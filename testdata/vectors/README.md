@@ -22,7 +22,9 @@ diff unless the generator's cases or a pin changed.
 
 ## File format
 
-One JSON file per case at `testdata/vectors/<area>/<name>.json`:
+One JSON file per case at `testdata/vectors/<area>/<name>.json`. A case is either a single computation
+or a coherent grid of them that shares its inputs, such as one seed on one network across several
+paths and amounts; a grid lists its entries under `expected` in a fixed order.
 
 ```json
 {
