@@ -1,18 +1,21 @@
 //! Message cases: a plaintext encrypted by upstream's `EncryptedMessage` from a sender to a
 //! receiver, the `str` the sender posts, and the sender's signature over it.
 //!
-//! Upstream draws the salt and nonce inside `EncryptedMessage::new`, so these vectors change on
-//! every run. The plaintext, keys and addresses are fixed, and before a vector is written upstream
-//! decrypts it again, on the receive path the Epicbox listener uses when the plaintext is a slate.
+//! Upstream draws the salt and nonce inside `EncryptedMessage::new`, so a fresh message differs on
+//! every run. The generator keeps a committed message while it still matches its case and opens,
+//! and draws a new one otherwise. The plaintext, keys and addresses are fixed, and before a vector
+//! is written upstream decrypts it again, on the receive path the Epicbox listener uses when the
+//! plaintext is a slate.
 
-use epic_util::secp::Secp256k1;
+use epic_util::secp::{Secp256k1, Signature};
+use epic_wallet_libwallet::crypto::{Hex, verify_signature};
 use epic_wallet_libwallet::message::EncryptedMessage;
 use epic_wallet_libwallet::{EpicboxAddress, Slate, SlateVersion, TxProof, VersionedSlate};
 use serde::Serialize;
 
 use super::{
-    ALICE, BOB, CAROL, CheckFailed, Network, TestKey, address, on_network, render, signature,
-    upstream_outcome,
+    ALICE, BOB, CAROL, CheckFailed, Network, TestKey, address, committed_path, on_network, render,
+    signature, upstream_outcome,
 };
 use crate::{Error, Rendered, Upstream, hex};
 
@@ -205,6 +208,11 @@ fn field(fields: &serde_json::Value, name: &'static str) -> Result<String, Error
 /// Decrypts a posted message with upstream code as the receiver, and checks every property the
 /// vector relies on.
 pub(super) fn open(prepared: &Prepared, posted: &str, signature: &str) -> Result<Opened, Error> {
+    let signed_by_sender = upstream_outcome(|| {
+        Signature::from_hex(signature)
+            .and_then(|parsed| verify_signature(posted, &parsed, &prepared.sender.public))
+    });
+    check(signed_by_sender.is_some(), CheckFailed::Signature)?;
     let message: EncryptedMessage = serde_json::from_str(posted)?;
     let key = message
         .key(&prepared.sender.public, &prepared.receiver.secret)
@@ -280,13 +288,49 @@ fn seal(prepared: &Prepared) -> Result<(String, String), Error> {
     Ok((posted, signature))
 }
 
+/// The posted `str` and signature of the committed vector for this case, when that vector is still
+/// one this generator would accept: same inputs, same upstream commit, and upstream opens it.
+fn committed(
+    name: &str,
+    prepared: &Prepared,
+    upstream: &Upstream,
+) -> Result<Option<(String, String)>, Error> {
+    let Ok(bytes) = std::fs::read(committed_path(name)) else {
+        return Ok(None);
+    };
+    let Ok(vector) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Ok(None);
+    };
+    let same_case = vector.get("inputs") == Some(&serde_json::to_value(prepared.inputs())?)
+        && vector.get("upstream") == Some(&serde_json::to_value(upstream)?);
+    let expected = vector.get("expected");
+    let text = |key: &str| {
+        expected
+            .and_then(|e| e.get(key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    Ok(match (same_case, text("str"), text("signature")) {
+        (true, Some(posted), Some(signature)) => open(prepared, &posted, &signature)
+            .is_ok()
+            .then_some((posted, signature)),
+        _ => None,
+    })
+}
+
+/// Reuses a committed message that is still valid, so regenerating the area changes the random
+/// values only when a case or the pin changed.
 pub(super) fn generate(upstream: &Upstream) -> Result<Vec<Rendered>, Error> {
     let secp = Secp256k1::new();
     cases()
         .iter()
         .map(|case| {
+            let name = format!("message_{}", case.name);
             let prepared = prepare(case)?;
-            let (posted, signature) = seal(&prepared)?;
+            let (posted, signature) = match committed(&name, &prepared, upstream)? {
+                Some(kept) => kept,
+                None => seal(&prepared)?,
+            };
             let opened = open(&prepared, &posted, &signature)?;
             let expected = Expected {
                 random: ["salt", "nonce"],
@@ -301,12 +345,7 @@ pub(super) fn generate(upstream: &Upstream) -> Result<Vec<Rendered>, Error> {
                 str: &posted,
                 signature: &signature,
             };
-            render(
-                &format!("message_{}", case.name),
-                upstream,
-                prepared.inputs(),
-                expected,
-            )
+            render(&name, upstream, prepared.inputs(), expected)
         })
         .collect()
 }

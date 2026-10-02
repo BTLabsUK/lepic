@@ -10,6 +10,7 @@ mod message;
 mod signature;
 
 use std::panic;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use epic_core::global::{self, ChainTypes};
@@ -20,7 +21,7 @@ use epic_wallet_libwallet::crypto::{
 };
 use serde::Serialize;
 
-use crate::{Error, LOCKFILE, Pins, Rendered, Upstream, chain_type_guard, git_source};
+use crate::{DEFAULT_OUT, Error, LOCKFILE, Pins, Rendered, Upstream, chain_type_guard, git_source};
 
 const AREA: &str = "epicbox";
 
@@ -41,6 +42,8 @@ enum CheckFailed {
     Address,
     #[error("upstream's epicbox receive path did not return the slate")]
     ReceivePath,
+    #[error("signature over str did not verify under the sender key")]
+    Signature,
 }
 
 pub(crate) fn generate(_pins: &Pins) -> Result<Vec<Rendered>, Error> {
@@ -143,6 +146,12 @@ impl TestKey {
     }
 }
 
+fn committed_path(name: &str) -> PathBuf {
+    Path::new(DEFAULT_OUT)
+        .join(AREA)
+        .join(format!("{name}.json"))
+}
+
 // Test-only secret keys, never real wallet material.
 const ALICE: [u8; 32] = [0x01; 32];
 const BOB: [u8; 32] = [0x02; 32];
@@ -151,24 +160,15 @@ const CAROL: [u8; 32] = [0x03; 32];
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::DEFAULT_OUT;
 
-    fn committed_path(name: &str) -> PathBuf {
-        Path::new(DEFAULT_OUT)
-            .join(AREA)
-            .join(format!("{name}.json"))
-    }
-
+    // Message files regenerate byte for byte too, because the generator keeps a committed message
+    // that still opens.
     #[test]
-    fn deterministic_vectors_match_committed_files() -> Result<(), Box<dyn std::error::Error>> {
+    fn regenerated_vectors_match_committed_files() -> Result<(), Box<dyn std::error::Error>> {
         let pins = Pins::from_lockfile(LOCKFILE)?;
         for vector in generate(&pins)? {
-            if vector.name.starts_with("message_") {
-                continue;
-            }
             let path = committed_path(&vector.name);
             assert_eq!(std::fs::read(&path)?, vector.bytes, "{}", path.display());
         }
