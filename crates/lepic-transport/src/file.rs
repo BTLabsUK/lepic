@@ -6,9 +6,13 @@ use std::path::{Path, PathBuf};
 
 use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
-use lepic_slate::codec::{CodecId, EncodeContext, MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
+use lepic_slate::codec::{Codec, CodecId, EncodeContext, MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
+use lepic_slate::error::{DecodeError, FieldProblem};
 use lepic_slate::model::Slate;
 use lepic_slate::origin::{LegacyHeader, WireOrigin};
+use lepic_slate::registry::CodecRegistry;
+use lepic_slate::validate::check_size;
+use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{FileError, FileOperation, TransportError};
@@ -78,6 +82,78 @@ impl FormatPolicy for FilePolicy {
     fn for_reply(&self, slate: &Slate, context: &EncodeContext) -> Encoding {
         Self::choose_for(slate, context)
     }
+
+    /// Dispatches on `version_info.version`, as upstream's file method does
+    /// (`Slate::deserialize_upgrade`), not on the JSON shape: version 2 is read as V2 with any V3
+    /// keys ignored, so a V3-shaped file with a version 2 header loses its TTL and payment proof
+    /// exactly as it does upstream, and version 3 is read as V3 only.
+    fn decode(&self, codecs: &CodecRegistry, wire: &WireSlate) -> Result<Slate, DecodeError> {
+        check_size(wire)?;
+        let text = wire.as_text().ok_or(DecodeError::UnknownFormat)?;
+        let mut slate: Value =
+            serde_json::from_str(text).map_err(|_| DecodeError::UnknownFormat)?;
+        match header_version(&slate)? {
+            V2_FILE_VERSION_NUMBER => {
+                let codec = registered(codecs, LEGACY_V2_JSON)?;
+                if remove_v3_keys(&mut slate) {
+                    codec.decode(&WireSlate::text(MediaType::JSON, slate.to_string()))
+                } else {
+                    codec.decode(wire)
+                }
+            }
+            V3_FILE_VERSION_NUMBER => registered(codecs, LEGACY_V3_JSON)?.decode(wire),
+            version => Err(DecodeError::UnsupportedVersion {
+                codec: LEGACY_V3_JSON,
+                version,
+            }),
+        }
+    }
+}
+
+const V2_FILE_VERSION_NUMBER: u64 = 2;
+const V3_FILE_VERSION_NUMBER: u64 = 3;
+
+/// The keys V3 has and V2 lacks.
+const V3_ONLY_KEYS: [&str; 2] = ["ttl_cutoff_height", "payment_proof"];
+
+/// The slate version as upstream's version probe reads it: `version_info.version`; a slate with
+/// only a top-level `version` key is version 1, and one with neither is version 0.
+fn header_version(slate: &Value) -> Result<u64, DecodeError> {
+    let object = slate.as_object().ok_or(DecodeError::UnknownFormat)?;
+    match object.get("version_info") {
+        Some(info) => info
+            .get("version")
+            .ok_or(DecodeError::Field {
+                field: "version_info.version",
+                problem: FieldProblem::Missing,
+            })?
+            .as_u64()
+            .ok_or(DecodeError::Field {
+                field: "version_info.version",
+                problem: FieldProblem::WrongType,
+            }),
+        None if object.contains_key("version") => Ok(1),
+        None => Err(DecodeError::Field {
+            field: "version_info",
+            problem: FieldProblem::Missing,
+        }),
+    }
+}
+
+/// Removes the V3-only keys and says whether there were any.
+fn remove_v3_keys(slate: &mut Value) -> bool {
+    let Some(object) = slate.as_object_mut() else {
+        return false;
+    };
+    let mut removed = false;
+    for key in V3_ONLY_KEYS {
+        removed |= object.remove(key).is_some();
+    }
+    removed
+}
+
+fn registered(codecs: &CodecRegistry, id: CodecId) -> Result<&dyn Codec, DecodeError> {
+    codecs.get(id).ok_or(DecodeError::UnknownFormat)
 }
 
 /// The file method. Exports write the wire slate's bytes unchanged; imports read at most

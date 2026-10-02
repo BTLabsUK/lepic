@@ -27,8 +27,17 @@ Upstream has two parse paths:
 2. An untagged enum (Epicbox) that tries the V3 shape, then the V2 shape, ignoring the header. The V3
    shape requires the `ttl_cutoff_height` key, so a payload without it parses as V2.
 
-LEPIC detects the shape structurally (path 2's rule), keeps the header as received (`WireOrigin`,
-ADR 0002), and on the file path also accepts what path 1 accepts.
+LEPIC keeps the header as received (`WireOrigin`, ADR 0002) and follows each method's path:
+
+- The file path dispatches on the header, as path 1 does: version 2 goes to the V2 codec with any
+  `ttl_cutoff_height` and `payment_proof` keys ignored, version 3 to the V3 codec only, and any
+  other version is refused. A V3-shaped file with header version 2, which upstream writes in the
+  invoice flow (`invoice_file_ttl_i2_file`), is therefore read without its TTL and payment proof,
+  as upstream reads it.
+- The Epicbox path detects the shape structurally, as path 2 does, and ignores the header.
+
+The codecs themselves detect by shape; the file policy in `lepic-transport` does the header
+dispatch.
 
 ## V3 fields
 
@@ -61,8 +70,9 @@ V2 is V3 without the `ttl_cutoff_height` and `payment_proof` keys.
 - An unfinalized kernel carries all-zero `excess` and `excess_sig`. Decoders accept that placeholder
   before the final stage and require valid points and signatures at it.
 - The V2 shape has no field for TTL or a payment proof, so a slate sent in that shape carries neither.
-- The file path rejects a V3-shaped slate without `ttl_cutoff_height`; the Epicbox path reads it as
-  V2. Both accept a V3 slate without the `payment_proof` key.
+- The file path rejects a V3-shaped slate without `ttl_cutoff_height`, and a V2-shaped slate with
+  header version 3; the Epicbox path reads both as V2. Both accept a V3 slate without the
+  `payment_proof` key.
 
 ## Which shape each method uses
 

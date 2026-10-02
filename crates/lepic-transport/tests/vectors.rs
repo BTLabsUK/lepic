@@ -153,9 +153,20 @@ fn starts_slate(vector: &Value) -> bool {
     matches!(vector["inputs"]["stage"].as_str(), Some("S1" | "I1"))
 }
 
-/// Importing each file upstream wrote, through the file policy, yields the codec of its shape,
-/// the header as written, the vector's slate id and stage, and the same slate as upstream's
-/// own V3 rendering of the producer's slate.
+/// The codec upstream's file method reads a file with: the one its header version names.
+fn codec_for_header(name: &str, header: LegacyHeader) -> CodecId {
+    match header.version {
+        2 => LEGACY_V2_JSON,
+        3 => LEGACY_V3_JSON,
+        other => panic!("{name}: unexpected header version {other}"),
+    }
+}
+
+/// Importing each file upstream wrote, through the file policy, yields the codec its header
+/// names, the header as written, the vector's slate id and stage, and the slate upstream read:
+/// the producer's slate, without TTL and payment proof when a version 2 header made upstream
+/// read the file as V2 (`invoice_file_ttl_i2_file`, whose issuer finalizes without the TTL in
+/// `invoice_file_ttl_i3_v3`).
 #[tokio::test]
 async fn importing_every_upstream_slate_file_yields_the_expected_codec_and_slate() {
     let codecs = legacy_codecs();
@@ -169,16 +180,16 @@ async fn importing_every_upstream_slate_file_yields_the_expected_codec_and_slate
         let wire = transport.import(&Location::File(path)).await.unwrap();
         let slate = transport.policy().decode(&codecs, &wire).unwrap();
 
+        let written_header = header_of(&serde_json::from_str(bytes).unwrap());
         let origin = slate.origin().unwrap();
         assert_eq!(
             origin.codec(),
-            expected_codec(&name, &vector),
+            codec_for_header(&name, written_header),
             "{name}: codec"
         );
-        let written: Value = serde_json::from_str(bytes).unwrap();
         assert_eq!(
             origin.legacy_header(),
-            Some(header_of(&written)),
+            Some(written_header),
             "{name}: header"
         );
         assert_eq!(
@@ -193,17 +204,88 @@ async fn importing_every_upstream_slate_file_yields_the_expected_codec_and_slate
         );
 
         let stem = name.strip_suffix("_file").unwrap();
+        let mut producer: Value =
+            serde_json::from_str(slate_json(&read_vector(&format!("{stem}_v3")))).unwrap();
+        if written_header.version == 2 {
+            producer["ttl_cutoff_height"] = Value::Null;
+            producer["payment_proof"] = Value::Null;
+        }
         let producer = codecs
-            .decode(&WireSlate::text(
-                MediaType::JSON,
-                slate_json(&read_vector(&format!("{stem}_v3"))).to_owned(),
-            ))
+            .decode(&WireSlate::text(MediaType::JSON, producer.to_string()))
             .unwrap();
         assert_eq!(
             slate.with_origin(None),
             producer.with_origin(None),
             "{name}: slate"
         );
+    }
+}
+
+/// Cases where LEPIC refuses a file upstream's parser accepts, because LEPIC's decode checks
+/// more than upstream's parse step (`docs/compat/legacy-slates.md`, checks on decode).
+const STRICTER_THAN_UPSTREAM: [&str; 3] = [
+    "malformed_duplicate_participant_id",
+    "malformed_num_participants_zero",
+    "malformed_offset_too_short",
+];
+
+/// Each malformed file is accepted or refused as upstream's file method does, except the
+/// deliberately stricter cases. An accepted file is read with the codec upstream read it with,
+/// and re-encoded as V3 it is the V3 JSON upstream wrote back for it.
+#[tokio::test]
+async fn malformed_files_resolve_as_upstream_file_method_resolves_them() {
+    let codecs = legacy_codecs();
+    let transport = FileTransport::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(vector_dir())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter_map(|name| {
+            name.strip_suffix(".json")
+                .filter(|stem| stem.starts_with("malformed_"))
+                .map(str::to_owned)
+        })
+        .collect();
+    names.sort();
+    assert!(!names.is_empty(), "no malformed vectors");
+    for name in names {
+        let vector = read_vector(&name);
+        let outcome = &vector["expected"]["file_method"];
+        let path = dir.path().join(&name);
+        std::fs::write(&path, vector["inputs"]["json"].as_str().unwrap()).unwrap();
+
+        let wire = transport.import(&Location::File(path)).await.unwrap();
+        let decoded = transport.policy().decode(&codecs, &wire);
+
+        let upstream_accepts = outcome["accepted"].as_bool().unwrap();
+        let stricter = STRICTER_THAN_UPSTREAM.contains(&name.as_str());
+        assert!(!stricter || upstream_accepts, "{name}: listed as stricter");
+        match decoded {
+            Err(_) => assert!(!upstream_accepts || stricter, "{name}: refused"),
+            Ok(slate) => {
+                assert!(upstream_accepts && !stricter, "{name}: accepted");
+                let parsed_as = match outcome["parsed_as"].as_str() {
+                    Some("V2") => LEGACY_V2_JSON,
+                    Some("V3") => LEGACY_V3_JSON,
+                    other => panic!("{name}: unexpected parsed_as {other:?}"),
+                };
+                let origin = slate.origin().unwrap();
+                assert_eq!(origin.codec(), parsed_as, "{name}: codec");
+                let header = origin.legacy_header().unwrap();
+                let context = EncodeContext {
+                    block_header_version: header.block_header_version,
+                };
+                let v3 = codecs
+                    .encode(LEGACY_V3_JSON, &slate, &context)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    v3.as_text().unwrap(),
+                    outcome["reencoded_v3"].as_str().unwrap(),
+                    "{name}: re-encoded"
+                );
+            }
+        }
     }
 }
 
