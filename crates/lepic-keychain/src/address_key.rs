@@ -1,7 +1,11 @@
-//! The Epicbox address key, derived as `epic-wallet`'s `address_from_derivation_path` does.
+//! The Epicbox address key, derived as `epic-wallet`'s `address_from_derivation_path` does, and
+//! the payment-proof key built on it.
+
+use std::fmt;
 
 use blake2::Blake2b256;
 use blake2::digest::{FixedOutput, Update};
+use ed25519_dalek::SigningKey;
 use lepic_crypto::SecretKey;
 use zeroize::Zeroize;
 
@@ -43,6 +47,40 @@ impl Keychain {
         let key = SecretKey::from_bytes(&hashed);
         hashed.as_mut_slice().zeroize();
         Ok(key?)
+    }
+
+    /// The ed25519 key `epic-wallet` signs payment proofs with: its seed is the
+    /// [`Keychain::address_key`] for the same account and index.
+    pub fn payment_proof_key(
+        &self,
+        parent: &Identifier,
+        index: u32,
+    ) -> Result<PaymentProofKey, KeychainError> {
+        let address_key = self.address_key(parent, index)?;
+        Ok(PaymentProofKey(SigningKey::from_bytes(
+            address_key.expose_bytes(),
+        )))
+    }
+}
+
+/// An ed25519 payment-proof key. Wiped on drop and never printed.
+pub struct PaymentProofKey(SigningKey);
+
+impl PaymentProofKey {
+    /// The 32-byte public key, which is the wallet's payment-proof address.
+    pub fn public_key(&self) -> [u8; 32] {
+        self.0.verifying_key().to_bytes()
+    }
+
+    /// The signing key. Callers must not log it or copy its bytes into memory that is not wiped.
+    pub fn expose_signing_key(&self) -> &SigningKey {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PaymentProofKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PaymentProofKey([redacted])")
     }
 }
 

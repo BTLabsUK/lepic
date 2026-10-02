@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 bip39 = { workspace = true, features = ["zeroize"] }
 blake2 = { workspace = true, features = ["zeroize"] }
+ed25519-dalek = { workspace = true, features = ["zeroize"] }
 hmac = { workspace = true, features = ["zeroize"] }
 lepic-crypto.workspace = true
 lepic-primitives.workspace = true

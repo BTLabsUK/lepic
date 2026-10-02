@@ -142,6 +142,7 @@ fn secrets_stay_out_of_logs_debug_and_errors() {
         .derive_key(1, &id, SwitchCommitment::Regular)
         .unwrap();
     let address = keychain.address_key(&default_account(), 0).unwrap();
+    let proof_key = keychain.payment_proof_key(&default_account(), 0).unwrap();
     let bad_phrase = PHRASE.replace("joy", "hunter");
     let mnemonic_error = Seed::from_mnemonic(&bad_phrase).err().unwrap();
     let keychain_error = Keychain::from_mnemonic(&bad_phrase, ExtKeyVersion::MAINNET)
@@ -158,6 +159,7 @@ fn secrets_stay_out_of_logs_debug_and_errors() {
             chain_code = ?ext.chain_code(),
             blind = ?blind,
             address = ?address,
+            proof_key = ?proof_key,
             "keys derived"
         );
         tracing::warn!(error = %mnemonic_error, debug = ?mnemonic_error, "mnemonic rejected");
@@ -171,7 +173,8 @@ fn secrets_stay_out_of_logs_debug_and_errors() {
         PublicKey::from_secret_key(keychain.master().secret_key()),
         Ok(master_public)
     );
-    let secrets: [&[u8]; 9] = [
+    let proof_secret = proof_key.expose_signing_key().to_bytes();
+    let secrets: [&[u8]; 10] = [
         seed.expose_bytes(),
         phrase.as_bytes(),
         b"pipe stock song",
@@ -181,6 +184,7 @@ fn secrets_stay_out_of_logs_debug_and_errors() {
         ext.chain_code().expose_bytes(),
         blind.expose_bytes(),
         address.expose_bytes(),
+        &proof_secret,
     ];
     assert_eq!(assert_no_secrets(&captured.records, &secrets), Ok(()));
 }

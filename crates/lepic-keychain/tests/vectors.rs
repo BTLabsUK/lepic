@@ -1,7 +1,8 @@
 //! Replays the G-01 golden vectors in `testdata/vectors/keys` that cover mnemonics, BIP32
-//! derivation, identifiers, keychain commitments and Epicbox address keys. Commitments over raw
-//! blinding factors and bulletproofs are checked by `lepic-crypto`, proof builders by K-02 and the
-//! seed file by K-03.
+//! derivation, identifiers, keychain commitments, Epicbox address keys and payment-proof keys.
+//! Commitments over raw blinding factors and bulletproofs are checked by `lepic-crypto`, proof
+//! builders by K-02 and the seed file by K-03. The onion v3 form of the payment-proof key is
+//! Tor-only and not ported.
 
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
 // unwrap, index and use plain arithmetic (docs/rules.md).
@@ -308,6 +309,12 @@ fn derives_epicbox_address_keys_on_both_networks() {
                 assert_eq!(
                     PublicKey::from_secret_key(&address_key).unwrap().to_hex(),
                     text(&case["address_public_key"]),
+                    "{label}"
+                );
+                let proof_key = keychain.payment_proof_key(&parent, index).unwrap();
+                assert_eq!(
+                    hex(&proof_key.public_key()),
+                    text(&case["payment_proof_public_key"]),
                     "{label}"
                 );
             }
