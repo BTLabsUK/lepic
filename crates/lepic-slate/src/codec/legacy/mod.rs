@@ -3,4 +3,5 @@
 //! improvements into a new codec.
 
 mod fields;
+pub mod v2_json;
 pub mod v3_json;
