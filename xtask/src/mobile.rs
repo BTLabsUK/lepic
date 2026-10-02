@@ -1,5 +1,5 @@
-//! `cargo xtask mobile --target <triple> [--release]`: builds the workspace library crates for one
-//! mobile target. Android goes through `cargo ndk`, Apple targets through plain cargo on macOS.
+//! Android builds go through `cargo ndk` so the NDK linker, sysroot and API level are set for every
+//! C dependency.
 
 use std::path::Path;
 
