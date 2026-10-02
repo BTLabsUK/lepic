@@ -1,7 +1,7 @@
 use std::fmt;
 
 use chacha20poly1305::aead::AeadInOut;
-use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Tag};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Tag};
 use lepic_crypto::{CryptoError, EcdsaSignature, Message, PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
@@ -91,8 +91,10 @@ impl MessageKey {
         &self.0
     }
 
-    fn cipher(&self) -> ChaCha20Poly1305 {
-        ChaCha20Poly1305::new(&Key::from(*self.0))
+    /// Builds the cipher from the key in place, so the only other copy is inside the cipher,
+    /// which wipes it on drop.
+    fn cipher(&self) -> Option<ChaCha20Poly1305> {
+        ChaCha20Poly1305::new_from_slice(self.0.as_slice()).ok()
     }
 }
 
@@ -229,6 +231,7 @@ impl EncryptedMessage {
         let mut ciphertext = plaintext.as_bytes().to_vec();
         let tag = key
             .cipher()
+            .ok_or(MessageError::Encryption)?
             .encrypt_inout_detached(&nonce.0.into(), &[], ciphertext.as_mut_slice().into())
             .map_err(|_| MessageError::Encryption)?;
         ciphertext.extend_from_slice(&tag);
@@ -313,6 +316,7 @@ impl EncryptedMessage {
         let tag = Tag::try_from(tag).map_err(|_| MessageError::Decryption)?;
         let mut buffer = Zeroizing::new(body.to_vec());
         key.cipher()
+            .ok_or(MessageError::Decryption)?
             .decrypt_inout_detached(
                 &self.nonce.0.into(),
                 &[],
@@ -506,6 +510,7 @@ mod tests {
         let mut ciphertext = vec![0xff, 0xfe];
         let tag = key
             .cipher()
+            .unwrap()
             .encrypt_inout_detached(&[9u8; 12].into(), &[], ciphertext.as_mut_slice().into())
             .unwrap();
         ciphertext.extend_from_slice(&tag);
