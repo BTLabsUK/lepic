@@ -28,7 +28,8 @@ own state (`lepic-wallet`'s `state` module).
 | incoming `finalized` | `TxReceived`, with the transaction stored | false | the invoice issuer finalizing I3 |
 | incoming `posted` | `TxReceived`, or `TxReceivedMempool` once seen in the mempool | false | the invoice issuer posting |
 | incoming `confirmed` | `TxReceived` | true | a refresh finding one of its outputs on chain |
-| incoming `confirmed` | `ConfirmedCoinbase` | true | a refresh confirming a coinbase output; no slate |
+| incoming `confirmed` | `TxReceivedMempool` | true | the same, for an invoice issuer whose posted transaction was seen in the mempool; the refresh rewrites only outgoing types |
+| incoming `confirmed` | `ConfirmedCoinbase` | true | a refresh confirming a coinbase output, or a restore finding one; no slate |
 | incoming `confirmed` | `TxReceived`, no slate id | true | a restore finding an output with no entry |
 | incoming `cancelled` | `TxReceivedCancelled` | false | the owner's cancel |
 | incoming `expired` | `TxReceivedCancelled` | false | a refresh at or past the TTL cutoff height |
@@ -56,6 +57,15 @@ which includes a transaction it posted but has not yet seen in the mempool. LEPI
 posted transaction, because it may still be mined after the TTL cutoff; only the owner's explicit
 cancel ends it before confirmation. Upstream refuses to cancel an entry with `confirmed = true`, and
 so does LEPIC: `confirmed` is final.
+
+Upstream also refuses to cancel an entry whose type is neither `TxSentCreated` nor `TxReceived`, so
+a transaction the mempool has seen (`TxSentMempool`, `TxReceivedMempool`) cannot be cancelled there.
+LEPIC's state machine allows cancelling any `posted` transaction; the task that implements cancel
+decides whether to refuse it once the mempool has seen the transaction.
+
+The state machine does not know the direction of a transaction. Which side may take a step, for
+example that only an invoice issuer finalizes an incoming transaction, is enforced by the stages
+that take it (W-03 to W-05, W-08).
 
 ## Output states
 
