@@ -20,7 +20,7 @@ lepic-store.workspace = true
 lepic-transport.workspace = true
 rand_core.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 uuid.workspace = true
 zeroize.workspace = true
