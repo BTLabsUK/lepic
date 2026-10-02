@@ -2,6 +2,8 @@
 
 mod check;
 mod deps_check;
+#[cfg(test)]
+mod lint_tables;
 
 use std::env;
 use std::path::{Path, PathBuf};

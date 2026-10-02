@@ -11,7 +11,8 @@ publish.workspace = true
 crate-type = ["lib", "cdylib", "staticlib"]
 
 # Copy of [workspace.lints] in the root Cargo.toml without `unsafe_code`, because
-# flutter_rust_bridge generates unsafe glue here. Keep the two in step.
+# flutter_rust_bridge generates unsafe glue here. xtask/src/lint_tables.rs fails
+# when the two differ.
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"

@@ -62,8 +62,8 @@ proptest = { version = "1.11.0", default-features = false }
 insta = { version = "1.48.0", default-features = false }
 tempfile = { version = "3.27.0", default-features = false }
 
-# crates/lepic-ffi/Cargo.toml carries a copy of this table without `unsafe_code`.
-# Keep the two in step.
+# crates/lepic-ffi/Cargo.toml carries a copy of this table without `unsafe_code`;
+# xtask/src/lint_tables.rs fails when the two differ.
 [workspace.lints.rust]
 unsafe_code = "deny"
 
