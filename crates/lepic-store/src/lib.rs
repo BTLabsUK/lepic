@@ -1,1 +1,36 @@
 //! SQLite wallet storage behind repository traits.
+//!
+//! The engine sees only [`WalletStore`] and the repository traits. [`SqliteStore`] is the product
+//! implementation; [`MemoryStore`] behaves the same without a file, for tests of the layers above.
+
+mod account;
+mod context;
+mod encoding;
+mod error;
+mod memory;
+mod output;
+mod relay;
+mod settings;
+mod slate;
+mod sqlite;
+mod store;
+mod transaction;
+
+pub use account::{AccountIndex, AccountRecord, AccountRepository};
+pub use context::{CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext};
+pub use error::{DatabaseError, Record, StoreError};
+pub use memory::MemoryStore;
+pub use output::{
+    COMMITMENT_LEN, CommitmentBytes, KEY_ID_LEN, KeyId, OutputRecord, OutputRepository,
+    OutputStatus,
+};
+pub use relay::{
+    InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
+};
+pub use settings::SettingsRepository;
+pub use slate::{SlateRepository, SlateStage, StoredSlate};
+pub use sqlite::{SCHEMA_VERSION, SqliteStore};
+pub use store::{Repositories, WalletStore};
+pub use transaction::{
+    StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId, TxState,
+};
