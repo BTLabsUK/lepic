@@ -4,6 +4,7 @@ mod budget;
 mod check;
 mod ci_lint;
 mod deps_check;
+mod fuzz;
 #[cfg(test)]
 mod lint_tables;
 mod mobile;
@@ -23,6 +24,7 @@ commands:
   check       fmt, clippy, tests, cargo deny and deps-check
   ci-lint     every `uses:` under .github is pinned to a commit sha
   deps-check  crate edges and banned crates against docs/architecture.md
+  fuzz        (--smoke | --full) [--target <name>]... [--jobs <n>]: seed and run the fuzz targets
   mobile      --target <triple> [--release]: build the library crates for a mobile target
               --package [--target <triple>]...: copy release lepic-ffi into bindings/flutter
   upstream-drift
@@ -54,6 +56,7 @@ fn run() -> Result<()> {
         "check" => check::run(&root),
         "ci-lint" => ci_lint::run(&root),
         "deps-check" => deps_check::run(&root),
+        "fuzz" => fuzz::run(&root, rest),
         "mobile" => mobile::run(&root, rest),
         "upstream-drift" => upstream::run(&root),
         "vectors" => vectors::run(&root, rest),
