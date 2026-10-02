@@ -7,5 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[dependencies]
+lepic-slate.workspace = true
+thiserror.workspace = true
+
 [lints]
 workspace = true

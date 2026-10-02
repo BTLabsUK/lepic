@@ -786,6 +786,10 @@ dependencies = [
 [[package]]
 name = "lepic-transport"
 version = "0.1.0"
+dependencies = [
+ "lepic-slate",
+ "thiserror",
+]
 
 [[package]]
 name = "lepic-wallet"
