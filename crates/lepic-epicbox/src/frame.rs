@@ -25,8 +25,8 @@ pub enum FrameError {
         #[source]
         source: serde_json::Error,
     },
-    #[error("client frame type is unknown")]
-    UnknownClientType(#[source] serde_json::Error),
+    #[error("client frame type {type_name} is unknown")]
+    UnknownClientType { type_name: String },
     #[error("frame could not be signed")]
     Signature(#[source] CryptoError),
 }
@@ -130,8 +130,11 @@ impl ClientFrame {
     pub fn from_json(text: &str) -> Result<Self, FrameError> {
         check_len(text)?;
         let value = parse_object(text)?;
-        type_name(&value)?;
-        serde_json::from_value(value).map_err(FrameError::UnknownClientType)
+        let type_name = type_name(&value)?.to_owned();
+        if !KNOWN_CLIENT_TYPES.contains(&type_name.as_str()) {
+            return Err(FrameError::UnknownClientType { type_name });
+        }
+        serde_json::from_value(value).map_err(|source| FrameError::Fields { type_name, source })
     }
 }
 
@@ -274,6 +277,15 @@ impl RelayFrame {
             .map_err(FrameError::Json)
     }
 }
+
+const KNOWN_CLIENT_TYPES: [&str; 6] = [
+    "ClientDetails",
+    "Subscribe",
+    "PostSlate",
+    "Made",
+    "Unsubscribe",
+    "GetVersion",
+];
 
 const KNOWN_RELAY_TYPES: [&str; 5] = ["Challenge", "Ok", "Error", "Slate", "GetVersion"];
 

@@ -256,7 +256,7 @@ fn rejects_frame_over_the_length_limit_before_parsing() {
 fn relay_side_rejects_unknown_client_frame_types() {
     assert!(matches!(
         ClientFrame::from_json(r#"{"type":"Shutdown"}"#),
-        Err(FrameError::UnknownClientType(_))
+        Err(FrameError::UnknownClientType { type_name }) if type_name == "Shutdown"
     ));
     assert!(matches!(
         ClientFrame::from_json("pong"),
@@ -270,7 +270,15 @@ fn relay_side_rejects_unknown_wallet_mode() {
         ClientFrame::from_json(
             r#"{"type":"ClientDetails","wallet_version":"1","wallet_mode":"miner","protocol_version":"3.0.0"}"#
         ),
-        Err(FrameError::UnknownClientType(_))
+        Err(FrameError::Fields { type_name, .. }) if type_name == "ClientDetails"
+    ));
+}
+
+#[test]
+fn relay_side_rejects_known_client_type_with_missing_fields() {
+    assert!(matches!(
+        ClientFrame::from_json(r#"{"type":"Subscribe","address":"a"}"#),
+        Err(FrameError::Fields { type_name, .. }) if type_name == "Subscribe"
     ));
 }
 
