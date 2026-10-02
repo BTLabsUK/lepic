@@ -221,7 +221,8 @@
               "user_agent": "MW/Epic 4.0.4"
             }
           }
-        }
+        },
+        "built": true
       },
       {
         "endpoint": "/v2/foreign",

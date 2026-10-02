@@ -31,6 +31,13 @@ pub(crate) struct Exchange {
     pub(crate) method: String,
     pub(crate) params: Value,
     pub(crate) response: Value,
+    /// The generator built this answer instead of a node handler serving it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) built: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// What a replay session left over: recorded exchanges nobody asked for, and requests that had no
@@ -203,6 +210,7 @@ fn answer(backend: &Mutex<Backend>, endpoint: &str, request: &Value) -> Value {
     let params = normalized_params(&method, request.get("params").unwrap_or(&Value::Null));
     match &mut *backend.lock() {
         Backend::Live { chain, recording } => {
+            let built = is_built(endpoint, &method);
             let response = match dispatch(chain, endpoint, &method, &params) {
                 Dispatch::Result(result) => {
                     json!({ "id": id, "jsonrpc": "2.0", "result": result })
@@ -216,6 +224,7 @@ fn answer(backend: &Mutex<Backend>, endpoint: &str, request: &Value) -> Value {
                     method,
                     params,
                     response: response.clone(),
+                    built,
                 });
             }
             response
@@ -277,6 +286,10 @@ fn dispatch(chain: &Arc<Chain>, endpoint: &str, method: &str, params: &Value) ->
         OWNER if method == "get_status" => Dispatch::Result(owner_status(chain)),
         _ => Dispatch::MethodNotFound,
     }
+}
+
+fn is_built(endpoint: &str, method: &str) -> bool {
+    endpoint == OWNER && method == "get_status"
 }
 
 const FOREIGN: &str = "/v2/foreign";

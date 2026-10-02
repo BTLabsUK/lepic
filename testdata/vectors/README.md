@@ -157,14 +157,48 @@ calls under `expected.exchanges`. Each element is one JSON-RPC call over HTTP, a
 | `method` | The JSON-RPC method. |
 | `params` | The JSON-RPC params exactly as sent, except that `get_outputs` commitments are sorted. |
 | `response` | The JSON-RPC response object. A handler result is `{"Ok": value}` or `{"Err": error}` inside `result`; a protocol failure is an `error` object instead of `result`. |
+| `built` | Present and `true` only on an answer the generator built instead of a node handler serving it: owner `get_status`, see the notes below. |
 
-`MockNode` (task N-01) replays a session like this:
+All recorded calls are read-only, so a session can be replayed in two ways.
+
+### Strict replay
+
+Used by the generator, with upstream's own `HTTPNodeClient`, to show a recording is complete:
 
 1. For each request, serve the first exchange not yet served whose `endpoint`, `method` and `params`
    equal the request's. Compare `params` as JSON values; for `get_outputs`, sort the request's
    commitment list before comparing. Answer with `response`, with `id` set to the request's id.
 2. A request with no matching exchange is a test failure, not a node error to recover from.
 3. When the session ends, every exchange must have been served.
+
+The generator replays every session this way into a second upstream wallet that starts from the
+same state (a copy of the subject's wallet directory for a refresh, a new wallet from the mnemonic
+for a restore), and requires that wallet to end in `expected.after`.
+
+### LEPIC replay
+
+Used by `MockNode` (task N-01) for LEPIC's engine tests (W-06, W-07). LEPIC's node client is not
+upstream's and need not repeat upstream's call sequence, so the session is served as a fixed node
+state rather than a script:
+
+1. Any recorded answer may be served any number of times, or not at all.
+2. `get_tip` and `get_pmmr_indices` are served by equal `endpoint`, `method` and `params`. Owner
+   `get_status` is served the same way if asked; LEPIC does not call the owner API, so a session
+   that never asks for it is complete.
+3. `get_outputs` is answered per commitment from the union of the session's recorded `get_outputs`
+   exchanges: a commitment listed in a request's params with an output in the answer is found, one
+   listed with no output is not found. A commitment no recorded request listed is a test failure.
+   Chunking and order of LEPIC's requests do not matter.
+4. `get_unspent_outputs` is answered from the session's recorded listing, which is always complete
+   (`last_retrieved_index` equals `highest_index`). For a request `[start, end, max, true]`, return
+   the recorded outputs whose `mmr_index` lies in `start..=end`, at most `max` of them; as the node
+   does, set `highest_index` to `end`, and `last_retrieved_index` to the `mmr_index` of the last
+   output returned when `max` cut the window short, or to `end` otherwise. A window that reaches
+   past the recorded listing's `highest_index` is a test failure. The recordings exercise only one
+   full window, so the shortened-window rule is the node's, not shown by a vector.
+5. Any other request is a test failure.
+6. The session passes when LEPIC's wallet ends in `expected.after`, mapped through
+   `docs/compat/states.md`. Unused exchanges do not fail it.
 
 Notes for consumers:
 
@@ -174,11 +208,7 @@ Notes for consumers:
 - Upstream checks `get_status` on the owner endpoint before every refresh and refreshes only when
   `sync_status` is `no_sync`. The in-process node has no peers and never syncs, so the generator
   builds that status the way the node's status handler does, with `connections` 0 and
-  `sync_status` `no_sync`. Every other response comes from the node's own handlers over the chain.
+  `sync_status` `no_sync`, and marks the exchange `built`. Every other response comes from the
+  node's own handlers over the chain.
 - Responses are stored as JSON values, so their key order is the generator's, not the node's.
 - The same call can appear more than once in a session with the same answer, for example `get_tip`.
-
-The generator checks every session the same way: it replays the recorded exchanges through a
-loopback server into a second upstream wallet that starts from the same state (a copy of the
-subject's wallet directory for a refresh, a new wallet from the mnemonic for a restore), requires
-the three rules above to hold, and requires the second wallet to end in `expected.after`.
