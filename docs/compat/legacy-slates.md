@@ -2,8 +2,9 @@
 
 Derived from `epic-wallet` `v4.0.2`: `libwallet/src/slate.rs`, `libwallet/src/slate_versions/{mod,ser,v2,v3}.rs`,
 `impls/src/adapters/{file,epicbox,http}.rs`, `libwallet/src/api_impl/{owner,foreign}.rs`,
-`libwallet/src/internal/tx.rs`, `libwallet/src/tx_proof.rs`. Items marked "confirm" must be settled by
-golden vectors in task G-03 before code depends on them.
+`libwallet/src/internal/tx.rs`, `libwallet/src/tx_proof.rs`. The golden vectors in
+`testdata/vectors/slates/` (task G-03) settle every fact on this page; where they disagree with it, the
+vectors win.
 
 ## Shape versus header
 
@@ -11,10 +12,12 @@ A legacy slate has a JSON shape (V2 or V3, differing by two keys) and a `version
 `{ "version", "orig_version", "block_header_version" }` of JSON numbers. They can disagree, and
 LEPIC must reproduce exactly the combinations upstream produces:
 
-- New slates are created with header `3/3/6`.
+- New slates are created with header `3/3/<b>`, where `<b>` is the block header version at the chain
+  tip: 6 below the first header-version change (mainnet height 9,000,000, floonet 25,800), 7 at or
+  above it. Floonet slates today carry `3/3/7` (vectors `*_header_7_*`).
 - Converting to the V2 shape copies the header unchanged. The Epicbox sender always converts to the
   V2 shape, so Epicbox payloads carry the V2 shape with header `3/3/6`.
-- The file method forces the header to `2/2/6` when it writes the V2 shape.
+- The file method forces `version` and `orig_version` to 2 when it writes the V2 shape.
 - The Epicbox receiver replies in the shape it received, with the header carried through.
 
 Upstream has two parse paths:
@@ -37,8 +40,8 @@ ADR 0002), and on the file path also accepts what path 1 accepts.
 | `tx.offset` | 64 hex chars | 32 bytes |
 | `tx.body.inputs[]` | `{features, commit}` | features `"Plain"` or `"Coinbase"`, commit 66 hex |
 | `tx.body.outputs[]` | `{features, commit, proof}` | proof is hex of the Bulletproof |
-| `tx.body.kernels[]` | `{features, fee, lock_height, excess, excess_sig}` | excess 66 hex, signature 128 hex; feature names confirm |
-| `amount`, `fee`, `height`, `lock_height` | string or number | written as strings, read as either; confirm the written form |
+| `tx.body.kernels[]` | `{features, fee, lock_height, excess, excess_sig}` | features `"Plain"` or `"HeightLocked"`, fee and lock height as strings, excess 66 hex, signature 128 hex; before S3 and I3 both are all-zero placeholders |
+| `amount`, `fee`, `height`, `lock_height` | string or number | written as strings, read as either |
 | `ttl_cutoff_height` | string, number or `null` | key always present in V3 |
 | `participant_data[]` | `{id, public_blind_excess, public_nonce, part_sig, message, message_sig}` | id string-or-number; keys 66 hex; signatures 128 hex or `null`; message string or `null` |
 | `payment_proof` | `{sender_address, receiver_address, receiver_signature}` or `null` | key always written, `null` without a proof; may be absent on read; addresses 64 hex (ed25519), signature 128 hex or `null` |
@@ -52,16 +55,21 @@ V2 is V3 without the `ttl_cutoff_height` and `payment_proof` keys.
   slates that were produced this way.
 - Participant `id` is string-encoded while `num_participants` is a number.
 - Roles are positional: in the standard flow the sender is id 0 and the receiver id 1; in the invoice
-  flow the issuer (receiving funds) is id 1 and the payer id 0. Confirm with invoice vectors.
-- The receiver truncates its own message to 256 bytes before signing it.
-- Signatures are the compact 64-byte form in hex. Confirm the serialize side against a vector.
+  flow the issuer (receiving funds) is id 1 and the payer id 0.
+- Each party truncates its own message to 256 bytes before signing it.
+- Signatures are the compact 64-byte form in hex.
+- An unfinalized kernel carries all-zero `excess` and `excess_sig`. Decoders accept that placeholder
+  before the final stage and require valid points and signatures at it.
+- The V2 shape has no field for TTL or a payment proof, so a slate sent in that shape carries neither.
+- The file path rejects a V3-shaped slate without `ttl_cutoff_height`; the Epicbox path reads it as
+  V2. Both accept a V3 slate without the `payment_proof` key.
 
 ## Which shape each method uses
 
 | Method | New slate | Accepts | Reply |
 |---|---|---|---|
-| File | V2 shape with header `2/2/6`, unless the slate has a TTL or payment proof, then V3; compact JSON | path 1 | same content rule as a new slate |
-| Epicbox | V2 shape, header unchanged | path 2 | shape of the inbound slate |
+| File | V2 shape with header `2/2/<b>`, unless the slate has a TTL or payment proof, then V3; compact JSON | path 1 | same content rule as a new slate |
+| Epicbox | V2 shape, header unchanged (`3/3/<b>`) | path 2 | shape of the inbound slate |
 | HTTP (not in LEPIC) | V3 if the peer lists V3, else V2 | path 1 | |
 
 File naming has no enforced extension. The CLI writes the receiver's reply to `<input>.response`.
