@@ -1,35 +1,41 @@
-# 0007 Binding generator: UniFFI or flutter_rust_bridge
+# 0007 Mobile bindings with flutter_rust_bridge for the existing Flutter frontend
 
-Status: proposed, needs an operator decision
+Status: accepted
 Date: 2026-10-02
 
 ## Context
 
-The mobile app's UI stack decides the binding generator. Findings, 2026-10-02:
+A Flutter frontend already exists. LEPIC is its backend: the Rust library and the binding layer the
+app calls. Findings, 2026-10-02:
 
-- UniFFI 0.32 generates Kotlin and Swift (and Python for tests), supports async functions as Kotlin
-  `suspend` and Swift `async`, and is used in production by Firefox mobile. Dart support exists only
-  as an experimental community project.
+- flutter_rust_bridge 2.13 is the established choice for Flutter, with async Rust, streams to Dart,
+  and Android, iOS and desktop support. (https://cjycode.com/flutter_rust_bridge/)
+- UniFFI 0.32 targets Kotlin and Swift; its Dart support is an experimental community project.
   (https://mozilla.github.io/uniffi-rs/latest/, https://github.com/Uniffi-Dart/uniffi-dart)
-- flutter_rust_bridge 2.13 is the established choice for Flutter, with async Rust support on Android,
-  iOS and desktop. (https://cjycode.com/flutter_rust_bridge/)
 - The existing Flutter integration of `epic-wallet` uses a hand-written C interface with string
   arguments and JSON results. A generated, typed binding removes that whole class of glue code.
 
-## Options
-
-1. Native apps (Kotlin and Swift): UniFFI in `lepic-ffi`.
-2. Flutter: flutter_rust_bridge in `lepic-ffi`.
-3. Both: one binding-agnostic API in `lepic-wallet`, two thin binding crates.
-
-## Requirements for any option
-
-- Opaque object handles; no raw pointers or secrets cross the boundary.
-- Typed error enum with stable codes.
-- Async functions, and an event stream or callback for wallet events and log records.
-- Panics are converted to errors at the boundary. The workspace never sets `panic = "abort"`, so
-  unwinding reaches the boundary.
-
 ## Decision
 
-Pending. Tasks U-02 and U-03 wait for it; nothing earlier depends on it.
+- `lepic-ffi` uses flutter_rust_bridge v2 at its latest stable release. It exposes a small,
+  binding-friendly API over `lepic-wallet`; `lepic-wallet` itself knows nothing about Dart.
+- Requirements:
+  - Opaque object handles. No raw pointers or secrets cross the boundary.
+  - One error enum with stable numeric codes, so the app maps errors to messages without parsing
+    text.
+  - Async functions, plus Dart streams for wallet events and log records.
+  - Panics are converted to errors at the boundary. The workspace never sets `panic = "abort"`.
+  - The app implements `SecretStore` (for example with `flutter_secure_storage`, which uses Android
+    Keystore and the iOS Keychain) and passes it in.
+- Delivery is a Dart package containing the generated bindings and the native libraries for Android
+  and iOS, which the existing app depends on. No sample or smoke app is built here.
+
+## Consequences
+
+- Host-side tests run with `flutter test` against the generated bindings on the Linux build machine.
+- The flutter_rust_bridge code generator version is pinned together with the Rust crate version.
+
+## Alternatives considered
+
+- UniFFI with a community Dart backend: experimental and one release behind UniFFI.
+- A hand-written C interface: the approach the existing integration uses, and the one LEPIC replaces.

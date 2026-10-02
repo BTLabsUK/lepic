@@ -47,7 +47,7 @@ workspace table:
 | Ids and time | uuid 1.26, jiff 0.2 | |
 | Randomness | rand 0.10, rand_core 0.10, getrandom 0.4 | |
 | Curve | grin_secp256k1zkp from `EpicCash/rust-secp256k1-zkp` at `42fcb29d` | |
-| Bindings | uniffi 0.32 or flutter_rust_bridge 2.13 | ADR 0007 |
+| Bindings | flutter_rust_bridge 2.13 | ADR 0007 |
 | Tests | proptest 1.11, insta 1.48, tempfile 3.27, libfuzzer-sys 0.4 | |
 
 ## Consequences

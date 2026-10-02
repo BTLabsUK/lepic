@@ -12,7 +12,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0004](0004-epicbox-client.md) | Async Epicbox client with listen and drain modes, acknowledge after store | accepted |
 | [0005](0005-storage.md) | SQLite storage, platform keystore for secrets, legacy seed import | accepted |
 | [0006](0006-tls-and-http.md) | rustls with ring; HTTP and websocket stack chosen by spike F-03 | proposed |
-| [0007](0007-mobile-bindings.md) | Binding generator: UniFFI or flutter_rust_bridge | proposed, operator decision |
+| [0007](0007-mobile-bindings.md) | flutter_rust_bridge bindings for the existing Flutter frontend | accepted |
 | [0008](0008-logging-and-errors.md) | tracing everywhere, host-installed subscribers, typed errors | accepted |
 | [0009](0009-conformance.md) | Separate conformance workspace on public pins, golden vectors | accepted |
 | [0010](0010-dependency-policy.md) | Latest stable crates and toolchain, banned list, update bots | accepted |

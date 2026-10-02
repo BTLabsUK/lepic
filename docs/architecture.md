@@ -23,7 +23,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. | through ports |
 | `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stdout, files |
 | `lepic-cli` | The `lepic` binary. | all |
-| `lepic-ffi` | Mobile bindings (ADR 0007). | all |
+| `lepic-ffi` | flutter_rust_bridge API for the existing Flutter frontend (ADR 0007). | all |
 | `xtask` | Build, check, vector, mobile packaging and release commands. | all |
 
 Outside the product workspace, with their own `Cargo.lock`:
