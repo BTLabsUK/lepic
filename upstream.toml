@@ -238,3 +238,17 @@ task = "E-01"
 upstream.repo = "https://github.com/EpicCash/epic-wallet"
 upstream.paths = ["impls/src/epicbox/protocol.rs"]
 upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-epicbox/src/session"
+task = "E-02"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["impls/src/adapters/epicbox.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-epicbox/src/client_inbox"
+task = "E-02"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["impls/src/adapters/epicbox.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"

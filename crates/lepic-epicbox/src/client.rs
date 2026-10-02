@@ -1,0 +1,422 @@
+//! The Epicbox client (ADR 0004): settings, the wallet's relay identity, sending, and the entry
+//! points to listening and draining.
+
+use std::error::Error as StdError;
+use std::fmt;
+use std::io;
+use std::sync::Arc;
+use std::time::Duration;
+
+use lepic_crypto::{PublicKey, SecretKey};
+use lepic_slate::codec::WireSlate;
+use lepic_transport::error::TransportError;
+use lepic_transport::transport::{BoxFuture, Destination, Outbound, TransportId};
+use tokio::sync::watch;
+use tokio::time::Instant;
+use tracing::{Instrument, debug, info_span, warn};
+
+use crate::address::{AddressError, EpicboxAddress};
+use crate::client_inbox::{Mode, Subscription};
+use crate::crypto::{MessageError, NONCE_LEN, Nonce, SALT_LEN, Salt, SignedMessage};
+use crate::frame::{ClientFrame, FrameError, RelayErrorKind, WalletMode};
+use crate::session::{Connection, Connector, ProtocolVersion, RelayEndpoint};
+
+/// The transport id of the Epicbox method.
+pub const TRANSPORT_ID: TransportId = TransportId::new("epicbox");
+
+const MAX_ERROR_SOURCES: usize = 8;
+
+/// What the client was waiting for when the relay went quiet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Awaiting {
+    Connection,
+    Challenge,
+    Answer,
+    Traffic,
+}
+
+impl fmt::Display for Awaiting {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Connection => "the connection",
+            Self::Challenge => "a challenge",
+            Self::Answer => "an answer",
+            Self::Traffic => "any traffic",
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ClientError {
+    #[error("no tokio runtime is running")]
+    NoRuntime,
+    #[error("epicbox secret key does not belong to the address")]
+    IdentityMismatch,
+    #[error("could not connect to the relay")]
+    Connect(#[source] io::Error),
+    #[error("websocket failed")]
+    Websocket(#[source] Box<tokio_tungstenite::tungstenite::Error>),
+    #[error("relay closed the connection")]
+    Closed,
+    #[error("relay sent nothing in time while the client waited for {awaiting}")]
+    Timeout { awaiting: Awaiting },
+    #[error("relay answered with error {kind:?}")]
+    Relay { kind: RelayErrorKind },
+    #[error("relay speaks protocol {version}, older than the supported baseline")]
+    UnsupportedRelayVersion { version: ProtocolVersion },
+    #[error("relay frame could not be built")]
+    Frame(#[source] FrameError),
+    #[error("message could not be sealed")]
+    Message(#[source] MessageError),
+    #[error("destination is not an epicbox address")]
+    Destination(#[source] AddressError),
+    #[error("slate is binary, and epicbox carries only text")]
+    BinarySlate,
+    #[error("operating system randomness is unavailable")]
+    Randomness(#[source] getrandom::Error),
+    #[error("client is not connected to the relay")]
+    NotConnected,
+    #[error("subscription has ended")]
+    Ended,
+    #[error("subscription task failed")]
+    Task(#[source] tokio::task::JoinError),
+}
+
+impl From<ClientError> for TransportError {
+    fn from(error: ClientError) -> Self {
+        Self::Backend {
+            transport: TRANSPORT_ID,
+            source: Box::new(error),
+        }
+    }
+}
+
+/// Displays an error with its source chain, for the `error` log field.
+pub(crate) struct ErrorChain<'a>(pub(crate) &'a (dyn StdError + 'static));
+
+impl fmt::Display for ErrorChain<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)?;
+        let sources = std::iter::successors(self.0.source(), |&error| error.source());
+        for source in sources.take(MAX_ERROR_SOURCES) {
+            write!(f, ": {source}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Capped exponential backoff between reconnect attempts, with jitter so that many wallets
+/// dropped at once do not return at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backoff {
+    pub initial: Duration,
+    pub max: Duration,
+}
+
+impl Backoff {
+    /// The delay before reconnect attempt `attempt`, counted from 1, before jitter.
+    pub fn ceiling(&self, attempt: u32) -> Duration {
+        let doublings = attempt.saturating_sub(1);
+        let factor = 1_u32.checked_shl(doublings).unwrap_or(u32::MAX);
+        self.initial.saturating_mul(factor).min(self.max)
+    }
+
+    /// A delay between half the ceiling and the ceiling, placed by `random`.
+    pub fn delay(&self, attempt: u32, random: u32) -> Duration {
+        let ceiling = self.ceiling(attempt);
+        let half = ceiling.checked_div(2).unwrap_or_default();
+        let span =
+            u128::from(u64::try_from(ceiling.saturating_sub(half).as_nanos()).unwrap_or(u64::MAX));
+        let jitter = span
+            .checked_mul(u128::from(random))
+            .and_then(|scaled| scaled.checked_div(u128::from(u32::MAX)))
+            .and_then(|nanos| u64::try_from(nanos).ok())
+            .unwrap_or_default();
+        half.saturating_add(Duration::from_nanos(jitter))
+    }
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self {
+            initial: Duration::from_secs(1),
+            max: Duration::from_secs(60),
+        }
+    }
+}
+
+/// How the client talks to its relay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientSettings {
+    pub endpoint: RelayEndpoint,
+    /// Sent to the relay in `ClientDetails`.
+    pub wallet_version: String,
+    /// Limit for the TCP, TLS and websocket handshakes together.
+    pub connect_timeout: Duration,
+    /// Limit for each relay answer.
+    pub response_timeout: Duration,
+    /// Interval of websocket pings. It must stay below the relay proxy's idle timeout. A
+    /// connection that hears nothing for two intervals is treated as lost.
+    pub ping_interval: Duration,
+    pub backoff: Backoff,
+}
+
+impl ClientSettings {
+    pub fn new(endpoint: RelayEndpoint) -> Self {
+        Self {
+            endpoint,
+            wallet_version: concat!("lepic-", env!("CARGO_PKG_VERSION")).to_owned(),
+            connect_timeout: Duration::from_secs(15),
+            response_timeout: Duration::from_secs(15),
+            ping_interval: Duration::from_secs(25),
+            backoff: Backoff::default(),
+        }
+    }
+}
+
+/// The wallet's Epicbox address and its secret key. The key never leaves the client.
+#[derive(Clone)]
+pub struct Identity {
+    address: EpicboxAddress,
+    secret: SecretKey,
+}
+
+impl Identity {
+    /// `address` must carry the public key of `secret`; its domain and port are written as the
+    /// sender of every message.
+    pub fn new(secret: SecretKey, address: EpicboxAddress) -> Result<Self, ClientError> {
+        let public =
+            PublicKey::from_secret_key(&secret).map_err(|_| ClientError::IdentityMismatch)?;
+        if public != *address.public_key() {
+            return Err(ClientError::IdentityMismatch);
+        }
+        Ok(Self { address, secret })
+    }
+
+    pub fn address(&self) -> &EpicboxAddress {
+        &self.address
+    }
+
+    pub(crate) fn secret(&self) -> &SecretKey {
+        &self.secret
+    }
+}
+
+impl fmt::Debug for Identity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Identity")
+            .field("address", &self.address)
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) struct ClientContext {
+    pub(crate) settings: ClientSettings,
+    pub(crate) identity: Identity,
+    pub(crate) connector: Arc<dyn Connector>,
+}
+
+/// One wallet's Epicbox client. Sending opens a short connection of its own; [`Self::listen`]
+/// and [`Self::drain`] start a subscription.
+#[derive(Clone)]
+pub struct EpicboxClient {
+    context: Arc<ClientContext>,
+}
+
+impl EpicboxClient {
+    pub fn new(
+        settings: ClientSettings,
+        identity: Identity,
+        connector: Arc<dyn Connector>,
+    ) -> Self {
+        Self {
+            context: Arc::new(ClientContext {
+                settings,
+                identity,
+                connector,
+            }),
+        }
+    }
+
+    pub fn address(&self) -> &EpicboxAddress {
+        self.context.identity.address()
+    }
+
+    pub fn settings(&self) -> &ClientSettings {
+        &self.context.settings
+    }
+
+    /// Holds a connection, keeps it alive and reconnects after failures until stopped.
+    pub fn listen(&self) -> Result<Subscription, ClientError> {
+        Subscription::start(Arc::clone(&self.context), Mode::Listen)
+    }
+
+    /// Connects once, hands out every pending message, and disconnects when the relay has none
+    /// left and every handed-out message was acknowledged. A connection failure ends it.
+    pub fn drain(&self) -> Result<Subscription, ClientError> {
+        Subscription::start(Arc::clone(&self.context), Mode::Drain)
+    }
+
+    /// Encrypts `plaintext` for `to`, signs exactly the `str` it sends, posts it through this
+    /// client's relay and waits for the relay's answer. Resending is safe because receivers
+    /// deduplicate.
+    pub async fn post(&self, to: &EpicboxAddress, plaintext: &str) -> Result<(), ClientError> {
+        let context = &self.context;
+        let span = info_span!(
+            "epicbox_post",
+            transport = TRANSPORT_ID.as_str(),
+            relay = %context.settings.endpoint.domain(),
+        );
+        async move {
+            let started = Instant::now();
+            let message = seal(plaintext, to, context.identity.secret())?;
+            let frame = ClientFrame::post_slate(context.identity.address(), to, &message);
+            let settings = &context.settings;
+            let mut connection = Connection::open(
+                context.connector.as_ref(),
+                &settings.endpoint,
+                settings.connect_timeout,
+            )
+            .await?;
+            let result = async {
+                connection.greet(WalletMode::Send, settings).await?;
+                connection.send(&frame).await?;
+                connection.answer(settings.response_timeout).await
+            }
+            .await;
+            connection.close().await;
+            let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            match &result {
+                Ok(()) => debug!(elapsed_ms, "epicbox message posted"),
+                Err(error) => warn!(elapsed_ms, error = %ErrorChain(error), "epicbox post failed"),
+            }
+            result
+        }
+        .instrument(span)
+        .await
+    }
+}
+
+impl fmt::Debug for EpicboxClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EpicboxClient")
+            .field("identity", &self.context.identity)
+            .field("settings", &self.context.settings)
+            .finish_non_exhaustive()
+    }
+}
+
+fn seal(
+    plaintext: &str,
+    to: &EpicboxAddress,
+    sender: &SecretKey,
+) -> Result<SignedMessage, ClientError> {
+    let mut salt = [0_u8; SALT_LEN];
+    let mut nonce = [0_u8; NONCE_LEN];
+    getrandom::fill(&mut salt).map_err(ClientError::Randomness)?;
+    getrandom::fill(&mut nonce).map_err(ClientError::Randomness)?;
+    SignedMessage::seal(plaintext, to, sender, Salt::from(salt), Nonce::from(nonce))
+        .map_err(ClientError::Message)
+}
+
+impl Outbound for EpicboxClient {
+    /// `to` is an Epicbox address on this wallet's network; the wire slate must be text.
+    fn deliver<'a>(
+        &'a self,
+        to: &'a Destination,
+        wire: &'a WireSlate,
+    ) -> BoxFuture<'a, Result<(), TransportError>> {
+        Box::pin(async move {
+            let network = self.address().network();
+            let to =
+                EpicboxAddress::parse(to.as_str(), network).map_err(ClientError::Destination)?;
+            let plaintext = wire.as_text().ok_or(ClientError::BinarySlate)?;
+            Ok(self.post(&to, plaintext).await?)
+        })
+    }
+}
+
+/// Cancellation shared by a subscription handle and its task, checked at every await.
+#[derive(Clone)]
+pub(crate) struct CancelToken(Arc<watch::Sender<bool>>);
+
+impl CancelToken {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(watch::Sender::new(false)))
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.0.send_replace(true);
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        let mut receiver = self.0.subscribe();
+        // The sender lives in `self`, so waiting cannot fail.
+        let _ = receiver.wait_for(|cancelled| *cancelled).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_doubles_up_to_the_cap() {
+        let backoff = Backoff {
+            initial: Duration::from_millis(100),
+            max: Duration::from_millis(500),
+        };
+        let ceilings: Vec<_> = (1..=5).map(|attempt| backoff.ceiling(attempt)).collect();
+        assert_eq!(
+            ceilings,
+            [100, 200, 400, 500, 500].map(Duration::from_millis)
+        );
+        assert_eq!(backoff.ceiling(u32::MAX), Duration::from_millis(500));
+        assert_eq!(backoff.ceiling(0), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn jitter_stays_between_half_the_ceiling_and_the_ceiling() {
+        let backoff = Backoff {
+            initial: Duration::from_millis(400),
+            max: Duration::from_secs(60),
+        };
+        assert_eq!(backoff.delay(1, 0), Duration::from_millis(200));
+        assert_eq!(backoff.delay(1, u32::MAX), Duration::from_millis(400));
+        let middle = backoff.delay(1, u32::MAX / 2);
+        assert!(middle > Duration::from_millis(299) && middle < Duration::from_millis(301));
+    }
+
+    #[test]
+    fn identity_rejects_an_address_of_another_key() {
+        let secret = SecretKey::from_array([1; 32]).unwrap();
+        let other = PublicKey::from_secret_key(&SecretKey::from_array([2; 32]).unwrap()).unwrap();
+        let address = EpicboxAddress::new(
+            other,
+            crate::address::Network::Mainnet,
+            crate::address::Domain::default(),
+            None,
+        );
+        assert!(matches!(
+            Identity::new(secret, address),
+            Err(ClientError::IdentityMismatch)
+        ));
+    }
+
+    #[test]
+    fn identity_debug_leaves_out_the_key() {
+        let secret = SecretKey::from_array([1; 32]).unwrap();
+        let address = EpicboxAddress::new(
+            PublicKey::from_secret_key(&secret).unwrap(),
+            crate::address::Network::Mainnet,
+            crate::address::Domain::default(),
+            None,
+        );
+        let identity = Identity::new(secret, address).unwrap();
+        let text = format!("{identity:?}");
+        assert!(!text.contains("0101"));
+        assert!(text.contains("address"));
+    }
+}
