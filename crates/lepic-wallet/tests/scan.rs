@@ -565,3 +565,67 @@ fn locked_and_unconfirmed_outputs_change_only_with_delete_unconfirmed() {
             .all(|output| output.commitment() != unconfirmed.commitment())
     );
 }
+
+/// The scanned subject with output `m/0/0/0` locked by an open send.
+fn locked_by_a_send() -> (Harness, support::TestWallet, TxId) {
+    let (harness, wallet, _) = scanned();
+    let sending = open_transaction(&harness, TxDirection::Outgoing, TxState::Sent);
+    let mut locked = output_by_child(&harness, 0);
+    locked.status = OutputStatus::Locked;
+    locked.tx = Some(sending);
+    set_output(&harness, &locked);
+    (harness, wallet, sending)
+}
+
+fn small_page_repair() -> ScanOptions {
+    ScanOptions {
+        delete_unconfirmed: true,
+        page_size: SMALL_PAGE,
+        ..ScanOptions::update(Network::Mainnet)
+    }
+}
+
+#[test]
+fn repair_scan_does_not_resume_an_interrupted_plain_scan() {
+    let expected = {
+        let (harness, wallet, sending) = locked_by_a_send();
+        let summary = harness
+            .block_on(wallet.scan(small_page_repair(), &ScanCancel::new()))
+            .unwrap();
+        assert_eq!(summary.unlocked, 1);
+        assert_eq!(transaction_state(&harness, sending), TxState::Cancelled);
+        snapshot(&harness)
+    };
+    for failing_page in 2..=5 {
+        let (harness, wallet, sending) = locked_by_a_send();
+        wallet.close();
+        let cancel = ScanCancel::new();
+        let plain = disturbed_wallet(&harness, Disturbance::Fail(failing_page), &cancel);
+        harness.block_on(plain.open(password(PASSWORD))).unwrap();
+        let plain_scan = ScanOptions {
+            delete_unconfirmed: false,
+            ..small_page_repair()
+        };
+        let result = harness.block_on(plain.scan(plain_scan, &cancel));
+        assert!(
+            matches!(result, Err(ScanError::Node(_))),
+            "page {failing_page}"
+        );
+        assert!(
+            snapshot(&harness).checkpoint.is_some(),
+            "page {failing_page}"
+        );
+        plain.close();
+
+        let wallet = harness.wallet();
+        harness.block_on(wallet.open(password(PASSWORD))).unwrap();
+        let summary = harness
+            .block_on(wallet.scan(small_page_repair(), &ScanCancel::new()))
+            .unwrap();
+
+        assert!(!summary.resumed, "page {failing_page}");
+        assert_eq!(summary.unlocked, 1, "page {failing_page}");
+        assert_eq!(transaction_state(&harness, sending), TxState::Cancelled);
+        assert_eq!(snapshot(&harness), expected, "page {failing_page}");
+    }
+}

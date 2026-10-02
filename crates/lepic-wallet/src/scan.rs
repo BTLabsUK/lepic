@@ -89,6 +89,8 @@ pub enum ScanStart {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanOptions {
     pub start: ScanStart,
+    /// A scan resumes an interrupted one only when this setting matches, so a repair is never
+    /// skipped for pages an earlier plain scan stored.
     /// Also unlock locked outputs found on chain and delete unconfirmed outputs not found,
     /// cancelling their transactions: the repair `epic-wallet scan --delete_unconfirmed` runs.
     pub delete_unconfirmed: bool,
@@ -185,12 +187,21 @@ struct Checkpoint {
     start_height: Height,
     first_index: u64,
     next_index: u64,
+    delete_unconfirmed: bool,
 }
+
+const DELETE_UNCONFIRMED: &str = "delete_unconfirmed";
+const KEEP_UNCONFIRMED: &str = "keep_unconfirmed";
 
 impl Checkpoint {
     fn encode(&self) -> String {
+        let mode = if self.delete_unconfirmed {
+            DELETE_UNCONFIRMED
+        } else {
+            KEEP_UNCONFIRMED
+        };
         format!(
-            "{} {} {}",
+            "{} {} {} {mode}",
             self.start_height, self.first_index, self.next_index
         )
     }
@@ -201,6 +212,11 @@ impl Checkpoint {
             start_height: Height::new(fields.next()?.parse().ok()?),
             first_index: fields.next()?.parse().ok()?,
             next_index: fields.next()?.parse().ok()?,
+            delete_unconfirmed: match fields.next()? {
+                DELETE_UNCONFIRMED => true,
+                KEEP_UNCONFIRMED => false,
+                _ => return None,
+            },
         };
         fields.next().is_none().then_some(checkpoint)
     }
@@ -297,6 +313,7 @@ where
         if let Some(checkpoint) = checkpoint
             && checkpoint.start_height == start_height
             && checkpoint.first_index == indices.first_index
+            && checkpoint.delete_unconfirmed == options.delete_unconfirmed
         {
             next_index = checkpoint.next_index;
             summary.resumed = true;
@@ -335,6 +352,7 @@ where
                 start_height,
                 first_index: indices.first_index,
                 next_index: after,
+                delete_unconfirmed: options.delete_unconfirmed,
             };
             let outcome = self
                 .store_page(Arc::clone(&session), page.outputs, options, checkpoint)
@@ -729,13 +747,24 @@ mod tests {
 
     #[test]
     fn checkpoint_round_trips_and_rejects_malformed_text() {
-        let checkpoint = Checkpoint {
-            start_height: Height::new(3),
-            first_index: 1,
-            next_index: 9,
-        };
-        assert_eq!(Checkpoint::decode(&checkpoint.encode()), Some(checkpoint));
-        for text in ["", "3 1", "3 1 x", "3 1 9 9", "-3 1 9"] {
+        for delete_unconfirmed in [false, true] {
+            let checkpoint = Checkpoint {
+                start_height: Height::new(3),
+                first_index: 1,
+                next_index: 9,
+                delete_unconfirmed,
+            };
+            assert_eq!(Checkpoint::decode(&checkpoint.encode()), Some(checkpoint));
+        }
+        for text in [
+            "",
+            "3 1",
+            "3 1 9",
+            "3 1 x keep_unconfirmed",
+            "3 1 9 9",
+            "3 1 9 keep_unconfirmed 9",
+            "-3 1 9 keep_unconfirmed",
+        ] {
             assert_eq!(Checkpoint::decode(text), None, "{text}");
         }
     }
