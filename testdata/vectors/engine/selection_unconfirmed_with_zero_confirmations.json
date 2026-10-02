@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "area": "engine",
+  "name": "selection_unconfirmed_with_zero_confirmations",
+  "generator": "conformance/vectors/engine",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "description": "With zero required confirmations an unconfirmed plain output is eligible; a locked one still is not.",
+    "mnemonic": "furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just spring",
+    "tip_height": "20",
+    "coinbase_maturity": "3",
+    "utxos": [
+      {
+        "index": 0,
+        "n_child": 0,
+        "key_id": "0300000000000000000000000000000000",
+        "commit": "085738fda0499384debeb3d1c46fc687467b08127ce147b857386dc9f7bc5f85bd",
+        "value": "100000000",
+        "height": "5",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Locked"
+      },
+      {
+        "index": 1,
+        "n_child": 1,
+        "key_id": "0300000000000000000000000100000000",
+        "commit": "088be4e7fd2cc271ccb8efcccde939deb1d2cbbfdf8ef496c92935466c97b5c4c3",
+        "value": "200000000",
+        "height": "6",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unconfirmed"
+      },
+      {
+        "index": 2,
+        "n_child": 2,
+        "key_id": "0300000000000000000000000200000000",
+        "commit": "086144348a2fc9e5de2680bd76476cbb31f3145bad05962ed0388f038c3f30d99c",
+        "value": "600000000",
+        "height": "7",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      }
+    ],
+    "amount": "50000000",
+    "minimum_confirmations": "0",
+    "max_outputs": 500,
+    "num_change_outputs": 1,
+    "strategy": "all"
+  },
+  "expected": {
+    "estimate": {
+      "estimated": {
+        "total": "800000000",
+        "fee": "700000"
+      }
+    },
+    "send": {
+      "selected": {
+        "amount": "50000000",
+        "fee": "700000",
+        "total": "800000000",
+        "inputs": [
+          1,
+          2
+        ],
+        "change": [
+          {
+            "n_child": 3,
+            "key_id": "0300000000000000000000000300000000",
+            "value": "749300000"
+          }
+        ]
+      }
+    }
+  }
+}

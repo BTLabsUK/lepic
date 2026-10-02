@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "area": "engine",
+  "name": "selection_coinbase_maturity",
+  "generator": "conformance/vectors/engine",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "description": "A coinbase output whose lock height is above the tip is not eligible, even though it is smaller.",
+    "mnemonic": "furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just spring",
+    "tip_height": "20",
+    "coinbase_maturity": "3",
+    "utxos": [
+      {
+        "index": 0,
+        "n_child": 0,
+        "key_id": "0300000000000000000000000000000000",
+        "commit": "09adbc82c9c7549541f29e2f1349fe59fa0adcef925dbc3baff37df6f9e959125a",
+        "value": "800000000",
+        "height": "10",
+        "lock_height": "13",
+        "is_coinbase": true,
+        "status": "Unspent"
+      },
+      {
+        "index": 1,
+        "n_child": 1,
+        "key_id": "0300000000000000000000000100000000",
+        "commit": "0818c3ae553b0b99e1e23b275178ab4a8df6379503feb0a775c081adb7048eb121",
+        "value": "700000000",
+        "height": "18",
+        "lock_height": "21",
+        "is_coinbase": true,
+        "status": "Unspent"
+      }
+    ],
+    "amount": "100000000",
+    "minimum_confirmations": "1",
+    "max_outputs": 500,
+    "num_change_outputs": 1,
+    "strategy": "smallest"
+  },
+  "expected": {
+    "estimate": {
+      "estimated": {
+        "total": "800000000",
+        "fee": "800000"
+      }
+    },
+    "send": {
+      "selected": {
+        "amount": "100000000",
+        "fee": "800000",
+        "total": "800000000",
+        "inputs": [
+          0
+        ],
+        "change": [
+          {
+            "n_child": 2,
+            "key_id": "0300000000000000000000000200000000",
+            "value": "699200000"
+          }
+        ]
+      }
+    }
+  }
+}

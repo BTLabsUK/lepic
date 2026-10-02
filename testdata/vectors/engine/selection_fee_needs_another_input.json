@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "area": "engine",
+  "name": "selection_fee_needs_another_input",
+  "generator": "conformance/vectors/engine",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "description": "The input covers the amount but not amount plus fee, so a second input is selected.",
+    "mnemonic": "furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just spring",
+    "tip_height": "20",
+    "coinbase_maturity": "3",
+    "utxos": [
+      {
+        "index": 0,
+        "n_child": 0,
+        "key_id": "0300000000000000000000000000000000",
+        "commit": "0815c605c065966363927cf18f5cf8b9e2207df636a283d7ce4401e97c86302d75",
+        "value": "400000000",
+        "height": "2",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      },
+      {
+        "index": 1,
+        "n_child": 1,
+        "key_id": "0300000000000000000000000100000000",
+        "commit": "08685def3742fd0d2177181a78920ff3c2bdf42c5374013c09e5d69c8967e6d1fa",
+        "value": "100000000",
+        "height": "3",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      }
+    ],
+    "amount": "400000000",
+    "minimum_confirmations": "1",
+    "max_outputs": 500,
+    "num_change_outputs": 1,
+    "strategy": "smallest"
+  },
+  "expected": {
+    "estimate": {
+      "estimated": {
+        "total": "500000000",
+        "fee": "700000"
+      }
+    },
+    "send": {
+      "selected": {
+        "amount": "400000000",
+        "fee": "700000",
+        "total": "500000000",
+        "inputs": [
+          1,
+          0
+        ],
+        "change": [
+          {
+            "n_child": 2,
+            "key_id": "0300000000000000000000000200000000",
+            "value": "99300000"
+          }
+        ]
+      }
+    }
+  }
+}

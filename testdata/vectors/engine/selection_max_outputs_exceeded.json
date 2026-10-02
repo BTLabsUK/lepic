@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "area": "engine",
+  "name": "selection_max_outputs_exceeded",
+  "generator": "conformance/vectors/engine",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "description": "No window of two covers the amount, so selection goes past the maximum, smallest first.",
+    "mnemonic": "furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just spring",
+    "tip_height": "20",
+    "coinbase_maturity": "3",
+    "utxos": [
+      {
+        "index": 0,
+        "n_child": 0,
+        "key_id": "0300000000000000000000000000000000",
+        "commit": "085738fda0499384debeb3d1c46fc687467b08127ce147b857386dc9f7bc5f85bd",
+        "value": "100000000",
+        "height": "2",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      },
+      {
+        "index": 1,
+        "n_child": 1,
+        "key_id": "0300000000000000000000000100000000",
+        "commit": "088be4e7fd2cc271ccb8efcccde939deb1d2cbbfdf8ef496c92935466c97b5c4c3",
+        "value": "200000000",
+        "height": "3",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      },
+      {
+        "index": 2,
+        "n_child": 2,
+        "key_id": "0300000000000000000000000200000000",
+        "commit": "09d3fa66ea6deefe50d1c2b9aeb84bbbb52391d96ef992c82db6a42be86379630f",
+        "value": "300000000",
+        "height": "4",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      },
+      {
+        "index": 3,
+        "n_child": 3,
+        "key_id": "0300000000000000000000000300000000",
+        "commit": "0879cc9142412b926f66ff64a552637306e627092ad8361e3579e9e0cad59f08a7",
+        "value": "400000000",
+        "height": "5",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      },
+      {
+        "index": 4,
+        "n_child": 4,
+        "key_id": "0300000000000000000000000400000000",
+        "commit": "08761936e636687ef94c590642039eecaf63e6dba46e0727a846d1bfa2f53775eb",
+        "value": "500000000",
+        "height": "6",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      }
+    ],
+    "amount": "1000000000",
+    "minimum_confirmations": "1",
+    "max_outputs": 2,
+    "num_change_outputs": 1,
+    "strategy": "smallest"
+  },
+  "expected": {
+    "estimate": {
+      "estimated": {
+        "total": "1500000000",
+        "fee": "400000"
+      }
+    },
+    "send": {
+      "selected": {
+        "amount": "1000000000",
+        "fee": "400000",
+        "total": "1500000000",
+        "inputs": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "change": [
+          {
+            "n_child": 5,
+            "key_id": "0300000000000000000000000500000000",
+            "value": "499600000"
+          }
+        ]
+      }
+    }
+  }
+}

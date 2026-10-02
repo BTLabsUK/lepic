@@ -1,0 +1,840 @@
+{
+  "schema": 1,
+  "area": "engine",
+  "name": "refresh_reorganised",
+  "generator": "conformance/vectors/engine",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "description": "The subject saw a received transaction confirmed, then a longer fork without it became the chain; the refresh no longer finds the output.",
+    "subject": {
+      "mnemonic": "fashion once state pluck cry predict essence heavy fashion once state pluck cry predict essence heavy fashion once state pluck cry predict essence joy",
+      "password": "",
+      "keychain": "mainnet"
+    },
+    "chain": {
+      "chain_type": "AutomatedTesting",
+      "coinbase_maturity": "3",
+      "blocks": [
+        {
+          "height": "1",
+          "hash": "9b2933004855dced765768ab196964f856a4e0a53cfc41ae3a37ee4063039328",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "2",
+          "hash": "9e4059d4241a65925a33a8cd86f8fcc2f57832fd0d42c782dd2c4401603e0baf",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "3",
+          "hash": "1f468226419c0c89b853b94a208315f98957810196ffb45760c1426ae98b3554",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "4",
+          "hash": "aaef204e98e228e9cf6d24a87ef7031b00d9635d650272f831bd80e6325ef94f",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "5",
+          "hash": "b43369dc60029d227adc24bffd69da20d56808d47d03383e35d325dcc5ea52f8",
+          "reward_to": "subject",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "6",
+          "hash": "5917641fa44767287280877674f569573af3bdd7089cb6d764a7830f055f99c1",
+          "reward_to": "subject",
+          "proof_builder": "legacy",
+          "transactions": [],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "7",
+          "hash": "aecbea0d718c0d05153b487428c3d40c45b556f3e310849f6b5f3468e9948ba6",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "8",
+          "hash": "f41bb2a1288afd31e0d5d4fda98fd0be02fed32582a922b66009a009ff52c20d",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "9",
+          "hash": "b7b1f1999c9528d90d29764c880df1653fa23ff7662b837c204fc52d169f0a91",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [
+            "received"
+          ],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "10",
+          "hash": "0c6acaab1829eec3cee744626ba82e30cb4025d6887fdc8b0ae214478364ee39",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [
+            "sent"
+          ],
+          "fork_of": null,
+          "orphaned": false
+        },
+        {
+          "height": "11",
+          "hash": "f88147001764438c01f2e3b7eba8f2a305dfdba13c26af5d9aa4d6c486e6ced3",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [
+            "reorganised"
+          ],
+          "fork_of": null,
+          "orphaned": true
+        },
+        {
+          "height": "11",
+          "hash": "dbfffcc0f4f20850d2108e661a4d39bbb1d82e7c60ee6ee6deb28ede18e673e4",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": "10",
+          "orphaned": false
+        },
+        {
+          "height": "12",
+          "hash": "78c5aed0b9ecd71a52f68c44b41e29767c3c463697b78ca398b133f09155df5a",
+          "reward_to": "miner",
+          "proof_builder": "current",
+          "transactions": [],
+          "fork_of": "10",
+          "orphaned": false
+        }
+      ],
+      "transactions": [
+        {
+          "name": "received",
+          "from": "miner",
+          "to": "subject",
+          "amount": "300000000",
+          "fee": "800000",
+          "kernel_excess": "095fc9070f0084ae9a9155db8faf87a2e351ef71012c420e3ef393a7b820df20ae"
+        },
+        {
+          "name": "sent",
+          "from": "subject",
+          "to": "miner",
+          "amount": "100000000",
+          "fee": "800000",
+          "kernel_excess": "0979eac119f7b0d5650cd48b1ccc3011b4a24941e7b87fe4baaf2d53c370c57b47"
+        },
+        {
+          "name": "reorganised",
+          "from": "miner",
+          "to": "subject",
+          "amount": "200000000",
+          "fee": "700000",
+          "kernel_excess": "0918e6820050df66107768f5d146ce8bc4dea5ae6792506ebc829f0a5210592f4d"
+        }
+      ]
+    },
+    "session": "refresh",
+    "before": {
+      "outputs": [
+        {
+          "key_id": "0300000000000000000000000000000000",
+          "n_child": 0,
+          "commit": "08a50cb2e2414bea6b981937c03dff27f14299afdc0268db156ff24340bdd1b6a3",
+          "value": "1457920000",
+          "status": "Unspent",
+          "height": "5",
+          "lock_height": "8",
+          "is_coinbase": true,
+          "mmr_index": "8",
+          "tx_log_entry": 0
+        },
+        {
+          "key_id": "0300000000000000000000000100000000",
+          "n_child": 1,
+          "commit": "08ca094aa39ddda4cdef4702c149988a5d5f9fe15ff89a34a2e2b05f6e7e8253eb",
+          "value": "1457920000",
+          "status": "Unspent",
+          "height": "6",
+          "lock_height": "9",
+          "is_coinbase": true,
+          "mmr_index": "11",
+          "tx_log_entry": 1
+        },
+        {
+          "key_id": "0300000000000000000000000200000000",
+          "n_child": 2,
+          "commit": "09b1b339e0f4a38f7595cbf23227f68e226786976fd4d2dca58d4b6d3d889c2815",
+          "value": "300000000",
+          "status": "Spent",
+          "height": "9",
+          "lock_height": "0",
+          "is_coinbase": false,
+          "mmr_index": "19",
+          "tx_log_entry": 3
+        },
+        {
+          "key_id": "0300000000000000000000000300000000",
+          "n_child": 3,
+          "commit": "08ed2a8962e794c96e4ed35a5ac303a15cbbbd5527bfa15856f620e33d91b922ae",
+          "value": "199200000",
+          "status": "Unspent",
+          "height": "10",
+          "lock_height": "0",
+          "is_coinbase": false,
+          "mmr_index": "23",
+          "tx_log_entry": 3
+        },
+        {
+          "key_id": "0300000000000000000000000400000000",
+          "n_child": 4,
+          "commit": "08e18b3254f72824dc6281df02c1b5315435f41e3d408c5053db3cc813596cf107",
+          "value": "200000000",
+          "status": "Unspent",
+          "height": "11",
+          "lock_height": "0",
+          "is_coinbase": false,
+          "mmr_index": "33",
+          "tx_log_entry": 4
+        }
+      ],
+      "transactions": [
+        {
+          "id": 0,
+          "tx_type": "ConfirmedCoinbase",
+          "confirmed": true,
+          "confirmation_height": "8",
+          "num_inputs": 0,
+          "num_outputs": 1,
+          "amount_credited": "1457920000",
+          "amount_debited": "0",
+          "fee": null,
+          "ttl_cutoff_height": null,
+          "kernel_excess": "09d80c4cc35e06fba810c0d52bb25b90d0fe50802867be2287aaa92f2b6f7b1f68",
+          "kernel_lookup_min_height": "8",
+          "has_slate_id": false,
+          "public_addr": null
+        },
+        {
+          "id": 1,
+          "tx_type": "ConfirmedCoinbase",
+          "confirmed": true,
+          "confirmation_height": null,
+          "num_inputs": 0,
+          "num_outputs": 1,
+          "amount_credited": "1457920000",
+          "amount_debited": "0",
+          "fee": null,
+          "ttl_cutoff_height": null,
+          "kernel_excess": null,
+          "kernel_lookup_min_height": null,
+          "has_slate_id": false,
+          "public_addr": "Restore"
+        },
+        {
+          "id": 2,
+          "tx_type": "TxReceived",
+          "confirmed": true,
+          "confirmation_height": "9",
+          "num_inputs": 0,
+          "num_outputs": 1,
+          "amount_credited": "300000000",
+          "amount_debited": "0",
+          "fee": null,
+          "ttl_cutoff_height": null,
+          "kernel_excess": "095fc9070f0084ae9a9155db8faf87a2e351ef71012c420e3ef393a7b820df20ae",
+          "kernel_lookup_min_height": "8",
+          "has_slate_id": true,
+          "public_addr": null
+        },
+        {
+          "id": 3,
+          "tx_type": "TxSent",
+          "confirmed": true,
+          "confirmation_height": "10",
+          "num_inputs": 1,
+          "num_outputs": 1,
+          "amount_credited": "199200000",
+          "amount_debited": "300000000",
+          "fee": "800000",
+          "ttl_cutoff_height": null,
+          "kernel_excess": "0979eac119f7b0d5650cd48b1ccc3011b4a24941e7b87fe4baaf2d53c370c57b47",
+          "kernel_lookup_min_height": "9",
+          "has_slate_id": true,
+          "public_addr": null
+        },
+        {
+          "id": 4,
+          "tx_type": "TxReceived",
+          "confirmed": true,
+          "confirmation_height": "11",
+          "num_inputs": 0,
+          "num_outputs": 1,
+          "amount_credited": "200000000",
+          "amount_debited": "0",
+          "fee": null,
+          "ttl_cutoff_height": null,
+          "kernel_excess": "0918e6820050df66107768f5d146ce8bc4dea5ae6792506ebc829f0a5210592f4d",
+          "kernel_lookup_min_height": "10",
+          "has_slate_id": true,
+          "public_addr": null
+        }
+      ],
+      "last_confirmed_height": "11",
+      "last_scanned_block": {
+        "height": "11",
+        "hash": "f88147001764438c01f2e3b7eba8f2a305dfdba13c26af5d9aa4d6c486e6ced3",
+        "start_pmmr_index": "1",
+        "last_pmmr_index": "35"
+      },
+      "next_child_index": 5,
+      "init_status": "InitComplete"
+    }
+  },
+  "expected": {
+    "exchanges": [
+      {
+        "endpoint": "/v2/owner",
+        "method": "get_status",
+        "params": null,
+        "response": {
+          "id": 1,
+          "jsonrpc": "2.0",
+          "result": {
+            "Ok": {
+              "blocks_to_next_halving": 480948,
+              "connections": 0,
+              "max_supply": 21000000,
+              "protocol_version": 2,
+              "supply": 192,
+              "sync_status": "no_sync",
+              "tip": {
+                "height": 12,
+                "last_block_pushed": "78c5aed0b9ecd71a52f68c44b41e29767c3c463697b78ca398b133f09155df5a",
+                "prev_block_to_last": "dbfffcc0f4f20850d2108e661a4d39bbb1d82e7c60ee6ee6deb28ede18e673e4",
+                "total_difficulty": {
+                  "cuckaroo": 37,
+                  "cuckatoo": 25,
+                  "progpow": 13,
+                  "randomx": 13
+                }
+              },
+              "user_agent": "MW/Epic 4.0.4"
+            }
+          }
+        }
+      },
+      {
+        "endpoint": "/v2/foreign",
+        "method": "get_tip",
+        "params": null,
+        "response": {
+          "id": 1,
+          "jsonrpc": "2.0",
+          "result": {
+            "Ok": {
+              "height": 12,
+              "last_block_pushed": "78c5aed0b9ecd71a52f68c44b41e29767c3c463697b78ca398b133f09155df5a",
+              "prev_block_to_last": "dbfffcc0f4f20850d2108e661a4d39bbb1d82e7c60ee6ee6deb28ede18e673e4",
+              "total_difficulty": {
+                "cuckaroo": 37,
+                "cuckatoo": 25,
+                "progpow": 13,
+                "randomx": 13
+              }
+            }
+          }
+        }
+      },
+      {
+        "endpoint": "/v2/foreign",
+        "method": "get_outputs",
+        "params": [
+          [
+            "08a50cb2e2414bea6b981937c03dff27f14299afdc0268db156ff24340bdd1b6a3",
+            "08ca094aa39ddda4cdef4702c149988a5d5f9fe15ff89a34a2e2b05f6e7e8253eb",
+            "08e18b3254f72824dc6281df02c1b5315435f41e3d408c5053db3cc813596cf107",
+            "08ed2a8962e794c96e4ed35a5ac303a15cbbbd5527bfa15856f620e33d91b922ae"
+          ],
+          null,
+          null,
+          false,
+          false
+        ],
+        "response": {
+          "id": 1,
+          "jsonrpc": "2.0",
+          "result": {
+            "Ok": [
+              {
+                "block_height": 5,
+                "commit": "08a50cb2e2414bea6b981937c03dff27f14299afdc0268db156ff24340bdd1b6a3",
+                "merkle_proof": null,
+                "mmr_index": 8,
+                "output_type": "Coinbase",
+                "proof": null,
+                "proof_hash": "56095d1e6ade21c5b71f4f0d6abd1ca32ea647169d3a27d93a12d8b7d3ff31cd",
+                "spent": false
+              },
+              {
+                "block_height": 6,
+                "commit": "08ca094aa39ddda4cdef4702c149988a5d5f9fe15ff89a34a2e2b05f6e7e8253eb",
+                "merkle_proof": null,
+                "mmr_index": 11,
+                "output_type": "Coinbase",
+                "proof": null,
+                "proof_hash": "1c43195417b55ad65810ed638e7342d2d1bc04f8ad6f0cf05db35c455fdb1403",
+                "spent": false
+              },
+              {
+                "block_height": 10,
+                "commit": "08ed2a8962e794c96e4ed35a5ac303a15cbbbd5527bfa15856f620e33d91b922ae",
+                "merkle_proof": null,
+                "mmr_index": 23,
+                "output_type": "Transaction",
+                "proof": null,
+                "proof_hash": "f9295887afe339c84ca511affe59eb219e2c57b1e4282faa1a758207d28d8393",
+                "spent": false
+              }
+            ]
+          }
+        }
+      },
+      {
+        "endpoint": "/v2/foreign",
+        "method": "get_tip",
+        "params": null,
+        "response": {
+          "id": 1,
+          "jsonrpc": "2.0",
+          "result": {
+            "Ok": {
+              "height": 12,
+              "last_block_pushed": "78c5aed0b9ecd71a52f68c44b41e29767c3c463697b78ca398b133f09155df5a",
+              "prev_block_to_last": "dbfffcc0f4f20850d2108e661a4d39bbb1d82e7c60ee6ee6deb28ede18e673e4",
+              "total_difficulty": {
+                "cuckaroo": 37,
+                "cuckatoo": 25,
+                "progpow": 13,
+                "randomx": 13
+              }
+            }
+          }
+        }
+      },
+      {
+        "endpoint": "/v2/foreign",
+        "method": "get_tip",
+        "params": null,
+        "response": {
+          "id": 1,
+          "jsonrpc": "2.0",
+          "result": {
+            "Ok": {
+              "height": 12,
+              "last_block_pushed": "78c5aed0b9ecd71a52f68c44b41e29767c3c463697b78ca398b133f09155df5a",
+              "prev_block_to_last": "dbfffcc0f4f20850d2108e661a4d39bbb1d82e7c60ee6ee6deb28ede18e673e4",
+              "total_difficulty": {
+                "cuckaroo": 37,
+                "cuckatoo": 25,
+                "progpow": 13,
+                "randomx": 13
+              }
+            }
+          }
+        }
+      },
+      {
+        "endpoint": "/v2/foreign",
+        "method": "get_pmmr_indices",
+        "params": [
+          0,
+          12
+        ],
+        "response": {
+          "id": 1,
+          "jsonrpc": "2.0",
+          "result": {
+            "Ok": {
+              "highest_index": 34,
+              "last_retrieved_index": 1,
+              "outputs": []
+            }
+          }
+        }
+      },
+      {
+        "endpoint": "/v2/foreign",
+        "method": "get_unspent_outputs",
+        "params": [
+          1,
+          34,
+          1000,
+          true
+        ],
+        "response": {
+          "id": 1,
+          "jsonrpc": "2.0",
+          "result": {
+            "Ok": {
+              "highest_index": 34,
+              "last_retrieved_index": 34,
+              "outputs": [
+                {
+                  "block_height": 2,
+                  "commit": "08350e1dbea1f80ae554c5ea39dcf3ad3c51c4489b00ce64a8f30a2c37b2c52e54",
+                  "merkle_proof": null,
+                  "mmr_index": 2,
+                  "output_type": "Coinbase",
+                  "proof": "382b9c910ad56d489bfe6ba1c3632f8bb321e5960203eea6d6301ada25b6157355c7b1aeb31aed54f5743ed33c2793423d127c7a57249c7a6573f609b470d6be0badfdff7d9cc835dd6c78f3c8b325b95641445cc29cb4df9863ee251d1a0c0db739e8beccc6cc947edc21182e3588858863eab9c3f9d6dda07126b66935b9e277a48edb6dadcc3e205e35fe3838e08e3893fed87c7ce02b6a3bfbd253ab26798ba90c2bfb48d4ac40494f1d6e56a3cef39b3d2f117337285727fa5135414858766f002af5cad8e7f2740a11f2cf2cc3eb8d568aef63d5213b3e91ef20108076e5070ffd8b1e5183c0e428fe5a3088e9277fe994a63736583cd4c07f0015fca437b4f25ef938534135a5a5a9405489c46b536a5a7f00ac83e6eabb9d61c22c6ee24f6023942ab8da173df5d8a71ced15710590aac539d0cfd5f7666254f8ed1c6817a62572e7939f271f7a896bf2eb14d8217d3394c9eb99804a1e6ade4d4ee488b100e074395fa5e10a09b88182f0920e6835081dd339cd913f96337ae3f07d06519fe00e246d50d65677a5528a30e55c8c2384f4193de90a141e0df463b1287708cce15622e5ec1df6648ee2b43f62353526578ec555d3e5b11c757c0a8253faa58e34650c4cd79e8f1169d238d6cdd637ff0197261ab7ee6c3b2246fbc887974ef72be267e08fdd46a62b2b3f3b190a155a788ff25bb4d7ade51c3e460179412be7da9692905f57af91cca4f4e97db0119c0d6604dfc5ac39d4033b83b20e35321580e256d957553ea9f8880be1536f2ce67da3365dd5e40212211bc2053d5c6bee2690481ba3351dc5c804d8d987ba5bb0be4df69d8cc9fff46b370e6f036f83b9548364cad203df7c3a92c342ac86d9073ac064c7547d7af1de9ba2290130fec548b069d804e4280666d81345c4051ed26173f30d83f512b66f441b1f580fa399",
+                  "proof_hash": "37550ffdff037e8a68163fb06a0f325a76f41ae1d9012fb74d815186654a1013",
+                  "spent": false
+                },
+                {
+                  "block_height": 3,
+                  "commit": "097ff09050f35eb82c50fc591ea29da60c4795019dd32312cd333061a27e28c387",
+                  "merkle_proof": null,
+                  "mmr_index": 4,
+                  "output_type": "Coinbase",
+                  "proof": "d57c363ceb866aacae3e9b82e3ed129e508ad8ea2409595143bd9a51360709a73a3bb50816d702a8fe715fb1d3ed52bff1484a130569c5bf91cbd4ddb0293dd40a88e055b51f7687e1a3e7d11abc098d0c56e6a776a06c3f271f6b553f0910a26299ceea2ed131742e9c2b89aef6770f7d8185718ae080e1b6ddd24f072989de9563a28e5f5c13d27393a32cc1a24831b10988dd77e8a893b4098afcc88a5f549984c24212b080ff8f5d6c027131fe06b4833ea31a0f025cb033d355b0ea9f68867ba115686e330809705963d3c28f45b9d9f5f4ccfc96fae6e2d9dfc0b38f100807de6248f38ce0ff5ee03ca24b275d561ccb8128f4bf8da829e46d692fc9d3faeec982aefa53d8917d527232570d05c772b89ecbda2159551c5a6cbae9b96084c6ee33298da9b39076106891610f14e8625c16f904bbab17724b58bae7be753b6664dba9f3ac4d69758046dc31d23f7bba68299982e0da664947471c93187f63c2026fdb25193b8489abe8b1ffa3ed2af077c50e3b3dc7798ddb196398008205377669738d4fcc7a7667616a6f39db70da3cfcd2ffc8d88bf10e1bb355c3d22d324cc36e0307e72a7b924ccb60950b5f864af9a5d873012cdb0dc406a619a2028f007a18a4aa07e27c3eca901a3ccc4056ac86d11c21e07c336b5725f8bc1b6d8d0a3a22e72430bdb828cfe3945347078fda4a3ebc0676e6452b9e369ef7ee37071c2654597be78fc4fb330c6e9f09d4c435bb0fdc250b3ffec71037f567f952c27808d0dfedfe4564a15f0f95d06cf55926ae3019fc6290fa59eca09daf4aaa47f1b00937104d2e8702ffde3bb1a36f306425947acee21689cf116b3510d0bb72c959ab930a06e08a56a39563fe6d3f4fed6021bb87304bfc9e1bbaf06d2c6c37bc16e5a9666d390c539c89d0f19c5253bdc5d19d1be3da4454d82dc742586b1e54",
+                  "proof_hash": "b95d11c2650b559d56cb2f11b8d3d12d39fe4ea84d98e1f481fa1755e9d91054",
+                  "spent": false
+                },
+                {
+                  "block_height": 4,
+                  "commit": "09c87c97f68aa59a03f901f6730eb45b2daaead98f4b8025f71f6f5aba604e5f48",
+                  "merkle_proof": null,
+                  "mmr_index": 5,
+                  "output_type": "Coinbase",
+                  "proof": "fd002520ee9fd44e7c7f98fb1dac8687810bb45f2790805aa72e0339fb40fcd13ce65f7795c8542b16a845cedfe8b9d0aa69969b04270638fc70af34cd7cffa90f64d8d03bbe3c0c1244be82e0a5f0998229ea7a58ade2ddfd2ee1414905eb766d8ba1804dc15d3e28ac758aaa895a1bacec3606948317fc03f28680cb5c724f062397cce526fcbbce5853367480bc37e6c5b9a993c472af4f0827cb7998424166d75a2cc407977571ee6b436bd93df7e84fd02e6e801a17d456a8de0a5114baa7c1b672a8a31440fe7afa703b537df905ca43ed953e4a2dd0431fc8685190d9da58e6a0a6a0259595bb867dce64b94bce384f65eaf627a3d55913f473927798fdc99ddbc6386b0c6d7ed5c347e7c31d69ac62f4143957b9dac57e20e66417e12f188acc4e4581d70e996fc0bb7f59ca3b482624e6d376304e7a8bb341e0f38c1f49fd280b710fe13905211305903ca80e78c0f70a8aa719d07567b55101cff392a30059eedd92204a9fbccff6efb1423ba1ee4a4d3dd667b0737b91ec67fcf0d13b47bbb46411349e1c26b03893a80f78901df3f6739b685a44e660e0d0cdc742917c5adb0c8250142eb9581756c4e79a16362571f7e81cf6a8cb520201953a0aa9d0d0cee7861fe8b0743d94c1f1891b1b81929e6a54b3109102af4e87d0d1b754fedf2a1161e9aa6c1ad62cf4ea896061b97aa19573b143347e666f158da4e641e2a688655bd78465b4dc99510f1860afda25cf97baec52cf14662c3064aa315da195e33bb0f36ec730c77edd167f295ea06a5fb1007581969d6a8ec8b199db6a016053e1af803151546cba6175d21e119a5786536ebfa6460d1af4a1f0fd9a4160f2a33666f525fad2ad3c65e1e6a3eb3cd93f0255c91c1cc21aa748ea8df1468f738fc21ee2c00502e3502712f4f7234a670a64690d7568e4d46acfeff0ab4862",
+                  "proof_hash": "ad8e1db6d3bb5eb5e0aeef1d485c17a86e696fbf2e3a1cd5eb8ac2a57ad28809",
+                  "spent": false
+                },
+                {
+                  "block_height": 5,
+                  "commit": "08a50cb2e2414bea6b981937c03dff27f14299afdc0268db156ff24340bdd1b6a3",
+                  "merkle_proof": null,
+                  "mmr_index": 8,
+                  "output_type": "Coinbase",
+                  "proof": "67a184d20104eaf92335f932ea8b3afd54132b223b09a5c6ac220ed340fc1c9c5564ba1734046ee8060a9dd8f9f5756f1cbbba05b85442b8a011f3c5da851ce200d080cd5b569468b1d8dc2055c846172e2fee658dbce316f4a030ae111576505c629f12eb01e71d177314389136072a95e87f9977819896988c9e1da00fae0a75f90590214770050fae8bad6ce8f49f57c5689f9622028eade08aa481d02bbd495f6b5d20a91f40e86925b739936d60fecd8922efb03e7ed844cd8baac51f880ec244aa90bb4a7c85fed2c6076c75a3cd971a68e6521244176eac15454b4c998ebb2c88c66bf964967b1067bebf086d3bab091b5dd9dcf9bbc33a14c7dec43c7704a4cb03d515dd21165146ff2ed9367dab49fce2da145b3bfa10c3183123c6722d477b46b2ce9bf8fb6caf05e381942a10bb841d489c517e22fd0095965d791d22254d4903329c83eda847d381cf858fd4e133af37635d539df22b95d1183e4af80106ec45cff29466220f645380640ffb037c1b885adbc063bba6e95b85b87aac94069e322a57ee85a1adcc8fde5682ee93a2019e70eda9701c829a90aeb8ec72b183e491cf1f9f1842eaed7b20de959e2dc62e97839076dd7b2af25ecc2b8939d0f3d9a24b36c91d52fbc2132de07e9a946f96d02ba003002d44733249f7ce9ece7ea37edc8df97a4c6a96f92af30da0ca6ba90788773264468b55ddcb353ef65f6cab4ec7a7cba7086249fe847cf58ed096cbbb1f4290c3c345e08ce2a2e08eaf4e6190c7c7c6cb5d74be94ea694f766e4069c7cb58171e349573b5c4c60a489f6134a46fd789737d81ac6673e2318de6c8efb1acbffae7c4bb4fac7a037626a6235367a7eae08df5bd1d405a574496d3fcb9b693b180cb5604e93aa4efa05ec9aadfab5b79cf54449c7df6b030c09d551f764d57b0d1aaa1a2222fa7a06013cd",
+                  "proof_hash": "56095d1e6ade21c5b71f4f0d6abd1ca32ea647169d3a27d93a12d8b7d3ff31cd",
+                  "spent": false
+                },
+                {
+                  "block_height": 5,
+                  "commit": "096b43c9245a1181bd81b7765df868ad9f4c8512f67f5c48f6518dcd150ef072bc",
+                  "merkle_proof": null,
+                  "mmr_index": 9,
+                  "output_type": "Coinbase",
+                  "proof": "139da25faeba7b4c41b213dc304acee586670f33a772b3e12bf4d211eda49fb778890f5b3dcb83627a53ed4168727c3ab16d2bf86cd6d3b6b2aeea45a75536ea0193bbb01fd69ae11afeb266d729060f43180a1944d6ade04f367f13b53faaed13054800c6a9113c7e7105cb033637f8bf1587b3bb2d949c9309dd6a84ce13710990c7b6b6e6ad1644346f1bfa236ad12c5b8b7c05d12a04e9a640b26bbb2fb5c2b36d1e27b453744d74c9c929defff4f7cc9c5dfa5b0d042b7fcb06d61b4802942bf04f31257a664d97e9e128672232c84a4bdb5de53cc9831009f09c5e44400419915bc22acc7bee1ca08c00f716df677b65f1638a9a388528a2bf69880ae4e959ea4870909ea19ee33a08dc056b7fda2822bf8a460b892c9e0db52ffc183369719c60d824f46cea1443cdce17186131c07a319a248ed4e669d4237eb2e841920f5529ea60a43c1304325b6b22a1a18c929a8d48fb7b56cbbe7bc6717f9a64410003c0638866f92e9ae28952a6e3c2d3b2d1685683fa265945da3250faa6925b11ffbaa2faed95376f0be20bebcf586c986d2d78e75d870722de7ed8c06bf4b7a7b70a63d0aa4fbafea70a45a1238752fefa0bfbeb2c389f0ac7e5be61637706c0f097fa94cdc4baded0fc5f0e6daf8d4d023aba87ef06995156186c39ac6e32930464c863471bc5805da329b0061cfd901e2145d00fc20a951fd2ffbd4a11dc9d0e1d45085daa6b26a2ebc45d9180567e95490490a15a1d6d9f510025a8816d9acf8a7b9804ef8c1a894d8101fb4efc925fb54731f70c54fd513ce6dc8ff275c64c2ae7d71bd893c7b80a4980aed02fb7c2962e2d86660dd55834c03e54b03277656becdce08a01fd36f054d85819dcfb71db04ca9383894bd53d7b0fa28c5f249daddd61b7812c11bde3c68585d700c0f99b907d613748cba2664b88281195e4fc",
+                  "proof_hash": "872c676c51741892319d5f7746e3f3ef71a52c1b4460e9c1dc269b928837d1b0",
+                  "spent": false
+                },
+                {
+                  "block_height": 6,
+                  "commit": "08ca094aa39ddda4cdef4702c149988a5d5f9fe15ff89a34a2e2b05f6e7e8253eb",
+                  "merkle_proof": null,
+                  "mmr_index": 11,
+                  "output_type": "Coinbase",
+                  "proof": "71d965687d8a2976b6bf14c7a8420d4d14a50bdf750f1ee1c99bfed4366dcaa4aa010e55a840b64f371db68e9c8e282027433751e1e871c8c9c8ea66a3088b79094a41ea7d78d45b76e92b7d353b424e205c143af89502858dee78ab06728ccdd9cdaaeb9ad36be9b2a42bcf8fdfe01e4b18d2755fffa277c1ebeaaaf02531354c2a1602140d1b2d8f187aa4b9fc5811c0fd952c6218cd36ae2a4538cf71fa85c7cbe25e4bc1b2486f9dabcf51fd0c7d58a4a1719a31bb58a392911a77185bb424ee3e468c1d41013a24a547dbd81bb008426b8ce1c4d840904a3c73b12abcc87135d4b184d5beb445f9253691a3d60c969c011baf8fc056b602079c25d446117d7295fbcab1359c1cf785968b5273acb0c45cde1c1fed517d765e8f3a30478aa4eca8f15075920e3b861a35ef85a312191ea6565a0c3bdd96a5a00ee00e18f777014eb2d05f072974dc657122d2f19bf0f413ce7a6e076ff408c52fe91d356ec6c50174b7401a62f187b2f292cb7c5c0dd30c875b648b43f54e105051fad0c10d27c3a67969d489fd28c8ca040d7be9707c369e630f88ee4ea4e688e7c9b54319393d4110bf268e293833e115b74375814765900516e858e96329fbf4d8963445986948f4070ee0c92d19344c66663f19aa9a5ae2f5c8597cb1459a5f15d5814f9c16950f4c0a9645b433c4b2947759a307e946d7b113a7a26ce0159cadac3d50582a79c60f2c85852febede2bdbc59808fb746e09242cdea64444e2441985054b29390b08786cc789108cdcee9b6c319798ac33fd9e36ff899473a742ae98e051e42dfccc2ee37549b9099589340e61e743139dad247e79d06607fe3261001816834da2a95ffd12066961b8f51702e2f62a2fd2e364f1a34682f73c3e4259b1d90203a5fc74b9ad44cf0292f424f7f5e2becbb54c12dd43d10a36cf9737ba06f6cd3",
+                  "proof_hash": "1c43195417b55ad65810ed638e7342d2d1bc04f8ad6f0cf05db35c455fdb1403",
+                  "spent": false
+                },
+                {
+                  "block_height": 7,
+                  "commit": "0822f320537aa53d319da73295ee0e9e93a6f7fcc9b7ee028fd23982ef73a135af",
+                  "merkle_proof": null,
+                  "mmr_index": 12,
+                  "output_type": "Coinbase",
+                  "proof": "0b0fdf7a760b152f8b20b06660e89798efc02f93f13168f727b6b3f7a12d1a1e3c430458dc8e9aa20c277cc5b72c909ca49c57e5d2d16cb1d187fdfc099ef7620185aed7bc2955d4c6f41e81216d9c3b7e709abbcecbd7d81eb150dba06e38419a48e52bad86691b1e67da5faf9930e9d2f8ea56d22346a14830f27a50d8fdd789695a0a7e3d2b72b0155df2ae4de4d66c2b9983ef3314b8842382c720b5908d8d9b834ce8db66809e70d7abdde0bedc6a4b2d73d528cb27e5e2ba2107ca1f9df9dad1466978501737c7bfdf0465320c5142d7f5c0ddbd27a1a8d5cf22a2ff491479e87e13229c720207e27ce69d4c971594ebb8bf47863a033b1c3a36267617b4c3b6f380eb8541f709bfb2233fba8507a1e8ed180272246bd4851ae80f4001b6b2cb0b2162695f9bdab437602212f6c9b4f8e2345ca4461c16ff92945bf331e2525caf9f2633f0d65563fc6e6a9a29ccfb24acca4748a7bbb7f73dcc5a160e64b7024e235b81ff009e565baf752f7b5285f834ccf451d0257572029dc864a036ba516359de20275091ac037efa851dbea20ba114143a48a41d33e9f2364f5df99df1312020adef70a2d5e73f89bbaab4c1249d1c5bcf1cd8bc9060d744ff96374c17a92d0398d922ab6080d08521d20aec43591f42c0c696ffc209cfc1f10120c1e3016f89790a5ca7cbcc4b9dccf6f51b4f0e48541b721b8d51fbb716a2c54befa7b73d96a9df584137680fd9b63161d47584e590f308d407d4da12593e0a687335290f8c445ab0b316627ac4c9013b0100d081c29eaca4f633ebd8c998d0aa05bee084b76f7c39990ea03ed631f6634f61e7fc37256770846184d5b9e012a3278665d4d4e13038ee903017ed65e956fdf1a095c050b4ec17fdc87023edaf02467f13a486cb575a6f7ee4f699ca7e9cfcffe26b894e39d1119fb18881fe3e0d4ac1",
+                  "proof_hash": "90ef1e39d21bb33f6143567cdc0496e5f794255c512ca263509eef5b2c28c35a",
+                  "spent": false
+                },
+                {
+                  "block_height": 8,
+                  "commit": "08eb0fb4d5414aff884ae929097956225add5c93f95cd3c655329c7ea1aaee81e9",
+                  "merkle_proof": null,
+                  "mmr_index": 16,
+                  "output_type": "Coinbase",
+                  "proof": "c84ec9a49c36e3f4f99feb83ed06fe376df14a2ebeaaa20d0d86f2eef9fb6ac938b5b139fe2f04cb63c6e8f42c9edb418c2fda5c2a38ed26c846704b64424cc9043301b8f2e33da4c0edae83045c4bf0671a7200407c336b358aef68c8bf315e37d7d1c265aec947c18225e171af16967cdd1ef6b0605db616c044fe9795537cd5e608d794e870319b5a29e4d251744ab94d1cfe5a044a5fa826ddc3708c0eac994594cad766c532cdc62e936707a6459ab9a48080084e1a60cb09a5d9719e68b9d203db1ce4065f833e0c77460c82c7709d068396c6f0e98fcea8ae9fc87456964afb136edf20c47b583750504b7d7412ac0ee8c6cb4a01bc3be3e6a82b350640fd6550f6f2f54268d6e37dd70a951f2f072ca1949b4feae1402773f91538d8bcd4469059bee672f5dd4118c2e1b89dd5b116f0094c36341d73c5f9654c0bb27b9b6fdd599f6f2feb9a4fe23f66810648436944588363b1b67df5edd29616b49afb01bfd30985dbcbf9659ee1de8579b5df79f740ae805c04678323f628d420c1fe152ab61f0b441aa1a7a84ac0c5047ad81a7ecd1d334bfea35b83656ced217aba90109a601600f8fa24875f610b4aecaae0664db1e4c8d7548b0ecc4acf00732b0bb1473b59e129e4a6d5e4002d1b87de0987b0f7cebba721d0f029d695e72837a19d8955bfcf7939014e46be616782031304afe5861525efaf4f0247c385ca674da95651acab118cad567c3d044ec47016be4ed45db628ceb1e013e0eec2da81a5cc65d529c95d5e84001ad29c319bd556b3bd38247084e2c089f5ef20ef061822190f4f15de16f44088d9e767707c47a82728ae32ae7412b60612b33009b72b16fb6c2b403faf1691b5dd8bd67a640c718c7b25376f0c717e0700efeea16b0ebaf8bbcf6c5b7b15b5457d00d57ab60355264d0a8cbb36906d2e1fedf150a49f01",
+                  "proof_hash": "cc7e37342e30c68de306326549dae99e3f8873a3f997093f6687957b0c31d70d",
+                  "spent": false
+                },
+                {
+                  "block_height": 9,
+                  "commit": "09fec4fe442a9cea330b80ba41a3a65b3ab8014f5355cc0730002778c1f2b7fbcb",
+                  "merkle_proof": null,
+                  "mmr_index": 17,
+                  "output_type": "Transaction",
+                  "proof": "c45a6fd9ad0396b9a6467b16694d8e9dd65de60eb4404618e06ab853dbd8797f3adb0a2611f07d54cd2270b4147957d0ba6d265746b2275a065a10c8c3ba4f260073acce0153e6ba48d9ba8ce4cd268c65181f3b5de3560f8a14182bf5725c053c6fe9699540c85d77ae90e4872a8e1ff987fa719dd9fb642a0a59199ce8aea88222e52c5502fefbc4452f6f593d23977c1f5e2326fb7a6227cfc1e97ed9407f7d7b2f821cb894a2620be981045cb6cc90af0dd5d5a04b76b85fc054a09c3f043f80157115d8fe86c7b265d59440c019403fbd278ff5942ec254a2328effeceedf70c74fd45b80b96c32fd6447144b413a92a09ace223f7f90b1af487dc44a051917c14b9639c5dcaaeeffadcb673ca6e4f270f91b12daa8692356ecb8aa4955a32dc4aff88fa05727a701c94b29add41a4b95955f95c5705df5f870ac7f2f537fc4ab087803af963e7b843a8dce57ac41d872bd47621dd7ed9dc1fb599e2c6f218900f764c6a29099ff1519e30bc18a690e56f1b8a8cfce2dcd84f917e90711a30fca2868e57a5dbaf10267f1fedc4d92058a5596fb57eb33640739ba72eb1de3c9d1c784a21ba60c75018cd3658ed465e7294fd4f83829814946c1d46c357303a114426b27507b2b82324b8900022834ddd43b4b7475928567925f7ac974af394dfcf75b8fb81d6e72c4188ae21137a3c3b05783b77b982ed0c5603ba49162b1e929d83f25cca48ae147a69c702e43bbbac1c984ce433ad67904cdd8a33a3c213785e071c11015d0abb7a4337bf086ef12b1cff8235afda1534775eff99afc2c4a40c3ce958ba7799d3cc19a6c9fbdbc3b99189b45ac1b9f074a3f4dfdcfe65709c013aeced0f3a8a743304fe9de9fa051d65a65aff4686ce2c9a0849d69bf9c578be1286588428341e00589e81471ebbc4ef513f9cfe06f0bcb26e8c7f8f77cbacb",
+                  "proof_hash": "a0c93730bcdac40773f8bb81efc5b4630ebd5546bcf58a55a51ed6ac3c2b7c48",
+                  "spent": false
+                },
+                {
+                  "block_height": 9,
+                  "commit": "09854c320451d2a66d72bff6cbc506315e82bb6d5f1cf26e97e4fcf71b84e5ebf2",
+                  "merkle_proof": null,
+                  "mmr_index": 20,
+                  "output_type": "Coinbase",
+                  "proof": "403a9cf8df523bd6cc2e666ae531169fb2ad2951626f0d842475ca87dbbd69bde47aa5257f7a6454b3f171db7aca51034987bd532828991bd8cf32138f1a9b0a0a776c633c3c64f82f7e910f1cdebb789393317ca5c431c2b0ba8899719f83ec55fab938e39cc02a60c525b8a9f502ffdf5072e6fa472e2a34b1174437febd54564c6767ec799d4cc4b6769e6bcd4fda6008ea062d483b6a4a0fba5600ff4f0aebfe12bd20afe62e23e1aad73a09e451baca328740a2ad262504216c2352efe506483ae83f5e2320b9018b743d3d1690906c26a99c3edbea06d5238cd7c86ddd5ac1382e90c5aa64ece4c9b8a21986bbba2eb6ee415ec3815f89086e375940c529d33b557c7a89674a108fd08d57616b90a474972ff5569aebf85bc1161eec91ddb96df8a4dd1c06d0bfd96615066303b958467180106975d2b55d12d1e8ac46d6835cf9d652dbdfe94be895f9bd31badce4ab91a245a6229b7b6900b240edb2f3c701f42d3094ea63a52cfd783cc3169ef1f1562e035826cce854f1f421d19e9201881e1d052547b786efefcebdbc978f2f365c5aafba7cc786a3d8ac6846e4faff8e3b2765b80f785a2b0e5e4b878df374b4a0b04c511de132aa31ef67457d63890487c19cf97c8e25002965814a2902bd2f1d164544fc3f07bd650d2447cf356a99a368761f86f098cc8cf287056a424acf758290d6a96b5310bdb3398e65b9308ceb90f760847a77776b32f68a11f4ba53261f73f15de399298f635acc3d80612138cc902551e386ddff7ede3453dfe8f38004a64da0825454df95483d744a3cba80a91d459a2840f053ae6d981a4113152bae4d73064c417a0c456ddf0f26f5da2730edec57746eff12821622e93f3fdd00f0314f88d332aaf662e1e15f87460b85fe913895ff12211ac2f5ee14516a6b9f2ced16b417e8dbe9e1812949bc1c86",
+                  "proof_hash": "708350071c45ea4ee3a0aaf1107dc2dd6621a3803eb91176a3a683f4d66c9aad",
+                  "spent": false
+                },
+                {
+                  "block_height": 10,
+                  "commit": "08ed2a8962e794c96e4ed35a5ac303a15cbbbd5527bfa15856f620e33d91b922ae",
+                  "merkle_proof": null,
+                  "mmr_index": 23,
+                  "output_type": "Transaction",
+                  "proof": "8ab1c393419de1b16e799368ce2caa4c08bda10d5dde31067ab05dd92a7bce04fd2fe16b1123a9c7d8bb66e91f31176ba7fd087462111e3eee86c0be1e30b74506866b3a90237bdfc7d7cf159cd80d1275b5d39f7a29028577075723178364036b4befc25788d828a5030b65ec7cc86217be704350faba72a77a8935a8efa95ac66be973bc30d7fcc486fff003bf0dcffb74144ec494087f1b844293b1260608fff89f8d453f20c8e5337a5ae901d450504cb4eaa760b724ea1d31d9244cf0dde202e4c10f8dcf7d64626d816eba712d4f9ec30265a320e6325911b1e9e29d5b9b9d7d8060d28d264952a25ea8d4d0a8a4257a3b473f0a425a89b1af0b09508c15861264f3eead04d982cc1ad91522363ff2f71cec61c77c7c4fe669e91d6d8d6914c5548d2dda1fd75bafce5bb7dbad75baf6e056ba059568733b9a20a70ff6411cfa3fd778ed57d84a621e7b85f717845bb33e64ce0f7c41b4e47b925993bbc68c038bcceb973b3c2cacf71a9a6f85954fcb7e929c169d59d1723dfd32a573848b802f851c4b4d0a9c0f7fec540fd1597051f393920041d311df50ec7f719556842c797c6c3b4d04b9de2b5656d974501bc653c68f473e50035183eba8828f469d82bd4d260405589cc80a42060aa378c56b3c020a55928afcfdeadf572e906edb907ddb9ae141b071f7287a48c48d3388287397d1b5e43df3240c38cf4be5132af3e01080ae457bc290a3d223d119dc5e8763c784a3b634746e31977dea1feefcf95bcbf646cb266737ff078c3def2b4c5a5d7a37e946ed697e46fdb59d4b55cfd0a2da4018ff01b4b26ff4c7924235694a47730f7358f15c63914b88bc7731c7df008785264803464d9bcb6890948524d00204e0622b25d268da2c6ee42d311af70d547827f8587a001b14e5f8772a6cd2715eebed12bd412d8b11e64562cb0db4",
+                  "proof_hash": "f9295887afe339c84ca511affe59eb219e2c57b1e4282faa1a758207d28d8393",
+                  "spent": false
+                },
+                {
+                  "block_height": 10,
+                  "commit": "083cd5841265aa58938db75eabc519b0e3434a9b1ce3d8e7f2e4f17b07713c9bd9",
+                  "merkle_proof": null,
+                  "mmr_index": 24,
+                  "output_type": "Transaction",
+                  "proof": "20a7308588aa6443aa9f65210ef4f49e64dbd29bcdf310ac66ea6b4bd86faa004247a1d9fac93c611d589919a6661fee5ffc45339dc57b939a3c1eefb46777da008ea3579630efbd50310c4c77d98038ca7b90dcdef5edc415b4405f486f6988b2df645724fd5fa451f39e1a1b9950efc1b52620514819ee2a944cbeb8233d7f917d2d31d97e5b8e3b774c298f5f908cf82cf81512084c1ed3f847952c3dc7e41e2b416a9f565429757be74f82ae598152ef8a6e51490c2d9e314d7a4e125dd846fdb5e1713b7b793b2365114114edda41a9e9138c2b0f2d8f3bd38f5747261b15e3016443091af98651a5178f78154ae37ae016098c90ea1f4bd71a209cc3ac66f005af98eebab662c8949e6bdb43d5bbc8de89a4cb39b087b7e98ffd5359e30d9084ac1ec31d90204aac49a2def03a59dd72835aba59198bf2a1d533c3c21088f3a672db1082da3f41aad9c2938806ce2cf39ab117abe0cce31968bf6c1304f24b0283d135abfd91fabe1a3d79e8c118eee558a7df327623e8f21660ec4262d0e2cb107ff40d82e6b929da2d672203cc2bd6faa64dbef61824bea3a54eba7dd0fa9dca2cd68d4623bc37226a93520c94539d3ceddb8af4cec43f88ca787c62186807cf4b1090e6be874b973ed7dc52bec4e544628306defccc92c4269b5bb01836d58d2b01e20bcf0e77a94e4e39376b1ac94ffdba6542e418c1d4fd59fb0a5e83fd47f0d1422c7a28796ce889d740dd22165e19235a7b4a5b488533cf256b300556c14b96f492d4ad16bf760030a094c85943ca5b2205da865ce3ab50be658f401c017a8a5d54a0d612e92e308f040043538ebd22d22e575af35b54c8dc328038f608bba1fdccfdacd69e8bff88a14d11fb976d88ced6cb5991596fe55ae00655e10a94841aaecfb876a279897743f4a9c748d046aadb17f98896795ca5525b8a78",
+                  "proof_hash": "fbc8f4af371fea5fab6b0f6287247a86d03c47da30ee5dd770a97579929a074d",
+                  "spent": false
+                },
+                {
+                  "block_height": 10,
+                  "commit": "08a4d252df54161f98941ad7e35019eba87f536acc69ec9f7df5ec6e46453ff48c",
+                  "merkle_proof": null,
+                  "mmr_index": 26,
+                  "output_type": "Coinbase",
+                  "proof": "01bc11f523f07f7db38376d1db8fa3b5b1024fdbb5b6c39114fac7153df44dfbc4ebe73c9efa7d3eae4af347636a2d7323b37650a0c00f584bfdb4807ddd24190ae98e2c294a52a9c09122af1f89ab280867c3f2a1ada0c53fbcee197e55607c9dec6e16472a61460674e3224e9fdb650d275801493bca7b92dff407dbc6448c0e8e6803eca9d0e5a8a9041805988a67f535fb9cb25d25156dd33b444114861825af62d0b6e1e39d64db79dfacce4fd240d2eeb023b5dc7e86d342cec2211ac3d2938fe695c351a3a88cf8a4ae38640373a1151053031f24b1792bef3d59f36c758e79e8ccc1dbf4d753a1170b7768731aa108faaa25777ea27af7743302e1f379e6b54c0fd915f8a4c35d879762d6f0435e09de9e3fce8d769119c16b53b17ebb27e506bc4812e20d90cf3ba7ac315b4f7780dd84190fcde87b856fb44780b78371e5e8b3d12e4d5a3d5ce50b8d511ee66bc1d0dc6d9da06365f5bfb921ab66870702645d8df2c6d8b8bcad008484b56e1d3459c105f2d4641391d84ab224a125bca5dbc3fc8eddbc34844979e4625a3500dfa9048bbf4c54dc239fb7e81df871540d324fe6ea3f475db85733f728b84fb7fbac38c573c239508c35b11c0b91fbb1fc3630ef564d3a2a328d5353b624b1396c964f02f56b77ec109b00e827aed7b5ad0a0ebd8b287727caf4620a04b101618d8bd904ca747687253a070f1ea99ec89a952f11281964d2ad41bd927898bc52f6d18c0d1be151a7cca1e6a5184ca27d98797e3852e86e998cf54984c7345aa1b7e2049f61be9e6b6c822460d910686300750981cfaa57b5c18c91b3f140cd8b5ffa0a1650b733fff245ceb4ecf6f3754dca558bfb4247925e2672d265d0cae33da5541150b1591ae66a66ce297c96b35cc6f96cfc70f58234de88c906a93ba0a6cac460c76aa362a18991f37c57a3fead",
+                  "proof_hash": "3b0728fc98e3a7ad77d95593d2272570712016e70bdd7aacdb5a500edfc41203",
+                  "spent": false
+                },
+                {
+                  "block_height": 10,
+                  "commit": "083abb505a44883d4f274f96579f0d8cfc35ca374f1cfdafc1e7fdacc26d9683aa",
+                  "merkle_proof": null,
+                  "mmr_index": 27,
+                  "output_type": "Coinbase",
+                  "proof": "15592aec3dfa2e205e451311e2a8e19bbffcdc7fb47f8ad322c7943faa48078eb716e49e5318017dd06d439a218f637f5de4f58cffb4096a77434331dfc73f6606bc266464811dca05d3ea57f322418d54c82fae5ee5d6efd695bbd57acfd583fc08f29fdc8e2c45b9a2529723d2a4a651b700bfee348ce5a499f77f03fad1bcdc3a1ff28e2bb66dd287f4279c87a7f0b30eb68d6328abbc50f36c361c29cd6714274cd1f692d3b867c9c5718405c86c545b394c061a3df4f68209054e98736205dc06bf81174c4bf9cf9e778dbea4e04b40a348a8e9223f3b354263b3413f53a198e5134a1f6c666ee946fcb72f02532a9d28e4fe0c3c32dd60cef4bea90f371cee7a49a913e830f086123ec880d821581bae9b810ea691cf08e38a1f650ffcf54a3b238b993833b4a820139a16610069a0cf86a56e9f18d08639bdbb5eb513201eea193b9b90ce38de20fa338b515dabf874e0df17dd47466074c95afe84ba886c0399b57990ce585a7914066216e315734d4a96211aaa2b558a50cd205994cd1f2762bc5ba2faca656e8842379f7a8199772aa3489e6cc093f07d6f592d9288cee2e1bc6f39771605f6d3921e829a8b3c10735d06648693d4db1be6b68e6a86f1f15e204a5834c199b599d4871ea79b0a50c21160497d8be8d17023b714721165287a77df7a9f932ceecfce2d93757e8e05fb758003373209f0759a3a71bec1e68a1cc67140742729776c82dd5c33ded33ab5fa36c60524063a804d7722fcd8b1e4d26fa15696ccbecf10c4753e57a99999735cb7d7d814f6eb68e4458b5d37833437ef83a0c4c59392e228edda6609813534daddbc4eb2578cf2f080b4dfb2118bc31dbd20d4df088458a92a1a185a3f46616a1d60d00e823721d387c91af383a20d10cd1ef62de9feaa3e438080d743ff2e60e332036670fea6e9a738a0a847d7",
+                  "proof_hash": "840a29c3ecedbd7057c89fd18c1c6b41cf275853f2b4c26a73c23d157cc5e7a2",
+                  "spent": false
+                },
+                {
+                  "block_height": 11,
+                  "commit": "09fc62a7c2f2e4176e4d18fcd8f5a708b90b287837a93061cd648c0a3a61e3f9d5",
+                  "merkle_proof": null,
+                  "mmr_index": 32,
+                  "output_type": "Coinbase",
+                  "proof": "e52d7d12041cf51c1e7dd8fdfe9176f3c50086a46e2d3d7b28a0b893a246f9e8756f93a2d8a89d9d0b8b838f8b7b078b7d03e2b5066557e2664c89a289916724002b68e470629d4ba90b087dca48f993cf5ca77efbec65153a615cc5397578f4dd3d07e6d753c7d2eb19fc85b29e206cfa97277ed87ecfe15a11d1de269e10c10f5900d0e258f5a76f6c3eac5051853de8046da5a86717176df3c0de85bf043b45c5a981348a83dde144b9d33812361f5508fc09e9664e1bb30c75118935d2685c49fbfb42ac52707288452c0e864248b599b0fed231c281dc4f344b192e81d5ac351c4e8ce8056959f5d6cd4124bf8dfea296edb1dc5309e0d664435e08a74888d461ca8f39dc9fca2a750d947ab0a58fee130ecee1948558e58d3d421a2fcf3b86baefb7ef1551e0be3bd38876a8f1b606543ef91b0e118630344c86245564807dba07c14f53811a3d506618818dc11fa8334f241ae8a65babb0d5894fabcc535c01263dd272590ee9a0aa65fef05f8d3a5643723ca866ce600bb4861c896066e806bc5933b5b19fbc877d16bfb4c790e0644095b386adf6132bea6bc43cdf52679062a69341bfcd8f0c8c693e3f07b13ef676dfbb3f1e5ca28dbcce1cedbf350597a2beb4e736299d08b8baafb51428c2be76bfd13b9462f8421171d2ee59ca8ae40520913a7d468f5b430343ca5bef4354668bddc29065b854aabd8745a0c37f3d9d9f960d5df476c763452639d8212559e4ffdb51fccc1dec74bbbe6f5fdf51dd66702fedea10d337317707dbc8c11d210148ddba9170e0ce4fcad868fe7b325c500e1023289b723f2a8d0419c61961c28b88fff1c4e32f0a84e8c4073c86319eb24dd57460923ec7e77ea0b162d284dd90eb2c496abbf4ce7f6033f8b80db9fdfca45dfa5156c322b21a57418a0dead28bf416128756615a92073e34064b1204",
+                  "proof_hash": "4494601f55e210de89ccb031dce490b0a67e7707778f28c05214854bcf2292b3",
+                  "spent": false
+                },
+                {
+                  "block_height": 12,
+                  "commit": "081246088e810d15c9beba1db916ae27dda5d7eb5ae43167606d4e324d27ce9308",
+                  "merkle_proof": null,
+                  "mmr_index": 33,
+                  "output_type": "Coinbase",
+                  "proof": "33a7629794b6fd3c5646dd19fc11eb6208f09a4cce3f867fd4b824ccd677c3467ca55ccdb51d3790a863774bf197f071f76d7ef9a14e03351e42b32845c5714d068070ff6b7bcbb8ac5e6d05fa1d88e807a24a41367a3faf138d771d3a701f812fb70e835444f56096e872a77c6519018ca79b6c9376d0fbe77997b4a3b1f23f16e7e46d6755125d26b43660752144c4a62a4529038b554d0967e2f236fde4fb2f43beb87c41114435a823f77f887de6fa2169866cbbfa19f53eed99acc93d7daaf6eb7ba9b4f106fcc6651d936d188c20dd6360042e5bccdbd92a8b084ce53a877abe37f30d697b330b78874cd297a4fb36a8da60e3c70c940edf8ab419644d1e8beb948eb67f59c909a131e25f0e5a2259b3a5e95beeef25206af85f2ff11f06bc74e4639041d60cca36bebd3f06b6b44330a5d68142aab21b516ccba3538874c19ea0ab08b8c0cf601d6f7df5c05a1f4a6cda5bdf2670f2c072f0b7c7db0fe6d103f7fc772573f21ffce1bf7e2ca4b290360ffa4d88c379654af01178dc9fc06b786048c25b39e940f6c679c88214aefac83dca755bc12b42cf10878252642da03527a8f94a5bdeb8c078b91ca95be356ab8fe85d546879a1d80c1ca9595060afd676387aa176a883926a320accd6fb88cebeb607805a4661a367be69f501e5e6726657ac6a6360a5b8f95b17e301eb4bbc9d92961d2ad57be5e5b2526b1ca463d72d868e5ee6c53b53d5a0905c972725a54f0f4836385311f15a2720dc53cbc7c4eba00450de823f1c073bc153c0feee5fc4cedd9a462abb8d59ea140a0d7314858bf78165167e3fbd1d10111771f308f65a31954d032e315e25325bd49f408da2ec2f0b431577786d86aef83762e4f277b95d7f749fa17ece780f0be33e11fa01e2396dc1de9ddd95878db9dc82eb3b942a18e96a8b1f115bbc5248753993e1e9",
+                  "proof_hash": "99062d0139650d5973363c1381d9e858e7bfefcd675d0c7f7e1cef728f6cd650",
+                  "spent": false
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "after": {
+      "outputs": [
+        {
+          "key_id": "0300000000000000000000000000000000",
+          "n_child": 0,
+          "commit": "08a50cb2e2414bea6b981937c03dff27f14299afdc0268db156ff24340bdd1b6a3",
+          "value": "1457920000",
+          "status": "Unspent",
+          "height": "5",
+          "lock_height": "8",
+          "is_coinbase": true,
+          "mmr_index": "8",
+          "tx_log_entry": 0
+        },
+        {
+          "key_id": "0300000000000000000000000100000000",
+          "n_child": 1,
+          "commit": "08ca094aa39ddda4cdef4702c149988a5d5f9fe15ff89a34a2e2b05f6e7e8253eb",
+          "value": "1457920000",
+          "status": "Unspent",
+          "height": "6",
+          "lock_height": "9",
+          "is_coinbase": true,
+          "mmr_index": "11",
+          "tx_log_entry": 1
+        },
+        {
+          "key_id": "0300000000000000000000000200000000",
+          "n_child": 2,
+          "commit": "09b1b339e0f4a38f7595cbf23227f68e226786976fd4d2dca58d4b6d3d889c2815",
+          "value": "300000000",
+          "status": "Spent",
+          "height": "9",
+          "lock_height": "0",
+          "is_coinbase": false,
+          "mmr_index": "19",
+          "tx_log_entry": 3
+        },
+        {
+          "key_id": "0300000000000000000000000300000000",
+          "n_child": 3,
+          "commit": "08ed2a8962e794c96e4ed35a5ac303a15cbbbd5527bfa15856f620e33d91b922ae",
+          "value": "199200000",
+          "status": "Unspent",
+          "height": "10",
+          "lock_height": "0",
+          "is_coinbase": false,
+          "mmr_index": "23",
+          "tx_log_entry": 3
+        },
+        {
+          "key_id": "0300000000000000000000000400000000",
+          "n_child": 4,
+          "commit": "08e18b3254f72824dc6281df02c1b5315435f41e3d408c5053db3cc813596cf107",
+          "value": "200000000",
+          "status": "Spent",
+          "height": "11",
+          "lock_height": "0",
+          "is_coinbase": false,
+          "mmr_index": "33",
+          "tx_log_entry": 4
+        }
+      ],
+      "transactions": [
+        {
+          "id": 0,
+          "tx_type": "ConfirmedCoinbase",
+          "confirmed": true,
+          "confirmation_height": "8",
+          "num_inputs": 0,
+          "num_outputs": 1,
+          "amount_credited": "1457920000",
+          "amount_debited": "0",
+          "fee": null,
+          "ttl_cutoff_height": null,
+          "kernel_excess": "09d80c4cc35e06fba810c0d52bb25b90d0fe50802867be2287aaa92f2b6f7b1f68",
+          "kernel_lookup_min_height": "8",
+          "has_slate_id": false,
+          "public_addr": null
+        },
+        {
+          "id": 1,
+          "tx_type": "ConfirmedCoinbase",
+          "confirmed": true,
+          "confirmation_height": null,
+          "num_inputs": 0,
+          "num_outputs": 1,
+          "amount_credited": "1457920000",
+          "amount_debited": "0",
+          "fee": null,
+          "ttl_cutoff_height": null,
+          "kernel_excess": null,
+          "kernel_lookup_min_height": null,
+          "has_slate_id": false,
+          "public_addr": "Restore"
+        },
+        {
+          "id": 2,
+          "tx_type": "TxReceived",
+          "confirmed": true,
+          "confirmation_height": "9",
+          "num_inputs": 0,
+          "num_outputs": 1,
+          "amount_credited": "300000000",
+          "amount_debited": "0",
+          "fee": null,
+          "ttl_cutoff_height": null,
+          "kernel_excess": "095fc9070f0084ae9a9155db8faf87a2e351ef71012c420e3ef393a7b820df20ae",
+          "kernel_lookup_min_height": "8",
+          "has_slate_id": true,
+          "public_addr": null
+        },
+        {
+          "id": 3,
+          "tx_type": "TxSent",
+          "confirmed": true,
+          "confirmation_height": "10",
+          "num_inputs": 1,
+          "num_outputs": 1,
+          "amount_credited": "199200000",
+          "amount_debited": "300000000",
+          "fee": "800000",
+          "ttl_cutoff_height": null,
+          "kernel_excess": "0979eac119f7b0d5650cd48b1ccc3011b4a24941e7b87fe4baaf2d53c370c57b47",
+          "kernel_lookup_min_height": "9",
+          "has_slate_id": true,
+          "public_addr": null
+        },
+        {
+          "id": 4,
+          "tx_type": "TxReceived",
+          "confirmed": true,
+          "confirmation_height": "11",
+          "num_inputs": 0,
+          "num_outputs": 1,
+          "amount_credited": "200000000",
+          "amount_debited": "0",
+          "fee": null,
+          "ttl_cutoff_height": null,
+          "kernel_excess": "0918e6820050df66107768f5d146ce8bc4dea5ae6792506ebc829f0a5210592f4d",
+          "kernel_lookup_min_height": "10",
+          "has_slate_id": true,
+          "public_addr": null
+        }
+      ],
+      "last_confirmed_height": "12",
+      "last_scanned_block": {
+        "height": "12",
+        "hash": "78c5aed0b9ecd71a52f68c44b41e29767c3c463697b78ca398b133f09155df5a",
+        "start_pmmr_index": "1",
+        "last_pmmr_index": "34"
+      },
+      "next_child_index": 5,
+      "init_status": "InitComplete"
+    }
+  }
+}

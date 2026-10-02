@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "area": "engine",
+  "name": "selection_minimum_confirmations",
+  "generator": "conformance/vectors/engine",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "description": "With ten blocks of confirmations required, only outputs at or below height 11 at tip 20 are eligible.",
+    "mnemonic": "furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just slim furnace very nurse royal tourist connect just spring",
+    "tip_height": "20",
+    "coinbase_maturity": "3",
+    "utxos": [
+      {
+        "index": 0,
+        "n_child": 0,
+        "key_id": "0300000000000000000000000000000000",
+        "commit": "0885bf84e22b5994522909ed99c0d85e88e11ef0fae93ba4ec2bd3d6fc99d99c7a",
+        "value": "200000000",
+        "height": "17",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      },
+      {
+        "index": 1,
+        "n_child": 1,
+        "key_id": "0300000000000000000000000100000000",
+        "commit": "08685def3742fd0d2177181a78920ff3c2bdf42c5374013c09e5d69c8967e6d1fa",
+        "value": "100000000",
+        "height": "18",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      },
+      {
+        "index": 2,
+        "n_child": 2,
+        "key_id": "0300000000000000000000000200000000",
+        "commit": "09731b49e62a276253e202e63dc8698905c15c6992dab4ec70c74f161b78a00443",
+        "value": "900000000",
+        "height": "11",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      },
+      {
+        "index": 3,
+        "n_child": 3,
+        "key_id": "0300000000000000000000000300000000",
+        "commit": "08e31a88c1ee2f619933ad7f7a87769c8981c4d3c47f64855cd8989f69fae0bc7d",
+        "value": "300000000",
+        "height": "12",
+        "lock_height": "0",
+        "is_coinbase": false,
+        "status": "Unspent"
+      }
+    ],
+    "amount": "200000000",
+    "minimum_confirmations": "10",
+    "max_outputs": 500,
+    "num_change_outputs": 1,
+    "strategy": "smallest"
+  },
+  "expected": {
+    "estimate": {
+      "estimated": {
+        "total": "900000000",
+        "fee": "800000"
+      }
+    },
+    "send": {
+      "selected": {
+        "amount": "200000000",
+        "fee": "800000",
+        "total": "900000000",
+        "inputs": [
+          2
+        ],
+        "change": [
+          {
+            "n_child": 4,
+            "key_id": "0300000000000000000000000400000000",
+            "value": "699200000"
+          }
+        ]
+      }
+    }
+  }
+}

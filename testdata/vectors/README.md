@@ -94,7 +94,7 @@ process can create at most 256 test-RNG slates; larger case sets are split acros
 | `aggsig` | G-02 | deterministic | Two-party flow with fixed nonces. |
 | `slates` | G-03 | deterministic under test-RNG | Slate ids, offsets and nonces come from the test-RNG mode. Any value still drawn at random is recorded, and the vector says which. |
 | `epicbox` | G-04 | randomized for messages | Addresses and signatures are deterministic. Encrypted messages record the salt, nonce and ciphertext upstream drew. |
-| `engine` | G-05 | deterministic | Selection and the recorded node responses of a test chain built in a fixed order. |
+| `engine` | G-05 | deterministic | Selection, and the recorded node responses of restore and refresh sessions on a test chain built in a fixed order with upstream's test mode. |
 
 ## Areas present
 
@@ -124,3 +124,61 @@ signatures, each with the verification calls upstream accepts and rejects. The g
 Stage vectors of the standard and invoice flows over the file and Epicbox methods, and upstream's
 parse outcomes for malformed slates. Case setup, file names and fields are described in
 [slates/README.md](slates/README.md).
+
+### engine
+
+Output selection over stated UTXO sets, and restore and refresh sessions of an upstream wallet on an
+in-process upstream test chain: every node exchange of each session in the shape below, and the
+wallet state upstream ended in. Each session was replayed into a second upstream wallet by the
+generator and reached the same state. Details are in [engine/README.md](engine/README.md).
+
+## Recorded node exchanges
+
+Vectors that record a node session (currently `engine/restore_*` and `engine/refresh_*`) list its
+calls under `expected.exchanges`. Each element is one JSON-RPC call over HTTP, as upstream's
+`HTTPNodeClient` sent it and the node's API handlers answered it:
+
+```json
+{
+  "endpoint": "/v2/foreign",
+  "method": "get_tip",
+  "params": null,
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": { "Ok": { "height": 9, "last_block_pushed": "…", "prev_block_to_last": "…", "total_difficulty": { } } }
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `endpoint` | The request path: `/v2/foreign`, or `/v2/owner` for `get_status`. |
+| `method` | The JSON-RPC method. |
+| `params` | The JSON-RPC params exactly as sent, except that `get_outputs` commitments are sorted. |
+| `response` | The JSON-RPC response object. A handler result is `{"Ok": value}` or `{"Err": error}` inside `result`; a protocol failure is an `error` object instead of `result`. |
+
+`MockNode` (task N-01) replays a session like this:
+
+1. For each request, serve the first exchange not yet served whose `endpoint`, `method` and `params`
+   equal the request's. Compare `params` as JSON values; for `get_outputs`, sort the request's
+   commitment list before comparing. Answer with `response`, with `id` set to the request's id.
+2. A request with no matching exchange is a test failure, not a node error to recover from.
+3. When the session ends, every exchange must have been served.
+
+Notes for consumers:
+
+- Upstream builds the `get_outputs` commitment list from a hash map, so its order changes between
+  runs. The generator sorts it, and since the node answers in request order, the response lists
+  outputs sorted by commitment. Upstream reads the response into a map, so order carries no meaning.
+- Upstream checks `get_status` on the owner endpoint before every refresh and refreshes only when
+  `sync_status` is `no_sync`. The in-process node has no peers and never syncs, so the generator
+  builds that status the way the node's status handler does, with `connections` 0 and
+  `sync_status` `no_sync`. Every other response comes from the node's own handlers over the chain.
+- Responses are stored as JSON values, so their key order is the generator's, not the node's.
+- The same call can appear more than once in a session with the same answer, for example `get_tip`.
+
+The generator checks every session the same way: it replays the recorded exchanges through a
+loopback server into a second upstream wallet that starts from the same state (a copy of the
+subject's wallet directory for a refresh, a new wallet from the mnemonic for a restore), requires
+the three rules above to hold, and requires the second wallet to end in `expected.after`.
