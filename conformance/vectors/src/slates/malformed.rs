@@ -278,6 +278,9 @@ const MUTATIONS: &[Mutation] = &[
 #[derive(Serialize)]
 struct Inputs<'a> {
     base: String,
+    flow: &'static str,
+    stage: &'static str,
+    producer: &'static str,
     mutation: &'a str,
     json: String,
 }
@@ -304,17 +307,20 @@ pub(super) fn generate(
 ) -> Result<Vec<Rendered>, Error> {
     let mut vectors = Vec::new();
     for mutation in MUTATIONS {
-        let (base, text) = base_text(flows, mutation)?;
-        let json = (mutation.apply)(text).ok_or_else(|| Error::Reference {
+        let base = base_text(flows, mutation)?;
+        let json = (mutation.apply)(base.text).ok_or_else(|| Error::Reference {
             step: "mutating a slate",
-            source: format!("mutation {} does not apply to {base}", mutation.name).into(),
+            source: format!("mutation {} does not apply to {}", mutation.name, base.name).into(),
         })?;
         let expected = Expected {
             file_method: file_outcome(&json)?,
             epicbox_method: epicbox_outcome(&json)?,
         };
         let inputs = Inputs {
-            base,
+            base: base.name,
+            flow: base.flow,
+            stage: base.stage,
+            producer: base.producer,
             mutation: mutation.description,
             json,
         };
@@ -324,10 +330,15 @@ pub(super) fn generate(
     Ok(vectors)
 }
 
-fn base_text<'a>(
-    flows: &'a [(&Case, FlowRecord)],
-    mutation: &Mutation,
-) -> Result<(String, &'a str), Error> {
+struct Base<'a> {
+    name: String,
+    flow: &'static str,
+    stage: &'static str,
+    producer: &'static str,
+    text: &'a str,
+}
+
+fn base_text<'a>(flows: &'a [(&Case, FlowRecord)], mutation: &Mutation) -> Result<Base<'a>, Error> {
     flows
         .iter()
         .filter(|(case, _)| case.name == mutation.base_case)
@@ -341,7 +352,13 @@ fn base_text<'a>(
                 stage.stage.name().to_lowercase(),
                 wire.encoding
             );
-            Some((name, wire.text.as_str()))
+            Some(Base {
+                name,
+                flow: case.flow.name(),
+                stage: stage.stage.name(),
+                producer: stage.producer.name(),
+                text: wire.text.as_str(),
+            })
         })
         .ok_or_else(|| Error::Reference {
             step: "finding a mutation base",

@@ -9,6 +9,9 @@
   },
   "inputs": {
     "base": "send_file_plain_s1_file",
+    "flow": "standard",
+    "stage": "S1",
+    "producer": "sender",
     "mutation": "text that is not JSON",
     "json": "not a slate"
   },
