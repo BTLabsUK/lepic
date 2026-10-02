@@ -69,7 +69,7 @@ pub fn unspent_outputs(
 
 pub fn pmmr_indices(body: &[u8]) -> Result<PmmrIndices, NodeError> {
     const METHOD: &str = "get_pmmr_indices";
-    Ok(decode_response::<WireOutputListing>(METHOD, body)?.into_pmmr_indices())
+    decode_response::<WireOutputListing>(METHOD, body)?.into_pmmr_indices(METHOD)
 }
 
 pub fn push_transaction(body: &[u8]) -> Result<(), NodeError> {

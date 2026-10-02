@@ -351,6 +351,16 @@ async fn rejects_outputs_that_were_not_asked_for() {
         FieldProblem::Duplicate
     );
 
+    let mut spent = output_json(&asked, 1, None);
+    spent["spent"] = Value::Bool(true);
+    let body = ok_body(&json!([spent]));
+    let server = TestServer::start(move |_| Reply::json(body.clone())).await;
+    let error = client(&server).get_outputs(&[asked]).await.unwrap_err();
+    assert_eq!(
+        assert_invalid_field(error, "spent"),
+        FieldProblem::Contradiction
+    );
+
     let mut missing_height = output_json(&asked, 1, None);
     missing_height["block_height"] = Value::Null;
     let body = ok_body(&json!([missing_height]));
@@ -429,6 +439,80 @@ async fn rejects_unspent_pages_that_break_the_request() {
             FieldProblem::Crypto(_)
         ));
     }
+}
+
+#[tokio::test]
+async fn rejects_paging_indices_that_do_not_move_forward() {
+    let proof = listing()["outputs"][0]["proof"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let commit = listed_commitments()[0];
+    let page = |highest: u64, last: u64, outputs: &[Value]| {
+        ok_body(
+            &json!({"highest_index": highest, "last_retrieved_index": last, "outputs": outputs}),
+        )
+    };
+    let cases = [
+        (page(200, 98, &[]), "last_retrieved_index"),
+        (
+            page(200, 140, &[output_json(&commit, 150, Some(&proof))]),
+            "last_retrieved_index",
+        ),
+        (page(200, 201, &[]), "last_retrieved_index"),
+        (page(999_999, 200, &[]), "highest_index"),
+    ];
+    for (body, field) in cases {
+        let server = TestServer::start(move |_| Reply::json(body.clone())).await;
+        let error = client(&server)
+            .get_unspent_outputs(100, Some(200), 10)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            assert_invalid_field(error, field),
+            FieldProblem::OutOfRange,
+            "{field}"
+        );
+    }
+
+    for (body, accepted) in [
+        (page(200, 99, &[]), true),
+        (
+            page(200, 150, &[output_json(&commit, 150, Some(&proof))]),
+            true,
+        ),
+    ] {
+        let server = TestServer::start(move |_| Reply::json(body.clone())).await;
+        let result = client(&server)
+            .get_unspent_outputs(100, Some(200), 10)
+            .await;
+        assert_eq!(result.is_ok(), accepted, "{result:?}");
+    }
+}
+
+#[tokio::test]
+async fn rejects_pmmr_indices_outside_the_mmr() {
+    let listing = |first: u64, last: u64| {
+        ok_body(&json!({"highest_index": last, "last_retrieved_index": first, "outputs": []}))
+    };
+    for body in [listing(0, 5), listing(900, 5)] {
+        let server = TestServer::start(move |_| Reply::json(body.clone())).await;
+        let error = client(&server)
+            .get_pmmr_indices(Height::new(1), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            assert_invalid_field(error, "last_retrieved_index"),
+            FieldProblem::OutOfRange
+        );
+    }
+    let body = listing(6, 5);
+    let server = TestServer::start(move |_| Reply::json(body.clone())).await;
+    let empty = client(&server)
+        .get_pmmr_indices(Height::new(1), None)
+        .await
+        .unwrap();
+    assert_eq!((empty.first_index, empty.last_index), (6, 5));
 }
 
 #[cfg(test)]

@@ -156,6 +156,13 @@ pub(crate) fn validate_output_locations(
                     FieldProblem::Duplicate,
                 ));
             }
+            if output.spent {
+                return Err(NodeError::invalid(
+                    method,
+                    "spent",
+                    FieldProblem::Contradiction,
+                ));
+            }
             Ok(OutputLocation {
                 commitment,
                 features: output.output_type.into(),
@@ -188,6 +195,11 @@ impl WireOutputListing {
         if count > max {
             return Err(NodeError::invalid(method, "outputs", FieldProblem::TooMany));
         }
+        let paging = PagingIndices {
+            highest_index: self.highest_index,
+            last_retrieved_index: self.last_retrieved_index,
+            last_returned: self.outputs.iter().map(|output| output.mmr_index).max(),
+        };
         let mut seen = BTreeSet::new();
         let mut outputs = Vec::with_capacity(self.outputs.len());
         for output in self.outputs {
@@ -226,20 +238,61 @@ impl WireOutputListing {
                 mmr_index: output.mmr_index,
             });
         }
+        paging.check(method, start_index, end_index)?;
         Ok(UnspentOutputs {
-            highest_index: self.highest_index,
-            last_retrieved_index: self.last_retrieved_index,
+            highest_index: paging.highest_index,
+            last_retrieved_index: paging.last_retrieved_index,
             outputs,
         })
     }
 
     // The node fills an output listing for this call, with the first index of the range in
-    // `last_retrieved_index` and the last in `highest_index`.
-    pub(crate) fn into_pmmr_indices(self) -> PmmrIndices {
-        PmmrIndices {
-            first_index: self.last_retrieved_index,
-            last_index: self.highest_index,
+    // `last_retrieved_index` and the last in `highest_index`. MMR positions start at 1, and an
+    // empty range ends just before it starts.
+    pub(crate) fn into_pmmr_indices(self, method: &'static str) -> Result<PmmrIndices, NodeError> {
+        let first_index = self.last_retrieved_index;
+        let last_index = self.highest_index;
+        if first_index == 0 || first_index > last_index.saturating_add(1) {
+            return Err(NodeError::invalid(
+                method,
+                "last_retrieved_index",
+                FieldProblem::OutOfRange,
+            ));
         }
+        Ok(PmmrIndices {
+            first_index,
+            last_index,
+        })
+    }
+}
+
+struct PagingIndices {
+    highest_index: u64,
+    last_retrieved_index: u64,
+    last_returned: Option<u64>,
+}
+
+impl PagingIndices {
+    /// The indices a caller pages with must move it forward: `last_retrieved_index` is the last
+    /// position the node scanned, so it lies between the position before the window and
+    /// `highest_index`, and not before any output returned; `highest_index` is the requested end
+    /// when there is one.
+    fn check(
+        &self,
+        method: &'static str,
+        start_index: u64,
+        end_index: Option<u64>,
+    ) -> Result<(), NodeError> {
+        let out_of_range = |field| NodeError::invalid(method, field, FieldProblem::OutOfRange);
+        if end_index.is_some_and(|end| self.highest_index > end) {
+            return Err(out_of_range("highest_index"));
+        }
+        let last = self.last_retrieved_index;
+        let before_returned = self.last_returned.is_some_and(|returned| last < returned);
+        if last < start_index.saturating_sub(1) || last > self.highest_index || before_returned {
+            return Err(out_of_range("last_retrieved_index"));
+        }
+        Ok(())
     }
 }
 

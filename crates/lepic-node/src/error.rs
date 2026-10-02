@@ -104,6 +104,8 @@ pub enum FieldProblem {
     OutOfRange,
     #[error("more entries than requested")]
     TooMany,
+    #[error("value contradicts the call's contract")]
+    Contradiction,
 }
 
 /// The handler error a node returned inside a JSON-RPC result.
