@@ -3,8 +3,9 @@
 
 use std::path::PathBuf;
 
-use lepic_crypto::{Commitment, Message, PublicKey, RangeProof, SecretKey, Signature};
+use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, RangeProof, SecretKey, Signature};
 use lepic_primitives::amount::{EPIC_BASE, Fee, Height, MICRO_EPIC, MILLI_EPIC};
+use lepic_primitives::committed::KernelSumError;
 use lepic_primitives::crypto_ser::BlindingFactor;
 use lepic_primitives::fee::BodyCounts;
 use lepic_primitives::hash::{Hash, Hashed, ZERO_HASH, blake2b_256, blake2b_256_keyed};
@@ -19,6 +20,7 @@ use lepic_primitives::ser::{
 };
 use lepic_primitives::ser::{Readable, Writeable};
 use lepic_primitives::tx::{BodyPart, Transaction, TransactionBody, TxError};
+use lepic_primitives::validate::ValidationError;
 use serde_json::Value;
 
 const V1: ProtocolVersion = ProtocolVersion::V1;
@@ -749,5 +751,41 @@ fn transactions_decode_as_upstream() {
                 other => panic!("unhandled outcome {other}"),
             }
         }
+    }
+}
+
+/// Each valid transaction validates, and each invalid one fails with the rule upstream's
+/// `Transaction::validate(Weighting::AsTransaction)` reported.
+#[test]
+fn transactions_validate_as_upstream() {
+    for name in TX_VECTORS {
+        let vector = load(name);
+        let expected = &vector["expected"];
+        let tx = transaction(&expected["transaction"]);
+        let result = tx.validate();
+        let expected_error = match expected["validation"]["rule"].as_str() {
+            None => {
+                assert_eq!(expected["validation"]["upstream_error"], Value::Null);
+                assert_eq!(result, Ok(()), "{name}");
+                continue;
+            }
+            Some("sort_order") => ValidationError::Structure(TxError::NotSorted {
+                part: BodyPart::Outputs,
+            }),
+            Some("duplicate") => ValidationError::Structure(TxError::Duplicate {
+                part: BodyPart::Outputs,
+            }),
+            Some("cut_through") => ValidationError::Structure(TxError::CutThrough),
+            Some("range_proof") => ValidationError::RangeProof(CryptoError::InvalidRangeProof),
+            Some("kernel_signature") => ValidationError::KernelSignature {
+                index: 0,
+                source: CryptoError::SignatureMismatch,
+            },
+            Some("output_features") => ValidationError::Structure(TxError::CoinbaseOutput),
+            Some("kernel_features") => ValidationError::Structure(TxError::CoinbaseKernel),
+            Some("kernel_sum") => ValidationError::KernelSum(KernelSumError::Mismatch),
+            Some(other) => panic!("{name}: unhandled rule {other}"),
+        };
+        assert_eq!(result, Err(expected_error), "{name}");
     }
 }
