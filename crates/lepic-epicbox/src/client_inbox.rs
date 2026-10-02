@@ -20,8 +20,9 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, interval_at, sleep, sleep_until, timeout};
 use tracing::{Instrument, debug, info, info_span, warn};
 
+use crate::address::EpicboxAddress;
 use crate::client::{Awaiting, CancelToken, ClientContext, ClientError, ErrorChain, TRANSPORT_ID};
-use crate::crypto::ReceivedMessage;
+use crate::crypto::{MessageError, ReceivedMessage};
 use crate::frame::{ClientFrame, RelayFrame, SlateFrame, WalletMode};
 use crate::session::{Connection, Greeting, ProtocolVersion, deadline_after};
 
@@ -29,7 +30,7 @@ use crate::session::{Connection, Greeting, ProtocolVersion, deadline_after};
 /// is acknowledged again instead of handed out twice.
 const REMEMBERED_ACKNOWLEDGEMENTS: usize = 4096;
 
-/// Received messages waiting to be handed out. Beyond this a relay that pushes faster than the
+/// Received messages and rejections waiting to be handed out. Beyond this a relay that pushes faster than the
 /// wallet consumes gets no acknowledgement, so it keeps the message for later.
 const MAX_READY: usize = 64;
 
@@ -78,7 +79,77 @@ impl ConnectionState {
     }
 }
 
+/// Why a received message could not be opened. Each is permanent: the same bytes never open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RejectionReason {
+    /// `from` is not an address on this wallet's network.
+    InvalidSender,
+    /// The signature over `str` does not verify with the sender's key.
+    InvalidSignature,
+    /// The message is encrypted for another key.
+    NotAddressedToUs,
+    /// The message does not decrypt, or its plaintext is not text.
+    Undecryptable,
+    /// `str` is not the expected message JSON.
+    Malformed,
+}
+
+impl From<&MessageError> for RejectionReason {
+    fn from(error: &MessageError) -> Self {
+        match error {
+            MessageError::Sender(_) => Self::InvalidSender,
+            MessageError::Signature(_) => Self::InvalidSignature,
+            MessageError::NotAddressedToUs => Self::NotAddressedToUs,
+            MessageError::Key(_) | MessageError::Decryption | MessageError::NotUtf8 => {
+                Self::Undecryptable
+            }
+            _ => Self::Malformed,
+        }
+    }
+}
+
+/// A received message that could not be opened. It stays unacknowledged, and the relay delivers
+/// nothing else to the address, until the consumer records it and passes its token to
+/// [`Inbound::acknowledge`] (ADR 0004).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejection {
+    ack_token: AckToken,
+    msg_id: Option<String>,
+    sender: Option<String>,
+    reason: RejectionReason,
+}
+
+impl Rejection {
+    pub fn ack_token(&self) -> &AckToken {
+        &self.ack_token
+    }
+
+    /// The relay message id, when the relay sent one.
+    pub fn msg_id(&self) -> Option<&str> {
+        self.msg_id.as_deref()
+    }
+
+    /// The sender's address text, when `from` parsed. A sender that did not sign the message is
+    /// a claim, not a fact.
+    pub fn sender(&self) -> Option<&str> {
+        self.sender.as_deref()
+    }
+
+    pub fn reason(&self) -> RejectionReason {
+        self.reason
+    }
+}
+
 /// A subscription to the wallet's relay address. Dropping it stops the task.
+///
+/// Consume it by calling [`Inbound::next_envelope`] and [`Self::next_rejection`] until both are
+/// empty, acknowledging each item once its effect or its rejection is recorded. The relay sends
+/// one message at a time, so an unacknowledged item holds back the rest.
+///
+/// A drain ends with an error when its connection fails, including when the relay sends a frame
+/// the websocket layer refuses (too long, or text that is not UTF-8). Unacknowledged messages
+/// stay on the relay, so treat a failed drain as "retry later". A listener reconnects instead.
 pub struct Subscription {
     mode: Mode,
     shared: Arc<Shared>,
@@ -136,20 +207,32 @@ impl Subscription {
         self.shared.lock().relay_version
     }
 
-    /// Resolves once an envelope is ready to be handed out or the subscription has ended. In
-    /// `listen` mode, call [`Inbound::next_envelope`] until it returns `None`, then wait here.
-    pub async fn envelope_available(&self) {
+    /// Resolves once an envelope or a rejection is ready to be handed out, or the subscription
+    /// has ended. In `listen` mode, take everything available, then wait here.
+    pub async fn delivery_available(&self) {
         loop {
             let mut notified = pin!(self.shared.changed.notified());
             notified.as_mut().enable();
             {
                 let inbox = self.shared.lock();
-                if !inbox.ready.is_empty() || inbox.state.has_ended() {
+                if !inbox.ready.is_empty() || !inbox.rejected.is_empty() || inbox.state.has_ended()
+                {
                     return;
                 }
             }
             notified.await;
         }
+    }
+
+    /// The next message that could not be opened, if one is waiting. Acknowledge its token after
+    /// the rejection is recorded.
+    pub fn next_rejection(&self) -> Option<Rejection> {
+        let mut inbox = self.shared.lock();
+        let rejection = inbox.rejected.pop_front()?;
+        inbox
+            .handed_out
+            .insert(rejection.ack_token.clone(), rejection.msg_id.clone());
+        Some(rejection)
     }
 
     /// Stops the subscription and waits for its task, which returns promptly from any state.
@@ -241,7 +324,7 @@ impl Inbound for Subscription {
         })
     }
 
-    /// Sends `Made` for the message and waits for the relay to accept it.
+    /// Sends `Made` for the envelope or rejection and waits for the relay to accept it.
     fn acknowledge<'a>(&'a self, token: &'a AckToken) -> BoxFuture<'a, Result<(), TransportError>> {
         Box::pin(self.acknowledge_message(token))
     }
@@ -291,7 +374,8 @@ struct InboxState {
     expecting: bool,
     relay_version: Option<ProtocolVersion>,
     ready: VecDeque<(Option<String>, Envelope)>,
-    /// Handed-out envelopes by token, with the relay message id to acknowledge, if any.
+    rejected: VecDeque<Rejection>,
+    /// Handed-out envelopes and rejections by token, with the relay message id to acknowledge, if any.
     handed_out: HashMap<AckToken, Option<String>>,
     acknowledged: HashSet<String>,
     acknowledged_order: VecDeque<String>,
@@ -305,6 +389,7 @@ impl InboxState {
             expecting: true,
             relay_version: None,
             ready: VecDeque::new(),
+            rejected: VecDeque::new(),
             handed_out: HashMap::new(),
             acknowledged: HashSet::new(),
             acknowledged_order: VecDeque::new(),
@@ -334,6 +419,10 @@ impl InboxState {
                 .ready
                 .iter()
                 .any(|(id, _)| id.as_deref() == Some(msg_id))
+            || self
+                .rejected
+                .iter()
+                .any(|rejection| rejection.msg_id.as_deref() == Some(msg_id))
         {
             Seen::Held
         } else {
@@ -341,16 +430,39 @@ impl InboxState {
         }
     }
 
-    fn push(&mut self, msg_id: Option<String>, reply_to: Destination, wire: WireSlate) {
-        let token = match &msg_id {
-            Some(msg_id) => AckToken::new(msg_id.clone()),
+    fn token_for(&mut self, msg_id: Option<&str>) -> AckToken {
+        match msg_id {
+            Some(msg_id) => AckToken::new(msg_id.to_owned()),
             None => {
                 self.local_tokens = self.local_tokens.wrapping_add(1);
                 AckToken::new(format!("local-{}", self.local_tokens))
             }
-        };
+        }
+    }
+
+    fn push(&mut self, msg_id: Option<String>, reply_to: Destination, wire: WireSlate) {
+        let token = self.token_for(msg_id.as_deref());
         self.ready
             .push_back((msg_id, Envelope::new(token, Some(reply_to), wire)));
+    }
+
+    fn push_rejection(
+        &mut self,
+        msg_id: Option<String>,
+        sender: Option<String>,
+        reason: RejectionReason,
+    ) {
+        let ack_token = self.token_for(msg_id.as_deref());
+        self.rejected.push_back(Rejection {
+            ack_token,
+            msg_id,
+            sender,
+            reason,
+        });
+    }
+
+    fn waiting(&self) -> usize {
+        self.ready.len().saturating_add(self.rejected.len())
     }
 
     fn record_acknowledged(&mut self, msg_id: &str) {
@@ -368,7 +480,7 @@ impl InboxState {
 
     /// Nothing is waiting to be handed out or acknowledged.
     fn is_settled(&self) -> bool {
-        self.ready.is_empty() && self.handed_out.is_empty()
+        self.ready.is_empty() && self.rejected.is_empty() && self.handed_out.is_empty()
     }
 }
 
@@ -540,6 +652,7 @@ impl<'a> Session<'a> {
     async fn run(mut self, attempt: &mut u32) -> Result<End, ClientError> {
         let settings = &self.manager.context.settings;
         let ping_every = settings.ping_interval;
+        let response_timeout = settings.response_timeout;
         let silence_limit = ping_every.saturating_mul(2);
         let first_ping = deadline_after(ping_every);
         let mut pings = interval_at(first_ping, ping_every);
@@ -573,7 +686,13 @@ impl<'a> Session<'a> {
                     if connection.idle_for() > silence_limit {
                         return Err(ClientError::Timeout { awaiting: Awaiting::Traffic });
                     }
-                    connection.ping().await?;
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => return Ok(self.leave().await),
+                        sent = timeout(response_timeout, connection.ping()) => {
+                            sent.map_err(|_| ClientError::Timeout { awaiting: Awaiting::Traffic })??;
+                        }
+                    }
                 }
                 () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
                     let awaiting = if self.outstanding.is_some() {
@@ -739,7 +858,7 @@ impl<'a> Session<'a> {
                 self.acknowledge_unasked(msg_id);
             }
             (_, msg_id) => {
-                if shared.lock().ready.len() >= MAX_READY {
+                if shared.lock().waiting() >= MAX_READY {
                     debug!(
                         msg_id = msg_id.as_deref().unwrap_or(""),
                         "epicbox delivery deferred"
@@ -763,17 +882,18 @@ impl<'a> Session<'a> {
                         );
                         shared.update(|inbox| inbox.push(msg_id, reply_to, wire));
                     }
-                    // A message that cannot be opened never will be, and the relay delivers
-                    // nothing else to this address until it is acknowledged.
                     Err(error) => {
                         warn!(
                             msg_id = msg_id.as_deref().unwrap_or(""),
                             error = %ErrorChain(&error),
                             "epicbox message rejected"
                         );
-                        if let Some(msg_id) = msg_id {
-                            self.acknowledge_unasked(msg_id);
-                        }
+                        let sender =
+                            EpicboxAddress::parse(&slate.from, identity.address().network())
+                                .ok()
+                                .map(|address| address.to_string());
+                        let reason = RejectionReason::from(&error);
+                        shared.update(|inbox| inbox.push_rejection(msg_id, sender, reason));
                     }
                 }
             }

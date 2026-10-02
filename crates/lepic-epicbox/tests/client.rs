@@ -11,7 +11,7 @@ use client_support::{
     ALICE, BOB, CAROL, address, client, client_with, reach, sealed, settings, until, within,
 };
 use lepic_epicbox::mock_relay::MockRelay;
-use lepic_epicbox::{ClientError, ConnectionState, Network};
+use lepic_epicbox::{ClientError, ConnectionState, Network, RejectionReason};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{AckToken, Destination, Envelope, Inbound, Outbound};
@@ -72,7 +72,7 @@ async fn sender_posts_and_live_listener_receives_it() {
     within(LONG, alice.deliver(&to, &wire)).await.unwrap();
     assert_eq!(relay.received("PostSlate"), 1);
 
-    within(LONG, bob.envelope_available()).await;
+    within(LONG, bob.delivery_available()).await;
     let envelope = next(&bob).await.unwrap();
     assert_eq!(text(&envelope), "{\"slate\":1}");
     within(LONG, bob.acknowledge(envelope.ack_token()))
@@ -208,7 +208,7 @@ async fn unknown_frames_and_bare_pong_do_not_end_the_session() {
         &address(BOB),
         &sealed(ALICE, BOB, "after noise"),
     );
-    within(LONG, bob.envelope_available()).await;
+    within(LONG, bob.delivery_available()).await;
     let envelope = next(&bob).await.unwrap();
     assert_eq!(text(&envelope), "after noise");
     assert_eq!(*bob.state().borrow(), ConnectionState::Subscribed);
@@ -230,16 +230,16 @@ async fn resubscribes_with_each_new_challenge() {
     until(|| relay.received("Subscribe") == 3).await;
     // An invalid signature would have made the relay drop the subscription and live delivery.
     relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "live"));
-    within(LONG, bob.envelope_available()).await;
+    within(LONG, bob.delivery_available()).await;
     assert_eq!(text(&next(&bob).await.unwrap()), "live");
     bob.stop().await.unwrap();
 }
 
 #[tokio::test]
-async fn undecryptable_message_is_acknowledged_without_being_handed_out() {
+async fn undecryptable_message_is_handed_out_as_a_rejection_and_acknowledged_on_confirmation() {
     let relay = MockRelay::new(Network::Mainnet);
     // Queued for Bob, but encrypted for Carol.
-    relay.store(
+    let rejected = relay.store(
         &address(ALICE),
         &address(BOB),
         &sealed(ALICE, CAROL, "not for bob"),
@@ -251,6 +251,24 @@ async fn undecryptable_message_is_acknowledged_without_being_handed_out() {
     );
     let bob = client(&relay, BOB).drain().unwrap();
 
+    // The relay holds back the next message until the rejection is acknowledged.
+    assert!(next(&bob).await.is_none());
+    let rejection = bob.next_rejection().unwrap();
+    assert_eq!(rejection.reason(), RejectionReason::NotAddressedToUs);
+    assert_eq!(rejection.msg_id(), Some(rejected.as_str()));
+    assert_eq!(
+        rejection.sender(),
+        Some(address(ALICE).to_string().as_str())
+    );
+    assert!(bob.next_rejection().is_none());
+    assert_eq!(relay.received("Made"), 0);
+    assert_eq!(relay.pending(&address(BOB)), 2);
+    assert_eq!(*bob.state().borrow(), ConnectionState::Subscribed);
+
+    within(LONG, bob.acknowledge(rejection.ack_token()))
+        .await
+        .unwrap();
+    assert_eq!(relay.pending(&address(BOB)), 1);
     let envelope = next(&bob).await.unwrap();
     assert_eq!(text(&envelope), "for bob");
     within(LONG, bob.acknowledge(envelope.ack_token()))
@@ -259,6 +277,31 @@ async fn undecryptable_message_is_acknowledged_without_being_handed_out() {
     assert!(next(&bob).await.is_none());
     within(LONG, bob.finished()).await.unwrap();
     assert_eq!(relay.pending(&address(BOB)), 0);
+}
+
+#[tokio::test]
+async fn message_with_a_bad_signature_is_rejected_with_its_reason() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = client(&relay, BOB).listen().unwrap();
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    let signed = sealed(ALICE, BOB, "slate");
+    let other = sealed(ALICE, BOB, "another slate");
+    let frame = serde_json::json!({
+        "type": "Slate",
+        "from": address(ALICE).to_string(),
+        "str": signed.str,
+        "signature": other.signature.to_der_hex(),
+        "challenge": "",
+        "epicboxmsgid": "forged1",
+        "ver": "3.0.0",
+    });
+    relay.broadcast(&frame.to_string());
+    within(LONG, bob.delivery_available()).await;
+    let rejection = bob.next_rejection().unwrap();
+    assert_eq!(rejection.reason(), RejectionReason::InvalidSignature);
+    assert_eq!(rejection.ack_token().as_str(), "forged1");
+    assert!(next(&bob).await.is_none());
+    bob.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -295,7 +338,7 @@ async fn reconnects_with_backoff_after_the_relay_returns() {
         &sealed(ALICE, BOB, "waited"),
     );
     reach(&bob, |s| s == ConnectionState::Subscribed).await;
-    within(LONG, bob.envelope_available()).await;
+    within(LONG, bob.delivery_available()).await;
     assert_eq!(text(&next(&bob).await.unwrap()), "waited");
     bob.stop().await.unwrap();
 }
@@ -326,7 +369,7 @@ async fn stop_returns_within_a_second_during_receive() {
     quiet.ping_interval = Duration::from_secs(60);
     let bob = client_with(&relay, BOB, quiet).listen().unwrap();
     reach(&bob, |s| s == ConnectionState::Subscribed).await;
-    let waiting = async { bob.envelope_available().await };
+    let waiting = async { bob.delivery_available().await };
 
     let started = Instant::now();
     let ((), stopped) = within(ONE_SECOND, async { tokio::join!(waiting, bob.stop()) }).await;

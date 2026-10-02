@@ -16,7 +16,7 @@ pub use address::{
 pub use client::{
     Awaiting, Backoff, ClientError, ClientSettings, EpicboxClient, Identity, TRANSPORT_ID,
 };
-pub use client_inbox::{ConnectionState, Mode, Subscription};
+pub use client_inbox::{ConnectionState, Mode, Rejection, RejectionReason, Subscription};
 pub use crypto::{
     Destination, EncryptedMessage, KEY_LEN, MAX_MESSAGE_LEN, MessageError, MessageField,
     MessageKey, NONCE_LEN, Nonce, Plaintext, ReceivedMessage, SALT_LEN, Salt, SignedMessage,
