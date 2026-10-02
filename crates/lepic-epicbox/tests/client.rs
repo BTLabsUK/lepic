@@ -140,7 +140,7 @@ async fn redelivery_after_reconnect_is_surfaced_once() {
 #[tokio::test]
 async fn redelivery_to_a_resubscription_is_surfaced_once() {
     let relay = MockRelay::new(Network::Mainnet);
-    relay.store(
+    let id = relay.store(
         &address(ALICE),
         &address(BOB),
         &sealed(ALICE, BOB, "slate one"),
@@ -153,10 +153,40 @@ async fn redelivery_to_a_resubscription_is_surfaced_once() {
     let again = next(&drain).await.unwrap();
     assert_eq!(again.ack_token(), envelope.ack_token());
     drain.stop().await.unwrap();
+    assert_eq!(relay.deliveries(&id), 2);
 
-    relay.send_challenges();
-    until(|| relay.received("Subscribe") >= 3).await;
+    // Bob's own socket gets it again after three subscribes while it is unacknowledged.
+    for round in 1..=4 {
+        relay.send_challenges();
+        until(|| relay.received("Subscribe") >= 2 + round).await;
+    }
+    until(|| relay.deliveries(&id) == 3).await;
     assert!(next(&bob).await.is_none());
+    assert_eq!(relay.received("Made"), 0);
+
+    within(LONG, bob.acknowledge(envelope.ack_token()))
+        .await
+        .unwrap();
+    assert_eq!(relay.pending(&address(BOB)), 0);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn relay_discards_messages_left_unacknowledged_for_three_rounds() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let id = relay.store(
+        &address(ALICE),
+        &address(BOB),
+        &sealed(ALICE, BOB, "never acknowledged"),
+    );
+    let bob = client(&relay, BOB).listen().unwrap();
+    let _held = next(&bob).await.unwrap();
+    for round in 1..=12 {
+        relay.send_challenges();
+        until(|| relay.received("Subscribe") > round).await;
+    }
+    assert_eq!(relay.deliveries(&id), 3);
+    assert_eq!(relay.pending(&address(BOB)), 0);
     bob.stop().await.unwrap();
 }
 

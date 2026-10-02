@@ -3,10 +3,12 @@
 //!
 //! It sends a challenge on connect, verifies `Subscribe`, `PostSlate` and `Made` signatures,
 //! stores messages until `Made`, delivers the oldest pending message one at a time per socket,
-//! redelivers to a socket that subscribes while a message is unacknowledged, keeps one live
-//! listener per address, passes new messages through to that listener, answers the JSON `ping`
-//! with bare `pong` text, and closes sockets that send text that is not JSON. Unlike the public
-//! relay it stores every message itself instead of forwarding to other domains.
+//! redelivers an unacknowledged message to a new socket and, after three more subscribes, to the
+//! same socket, discards an address's unacknowledged messages after three such rounds, keeps one
+//! live listener per address, passes each newly posted message through to an idle listener,
+//! answers the JSON `ping` with bare `pong` text, and closes sockets that send text that is not
+//! JSON. Unlike the public relay it stores every message itself instead of forwarding to other
+//! domains, and its messages do not expire.
 
 use std::collections::HashMap;
 use std::io;
@@ -34,6 +36,10 @@ const PIPE_CAPACITY: usize = 64 * 1024;
 
 /// Close code the public relay uses for text that is not JSON.
 const CLOSE_NOT_JSON: u16 = 3000;
+
+/// Subscribes while a message is unacknowledged after which the relay sends it again on the same
+/// socket, and redelivery rounds after which it discards the address's unacknowledged messages.
+const RESEND_AFTER: u32 = 3;
 
 /// A relay shared by every connection made through its [`MockRelay::connector`].
 #[derive(Clone)]
@@ -64,6 +70,10 @@ struct Socket {
     versioned: bool,
     /// The message this socket was sent and has not acknowledged.
     in_flight: Option<String>,
+    /// Subscribes answered `Ok` while a message was in flight.
+    resend_attempts: u32,
+    /// Redeliveries made after `RESEND_AFTER` such subscribes.
+    resend_rounds: u32,
 }
 
 enum Outgoing {
@@ -83,6 +93,7 @@ struct RelayState {
     stalled: Vec<DuplexStream>,
     version: Option<String>,
     received: HashMap<String, usize>,
+    deliveries: HashMap<String, usize>,
     pings: usize,
 }
 
@@ -104,6 +115,7 @@ impl MockRelay {
                     stalled: Vec::new(),
                     version: Some(PROTOCOL_VERSION.to_owned()),
                     received: HashMap::new(),
+                    deliveries: HashMap::new(),
                     pings: 0,
                 }),
             }),
@@ -157,8 +169,13 @@ impl MockRelay {
             message.str.clone(),
             message.signature.to_der_hex(),
         );
-        state.pass_through(&to.key_text());
+        state.pass_through(&to.key_text(), &id);
         id
+    }
+
+    /// How often the message with this id was sent to any socket.
+    pub fn deliveries(&self, msg_id: &str) -> usize {
+        self.lock().deliveries.get(msg_id).copied().unwrap_or(0)
     }
 
     /// Messages for `address` not yet acknowledged with `Made`.
@@ -267,6 +284,8 @@ impl MockRelay {
                     address: None,
                     versioned: false,
                     in_flight: None,
+                    resend_attempts: 0,
+                    resend_rounds: 0,
                 },
             );
             state.challenge(id);
@@ -445,10 +464,29 @@ impl RelayState {
             return;
         }
         socket.address = Some(address.clone());
+        // The public relay retries an unacknowledged message on the same socket after a few
+        // subscribes, and gives up on the address's unacknowledged messages after a few rounds.
+        if socket.resend_attempts >= RESEND_AFTER && socket.resend_rounds <= RESEND_AFTER {
+            socket.resend_attempts = 0;
+            socket.resend_rounds = socket.resend_rounds.saturating_add(1);
+            socket.in_flight = None;
+        }
+        let discard = socket.resend_rounds >= RESEND_AFTER;
+        if discard {
+            socket.resend_attempts = 0;
+            socket.resend_rounds = 0;
+            socket.in_flight = None;
+        }
         let listener_mode = socket.listener_mode;
         let in_flight = socket.in_flight.is_some();
+        if in_flight {
+            socket.resend_attempts = socket.resend_attempts.saturating_add(1);
+        }
         if listener_mode {
             self.listeners.entry(address.clone()).or_insert(id);
+        }
+        if discard {
+            self.messages.retain(|m| m.queue != address || m.made);
         }
         if in_flight {
             self.send(id, ok());
@@ -470,6 +508,8 @@ impl RelayState {
             return;
         };
         socket.in_flight = Some(stored.id.clone());
+        let count = self.deliveries.entry(stored.id.clone()).or_default();
+        *count = count.saturating_add(1);
         let mut slate = json!({
             "type": "Slate",
             "from": stored.from,
@@ -500,8 +540,9 @@ impl RelayState {
         id
     }
 
-    /// Hands the oldest pending message to the address's live listener, if it is idle.
-    fn pass_through(&mut self, queue: &str) {
+    /// Hands the message just stored to the address's live listener, if it is idle, as the
+    /// public relay does.
+    fn pass_through(&mut self, queue: &str, msg_id: &str) {
         let Some(&listener) = self.listeners.get(queue) else {
             return;
         };
@@ -512,12 +553,7 @@ impl RelayState {
         if !idle {
             return;
         }
-        if let Some(stored) = self
-            .messages
-            .iter()
-            .find(|m| m.queue == queue && !m.made)
-            .cloned()
-        {
+        if let Some(stored) = self.messages.iter().find(|m| m.id == msg_id).cloned() {
             self.deliver(listener, &stored);
         }
     }
@@ -543,14 +579,14 @@ impl RelayState {
             return;
         };
         let queue = encrypted.destination().public_key().to_owned();
-        self.store(
+        let msg_id = self.store(
             queue.clone(),
             from.to_owned(),
             str.to_owned(),
             signature.to_owned(),
         );
         self.send(id, ok());
-        self.pass_through(&queue);
+        self.pass_through(&queue, &msg_id);
     }
 
     fn made(&mut self, id: u64, network: Network, message: &Value) {
@@ -572,6 +608,7 @@ impl RelayState {
         }
         if let Some(socket) = self.sockets.get_mut(&id) {
             socket.in_flight = None;
+            socket.resend_attempts = 0;
         }
         self.send(id, ok());
         self.challenge(id);
