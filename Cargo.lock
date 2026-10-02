@@ -203,6 +203,7 @@ name = "lepic-crypto"
 version = "0.1.0"
 dependencies = [
  "grin_secp256k1zkp",
+ "serde_json",
  "thiserror",
  "zeroize",
 ]
