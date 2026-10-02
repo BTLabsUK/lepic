@@ -26,9 +26,10 @@ pub enum ValidationError {
 }
 
 impl Transaction {
-    /// Checks everything the node checks before accepting a transaction into its pool, in the
-    /// node's order: weight, sorting and duplicates, cut-through, range proofs, kernel
-    /// signatures, features, kernel sums. Fee rules are a slate concern and are not checked.
+    /// Runs the node's `Transaction::validate(Weighting::AsTransaction)` checks, in its order:
+    /// weight, sorting and duplicates, cut-through, range proofs, kernel signatures, features,
+    /// kernel sums. Passing does not mean the pool accepts the transaction: lock heights,
+    /// coinbase maturity and fee rules are not checked.
     pub fn validate(&self) -> Result<(), ValidationError> {
         let body = self.body();
         body.verify_tx_weight()?;
