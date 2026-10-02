@@ -118,3 +118,9 @@ with the rule each breaks. Files and conventions are in [primitives/README.md](p
 The two-party aggregate-signature flow for a plain and a height-locked kernel, and single-signer
 signatures, each with the verification calls upstream accepts and rejects. The generator is
 `conformance/vectors/src/primitives/aggsig.rs`. Details are in [aggsig/README.md](aggsig/README.md).
+
+### slates
+
+Stage vectors of the standard and invoice flows over the file and Epicbox methods, and upstream's
+parse outcomes for malformed slates. Case setup, file names and fields are described in
+[slates/README.md](slates/README.md).
