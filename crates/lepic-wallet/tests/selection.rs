@@ -233,6 +233,31 @@ fn all_strategy_takes_the_whole_first_covering_window() {
 }
 
 #[test]
+fn past_the_limit_takes_the_smallest_outputs_that_cover_the_amount_whatever_the_strategy() {
+    let outputs = unspent(&[
+        100_000_000,
+        110_000_000,
+        120_000_000,
+        130_000_000,
+        140_000_000,
+    ]);
+    for strategy in [SelectionStrategy::Smallest, SelectionStrategy::All] {
+        let request = SelectionRequest {
+            max_outputs: NonZeroUsize::new(2).unwrap(),
+            strategy,
+            ..request(300_000_000)
+        };
+        let selected = select(&outputs, &request).unwrap();
+        assert_eq!(
+            values(&selected.inputs),
+            [100_000_000, 110_000_000, 120_000_000],
+            "{strategy:?}"
+        );
+        assert_eq!(selected.fee, Fee::new(600_000));
+    }
+}
+
+#[test]
 fn equal_values_are_taken_in_the_order_given() {
     let outputs = unspent(&[200_000_000, 200_000_000, 200_000_000]);
     let selected = select(&outputs, &request(300_000_000)).unwrap();

@@ -68,7 +68,8 @@ pub struct Estimate {
 pub enum SelectionError {
     /// `available` is the value of the best set selection found, `needed` the amount plus the
     /// fee that set would pay.
-    #[error("not enough funds: {available} available, {needed} needed")]
+    // Amounts stay out of the text because errors are logged above `debug` (docs/logging.md).
+    #[error("not enough funds")]
     NotEnoughFunds { available: Amount, needed: Amount },
     #[error("change of {change} cannot be split into {outputs} outputs")]
     ChangeTooSmall { change: Amount, outputs: usize },
@@ -82,6 +83,14 @@ pub enum SelectionError {
 ///
 /// Outputs of other accounts and outputs not yet spendable at `request.tip` are ignored.
 /// Outputs of equal value are taken in the order they are given.
+///
+/// # Errors
+///
+/// - [`SelectionError::NotEnoughFunds`] when the eligible outputs cannot cover amount and fee.
+/// - [`SelectionError::ChangeTooSmall`] when the change has fewer base units than the requested
+///   number of change outputs.
+/// - [`SelectionError::TooHeavy`] when the transaction would exceed the weight limit.
+/// - [`SelectionError::Arithmetic`] when a sum of values overflows.
 pub fn select(
     outputs: &[OutputRecord],
     request: &SelectionRequest,
@@ -98,6 +107,11 @@ pub fn select(
 }
 
 /// The total and fee [`select`] would choose, without splitting change.
+///
+/// # Errors
+///
+/// Only [`SelectionError::NotEnoughFunds`] and [`SelectionError::Arithmetic`]. Unlike
+/// [`select`], it does not check the change split or the weight limit, as upstream's estimate.
 pub fn estimate(
     outputs: &[OutputRecord],
     request: &SelectionRequest,
