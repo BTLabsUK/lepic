@@ -1,6 +1,8 @@
 //! The codec framework: one [`Codec`] per wire format, mapping between [`WireSlate`] and the
 //! domain [`Slate`]. Codecs own their wire structs and never convert into each other.
 
+pub mod legacy;
+
 use crate::error::{DecodeError, EncodeError};
 use crate::model::Slate;
 
