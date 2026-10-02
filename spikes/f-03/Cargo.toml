@@ -1,0 +1,50 @@
+# Throwaway spike for task F-03. Deleted before the branch merges.
+[workspace]
+
+[package]
+name = "f03-spike"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "f03-probe"
+path = "src/bin/f03-probe.rs"
+
+[features]
+default = []
+# Exactly one stack, or none for the core-only baseline.
+stack-reqwest = ["net", "dep:reqwest", "dep:rustls-platform-verifier"]
+stack-hyper = ["net", "dep:hyper", "dep:hyper-util", "dep:hyper-rustls", "dep:http-body-util", "dep:webpki-roots"]
+net = ["dep:tokio", "dep:rustls", "dep:tokio-rustls", "dep:tokio-tungstenite", "dep:futures-util"]
+
+[dependencies]
+secp256k1zkp = { package = "grin_secp256k1zkp", git = "https://github.com/EpicCash/rust-secp256k1-zkp", rev = "42fcb29d4b635ea771d1984be0d11b0e64b15a93", features = ["bullet-proof-sizing"] }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+
+tokio = { version = "1.53.1", default-features = false, features = ["rt", "net", "time", "io-util"], optional = true }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"], optional = true }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "stream"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
+
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"], optional = true }
+rustls-platform-verifier = { version = "0.7.1", optional = true }
+
+hyper = { version = "1.11.1", default-features = false, features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1.21", default-features = false, features = ["client-legacy", "http1", "tokio"], optional = true }
+hyper-rustls = { version = "0.27.10", default-features = false, features = ["ring", "http1", "tls12"], optional = true }
+http-body-util = { version = "0.1.5", optional = true }
+webpki-roots = { version = "1.0.9", optional = true }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+overflow-checks = true
+opt-level = "s"

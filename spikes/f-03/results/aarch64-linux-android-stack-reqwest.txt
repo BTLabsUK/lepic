@@ -1,0 +1,5 @@
+command: ANDROID_NDK_HOME=~/Android/Sdk/ndk/28.2.13676358 CARGO_BUILD_JOBS=4 cargo ndk -t aarch64-linux-android -P 24 build --release --lib --target-dir target-measure/aarch64-linux-android-stack-reqwest --features stack-reqwest
+build_seconds: 72
+cdylib_stripped_bytes: 4128472
+staticlib_bytes: 71837466
+staticlib_strip_debug_bytes: 59404290

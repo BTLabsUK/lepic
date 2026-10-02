@@ -1,0 +1,5 @@
+command: ANDROID_NDK_HOME=~/Android/Sdk/ndk/28.2.13676358 CARGO_BUILD_JOBS=4 cargo ndk -t x86_64-linux-android -P 24 build --release --lib --target-dir target-measure/x86_64-linux-android-stack-hyper --features stack-hyper
+build_seconds: 35
+cdylib_stripped_bytes: 3664248
+staticlib_bytes: 56834448
+staticlib_strip_debug_bytes: 44931712
