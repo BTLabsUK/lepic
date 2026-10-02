@@ -99,11 +99,6 @@ pub(crate) enum SeedSource {
 
 /// The unlocked state of a wallet: the root key and the database it opened.
 pub(crate) struct Session<D> {
-    // TODO(W-03): the transaction stages derive keys from it; until then only the session holds it.
-    #[expect(
-        dead_code,
-        reason = "read by the transaction stages, starting with W-03"
-    )]
     pub(crate) keychain: Keychain,
     pub(crate) store: D,
 }

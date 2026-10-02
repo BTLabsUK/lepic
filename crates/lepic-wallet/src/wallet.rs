@@ -273,7 +273,7 @@ where
     /// is never stalled by Argon2 or disk access. The work runs under the caller's subscriber
     /// and inside the operation's span, so what it logs is attributed and filtered like the rest
     /// of the operation.
-    async fn blocking<T, F>(&self, work: F) -> Result<T, WalletError>
+    pub(crate) async fn blocking<T, F>(&self, work: F) -> Result<T, WalletError>
     where
         T: Send + 'static,
         F: FnOnce(&Ports<N, S, V>, &WalletConfig) -> Result<T, WalletError> + Send + 'static,

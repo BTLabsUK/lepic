@@ -14,6 +14,7 @@ pub mod error;
 pub mod event;
 pub mod lifecycle;
 pub mod ports;
+pub mod receive;
 pub mod selection;
 pub mod state;
 mod wallet;
@@ -27,4 +28,5 @@ pub use ports::{
     Clock, DATABASE_FILE, Ports, SecretVault, SecretVaultError, SharedRng, SqliteStores,
     StoreOpener,
 };
+pub use receive::{ReceiveError, ReceiveRequest, Received};
 pub use wallet::Wallet;

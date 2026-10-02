@@ -829,11 +829,13 @@ name = "lepic-wallet"
 version = "0.1.0"
 dependencies = [
  "blake2",
+ "ed25519-dalek",
  "jiff",
  "lepic-crypto",
  "lepic-keychain",
  "lepic-node",
  "lepic-primitives",
+ "lepic-slate",
  "lepic-store",
  "lepic-telemetry",
  "lepic-transport",
@@ -844,6 +846,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
  "zeroize",
 ]
 
