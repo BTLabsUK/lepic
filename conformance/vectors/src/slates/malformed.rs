@@ -7,6 +7,7 @@ use epic_wallet_libwallet::{Slate, SlateVersion, VersionedSlate};
 use serde::Serialize;
 
 use super::flows::{Case, FlowRecord, Stage};
+use super::{Header, header_of, shape_of};
 use crate::{Error, Rendered, Upstream, render};
 
 const AREA: &str = "slates";
@@ -282,6 +283,9 @@ struct Inputs<'a> {
     stage: &'static str,
     producer: &'static str,
     mutation: &'a str,
+    /// Read from `json` itself; `null` when the mutation leaves no object or no header.
+    shape: Option<&'static str>,
+    header: Option<Header>,
     json: String,
 }
 
@@ -316,7 +320,10 @@ pub(super) fn generate(
             file_method: file_outcome(&json)?,
             epicbox_method: epicbox_outcome(&json)?,
         };
+        let parsed = serde_json::from_str::<serde_json::Value>(&json).ok();
         let inputs = Inputs {
+            shape: parsed.as_ref().and_then(shape_of),
+            header: parsed.as_ref().and_then(header_of),
             base: base.name,
             flow: base.flow,
             stage: base.stage,

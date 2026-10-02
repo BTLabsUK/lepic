@@ -332,31 +332,38 @@ fn wallet_inputs(keys: &RoleKeys) -> WalletInputs {
 
 /// Reads the shape and header from the emitted bytes themselves: the V3 shape is the one with
 /// the `ttl_cutoff_height` key.
-pub(super) fn shape_and_header(json: &str) -> Result<(&'static str, Header), Error> {
+fn shape_and_header(json: &str) -> Result<(&'static str, Header), Error> {
     let value: serde_json::Value = serde_json::from_str(json)?;
-    let shape = if value.get("ttl_cutoff_height").is_some() {
+    let shape = shape_of(&value).ok_or_else(|| Error::Reference {
+        step: "reading the slate shape",
+        source: "slate is not a JSON object".into(),
+    })?;
+    let header = header_of(&value).ok_or_else(|| Error::Reference {
+        step: "reading the slate header",
+        source: "version_info does not hold three numbers".into(),
+    })?;
+    Ok((shape, header))
+}
+
+/// The V3 shape is the object with the `ttl_cutoff_height` key; `None` when it is not an object.
+pub(super) fn shape_of(value: &serde_json::Value) -> Option<&'static str> {
+    let object = value.as_object()?;
+    Some(if object.contains_key("ttl_cutoff_height") {
         "V3"
     } else {
         "V2"
-    };
-    let field = |name: &'static str| {
-        value
-            .get("version_info")
-            .and_then(|info| info.get(name))
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| Error::Reference {
-                step: "reading the slate header",
-                source: format!("version_info.{name} is not a number").into(),
-            })
-    };
-    Ok((
-        shape,
-        Header {
-            version: field("version")?,
-            orig_version: field("orig_version")?,
-            block_header_version: field("block_header_version")?,
-        },
-    ))
+    })
+}
+
+/// `None` when `version_info` or one of its numbers is missing.
+pub(super) fn header_of(value: &serde_json::Value) -> Option<Header> {
+    let info = value.get("version_info")?;
+    let field = |name: &str| info.get(name).and_then(serde_json::Value::as_u64);
+    Some(Header {
+        version: field("version")?,
+        orig_version: field("orig_version")?,
+        block_header_version: field("block_header_version")?,
+    })
 }
 
 #[cfg(test)]

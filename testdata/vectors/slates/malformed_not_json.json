@@ -13,6 +13,8 @@
     "stage": "S1",
     "producer": "sender",
     "mutation": "text that is not JSON",
+    "shape": null,
+    "header": null,
     "json": "not a slate"
   },
   "expected": {

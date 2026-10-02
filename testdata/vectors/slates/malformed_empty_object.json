@@ -13,6 +13,8 @@
     "stage": "S1",
     "producer": "sender",
     "mutation": "an empty JSON object",
+    "shape": "V2",
+    "header": null,
     "json": "{}"
   },
   "expected": {

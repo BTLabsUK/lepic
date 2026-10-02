@@ -51,7 +51,8 @@ Facts the vectors show:
 ## Malformed vectors
 
 `malformed_<name>.json` mutates the stage vector named in `inputs.base`, whose flow, stage and
-producing role it repeats, and records, in
+producing role it repeats. `inputs.shape` and `inputs.header` are read from the mutated bytes and
+are `null` when the mutation leaves no JSON object or no complete header. It records, in
 `expected.file_method` and `expected.epicbox_method`, whether each upstream parser accepts the
 result, the shape it read, the upstream error text, and the V3 JSON upstream writes back for the
 parsed slate. These are parse outcomes only; LEPIC's decoder is stricter where
