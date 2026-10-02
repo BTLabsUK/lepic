@@ -86,6 +86,15 @@ Parse `from` (network version bytes checked), verify the signature over `str` wi
 require `destination.public_key` to equal our own key, derive the shared secret with the sender's key
 and decrypt, then decode the slate.
 
+## Relay retention
+
+- The relay stores each message with a 24-hour expiration.
+- A message that is delivered but not acknowledged is redelivered; after several redelivery rounds
+  the relay may drop the address's unacknowledged messages. Acknowledge promptly once the effect is
+  stored, and do not hold a delivered message across many challenge intervals.
+- Live pass-through delivers the newly posted message; a fresh subscription delivers the oldest
+  pending one.
+
 ## Robustness the client must provide
 
 - Deduplicate on the relay message id and on `(slate_id, stage)`; deliveries can repeat.
