@@ -14,8 +14,11 @@ publish = false
 # node dependencies, so Cargo unifies them into one copy. Cargo.lock records the commits, and a
 # test in the vectors crate checks them against ADR 0009.
 [workspace.dependencies]
+epic_api = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
+epic_chain = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_keychain = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
+epic_pool = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_util = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_wallet_libwallet = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }
 epic_wallet_impls = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }

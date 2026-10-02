@@ -8,8 +8,11 @@ publish.workspace = true
 
 [dependencies]
 blake2-rfc.workspace = true
+epic_api.workspace = true
+epic_chain.workspace = true
 epic_core.workspace = true
 epic_keychain.workspace = true
+epic_pool.workspace = true
 epic_util.workspace = true
 epic_wallet_impls.workspace = true
 epic_wallet_libwallet.workspace = true

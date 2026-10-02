@@ -4330,8 +4330,11 @@ name = "vectors"
 version = "0.1.0"
 dependencies = [
  "blake2-rfc",
+ "epic_api",
+ "epic_chain",
  "epic_core",
  "epic_keychain",
+ "epic_pool",
  "epic_util",
  "epic_wallet_impls",
  "epic_wallet_libwallet",
