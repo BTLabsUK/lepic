@@ -1,6 +1,7 @@
 //! Repository automation, run as `cargo xtask <command>`.
 
 mod check;
+mod ci_lint;
 mod deps_check;
 #[cfg(test)]
 mod lint_tables;
@@ -18,6 +19,7 @@ const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
   check       fmt, clippy, tests, cargo deny and deps-check
+  ci-lint     every `uses:` under .github is pinned to a commit sha
   deps-check  crate edges and banned crates against docs/architecture.md
   mobile      --target <triple> [--release]: build the library crates for a mobile target
   upstream-drift
@@ -46,6 +48,7 @@ fn run() -> Result<()> {
     let root = workspace_root()?;
     match command.as_str() {
         "check" => check::run(&root),
+        "ci-lint" => ci_lint::run(&root),
         "deps-check" => deps_check::run(&root),
         "mobile" => mobile::run(&root, rest),
         "upstream-drift" => upstream::run(&root),
