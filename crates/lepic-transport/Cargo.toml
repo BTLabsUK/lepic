@@ -10,6 +10,12 @@ publish.workspace = true
 [dependencies]
 lepic-slate.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["std"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "macros"] }
 
 [lints]
 workspace = true
