@@ -1,0 +1,10 @@
+[package]
+name = "differential"
+description = "Differential tests running the reference code and LEPIC side by side on the same inputs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

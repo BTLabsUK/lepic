@@ -1,0 +1,6 @@
+# The reference code is built with the toolchain it pins itself (epic v4.0.4 and epic-wallet
+# v4.0.2 both pin 1.89.0), independent of the product workspace toolchain.
+[toolchain]
+channel = "1.89.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

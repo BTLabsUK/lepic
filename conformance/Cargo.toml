@@ -1,0 +1,36 @@
+# Conformance workspace (ADR 0009). Separate from the product workspace so that the reference
+# crates, RandomX and LMDB never enter the product dependency graph.
+[workspace]
+members = ["vectors", "differential"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+# The reference crates are pinned by tag, spelled exactly as epic-wallet v4.0.2 spells its own
+# node dependencies, so Cargo unifies them into one copy. Cargo.lock records the commits, and a
+# test in the vectors crate checks them against ADR 0009.
+[workspace.dependencies]
+epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
+epic_keychain = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
+epic_util = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
+epic_wallet_libwallet = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
