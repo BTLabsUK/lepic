@@ -50,6 +50,13 @@ use crate::lifecycle::Session;
 use crate::ports::{Ports, SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
+// TODO(E-03): the Epicbox inbox resends the stored S2 for a redelivered S1 through these.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the inbox pipeline of E-03 is the first caller")
+)]
+pub(crate) mod redelivery;
+
 /// `epic-wallet` signs payment proofs with the address key at index 0 of the account.
 const PAYMENT_PROOF_KEY_INDEX: u32 = 0;
 
@@ -90,8 +97,10 @@ pub enum ReceiveError {
     Decode(#[source] DecodeError),
     #[error("slate at stage {stage} is not a payment to receive")]
     WrongStage { stage: Stage },
-    #[error("slate {slate_id} was already received")]
-    AlreadyReceived { slate_id: SlateId },
+    /// The S2 stored for `tx_id` answers a redelivery of the same S1. A different slate that
+    /// reuses the id is refused the same way.
+    #[error("slate {slate_id} was already received as transaction {tx_id}")]
+    AlreadyReceived { slate_id: SlateId, tx_id: TxId },
     #[error("slate expired at height {cutoff}, the chain tip is at {tip}")]
     Expired { cutoff: Height, tip: Height },
     #[error("fee {fee} is below the minimum {minimum} for the transaction")]
@@ -300,7 +309,9 @@ fn check_proposal(slate: &Slate) -> Result<(), ReceiveError> {
     Ok(())
 }
 
-/// Upstream refuses a slate once its last confirmed height reaches the cutoff.
+/// Refuses a slate once the node's current tip reaches the cutoff. Upstream compares the cutoff
+/// with the last confirmed height stored at its last refresh instead, so the two disagree while
+/// that height is behind the tip.
 fn check_ttl(slate: &Slate, tip: Height) -> Result<(), ReceiveError> {
     match slate.ttl_cutoff_height() {
         Some(cutoff) if tip >= cutoff => Err(ReceiveError::Expired { cutoff, tip }),
@@ -343,14 +354,14 @@ fn respond<D>(
 ) -> Result<Response, ReceiveError> {
     let slate = &proposal.slate;
     let slate_id = slate.id();
-    if repos
-        .transaction_by_slate(
-            Uuid::from_bytes(*slate_id.as_bytes()),
-            TxDirection::Incoming,
-        )?
-        .is_some()
-    {
-        return Err(ReceiveError::AlreadyReceived { slate_id });
+    if let Some(stored) = repos.transaction_by_slate(
+        Uuid::from_bytes(*slate_id.as_bytes()),
+        TxDirection::Incoming,
+    )? {
+        return Err(ReceiveError::AlreadyReceived {
+            slate_id,
+            tx_id: stored.id,
+        });
     }
     let label = request.account.as_deref().unwrap_or(DEFAULT_ACCOUNT_LABEL);
     let account = account::account_by_label(repos, label)?;

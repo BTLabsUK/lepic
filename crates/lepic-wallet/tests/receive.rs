@@ -92,7 +92,11 @@ fn rejects_a_slate_id_already_received() {
     let error = receiver.receive(transport, &json(&s1), None).unwrap_err();
 
     assert!(
-        matches!(error, ReceiveError::AlreadyReceived { slate_id } if slate_id == first.slate.id()),
+        matches!(
+            error,
+            ReceiveError::AlreadyReceived { slate_id, tx_id }
+                if slate_id == first.slate.id() && tx_id == first.tx_id
+        ),
         "{error:?}"
     );
     assert_eq!(receiver.transaction_count(), 1);
