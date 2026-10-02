@@ -31,5 +31,9 @@ proptest = { workspace = true, features = ["std"] }
 rand = { workspace = true, features = ["std_rng"] }
 tracing = { workspace = true, features = ["std"] }
 
+[[bench]]
+name = "argon2"
+harness = false
+
 [lints]
 workspace = true
