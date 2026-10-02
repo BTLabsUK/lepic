@@ -1,7 +1,7 @@
 //! Replays the G-01 golden vectors in `testdata/vectors/keys` that cover mnemonics, BIP32
 //! derivation, identifiers, keychain commitments, Epicbox address keys and payment-proof keys.
-//! Commitments over raw blinding factors and bulletproofs are checked by `lepic-crypto`, proof
-//! builders by K-02 and the seed file by K-03. The onion v3 form of the payment-proof key is
+//! It also replays the proof builder vectors. Commitments over raw blinding factors and
+//! bulletproofs are checked by `lepic-crypto` and the seed file by K-03. The onion v3 form of the payment-proof key is
 //! Tor-only and not ported.
 
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
@@ -15,9 +15,11 @@
 
 use std::path::PathBuf;
 
-use lepic_crypto::{Commitment, PublicKey, SecretKey};
+use lepic_crypto::{Commitment, PublicKey, RangeProof, SecretKey};
+use lepic_keychain::proof::{create_output, create_proof, rewind};
 use lepic_keychain::{
-    ExtKeyVersion, Identifier, Keychain, MnemonicError, Seed, SwitchCommitment, address_key_id,
+    ExtKeyVersion, Identifier, Keychain, LegacyProofBuilder, MnemonicError, OutputRewinder,
+    ProofBuild, ProofBuilder, RewoundOutput, Seed, SwitchCommitment, address_key_id,
 };
 use serde_json::Value;
 
@@ -320,4 +322,125 @@ fn derives_epicbox_address_keys_on_both_networks() {
             }
         }
     }
+}
+
+fn rewound(value: &Value) -> Option<RewoundOutput> {
+    if value.is_null() {
+        return None;
+    }
+    Some(RewoundOutput {
+        amount: text(&value["amount"]).parse().unwrap(),
+        identifier: Identifier::from_hex(text(&value["identifier"])).unwrap(),
+        switch: switch(text(&value["switch"])),
+    })
+}
+
+/// Replays one proof builder vector. `own` and `other` are the builder under test and the other
+/// scheme of the same wallet; `stranger` is the same scheme for `other_seed`.
+fn replay_proofs<B: ProofBuild, O: ProofBuild>(
+    vector: &Value,
+    keychain: &Keychain,
+    own: &B,
+    other: &O,
+    stranger: &B,
+) {
+    let name = text(&vector["name"]);
+    let paths = cases(&vector["inputs"]["paths"]);
+    let amounts = cases(&vector["inputs"]["amounts"]);
+    let switches = cases(&vector["inputs"]["switches"]);
+    let expected = cases(&vector["expected"]["cases"]);
+    assert_eq!(
+        expected.len(),
+        paths.len() * amounts.len() * switches.len(),
+        "{name}"
+    );
+    let rewinder = OutputRewinder::new(keychain).unwrap();
+
+    for case in expected {
+        let id = path(&case["path"]);
+        assert_eq!(id.to_hex(), text(&case["identifier"]));
+        let amount: u64 = text(&case["amount"]).parse().unwrap();
+        let switch = switch(text(&case["switch"]));
+        let label = format!("{name} {id} {amount} {switch:?}");
+        let commit = Commitment::from_hex(text(&case["commit"])).unwrap();
+        let proof = RangeProof::from_hex(text(&case["proof"])).unwrap();
+
+        assert_eq!(keychain.commit(amount, &id, switch), Ok(commit), "{label}");
+        let rewind_nonce = own.rewind_nonce(&commit).unwrap();
+        assert_eq!(
+            hex(rewind_nonce.expose_bytes()),
+            text(&case["rewind_nonce"]),
+            "{label}"
+        );
+        let private_nonce = own.private_nonce(&commit).unwrap();
+        assert_eq!(
+            hex(private_nonce.expose_bytes()),
+            text(&case["private_nonce"]),
+            "{label}"
+        );
+        assert_eq!(
+            hex(own.proof_message(&id, switch).as_bytes()),
+            text(&case["message"]),
+            "{label}"
+        );
+        assert_eq!(
+            create_proof(keychain, own, amount, &id, switch),
+            Ok(proof.clone()),
+            "{label}"
+        );
+        let output = create_output(keychain, own, amount, &id, switch).unwrap();
+        assert_eq!(output.commitment, commit, "{label}");
+        assert_eq!(output.proof, proof, "{label}");
+
+        let expected_rewind = rewound(&case["rewind"]);
+        assert!(expected_rewind.is_some(), "{label}");
+        assert_eq!(rewind(own, &commit, &proof), Ok(expected_rewind), "{label}");
+        assert_eq!(
+            rewind(other, &commit, &proof),
+            Ok(rewound(&case["rewind_with_other_builder"])),
+            "{label}"
+        );
+        assert_eq!(
+            rewind(stranger, &commit, &proof),
+            Ok(rewound(&case["rewind_by_other_wallet"])),
+            "{label}"
+        );
+        assert_eq!(
+            rewinder.rewind(&commit, &proof),
+            Ok(expected_rewind),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn builds_and_rewinds_proofs_as_upstream_proof_builder() {
+    let vector = node_vector("proofs_builder_seed32");
+    assert_eq!(vector["inputs"]["builder"], "ProofBuilder");
+    let network = text(&vector["inputs"]["network"]);
+    let stranger = keychain(&vector["inputs"]["other_seed"], network);
+    let keychain = keychain(&vector["inputs"]["seed"], network);
+    replay_proofs(
+        &vector,
+        &keychain,
+        &ProofBuilder::new(&keychain).unwrap(),
+        &LegacyProofBuilder::new(&keychain).unwrap(),
+        &ProofBuilder::new(&stranger).unwrap(),
+    );
+}
+
+#[test]
+fn builds_and_rewinds_proofs_as_upstream_legacy_proof_builder() {
+    let vector = node_vector("proofs_legacy_builder_seed32");
+    assert_eq!(vector["inputs"]["builder"], "LegacyProofBuilder");
+    let network = text(&vector["inputs"]["network"]);
+    let stranger = keychain(&vector["inputs"]["other_seed"], network);
+    let keychain = keychain(&vector["inputs"]["seed"], network);
+    replay_proofs(
+        &vector,
+        &keychain,
+        &LegacyProofBuilder::new(&keychain).unwrap(),
+        &ProofBuilder::new(&keychain).unwrap(),
+        &LegacyProofBuilder::new(&stranger).unwrap(),
+    );
 }
