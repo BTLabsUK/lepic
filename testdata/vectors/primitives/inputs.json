@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "inputs",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {},
+  "expected": {
+    "cases": [
+      {
+        "input": {
+          "features": "Plain",
+          "value": "1500000000",
+          "blind": "4141414141414141414141414141414141414141414141414141414141414141"
+        },
+        "commit": "09d95a9bbadbbe31dceca5a7b692a8d1f06fa018dcbaa49aca0e94e0827f6c2c9b",
+        "serialized_v1": "0009d95a9bbadbbe31dceca5a7b692a8d1f06fa018dcbaa49aca0e94e0827f6c2c9b",
+        "serialized_v2": "0009d95a9bbadbbe31dceca5a7b692a8d1f06fa018dcbaa49aca0e94e0827f6c2c9b",
+        "hash": "62b6c689f783cafde3449476ca8265c507f505050eee702f905edda0d0d323c3"
+      },
+      {
+        "input": {
+          "features": "Coinbase",
+          "value": "1500000000",
+          "blind": "4141414141414141414141414141414141414141414141414141414141414141"
+        },
+        "commit": "09d95a9bbadbbe31dceca5a7b692a8d1f06fa018dcbaa49aca0e94e0827f6c2c9b",
+        "serialized_v1": "0109d95a9bbadbbe31dceca5a7b692a8d1f06fa018dcbaa49aca0e94e0827f6c2c9b",
+        "serialized_v2": "0109d95a9bbadbbe31dceca5a7b692a8d1f06fa018dcbaa49aca0e94e0827f6c2c9b",
+        "hash": "20bb493849669fdac6a11c1972df1f34ad5ffbd3535b849b8532423b2cbf3726"
+      }
+    ]
+  }
+}

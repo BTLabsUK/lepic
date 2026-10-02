@@ -3,6 +3,7 @@
 //!
 //! Usage: `vectors generate [--area <area>] [--out <dir>]`, `vectors list`.
 
+mod primitives;
 mod smoke;
 
 use std::fmt::Write as _;
@@ -12,10 +13,16 @@ use std::process::ExitCode;
 use serde::Serialize;
 
 /// One entry per vector area. A new area is one module plus one line here.
-const AREAS: &[Area] = &[Area {
-    name: "smoke",
-    generate: smoke::generate,
-}];
+const AREAS: &[Area] = &[
+    Area {
+        name: "smoke",
+        generate: smoke::generate,
+    },
+    Area {
+        name: "primitives",
+        generate: primitives::generate,
+    },
+];
 
 const SCHEMA: u32 = 1;
 

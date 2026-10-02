@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "ser_truncated_reads",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {},
+  "expected": {
+    "cases": [
+      {
+        "type": "u8",
+        "bytes": "",
+        "outcome": "IOErr(UnexpectedEof)"
+      },
+      {
+        "type": "u16",
+        "bytes": "12",
+        "outcome": "IOErr(UnexpectedEof)"
+      },
+      {
+        "type": "u32",
+        "bytes": "123456",
+        "outcome": "IOErr(UnexpectedEof)"
+      },
+      {
+        "type": "u64",
+        "bytes": "01020304050607",
+        "outcome": "IOErr(UnexpectedEof)"
+      },
+      {
+        "type": "u64",
+        "bytes": "0102030405060708",
+        "outcome": "ok"
+      },
+      {
+        "type": "(u8,u64)",
+        "bytes": "0000000000000000",
+        "outcome": "IOErr(UnexpectedEof)"
+      }
+    ]
+  }
+}

@@ -1,0 +1,267 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "weight_limits",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {},
+  "expected": {
+    "cases": [
+      {
+        "network": "mainnet",
+        "inputs": 1,
+        "outputs": 1,
+        "kernels": 1,
+        "weight_as_block": 25,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 39973,
+        "outputs": 0,
+        "kernels": 1,
+        "weight_as_block": 39976,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 39974,
+        "outputs": 0,
+        "kernels": 1,
+        "weight_as_block": 39977,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 39997,
+        "outputs": 0,
+        "kernels": 1,
+        "weight_as_block": 40000,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 39998,
+        "outputs": 0,
+        "kernels": 1,
+        "weight_as_block": 40001,
+        "as_transaction": "too_heavy",
+        "read_counts": "TooLargeReadErr"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 0,
+        "outputs": 1903,
+        "kernels": 1,
+        "weight_as_block": 39966,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 0,
+        "outputs": 1904,
+        "kernels": 1,
+        "weight_as_block": 39987,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 1,
+        "outputs": 1902,
+        "kernels": 2,
+        "weight_as_block": 39949,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 2,
+        "outputs": 1902,
+        "kernels": 2,
+        "weight_as_block": 39950,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 0,
+        "outputs": 1904,
+        "kernels": 2,
+        "weight_as_block": 39990,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 0,
+        "outputs": 0,
+        "kernels": 13325,
+        "weight_as_block": 39975,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 0,
+        "outputs": 0,
+        "kernels": 13326,
+        "weight_as_block": 39978,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 0,
+        "outputs": 0,
+        "kernels": 13333,
+        "weight_as_block": 39999,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "mainnet",
+        "inputs": 0,
+        "outputs": 0,
+        "kernels": 13334,
+        "weight_as_block": 40002,
+        "as_transaction": "too_heavy",
+        "read_counts": "TooLargeReadErr"
+      },
+      {
+        "network": "floonet",
+        "inputs": 1,
+        "outputs": 1,
+        "kernels": 1,
+        "weight_as_block": 25,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 39973,
+        "outputs": 0,
+        "kernels": 1,
+        "weight_as_block": 39976,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 39974,
+        "outputs": 0,
+        "kernels": 1,
+        "weight_as_block": 39977,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 39997,
+        "outputs": 0,
+        "kernels": 1,
+        "weight_as_block": 40000,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 39998,
+        "outputs": 0,
+        "kernels": 1,
+        "weight_as_block": 40001,
+        "as_transaction": "too_heavy",
+        "read_counts": "TooLargeReadErr"
+      },
+      {
+        "network": "floonet",
+        "inputs": 0,
+        "outputs": 1903,
+        "kernels": 1,
+        "weight_as_block": 39966,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 0,
+        "outputs": 1904,
+        "kernels": 1,
+        "weight_as_block": 39987,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 1,
+        "outputs": 1902,
+        "kernels": 2,
+        "weight_as_block": 39949,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 2,
+        "outputs": 1902,
+        "kernels": 2,
+        "weight_as_block": 39950,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 0,
+        "outputs": 1904,
+        "kernels": 2,
+        "weight_as_block": 39990,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 0,
+        "outputs": 0,
+        "kernels": 13325,
+        "weight_as_block": 39975,
+        "as_transaction": "within_limit",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 0,
+        "outputs": 0,
+        "kernels": 13326,
+        "weight_as_block": 39978,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 0,
+        "outputs": 0,
+        "kernels": 13333,
+        "weight_as_block": 39999,
+        "as_transaction": "too_heavy",
+        "read_counts": "within_limit"
+      },
+      {
+        "network": "floonet",
+        "inputs": 0,
+        "outputs": 0,
+        "kernels": 13334,
+        "weight_as_block": 40002,
+        "as_transaction": "too_heavy",
+        "read_counts": "TooLargeReadErr"
+      }
+    ]
+  }
+}

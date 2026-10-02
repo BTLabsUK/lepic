@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "kernel_features",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {},
+  "expected": {
+    "cases": [
+      {
+        "features": {
+          "kind": "Plain",
+          "fee": "0"
+        },
+        "serialized_v1": "0000000000000000000000000000000000",
+        "serialized_v2": "000000000000000000",
+        "sig_msg": "5187b7a8021bf4f2c004ea3a54cfece1754f11c7624d2363c7f4cf4fddd1441e"
+      },
+      {
+        "features": {
+          "kind": "Plain",
+          "fee": "1"
+        },
+        "serialized_v1": "0000000000000000010000000000000000",
+        "serialized_v2": "000000000000000001",
+        "sig_msg": "ea2919638289bf4ac4b9196cd4120fce0a6f072b0f2f0b0c993645e0ba9acb76"
+      },
+      {
+        "features": {
+          "kind": "Plain",
+          "fee": "800000"
+        },
+        "serialized_v1": "0000000000000c35000000000000000000",
+        "serialized_v2": "0000000000000c3500",
+        "sig_msg": "e53e06583972cbb0d91cad369c4fe0a5de72ab91381a38c4933388a596ef9408"
+      },
+      {
+        "features": {
+          "kind": "Plain",
+          "fee": "18446744073709551615"
+        },
+        "serialized_v1": "00ffffffffffffffff0000000000000000",
+        "serialized_v2": "00ffffffffffffffff",
+        "sig_msg": "cc256724bb79396a2126c661d07057d45f96e05233971ca808f7a7581efaee18"
+      },
+      {
+        "features": {
+          "kind": "Coinbase"
+        },
+        "serialized_v1": "0100000000000000000000000000000000",
+        "serialized_v2": "01",
+        "sig_msg": "ee155ace9c40292074cb6aff8c9ccdd273c81648ff1149ef36bcea6ebb8a3e25"
+      },
+      {
+        "features": {
+          "kind": "HeightLocked",
+          "fee": "800000",
+          "lock_height": "0"
+        },
+        "serialized_v1": "0200000000000c35000000000000000000",
+        "serialized_v2": "0200000000000c35000000000000000000",
+        "sig_msg": "56d16a69d0cd97b1905cdb555486faa8fddca6b8b80039a0db44fefad7abf5c4"
+      },
+      {
+        "features": {
+          "kind": "HeightLocked",
+          "fee": "800000",
+          "lock_height": "1"
+        },
+        "serialized_v1": "0200000000000c35000000000000000001",
+        "serialized_v2": "0200000000000c35000000000000000001",
+        "sig_msg": "fb98c1a5c67abddb725a18d6bd9ae2db16a74345d0f45f7ac306f84d5e2e2be1"
+      },
+      {
+        "features": {
+          "kind": "HeightLocked",
+          "fee": "800000",
+          "lock_height": "1000000"
+        },
+        "serialized_v1": "0200000000000c350000000000000f4240",
+        "serialized_v2": "0200000000000c350000000000000f4240",
+        "sig_msg": "9eb39aacd1b2354f99335f5da85d4cf3e18f68c56990076f55be760cb3bcc129"
+      },
+      {
+        "features": {
+          "kind": "HeightLocked",
+          "fee": "18446744073709551615",
+          "lock_height": "18446744073709551615"
+        },
+        "serialized_v1": "02ffffffffffffffffffffffffffffffff",
+        "serialized_v2": "02ffffffffffffffffffffffffffffffff",
+        "sig_msg": "72d437d7c2c35a6bf972e61518820699ee4bb0169f40c9ccb5f660de2d7aa079"
+      }
+    ]
+  }
+}

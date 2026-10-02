@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "chain_params_mainnet",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "network": "mainnet"
+  },
+  "expected": {
+    "coinbase_maturity": "1440",
+    "max_block_weight": 40000,
+    "max_tx_weight": 39976,
+    "block_input_weight": 1,
+    "block_output_weight": 21,
+    "block_kernel_weight": 3,
+    "protocol_version": 2,
+    "epic_base": "100000000",
+    "milli_epic": "100000",
+    "micro_epic": "100",
+    "default_base_fee": "100000"
+  }
+}

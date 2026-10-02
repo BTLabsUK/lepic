@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "hash_values",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {},
+  "expected": {
+    "cases": [
+      {
+        "type": "u8",
+        "value": "0",
+        "preimage": "00",
+        "hash": "03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314"
+      },
+      {
+        "type": "u8",
+        "value": "255",
+        "preimage": "ff",
+        "hash": "ac4e4076a883937282f1377ef5cacb8edd00e3c79629e43532464eb3be277367"
+      },
+      {
+        "type": "u64",
+        "value": "0",
+        "preimage": "0000000000000000",
+        "hash": "81e47a19e6b29b0a65b9591762ce5143ed30d0261e5d24a3201752506b20f15c"
+      },
+      {
+        "type": "u64",
+        "value": "18446744073709551615",
+        "preimage": "ffffffffffffffff",
+        "hash": "e2d93df6a2e919e879551686bc301480fc50c54dc949b14b916d5834113bb061"
+      },
+      {
+        "type": "(u8,u64)",
+        "value": "(0,7000000)",
+        "preimage": "0000000000006acfc0",
+        "hash": "bd5562c4e3aa5de611a7dd79b7aa0ef7ae4c9cfe58b1cc986535a5018d8799dd"
+      },
+      {
+        "type": "(u8,u64,u64)",
+        "value": "(2,7000000,1000000)",
+        "preimage": "0200000000006acfc000000000000f4240",
+        "hash": "cd8861a682e3b78bc83c2e9c57435317cd34eb3890912e9287de76dd4e3ec5d3"
+      },
+      {
+        "type": "hash",
+        "value": "0000000000000000000000000000000000000000000000000000000000000000",
+        "preimage": "0000000000000000000000000000000000000000000000000000000000000000",
+        "hash": "89eb0d6a8a691dae2cd15ed0369931ce0a949ecafa5c3f93f8121833646e15c3"
+      },
+      {
+        "type": "(hash,hash)",
+        "value": "(0000000000000000000000000000000000000000000000000000000000000000,bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319)",
+        "preimage": "0000000000000000000000000000000000000000000000000000000000000000bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319",
+        "hash": "6535b6ec4b492dfe60ff645c10a9afbc39ce11cd4c1c928599434d9a94f1cf72"
+      }
+    ]
+  }
+}

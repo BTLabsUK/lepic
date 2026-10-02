@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "hash_operations",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {},
+  "expected": {
+    "zero_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "zero_plus_abc": "6535b6ec4b492dfe60ff645c10a9afbc39ce11cd4c1c928599434d9a94f1cf72",
+    "abc_to_u64": "13681233339384740210"
+  }
+}

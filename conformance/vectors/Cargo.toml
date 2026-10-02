@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 epic_core.workspace = true
+epic_keychain.workspace = true
 epic_util.workspace = true
 # Not called yet; linked so the lockfile pins the wallet commit the slate areas will use.
 epic_wallet_libwallet.workspace = true

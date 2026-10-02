@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "output_features",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {},
+  "expected": {
+    "cases": [
+      {
+        "byte": "00",
+        "outcome": "Plain"
+      },
+      {
+        "byte": "01",
+        "outcome": "Coinbase"
+      },
+      {
+        "byte": "02",
+        "outcome": "CorruptedData"
+      },
+      {
+        "byte": "ff",
+        "outcome": "CorruptedData"
+      }
+    ]
+  }
+}
