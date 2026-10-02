@@ -5,6 +5,7 @@ mod deps_check;
 #[cfg(test)]
 mod lint_tables;
 mod mobile;
+mod upstream;
 mod vectors;
 
 use std::env;
@@ -19,6 +20,8 @@ commands:
   check       fmt, clippy, tests, cargo deny and deps-check
   deps-check  crate edges and banned crates against docs/architecture.md
   mobile      --target <triple> [--release]: build the library crates for a mobile target
+  upstream-drift
+              upstream commits since the ones recorded in upstream.toml
   vectors     generate [--area <area>] golden vectors, or verify them";
 
 fn main() -> ExitCode {
@@ -41,6 +44,7 @@ fn run() -> Result<()> {
         "check" => check::run(&root),
         "deps-check" => deps_check::run(&root),
         "mobile" => mobile::run(&root, rest),
+        "upstream-drift" => upstream::run(&root),
         "vectors" => vectors::run(&root, rest),
         other => bail!("unknown command `{other}`\n\n{USAGE}"),
     }
