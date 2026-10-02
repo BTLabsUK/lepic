@@ -6,6 +6,7 @@
 mod epicbox;
 mod keys;
 mod primitives;
+mod slates;
 mod smoke;
 
 use std::fmt::Write as _;
@@ -36,6 +37,10 @@ const AREAS: &[Area] = &[
     Area {
         name: "epicbox",
         generate: epicbox::generate,
+    },
+    Area {
+        name: "slates",
+        generate: slates::generate,
     },
 ];
 

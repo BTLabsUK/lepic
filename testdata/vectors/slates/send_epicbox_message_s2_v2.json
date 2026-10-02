@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "area": "slates",
+  "name": "send_epicbox_message_s2_v2",
+  "generator": "conformance/vectors/slates",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "case": "send_epicbox_message",
+    "flow": "standard",
+    "method": "epicbox",
+    "stage": "S2",
+    "producer": "receiver",
+    "encoding": "v2",
+    "chain_type": "AutomatedTesting",
+    "use_test_rng": true,
+    "options": {
+      "amount": "210000000",
+      "initiator_message": "lepic vector: sender message",
+      "responder_message": null,
+      "ttl_blocks": null,
+      "payment_proof": false,
+      "change_outputs": 1,
+      "minimum_confirmations": "1",
+      "selection_strategy": "smallest",
+      "blocks_before": 4,
+      "funding": "coinbase"
+    },
+    "wallets": [
+      {
+        "role": "sender",
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        "account": "default",
+        "inputs": [
+          {
+            "key_id": "0300000000000000000000000000000000",
+            "mmr_index": null,
+            "value": "1457920000"
+          }
+        ],
+        "outputs": [
+          {
+            "key_id": "0300000000000000000000000400000000",
+            "mmr_index": null,
+            "value": "1247120000"
+          }
+        ]
+      },
+      {
+        "role": "receiver",
+        "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+        "account": "default",
+        "inputs": [],
+        "outputs": [
+          {
+            "key_id": "0300000000000000000000000000000000",
+            "mmr_index": null,
+            "value": "210000000"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "shape": "V2",
+    "header": {
+      "version": 3,
+      "orig_version": 3,
+      "block_header_version": 6
+    },
+    "slate_id": "0436430c-2b02-624c-2032-570501212b0a",
+    "randomized": [],
+    "json": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":6},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b0a\",\"tx\":{\"offset\":\"d202964900000000d302964900000000d402964900000000d502964900000000\",\"body\":{\"inputs\":[{\"features\":\"Coinbase\",\"commit\":\"0889d62841941eba3c354c826b7b5f4a9d14cd908928f3960bce9aca686f3cfc88\"}],\"outputs\":[{\"features\":\"Plain\",\"commit\":\"08126e79e806271d329d53599a2e7930c248d141784d85944c9301e088b7114bb0\",\"proof\":\"735da71b04c95ef1bd24cc4b2658d46e54e06dcf676508b0ea9130250be053df2cd36dcb546d308ae360cb9b54a044d6b9ac033722f8a93267b1f544fc7ec94701928cd967e2cd4bd966ce0d9fe2bbd9b389504398b2bc72472fd2d532142402f0c9838b61f48105debf9ea3702b72bb886cf5c750ea325ccf4461ff2b7e0dbda2d048e9a900193b767d807256f22e8b681f1f22f2c71a30241f7bd7d3b4d0d088e28772d9081500f1a9a0b56d33bdb9907323563a4ef77cc6c2a3df39993bd4632834d471affc59a25a3f74509edc14f22be1a85a1f3110e0e4acb2a1305257f054641263efb04dc3a65a909d941c40f106dcc63619aea15afca7d20f6eb4bfe95e7605212a11d1ad593be39ecaa40f7ba6fe047987fa031504854f8035c37a9d04cd6df8f1c40cbde26fea72d991d584b4c5127803d3ff9f7a99f67067da1f323c87de5b25470971ad0bf9f1859018c9080b14928b4345d76332ca9c5642c2101c0050dad48a31a89747c389ddfe5c9adb7b686d8fa35a731c75a0415973fe36a8a4bea56f3a9ff4b5fe56b7f403d53de013fdcdb48c64b189f0bbfdf6c2a985db21d097f898073ad26fe1d3a5680dce69bc634e03649a68fd0b7745d6bda65306b731fd6d453f2c91c6aa0d062ec41ba83aee862a05de3693487cdf1946708efc493a2ad7609bf2f8451f31aff8a408df3560d358d62e5adb55e8265edfabbed232266bb82ee1518c209b6f62307ef2d58eb19b26e705884c2d87189d9d13285f4f5c780c9d7d6a9cbd80a601c7643d9875f77f3672ce6750e9558e078c13d0fbc7180ccc953a44634867fbff2bab9fb13518159e3b5b2480a013e362fac639f36f132aaaaf9e0186b76428fac3a84f1528b6bfade448c58038c0fe8df101f5efb4cde6e908757c420fa05eff1961c43018644483b61ef2885b29bbec424411cbfb\"},{\"features\":\"Plain\",\"commit\":\"08a72d9986542bc4a6579eeeaca3eee8b6b553a84424776ff9a6f3238e6e16b06e\",\"proof\":\"53d3e3fbf45187c526f3dde5146a772b940783859b5e9c8e6ce8c38683a8451b0eeaa1e4ea85be4db3a14efde66bc203542225bc1e122818461da0b8f5b44b240736ad32bc832dde8fd1703127b7ecd533b1998fc6a90e017b454e062300184f7ea67807f7228677093f8bbba2d98a7ef93866ee71e0c990b454c2b84a3e66b436c223d23c70d0692b7fe34b3819df8d13c8bb88f1ade91fc8fe72da491dda48d9359425d092e039100ae678bf3f4c4bb0144bf293ab61766b16b915d014fce26c1e54e1d6bf4f4d8272d600eded956fe58573cad88bb7bf0d1d55aecb6638556bbf73ad1bfb295952bf64824ceb3afaefb514389dea981e6ab3a5afa70297f21ed0f9ac37f95e9db50fba9831462dcb7c93b89534556731924d4b0db639027e076c049d5efc587fa4ab390277d141aaf24745e93dc97f50fa8358b9b663622eb5c21beadf4ca61c53a322f2e8e756024dad319b8ce97b29b9393e812aabd19f318e02a01283d93e09e94305f66a477da7749b8f5e5293c6e6096335e986ecdf8d016829cad011eefd6f8263e922833b767e9341921bd529e9fbd7757313a457c45897ba015fe6bb8c813d1b379076bbd2fdf1be332fe0280afb90095b54d563e295d8a0e853d9fbfc9db56dbe00cde7386eda546e2be6831d3c901e1c0ab4f6d6c05cbdd620dd33f74e6014183847caf83533b8493953c1a6ccc0435edf5cfa6bd598bfad0089f4c978983e9fb50484bed125071049f3d0dd646afe236eec4e43aa318b983764eef6ba8b7b1fad839e5c5278829edae8c0ee9b7c0f27989bae36fc1f6153df4b795aa9a164aed41fd4afba7e33fb2e55d7477f1246e828ea6709f05f40f6b4498f591c945cc20b4bef0353d07b4a7a07064bee2cd1b7059d9607694091f93043503c5202f81eb3e286dbc4d7f4ebbacd0913ff8bb425754902c1c955\"}],\"kernels\":[{\"features\":\"Plain\",\"fee\":\"800000\",\"lock_height\":\"0\",\"excess\":\"000000000000000000000000000000000000000000000000000000000000000000\",\"excess_sig\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}]}},\"amount\":\"210000000\",\"fee\":\"800000\",\"height\":\"4\",\"lock_height\":\"0\",\"participant_data\":[{\"id\":\"0\",\"public_blind_excess\":\"02b574a34feddecb4dbeec864ec58cfdf265f47ef8b37ab0ac8813711a159a80f5\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":null,\"message\":\"lepic vector: sender message\",\"message_sig\":\"8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841bc6cfe636c090954b8daf571bb763acaf3cb6b484f07bf99d120c5bd95d5c1aa1\"},{\"id\":\"1\",\"public_blind_excess\":\"02eaeb60e56bd0b5169e5c7854cb6719f67b79d5b783505626a06562bbbba6629a\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":\"8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b139c128235c72ea18346efeeb98ad98ec857fa68cfb3041ccc045f2d7e9e3c8b\",\"message\":null,\"message_sig\":null}]}",
+    "final_tx": null
+  }
+}

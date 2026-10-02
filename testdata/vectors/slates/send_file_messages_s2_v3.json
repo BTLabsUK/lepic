@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "area": "slates",
+  "name": "send_file_messages_s2_v3",
+  "generator": "conformance/vectors/slates",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "case": "send_file_messages",
+    "flow": "standard",
+    "method": "file",
+    "stage": "S2",
+    "producer": "receiver",
+    "encoding": "v3",
+    "chain_type": "AutomatedTesting",
+    "use_test_rng": true,
+    "options": {
+      "amount": "110000000",
+      "initiator_message": "lepic vector: sender message",
+      "responder_message": "lepic vector: receiver message",
+      "ttl_blocks": null,
+      "payment_proof": false,
+      "change_outputs": 1,
+      "minimum_confirmations": "1",
+      "selection_strategy": "smallest",
+      "blocks_before": 4,
+      "funding": "coinbase"
+    },
+    "wallets": [
+      {
+        "role": "sender",
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        "account": "default",
+        "inputs": [
+          {
+            "key_id": "0300000000000000000000000000000000",
+            "mmr_index": null,
+            "value": "1457920000"
+          }
+        ],
+        "outputs": [
+          {
+            "key_id": "0300000000000000000000000400000000",
+            "mmr_index": null,
+            "value": "1347120000"
+          }
+        ]
+      },
+      {
+        "role": "receiver",
+        "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+        "account": "default",
+        "inputs": [],
+        "outputs": [
+          {
+            "key_id": "0300000000000000000000000000000000",
+            "mmr_index": null,
+            "value": "110000000"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "shape": "V3",
+    "header": {
+      "version": 2,
+      "orig_version": 2,
+      "block_header_version": 6
+    },
+    "slate_id": "0436430c-2b02-624c-2032-570501212b01",
+    "randomized": [],
+    "json": "{\"version_info\":{\"version\":2,\"orig_version\":2,\"block_header_version\":6},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b01\",\"tx\":{\"offset\":\"d202964900000000d302964900000000d402964900000000d502964900000000\",\"body\":{\"inputs\":[{\"features\":\"Coinbase\",\"commit\":\"0889d62841941eba3c354c826b7b5f4a9d14cd908928f3960bce9aca686f3cfc88\"}],\"outputs\":[{\"features\":\"Plain\",\"commit\":\"0944c73b671fde7b6405884175e1a394873cb7398a237a08defcb60fa178c89947\",\"proof\":\"e229651a0c74750a3746b80cdaac6499a05d3f24ca8f4c9fc42ef20f342bb767b378f1667213c6efdf1e94ea0ce00e9a7cfcbd84d71dabbbd7eb651dbfa6ce9308192236e7304b5e1f710da138f1c997ddf498730690ad47d9aed4d4c6d5b0ec54e0bfcdf6a2b72337e3d19334d0a659c72fd53437d244d969bbec95483686b85e1727c260ac6720dba86b2ce933987624ab41e2c9b0bc627c3709cda07cdbff060dca290701f2366388d224ffc11925a67ac607307b1795e852cb87ce408242e6771ba182254a23c24b67257f1ab6430a60242db9ebd7290423351ebed90721389f060a1122c18050f48bf6bd2a4eae1c0e583c9200e607a9f273402a9be50315c9f030bf0755928ab0fd5720171864cd55f33a85a1e4db6909d54b2d27c5cf1adc4d305915e46efa1c42d4abff4717b7b940c0506669bf1a59653827377150048df96d86a79dcd602c56906bd292a89040f728e245012c8a2d25201c8066ca2687021df7becdeb3b0f596f045ab9b451aa011dfb3576282e85a0e476c7de3eaadac3917631f41585153df00278e694ce216bb1c6e8cac61f6594582094df40ca8e055f2e47b2bd591749f8a30f3aa54198fabe0485a5d3d5776946d908ebd3347cb78419d8fd979e10d99ee6a890b87117b8bc852ecdbc2b4385cca7e360c4bc6b06fd26ebd2e944104b3c6e37af150f69e0c39f830d3450b4abe22a6a7b3b0526fe519d5ab88f6f84459542c80ae089230969e36bcc8e2f7ce9f597abad64061567b7370648cb810bb7d7dd5da62b58d48a5e8586276d220db1b679b00680097ab1c2c6b3e16763fb26fbff213812d7a3f9f786f92b235a79f4cc13b0e8aaa0c7d3dd529c1d6cd7106249b20dd6837ef54fc332b265b706b14be358134681393ad6c734a2f068f978dfa4c6c0cbda8cca8f87df1f774a0651d74e27b5ecb8e2e29c\"},{\"features\":\"Plain\",\"commit\":\"088ef3f036f34ee5ec6ae5822329aa25c14b9d1a0638d148c8e9a88b9f334b3999\",\"proof\":\"ecbdee1a2d7d499d15cbaf765821c12391c437dc430addb76d593fc63da2e055166f0b01e2922ae2310b83232a41464d9ca0d18cdc65c8a200c958d7233cca5f0da132e1969a4b27809bf4a66eadaf4d78b64ace928e473231dee0bacf6fb47f2b67ba20c10ddf4dbd38f136cfc02702f0df935d91128c027d432d45dd5ccbe72b2a8e91721a66c3817ebbc1790441922ecbc751fbae6f6869093881907fd19fd271e1d53b03cfb06747a3632c76fead8f4758692467fe32ec95a39b0e830ab996b1727f149ceaf3b94ed0415883369807c1e3d870e45c44c1a1ef5cd901d8b2adb1ca4f58a5d12c4b9106923038e762ecfe66062979ea19286a7eba22bfe6af69d5bb2167955ca6202ce0e20d1f805758381e8731c63cae9a9777d0d9fe6aff7f154d02e2175ec375d605d2d02e8c77873e62200f9c732183f049a6b1e283234590c8d9e955bd0dc010abc5bc9a650e931300a2b92b11ebf589ba8d03d0854d7fc201bd97e693b60bd750c34db500f5e2e7818ba2575b2457db179a2c3e4d30543102cdbd1e3be0ccacabbe6eb0b2e9bcbfa31a0e67e918bcd56dcbd1858c99212265b48c4d17ea7bd787083bf6fcd50f93cc31a622cd28814a5372eabda391ef921f742d2c185baa84100479e53cf80700c1a6fa5bda701a1432829085c47609e2f2ca159e1993f61a142926c09c65d7a70d6680c45cda4981b52c58a4f2a7383c4560ec318889adfb992270509eb5e2b5fcfaaee24385920659fe32a31d64a02b42e3d469ebf38004e8b1ded64488184a7e4a630bc6055d22b8e5ef7fc033b3f8e16bcc8c86600f802da8611f25fca664cc8cf4996f2ec89a108819a01221b3acca54279280df3014a18756b6bc699a688b4082abd263bf5b4a63987552d865b2793f7dbcbfc35c7ec6129e75c17e137770945589721ea00fe61cdb9dff898a845f\"}],\"kernels\":[{\"features\":\"Plain\",\"fee\":\"800000\",\"lock_height\":\"0\",\"excess\":\"000000000000000000000000000000000000000000000000000000000000000000\",\"excess_sig\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}]}},\"amount\":\"110000000\",\"fee\":\"800000\",\"height\":\"4\",\"lock_height\":\"0\",\"ttl_cutoff_height\":null,\"participant_data\":[{\"id\":\"0\",\"public_blind_excess\":\"023a09d783f9af6d632de2e1202bf3f9273145c204e819ddb47b1ca36fff670084\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":null,\"message\":\"lepic vector: sender message\",\"message_sig\":\"8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b73cee0aa44ad57908bf59e928fbaeb976145b1984ad80f648fb6f7617cbf4863\"},{\"id\":\"1\",\"public_blind_excess\":\"03d07d72a4678091ef6c2baaff5fd2f71c5540552a9c6755e632d3ea57b94b0913\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":\"8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b2642a4492346ac62bcae303bbcf52d3a0824b4ac26d9a7a48b5514c790ea4605\",\"message\":\"lepic vector: receiver message\",\"message_sig\":\"8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b467f5e48343adc19cb68f3aab97e70f08fd71d080dfaf25c1a8e2a0f19e318cf\"}],\"payment_proof\":null}",
+    "final_tx": null
+  }
+}

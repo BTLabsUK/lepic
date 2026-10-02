@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "area": "slates",
+  "name": "send_epicbox_header_7_s1_v2",
+  "generator": "conformance/vectors/slates",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "case": "send_epicbox_header_7",
+    "flow": "standard",
+    "method": "epicbox",
+    "stage": "S1",
+    "producer": "sender",
+    "encoding": "v2",
+    "chain_type": "AutomatedTesting",
+    "use_test_rng": true,
+    "options": {
+      "amount": "230000000",
+      "initiator_message": null,
+      "responder_message": null,
+      "ttl_blocks": null,
+      "payment_proof": false,
+      "change_outputs": 1,
+      "minimum_confirmations": "1",
+      "selection_strategy": "smallest",
+      "blocks_before": 7,
+      "funding": "coinbase"
+    },
+    "wallets": [
+      {
+        "role": "sender",
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        "account": "default",
+        "inputs": [
+          {
+            "key_id": "0300000000000000000000000000000000",
+            "mmr_index": null,
+            "value": "1457920000"
+          }
+        ],
+        "outputs": [
+          {
+            "key_id": "0300000000000000000000000700000000",
+            "mmr_index": null,
+            "value": "1227120000"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "shape": "V2",
+    "header": {
+      "version": 3,
+      "orig_version": 3,
+      "block_header_version": 7
+    },
+    "slate_id": "0436430c-2b02-624c-2032-570501212b0c",
+    "randomized": [],
+    "json": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":7},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b0c\",\"tx\":{\"offset\":\"d202964900000000d302964900000000d402964900000000d502964900000000\",\"body\":{\"inputs\":[{\"features\":\"Coinbase\",\"commit\":\"0889d62841941eba3c354c826b7b5f4a9d14cd908928f3960bce9aca686f3cfc88\"}],\"outputs\":[{\"features\":\"Plain\",\"commit\":\"091fbc1aac564b2ec431a15fad304bf292559709465e02534dd94205cae841e312\",\"proof\":\"ca1de0c2d163bb4826e038529a6921aff6cef0361082341f4faf741600041830a86b8eeedc2c09d1ae6a004ba4e36435a06f13d58256ec26891345aa59a4d3a302168440bb0cd32b525ab7d3e21061cfaf6650f9e100dbaadc1050609477fae972c98c90199de6a325b1e694cf70370de20c085135d7c3fdad8fa487b7dd8736636ad2ea0725e5837e5e4f67daa4ed4b46b9b50f43e0f13db3046d6aee42ebf1b88ee3be70ec64a43eda3a44fb0eb398116e0f2af39eba176d7395de58c0125b2b178e21e1c2f1f53722eef624d569cbf1f6aae79694771171a7e884f530a465e71033e84749fad2601875a6ed07f87dc422ca9efe6bf3b64565a6e053de47e8f75c1156d16e75978cf695214e092f0bc77930190a6876a7fc420a63e4524135008ed68b862c4a49040dc02c82208cea41cc3744bee2b596d39ea50d1e644646bc6d272aaf72ddb7a70df8aed9eed66310c37c01edf23ccf01205517eb38d208aad40048e4e825570cc9b5b6a74bc494820def844a6960e243d5f31afd47217c4ff8b6d49f524fef17ec6a1f3b8f0ed4667a45fe36d9e1be8cc3167dc85e310b2432394e19fe673e93674dbbd0f5bc54376b6bc5b2d14bfb861dcec5269ba3383b268d28a3fe924793bcd53729375607e648a057ce037ff1cf76db4ea54aa301d7724ee644ee65c21ae56a7337648a509afb53ee21a0d0bb7015344ce63edb6dc60af989b3833a66bdc691547d8af20f3a69aba0739714b6eb16b2f394ef93d3274016b41f4b5d738825371eec29636120a460ccfac2a7cb1a96774ab5f7528ff5c004d3b18f95371cb3af5a4c56fb6cad5a5eeef5d8e0417a0e3039530d6dfafabee681fe95d73cc81ba164b866e24847d7b6e6fee6c24cfd884036d9b19b0082eee5af58fe4ecec6c77f33b7b8476f6f83398ae725c645cf295ba250108b35c5bffb\"}],\"kernels\":[{\"features\":\"Plain\",\"fee\":\"800000\",\"lock_height\":\"0\",\"excess\":\"000000000000000000000000000000000000000000000000000000000000000000\",\"excess_sig\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}]}},\"amount\":\"230000000\",\"fee\":\"800000\",\"height\":\"7\",\"lock_height\":\"0\",\"participant_data\":[{\"id\":\"0\",\"public_blind_excess\":\"0313a5f5984babe6c232adbdd91e9d97d42247a0c780bad46a18ef4f1aafe1d6f1\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":null,\"message\":null,\"message_sig\":null}]}",
+    "final_tx": null
+  }
+}

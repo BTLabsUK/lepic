@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "area": "slates",
+  "name": "malformed_not_json",
+  "generator": "conformance/vectors/slates",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "base": "send_file_plain_s1_file",
+    "mutation": "text that is not JSON",
+    "json": "not a slate"
+  },
+  "expected": {
+    "file_method": {
+      "accepted": false,
+      "parsed_as": null,
+      "error": "Can't parse slate version",
+      "reencoded_v3": null
+    },
+    "epicbox_method": {
+      "accepted": false,
+      "parsed_as": null,
+      "error": "expected ident at line 1 column 2",
+      "reencoded_v3": null
+    }
+  }
+}
