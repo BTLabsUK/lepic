@@ -101,6 +101,11 @@ pub fn add_signatures(
 /// Checks a final aggregate or single-signer signature against `pubkey`.
 ///
 /// `pubkey_sum` must match the challenge key the signers used, or `None` when they used none.
+///
+/// Deliberately stricter than upstream's `verify_completed_sig`, which checks only the nonce's X
+/// coordinate: this also requires a square Y, as the node's kernel verification
+/// (`core/src/core/transaction.rs`) and `epic-wallet`'s participant-message verification
+/// (`libwallet/src/slate.rs`) do. It rejects only signatures those checks reject too.
 pub fn verify_completed_sig(
     sig: &Signature,
     pubkey: &PublicKey,
