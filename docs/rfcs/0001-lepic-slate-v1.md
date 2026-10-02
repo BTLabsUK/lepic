@@ -7,7 +7,7 @@ Proposes: ADR 0012. Implemented by X-02 (codec) and X-03 (packs, text transport,
 ## TL;DR
 
 `lepic.v1` is a binary slate format that carries, at each stage, only what the next party needs.
-A first-leg slate (S1 or I1) is 149 to 243 bytes in the G-03 cases, against 2,315 to 5,394 bytes
+A first-leg slate (S1 or I1) is 149 to 471 bytes in the G-03 cases, against 2,315 to 5,394 bytes
 of legacy JSON, and the reply
 is about a quarter of its legacy size. Slates travel inside a pack: a small header, an optional
 reply address, and optional encryption to the recipient with HPKE (RFC 9180). The pack is written
