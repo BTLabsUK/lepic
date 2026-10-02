@@ -16,7 +16,7 @@ pub const DEFAULT_ACCOUNT_LABEL: &str = "default";
 
 /// Account indices and output key child numbers stay below the hardened range, because
 /// `epic-wallet` turns a component at or above it into a hardened derivation step.
-const FIRST_HARDENED: u32 = 1 << 31;
+pub(crate) const FIRST_HARDENED: u32 = 1 << 31;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
