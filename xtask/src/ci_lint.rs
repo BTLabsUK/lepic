@@ -12,37 +12,52 @@ const SHA_LEN: usize = 40;
 const USES_KEY: &str = "uses";
 
 #[derive(Debug, PartialEq, Eq)]
-struct Unpinned {
+enum Problem {
+    NotPinned,
+    /// A key spelled with escapes may decode to `uses`, so its value cannot be trusted unchecked.
+    EscapedKey,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Finding {
     file: PathBuf,
     line: usize,
     reference: String,
+    problem: Problem,
 }
 
-impl fmt::Display for Unpinned {
+impl fmt::Display for Finding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}:{}: `{}` is not pinned to a {SHA_LEN}-character commit sha",
+            "{}:{}: `{}` ",
             self.file.display(),
             self.line,
             self.reference
-        )
+        )?;
+        match self.problem {
+            Problem::NotPinned => write!(f, "is not pinned to a {SHA_LEN}-character commit sha"),
+            Problem::EscapedKey => write!(f, "is a quoted key written with escapes"),
+        }
     }
 }
 
 pub(crate) fn run(root: &Path) -> Result<()> {
-    let unpinned = check(root)?;
-    if unpinned.is_empty() {
+    let findings = check(root)?;
+    if findings.is_empty() {
         eprintln!("ci-lint: ok");
         return Ok(());
     }
-    for entry in &unpinned {
-        eprintln!("ci-lint: {entry}");
+    for finding in &findings {
+        eprintln!("ci-lint: {finding}");
     }
-    bail!("{} unpinned `uses:` reference(s)", unpinned.len())
+    bail!(
+        "{} unpinned or unreadable `uses:` reference(s)",
+        findings.len()
+    )
 }
 
-fn check(root: &Path) -> Result<Vec<Unpinned>> {
+fn check(root: &Path) -> Result<Vec<Finding>> {
     let github = root.join(GITHUB_DIR);
     if !github.is_dir() {
         bail!("{} does not exist", github.display());
@@ -51,24 +66,31 @@ fn check(root: &Path) -> Result<Vec<Unpinned>> {
     collect_yaml(&github, &mut files)?;
     files.sort();
 
-    let mut unpinned = Vec::new();
+    let mut findings = Vec::new();
     for file in files {
         let text =
             fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
         let relative = file.strip_prefix(root).unwrap_or(&file).to_path_buf();
         for (line, content) in (1..).zip(text.lines()) {
+            let mut report = |reference: &str, problem| {
+                findings.push(Finding {
+                    file: relative.clone(),
+                    line,
+                    reference: reference.to_owned(),
+                    problem,
+                });
+            };
             for reference in uses_values(content) {
                 if !is_pinned(reference) {
-                    unpinned.push(Unpinned {
-                        file: relative.clone(),
-                        line,
-                        reference: reference.to_owned(),
-                    });
+                    report(reference, Problem::NotPinned);
                 }
+            }
+            for key in escaped_double_quoted_keys(content) {
+                report(key, Problem::EscapedKey);
             }
         }
     }
-    Ok(unpinned)
+    Ok(findings)
 }
 
 fn collect_yaml(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -119,6 +141,46 @@ fn value_after_key<'a>(before: &str, after: &'a str) -> Option<&'a str> {
         .find(|c: char| c.is_whitespace() || matches!(c, ',' | '}' | '#'))
         .unwrap_or(value.len());
     Some(value.get(..end)?.trim_matches(['"', '\'']))
+}
+
+/// Every double-quoted scalar on this line that contains an escape and is followed by a colon,
+/// that is, every key whose decoded name the plain text search for `uses` cannot see.
+fn escaped_double_quoted_keys(line: &str) -> Vec<&str> {
+    let mut keys = Vec::new();
+    let mut chars = line.char_indices();
+    while let Some((start, c)) = chars.next() {
+        if c != '"' {
+            continue;
+        }
+        let mut escaped = false;
+        let mut close = None;
+        while let Some((index, c)) = chars.next() {
+            match c {
+                '\\' => {
+                    escaped = true;
+                    chars.next();
+                }
+                '"' => {
+                    close = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(after_close) = close.and_then(|index| index.checked_add(1)) else {
+            break;
+        };
+        let is_key = line
+            .get(after_close..)
+            .is_some_and(|rest| rest.trim_start().starts_with(':'));
+        if escaped
+            && is_key
+            && let Some(key) = line.get(start..after_close)
+        {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 fn is_pinned(reference: &str) -> bool {
@@ -224,6 +286,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_double_quoted_keys_written_with_escapes() {
+        let steps = format!(
+            "      - \"\\x75ses\": actions/checkout@v7\n      - {{\"u\\u0073es\": actions/checkout@{SHA}}}\n      - run: \"echo \\\"a\\\": b\"\n"
+        );
+        let dir = fixture(&[(".github/workflows/ci.yml", &workflow(&steps))]);
+        assert_eq!(
+            check(dir.path())
+                .unwrap()
+                .into_iter()
+                .map(|finding| (finding.problem, finding.reference))
+                .collect::<Vec<_>>(),
+            [
+                (Problem::EscapedKey, "\"\\x75ses\"".to_owned()),
+                (Problem::EscapedKey, "\"u\\u0073es\"".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_unpinned_reusable_workflow_at_job_level() {
         let dir = fixture(&[(
             ".github/workflows/ci.yml",
@@ -246,10 +327,11 @@ mod tests {
         ]);
         assert_eq!(
             check(dir.path()).unwrap(),
-            [Unpinned {
+            [Finding {
                 file: PathBuf::from(".github/actions/setup/action.yaml"),
                 line: 4,
                 reference: "actions/cache@v4".to_owned(),
+                problem: Problem::NotPinned,
             }]
         );
     }
