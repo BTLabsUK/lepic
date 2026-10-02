@@ -127,6 +127,42 @@ fn leak_report_does_not_contain_the_secret() {
     assert_eq!(report, "secret 0 appeared in record 0 as lowercase hex");
 }
 
+const KEY: [u8; 4] = [0x8c, 0x01, 0xfe, 0x42];
+
+/// A key type with a derived, unredacted `Debug`.
+#[derive(Debug)]
+#[allow(dead_code)] // read only through Debug
+struct DerivedKey {
+    bytes: [u8; 4],
+}
+
+fn leak_encoding(f: impl FnOnce()) -> Option<Encoding> {
+    let ((), captured) = capture(f);
+    match assert_no_secrets(&captured.records, &[&KEY]) {
+        Err(LeakCheckError::Leaked { encoding, .. }) => Some(encoding),
+        _ => None,
+    }
+}
+
+#[test]
+fn catches_debug_formatted_byte_array() {
+    let encoding = leak_encoding(|| tracing::debug!(key = ?KEY, "key derived"));
+    assert_eq!(encoding, Some(Encoding::DebugDecimal));
+}
+
+#[test]
+fn catches_secret_inside_derived_debug() {
+    let encoding =
+        leak_encoding(|| tracing::debug!(key = ?DerivedKey { bytes: KEY }, "key derived"));
+    assert_eq!(encoding, Some(Encoding::DebugDecimal));
+}
+
+#[test]
+fn catches_byte_slice_field() {
+    let encoding = leak_encoding(|| tracing::debug!(key = &KEY[..], "key derived"));
+    assert_eq!(encoding, Some(Encoding::SpacedHex));
+}
+
 #[test]
 fn rejects_empty_secret() {
     assert_eq!(

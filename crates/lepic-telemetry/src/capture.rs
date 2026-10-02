@@ -1,4 +1,4 @@
-use std::fmt::{self, Write as _};
+use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use thiserror::Error;
@@ -44,10 +44,48 @@ pub fn capture<T>(f: impl FnOnce() -> T) -> (T, Captured) {
 
 /// How a secret appeared in a rendered record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Encoding {
+    /// The secret's own bytes; only a valid UTF-8 secret can match.
     Raw,
+    /// `8c01fe42`
     LowerHex,
+    /// `8C01FE42`
     UpperHex,
+    /// `8c 01 fe 42`, how tracing records a `&[u8]` field value.
+    SpacedHex,
+    /// `[140, 1, 254, 66]`, the `Debug` form of a byte array, slice or
+    /// `Vec`, including inside a derived `Debug`.
+    DebugDecimal,
+}
+
+impl Encoding {
+    const ALL: [Self; 5] = [
+        Self::Raw,
+        Self::LowerHex,
+        Self::UpperHex,
+        Self::SpacedHex,
+        Self::DebugDecimal,
+    ];
+
+    fn render(self, bytes: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Raw => bytes.to_vec(),
+            Self::LowerHex => join(bytes, "", |byte| format!("{byte:02x}")),
+            Self::UpperHex => join(bytes, "", |byte| format!("{byte:02X}")),
+            Self::SpacedHex => join(bytes, " ", |byte| format!("{byte:02x}")),
+            Self::DebugDecimal => format!("{bytes:?}").into_bytes(),
+        }
+    }
+}
+
+fn join(bytes: &[u8], separator: &str, byte_text: impl Fn(u8) -> String) -> Vec<u8> {
+    bytes
+        .iter()
+        .map(|&byte| byte_text(byte))
+        .collect::<Vec<_>>()
+        .join(separator)
+        .into_bytes()
 }
 
 impl fmt::Display for Encoding {
@@ -56,6 +94,8 @@ impl fmt::Display for Encoding {
             Self::Raw => "raw bytes",
             Self::LowerHex => "lowercase hex",
             Self::UpperHex => "uppercase hex",
+            Self::SpacedHex => "space-separated hex",
+            Self::DebugDecimal => "debug-formatted decimal bytes",
         })
     }
 }
@@ -75,8 +115,10 @@ pub enum LeakCheckError {
 }
 
 /// Fails if any secret appears in any record rendered with its `Display`
-/// form, either as its raw bytes or hex encoded. Indices in the error count
-/// from zero.
+/// form, in any [`Encoding`]. Indices in the error count from zero.
+///
+/// Records are rendered as UTF-8 text, so a secret that is not valid UTF-8
+/// is found only through its encoded forms, never as [`Encoding::Raw`].
 ///
 /// # Errors
 ///
@@ -90,11 +132,7 @@ pub fn assert_no_secrets(records: &[LogRecord], secrets: &[&[u8]]) -> Result<(),
             if bytes.is_empty() {
                 return Err(LeakCheckError::EmptySecret { secret });
             }
-            Ok([
-                (Encoding::Raw, bytes.to_vec()),
-                (Encoding::LowerHex, hex(bytes, false).into_bytes()),
-                (Encoding::UpperHex, hex(bytes, true).into_bytes()),
-            ])
+            Ok(Encoding::ALL.map(|encoding| (encoding, encoding.render(bytes))))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -112,19 +150,6 @@ pub fn assert_no_secrets(records: &[LogRecord], secrets: &[&[u8]]) -> Result<(),
         }
     }
     Ok(())
-}
-
-fn hex(bytes: &[u8], upper: bool) -> String {
-    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        // Writing to a String cannot fail.
-        let _ = if upper {
-            write!(out, "{byte:02X}")
-        } else {
-            write!(out, "{byte:02x}")
-        };
-    }
-    out
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
