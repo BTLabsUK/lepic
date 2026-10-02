@@ -14,8 +14,10 @@
 use std::path::PathBuf;
 
 use lepic_slate::codec::EncodeContext;
+use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
+use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::origin::LegacyHeader;
-use lepic_transport::file::{FilePolicy, FileTransport, LEGACY_V2_JSON, LEGACY_V3_JSON};
+use lepic_transport::file::{FilePolicy, FileTransport};
 use lepic_transport::transport::{Exchange, Location};
 use serde_json::Value;
 

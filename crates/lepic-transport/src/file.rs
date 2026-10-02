@@ -4,6 +4,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
+use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{CodecId, EncodeContext, MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::origin::{LegacyHeader, WireOrigin};
@@ -14,11 +16,6 @@ use crate::policy::{Encoding, FormatPolicy};
 use crate::transport::{BoxFuture, Exchange, Location, Transport, TransportId};
 
 pub const FILE: TransportId = TransportId::new("file");
-
-// TODO(S-02): use the id the legacy V3 codec exports.
-pub const LEGACY_V3_JSON: CodecId = CodecId::new("legacy.v3_json");
-// TODO(S-03): use the id the legacy V2 codec exports.
-pub const LEGACY_V2_JSON: CodecId = CodecId::new("legacy.v2_json");
 
 /// Upstream's file method writes `version` and `orig_version` 2 whenever it writes the V2
 /// shape, whatever the slate's header says.
