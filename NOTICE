@@ -1,0 +1,14 @@
+LEPIC
+Copyright The LEPIC Developers
+
+This product includes software ported from the Epic Cash projects
+(https://github.com/EpicCash/epic and https://github.com/EpicCash/epic-wallet),
+licensed under the Apache License, Version 2.0, which in turn derive from
+the Grin project (https://github.com/mimblewimble/grin), also licensed under
+the Apache License, Version 2.0.
+
+Parts of the Epicbox protocol, address and message code in epic-wallet are
+Copyright 2019 The vault713 Developers, licensed under the Apache License,
+Version 2.0; LEPIC's ports of that code carry the same attribution.
+
+Ported files record their upstream origin in upstream.toml.
