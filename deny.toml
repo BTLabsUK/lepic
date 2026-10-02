@@ -50,6 +50,8 @@ deny = [
   { crate = "native-tls", reason = "TLS is rustls with ring" },
   { crate = "tokio-native-tls", reason = "TLS is rustls with ring" },
   { crate = "hyper-tls", reason = "TLS is rustls with ring" },
+  { crate = "aws-lc-rs", reason = "the rustls provider is ring (ADR 0006)" },
+  { crate = "aws-lc-sys", reason = "the rustls provider is ring (ADR 0006)" },
   { crate = "cmake", reason = "builds need only Rust and a C compiler" },
   { crate = "bindgen", reason = "builds need only Rust and a C compiler" },
 ]

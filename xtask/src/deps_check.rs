@@ -33,6 +33,8 @@ const BANNED: &[&str] = &[
     "native-tls",
     "tokio-native-tls",
     "hyper-tls",
+    "aws-lc-rs",
+    "aws-lc-sys",
     "cmake",
     "bindgen",
 ];

@@ -19,6 +19,8 @@ project. LEPIC starts fresh and must stay current.
 - `cargo deny` checks advisories, licenses, sources and bans in CI. Allowed licenses: Apache-2.0, MIT,
   BSD-2/3-Clause, ISC, Unicode-3.0, Zlib, CC0-1.0, MPL-2.0 (file-level). Allowed git source: the pinned
   secp256k1-zkp wrapper.
+- The `fuzz/` workspace is test tooling that never ships, so it may also use NCSA-licensed fuzzing
+  crates such as `libfuzzer-sys`, set directly in `fuzz/Cargo.toml`.
 - Banned in the graph: RandomX, ProgPoW, CRoaring, LMDB, OpenSSL, native-tls, and crates that need
   CMake or bindgen at build time. Not used by LEPIC crates directly: `failure`, `log4rs`,
   `lazy_static`, `once_cell`, `chrono`, `log`.
@@ -33,7 +35,7 @@ workspace table:
 | Async | tokio | 1.53 |
 | Websocket | tokio-tungstenite | 0.30 |
 | TLS | rustls | 0.23 (ring provider) |
-| HTTP | reqwest 0.13 or hyper 1.11 | ADR 0006 |
+| HTTP | hyper 1.11 with hyper-util 0.1, hyper-rustls 0.27, http-body-util 0.1, webpki-roots 1.0 | ADR 0006 |
 | Serialization | serde 1.0, serde_json 1.0 | |
 | Errors | thiserror 2.0, anyhow 1.0 | |
 | Logging | tracing 0.1, tracing-subscriber 0.3, tracing-appender 0.2 | |

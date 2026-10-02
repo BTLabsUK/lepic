@@ -28,8 +28,13 @@ grin_secp256k1zkp = { git = "https://github.com/EpicCash/rust-secp256k1-zkp", re
 tokio = { version = "1.53.1", default-features = false }
 tokio-tungstenite = { version = "0.30.0", default-features = false }
 rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
-reqwest = { version = "0.13.5", default-features = false }
 hyper = { version = "1.11.1", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
+hyper-rustls = { version = "0.27.10", default-features = false, features = ["ring", "http1", "tls12"] }
+http-body-util = { version = "0.1.5", default-features = false }
+webpki-roots = { version = "1.0.9", default-features = false }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+futures-util = { version = "0.3.34", default-features = false }
 serde = { version = "1.0.229", default-features = false }
 serde_json = { version = "1.0.151", default-features = false }
 thiserror = { version = "2.0.21", default-features = false }
