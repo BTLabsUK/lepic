@@ -13,7 +13,9 @@ use serde::Serialize;
 
 use super::AGGSIG_AREA;
 use super::fixtures::{Features, ensure, public, public_hex, secp, secret, sig_hex};
-use crate::{Error, Pins, Rendered, hex, render};
+use crate::{Error, Pins, Rendered, hex, render_from};
+
+const MODULE: &str = "primitives/aggsig";
 
 #[derive(Serialize)]
 struct FlowInputs {
@@ -425,7 +427,7 @@ fn two_party(pins: &Pins, flow: &Flow) -> Result<Rendered, Error> {
         checks: v.checks,
         commit_checks,
     };
-    render(AGGSIG_AREA, flow.name, &pins.node, inputs, expected)
+    render_from(MODULE, AGGSIG_AREA, flow.name, &pins.node, inputs, expected)
 }
 
 #[derive(Serialize)]
@@ -522,7 +524,7 @@ fn single_signer(pins: &Pins, case: &Single) -> Result<Rendered, Error> {
         sig: sig_hex(&secp, &sig),
         checks: v.checks,
     };
-    render(AGGSIG_AREA, case.name, &pins.node, inputs, expected)
+    render_from(MODULE, AGGSIG_AREA, case.name, &pins.node, inputs, expected)
 }
 
 pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {

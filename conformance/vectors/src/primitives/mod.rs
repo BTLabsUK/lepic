@@ -13,14 +13,14 @@ mod validate;
 
 use epic_core::global::{self, ChainTypes};
 
-use crate::{Error, Pins, Rendered};
+use crate::{Error, Pins, Rendered, chain_type_guard};
 
 const AREA: &str = "primitives";
 const AGGSIG_AREA: &str = "aggsig";
 
 pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
-    // Weight limits read the process-wide chain type; every case except the per-network ones
-    // runs on mainnet.
+    // Weight limits read the chain type; every case except the per-network ones runs on mainnet.
+    let _chain_type = chain_type_guard();
     global::set_mining_mode(ChainTypes::Mainnet);
     let mut rendered = ser::generate(pins)?;
     rendered.extend(hash::generate(pins)?);
@@ -31,7 +31,6 @@ pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
 }
 
 pub(crate) fn generate_aggsig(pins: &Pins) -> Result<Vec<Rendered>, Error> {
-    global::set_mining_mode(ChainTypes::Mainnet);
     aggsig::generate(pins)
 }
 

@@ -2,7 +2,7 @@
   "schema": 1,
   "area": "aggsig",
   "name": "two_party_height_locked",
-  "generator": "conformance/vectors/aggsig",
+  "generator": "conformance/vectors/primitives/aggsig",
   "upstream": {
     "repo": "https://github.com/EpicCash/epic",
     "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"

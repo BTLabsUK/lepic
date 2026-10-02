@@ -1,7 +1,6 @@
 # aggsig vectors
 
-Written by `conformance/vectors/src/primitives/aggsig.rs` (task G-02; the envelope's `generator`
-names the area) from `core/src/libtx/aggsig.rs` of the Epic node at the commit in `upstream`.
+Written by `conformance/vectors/src/primitives/aggsig.rs` (task G-02) from `core/src/libtx/aggsig.rs` of the Epic node at the commit in `upstream`.
 Deterministic: all keys and nonces are fixed test values passed in, so `cargo xtask vectors generate
 --area aggsig` reproduces the files byte for byte.
 

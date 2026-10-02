@@ -9,6 +9,7 @@ mod smoke;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
 
@@ -149,11 +150,24 @@ fn render<I: Serialize, E: Serialize>(
     inputs: I,
     expected: E,
 ) -> Result<Rendered, Error> {
+    render_from(area, area, name, upstream, inputs, expected)
+}
+
+/// `module` is the generator module under `conformance/vectors/src`, for an area whose generator
+/// is not named after it.
+fn render_from<I: Serialize, E: Serialize>(
+    module: &str,
+    area: &str,
+    name: &str,
+    upstream: &Upstream,
+    inputs: I,
+    expected: E,
+) -> Result<Rendered, Error> {
     let vector = Vector {
         schema: SCHEMA,
         area,
         name,
-        generator: format!("conformance/vectors/{area}"),
+        generator: format!("conformance/vectors/{module}"),
         upstream,
         inputs,
         expected,
@@ -164,6 +178,14 @@ fn render<I: Serialize, E: Serialize>(
         name: name.to_owned(),
         bytes: text.into_bytes(),
     })
+}
+
+/// Upstream keeps the chain type in a process-wide lock. A generator that sets or reads it holds
+/// this guard for as long as its output depends on the chain type, so generators running on
+/// parallel test threads cannot change it under each other.
+fn chain_type_guard() -> MutexGuard<'static, ()> {
+    static CHAIN_TYPE: Mutex<()> = Mutex::new(());
+    CHAIN_TYPE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn hex(bytes: impl AsRef<[u8]>) -> String {
