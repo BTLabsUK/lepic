@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{Context, Result, bail};
 
@@ -11,29 +11,56 @@ const MANIFEST: &str = "upstream.toml";
 const CACHE_DIR: &str = "target/upstream-cache";
 const UPSTREAM_HEAD: &str = "refs/upstream/head";
 
+/// Exit status when drift was found, distinct from the status 1 that every
+/// xtask failure uses, so a scheduled job can tell drift from an outage.
+pub(crate) const DRIFT_EXIT_CODE: u8 = 2;
+
 pub(crate) fn run(root: &Path) -> Result<()> {
     let manifest_path = root.join(MANIFEST);
     let text = fs::read_to_string(&manifest_path)
         .with_context(|| format!("could not read {}", manifest_path.display()))?;
     let manifest = Manifest::parse(&text).with_context(|| format!("bad {MANIFEST}"))?;
-    let reports = check_drift(&manifest, &root.join(CACHE_DIR))?;
+    let reports = check_drift(&manifest, &root.join(CACHE_DIR), &Git::user())?;
     for report in &reports {
         print!("{report}");
     }
-    let drifted = reports
-        .iter()
-        .flat_map(|report| &report.modules)
-        .filter(|module| !module.commits.is_empty())
-        .count();
-    if drifted == 0 {
+    let drift = DriftFound::count(&reports);
+    if drift.drifted == 0 {
         println!("upstream-drift: no upstream changes since the recorded commits");
         return Ok(());
     }
-    bail!(
-        "{drifted} of {} module(s) have upstream changes to review",
-        manifest.modules.len()
-    )
+    Err(drift.into())
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DriftFound {
+    drifted: usize,
+    total: usize,
+}
+
+impl DriftFound {
+    fn count(reports: &[RepoReport<'_>]) -> Self {
+        let modules = || reports.iter().flat_map(|report| &report.modules);
+        Self {
+            drifted: modules()
+                .filter(|module| !module.commits.is_empty())
+                .count(),
+            total: modules().count(),
+        }
+    }
+}
+
+impl fmt::Display for DriftFound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} of {} module(s) have upstream changes to review",
+            self.drifted, self.total
+        )
+    }
+}
+
+impl std::error::Error for DriftFound {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Manifest {
@@ -453,7 +480,11 @@ impl fmt::Display for RepoReport<'_> {
 /// Fetches each upstream repository once into `cache_root` and lists, per
 /// module, the commits on the upstream default branch that touched the
 /// recorded paths after the recorded commit.
-fn check_drift<'a>(manifest: &'a Manifest, cache_root: &Path) -> Result<Vec<RepoReport<'a>>> {
+fn check_drift<'a>(
+    manifest: &'a Manifest,
+    cache_root: &Path,
+    git: &Git,
+) -> Result<Vec<RepoReport<'a>>> {
     let mut by_repo: BTreeMap<&str, Vec<&Module>> = BTreeMap::new();
     for module in &manifest.modules {
         by_repo
@@ -464,7 +495,7 @@ fn check_drift<'a>(manifest: &'a Manifest, cache_root: &Path) -> Result<Vec<Repo
 
     let mut reports = Vec::with_capacity(by_repo.len());
     for (repo, modules) in by_repo {
-        let cache = UpstreamCache::sync(cache_root, repo)?;
+        let cache = UpstreamCache::sync(cache_root, repo, git)?;
         let mut drifts = Vec::with_capacity(modules.len());
         for module in modules {
             let commits = cache
@@ -483,16 +514,17 @@ fn check_drift<'a>(manifest: &'a Manifest, cache_root: &Path) -> Result<Vec<Repo
 
 /// A bare, blobless clone: commits and trees are enough for path history, and
 /// skipping file contents keeps the cache small.
-struct UpstreamCache {
+struct UpstreamCache<'g> {
+    git: &'g Git,
     dir: PathBuf,
     head: CommitId,
 }
 
-impl UpstreamCache {
-    fn sync(cache_root: &Path, repo: &str) -> Result<Self> {
+impl<'g> UpstreamCache<'g> {
+    fn sync(cache_root: &Path, repo: &str, git: &'g Git) -> Result<Self> {
         let dir = cache_root.join(cache_dir_name(repo)?);
         if dir.join("HEAD").is_file() {
-            let origin = git_output(&dir, ["config", "--get", "remote.origin.url"])?;
+            let origin = git.output(&dir, ["config", "--get", "remote.origin.url"])?;
             if origin.trim() != repo {
                 bail!(
                     "cache {} belongs to {}, not {repo}; delete it",
@@ -503,7 +535,7 @@ impl UpstreamCache {
         } else {
             fs::create_dir_all(cache_root)
                 .with_context(|| format!("could not create {}", cache_root.display()))?;
-            git_output(
+            git.output(
                 cache_root,
                 [
                     OsStr::new("clone"),
@@ -517,23 +549,25 @@ impl UpstreamCache {
             )?;
         }
         let head_refspec = format!("+HEAD:{UPSTREAM_HEAD}");
-        git_output(&dir, ["fetch", "--quiet", "origin", head_refspec.as_str()])
+        git.output(&dir, ["fetch", "--quiet", "origin", head_refspec.as_str()])
             .with_context(|| format!("could not fetch {repo}"))?;
         let head_spec = format!("{UPSTREAM_HEAD}^{{commit}}");
-        let head = git_output(
+        let head = git.output(
             &dir,
             ["rev-parse", "--verify", "--quiet", head_spec.as_str()],
         )?;
         let head = CommitId::parse(head.trim())
             .with_context(|| format!("unexpected upstream head `{}`", head.trim()))?;
-        Ok(Self { dir, head })
+        Ok(Self { git, dir, head })
     }
 
     fn commits_touching(&self, module: &Module) -> Result<Vec<UpstreamCommit>> {
         let commit = &module.upstream.commit;
-        self.ensure_commit(commit)?;
+        self.ensure_on_default_branch(commit)?;
         for path in &module.upstream.paths {
-            let listing = git_output(&self.dir, ["ls-tree", "--name-only", &commit.0, "--", path])?;
+            let listing = self
+                .git
+                .output(&self.dir, ["ls-tree", "--name-only", &commit.0, "--", path])?;
             if listing.trim().is_empty() {
                 return Err(MissingUpstreamPath {
                     path: path.clone(),
@@ -545,7 +579,7 @@ impl UpstreamCache {
         let range = format!("{}..{UPSTREAM_HEAD}", commit.0);
         let mut args = vec!["log", "--format=%H%x09%s", range.as_str(), "--"];
         args.extend(module.upstream.paths.iter().map(String::as_str));
-        let log = git_output(&self.dir, args)?;
+        let log = self.git.output(&self.dir, args)?;
         Ok(log
             .lines()
             .filter(|line| !line.is_empty())
@@ -559,18 +593,58 @@ impl UpstreamCache {
             .collect())
     }
 
-    /// The recorded commit is usually an ancestor of the default branch and
-    /// arrives with it; a tag commit off the branch is fetched by id.
-    fn ensure_commit(&self, commit: &CommitId) -> Result<()> {
+    /// `<commit>..head` means "changes since the port" only when the recorded
+    /// commit is in the default branch's history. For any other commit it
+    /// would also list older branch commits, so it is refused.
+    fn ensure_on_default_branch(&self, commit: &CommitId) -> Result<()> {
         let object = format!("{}^{{commit}}", commit.0);
-        if git_succeeds(&self.dir, ["cat-file", "-e", object.as_str()])? {
-            return Ok(());
+        let present = self
+            .git
+            .status(&self.dir, ["cat-file", "-e", object.as_str()])?
+            .success();
+        let on_branch = present && {
+            let status = self.git.status(
+                &self.dir,
+                [
+                    "merge-base",
+                    "--is-ancestor",
+                    commit.0.as_str(),
+                    UPSTREAM_HEAD,
+                ],
+            )?;
+            match status.code() {
+                Some(0) => true,
+                Some(1) => false,
+                _ => bail!("`git merge-base --is-ancestor {}` failed", commit.0),
+            }
+        };
+        if on_branch {
+            Ok(())
+        } else {
+            Err(RecordedCommitOffBranch {
+                commit: commit.clone(),
+            }
+            .into())
         }
-        git_output(&self.dir, ["fetch", "--quiet", "origin", commit.0.as_str()])
-            .with_context(|| format!("recorded commit {} is not available upstream", commit.0))?;
-        Ok(())
     }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+struct RecordedCommitOffBranch {
+    commit: CommitId,
+}
+
+impl fmt::Display for RecordedCommitOffBranch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "recorded commit {} is not on the upstream default branch",
+            self.commit.0
+        )
+    }
+}
+
+impl std::error::Error for RecordedCommitOffBranch {}
 
 #[derive(Debug, PartialEq, Eq)]
 struct MissingUpstreamPath {
@@ -610,52 +684,72 @@ fn cache_dir_name(repo: &str) -> Result<String> {
     Ok(name.to_owned())
 }
 
-fn git() -> Command {
-    let mut command = Command::new("git");
-    // Never wait on a credential prompt; a public upstream needs none.
-    command.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
-    command
+/// How git is run. Production uses the developer's git configuration; tests
+/// point it at an empty file so local settings cannot change the result.
+struct Git {
+    global_config: Option<PathBuf>,
 }
 
-fn git_output<I, S>(dir: &Path, args: I) -> Result<String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let args: Vec<S> = args.into_iter().collect();
-    let shown = args
-        .iter()
-        .map(|arg| arg.as_ref().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let output = git()
-        .current_dir(dir)
-        .args(&args)
-        .output()
-        .context("could not start `git`")?;
-    if !output.status.success() {
-        bail!(
-            "`git {shown}` failed in {}: {}",
-            dir.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+impl Git {
+    fn user() -> Self {
+        Self {
+            global_config: None,
+        }
     }
-    String::from_utf8(output.stdout).with_context(|| format!("`git {shown}` printed non-UTF-8"))
-}
 
-fn git_succeeds<I, S>(repo: &Path, args: I) -> Result<bool>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let status = git()
-        .current_dir(repo)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("could not start `git`")?;
-    Ok(status.success())
+    fn command(&self, dir: &Path) -> Command {
+        let mut command = Command::new("git");
+        command
+            .current_dir(dir)
+            // Never wait on a credential prompt; a public upstream needs none.
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null());
+        if let Some(config) = &self.global_config {
+            command
+                .env("GIT_CONFIG_GLOBAL", config)
+                .env("GIT_CONFIG_NOSYSTEM", "1");
+        }
+        command
+    }
+
+    fn output<I, S>(&self, dir: &Path, args: I) -> Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args: Vec<S> = args.into_iter().collect();
+        let shown = args
+            .iter()
+            .map(|arg| arg.as_ref().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let output = self
+            .command(dir)
+            .args(&args)
+            .output()
+            .context("could not start `git`")?;
+        if !output.status.success() {
+            bail!(
+                "`git {shown}` failed in {}: {}",
+                dir.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        String::from_utf8(output.stdout).with_context(|| format!("`git {shown}` printed non-UTF-8"))
+    }
+
+    fn status<I, S>(&self, dir: &Path, args: I) -> Result<ExitStatus>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.command(dir)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("could not start `git`")
+    }
 }
 
 #[cfg(test)]
@@ -858,11 +952,20 @@ mod tests {
             }
         }
 
+        fn isolated_git(&self) -> Git {
+            Git {
+                global_config: Some(self.temp.path().join("gitconfig")),
+            }
+        }
+
+        fn check_drift<'a>(&self, manifest: &'a Manifest) -> Result<Vec<RepoReport<'a>>> {
+            check_drift(manifest, &self.cache(), &self.isolated_git())
+        }
+
         fn git(&self, args: &[&str]) -> String {
-            let output = Command::new("git")
-                .current_dir(self.upstream())
-                .env("GIT_CONFIG_GLOBAL", self.temp.path().join("gitconfig"))
-                .env("GIT_CONFIG_NOSYSTEM", "1")
+            let output = self
+                .isolated_git()
+                .command(&self.upstream())
                 .env("GIT_AUTHOR_NAME", "Fixture")
                 .env("GIT_AUTHOR_EMAIL", "fixture@example.org")
                 .env("GIT_COMMITTER_NAME", "Fixture")
@@ -925,7 +1028,7 @@ mod tests {
             ("crates/a/src/ser", "core/src/ser.rs", &recorded),
             ("crates/a/src/hash", "core/src/hash.rs", &recorded),
         ]);
-        let reports = check_drift(&manifest, &fixture.cache()).unwrap();
+        let reports = fixture.check_drift(&manifest).unwrap();
 
         assert_eq!(reported(&reports, "crates/a/src/ser"), vec![ser_change]);
         assert!(reported(&reports, "crates/a/src/hash").is_empty());
@@ -940,11 +1043,11 @@ mod tests {
         let recorded = fixture.commit_file("core/src/ser.rs", "v1", "add ser");
         let manifest = fixture.manifest(&[("crates/a/src/core", "core", &recorded)]);
 
-        let first = check_drift(&manifest, &fixture.cache()).unwrap();
+        let first = fixture.check_drift(&manifest).unwrap();
         assert!(reported(&first, "crates/a/src/core").is_empty());
 
         let change = fixture.commit_file("core/src/new.rs", "v1", "add new");
-        let second = check_drift(&manifest, &fixture.cache()).unwrap();
+        let second = fixture.check_drift(&manifest).unwrap();
         assert_eq!(reported(&second, "crates/a/src/core"), vec![change]);
     }
 
@@ -953,13 +1056,53 @@ mod tests {
         let fixture = Fixture::new();
         let recorded = fixture.commit_file("core/src/ser.rs", "v1", "add ser");
         let manifest = fixture.manifest(&[("crates/a/src/ser", "core/src/missing.rs", &recorded)]);
-        let error = check_drift(&manifest, &fixture.cache()).unwrap_err();
+        let error = fixture.check_drift(&manifest).unwrap_err();
         assert_eq!(
             error.downcast_ref::<MissingUpstreamPath>(),
             Some(&MissingUpstreamPath {
                 path: "core/src/missing.rs".to_owned(),
                 commit: CommitId(recorded),
             })
+        );
+    }
+
+    #[test]
+    fn fails_when_recorded_commit_is_off_the_default_branch() {
+        let fixture = Fixture::new();
+        fixture.commit_file("core/src/ser.rs", "v1", "add ser");
+        fixture.git(&["checkout", "--quiet", "-b", "side"]);
+        let side = fixture.commit_file("core/src/ser.rs", "side", "side change");
+        fixture.git(&["checkout", "--quiet", "master"]);
+        fixture.commit_file("core/src/ser.rs", "v2", "change ser");
+
+        let manifest = fixture.manifest(&[("crates/a/src/ser", "core/src/ser.rs", &side)]);
+        let error = fixture.check_drift(&manifest).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<RecordedCommitOffBranch>(),
+            Some(&RecordedCommitOffBranch {
+                commit: CommitId(side),
+            })
+        );
+    }
+
+    #[test]
+    fn counts_drifted_modules_for_the_drift_exit_status() {
+        let fixture = Fixture::new();
+        fixture.commit_file("core/src/ser.rs", "v1", "add ser");
+        let recorded = fixture.commit_file("docs/hash.md", "v1", "add hash doc");
+        fixture.commit_file("core/src/ser.rs", "v2", "change ser");
+        let manifest = fixture.manifest(&[
+            ("crates/a/src/ser", "core/src/ser.rs", &recorded),
+            ("crates/a/src/core", "core/src", &recorded),
+            ("crates/a/src/hash", "docs/hash.md", &recorded),
+        ]);
+        let reports = fixture.check_drift(&manifest).unwrap();
+        assert_eq!(
+            DriftFound::count(&reports),
+            DriftFound {
+                drifted: 2,
+                total: 3,
+            }
         );
     }
 }

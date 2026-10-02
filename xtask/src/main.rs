@@ -29,7 +29,11 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("xtask: {error:#}");
-            ExitCode::FAILURE
+            if error.is::<upstream::DriftFound>() {
+                ExitCode::from(upstream::DRIFT_EXIT_CODE)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
