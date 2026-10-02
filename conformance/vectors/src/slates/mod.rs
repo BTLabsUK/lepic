@@ -9,7 +9,7 @@ mod malformed;
 
 use serde::Serialize;
 
-use crate::{Error, LOCKFILE, Pins, Rendered, Upstream, git_source, render};
+use crate::{Error, LOCKFILE, Pins, Rendered, Upstream, chain_type_guard, git_source, render};
 use flows::{Case, Flow, FlowRecord, Funding, Method, Role, RoleKeys, StageRecord};
 use harness::TestChain;
 
@@ -213,6 +213,7 @@ struct StageExpected {
 }
 
 pub(crate) fn generate(_pins: &Pins) -> Result<Vec<Rendered>, Error> {
+    let _chain_type = chain_type_guard();
     let upstream = git_source(LOCKFILE, "epic_wallet_libwallet")?;
     let mut vectors = Vec::new();
     let mut flows = Vec::new();
