@@ -22,6 +22,7 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+lepic-crypto.workspace = true
 lepic-node = { workspace = true, features = ["mock"] }
 lepic-primitives.workspace = true
 lepic-telemetry.workspace = true

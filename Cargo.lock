@@ -830,6 +830,7 @@ version = "0.1.0"
 dependencies = [
  "blake2",
  "jiff",
+ "lepic-crypto",
  "lepic-keychain",
  "lepic-node",
  "lepic-primitives",

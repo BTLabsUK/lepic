@@ -14,6 +14,7 @@ pub mod error;
 pub mod event;
 pub mod lifecycle;
 pub mod ports;
+pub mod selection;
 pub mod state;
 mod wallet;
 
