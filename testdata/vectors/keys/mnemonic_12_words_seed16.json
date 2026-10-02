@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "mnemonic_12_words_seed16",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "entropy": "a55ac33c9669f00f123456789abcdef0"
+  },
+  "expected": {
+    "word_count": 12,
+    "mnemonic": "pipe stock song coast pair always emotion member joy sting dash theory"
+  }
+}

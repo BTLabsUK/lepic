@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "mnemonic_parse_extra_whitespace",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "mnemonic": "  pipe \t stock \t song \t coast \t pair \t always \t emotion \t member \t joy \t sting \t dash \t theory\n"
+  },
+  "expected": {
+    "entropy": "a55ac33c9669f00f123456789abcdef0",
+    "error": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "commit_sums",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "positive_blinds": [
+      "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850c",
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      "0000000000000000000000000000000000000000000000000000000000000001"
+    ],
+    "negative_blinds": [
+      "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f",
+      "1111111111111111111111111111111111111111111111111111111111111111"
+    ],
+    "amounts": [
+      "100000000",
+      "2500000",
+      "7"
+    ]
+  },
+  "expected": {
+    "positive_commits": [
+      "091bb368dd948cbf3e755bb6e5d8513f314e23dcd194049744e42b6876e14a401a",
+      "097324ac7d27390d8f103a51c598dd4f1432858d9d5704f456e3057979499af6db",
+      "093f8e649ac67a604ce09de309eaff80246cf273eb3515a2b52f9f90be84ab3a21"
+    ],
+    "negative_commits": [
+      "09c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "094f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
+    ],
+    "blind_sum": "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850f",
+    "commit_sum": "098c8f176d05eae165d23275853192e46b4945431c62f7c9998f31c6f2ac1e2089"
+  }
+}

@@ -1,0 +1,351 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "derivation_seed32_mainnet",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "network": "mainnet",
+    "paths": [
+      {
+        "depth": 0,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 1,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 2,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          1000,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          2147483647,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          1,
+          0,
+          5,
+          0
+        ]
+      },
+      {
+        "depth": 4,
+        "components": [
+          0,
+          0,
+          0,
+          3
+        ]
+      },
+      {
+        "depth": 2,
+        "components": [
+          2147483648,
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          2147483692,
+          2147483648,
+          7,
+          0
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "master": {
+      "secret_key": "0f473b8701ec127806ce6151361d2e4bcb1750b850c274bbc8a7ef7fb3106d7e",
+      "chain_code": "f95430d63565db895bd0f6434d51c34d1a96db2b3d8f787f2235749a28ca2a45",
+      "public_key": "0251220219bb38c36216646350de587190cd9064c0f666e089e15df5b407aeb422",
+      "ext_priv_version": "033c04a4",
+      "ext_pub_version": "033c08df"
+    },
+    "keys": [
+      {
+        "path": {
+          "depth": 0,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0000000000000000000000000000000000",
+        "bip32_path": "m",
+        "parent_identifier": "0000000000000000000000000000000000",
+        "secret_key": "0f473b8701ec127806ce6151361d2e4bcb1750b850c274bbc8a7ef7fb3106d7e",
+        "public_key": "0251220219bb38c36216646350de587190cd9064c0f666e089e15df5b407aeb422",
+        "chain_code": "f95430d63565db895bd0f6434d51c34d1a96db2b3d8f787f2235749a28ca2a45",
+        "parent_fingerprint": "00000000"
+      },
+      {
+        "path": {
+          "depth": 1,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0100000000000000000000000000000000",
+        "bip32_path": "m/0",
+        "parent_identifier": "0000000000000000000000000000000000",
+        "secret_key": "93296ae5710ed5046ac10c691921f09a5e219ca642f3e0ce6a8e4e13369040b5",
+        "public_key": "02ecb1f989188a272ca703cc74617c18648b8c73425c8f3344f223c11c77ac9199",
+        "chain_code": "1264708d327eb82c7778c97c19f835ca484e122e49e6600f1854e01ab50208a2",
+        "parent_fingerprint": "a21f94ea"
+      },
+      {
+        "path": {
+          "depth": 2,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0200000000000000000000000000000000",
+        "bip32_path": "m/0/0",
+        "parent_identifier": "0100000000000000000000000000000000",
+        "secret_key": "4571b6f2318ae0f9e5f35172980722e2044222409fb83cff914d535f972c78cf",
+        "public_key": "0351e91e4669acb2b2a023575a81a3e708c4e8e44f3305bfc5d17b3f611c90ecf3",
+        "chain_code": "5140d53670ba21b539e2b7d7d43d9a5ea9d27a6f4a9edd2ed07770c312899715",
+        "parent_fingerprint": "0963db4b"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "bip32_path": "m/0/0/0",
+        "parent_identifier": "0200000000000000000000000000000000",
+        "secret_key": "270c436694092c3cfb0728da2405a6c513444030ba57a8765c580bbd972e292e",
+        "public_key": "0313ec74009056aa840972ced4d8e2d21701dba6c4ecd1e8ce050ad70362947134",
+        "chain_code": "25c9a68d1d0e28a6d79113e5e84aee4d3ae04387df3141e4e3a78b054a61663e",
+        "parent_fingerprint": "ddbce894"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "bip32_path": "m/0/0/1",
+        "parent_identifier": "0200000000000000000000000000000000",
+        "secret_key": "b70327d4cf71f7460fb232716f7c3f0df0896e238452634a9e469f3b465270d6",
+        "public_key": "03e21de59e9b1b74011c4ef5e0c066c4eb2097209436810a8549d16e9962e2e573",
+        "chain_code": "72453cec049b82480abd566f74be3f8d87702e2a1f358887c90935ad53e7169a",
+        "parent_fingerprint": "ddbce894"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1000,
+            0
+          ]
+        },
+        "identifier": "030000000000000000000003e800000000",
+        "bip32_path": "m/0/0/1000",
+        "parent_identifier": "0200000000000000000000000000000000",
+        "secret_key": "590fd281da1125f66ba0ea96070b36445dd5579d6cf3ba3c89ac4e46cefa0f63",
+        "public_key": "02530403789fad70055716703c3082dc4613674deee1cb5bdaabc96778b3400241",
+        "chain_code": "65c8755a746650740c489464bb2d840e3e10c4d62b50e9c47030f6308c54ab2e",
+        "parent_fingerprint": "ddbce894"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "bip32_path": "m/0/0/2147483647",
+        "parent_identifier": "0200000000000000000000000000000000",
+        "secret_key": "a33f898066d08f0d5187e022d34778a9a3e5592c424474690d807e805cc95579",
+        "public_key": "022633741bed1c048d73d4478d9b432072c16efe9aed19b2855980dc42cad92dc3",
+        "chain_code": "b12f285756d187fd6c8870383b57b41fb68a0d4303953941b21182d5d95fe8fd",
+        "parent_fingerprint": "ddbce894"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000010000000000000000",
+        "bip32_path": "m/0/1/0",
+        "parent_identifier": "0200000000000000010000000000000000",
+        "secret_key": "f907a204b7a33d3a4caa4166ad44e1befe170f8d5fa69f53f820cbdcc0affe5f",
+        "public_key": "038e7e0ff6f30312504b4dea768760f7231bf97c448d3e94b1c2edf04a43d959b3",
+        "chain_code": "a8a0a2b0657c3950fb5af727316b1a7822ede2918263c630bd1f739dd8660582",
+        "parent_fingerprint": "17a885ed"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "bip32_path": "m/1/0/5",
+        "parent_identifier": "0200000001000000000000000000000000",
+        "secret_key": "219b2c7434cf26390ee0c82e8cb511e0870349117ba326547ef1252967db7338",
+        "public_key": "02df91f3165e5e51df29759c59cd7360fcf3a81a4829af7e2bc8d1e5c7e96ce315",
+        "chain_code": "088195b83877c7ced7590fe921a3b94ce0369677b1d722788ed7b4fb60b08e25",
+        "parent_fingerprint": "eef6c14b"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "bip32_path": "m/0/0/0/3",
+        "parent_identifier": "0300000000000000000000000000000000",
+        "secret_key": "0c7c197121896ef3c7039c90293e7e101bd50d92e858ecf5649a46a8ff64d644",
+        "public_key": "02c33d3793955e3d0d59a923a2308860b772d046186ee4b05b84608efe347c0647",
+        "chain_code": "babef206b4d20cdd62ea31aec8e34cc51743dea7987a5742eb68e16ffc3cb7c9",
+        "parent_fingerprint": "e50667f8"
+      },
+      {
+        "path": {
+          "depth": 2,
+          "components": [
+            2147483648,
+            1,
+            0,
+            0
+          ]
+        },
+        "identifier": "0280000000000000010000000000000000",
+        "bip32_path": "m/2147483648/1",
+        "parent_identifier": "0180000000000000000000000000000000",
+        "secret_key": "09013c1c08fabefe551aa14622771cb9b3ca21d524966012b88886a999b158aa",
+        "public_key": "02c7d0108f257fedc63092bc7b2fcc8a7d1c86531bec41d7070e364c6f673f73e7",
+        "chain_code": "ea89c814ddbaf155bfd34813c481e61aeda00a11987b08e6962471af03908850",
+        "parent_fingerprint": "d4167d06"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            2147483692,
+            2147483648,
+            7,
+            0
+          ]
+        },
+        "identifier": "038000002c800000000000000700000000",
+        "bip32_path": "m/2147483692/2147483648/7",
+        "parent_identifier": "028000002c800000000000000000000000",
+        "secret_key": "8013867722ae285466a6d4d07f332d262f02a83c1ba8b38b655b2a5abf322509",
+        "public_key": "0272a5d88104a4ce8c663e76404707084d489709b9065ce641676c95ec2c3c71a6",
+        "chain_code": "19642ad04262edcef91a50b6e85b76bc14bababe6da540d69e6a2b5afed08126",
+        "parent_fingerprint": "8b7ee5ce"
+      }
+    ]
+  }
+}

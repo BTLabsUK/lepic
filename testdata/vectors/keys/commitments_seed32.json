@@ -1,0 +1,1033 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "commitments_seed32",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "network": "mainnet",
+    "paths": [
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          2147483647,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          1,
+          0,
+          5,
+          0
+        ]
+      },
+      {
+        "depth": 4,
+        "components": [
+          0,
+          0,
+          0,
+          3
+        ]
+      }
+    ],
+    "amounts": [
+      "0",
+      "1",
+      "100000",
+      "100000000",
+      "2100000000000000",
+      "18446744073709551615"
+    ]
+  },
+  "expected": {
+    "cases": [
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "0",
+        "switch": "none",
+        "blind": "270c436694092c3cfb0728da2405a6c513444030ba57a8765c580bbd972e292e",
+        "commit": "0913ec74009056aa840972ced4d8e2d21701dba6c4ecd1e8ce050ad70362947134"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "0",
+        "switch": "regular",
+        "blind": "58720a9b6d12aa3ce4eea03bee1e21c9419effc1cd88197aa9aaea33642234b1",
+        "commit": "08a2c2f3a3e03f1cbc2ccdd4e288bd3596d16b3b928fa14143381e098be0539723"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "1",
+        "switch": "none",
+        "blind": "270c436694092c3cfb0728da2405a6c513444030ba57a8765c580bbd972e292e",
+        "commit": "09cfa146e18eea36ba71d8bf7a85f1364e7eea02f803820d431770fec1fe201db7"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "1",
+        "switch": "regular",
+        "blind": "00e6be8e56ce1778bf95c3bddebdc4db1197b8502a92503463a18b7644fcab2d",
+        "commit": "0845da525ada5b0bca2f569472345813ece6bc8fe02dfaaa0d4dfcbd90172c05e9"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "100000",
+        "switch": "none",
+        "blind": "270c436694092c3cfb0728da2405a6c513444030ba57a8765c580bbd972e292e",
+        "commit": "0925ed9205598176af7bf0694759fce74da50870df41f291b4932776c6b45be6ce"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "100000",
+        "switch": "regular",
+        "blind": "8c7c00bd916dfe452117df09a69c7707a2121cfabf8bdc9a7b5cd397cd15bf26",
+        "commit": "092cd6c8b8482da71b85b2870abac7817b6d65ca147b42d4b2027d8219ae1cf6d8"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "100000000",
+        "switch": "none",
+        "blind": "270c436694092c3cfb0728da2405a6c513444030ba57a8765c580bbd972e292e",
+        "commit": "08a5c8baf5663d21b02c3e606c656fc0d322ccd778817a7d54a71c963477fc53d6"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "100000000",
+        "switch": "regular",
+        "blind": "9be0245ab209b255d68cf3e9956cd8a60ce1c78e7041914fd0e441a0ad2bc5fa",
+        "commit": "0893d85bd3596b1c0971cc04830fa202d14470a05c707d39852ea52c9a1eedd528"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "2100000000000000",
+        "switch": "none",
+        "blind": "270c436694092c3cfb0728da2405a6c513444030ba57a8765c580bbd972e292e",
+        "commit": "088b07e92ca33d17f1304ae696e3aed76a707a811e1bb7b9fb029cf6f88ba486f4"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "2100000000000000",
+        "switch": "regular",
+        "blind": "8acfdd3cc431da5138e88cff0a2c6bc950831573f477797bfe7d9ffba7dd0ed2",
+        "commit": "082cd082f0c6c724cc2aee5cab0fddc514f6a59899f50f259a931216e1434591f8"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "18446744073709551615",
+        "switch": "none",
+        "blind": "270c436694092c3cfb0728da2405a6c513444030ba57a8765c580bbd972e292e",
+        "commit": "09b031fade4dd63029c47ee70e0ba5ce4b9a7d0e69f70dc65c68a9537cbfa25cc9"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "amount": "18446744073709551615",
+        "switch": "regular",
+        "blind": "a0b7e02c3d66859b49f3d4e7662afdd0065dd42f02ab140b37c7f558b147b35e",
+        "commit": "0940eda43f08ad1c20171fa8cf63bdd9f20547a97c0621c99205f194baf7b8e97a"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "0",
+        "switch": "none",
+        "blind": "b70327d4cf71f7460fb232716f7c3f0df0896e238452634a9e469f3b465270d6",
+        "commit": "09e21de59e9b1b74011c4ef5e0c066c4eb2097209436810a8549d16e9962e2e573"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "0",
+        "switch": "regular",
+        "blind": "9d836171633fc92247fe9bb717450623bb77ec8527adb00e7498de7175f3f8fb",
+        "commit": "08d8eb7dc75872c681d917a23875236253d076f3b0244faf446dd2ccbd286f2e4a"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "1",
+        "switch": "none",
+        "blind": "b70327d4cf71f7460fb232716f7c3f0df0896e238452634a9e469f3b465270d6",
+        "commit": "0930b476c16139f166f64563c027c5d1bb018b4ca549623b21bb0684de50e11631"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "1",
+        "switch": "regular",
+        "blind": "033ae97630336f5d12764a90ee433d8f0276cac138f89dfc9cb04aed9978aa29",
+        "commit": "087975f8eb876ed3207702dd41e8c62044c375d02e0e897420a54517d9de80fc0e"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "100000",
+        "switch": "none",
+        "blind": "b70327d4cf71f7460fb232716f7c3f0df0896e238452634a9e469f3b465270d6",
+        "commit": "09554ef30a116881751fa9e64b03a34524215820b19261d63f2b0b0272143f8a68"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "100000",
+        "switch": "regular",
+        "blind": "81c71bf6b5418733f3d2b05a9d756c23e88a65271bce147dec3f1a544e2d5d20",
+        "commit": "08cc88d620230e0a7357fdd0825db3d69228938ac1a3385553c56309281b0f0f59"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "100000000",
+        "switch": "none",
+        "blind": "b70327d4cf71f7460fb232716f7c3f0df0896e238452634a9e469f3b465270d6",
+        "commit": "098a28792c1e3c6f6aaa57a6acadf69d1e86e021e32ec36a6f092e74f976b01bb0"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "100000000",
+        "switch": "regular",
+        "blind": "410677c2651e17905dcf060145a9570dcf9c531ccabf5ad5f4dcd6af750c8e28",
+        "commit": "0937770b2010fa5d44d7c82cdd5ca15c2b0c2ad7d130874bd0cdae0ccfb52ce422"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "2100000000000000",
+        "switch": "none",
+        "blind": "b70327d4cf71f7460fb232716f7c3f0df0896e238452634a9e469f3b465270d6",
+        "commit": "09e3b80c73262b3e8eed9ed5ef0228d8f59f7be10e7a4b2570b05022d88eedcdc5"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "2100000000000000",
+        "switch": "regular",
+        "blind": "c57471922065fa8f4ea04f5ef00f0d0121bdade1a5acaa8cb914f1156d422dc6",
+        "commit": "09eede98a0218942c9f8ab51b43ee0754525bb0addce4986781fb1e2af275ab44b"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "18446744073709551615",
+        "switch": "none",
+        "blind": "b70327d4cf71f7460fb232716f7c3f0df0896e238452634a9e469f3b465270d6",
+        "commit": "083e58a659e49a2605335bac95a95de7b7499c42294e264f95f4c03188875b26e4"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "amount": "18446744073709551615",
+        "switch": "regular",
+        "blind": "8e773686c927702be7a285fef184c7d94cfa8c2fc8f23a879e69b60f56238308",
+        "commit": "0974891ce2ccd6f20c144666912b44e4dcc3b41b3eb74e71c1c8d142a18f4394ad"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "0",
+        "switch": "none",
+        "blind": "a33f898066d08f0d5187e022d34778a9a3e5592c424474690d807e805cc95579",
+        "commit": "092633741bed1c048d73d4478d9b432072c16efe9aed19b2855980dc42cad92dc3"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "0",
+        "switch": "regular",
+        "blind": "fa6c1390166612259aca662c5db64091c802b0bc3d53823fab08c482dbb59e57",
+        "commit": "08f531023626adce6ac9ac455bd3c8ebc2a89201a437983f6a37ab29bbd02a7bd5"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "1",
+        "switch": "none",
+        "blind": "a33f898066d08f0d5187e022d34778a9a3e5592c424474690d807e805cc95579",
+        "commit": "09a73feb20867ee7d27c3dfdf24acd734016e5886d68302fa4d76f718258a0e5bd"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "1",
+        "switch": "regular",
+        "blind": "06b6227356798861c9a9f2c0dc0e00788885f6c17c191e52d40bc5bb263edf65",
+        "commit": "0961e6d55fccd0a81b1432b9da394c974f28d00d72e3388cac81786e11d8886c48"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "100000",
+        "switch": "none",
+        "blind": "a33f898066d08f0d5187e022d34778a9a3e5592c424474690d807e805cc95579",
+        "commit": "0876874079ebaad63b1721ee6cce193d5db810ac632b23e1ae315eb8eaaa8c39b2"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "100000",
+        "switch": "regular",
+        "blind": "736dfefc1d0ed4c8c2fd004a3b1e61b0637d3c86a3143d20c00ee7c45d8400ba",
+        "commit": "0806f6e3985898ebd7b898ccafd33df5e31a1a653862d6ecabafc6eea307733094"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "100000000",
+        "switch": "none",
+        "blind": "a33f898066d08f0d5187e022d34778a9a3e5592c424474690d807e805cc95579",
+        "commit": "0874a831b04262d3e9bc03b363764f708312d8935b62b0aa3994d686247f9da142"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "100000000",
+        "switch": "regular",
+        "blind": "dee55f3c2f4eef0a4f17469cf30498088a7002ccf01f8f75eedb048152c6c64c",
+        "commit": "09baa28d1649bf6c91a98e8110effa8ec95e2cee51bfbc7e595d08a7802758a28c"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "2100000000000000",
+        "switch": "none",
+        "blind": "a33f898066d08f0d5187e022d34778a9a3e5592c424474690d807e805cc95579",
+        "commit": "08622c40d1b263f640894130471bdf297e7107d4e9a28376ffeea0ef04253526b9"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "2100000000000000",
+        "switch": "regular",
+        "blind": "2ed68e72d034e4cc5ab25442b00c36661ef9baae2cb9f9855dbe82c40ca45457",
+        "commit": "0869c99493329268516768d1b62846a3d0c1ca18eea96c68271afb5d67eb4f70f9"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "18446744073709551615",
+        "switch": "none",
+        "blind": "a33f898066d08f0d5187e022d34778a9a3e5592c424474690d807e805cc95579",
+        "commit": "084dfb2327ffa6716302471e044ecb6912d7f5b010d00340b9240c7451a88dd008"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "amount": "18446744073709551615",
+        "switch": "regular",
+        "blind": "c4cfff94b47ab82d9f380d5aa6457e98a3dc6cc7132f46b15b4c363e70b746d6",
+        "commit": "09c8b358cc31913be6dc0d84d15797a7af6619eacd7af7aef13989457e7014e75b"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "0",
+        "switch": "none",
+        "blind": "219b2c7434cf26390ee0c82e8cb511e0870349117ba326547ef1252967db7338",
+        "commit": "09df91f3165e5e51df29759c59cd7360fcf3a81a4829af7e2bc8d1e5c7e96ce315"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "0",
+        "switch": "regular",
+        "blind": "763da00ec5923186facca85f69fbcdab823af98f081e92adb9f3892a0270cbe7",
+        "commit": "08381dcdfbaa972909e2e7b596cddc23f685afb8295160784344706da5766dfbc2"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "1",
+        "switch": "none",
+        "blind": "219b2c7434cf26390ee0c82e8cb511e0870349117ba326547ef1252967db7338",
+        "commit": "080b409b8f0157933204f8ee23cea3cc0041562bcec56885d8a9b3eb79e30adbd5"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "1",
+        "switch": "regular",
+        "blind": "2c521f4b35171ea7db71ea49ff83e49a785147dfc021bbb7a8ff6a08515c2115",
+        "commit": "087e4732bc70ba6eee10567f7f088ba75700ce98077ec838fa77f936f566b1d2e7"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "100000",
+        "switch": "none",
+        "blind": "219b2c7434cf26390ee0c82e8cb511e0870349117ba326547ef1252967db7338",
+        "commit": "097b8803506aef705bcc6fbda34ca0944e2148a9e30ac63388af44c19dc42b1cb7"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "100000",
+        "switch": "regular",
+        "blind": "eb1b124e36b956a28a41f3b86cb7aa1bc60ac7ed3ecfa46782685d85bb4c6ffe",
+        "commit": "09d5e0f5b47a2c0baf5f24442643856db03a2cc05f913b4360a900bd5a79723c9c"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "100000000",
+        "switch": "none",
+        "blind": "219b2c7434cf26390ee0c82e8cb511e0870349117ba326547ef1252967db7338",
+        "commit": "098665431e2435cb3d6d6ac7751ffd64b252f7bf9017ab3a693c55b8699a60a3c3"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "100000000",
+        "switch": "regular",
+        "blind": "1e708725f8b21ba22b02f28365b3243da31dc48d4ab971279668c5a5d9c9c097",
+        "commit": "087e2e182d82090f6636b187fe4c902825d67f342845661790aab88e45ff931554"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "2100000000000000",
+        "switch": "none",
+        "blind": "219b2c7434cf26390ee0c82e8cb511e0870349117ba326547ef1252967db7338",
+        "commit": "089227972e9048d3b2981bf611d5fe0064b30cafbef5781779784e6b60f4ebecdf"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "2100000000000000",
+        "switch": "regular",
+        "blind": "61dbcaca9b2cb1f6b57f694511ce5fdb2ee4beda196ff54fc25e70b1cb907cc4",
+        "commit": "08b34a71ac822ff2a93eeda6e7a427eebdc8c67965eb12f09d6a3f69837f6da5ad"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "18446744073709551615",
+        "switch": "none",
+        "blind": "219b2c7434cf26390ee0c82e8cb511e0870349117ba326547ef1252967db7338",
+        "commit": "0894795b9aa0c096042218c394be4ba1a50a796af7bb0f8f4ef817d76ea3b7c189"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "amount": "18446744073709551615",
+        "switch": "regular",
+        "blind": "c7dd1f3fbce0d4da2e7c61adead36ebbd23f464d0f2080e60a5d2a08db46b864",
+        "commit": "09a03e6bde5b68cdc86870f03fe042d71c982e090b59ec3965f7b8933cf8331c51"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "0",
+        "switch": "none",
+        "blind": "0c7c197121896ef3c7039c90293e7e101bd50d92e858ecf5649a46a8ff64d644",
+        "commit": "09c33d3793955e3d0d59a923a2308860b772d046186ee4b05b84608efe347c0647"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "0",
+        "switch": "regular",
+        "blind": "f29985a8cd8f79dec0edbbbfad61c1f432f8ada322ae916efdc151cf8aac63a6",
+        "commit": "093f894c26b4135397567dbd50fe11fc973a4259da380d9139c4d556e3af80f65a"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "1",
+        "switch": "none",
+        "blind": "0c7c197121896ef3c7039c90293e7e101bd50d92e858ecf5649a46a8ff64d644",
+        "commit": "08292d478a744ea23456d997064a9ed071a8517a4e737be3652806eea6397e3ebf"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "1",
+        "switch": "regular",
+        "blind": "d6e6342c916e4afa5ad5f7660fb345193adbe487444fb6136f6ced866f582e61",
+        "commit": "09a251eb57bb64d750dd892c1f0d6cc3d83ecfcc2fcb22e058680bb3d3fbd9819a"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "100000",
+        "switch": "none",
+        "blind": "0c7c197121896ef3c7039c90293e7e101bd50d92e858ecf5649a46a8ff64d644",
+        "commit": "087a0a8bf718f3a8a9a9c2cf08d0f1e801a0667bccd33fb5f782c172513daf3e15"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "100000",
+        "switch": "regular",
+        "blind": "ba7b1187edeb0dd244bb6bea7d7c10e5b6fb1c6bd55afb81c2f4e50476b85e7f",
+        "commit": "0847666b9db311fbb1da64d9429c11c28f45bbbf2187322ac84834a018e98d49cb"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "100000000",
+        "switch": "none",
+        "blind": "0c7c197121896ef3c7039c90293e7e101bd50d92e858ecf5649a46a8ff64d644",
+        "commit": "08b222cfe16c25858af6293799e67d8f06b77b363e2c03ccb03b271593fdbf893e"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "100000000",
+        "switch": "regular",
+        "blind": "fa650bdb209a7a7ab263edb8ecb2303cb895285009799911b700d207a53f241c",
+        "commit": "0849fa05f6df33961a855e6199b12ba8015cd3aca081ba7aa93a8a2728d0b785cc"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "2100000000000000",
+        "switch": "none",
+        "blind": "0c7c197121896ef3c7039c90293e7e101bd50d92e858ecf5649a46a8ff64d644",
+        "commit": "083b20ad250303f0d70e977a7f72eb32d3c37a1945e48edc2de9778e639055c728"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "2100000000000000",
+        "switch": "regular",
+        "blind": "9c5ba66c7b5745adad2e037958149d95e5f33fa35afb68b8ee4eb9044f6f6247",
+        "commit": "08a43a535da8530dc36797779fcc7a612b03f2b2bb8ad613af345dcf4df7afe58a"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "18446744073709551615",
+        "switch": "none",
+        "blind": "0c7c197121896ef3c7039c90293e7e101bd50d92e858ecf5649a46a8ff64d644",
+        "commit": "09990aa87c51aff657ef835d214d168f65f5f4c502bfdd8675069a57699200716d"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "amount": "18446744073709551615",
+        "switch": "regular",
+        "blind": "248348aad1b2c9f83ba694b3e617b227d0b213eefb87f8d9c519c5f79e8e8824",
+        "commit": "0835ba05d69598dffa54df58d3daca38f35100d3cd79b0dad1815eaeb9566dd2f4"
+      }
+    ]
+  }
+}

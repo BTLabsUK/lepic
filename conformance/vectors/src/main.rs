@@ -3,6 +3,7 @@
 //!
 //! Usage: `vectors generate [--area <area>] [--out <dir>]`, `vectors list`.
 
+mod keys;
 mod primitives;
 mod smoke;
 
@@ -26,6 +27,10 @@ const AREAS: &[Area] = &[
     Area {
         name: "aggsig",
         generate: primitives::generate_aggsig,
+    },
+    Area {
+        name: "keys",
+        generate: keys::generate,
     },
 ];
 

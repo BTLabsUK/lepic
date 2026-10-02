@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "mnemonic_parse_unknown_word",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "mnemonic": "lepic stock song coast pair always emotion member joy sting dash theory"
+  },
+  "expected": {
+    "entropy": null,
+    "error": "invalid bip39 word lepic"
+  }
+}

@@ -1,0 +1,351 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "derivation_seed16_floonet",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "seed": "a55ac33c9669f00f123456789abcdef0",
+    "network": "floonet",
+    "paths": [
+      {
+        "depth": 0,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 1,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 2,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          1000,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          0,
+          2147483647,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          0,
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          1,
+          0,
+          5,
+          0
+        ]
+      },
+      {
+        "depth": 4,
+        "components": [
+          0,
+          0,
+          0,
+          3
+        ]
+      },
+      {
+        "depth": 2,
+        "components": [
+          2147483648,
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "depth": 3,
+        "components": [
+          2147483692,
+          2147483648,
+          7,
+          0
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "master": {
+      "secret_key": "56b7385fe48c4c443075f7c0a6c23da390a350bd7498cee971d1579939cb9157",
+      "chain_code": "82ec41ff4b8689cae96f10517020706a7248bb64d0fd62fbd815f5f69db578f7",
+      "public_key": "03ad9336be3f55a3422d0fd50e3969d82e7e474d5438d8bfe3133c1c7e2f7c290c",
+      "ext_priv_version": "03273a10",
+      "ext_pub_version": "03273e4b"
+    },
+    "keys": [
+      {
+        "path": {
+          "depth": 0,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0000000000000000000000000000000000",
+        "bip32_path": "m",
+        "parent_identifier": "0000000000000000000000000000000000",
+        "secret_key": "56b7385fe48c4c443075f7c0a6c23da390a350bd7498cee971d1579939cb9157",
+        "public_key": "03ad9336be3f55a3422d0fd50e3969d82e7e474d5438d8bfe3133c1c7e2f7c290c",
+        "chain_code": "82ec41ff4b8689cae96f10517020706a7248bb64d0fd62fbd815f5f69db578f7",
+        "parent_fingerprint": "00000000"
+      },
+      {
+        "path": {
+          "depth": 1,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0100000000000000000000000000000000",
+        "bip32_path": "m/0",
+        "parent_identifier": "0000000000000000000000000000000000",
+        "secret_key": "79b0374c03fd226e71381d82206bede3b6de21c5e92e72f506e29b298427ebf6",
+        "public_key": "030d91685c4053a6fc13f8adc9732be83665c6ff211fc3a3a2029ac4bed55c39ae",
+        "chain_code": "0c828d91824dd7dfcd3177de0b06f240f4fca4254c2b81b72b02ca818b77b7ae",
+        "parent_fingerprint": "7bfaac3c"
+      },
+      {
+        "path": {
+          "depth": 2,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0200000000000000000000000000000000",
+        "bip32_path": "m/0/0",
+        "parent_identifier": "0100000000000000000000000000000000",
+        "secret_key": "c05354fd09ff3b4fed1798c7aa2be47af2987b0d23713e3ca9775ff81162f672",
+        "public_key": "03b6d1a54073801ae9e16856ffa15a9997fb114ce8e7f8d3f4ac15ac821ebb3c9b",
+        "chain_code": "56281dc81514c03d0fd4cebc3062de3b0e72db571b3d74d99e4a58e685b72be5",
+        "parent_fingerprint": "e6b2a932"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000000000000",
+        "bip32_path": "m/0/0/0",
+        "parent_identifier": "0200000000000000000000000000000000",
+        "secret_key": "1f76bc7f3e1d92385c630ee7495ce4a6792ee8dc9378ce44c71608c3ecc5c230",
+        "public_key": "038c2ebaf1490f8d16ebc82788add77f2718d46b78f77ca9511f21760feea1394c",
+        "chain_code": "7b4bed7b6e8c25e7d7ab14eec20929a2a2616d793d837baa6d932e595fa35f9d",
+        "parent_fingerprint": "5376f1a0"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1,
+            0
+          ]
+        },
+        "identifier": "0300000000000000000000000100000000",
+        "bip32_path": "m/0/0/1",
+        "parent_identifier": "0200000000000000000000000000000000",
+        "secret_key": "72c130e6b4c630f9135ceea9ddfde83bf3ba41c4baf5f0b5b2af8da46a92d4fc",
+        "public_key": "031a0b0ac0d0e0d04d9c59ad81bd9a1fd6b5802c42818262d8c2f44f75f487ff19",
+        "chain_code": "00af2154fd2f1a4b6e3dd2af4fbf933776605e3869b0d0af04de2e55e3f55508",
+        "parent_fingerprint": "5376f1a0"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            1000,
+            0
+          ]
+        },
+        "identifier": "030000000000000000000003e800000000",
+        "bip32_path": "m/0/0/1000",
+        "parent_identifier": "0200000000000000000000000000000000",
+        "secret_key": "55442236eab5769bbaec56037317a6c7719fd329ad743477f820357588c52297",
+        "public_key": "023dda7d35cb8c296338b6c5e1cf4193513731ab1d475aab55e5cee18ee8e0a389",
+        "chain_code": "90c8b66b5944e8ec78660e91e967f62c7789def7a64de4ed7f9d2b528e739cf2",
+        "parent_fingerprint": "5376f1a0"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            0,
+            2147483647,
+            0
+          ]
+        },
+        "identifier": "0300000000000000007fffffff00000000",
+        "bip32_path": "m/0/0/2147483647",
+        "parent_identifier": "0200000000000000000000000000000000",
+        "secret_key": "e5e3a6b474e24f396a83746184658af9fc5261ef652f6c83ad1f85454b224dba",
+        "public_key": "03cec589dbabc23b01a2ca246c8880ba86f4ba97bc9ee5c786fc41e3fc2a102f56",
+        "chain_code": "bf5ab6d2bc1d914fc2a1785bd7aa9509b5fd7806298fbbf1e0eb96e94fafb5a2",
+        "parent_fingerprint": "5376f1a0"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        "identifier": "0300000000000000010000000000000000",
+        "bip32_path": "m/0/1/0",
+        "parent_identifier": "0200000000000000010000000000000000",
+        "secret_key": "00911bb437c84c5c6cb6071fe19d1f412d758498d1abd41ff46f26fbcc13a53d",
+        "public_key": "029dedee72d75f0649ce3e2962f30b7de6af4d8c70f1a0a69e1ff0482ab3d315fb",
+        "chain_code": "a06fae2f48bb9526013c205b7383a25d72d54b8d0c0c118743e800d5955dcafc",
+        "parent_fingerprint": "121275f0"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            1,
+            0,
+            5,
+            0
+          ]
+        },
+        "identifier": "0300000001000000000000000500000000",
+        "bip32_path": "m/1/0/5",
+        "parent_identifier": "0200000001000000000000000000000000",
+        "secret_key": "47d0dbdffdf985b9f8517ca2dc2a52c2df309e7d8bf8ff86031de75c7f6c2959",
+        "public_key": "0210e8239f2279c2d8f8fca2f4738cdda0af39972b422efedf169c0d26f95ec17e",
+        "chain_code": "4b71f0ca056d7ef71bd3ea4f251644b059dc45533ebf83984e9fbdae75e6960b",
+        "parent_fingerprint": "50420baf"
+      },
+      {
+        "path": {
+          "depth": 4,
+          "components": [
+            0,
+            0,
+            0,
+            3
+          ]
+        },
+        "identifier": "0400000000000000000000000000000003",
+        "bip32_path": "m/0/0/0/3",
+        "parent_identifier": "0300000000000000000000000000000000",
+        "secret_key": "7ed9ec08e348f080e7ebf9057a9f3bac3575cc33663252b16630184c51c6ab64",
+        "public_key": "0268ec7bfe595df946ae8f4675e33417475beaa55333248ccca1d29a3d12d9b32e",
+        "chain_code": "fd92c644f4a563ba3f99f18ab15a288810b451e6759176f6c3298ccdb1db9383",
+        "parent_fingerprint": "51391596"
+      },
+      {
+        "path": {
+          "depth": 2,
+          "components": [
+            2147483648,
+            1,
+            0,
+            0
+          ]
+        },
+        "identifier": "0280000000000000010000000000000000",
+        "bip32_path": "m/2147483648/1",
+        "parent_identifier": "0180000000000000000000000000000000",
+        "secret_key": "c4d2f60ccd281930a53d0ebc363774f905e7bca7f2b263ebb5f9c130557f0ce5",
+        "public_key": "02c04a92573e98d4ded758d97d8d2352019994e8afb223da612b7d90acdbb3281d",
+        "chain_code": "0c2e8c3e8a2df91799841773b0621be9c5635bc5ded9f0b7808175d162e7142f",
+        "parent_fingerprint": "b8083d3d"
+      },
+      {
+        "path": {
+          "depth": 3,
+          "components": [
+            2147483692,
+            2147483648,
+            7,
+            0
+          ]
+        },
+        "identifier": "038000002c800000000000000700000000",
+        "bip32_path": "m/2147483692/2147483648/7",
+        "parent_identifier": "028000002c800000000000000000000000",
+        "secret_key": "b5c40b12890c972578290562fdf1083ff6d59124781c6c58df0c59cdccee3852",
+        "public_key": "03fd5c265b13cba9ea0dac487f42397b699a0bbdc70209ec4c8c7e8ef14ff89861",
+        "chain_code": "1b63eeb4e1c8407b511c91e7de52929ef014cf50f51070d50c687f82c05ff58c",
+        "parent_fingerprint": "5f7aafeb"
+      }
+    ]
+  }
+}

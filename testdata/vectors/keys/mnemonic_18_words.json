@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "mnemonic_18_words",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "entropy": "808080808080808080808080808080808080808080808080"
+  },
+  "expected": {
+    "word_count": 18,
+    "mnemonic": "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter always"
+  }
+}

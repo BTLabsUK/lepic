@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "commit_raw",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "amounts": [
+      "0",
+      "1",
+      "100000",
+      "100000000",
+      "2100000000000000",
+      "18446744073709551615"
+    ],
+    "blinds": [
+      "0000000000000000000000000000000000000000000000000000000000000001",
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850c",
+      "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f"
+    ]
+  },
+  "expected": {
+    "cases": [
+      {
+        "amount": "0",
+        "blind": "0000000000000000000000000000000000000000000000000000000000000001",
+        "commit": "0879be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "switched_blind": "da4ae30c2e534b4307c4813a5cb2bc39c3134e9ec3b4d89f0a54972c17fdabd1",
+        "switched_commit": "083c73c64ed5620859d65bf540a29c04f7ec01b4fa73f6e5f2dd0f7c564df1954b"
+      },
+      {
+        "amount": "1",
+        "blind": "0000000000000000000000000000000000000000000000000000000000000001",
+        "commit": "09337b7285fc31a330c3e05d10c1cbbc009bf37c9c5dcf192adfd221bc8450d79a",
+        "switched_blind": "a5a81902b9259bcdff123e81621e24a710ebe3d112bee6997de71470dc2d8bf6",
+        "switched_commit": "08bd35fd5823d88034136b150a42a6c098d4dc8fae3542031453e21437bd075f61"
+      },
+      {
+        "amount": "100000",
+        "blind": "0000000000000000000000000000000000000000000000000000000000000001",
+        "commit": "08794d6d30d8be31bc2592ee177177612cb3b3fbbc7452eb017f8a9bd0fc7dffad",
+        "switched_blind": "bf2e30df8bc829c0b1006e80d0a456b9e4955d9b930f741c191ac00d3ad45712",
+        "switched_commit": "09b021dec81ec217908bcd25f848f026fb24a784094576514b90e63df2c94983aa"
+      },
+      {
+        "amount": "100000000",
+        "blind": "0000000000000000000000000000000000000000000000000000000000000001",
+        "commit": "08e9ceb1bc5c66aa622ada473fbe687f197f531019811ad56ea8d5c43074e1e8ae",
+        "switched_blind": "ba1d9d3e118b90c0831e8e397e12e03381f71e5ece0b82de2711adb5b879a40c",
+        "switched_commit": "099e3b7fb4edb13fc8c71c3d0965d282e47d668048fbd33cee42b8fbb9b04f5619"
+      },
+      {
+        "amount": "2100000000000000",
+        "blind": "0000000000000000000000000000000000000000000000000000000000000001",
+        "commit": "086bac84e0bb8bc28e7325e54689ac68e8c84b484217b863db9b279ef634800d60",
+        "switched_blind": "8f8cc2c205989a12a5ce688db503ce12b707a26a64fac8029997e6daefc3b0f9",
+        "switched_commit": "095c1654d79c9520f6cfabe35e1ab15e9e1ad42fbadcbb97d419a858f0aed062c4"
+      },
+      {
+        "amount": "18446744073709551615",
+        "blind": "0000000000000000000000000000000000000000000000000000000000000001",
+        "commit": "080cf2911343d9c8bae7f7499360f87b1a57f326630bc33ca6505504514697038f",
+        "switched_blind": "d7d1848f4c2c0ca56cb6ee503b800baa23fac1b9a015516b8f78b4b6698ae01e",
+        "switched_commit": "0891be20d4ef1278e83f9b731a0f5245d4974b3bb5f680216ff6c8fd669a8a0b91"
+      },
+      {
+        "amount": "0",
+        "blind": "1111111111111111111111111111111111111111111111111111111111111111",
+        "commit": "094f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+        "switched_blind": "a5ed86617182d22ca45a64d14a9e0d647bddcd4f96cbfb9d01da808771383213",
+        "switched_commit": "089e34a966fa6482b905101cb37ab7429cb01b78cd0cf707b3fe6a766bf29ec500"
+      },
+      {
+        "amount": "1",
+        "blind": "1111111111111111111111111111111111111111111111111111111111111111",
+        "commit": "096a07b3e1628e97720fd261c1a40f2eb2248e8989062ec7c04f71a71a8bbaf694",
+        "switched_blind": "1408782b9a0e454943ef24208c4470b02f6e3c40cf113d130085cd4b2f4a762b",
+        "switched_commit": "08c967b37b7ef74ad028fab28dd1e33c9d93272adf6b71d76ba499d6750c97173c"
+      },
+      {
+        "amount": "100000",
+        "blind": "1111111111111111111111111111111111111111111111111111111111111111",
+        "commit": "09c870c36148c94e4580cdcfa11f43bf040d2866956db7602ccc9cfbe64282bc96",
+        "switched_blind": "b9a98da6ee49ed0d28f93b03a19fd06997a135662c3af23a8399c9d6db4de99d",
+        "switched_commit": "081d7114f140577bccadd67599db3bced09222b36f3f82a94663bc209f8d28cd92"
+      },
+      {
+        "amount": "100000000",
+        "blind": "1111111111111111111111111111111111111111111111111111111111111111",
+        "commit": "083f2b2bf5612a64688ff357491420f0114027d3a40bdec865f3515a3be340e9d6",
+        "switched_blind": "477057aa4a494dbc3bc9d5a4decfc39df7d6698f3f3b0244fefc16edc5bbbc46",
+        "switched_commit": "0894568f9cfe0505f15d9f74a49427f48f19deb213369ff63020780b801cce398c"
+      },
+      {
+        "amount": "2100000000000000",
+        "blind": "1111111111111111111111111111111111111111111111111111111111111111",
+        "commit": "09f0936dfa235ebd08b768409b809f15d55fcbb89f8b6b3a4e6798dc04fe561d59",
+        "switched_blind": "0192defc45b1f735cb5870eb13893dbae3ae536fc339948d5f77c13f2c614a27",
+        "switched_commit": "0826de70e40b167a636180bb266ee140c584e8e68889179d21e8fadb8a011c90d6"
+      },
+      {
+        "amount": "18446744073709551615",
+        "blind": "1111111111111111111111111111111111111111111111111111111111111111",
+        "commit": "090679349627881ce69d425ef0cdb4348679ae3cd0a46f1f5cf88f08d7e6c75a75",
+        "switched_blind": "bc1873572a5d5b1db52bdc8eb913e1a8436f8229011c784e440ea86ff40ccfe1",
+        "switched_commit": "0871988df4a530a3182347cbb4a904f467f549166f64af36d544a2cea6112e5070"
+      },
+      {
+        "amount": "0",
+        "blind": "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850c",
+        "commit": "093d8ceb296fa198001e82189834e6c82d725461c3bc791fae0f6b90aa502759f1",
+        "switched_blind": "ddfbddece4b21fa4c71fe16e05625f8c5f91e6aee6960aea42a2dd31432c1da4",
+        "switched_commit": "09f88d97ce52d90dba051b9942b769e7522212a9dc1fb9cbb6bea35f06b7f74f86"
+      },
+      {
+        "amount": "1",
+        "blind": "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850c",
+        "commit": "09233c70803363c41e48db6766a5650ea626e8c1ccb9e7c8f7b947a576d21550d4",
+        "switched_blind": "c3389d25bd3ec41ef899861a01c2aeffa004b66b182bbcd20ae028dd1b461620",
+        "switched_commit": "09b10b8de3d5e21c0d5a0af337f4cb64f8d1a2de2e9b3c16af630bc2cefda3d3c3"
+      },
+      {
+        "amount": "100000",
+        "blind": "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850c",
+        "commit": "0826e741571b01c85cd9bbf301be972f411749589822c3debf3176d6f01154b3a5",
+        "switched_blind": "a14c2fa177900ad88fbf53d9666bbe714782315f27498c1d08f1cd40d02b8745",
+        "switched_commit": "097baf26518af6acd00dd79312adfba29ba68fc266c5b7473a366577c6495637ad"
+      },
+      {
+        "amount": "100000000",
+        "blind": "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850c",
+        "commit": "091bb368dd948cbf3e755bb6e5d8513f314e23dcd194049744e42b6876e14a401a",
+        "switched_blind": "19671481fdc812a1c412054955f2dfb9462be7e333f447a4d34d514b972af347",
+        "switched_commit": "09d288cd6cd8bb982fc5f465cb68c5d34bf6eed3c877cda2083dd43c38f4da4fd3"
+      },
+      {
+        "amount": "2100000000000000",
+        "blind": "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850c",
+        "commit": "09f2950a6e6794cd03e341199f32a322e70a8674addece2496f7866ce98eaddf08",
+        "switched_blind": "bccc7dfda07af8c9eb8e7b4e18521c341206e3bb4b8e9e471fda315407b0f3a5",
+        "switched_commit": "08304beeafb3b471d7c20759211aa37cd157eb7c04d08a978ae91815a586a0d919"
+      },
+      {
+        "amount": "18446744073709551615",
+        "blind": "3c9a01e755428f10b62d73c409ee61389d04fa278b5ec01376a92f48d16b850c",
+        "commit": "08ec379350e15a4156e31affcf9f9b5566fe9ff6437463cef7893c51bb73767882",
+        "switched_blind": "4e0c19c25eb18267ad50784b0f31265656a68c3cde226e0fa109fb4c4b7ee99e",
+        "switched_commit": "09237c1c634f53320438b8edecc34c8f12425d231542c7e56bc1d07b1602eeab95"
+      },
+      {
+        "amount": "0",
+        "blind": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f",
+        "commit": "09c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "switched_blind": "54a4e72f4e9fb8210808df16f24a9105b43198f5ced16a852132160380dc374f",
+        "switched_commit": "086da75686b142ad9149480e556a6bd4dc8b56add279f103ed8c62b76b97f9488b"
+      },
+      {
+        "amount": "1",
+        "blind": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f",
+        "commit": "09693765ac7f65c6488f67ab1a0b8775e38c158729145f37a7962f0570943a5d74",
+        "switched_blind": "489fe9845b2d7728e4371eeb5120dba0a285e87d8ece3b7f8904370556fe9540",
+        "switched_commit": "0953a8077c5ac09b072701e56fabeb485bda3d7d08caaf2a1b02b6d817cf55e436"
+      },
+      {
+        "amount": "100000",
+        "blind": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f",
+        "commit": "09e9820d0a3f256246c29435de1be9b264ecc50f9d5f2fe8bed5bfecadb0eea441",
+        "switched_blind": "2fbb1691bebccaf85e509fabd5112dcb6c2ff855ed9f53e7c73d3187f4defe27",
+        "switched_commit": "09f2892c25f164efdf43b253a1b729ad64cf312ec326bb31ffde0a87d1c2747fef"
+      },
+      {
+        "amount": "100000000",
+        "blind": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f",
+        "commit": "09dc5e2fa8f760abfe688657297a98af80bf8cb08afddd92ff73e6918be07ecdcf",
+        "switched_blind": "2401f1c930174d09a314f199fd056b367d39141f0bbde8183caa1354d64d2f04",
+        "switched_commit": "083f859847bdbedcc29ff78f1ab411cc5466a6ea0195bd20f4315a28d491ccb47d"
+      },
+      {
+        "amount": "2100000000000000",
+        "blind": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f",
+        "commit": "0885229d7d9d6ad9cfc557354c6e347270ffed86dc549fa66ff53f39205018b886",
+        "switched_blind": "0a84d824b1eda2728bf2e20bc12fa46d8bfea6507ac3d2d35ca1ac7edc742873",
+        "switched_commit": "0827f06e34e9b5a81d49944fba10439513ffb460854076ebf1eb33df3159ee0018"
+      },
+      {
+        "amount": "18446744073709551615",
+        "blind": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f",
+        "commit": "09c8ba91e086cc19f1df2eecd310596877d00772f4e9a925c4cfdc62659540d8c5",
+        "switched_blind": "5496ccca869fbf3512807d97ac9b51de013088a7cac7b5e0d76193817dcfa4b4",
+        "switched_commit": "0892df39b3abff24b7cced36f1891fa8d5b2c4cb08d79b1d74bc89d6396f930d80"
+      }
+    ]
+  }
+}
