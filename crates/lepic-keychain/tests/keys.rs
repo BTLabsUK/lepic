@@ -84,9 +84,9 @@ fn output_path_parent_is_the_account() {
     assert_eq!(
         output.path().collect::<Vec<_>>(),
         [
-            ChildNumber::Normal(0),
-            ChildNumber::Normal(0),
-            ChildNumber::Normal(42)
+            ChildNumber::normal(0).unwrap(),
+            ChildNumber::normal(0).unwrap(),
+            ChildNumber::normal(42).unwrap()
         ]
     );
 }

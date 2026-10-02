@@ -24,33 +24,55 @@ pub enum Bip32Error {
     InvalidDerivedKey,
     #[error("derivation is deeper than 255 levels")]
     DepthOverflow,
+    #[error("child index {index} does not fit in 31 bits")]
+    ChildIndexOutOfRange { index: u32 },
     #[error("key operation failed")]
     Crypto(#[from] CryptoError),
 }
 
-/// A BIP32 child index. Hardened children set the top bit in their `u32` form.
+/// A BIP32 child number in its `u32` form: hardened children set the top bit. Every `u32` is a
+/// valid child number, so the conversions both ways are lossless.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ChildNumber {
-    Normal(u32),
-    Hardened(u32),
+pub struct ChildNumber(u32);
+
+impl ChildNumber {
+    /// The normal child `index`, which must be below 2^31.
+    pub fn normal(index: u32) -> Result<Self, Bip32Error> {
+        if index & HARDENED_BIT == 0 {
+            Ok(Self(index))
+        } else {
+            Err(Bip32Error::ChildIndexOutOfRange { index })
+        }
+    }
+
+    /// The hardened child `index`, which must be below 2^31.
+    pub fn hardened(index: u32) -> Result<Self, Bip32Error> {
+        if index & HARDENED_BIT == 0 {
+            Ok(Self(index | HARDENED_BIT))
+        } else {
+            Err(Bip32Error::ChildIndexOutOfRange { index })
+        }
+    }
+
+    pub fn is_hardened(self) -> bool {
+        self.0 & HARDENED_BIT != 0
+    }
+
+    /// The index without the hardened bit.
+    pub fn index(self) -> u32 {
+        self.0 & !HARDENED_BIT
+    }
 }
 
 impl From<u32> for ChildNumber {
     fn from(number: u32) -> Self {
-        if number & HARDENED_BIT == 0 {
-            Self::Normal(number)
-        } else {
-            Self::Hardened(number & !HARDENED_BIT)
-        }
+        Self(number)
     }
 }
 
 impl From<ChildNumber> for u32 {
     fn from(child: ChildNumber) -> Self {
-        match child {
-            ChildNumber::Normal(index) => index & !HARDENED_BIT,
-            ChildNumber::Hardened(index) => index | HARDENED_BIT,
-        }
+        child.0
     }
 }
 
@@ -143,7 +165,7 @@ impl ExtendedPrivKey {
         Ok(Self {
             depth: 0,
             parent_fingerprint: Fingerprint::default(),
-            child_number: ChildNumber::Normal(0),
+            child_number: ChildNumber(0),
             secret_key,
             chain_code,
         })
@@ -162,15 +184,16 @@ impl ExtendedPrivKey {
         let depth = self.depth.checked_add(1).ok_or(Bip32Error::DepthOverflow)?;
         let parent_public = self.public_key()?;
         let index = u32::from(child).to_be_bytes();
-        let output = match child {
-            ChildNumber::Normal(_) => hmac_sha512(
-                self.chain_code.expose_bytes(),
-                &[&parent_public.to_bytes(), &index],
-            )?,
-            ChildNumber::Hardened(_) => hmac_sha512(
+        let output = if child.is_hardened() {
+            hmac_sha512(
                 self.chain_code.expose_bytes(),
                 &[&[0u8], self.secret_key.expose_bytes(), &index],
-            )?,
+            )?
+        } else {
+            hmac_sha512(
+                self.chain_code.expose_bytes(),
+                &[&parent_public.to_bytes(), &index],
+            )?
         };
         let (tweak, chain_code) = split(&output)?;
         let secret_key = SecretKey::sum(&[tweak, self.secret_key.clone()], &[])
@@ -239,9 +262,21 @@ mod tests {
         }
         assert_eq!(
             ChildNumber::from(HARDENED_BIT | 7),
-            ChildNumber::Hardened(7)
+            ChildNumber::hardened(7).unwrap()
         );
-        assert_eq!(ChildNumber::from(7), ChildNumber::Normal(7));
+        assert_eq!(ChildNumber::from(7), ChildNumber::normal(7).unwrap());
+        let hardened = ChildNumber::from(HARDENED_BIT | 7);
+        assert!(hardened.is_hardened());
+        assert_eq!(hardened.index(), 7);
+    }
+
+    #[test]
+    fn rejects_child_index_with_the_hardened_bit_set() {
+        for index in [HARDENED_BIT, HARDENED_BIT | 5, u32::MAX] {
+            let error = Bip32Error::ChildIndexOutOfRange { index };
+            assert_eq!(ChildNumber::normal(index), Err(error));
+            assert_eq!(ChildNumber::hardened(index), Err(error));
+        }
     }
 
     #[test]
@@ -249,7 +284,7 @@ mod tests {
         let mut key = ExtendedPrivKey::new_master(&[1u8; 16]).unwrap();
         key.depth = u8::MAX;
         assert_eq!(
-            key.ckd_priv(ChildNumber::Normal(0)).err(),
+            key.ckd_priv(ChildNumber::from(0)).err(),
             Some(Bip32Error::DepthOverflow)
         );
     }
