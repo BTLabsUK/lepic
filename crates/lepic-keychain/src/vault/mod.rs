@@ -1,4 +1,5 @@
-//! Seed storage: the [`SecretStore`] port and the desktop vault that implements it.
+//! Seed storage: the [`SecretStore`] port, the desktop vault that implements it, and the
+//! read-only import of `epic-wallet`'s `wallet.seed`.
 //!
 //! The vault keeps named secrets in one file, sealed with XChaCha20-Poly1305 under an Argon2id
 //! key (ADR 0005). This crate does no I/O: a [`VaultStorage`] supplied by the caller reads and
@@ -7,6 +8,7 @@
 mod format;
 mod kdf;
 mod store;
+mod wallet_seed;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -24,6 +26,10 @@ pub use kdf::{
 pub use store::{
     BackendError, MAX_SECRET_NAME_LEN, SecretBytes, SecretName, SecretNameError, SecretStore,
     SecretStoreError,
+};
+pub use wallet_seed::{
+    MAX_WALLET_SEED_FILE_LEN, WALLET_SEED_NONCE_LEN, WALLET_SEED_SALT_LEN, WalletSeedError,
+    WalletSeedField, WalletSeedFile,
 };
 
 use format::Secrets;

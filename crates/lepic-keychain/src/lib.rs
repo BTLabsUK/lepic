@@ -18,5 +18,5 @@ pub use proof::{
 };
 pub use vault::{
     KdfParams, MemoryVaultStorage, SecretBytes, SecretName, SecretStore, SecretStoreError, Vault,
-    VaultError, VaultStorage,
+    VaultError, VaultStorage, WalletSeedError, WalletSeedFile,
 };

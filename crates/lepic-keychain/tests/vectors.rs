@@ -1,8 +1,8 @@
 //! Replays the G-01 golden vectors in `testdata/vectors/keys` that cover mnemonics, BIP32
 //! derivation, identifiers, keychain commitments, Epicbox address keys and payment-proof keys.
-//! It also replays the proof builder vectors. Commitments over raw blinding factors and
-//! bulletproofs are checked by `lepic-crypto` and the seed file by K-03. The onion v3 form of the payment-proof key is
-//! Tor-only and not ported.
+//! It also replays the proof builder vectors and the `wallet.seed` vectors of the read-only seed
+//! file import. Commitments over raw blinding factors and bulletproofs are checked by
+//! `lepic-crypto`. The onion v3 form of the payment-proof key is Tor-only and not ported.
 
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
 // unwrap, index and use plain arithmetic (docs/rules.md).
@@ -19,7 +19,8 @@ use lepic_crypto::{Commitment, PublicKey, RangeProof, SecretKey};
 use lepic_keychain::proof::{create_output, create_proof, rewind};
 use lepic_keychain::{
     ExtKeyVersion, Identifier, Keychain, LegacyProofBuilder, MnemonicError, OutputRewinder,
-    ProofBuild, ProofBuilder, RewoundOutput, Seed, SwitchCommitment, address_key_id,
+    ProofBuild, ProofBuilder, RewoundOutput, Seed, SwitchCommitment, WalletSeedError,
+    WalletSeedFile, address_key_id,
 };
 use serde_json::Value;
 
@@ -443,4 +444,53 @@ fn builds_and_rewinds_proofs_as_upstream_legacy_proof_builder() {
         &ProofBuilder::new(&keychain).unwrap(),
         &LegacyProofBuilder::new(&stranger).unwrap(),
     );
+}
+
+#[test]
+fn decrypts_upstream_wallet_seed_files() {
+    for name in ["wallet_seed_seed32", "wallet_seed_seed16_empty_password"] {
+        let vector = load(name, WALLET_REPO, WALLET_COMMIT);
+        let inputs = &vector["inputs"];
+        let expected = &vector["expected"];
+        let file_text = text(&expected["file"]);
+        for field in ["encrypted_seed", "salt", "nonce"] {
+            assert!(
+                file_text.contains(&format!("\"{field}\": {}", expected[field])),
+                "{name}"
+            );
+        }
+
+        let file = WalletSeedFile::parse(file_text).unwrap();
+        let password = text_bytes(&inputs["password"]);
+        let seed = file.decrypt(password).unwrap();
+        assert_eq!(seed.expose_bytes(), bytes(&inputs["entropy"]), "{name}");
+        assert_eq!(
+            seed.to_mnemonic().unwrap().as_str(),
+            text(&inputs["mnemonic"]),
+            "{name}"
+        );
+
+        let wrong = text_bytes(&inputs["wrong_password"]);
+        assert!(
+            matches!(file.decrypt(wrong), Err(WalletSeedError::Decryption)),
+            "{name}"
+        );
+
+        // Changing any hex digit of the sealed seed must fail authentication, not decrypt.
+        let sealed = text(&expected["encrypted_seed"]);
+        for index in 0..sealed.len() {
+            let mut digits = sealed.as_bytes().to_vec();
+            digits[index] = if digits[index] == b'0' { b'1' } else { b'0' };
+            let tampered = file_text.replace(sealed, std::str::from_utf8(&digits).unwrap());
+            let file = WalletSeedFile::parse(&tampered).unwrap();
+            assert!(
+                matches!(file.decrypt(password), Err(WalletSeedError::Decryption)),
+                "{name} digit {index}"
+            );
+        }
+    }
+}
+
+fn text_bytes(value: &Value) -> &[u8] {
+    text(value).as_bytes()
 }
