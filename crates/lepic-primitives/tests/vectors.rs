@@ -638,6 +638,25 @@ const TX_VECTORS: [&str; 12] = [
     "tx_invalid_unsorted_outputs",
 ];
 
+/// A transaction vector added later must be listed in `TX_VECTORS`, or this fails.
+#[test]
+fn every_transaction_vector_is_replayed() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/vectors/primitives");
+    let mut on_disk: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter_map(|name| {
+            name.strip_prefix("tx_")
+                .and_then(|rest| rest.strip_suffix(".json"))
+                .map(|stem| format!("tx_{stem}"))
+        })
+        .collect();
+    on_disk.sort_unstable();
+    let mut listed: Vec<String> = TX_VECTORS.iter().map(ToString::to_string).collect();
+    listed.sort_unstable();
+    assert_eq!(on_disk, listed);
+}
+
 /// Builds the transaction exactly as listed, in the listed order.
 #[cfg(test)]
 fn transaction(value: &Value) -> Transaction {
