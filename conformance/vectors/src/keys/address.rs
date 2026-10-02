@@ -1,8 +1,6 @@
 //! Epicbox address keys and payment-proof keys, derived by the wallet's
 //! `address::address_from_derivation_path`, and the default Epicbox address string on each network.
 
-use std::sync::Mutex;
-
 use epic_core::global::{self, ChainTypes};
 use epic_keychain::Keychain;
 use epic_util::secp::key::PublicKey;
@@ -10,17 +8,13 @@ use epic_wallet_libwallet::{EpicboxAddress, address, version_bytes};
 use serde::Serialize;
 
 use super::{AREA, Inconsistent, KeyPath, KeysPins, Network, SEEDS, ensure, keychain};
-use crate::{Error, Rendered, hex, render};
+use crate::{Error, Rendered, chain_type_guard, hex, render};
 
 /// The default account and a second one.
 const PARENTS: [KeyPath; 2] = [KeyPath::new(2, [0, 0, 0, 0]), KeyPath::new(2, [1, 0, 0, 0])];
 
 /// `epic-wallet` always uses index 0; the others show how the index enters the path.
 const INDEXES: [u32; 3] = [0, 1, 100];
-
-/// Upstream selects Epicbox version bytes from the process-wide chain type. This lock keeps the
-/// switch to floonet and back atomic for every caller in this generator.
-static CHAIN_TYPE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize)]
 struct Inputs {
@@ -149,9 +143,8 @@ fn with_address_branch(parent: KeyPath, index: u32) -> Result<[u32; 4], Error> {
 }
 
 fn epicbox_form(network: Network, public: PublicKey) -> Result<EpicboxForm, Error> {
-    let _guard = CHAIN_TYPE_LOCK
-        .lock()
-        .map_err(|_| Error::reference("chain type lock")(Inconsistent("lock poisoned")))?;
+    // Upstream picks the Epicbox version bytes from the process-wide chain type.
+    let _chain_type = chain_type_guard();
     let previous = global::CHAIN_TYPE.read().clone();
     global::set_mining_mode(match network {
         Network::Mainnet => ChainTypes::Mainnet,
