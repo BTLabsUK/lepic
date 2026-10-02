@@ -10,8 +10,9 @@ because `rustls-platform-verifier` needs the host app to initialise it from the 
 with hyper-rustls and webpki-roots. iOS was not built, because this machine has no Xcode SDK. CI on
 macOS builds it.
 
-Date: 2026-10-02. Spike code: `spikes/f-03/` on branch `build/f-03-mobile-build-spike`. It is deleted
-before merge and stays in the branch history.
+Date: 2026-10-02. The spike code lived in `spikes/f-03/` and was removed before merge. Commit
+`6e8b3f868d345b2388fe592e4fc6f6367943276a` holds it: `git show 6e8b3f8 --stat`, or
+`git archive 6e8b3f8 spikes/f-03 | tar x` to rebuild it.
 
 ## What was built
 
