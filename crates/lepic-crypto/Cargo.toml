@@ -9,3 +9,8 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+grin_secp256k1zkp.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
