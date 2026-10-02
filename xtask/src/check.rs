@@ -12,12 +12,13 @@ const STEPS: &[(&str, &[&str])] = &[
             "clippy",
             "--workspace",
             "--all-targets",
+            "--locked",
             "--",
             "-D",
             "warnings",
         ],
     ),
-    ("test", &["test", "--workspace"]),
+    ("test", &["test", "--workspace", "--locked"]),
     ("deny", &["deny", "check"]),
 ];
 

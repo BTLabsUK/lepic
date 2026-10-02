@@ -239,7 +239,13 @@ impl Dependency {
 impl Metadata {
     fn load(manifest: &Path) -> Result<Self> {
         let output = cargo()
-            .args(["metadata", "--format-version", "1", "--all-features"])
+            .args([
+                "metadata",
+                "--format-version",
+                "1",
+                "--all-features",
+                "--locked",
+            ])
             .arg("--manifest-path")
             .arg(manifest)
             .output()
@@ -375,7 +381,16 @@ lepic-telemetry   -> (external only)
 
         fn violations(&self) -> Vec<Violation> {
             let ws = self.dir.path().join("ws");
-            check_workspace(&ws.join("docs/architecture.md"), &ws.join("Cargo.toml")).unwrap()
+            let manifest = ws.join("Cargo.toml");
+            // deps-check runs `cargo metadata --locked`, so the fixture needs a lockfile.
+            let status = cargo()
+                .arg("generate-lockfile")
+                .arg("--manifest-path")
+                .arg(&manifest)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            check_workspace(&ws.join("docs/architecture.md"), &manifest).unwrap()
         }
     }
 
