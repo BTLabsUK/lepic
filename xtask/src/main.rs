@@ -4,6 +4,7 @@ mod check;
 mod deps_check;
 #[cfg(test)]
 mod lint_tables;
+mod vectors;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,8 @@ const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
   check       fmt, clippy, tests, cargo deny and deps-check
-  deps-check  crate edges and banned crates against docs/architecture.md";
+  deps-check  crate edges and banned crates against docs/architecture.md
+  vectors     generate [--area <area>] golden vectors, or verify them";
 
 fn main() -> ExitCode {
     match run() {
@@ -29,13 +31,14 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
-    let Some((command, _rest)) = args.split_first() else {
+    let Some((command, rest)) = args.split_first() else {
         bail!("no command given\n\n{USAGE}");
     };
     let root = workspace_root()?;
     match command.as_str() {
         "check" => check::run(&root),
         "deps-check" => deps_check::run(&root),
+        "vectors" => vectors::run(&root, rest),
         other => bail!("unknown command `{other}`\n\n{USAGE}"),
     }
 }

@@ -9,9 +9,10 @@ code. Only the generator in `conformance/vectors` writes them; never edit one by
 | Command | Effect |
 |---|---|
 | `cargo xtask vectors generate [--area <area>]` | Runs the generator for one area, or all areas, and rewrites `testdata/vectors/<area>/`. |
-| `cargo xtask vectors verify` | Runs `cargo test --workspace --test vectors`, the vector tests of every product crate. |
+| `cargo xtask vectors verify` | Runs `cargo test --workspace --test vectors`, the vector tests of every product crate. Succeeds with a notice while no crate has a `vectors` test. |
 
-Without `xtask`, the generator runs directly:
+`cargo xtask vectors generate` runs the generator with the conformance workspace's own toolchain
+(`conformance/rust-toolchain.toml`), not the product toolchain. Without `xtask`, it runs directly:
 `cargo run --manifest-path conformance/Cargo.toml -p vectors -- generate [--area <area>] [--out <dir>]`.
 `vectors list` prints the known areas. Generating an area also deletes JSON files in its directory
 that the generator no longer produces.
