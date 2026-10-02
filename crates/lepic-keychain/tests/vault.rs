@@ -40,6 +40,14 @@ fn rng(seed: u64) -> StdRng {
     StdRng::seed_from_u64(seed)
 }
 
+/// The stored bytes, so tests compare plain byte vectors rather than secret values.
+fn secret_of(store: &impl SecretStore, name: &SecretName) -> Option<Vec<u8>> {
+    store
+        .get(name)
+        .unwrap()
+        .map(|secret| secret.expose_bytes().to_vec())
+}
+
 fn name(text: &str) -> SecretName {
     SecretName::new(text).unwrap()
 }
@@ -86,9 +94,15 @@ fn round_trips_secrets_through_storage() {
     vault.put(&name("other"), &other).unwrap();
 
     let mut reopened = reopen(&vault, PASSWORD).unwrap();
-    assert_eq!(reopened.get(&seed_name()).unwrap(), Some(seed.clone()));
-    assert_eq!(reopened.get(&name("other")).unwrap(), Some(other));
-    assert_eq!(reopened.get(&name("missing")).unwrap(), None);
+    assert_eq!(
+        secret_of(&reopened, &seed_name()),
+        Some(seed.expose_bytes().to_vec())
+    );
+    assert_eq!(
+        secret_of(&reopened, &name("other")),
+        Some(other.expose_bytes().to_vec())
+    );
+    assert_eq!(secret_of(&reopened, &name("missing")), None);
     assert_eq!(
         reopened.names().map(SecretName::as_str).collect::<Vec<_>>(),
         ["other", "wallet/default/seed"]
@@ -98,8 +112,11 @@ fn round_trips_secrets_through_storage() {
     assert!(reopened.delete(&name("other")).unwrap());
     assert!(!reopened.delete(&name("other")).unwrap());
     let reopened = reopen(&reopened, PASSWORD).unwrap();
-    assert_eq!(reopened.get(&name("other")).unwrap(), None);
-    assert_eq!(reopened.get(&seed_name()).unwrap(), Some(seed));
+    assert_eq!(secret_of(&reopened, &name("other")), None);
+    assert_eq!(
+        secret_of(&reopened, &seed_name()),
+        Some(seed.expose_bytes().to_vec())
+    );
 }
 
 #[test]
@@ -112,10 +129,7 @@ fn put_replaces_a_stored_secret() {
         .put(&seed_name(), &SecretBytes::from_slice(b"new"))
         .unwrap();
     let reopened = reopen(&vault, PASSWORD).unwrap();
-    assert_eq!(
-        reopened.get(&seed_name()).unwrap(),
-        Some(SecretBytes::from_slice(b"new"))
-    );
+    assert_eq!(secret_of(&reopened, &seed_name()), Some(b"new".to_vec()));
     assert_eq!(reopened.names().count(), 1);
 }
 
@@ -128,8 +142,11 @@ fn stores_empty_and_maximum_size_secrets() {
         .unwrap();
     vault.put(&name("largest"), &largest).unwrap();
     let reopened = reopen(&vault, PASSWORD).unwrap();
-    assert_eq!(reopened.get(&name("empty")).unwrap().unwrap().len(), 0);
-    assert_eq!(reopened.get(&name("largest")).unwrap(), Some(largest));
+    assert_eq!(secret_of(&reopened, &name("empty")).unwrap().len(), 0);
+    assert_eq!(
+        secret_of(&reopened, &name("largest")),
+        Some(largest.expose_bytes().to_vec())
+    );
 }
 
 #[test]
@@ -166,7 +183,10 @@ fn rekey_re_encrypts_under_the_new_password_and_parameters() {
     ));
     let mut reopened = reopen(&vault, b"new password").unwrap();
     assert_eq!(reopened.params(), params);
-    assert_eq!(reopened.get(&seed_name()).unwrap(), Some(seed));
+    assert_eq!(
+        secret_of(&reopened, &seed_name()),
+        Some(seed.expose_bytes().to_vec())
+    );
 
     // The rekeyed vault keeps writing under the new key.
     reopened
@@ -351,8 +371,11 @@ fn a_failed_write_leaves_the_vault_and_storage_unchanged() {
         Err(VaultError::Storage(_))
     ));
 
-    assert_eq!(vault.get(&seed_name()).unwrap(), Some(seed.clone()));
-    assert_eq!(vault.get(&name("new")).unwrap(), None);
+    assert_eq!(
+        secret_of(&vault, &seed_name()),
+        Some(seed.expose_bytes().to_vec())
+    );
+    assert_eq!(secret_of(&vault, &name("new")), None);
     assert_eq!(vault.params(), fast());
     assert_eq!(vault.storage().inner, before);
 
@@ -362,7 +385,10 @@ fn a_failed_write_leaves_the_vault_and_storage_unchanged() {
         .put(&name("new"), &SecretBytes::from_slice(b"new"))
         .unwrap();
     let reopened = reopen(&vault, PASSWORD).unwrap();
-    assert_eq!(reopened.get(&seed_name()).unwrap(), Some(seed));
+    assert_eq!(
+        secret_of(&reopened, &seed_name()),
+        Some(seed.expose_bytes().to_vec())
+    );
     assert_eq!(reopened.names().count(), 2);
 }
 
@@ -374,10 +400,7 @@ fn opens_a_version_1_vault() {
 
     let opened = open_bytes(bytes, b"lepic vault v1").unwrap();
     assert_eq!(opened.params(), fast());
-    assert_eq!(
-        opened.get(&seed_name()).unwrap(),
-        Some(SecretBytes::from((0u8..32).collect::<Vec<_>>()))
-    );
+    assert_eq!(secret_of(&opened, &seed_name()), Some((0u8..32).collect()));
     assert_eq!(opened.names().count(), 1);
 }
 

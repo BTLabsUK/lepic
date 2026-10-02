@@ -53,8 +53,9 @@ impl fmt::Display for SecretName {
     }
 }
 
-/// A secret value. Wiped on drop and never printed.
-#[derive(Clone, PartialEq, Eq)]
+/// A secret value. Wiped on drop and never printed. Deliberately not `PartialEq`: comparing
+/// secrets that way would take variable time.
+#[derive(Clone)]
 pub struct SecretBytes(Zeroizing<Vec<u8>>);
 
 impl SecretBytes {

@@ -274,6 +274,13 @@ impl<'a> Reader<'a> {
 mod tests {
     use super::*;
 
+    fn exposed(secrets: &Secrets) -> Vec<(&str, &[u8])> {
+        secrets
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.expose_bytes()))
+            .collect()
+    }
+
     fn secrets(entries: &[(&str, &[u8])]) -> Secrets {
         entries
             .iter()
@@ -305,7 +312,10 @@ mod tests {
             ("z", &[1; MAX_SECRET_LEN]),
         ]);
         let payload = encode_payload(&secrets).unwrap();
-        assert_eq!(decode_payload(&payload).unwrap(), secrets);
+        assert_eq!(
+            exposed(&decode_payload(&payload).unwrap()),
+            exposed(&secrets)
+        );
         assert_eq!(
             decode_payload(&encode_payload(&Secrets::new()).unwrap())
                 .unwrap()
