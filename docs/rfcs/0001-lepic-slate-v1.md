@@ -7,7 +7,8 @@ Proposes: ADR 0012. Implemented by X-02 (codec) and X-03 (packs, text transport,
 ## TL;DR
 
 `lepic.v1` is a binary slate format that carries, at each stage, only what the next party needs.
-A first-leg slate (S1 or I1) is 149 bytes against 2,315 to 2,472 bytes of legacy JSON, and the reply
+A first-leg slate (S1 or I1) is 149 to 243 bytes in the G-03 cases, against 2,315 to 5,394 bytes
+of legacy JSON, and the reply
 is about a quarter of its legacy size. Slates travel inside a pack: a small header, an optional
 reply address, and optional encryption to the recipient with HPKE (RFC 9180). The pack is written
 as base58 text between `BEGINEPICSLATE.` and `ENDEPICSLATE.` markers for copy-paste, QR codes and
@@ -119,10 +120,9 @@ legacy formats instead of breaking a transfer.
   versions ADR 0010 already lists. Joint use of one key for Ed25519 signatures and an X25519 KEM
   with an HKDF-Extract-style KDF is proven secure in the random oracle model
   (https://eprint.iacr.org/2021/509).
-- E-C, the Epicbox message cipher (ECDH on secp256k1, PBKDF2-HMAC-SHA512 with 100 iterations,
-  ChaCha20-Poly1305). Already implemented in `lepic-epicbox`, but only usable with K-B or K-C, uses
-  the sender's static key so a sender cannot encrypt without revealing which key it holds, and its
-  PBKDF2 step adds cost without adding security for a high-entropy shared secret.
+- E-C, the Epicbox message cipher, already implemented in `lepic-epicbox`. It encrypts between two
+  secp256k1 keys, so it works only with K-B or K-C, and the sender must hold an Epicbox key. E-B
+  works with K-A and needs no sender key.
 
 Recommendation: E-B.
 
@@ -423,10 +423,9 @@ Initiator, on a reply (W-05, W-08):
 - Network separation. The pack's network byte, the HPKE `info` and the address prefix keep mainnet
   and floonet data apart.
 - Key reuse. The payment-proof key also decrypts packs, as in Slatepack (see D4 for the proof).
-- Privacy. The responder no longer learns the initiator's inputs and change, which legacy slates
-  reveal. The native address is the same index-0 key `epic-wallet` already uses for proofs, so it
-  links a user's transactions as the Epicbox address already does. Per-transaction addresses are a
-  later option; they need the wallet to listen on many keys.
+- Privacy. A native proposal carries none of the initiator's inputs or change outputs. The native
+  address is a long-lived key; per-transaction addresses are a later option, and they need the
+  wallet to listen on many keys.
 - Secrets. Ed25519 and X25519 secrets stay in `lepic-keychain` and the engine and never cross the
   FFI boundary; the app passes and receives armored text and addresses only.
 

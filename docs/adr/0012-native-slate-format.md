@@ -29,8 +29,8 @@ https://github.com/mimblewimble/grin-rfcs/blob/master/text/0015-slatepack.md)
 
 The specification is `docs/rfcs/0001-lepic-slate-v1.md` (task X-01). It answers the open questions
 below with options and a recommendation, and gives example encodings and sizes from the G-03
-vectors: a first-leg slate is 149 bytes against 2,315 to 2,472 bytes of legacy JSON, and a reply is
-about a quarter of its legacy size.
+vectors: a first-leg slate is 149 to 243 bytes against 2,315 to 5,394 bytes of legacy JSON, and a
+reply is about a quarter of its legacy size.
 
 ## Open questions and the recommended answers
 
