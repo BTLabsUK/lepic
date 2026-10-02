@@ -246,7 +246,7 @@ async fn read_slate_file(path: &Path) -> Result<WireSlate, FileError> {
             .map_err(io_error(FileOperation::Inspect))?,
         max_len,
     )?;
-    let file = tokio::fs::File::open(path)
+    let file = open_for_reading(path)
         .await
         .map_err(io_error(FileOperation::Open))?;
     // Checked again on the open file, which may not be the one inspected above.
@@ -287,6 +287,48 @@ fn check_slate_file(metadata: &std::fs::Metadata, max_len: u64) -> Result<u64, F
     Ok(len)
 }
 
+/// Opens for reading without blocking on a FIFO or device that replaced the regular file after
+/// it was inspected; the open file is checked again before anything is read.
+async fn open_for_reading(path: &Path) -> std::io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    if let Some(flag) = O_NONBLOCK {
+        options.custom_flags(flag);
+    }
+    options.open(path).await
+}
+
+// `O_NONBLOCK` from the platform headers, for the targets LEPIC builds for. The value differs
+// between kernels and, on Linux, between a few architectures; where it is not known here, the
+// inspection before opening is the only guard.
+#[cfg(unix)]
+const O_NONBLOCK: Option<i32> = if cfg!(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "powerpc64",
+        target_arch = "s390x",
+        target_arch = "loongarch64"
+    )
+)) {
+    Some(0o4000)
+} else if cfg!(any(
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+)) {
+    Some(0x0004)
+} else {
+    None
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +343,33 @@ mod tests {
             orig_version: version,
             block_header_version,
         }
+    }
+
+    /// Without `O_NONBLOCK` this open waits for a writer forever; the test then opens one to
+    /// release it and fails.
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    #[tokio::test]
+    async fn opening_a_fifo_swapped_in_after_inspection_does_not_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("swapped.slate");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if !made.is_ok_and(|status| status.success()) {
+            // No mkfifo on this host; nothing to observe.
+            return;
+        }
+
+        let opened =
+            tokio::time::timeout(std::time::Duration::from_secs(5), open_for_reading(&fifo)).await;
+        if opened.is_err() {
+            let _writer = std::fs::OpenOptions::new().write(true).open(&fifo);
+            panic!("opening the fifo blocked");
+        }
+
+        let file = opened.unwrap().unwrap();
+        assert!(matches!(
+            check_slate_file(&file.metadata().await.unwrap(), 1),
+            Err(FileError::NotAFile)
+        ));
     }
 
     #[test]

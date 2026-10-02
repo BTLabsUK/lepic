@@ -19,7 +19,7 @@ tokio = { workspace = true, features = ["fs", "io-util"] }
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "rt", "macros"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "macros", "time"] }
 
 [lints]
 workspace = true
