@@ -20,7 +20,7 @@ use epic_wallet_libwallet::crypto::{
 };
 use serde::Serialize;
 
-use crate::{Error, LOCKFILE, Pins, Rendered, Upstream, git_source};
+use crate::{Error, LOCKFILE, Pins, Rendered, Upstream, chain_type_guard, git_source};
 
 const AREA: &str = "epicbox";
 
@@ -84,13 +84,10 @@ impl Network {
     }
 }
 
-// Upstream reads the address network from a process-wide chain type. Every use in this area holds
-// this lock while the chain type is set, so cases built in parallel tests see the network they ask
-// for, and the chain type is put back to mainnet afterwards.
-static CHAIN_TYPE: Mutex<()> = Mutex::new(());
-
+// Upstream reads the address network from the process-wide chain type, so every use in this area
+// holds the crate's chain type guard while it is set, and puts it back to mainnet afterwards.
 fn on_network<T>(network: Network, run: impl FnOnce() -> T) -> T {
-    let _guard = CHAIN_TYPE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _guard = chain_type_guard();
     global::set_mining_mode(network.chain_type());
     let result = run();
     global::set_mining_mode(ChainTypes::Mainnet);
@@ -98,11 +95,14 @@ fn on_network<T>(network: Network, run: impl FnOnce() -> T) -> T {
 }
 
 // Serializes the swap of the panic hook in `upstream_outcome`, so the original hook is always the
-// one put back. Taken after `CHAIN_TYPE` when both are held.
+// one put back. Taken after the chain type guard when both are held.
 static PANIC_HOOK: Mutex<()> = Mutex::new(());
 
 /// Runs an upstream call whose verdict is whether it returns a value. Every other outcome is
 /// recorded as a rejection and kept out of the generator's output.
+///
+/// The panic hook is process-wide, so while the call runs a test failing on another thread still
+/// fails but prints no message. Rerun with `--test-threads=1` to see it.
 fn upstream_outcome<T, E>(call: impl FnOnce() -> Result<T, E> + panic::UnwindSafe) -> Option<T> {
     let _guard = PANIC_HOOK.lock().unwrap_or_else(PoisonError::into_inner);
     let hook = panic::take_hook();
