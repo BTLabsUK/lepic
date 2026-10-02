@@ -1,0 +1,6 @@
+# cargo-fuzz needs nightly for the sanitizer and coverage flags. A dated nightly keeps fuzz builds
+# reproducible; move it forward together with the product toolchain in the root file.
+[toolchain]
+channel = "nightly-2026-10-02"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

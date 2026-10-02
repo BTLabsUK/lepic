@@ -1,0 +1,115 @@
+[package]
+name = "lepic-fuzz"
+description = "cargo-fuzz targets for every LEPIC decoder of untrusted input."
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# A workspace of its own: test tooling that never ships, built on the nightly in
+# rust-toolchain.toml, with libfuzzer-sys (NCSA) set here directly as ADR 0010 allows.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+lepic-crypto = { path = "../crates/lepic-crypto" }
+lepic-epicbox = { path = "../crates/lepic-epicbox" }
+lepic-keychain = { path = "../crates/lepic-keychain" }
+lepic-node = { path = "../crates/lepic-node" }
+lepic-primitives = { path = "../crates/lepic-primitives" }
+lepic-slate = { path = "../crates/lepic-slate" }
+lepic-transport = { path = "../crates/lepic-transport" }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[profile.release]
+debug = 1
+overflow-checks = true
+
+[[bin]]
+name = "ser_read"
+path = "fuzz_targets/ser_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tx_decode"
+path = "fuzz_targets/tx_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "slate_v2"
+path = "fuzz_targets/slate_v2.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "slate_v3"
+path = "fuzz_targets/slate_v3.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "slate_detect"
+path = "fuzz_targets/slate_detect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "file_import"
+path = "fuzz_targets/file_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "epicbox_frame"
+path = "fuzz_targets/epicbox_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "epicbox_address"
+path = "fuzz_targets/epicbox_address.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "epicbox_message"
+path = "fuzz_targets/epicbox_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "node_response"
+path = "fuzz_targets/node_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vault_file"
+path = "fuzz_targets/vault_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wallet_seed"
+path = "fuzz_targets/wallet_seed.rs"
+test = false
+doc = false
+bench = false
