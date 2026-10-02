@@ -7,5 +7,32 @@ license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# An in-memory node for engine, CLI and binding tests: recorded sessions or a scripted chain.
+mock = []
+
+[dependencies]
+base64 = { workspace = true, features = ["std"] }
+futures-util = { workspace = true, features = ["alloc"] }
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-rustls.workspace = true
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+lepic-crypto.workspace = true
+lepic-primitives.workspace = true
+rustls = { workspace = true, features = ["std"] }
+secrecy.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+webpki-roots.workspace = true
+
+[dev-dependencies]
+lepic-node = { path = ".", features = ["mock"] }
+proptest = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
+
 [lints]
 workspace = true

@@ -140,10 +140,17 @@ upstream.paths = ["core/src/libtx/proof.rs"]
 upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
 
 [[module]]
-path = "crates/lepic-node/src/types"
+path = "crates/lepic-node/src/wire"
 task = "N-01"
 upstream.repo = "https://github.com/EpicCash/epic"
-upstream.paths = ["api/src/foreign_rpc.rs", "api/src/foreign.rs", "api/src/types.rs"]
+upstream.paths = [
+  "api/src/foreign_rpc.rs",
+  "api/src/foreign.rs",
+  "api/src/types.rs",
+  "api/src/rest.rs",
+  "core/src/core/transaction.rs",
+  "core/src/libtx/secp_ser.rs",
+]
 upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
 
 # Wallet, epic-wallet v4.0.2
