@@ -4,6 +4,11 @@ Derived from `epic-wallet` `v4.0.2` (`impls/src/node_clients/http.rs`, `libwalle
 `libwallet/src/api_impl/owner.rs`) and the node `v4.0.4` foreign API. LEPIC uses the foreign JSON-RPC
 API at `/v2/foreign` only: no owner API, no Tor path.
 
+Upstream also calls the owner API's `get_status` before every refresh to check that the node is
+synced (the G-05 recordings start with that exchange). LEPIC does not: public nodes do not expose the
+owner API, so LEPIC judges node progress from `get_tip` and `get_version`, and replays of the
+recordings skip the owner exchange.
+
 ## Calls
 
 | Method | Params | Result fields used |
