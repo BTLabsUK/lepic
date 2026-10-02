@@ -9,6 +9,7 @@ mod commitments;
 mod derivation;
 mod mnemonic;
 mod proofs;
+mod seed_file;
 
 use epic_keychain::{ExtKeychain, ExtKeychainPath, Identifier, Keychain, SwitchCommitmentType};
 use serde::Serialize;
@@ -135,6 +136,7 @@ pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     vectors.extend(commitments::generate(&pins)?);
     vectors.extend(proofs::generate(&pins)?);
     vectors.extend(address::generate(&pins)?);
+    vectors.extend(seed_file::generate(&pins)?);
     Ok(vectors)
 }
 

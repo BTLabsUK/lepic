@@ -18,6 +18,7 @@ epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_keychain = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_util = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_wallet_libwallet = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }
+epic_wallet_impls = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }
 # The BLAKE2b implementation the node and wallet hash with, at the version their lockfile resolves.
 blake2-rfc = "=0.2.18"
 serde = { version = "1", features = ["derive"] }

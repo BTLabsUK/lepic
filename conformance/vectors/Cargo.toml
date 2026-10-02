@@ -11,6 +11,7 @@ blake2-rfc.workspace = true
 epic_core.workspace = true
 epic_keychain.workspace = true
 epic_util.workspace = true
+epic_wallet_impls.workspace = true
 epic_wallet_libwallet.workspace = true
 serde.workspace = true
 serde_json.workspace = true

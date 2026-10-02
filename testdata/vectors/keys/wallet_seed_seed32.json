@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "wallet_seed_seed32",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "mnemonic": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
+    "entropy": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "password": "lepic test password",
+    "wrong_password": "not the password"
+  },
+  "expected": {
+    "file": "{\n  \"encrypted_seed\": \"d81e8ca299f568f890af7ebcc1560cad16fe570f8767e21df60a797e7d0203a97f20003e9b0efb040f19241ba5374a69\",\n  \"salt\": \"e9033b5dfc1fca39\",\n  \"nonce\": \"6e2b432af12348d426d718e7\"\n}",
+    "encrypted_seed": "d81e8ca299f568f890af7ebcc1560cad16fe570f8767e21df60a797e7d0203a97f20003e9b0efb040f19241ba5374a69",
+    "salt": "e9033b5dfc1fca39",
+    "nonce": "6e2b432af12348d426d718e7"
+  }
+}

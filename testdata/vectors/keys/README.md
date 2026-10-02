@@ -14,6 +14,7 @@ except `wallet_seed_*`, which records the salt and nonce upstream drew.
 | `bulletproof_raw` | secp256k1-zkp wrapper | Bulletproof creation with given blind, nonces, message and optional extra data; rewind output; failures with a wrong nonce or missing extra data. |
 | `proofs_builder_seed32` | node `core/src/libtx/proof.rs` | `ProofBuilder` nonces, message and proof per output; rewind by the same builder, by `LegacyProofBuilder` of the same wallet, and by another wallet. |
 | `proofs_legacy_builder_seed32` | same | The same for `LegacyProofBuilder`, depth-3 paths and the regular switch type only, as upstream restores them. |
+| `wallet_seed_*` | wallet `impls/src/lifecycle/{default,seed}.rs` | The exact `wallet.seed` text written by `create_wallet` from a mnemonic and password, with upstream's salt and nonce. Upstream decrypts it with `password` and rejects `wrong_password`. Kept across runs while the pin and inputs are unchanged. |
 | `address_keys_<seed>` | wallet `libwallet/src/address.rs`, `epicbox_address.rs` | Epicbox address key path, plain and hashed key, compressed public key, base58check key and default address on both networks, payment-proof ed25519 key and its onion v3 form. |
 
 An identifier is 17 bytes: depth, then four big-endian `u32` components. `bip32_path` is
