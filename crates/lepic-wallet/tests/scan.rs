@@ -13,6 +13,7 @@ mod scan_support;
 mod support;
 
 use std::num::NonZeroU64;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lepic_crypto::Commitment;
@@ -33,6 +34,7 @@ use lepic_wallet::{Event, Ports, Wallet, WalletError};
 use scan_support::{PASSWORD, Snapshot, full_scan_vector, options, restore, snapshot, write};
 use serde_json::Value;
 use support::{Harness, MemoryStores, TestVault, fixed_time, password};
+use tokio::sync::Notify;
 use tokio::sync::broadcast::Receiver;
 
 const SMALL_PAGE: NonZeroU64 = NonZeroU64::new(4).unwrap();
@@ -42,14 +44,17 @@ const SMALL_PAGE: NonZeroU64 = NonZeroU64::new(4).unwrap();
 enum Disturbance {
     Fail(usize),
     Cancel(usize),
+    /// The request never answers; [`DisturbedNode::hanging`] is notified when it starts.
+    Hang(usize),
 }
 
-/// The mock node's client, disturbed on one `get_unspent_outputs` call: it either fails as an
-/// unresponsive node does, or cancels the scan as it answers.
+/// The mock node's client, disturbed on one `get_unspent_outputs` call: it fails as an
+/// unresponsive node does, cancels the scan as it answers, or never answers.
 struct DisturbedNode {
     inner: NodeClient<MockNode>,
     disturbance: Disturbance,
     cancel: ScanCancel,
+    hanging: Arc<Notify>,
     unspent_calls: AtomicUsize,
 }
 
@@ -86,13 +91,19 @@ impl NodeApi for DisturbedNode {
     ) -> impl Future<Output = Result<UnspentOutputs, NodeError>> + Send {
         let call = self.unspent_calls.fetch_add(1, Ordering::SeqCst) + 1;
         let fail = matches!(self.disturbance, Disturbance::Fail(at) if at == call);
+        let hang = matches!(self.disturbance, Disturbance::Hang(at) if at == call);
         if matches!(self.disturbance, Disturbance::Cancel(at) if at == call) {
             self.cancel.cancel();
         }
         let answer = self.inner.get_unspent_outputs(start_index, end_index, max);
+        let hanging = Arc::clone(&self.hanging);
         async move {
             if fail {
                 return Err(NodeError::Timeout);
+            }
+            if hang {
+                hanging.notify_one();
+                std::future::pending::<()>().await;
             }
             answer.await
         }
@@ -122,6 +133,15 @@ fn disturbed_wallet(
     disturbance: Disturbance,
     cancel: &ScanCancel,
 ) -> DisturbedWallet {
+    disturbed_wallet_notifying(harness, disturbance, cancel, &Arc::default())
+}
+
+fn disturbed_wallet_notifying(
+    harness: &Harness,
+    disturbance: Disturbance,
+    cancel: &ScanCancel,
+    hanging: &Arc<Notify>,
+) -> DisturbedWallet {
     let Ports {
         node,
         stores,
@@ -135,6 +155,7 @@ fn disturbed_wallet(
         inner: node,
         disturbance,
         cancel: cancel.clone(),
+        hanging: Arc::clone(hanging),
         unspent_calls: AtomicUsize::new(0),
     };
     Wallet::new(
@@ -564,6 +585,59 @@ fn locked_and_unconfirmed_outputs_change_only_with_delete_unconfirmed() {
             .iter()
             .all(|output| output.commitment() != unconfirmed.commitment())
     );
+}
+
+/// Partial state of a restore whose page `page` failed: every earlier page stored.
+fn restore_failing_at(vector: &Value, page: usize) -> Snapshot {
+    let harness = scan_support::harness(vector);
+    let cancel = ScanCancel::new();
+    let wallet = disturbed_wallet(&harness, Disturbance::Fail(page), &cancel);
+    restore(&harness, &wallet, vector);
+    let result = harness.block_on(wallet.scan(small_pages(vector), &cancel));
+    assert!(matches!(result, Err(ScanError::Node(NodeError::Timeout))));
+    snapshot(&harness)
+}
+
+#[test]
+fn cancel_abandons_a_node_request_that_never_answers() {
+    let vector = full_scan_vector();
+    let harness = scan_support::harness(&vector);
+    let cancel = ScanCancel::new();
+    let hanging = Arc::new(Notify::new());
+    let wallet = disturbed_wallet_notifying(&harness, Disturbance::Hang(3), &cancel, &hanging);
+    restore(&harness, &wallet, &vector);
+
+    // After the cancel the scan gets a bounded number of polls, so a scan that ignores it fails
+    // the test instead of hanging it.
+    let result = harness.block_on(async {
+        tokio::select! {
+            result = wallet.scan(small_pages(&vector), &cancel) => Some(result),
+            () = async {
+                hanging.notified().await;
+                cancel.cancel();
+                for _ in 0..100 {
+                    tokio::task::yield_now().await;
+                }
+            } => None,
+        }
+    });
+
+    assert!(
+        matches!(result, Some(Err(ScanError::Cancelled))),
+        "scan did not return on cancel: {result:?}"
+    );
+    assert_eq!(
+        pages_served(&harness),
+        2,
+        "the hanging request never completed"
+    );
+    let partial = snapshot(&harness);
+    assert_eq!(
+        partial,
+        restore_failing_at(&vector, 3),
+        "pages 1 and 2 stored, the checkpoint after page 2"
+    );
+    assert!(partial.checkpoint.is_some());
 }
 
 /// The scanned subject with output `m/0/0/0` locked by an open send.
