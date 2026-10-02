@@ -54,14 +54,18 @@ const RESTORED_ACCOUNT_LABEL: &str = "account";
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ScanError {
+    /// The wallet is locked, or the database failed.
     #[error("wallet operation failed")]
     Wallet(#[from] WalletError),
+    /// The node could not be reached or gave an answer that failed validation.
     #[error("node request failed")]
     Node(#[from] NodeError),
     #[error("range proof rewind failed")]
     Proof(#[from] ProofError),
+    /// A height from the node is too large to add the coinbase maturity to.
     #[error("block height out of range")]
     Height(#[from] ArithmeticError),
+    /// The node's paging did not move past the last page.
     #[error("node paged its unspent outputs backwards")]
     Paging,
     /// What earlier pages stored is kept; the next scan resumes after it.
@@ -96,6 +100,7 @@ pub struct ScanOptions {
     pub delete_unconfirmed: bool,
     /// Blocks a restored coinbase output stays locked after the block that mined it.
     pub coinbase_maturity: u64,
+    /// Outputs asked for per node request; each page is stored in its own transaction.
     pub page_size: NonZeroU64,
 }
 
@@ -124,14 +129,19 @@ impl ScanOptions {
 pub struct ScanCancel(Arc<watch::Sender<bool>>);
 
 impl ScanCancel {
+    /// A signal that is not cancelled.
     pub fn new() -> Self {
         Self(Arc::new(watch::Sender::new(false)))
     }
 
+    /// Ends the scan with [`ScanError::Cancelled`]. A node request in flight is abandoned, a
+    /// page being stored is kept, and the next scan with the same options resumes after the
+    /// last stored page. The signal stays set; use a new one for the next scan.
     pub fn cancel(&self) {
         self.0.send_replace(true);
     }
 
+    /// Whether [`ScanCancel::cancel`] was called on this signal or a clone.
     pub fn is_cancelled(&self) -> bool {
         *self.0.borrow()
     }
@@ -402,8 +412,8 @@ where
         session.store.read(|repos| Ok(last_scanned(repos)?))
     }
 
-    /// Identifies a page on the blocking pool, since rewinding a thousand proofs takes a while,
-    /// and stores it with its checkpoint in one transaction.
+    /// Identifies a page on the blocking pool, since rewinding a full page of proofs takes a
+    /// while, and stores it with its checkpoint in one transaction.
     async fn store_page(
         &self,
         session: Arc<Session<S::Store>>,
@@ -658,10 +668,10 @@ fn ensure_account(repos: &mut dyn Repositories, index: AccountIndex) -> Result<(
     };
     repos.put_account(&AccountRecord {
         index,
-        label,
+        label: label.clone(),
         next_child: 0,
     })?;
-    info!(account = %index, "account restored");
+    info!(account = %label, "account restored");
     Ok(())
 }
 
