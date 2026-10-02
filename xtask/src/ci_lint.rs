@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 
 const GITHUB_DIR: &str = ".github";
 const SHA_LEN: usize = 40;
+const USES_KEY: &str = "uses";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Unpinned {
@@ -56,14 +57,14 @@ fn check(root: &Path) -> Result<Vec<Unpinned>> {
             fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
         let relative = file.strip_prefix(root).unwrap_or(&file).to_path_buf();
         for (line, content) in (1..).zip(text.lines()) {
-            if let Some(reference) = uses_value(content)
-                && !is_pinned(reference)
-            {
-                unpinned.push(Unpinned {
-                    file: relative.clone(),
-                    line,
-                    reference: reference.to_owned(),
-                });
+            for reference in uses_values(content) {
+                if !is_pinned(reference) {
+                    unpinned.push(Unpinned {
+                        file: relative.clone(),
+                        line,
+                        reference: reference.to_owned(),
+                    });
+                }
             }
         }
     }
@@ -85,13 +86,39 @@ fn collect_yaml(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// The value of a `uses:` key on this line, without quotes or a trailing comment.
-fn uses_value(line: &str) -> Option<&str> {
-    let line = line.trim_start();
-    let line = line.strip_prefix('-').map_or(line, str::trim_start);
-    let value = line.strip_prefix("uses:")?;
-    let value = value.split_whitespace().next().unwrap_or_default();
-    Some(value.trim_matches(|c| c == '"' || c == '\''))
+/// The values of every `uses` key on this line, in block or flow style, with the key bare or
+/// quoted, and without quotes. A value that is not on the same line comes back as whatever
+/// follows the colon, which is never a pinned reference, so the line is reported.
+fn uses_values(line: &str) -> Vec<&str> {
+    if line.trim_start().starts_with('#') {
+        return Vec::new();
+    }
+    line.match_indices(USES_KEY)
+        .filter_map(|(start, _)| {
+            let before = line.get(..start)?;
+            let after = line.get(start.checked_add(USES_KEY.len())?..)?;
+            value_after_key(before, after)
+        })
+        .collect()
+}
+
+fn value_after_key<'a>(before: &str, after: &'a str) -> Option<&'a str> {
+    let (before, after) = match before.chars().next_back() {
+        Some(quote @ ('"' | '\'')) => (before.strip_suffix(quote)?, after.strip_prefix(quote)?),
+        _ => (before, after),
+    };
+    let starts_key = before
+        .chars()
+        .next_back()
+        .is_none_or(|c| c.is_whitespace() || matches!(c, '-' | '{' | ','));
+    if !starts_key {
+        return None;
+    }
+    let value = after.trim_start().strip_prefix(':')?.trim_start();
+    let end = value
+        .find(|c: char| c.is_whitespace() || matches!(c, ',' | '}' | '#'))
+        .unwrap_or(value.len());
+    Some(value.get(..end)?.trim_matches(['"', '\'']))
 }
 
 fn is_pinned(reference: &str) -> bool {
@@ -169,6 +196,31 @@ mod tests {
                 "actions/checkout".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn rejects_unpinned_references_in_flow_mappings_and_quoted_keys() {
+        let steps = "      - {uses: actions/checkout@v7}\n      - \"uses\": actions/cache@v3\n      - 'uses': actions/cache@v2\n      - {name: x, uses: \"org/a@main\", with: {k: v}}\n      - uses: >-\n          actions/checkout@v7\n";
+        let dir = fixture(&[(".github/workflows/ci.yml", &workflow(steps))]);
+        assert_eq!(
+            references(&dir),
+            [
+                "actions/checkout@v7",
+                "actions/cache@v3",
+                "actions/cache@v2",
+                "org/a@main",
+                ">-",
+            ]
+        );
+    }
+
+    #[test]
+    fn accepts_pinned_flow_mappings_and_ignores_other_keys_and_comments() {
+        let steps = format!(
+            "      - {{uses: actions/checkout@{SHA}, with: {{fetch-depth: 0}}}}\n      - \"uses\": 'actions/cache@{SHA}'\n      # uses: actions/checkout@v7\n      - causes: actions/checkout@v7\n"
+        );
+        let dir = fixture(&[(".github/workflows/ci.yml", &workflow(&steps))]);
+        assert_eq!(references(&dir), Vec::<String>::new());
     }
 
     #[test]
