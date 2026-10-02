@@ -16,7 +16,7 @@ use crate::api::{
     UnspentOutputs,
 };
 use crate::decode;
-use crate::error::NodeError;
+use crate::error::{ErrorChain, NodeError};
 use crate::rpc::{FOREIGN_ENDPOINT, encode_request};
 use crate::wire::WireTransaction;
 
@@ -146,7 +146,7 @@ impl<T: RpcTransport> NodeClient<T> {
                     return Ok(response);
                 }
                 Err(error) if error.is_transient() && attempt < max_attempts => {
-                    warn!(attempt, elapsed_ms, error = %error, "node call failed, retrying");
+                    warn!(attempt, elapsed_ms, error = %ErrorChain(&error), "node call failed, retrying");
                     attempt = attempt.saturating_add(1);
                     tokio::time::sleep(self.policy.retry.backoff_before(attempt)).await;
                 }

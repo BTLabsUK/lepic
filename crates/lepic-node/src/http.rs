@@ -34,7 +34,8 @@ pub struct HttpSettings {
 }
 
 impl Default for HttpSettings {
-    // A full `get_unspent_outputs` page of 1,000 outputs with proofs is about 1.7 MB of JSON.
+    // The cap leaves room for a full `get_unspent_outputs` page, the largest answer the wallet
+    // asks for, because every output in it carries a range proof.
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(10),
