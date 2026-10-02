@@ -1,0 +1,371 @@
+// Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
+// unwrap, index and use plain arithmetic (docs/rules.md).
+#![allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
+
+use lepic_crypto::EcdsaSignature;
+use lepic_crypto::{PublicKey, SecretKey};
+use lepic_epicbox::{
+    ClientFrame, Domain, EpicboxAddress, FrameError, MAX_FRAME_LEN, Network, Nonce,
+    PROTOCOL_VERSION, RelayErrorKind, RelayFrame, Salt, SignedMessage, SlateFrame, WalletMode,
+    verify_text,
+};
+use proptest::prelude::*;
+
+fn secret(byte: u8) -> SecretKey {
+    SecretKey::from_array([byte; 32]).unwrap()
+}
+
+fn address(byte: u8, port: Option<u16>) -> EpicboxAddress {
+    EpicboxAddress::new(
+        PublicKey::from_secret_key(&secret(byte)).unwrap(),
+        Network::Mainnet,
+        Domain::default(),
+        port,
+    )
+}
+
+fn relay(text: &str) -> RelayFrame {
+    RelayFrame::from_json(text).unwrap()
+}
+
+#[test]
+fn client_frames_serialize_in_upstream_shape() {
+    let own = address(1, None);
+    let key = secret(1);
+    insta::assert_snapshot!(
+        ClientFrame::client_details("4.0.2", WalletMode::Listener).to_json().unwrap(),
+        @r#"{"type":"ClientDetails","wallet_version":"4.0.2","wallet_mode":"listener","protocol_version":"3.0.0"}"#
+    );
+    insta::assert_snapshot!(
+        ClientFrame::client_details("4.0.2", WalletMode::Send).to_json().unwrap(),
+        @r#"{"type":"ClientDetails","wallet_version":"4.0.2","wallet_mode":"send","protocol_version":"3.0.0"}"#
+    );
+    insta::assert_snapshot!(
+        ClientFrame::subscribe(&own, "7WUDtkSaKyGRUnQ22rE3QUXChV8DmA6NnunDYP4vheTpc", &key)
+            .unwrap()
+            .to_json()
+            .unwrap(),
+        @r#"{"type":"Subscribe","address":"esYTimgooNuxKXdEEXJk3fbXoy2HWyyY2CaRXYU8Z8B7fSPyz6YL","ver":"3.0.0","signature":"304402207aa124804523b62e52206f7711254c8756e6780a124b504d106c3b68b6b2864e02207dc6396ecf47517cdffa1a3932325dfe2b8dbcda563611097b3d407bbcb4bda2"}"#
+    );
+    insta::assert_snapshot!(
+        ClientFrame::made(&address(2, None), "Rk4pW7nZ2cT9sLb3XyQ6vH1mJ8dG5fUa", &secret(2))
+            .unwrap()
+            .to_json()
+            .unwrap(),
+        @r#"{"type":"Made","address":"esWtu4BwqC58U5YtffP4sVJ7SWV88uYdn3okpEdiv1dFHnYMh6oj","signature":"30440220112df76ccb6a023902de1757ea950f206486bbb49971a485e115f5040ce9de0702207d8e1bf6aa61e42001c7b12d4ce497518a34fdec52bacbfa01e630a521e202a7","ver":"3.0.0","epicboxmsgid":"Rk4pW7nZ2cT9sLb3XyQ6vH1mJ8dG5fUa"}"#
+    );
+    insta::assert_snapshot!(
+        ClientFrame::unsubscribe(&own).to_json().unwrap(),
+        @r#"{"type":"Unsubscribe","address":"esYTimgooNuxKXdEEXJk3fbXoy2HWyyY2CaRXYU8Z8B7fSPyz6YL"}"#
+    );
+    insta::assert_snapshot!(
+        ClientFrame::GetVersion.to_json().unwrap(),
+        @r#"{"type":"GetVersion"}"#
+    );
+}
+
+#[test]
+fn post_slate_carries_display_addresses_and_the_signature_over_str() {
+    let from = address(1, None);
+    let to = address(2, Some(13420));
+    let message = SignedMessage::seal(
+        "{}",
+        &to,
+        &secret(1),
+        Salt::from([1; 8]),
+        Nonce::from([2; 12]),
+    )
+    .unwrap();
+    let ClientFrame::PostSlate {
+        from: from_text,
+        to: to_text,
+        str,
+        signature,
+    } = ClientFrame::post_slate(&from, &to, &message)
+    else {
+        panic!("not a PostSlate frame");
+    };
+    assert_eq!(from_text, from.to_string());
+    assert_eq!(to_text, to.to_string());
+    assert!(to_text.ends_with(":13420"));
+    assert_eq!(str, message.str);
+    let signature = EcdsaSignature::from_der_hex(&signature).unwrap();
+    assert_eq!(verify_text(&str, &signature, from.public_key()), Ok(()));
+}
+
+#[test]
+fn decodes_every_relay_frame_the_public_relay_sends() {
+    assert_eq!(
+        relay(r#"{"type":"Challenge","str":"abc"}"#),
+        RelayFrame::Challenge {
+            str: "abc".to_owned()
+        }
+    );
+    assert_eq!(relay(r#"{"type":"Ok"}"#), RelayFrame::Ok);
+    assert_eq!(
+        relay(r#"{"type":"Error","kind":"InvalidSignature","description":"Invalid signature."}"#),
+        RelayFrame::Error {
+            kind: RelayErrorKind::InvalidSignature,
+            description: "Invalid signature.".to_owned()
+        }
+    );
+    assert_eq!(
+        relay(r#"{"type":"GetVersion","str":"3.0.0"}"#),
+        RelayFrame::GetVersion {
+            str: "3.0.0".to_owned()
+        }
+    );
+    assert_eq!(
+        relay(
+            r#"{"type":"Slate","from":"a@b","str":"{}","signature":"30","challenge":"","epicboxmsgid":"id1","ver":"3.0.0"}"#
+        ),
+        RelayFrame::Slate(SlateFrame {
+            from: "a@b".to_owned(),
+            str: "{}".to_owned(),
+            signature: "30".to_owned(),
+            challenge: String::new(),
+            epicboxmsgid: Some("id1".to_owned()),
+            ver: Some(PROTOCOL_VERSION.to_owned()),
+        })
+    );
+}
+
+#[test]
+fn decodes_slate_without_message_id_from_an_unversioned_subscription() {
+    let RelayFrame::Slate(slate) =
+        relay(r#"{"type":"Slate","from":"a","str":"s","signature":"30","challenge":"c"}"#)
+    else {
+        panic!("not a Slate frame");
+    };
+    assert_eq!(slate.epicboxmsgid, None);
+    assert_eq!(slate.ver, None);
+}
+
+#[test]
+fn keeps_error_kinds_it_does_not_know() {
+    assert_eq!(
+        relay(r#"{"type":"Error","kind":"RateLimited","description":""}"#),
+        RelayFrame::Error {
+            kind: RelayErrorKind::Other("RateLimited".to_owned()),
+            description: String::new()
+        }
+    );
+}
+
+#[test]
+fn ignores_unknown_fields() {
+    assert_eq!(relay(r#"{"type":"Ok","extra":1}"#), RelayFrame::Ok);
+    assert_eq!(
+        relay(r#"{"type":"Challenge","str":"c","extra":[1,2]}"#),
+        RelayFrame::Challenge {
+            str: "c".to_owned()
+        }
+    );
+}
+
+#[test]
+fn tolerates_unknown_frame_types() {
+    assert_eq!(
+        relay(r#"{"type":"Stats","clients":4}"#),
+        RelayFrame::Unknown {
+            type_name: "Stats".to_owned()
+        }
+    );
+}
+
+#[test]
+fn tolerates_non_json_keepalive_text() {
+    for text in ["pong", "ping", "", "  pong\n", "[1]", "42"] {
+        assert_eq!(relay(text), RelayFrame::Keepalive, "{text:?}");
+    }
+}
+
+#[test]
+fn rejects_truncated_json_object() {
+    assert!(matches!(
+        RelayFrame::from_json(r#"{"type":"Challenge""#),
+        Err(FrameError::Json(_))
+    ));
+}
+
+#[test]
+fn rejects_object_without_a_string_type() {
+    for text in [r#"{"str":"c"}"#, r#"{"type":5}"#, r#"{"type":null}"#] {
+        assert!(
+            matches!(RelayFrame::from_json(text), Err(FrameError::MissingType)),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn rejects_known_type_with_missing_fields() {
+    assert!(matches!(
+        RelayFrame::from_json(r#"{"type":"Challenge"}"#),
+        Err(FrameError::Fields { type_name, .. }) if type_name == "Challenge"
+    ));
+    assert!(matches!(
+        RelayFrame::from_json(r#"{"type":"Slate","from":"a","str":"s","signature":"30"}"#),
+        Err(FrameError::Fields { type_name, .. }) if type_name == "Slate"
+    ));
+}
+
+#[test]
+fn rejects_known_type_with_mistyped_fields() {
+    assert!(matches!(
+        RelayFrame::from_json(r#"{"type":"Challenge","str":7}"#),
+        Err(FrameError::Fields { .. })
+    ));
+    assert!(matches!(
+        RelayFrame::from_json(
+            r#"{"type":"Slate","from":"a","str":"s","signature":"30","challenge":"","epicboxmsgid":1}"#
+        ),
+        Err(FrameError::Fields { .. })
+    ));
+}
+
+#[test]
+fn rejects_frame_over_the_length_limit_before_parsing() {
+    let text = format!(
+        "{{\"type\":\"Challenge\",\"str\":\"{}\"}}",
+        "a".repeat(MAX_FRAME_LEN)
+    );
+    assert!(matches!(
+        RelayFrame::from_json(&text),
+        Err(FrameError::TooLong {
+            max: MAX_FRAME_LEN,
+            ..
+        })
+    ));
+    assert!(matches!(
+        RelayFrame::from_json(&"p".repeat(MAX_FRAME_LEN + 1)),
+        Err(FrameError::TooLong { .. })
+    ));
+    assert!(matches!(
+        ClientFrame::from_json(&text),
+        Err(FrameError::TooLong { .. })
+    ));
+}
+
+#[test]
+fn relay_side_rejects_unknown_client_frame_types() {
+    assert!(matches!(
+        ClientFrame::from_json(r#"{"type":"Shutdown"}"#),
+        Err(FrameError::UnknownClientType(_))
+    ));
+    assert!(matches!(
+        ClientFrame::from_json("pong"),
+        Err(FrameError::Json(_))
+    ));
+}
+
+#[test]
+fn relay_side_rejects_unknown_wallet_mode() {
+    assert!(matches!(
+        ClientFrame::from_json(
+            r#"{"type":"ClientDetails","wallet_version":"1","wallet_mode":"miner","protocol_version":"3.0.0"}"#
+        ),
+        Err(FrameError::UnknownClientType(_))
+    ));
+}
+
+fn wire_text() -> impl Strategy<Value = String> {
+    any::<String>()
+}
+
+fn relay_frame() -> impl Strategy<Value = RelayFrame> {
+    let kind = prop_oneof![
+        Just(RelayErrorKind::UnknownError),
+        Just(RelayErrorKind::InvalidRequest),
+        Just(RelayErrorKind::InvalidSignature),
+        Just(RelayErrorKind::InvalidChallenge),
+        Just(RelayErrorKind::TooManySubscriptions),
+        "[a-z]{1,8}".prop_map(RelayErrorKind::Other),
+    ];
+    prop_oneof![
+        wire_text().prop_map(|str| RelayFrame::Challenge { str }),
+        Just(RelayFrame::Ok),
+        (kind, wire_text()).prop_map(|(kind, description)| RelayFrame::Error { kind, description }),
+        (
+            wire_text(),
+            wire_text(),
+            wire_text(),
+            wire_text(),
+            proptest::option::of(wire_text()),
+            proptest::option::of(wire_text()),
+        )
+            .prop_map(|(from, str, signature, challenge, epicboxmsgid, ver)| {
+                RelayFrame::Slate(SlateFrame {
+                    from,
+                    str,
+                    signature,
+                    challenge,
+                    epicboxmsgid,
+                    ver,
+                })
+            }),
+        wire_text().prop_map(|str| RelayFrame::GetVersion { str }),
+    ]
+}
+
+fn client_frame() -> impl Strategy<Value = ClientFrame> {
+    let mode = prop_oneof![Just(WalletMode::Listener), Just(WalletMode::Send)];
+    prop_oneof![
+        (wire_text(), mode, wire_text()).prop_map(
+            |(wallet_version, wallet_mode, protocol_version)| ClientFrame::ClientDetails {
+                wallet_version,
+                wallet_mode,
+                protocol_version,
+            }
+        ),
+        (wire_text(), wire_text(), wire_text()).prop_map(|(address, ver, signature)| {
+            ClientFrame::Subscribe {
+                address,
+                ver,
+                signature,
+            }
+        }),
+        (wire_text(), wire_text(), wire_text(), wire_text()).prop_map(
+            |(from, to, str, signature)| ClientFrame::PostSlate {
+                from,
+                to,
+                str,
+                signature,
+            }
+        ),
+        (wire_text(), wire_text(), wire_text(), wire_text()).prop_map(
+            |(address, signature, ver, epicboxmsgid)| ClientFrame::Made {
+                address,
+                signature,
+                ver,
+                epicboxmsgid,
+            }
+        ),
+        wire_text().prop_map(|address| ClientFrame::Unsubscribe { address }),
+        Just(ClientFrame::GetVersion),
+    ]
+}
+
+proptest! {
+    #[test]
+    fn relay_frames_round_trip(frame in relay_frame()) {
+        let text = frame.to_json().unwrap().unwrap();
+        prop_assert_eq!(RelayFrame::from_json(&text).unwrap(), frame);
+    }
+
+    #[test]
+    fn client_frames_round_trip(frame in client_frame()) {
+        let text = frame.to_json().unwrap();
+        prop_assert_eq!(ClientFrame::from_json(&text).unwrap(), frame);
+    }
+
+    #[test]
+    fn relay_decoder_never_panics(text in any::<String>()) {
+        let _ = RelayFrame::from_json(&text);
+    }
+}
