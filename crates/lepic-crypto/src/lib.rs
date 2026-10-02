@@ -3,6 +3,7 @@
 //! Every value is checked when it is constructed, so the wrapper only ever sees well-formed keys,
 //! points and lengths, and every wrapper failure comes back as a [`CryptoError`].
 
+pub mod aggsig;
 mod blinding;
 mod commitment;
 mod context;
