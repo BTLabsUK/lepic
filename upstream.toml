@@ -1,0 +1,233 @@
+# Origin of every LEPIC module that ports upstream behaviour (ADR 0001).
+#
+# One [[module]] per ported LEPIC path. `path` is the module as the plan task
+# names it (a file stem or a directory), `task` is the plan task that ports it.
+# `upstream.paths` are files or directories in `upstream.repo` at
+# `upstream.commit`. `cargo xtask upstream-drift` lists upstream commits that
+# touched those paths since the recorded commit.
+#
+# Supported syntax: comments, [[module]] headers, and `key = "string"` or
+# `key = ["string", ...]` lines; arrays may span lines.
+#
+# Pins are the ADR 0009 commits: epic v4.0.4, epic-wallet v4.0.2.
+
+# Node, epic v4.0.4
+
+[[module]]
+path = "crates/lepic-primitives/src/ser"
+task = "P-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/ser.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/hash"
+task = "P-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/core/hash.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/crypto_ser"
+task = "P-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/ser.rs", "core/src/libtx/secp_ser.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/tx"
+task = "P-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/core/transaction.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/kernel"
+task = "P-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/core/transaction.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/input"
+task = "P-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/core/transaction.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/output"
+task = "P-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/core/transaction.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/fee"
+task = "P-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/libtx/mod.rs", "core/src/consensus.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/amount"
+task = "P-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/consensus.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/params"
+task = "P-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/consensus.rs", "core/src/global.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/committed"
+task = "P-03"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/core/committed.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-primitives/src/validate"
+task = "P-03"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/core/transaction.rs", "core/src/core/committed.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-crypto/src/aggsig"
+task = "C-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/libtx/aggsig.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-keychain/src/mnemonic"
+task = "K-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["keychain/src/mnemonic.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-keychain/src/bip32"
+task = "K-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["keychain/src/extkey_bip32.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-keychain/src/identifier"
+task = "K-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["keychain/src/types.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-keychain/src/keychain"
+task = "K-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["keychain/src/keychain.rs", "keychain/src/types.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-keychain/src/proof"
+task = "K-02"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/libtx/proof.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-node/src/types"
+task = "N-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["api/src/foreign_rpc.rs", "api/src/foreign.rs", "api/src/types.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+# Wallet, epic-wallet v4.0.2
+
+[[module]]
+path = "crates/lepic-keychain/src/address_key"
+task = "K-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/address.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-keychain/src/vault"
+task = "K-03"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["impls/src/lifecycle/seed.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-slate/src/model"
+task = "S-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/slate.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-slate/src/codec/legacy/mod"
+task = "S-02"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/slate_versions/mod.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-slate/src/codec/legacy/fields"
+task = "S-02"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/slate_versions/ser.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-slate/src/codec/legacy/v3_json"
+task = "S-02"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/slate_versions/v3.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-slate/src/codec/legacy/v2_json"
+task = "S-03"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/slate_versions/v2.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-node/src/client"
+task = "N-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["impls/src/node_clients/http.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-transport/src/file"
+task = "T-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["impls/src/adapters/file.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-epicbox/src/address"
+task = "E-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/epicbox_address.rs", "libwallet/src/base58.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-epicbox/src/crypto"
+task = "E-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/crypto.rs", "libwallet/src/message.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-epicbox/src/frame"
+task = "E-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["impls/src/epicbox/protocol.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
