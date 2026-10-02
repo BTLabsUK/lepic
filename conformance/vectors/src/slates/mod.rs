@@ -391,7 +391,9 @@ mod tests {
         let dir = Path::new(DEFAULT_OUT).join(AREA);
         for vector in &vectors {
             let path = dir.join(format!("{}.json", vector.name));
-            assert_eq!(std::fs::read(&path)?, vector.bytes, "{}", path.display());
+            let committed = std::fs::read_to_string(&path)?;
+            let regenerated = String::from_utf8(vector.bytes.clone())?;
+            assert_same_text(&committed, &regenerated, &path);
         }
         let committed = std::fs::read_dir(&dir)?
             .filter_map(Result::ok)
@@ -399,5 +401,29 @@ mod tests {
             .count();
         assert_eq!(committed, vectors.len(), "stale files in {}", dir.display());
         Ok(())
+    }
+
+    /// Reports where the files first differ, with a little context, rather than two whole files
+    /// of escaped JSON.
+    fn assert_same_text(committed: &str, regenerated: &str, path: &Path) {
+        let offset = committed
+            .bytes()
+            .zip(regenerated.bytes())
+            .position(|(left, right)| left != right)
+            .unwrap_or(committed.len().min(regenerated.len()));
+        if offset == committed.len() && offset == regenerated.len() {
+            return;
+        }
+        let window = |text: &str| {
+            let from = offset.saturating_sub(40);
+            let to = offset.saturating_add(40).min(text.len());
+            String::from_utf8_lossy(text.as_bytes().get(from..to).unwrap_or_default()).into_owned()
+        };
+        panic!(
+            "{} differs at byte {offset}\ncommitted:   ...{}...\nregenerated: ...{}...",
+            path.display(),
+            window(committed),
+            window(regenerated)
+        );
     }
 }
