@@ -80,7 +80,8 @@ Where upstream has a test-RNG mode, the generator uses it so that the case becom
 message-signature nonce to `[1; 32]`, draws the transaction offset from `StepRng::new(1234567890, 1)`,
 and derives slate ids from a process-wide counter. The counter makes slate ids depend on how many
 slates the process created before, so the slates generator builds its flows in a fixed order in a
-single process.
+single process. The counter is a `u8` that starts at 0 and becomes the last byte of the id, so one
+process can create at most 256 test-RNG slates; larger case sets are split across processes.
 
 | Area | Task | Class | Notes |
 |---|---|---|---|
