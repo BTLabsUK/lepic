@@ -104,3 +104,15 @@ the kernel serialized at protocol versions 1 and 2, and the kernel hash. The nod
 in the version 1 layout, so `hash` is unkeyed BLAKE2b-256 of `serialized_v1`. The binary layouts
 carry the signature in the wrapper's internal form, which is the compact form with each 32-byte half
 byte-reversed.
+
+### primitives
+
+Binary layouts, unkeyed and keyed BLAKE2b-256, kernel signature messages, weights and fees over a
+count grid, mainnet and floonet chain parameters, weight limits, and valid and invalid transactions
+with the rule each breaks. Files and conventions are in [primitives/README.md](primitives/README.md).
+
+### aggsig
+
+The two-party aggregate-signature flow for a plain and a height-locked kernel, and single-signer
+signatures, each with the verification calls upstream accepts and rejects. The generator is
+`conformance/vectors/src/primitives/aggsig.rs`. Details are in [aggsig/README.md](aggsig/README.md).

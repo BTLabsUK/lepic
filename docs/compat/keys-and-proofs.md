@@ -48,11 +48,17 @@ Derived from the Epic node `v4.0.4` (`keychain/src/{mnemonic,extkey_bip32,keycha
 
 ## Kernels and fees
 
-- Kernel signature message: hash of the feature byte and fee (plain), or feature byte, fee and lock
-  height (height-locked). Confirm the feature byte values and encoding with vectors.
+- Kernel feature bytes: plain 0, coinbase 1, height-locked 2.
+- Kernel signature message: BLAKE2b-256 of the feature byte (coinbase), the feature byte then the fee
+  as u64 big-endian (plain), or the feature byte, fee and lock height, each u64 big-endian
+  (height-locked).
 - Fee = transaction weight times base fee. Base fee is `MILLI_EPIC` = 100,000 base units, where
-  1 EPIC = 100,000,000 base units (`EPIC_BASE`). The weight formula lives in `Transaction::weight`;
-  port it from source and confirm with vectors.
+  1 EPIC = 100,000,000 base units (`EPIC_BASE`). Weight is `max(4 * outputs + kernels - inputs, 1)`,
+  with the subtraction saturating at 0.
+- Block weights: input 1, output 21, kernel 3. The block limit is 40,000 and a transaction may use
+  39,976, the limit less one coinbase output and kernel, on both networks.
+- Vectors: `testdata/vectors/primitives/` (`kernel_features`, `fee_grid`, `chain_params_*`,
+  `weight_limits`).
 - The receiver rejects a transaction whose fee is below the weight-based fee for its actual input,
   output and kernel counts.
 - Offset: the first party to add data generates a random 32-byte offset and subtracts it from its own
