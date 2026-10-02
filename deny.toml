@@ -1,0 +1,61 @@
+# Dependency policy from docs/adr/0010-dependency-policy.md, checked by
+# `cargo deny check`. xtask/src/deps_check.rs mirrors [bans].deny and a test
+# keeps the two lists equal.
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+]
+confidence-threshold = 0.9
+# MPL-2.0 is allowed ahead of need by ADR 0010.
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+  { crate = "randomx", reason = "proof-of-work code, not needed by a wallet" },
+  { crate = "progpow", reason = "proof-of-work code, not needed by a wallet" },
+  { crate = "progpow_cpu", reason = "proof-of-work code, not needed by a wallet" },
+  { crate = "croaring", reason = "chain storage, needs a C++ build" },
+  { crate = "croaring-sys", reason = "chain storage, needs a C++ build" },
+  { crate = "lmdb", reason = "LMDB chain storage" },
+  { crate = "lmdb-sys", reason = "LMDB chain storage" },
+  { crate = "lmdb-zero", reason = "LMDB chain storage" },
+  { crate = "liblmdb-sys", reason = "LMDB chain storage" },
+  { crate = "lmdb-rkv", reason = "LMDB chain storage" },
+  { crate = "lmdb-rkv-sys", reason = "LMDB chain storage" },
+  { crate = "lmdb-master-sys", reason = "LMDB chain storage" },
+  { crate = "openssl", reason = "TLS is rustls with ring" },
+  { crate = "openssl-sys", reason = "TLS is rustls with ring" },
+  { crate = "openssl-src", reason = "TLS is rustls with ring" },
+  { crate = "native-tls", reason = "TLS is rustls with ring" },
+  { crate = "tokio-native-tls", reason = "TLS is rustls with ring" },
+  { crate = "hyper-tls", reason = "TLS is rustls with ring" },
+  { crate = "cmake", reason = "builds need only Rust and a C compiler" },
+  { crate = "bindgen", reason = "builds need only Rust and a C compiler" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/EpicCash/rust-secp256k1-zkp"]
