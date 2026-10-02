@@ -569,9 +569,12 @@ name = "lepic-slate"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "insta",
  "lepic-crypto",
  "lepic-primitives",
  "proptest",
+ "serde",
+ "serde_json",
  "thiserror",
  "uuid",
 ]

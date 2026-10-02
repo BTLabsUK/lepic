@@ -11,10 +11,13 @@ publish.workspace = true
 ed25519-dalek.workspace = true
 lepic-crypto.workspace = true
 lepic-primitives.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 proptest = { workspace = true, features = ["std"] }
 
 [lints]
