@@ -144,8 +144,8 @@ impl Writer for HashWriter {
         SerializationMode::Hash
     }
 
-    // The node hashes with its local protocol version, so version-dependent encodings hash as
-    // version 2 regardless of how they travel.
+    // Writers see version 2 here, the node's local version. A type whose hash encoding differs
+    // from its version 2 encoding, such as kernel features, checks `serialization_mode()`.
     fn protocol_version(&self) -> ProtocolVersion {
         ProtocolVersion::V2
     }
