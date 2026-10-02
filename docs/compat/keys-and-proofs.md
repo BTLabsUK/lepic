@@ -10,21 +10,33 @@ Derived from the Epic node `v4.0.4` (`keychain/src/{mnemonic,extkey_bip32,keycha
 
 - The wallet seed is the BIP39 entropy, not the BIP39 PBKDF2 seed. The mnemonic (12, 15, 18, 21 or
   24 English words) is converted to entropy with its checksum checked, and the entropy is the BIP32
-  input.
+  input. Words are split on any run of whitespace and matched exactly against the English list, so
+  capitalised or Unicode-normalised variants are rejected.
 - Master key: HMAC-SHA512 with key `"IamVoldemort"` over the seed. Left half is the secret key, right
   half the chain code.
 - Child derivation follows BIP32: HMAC-SHA512 keyed by the chain code over the compressed parent
   public key (normal) or `0x00 || secret` (hardened), then the index as u32 big-endian; child secret
   = left half + parent secret.
 - Network affects only the extended-key version bytes: floonet `0x03273A10`/`0x03273E4B`, mainnet
-  `0x033C04A4`/`0x033C08DF`. Derived keys are identical on both networks. Confirm with vectors.
+  `0x033C04A4`/`0x033C08DF`. Derived keys are identical on both networks
+  (`testdata/vectors/keys/derivation_*`).
 
 ## Identifiers and paths
 
-- An identifier is 17 bytes: depth (u8) then four u32 big-endian path components.
+- An identifier is 17 bytes: depth (u8) then four u32 big-endian path components. Only the first
+  `depth` components are derived; a depth above 4 has no derivation upstream and LEPIC rejects it.
+- The parent of an identifier drops one level and zeroes the dropped component; the root is its own
+  parent. Upstream's path text prints hardened components as their raw `u32` value.
 - The default account is `m/0/0` (depth 2). Output keys are `m/0/0/<n>` (depth 3) with `n` taken from
   the stored next-child counter.
 - The Epicbox address key path is in `docs/compat/epicbox.md`.
+
+## Payment-proof key
+
+`epic-wallet` signs payment proofs with an ed25519 key whose 32-byte seed is the Epicbox address
+secret key for the account and derivation index (`libwallet/src/address.rs`, `ed25519_keypair`; used
+from `libwallet/src/internal/tx.rs` and `api_impl/owner.rs`). Its public key is the payment-proof
+address, also shown in onion v3 form. Vectors: `testdata/vectors/keys/address_keys_*`.
 
 ## Switch commitments
 
