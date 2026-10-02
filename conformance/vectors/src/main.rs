@@ -22,6 +22,10 @@ const AREAS: &[Area] = &[
         name: "primitives",
         generate: primitives::generate,
     },
+    Area {
+        name: "aggsig",
+        generate: primitives::generate_aggsig,
+    },
 ];
 
 const SCHEMA: u32 = 1;

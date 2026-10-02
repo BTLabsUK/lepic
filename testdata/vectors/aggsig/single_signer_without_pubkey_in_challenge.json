@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "area": "aggsig",
+  "name": "single_signer_without_pubkey_in_challenge",
+  "generator": "conformance/vectors/aggsig",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "key": "7272727272727272727272727272727272727272727272727272727272727272",
+    "nonce": "7373737373737373737373737373737373737373737373737373737373737373",
+    "text": "lepic plain schnorr",
+    "pubkey_for_e": false
+  },
+  "expected": {
+    "msg": "2361ece646878fbb345cfe7c68f2c0a8fc0d160585acf14fa2b9f1196dcfa208",
+    "pubkey": "03b83130de0d1386592fe7b9f407f5f1ae8f1db91d772e484b3d81df0fa2e88f24",
+    "sig": "d2fc10a654ebc88a996da22b90c9f9e1b4d957d387ff85314c2680f04f68ddd283a952783e8eaad4c55ac761db76f8ed49bff9b2c746b170be3ff4767c1a4b75",
+    "checks": [
+      {
+        "name": "as_signed",
+        "kind": "completed",
+        "sig": "d2fc10a654ebc88a996da22b90c9f9e1b4d957d387ff85314c2680f04f68ddd283a952783e8eaad4c55ac761db76f8ed49bff9b2c746b170be3ff4767c1a4b75",
+        "msg": "2361ece646878fbb345cfe7c68f2c0a8fc0d160585acf14fa2b9f1196dcfa208",
+        "pub_nonce_sum": null,
+        "pubkey": "03b83130de0d1386592fe7b9f407f5f1ae8f1db91d772e484b3d81df0fa2e88f24",
+        "pubkey_sum": null,
+        "valid": true
+      },
+      {
+        "name": "other_message",
+        "kind": "completed",
+        "sig": "d2fc10a654ebc88a996da22b90c9f9e1b4d957d387ff85314c2680f04f68ddd283a952783e8eaad4c55ac761db76f8ed49bff9b2c746b170be3ff4767c1a4b75",
+        "msg": "ac9c14932d76f3d1319d64f1f4e63a6a48f8d048b615d4ef4e9eca22e365821f",
+        "pub_nonce_sum": null,
+        "pubkey": "03b83130de0d1386592fe7b9f407f5f1ae8f1db91d772e484b3d81df0fa2e88f24",
+        "pubkey_sum": null,
+        "valid": false
+      },
+      {
+        "name": "other_key",
+        "kind": "completed",
+        "sig": "d2fc10a654ebc88a996da22b90c9f9e1b4d957d387ff85314c2680f04f68ddd283a952783e8eaad4c55ac761db76f8ed49bff9b2c746b170be3ff4767c1a4b75",
+        "msg": "2361ece646878fbb345cfe7c68f2c0a8fc0d160585acf14fa2b9f1196dcfa208",
+        "pub_nonce_sum": null,
+        "pubkey": "02b9aea0bf6be18d3ed48d1cc3495e9af5e499ad90a84930990ba58b198ee81b5e",
+        "pubkey_sum": null,
+        "valid": false
+      },
+      {
+        "name": "other_challenge_key",
+        "kind": "completed",
+        "sig": "d2fc10a654ebc88a996da22b90c9f9e1b4d957d387ff85314c2680f04f68ddd283a952783e8eaad4c55ac761db76f8ed49bff9b2c746b170be3ff4767c1a4b75",
+        "msg": "2361ece646878fbb345cfe7c68f2c0a8fc0d160585acf14fa2b9f1196dcfa208",
+        "pub_nonce_sum": null,
+        "pubkey": "03b83130de0d1386592fe7b9f407f5f1ae8f1db91d772e484b3d81df0fa2e88f24",
+        "pubkey_sum": "03b83130de0d1386592fe7b9f407f5f1ae8f1db91d772e484b3d81df0fa2e88f24",
+        "valid": false
+      }
+    ]
+  }
+}

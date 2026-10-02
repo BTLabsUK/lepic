@@ -1,7 +1,8 @@
-//! Primitives area: binary layouts, hashes, kernel signature messages, weights, fees, chain
-//! parameters and transaction validation outcomes, computed by the node code with fixed keys and
-//! nonces so every file regenerates byte for byte.
+//! Primitives and aggsig areas: binary layouts, hashes, kernel signature messages, weights, fees,
+//! chain parameters, transaction validation outcomes and the two-party signature flow, computed by
+//! the node code with fixed keys and nonces so every file regenerates byte for byte.
 
+mod aggsig;
 mod build;
 mod chain;
 mod fixtures;
@@ -15,6 +16,7 @@ use epic_core::global::{self, ChainTypes};
 use crate::{Error, Pins, Rendered};
 
 const AREA: &str = "primitives";
+const AGGSIG_AREA: &str = "aggsig";
 
 pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     // Weight limits read the process-wide chain type; every case except the per-network ones
@@ -26,6 +28,11 @@ pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     rendered.extend(chain::generate(pins)?);
     rendered.extend(validate::generate(pins)?);
     Ok(rendered)
+}
+
+pub(crate) fn generate_aggsig(pins: &Pins) -> Result<Vec<Rendered>, Error> {
+    global::set_mining_mode(ChainTypes::Mainnet);
+    aggsig::generate(pins)
 }
 
 #[cfg(test)]
@@ -63,5 +70,12 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let pins = Pins::from_lockfile(LOCKFILE)?;
         assert_matches_committed(AREA, generate(&pins)?)
+    }
+
+    #[test]
+    fn regenerated_aggsig_vectors_match_committed_files() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let pins = Pins::from_lockfile(LOCKFILE)?;
+        assert_matches_committed(AGGSIG_AREA, generate_aggsig(&pins)?)
     }
 }
