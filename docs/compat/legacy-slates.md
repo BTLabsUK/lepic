@@ -94,7 +94,8 @@ signs (I2), issuer finalizes (I3).
 ## Checks LEPIC performs on decode
 
 Exact hex lengths, valid curve points and signatures, range proof size within the Bulletproof maximum,
-`num_participants > 0`, participant count not above `num_participants`, ids below `num_participants`,
+`num_participants` equal to 2 (upstream accepts any value but only creates 2; see
+`malformed_num_participants_zero`), participant count not above `num_participants`, ids below `num_participants`,
 no duplicate ids, exactly one kernel, fees consistent between slate, kernel and transaction, fee not
 below the weight-based minimum. These are LEPIC's own rules and stricter than upstream's parse step.
 Any slate `epic-wallet` emits must still decode; the vectors prove it.
