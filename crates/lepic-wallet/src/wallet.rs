@@ -4,7 +4,7 @@ use lepic_keychain::{Seed, WalletSeedError, WalletSeedFile};
 use lepic_node::NodeApi;
 use lepic_store::WalletStore;
 use tokio::sync::broadcast;
-use tracing::{info, instrument};
+use tracing::{Dispatch, Span, debug, dispatcher, info, instrument};
 
 use crate::account::{self, Account, AccountLabel};
 use crate::config::{ConfigError, WalletConfig};
@@ -127,11 +127,14 @@ where
         let file = WalletSeedFile::parse(file).map_err(WalletError::WalletSeedFile)?;
         let seed = self
             .blocking(move |_, _| {
-                file.decrypt(file_password.expose_bytes())
-                    .map_err(|error| match error {
-                        WalletSeedError::Decryption => WalletError::WrongPassword,
-                        other => WalletError::WalletSeedFile(other),
-                    })
+                let seed =
+                    file.decrypt(file_password.expose_bytes())
+                        .map_err(|error| match error {
+                            WalletSeedError::Decryption => WalletError::WrongPassword,
+                            other => WalletError::WalletSeedFile(other),
+                        })?;
+                debug!("wallet.seed decrypted");
+                Ok(seed)
             })
             .await?;
         self.install_new(password, seed, SeedSource::Recovered)
@@ -267,7 +270,9 @@ where
     }
 
     /// Runs key derivation and database work on the runtime's blocking pool, so an async host
-    /// is never stalled by Argon2 or disk access.
+    /// is never stalled by Argon2 or disk access. The work runs under the caller's subscriber
+    /// and inside the operation's span, so what it logs is attributed and filtered like the rest
+    /// of the operation.
     async fn blocking<T, F>(&self, work: F) -> Result<T, WalletError>
     where
         T: Send + 'static,
@@ -275,9 +280,13 @@ where
     {
         let ports = Arc::clone(&self.ports);
         let config = Arc::clone(&self.config);
+        let span = Span::current();
+        let dispatch = dispatcher::get_default(Dispatch::clone);
         self.ports
             .runtime
-            .spawn_blocking(move || work(&ports, &config))
+            .spawn_blocking(move || {
+                dispatcher::with_default(&dispatch, || span.in_scope(|| work(&ports, &config)))
+            })
             .await
             .map_err(WalletError::Task)?
     }

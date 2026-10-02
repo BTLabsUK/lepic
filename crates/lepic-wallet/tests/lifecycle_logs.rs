@@ -10,7 +10,10 @@ mod support;
 
 use std::path::PathBuf;
 
-use lepic_keychain::Seed;
+use blake2::Blake2bMac;
+use blake2::digest::consts::U32;
+use blake2::digest::{FixedOutput, KeyInit, Update};
+use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_primitives::params::Network;
 use lepic_telemetry::{assert_no_secrets, capture};
 use lepic_wallet::WordCount;
@@ -18,6 +21,29 @@ use support::{Harness, TestVault, WALLET_SEED_VECTOR, password, vector_text};
 
 const PASSWORD: &str = "correct horse battery staple";
 const WRONG_PASSWORD: &str = "incorrect horse";
+
+/// Key material derived from a seed that must never be logged: the database context key (as
+/// `lifecycle::context_key` derives it), the master key and chain code, and the first output key
+/// of the default account.
+fn derived_secrets(seed: &Seed) -> Vec<Vec<u8>> {
+    let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).unwrap();
+    mac.update(b"lepic-wallet private context key v1");
+    let context_key: [u8; 32] = mac.finalize_fixed().into();
+    let keychain = Keychain::from_seed(seed, ExtKeyVersion::MAINNET).unwrap();
+    let output_key = keychain
+        .derive_key(
+            0,
+            &Identifier::new(3, [0, 0, 0, 0]).unwrap(),
+            SwitchCommitment::None,
+        )
+        .unwrap();
+    vec![
+        context_key.to_vec(),
+        keychain.master().secret_key().expose_bytes().to_vec(),
+        keychain.master().chain_code().expose_bytes().to_vec(),
+        output_key.expose_bytes().to_vec(),
+    ]
+}
 
 #[test]
 fn lifecycle_operations_run_in_named_spans_and_never_log_secrets() {
@@ -82,6 +108,11 @@ fn lifecycle_operations_run_in_named_spans_and_never_log_secrets() {
         created_seed.expose_bytes(),
         vector_seed.expose_bytes(),
     ];
+    let derived: Vec<Vec<u8>> = [&created_seed, &vector_seed]
+        .into_iter()
+        .flat_map(derived_secrets)
+        .collect();
+    secrets.extend(derived.iter().map(Vec::as_slice));
     let created_words: Vec<&str> = phrase.expose().split(' ').collect();
     let vector_words = phrase_text.clone();
     let vector_words: Vec<&str> = vector_words.split(' ').collect();
@@ -108,6 +139,14 @@ fn lifecycle_operations_run_in_named_spans_and_never_log_secrets() {
         ("wallet closed", "close"),
         ("wallet imported", "import_wallet_seed"),
         ("wallet restored", "restore"),
+        // Logged on the blocking pool, which must keep the operation's span and subscriber.
+        ("secret storage created", "create"),
+        ("wallet database prepared", "create"),
+        ("secret storage unlocked", "open"),
+        ("wallet database prepared", "open"),
+        ("wallet.seed decrypted", "import_wallet_seed"),
+        ("wallet database prepared", "import_wallet_seed"),
+        ("wallet database prepared", "restore"),
     ] {
         assert!(
             messages

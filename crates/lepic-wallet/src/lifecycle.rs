@@ -12,7 +12,8 @@ use lepic_keychain::{ExtKeyVersion, Keychain, SecretBytes, SecretStore, Seed};
 use lepic_primitives::params::Network;
 use lepic_store::{CONTEXT_KEY_LEN, ContextKey, Repositories, WalletStore};
 use rand_core::CryptoRng;
-use zeroize::{Zeroize, Zeroizing};
+use tracing::debug;
+use zeroize::Zeroizing;
 
 use crate::account::ensure_default_account;
 use crate::error::WalletError;
@@ -157,7 +158,9 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     }
     let mut vault = secrets.create(password)?;
     vault.put(&seed_name()?, &SecretBytes::from_slice(seed.expose_bytes()))?;
+    debug!("secret storage created");
     store.write(|repos| initialise(repos, target.network, &fingerprint))?;
+    debug!("wallet database prepared");
     Ok(Session { keychain, store })
 }
 
@@ -169,6 +172,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     password: &Password,
 ) -> Result<Session<S::Store>, WalletError> {
     let vault = secrets.unlock(password)?;
+    debug!("secret storage unlocked");
     let stored = vault.get(&seed_name()?)?.ok_or(WalletError::NoWallet)?;
     let seed = Seed::from_entropy(stored.expose_bytes()).map_err(WalletError::StoredSeed)?;
     let keychain = Keychain::from_seed(&seed, ext_key_version(target.network))?;
@@ -179,6 +183,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
         stored_identity(repos, target.network, &fingerprint)?;
         initialise(repos, target.network, &fingerprint)
     })?;
+    debug!("wallet database prepared");
     Ok(Session { keychain, store })
 }
 
@@ -246,6 +251,11 @@ fn fingerprint(keychain: &Keychain) -> Result<String, WalletError> {
 /// Keyed BLAKE2b of a domain string under the seed: the same seed always opens its database,
 /// and the key reveals nothing about the seed.
 fn context_key(seed: &Seed) -> Result<ContextKey, WalletError> {
+    let bytes = context_key_bytes(seed)?;
+    Ok(ContextKey::from_bytes(*bytes))
+}
+
+fn context_key_bytes(seed: &Seed) -> Result<Zeroizing<[u8; CONTEXT_KEY_LEN]>, WalletError> {
     let mut mac =
         <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).map_err(|_| {
             WalletError::StoredSeed(lepic_keychain::MnemonicError::EntropyLength {
@@ -253,11 +263,9 @@ fn context_key(seed: &Seed) -> Result<ContextKey, WalletError> {
             })
         })?;
     mac.update(CONTEXT_KEY_DOMAIN);
-    let mut key = [0u8; CONTEXT_KEY_LEN];
-    mac.finalize_into((&mut key).into());
-    let context_key = ContextKey::from_bytes(key);
-    key.zeroize();
-    Ok(context_key)
+    let mut key = Zeroizing::new([0u8; CONTEXT_KEY_LEN]);
+    mac.finalize_into((&mut *key).into());
+    Ok(key)
 }
 
 #[cfg(test)]
@@ -318,5 +326,16 @@ mod tests {
             .collect();
         assert_eq!(fingerprint(&first).unwrap(), expected);
         assert_ne!(fingerprint(&first).unwrap(), fingerprint(&second).unwrap());
+    }
+
+    /// `tests/lifecycle_logs.rs` recomputes the context key from this formula to check that it
+    /// is never logged; this test keeps the two in step.
+    #[test]
+    fn context_key_is_keyed_blake2b_of_the_domain_under_the_seed() {
+        let seed = Seed::from_entropy(&[5; 32]).unwrap();
+        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(&[5; 32]).unwrap();
+        mac.update(b"lepic-wallet private context key v1");
+        let expected: [u8; 32] = mac.finalize_fixed().into();
+        assert_eq!(*context_key_bytes(&seed).unwrap(), expected);
     }
 }
