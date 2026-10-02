@@ -197,6 +197,7 @@ impl TransactionBody {
         if weight > MAX_BLOCK_WEIGHT {
             return Err(SerError::TooLarge {
                 len: weight,
+                // Only reported in the error; the comparison above is in u64.
                 max: usize::try_from(MAX_BLOCK_WEIGHT).unwrap_or(usize::MAX),
             }
             .into());
