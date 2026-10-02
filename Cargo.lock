@@ -230,9 +230,11 @@ name = "lepic-primitives"
 version = "0.1.0"
 dependencies = [
  "blake2",
+ "lepic-crypto",
  "proptest",
  "serde_json",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

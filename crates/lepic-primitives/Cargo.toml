@@ -9,7 +9,9 @@ publish.workspace = true
 
 [dependencies]
 blake2.workspace = true
+lepic-crypto.workspace = true
 thiserror.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["std"] }
