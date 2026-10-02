@@ -13,7 +13,7 @@ generator's own test (`cargo test -p vectors` in `conformance/`) fails if they d
 - `serialized_v1` and `serialized_v2` are the binary layouts at protocol versions 1 and 2. They
   differ only in kernel features: version 1 always writes fee and lock height, version 2 only the
   fields the variant has. The node's local protocol version is 2.
-- Hashes are unkeyed BLAKE2b-256. A kernel always hashes its version 1 layout; an output hashes
+- Hashes are unkeyed BLAKE2b-256 except in `hash_bytes_keyed`. A kernel always hashes its version 1 layout; an output hashes
   features and commitment, not its proof.
 - In JSON forms, signatures are the 64-byte compact form. Binary layouts carry the wrapper's
   internal form, which is the compact form with each 32-byte half byte-reversed.
@@ -31,6 +31,7 @@ generator's own test (`cargo test -p vectors` in `conformance/`) fails if they d
 | `ser_composites` | Tuples (written field after field, no prefix) and `ProtocolVersion` (u32). |
 | `ser_truncated_reads` | Reading integers from too few bytes. |
 | `hash_bytes` | BLAKE2b-256 of raw byte strings around the 128-byte block size. |
+| `hash_bytes_keyed` | Keyed BLAKE2b-256 through `blake2-rfc` 0.2.18, the crate and version the node pins, for keys of 0, 1, 32, 33 and 64 bytes. The empty key gives the unkeyed hash. |
 | `hash_values` | `Hashed::hash` of u8, u64, tuples and hashes, with the preimage. |
 | `hash_operations` | `ZERO_HASH`, `Hash + Hash` (hash of the two concatenated), `Hash::to_u64`. |
 | `crypto_types` | Commitment, blinding factor, public key, signature and range proof, JSON and binary forms. |

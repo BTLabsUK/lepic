@@ -1,5 +1,5 @@
-//! Unkeyed BLAKE2b-256 as the node's `Hashed` trait computes it: over raw bytes, and over the
-//! serialization of typed values.
+//! BLAKE2b-256 as the node computes it: unkeyed through the `Hashed` trait, over raw bytes and over
+//! the serialization of typed values, and keyed as the proof nonces use it.
 
 use epic_core::core::hash::{Hash, Hashed, ZERO_HASH};
 use epic_core::ser::{self, ProtocolVersion, Writeable};
@@ -88,6 +88,34 @@ fn value_hashes() -> Result<Vec<ValueHash>, Error> {
 }
 
 #[derive(Serialize)]
+struct KeyedHash {
+    key: String,
+    data: String,
+    hash: String,
+}
+
+/// Keyed BLAKE2b-256 through `blake2-rfc`, the call the node makes for proof nonces
+/// (`blake2b(32, key, data)`). The empty key is the unkeyed hash; 64 bytes is the longest key
+/// BLAKE2b accepts.
+fn keyed_hashes() -> Vec<KeyedHash> {
+    let keys =
+        [0usize, 1, 32, 33, 64].map(|len| pattern(len).into_iter().rev().collect::<Vec<u8>>());
+    let data_lengths = [0usize, 1, 32, 128, 129];
+    keys.iter()
+        .flat_map(|key| {
+            data_lengths.iter().map(move |&len| {
+                let data = pattern(len);
+                KeyedHash {
+                    hash: hex(blake2_rfc::blake2b::blake2b(32, key, &data)),
+                    key: hex(key),
+                    data: hex(data),
+                }
+            })
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
 struct HashOps {
     zero_hash: String,
     /// `Hash + Hash` hashes the two 32-byte values concatenated.
@@ -124,6 +152,15 @@ pub(super) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
             NoInputs {},
             Cases {
                 cases: value_hashes()?,
+            },
+        )?,
+        render(
+            AREA,
+            "hash_bytes_keyed",
+            &pins.node,
+            NoInputs {},
+            Cases {
+                cases: keyed_hashes(),
             },
         )?,
         render(AREA, "hash_operations", &pins.node, NoInputs {}, hash_ops())?,
