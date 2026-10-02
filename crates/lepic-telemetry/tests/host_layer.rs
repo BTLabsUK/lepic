@@ -63,7 +63,7 @@ fn host_sink_receives_every_field_of_event_and_spans() {
         tracing::warn!(
             target: "lepic_epicbox",
             attempt = 2_i64,
-            subscribed = true,
+            transport = "epicbox",
             stage = ?Stage::S2,
             error = &error as &(dyn Error + 'static),
             "epicbox reconnected"
@@ -82,7 +82,7 @@ fn host_sink_receives_every_field_of_event_and_spans() {
                 ("tx_id", "9".to_owned()),
                 ("relay", "relay.example".to_owned()),
                 ("attempt", "2".to_owned()),
-                ("subscribed", "true".to_owned()),
+                ("transport", "epicbox".to_owned()),
                 ("stage", "S2".to_owned()),
                 ("error", "finalize failed: node unreachable".to_owned()),
             ],
