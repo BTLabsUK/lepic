@@ -1,0 +1,11 @@
+[package]
+name = "lepic-store"
+description = "SQLite wallet storage behind repository traits."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

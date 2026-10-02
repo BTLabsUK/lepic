@@ -1,0 +1,11 @@
+[package]
+name = "lepic-crypto"
+description = "Safe boundary over the secp256k1-zkp wrapper for commitments, proofs and signatures."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "lepic-cli"
+description = "The lepic command-line wallet."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "lepic"
+path = "src/main.rs"
+
+[lints]
+workspace = true
