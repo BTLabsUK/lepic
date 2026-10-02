@@ -797,6 +797,24 @@ dependencies = [
 [[package]]
 name = "lepic-wallet"
 version = "0.1.0"
+dependencies = [
+ "blake2",
+ "jiff",
+ "lepic-keychain",
+ "lepic-node",
+ "lepic-primitives",
+ "lepic-store",
+ "lepic-telemetry",
+ "lepic-transport",
+ "rand 0.10.3",
+ "rand_core 0.10.1",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
 
 [[package]]
 name = "libc"

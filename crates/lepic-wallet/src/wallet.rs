@@ -1,0 +1,300 @@
+use std::sync::{Arc, PoisonError, RwLock};
+
+use lepic_keychain::{Seed, WalletSeedError, WalletSeedFile};
+use lepic_node::NodeApi;
+use lepic_store::WalletStore;
+use tokio::sync::broadcast;
+use tracing::{info, instrument};
+
+use crate::account::{self, Account, AccountLabel};
+use crate::config::{ConfigError, WalletConfig};
+use crate::error::WalletError;
+use crate::event::{EVENT_CAPACITY, Event, SessionState};
+use crate::lifecycle::{
+    self, Password, RecoveryPhrase, SeedSource, Session, Target, WordCount, generate_seed,
+    recovery_phrase,
+};
+use crate::ports::{Ports, SecretVault, StoreOpener};
+
+/// One wallet: its configuration, the ports it runs on and, while unlocked, its root key and
+/// open database.
+///
+/// A new handle is locked. [`Wallet::create`], [`Wallet::restore`],
+/// [`Wallet::import_wallet_seed`] and [`Wallet::open`] unlock it; [`Wallet::lock`] drops the
+/// root key and closes the database again.
+pub struct Wallet<N, S: StoreOpener, V> {
+    config: Arc<WalletConfig>,
+    ports: Arc<Ports<N, S, V>>,
+    session: RwLock<Option<Arc<Session<S::Store>>>>,
+    events: broadcast::Sender<Event>,
+}
+
+impl<N, S, V> Wallet<N, S, V>
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    /// A locked handle. Fails with [`WalletError::Config`] when the configuration names a
+    /// transport the registry does not hold.
+    pub fn new(config: WalletConfig, ports: Ports<N, S, V>) -> Result<Self, WalletError> {
+        if let Some(&transport) = config
+            .transports
+            .iter()
+            .find(|&&id| ports.transports.get(id).is_none())
+        {
+            return Err(ConfigError::UnknownTransport { transport }.into());
+        }
+        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        Ok(Self {
+            config: Arc::new(config),
+            ports: Arc::new(ports),
+            session: RwLock::new(None),
+            events,
+        })
+    }
+
+    pub fn config(&self) -> &WalletConfig {
+        &self.config
+    }
+
+    pub fn ports(&self) -> &Ports<N, S, V> {
+        &self.ports
+    }
+
+    /// Events from now on. See [`crate::event`] for what a slow subscriber misses.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.events.subscribe()
+    }
+
+    pub fn is_unlocked(&self) -> bool {
+        self.session
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    /// Creates a wallet from new entropy, stores its seed under `password` and unlocks it.
+    /// Returns the recovery phrase, which the user must write down; it is not shown again.
+    ///
+    /// Fails with [`WalletError::WalletExists`] when the secret storage already holds a wallet,
+    /// and with [`WalletError::ForeignDatabase`] when the data directory holds another wallet's
+    /// database. Neither failure changes anything.
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub async fn create(
+        &self,
+        password: Password,
+        words: WordCount,
+    ) -> Result<RecoveryPhrase, WalletError> {
+        self.ensure_locked()?;
+        let seed = generate_seed(&mut **self.ports.rng.lock(), words)?;
+        let phrase = recovery_phrase(&seed)?;
+        self.install_new(password, seed, SeedSource::Generated)
+            .await?;
+        info!("wallet created");
+        Ok(phrase)
+    }
+
+    /// Recreates a wallet from its recovery phrase and unlocks it. Outputs on chain are found
+    /// by a later scan. A data directory that already holds this wallet's database is reused.
+    ///
+    /// Fails with [`WalletError::Mnemonic`] for a phrase that is not valid BIP39 English, and
+    /// otherwise as [`Wallet::create`] does.
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub async fn restore(&self, password: Password, phrase: &str) -> Result<(), WalletError> {
+        self.ensure_locked()?;
+        let seed = Seed::from_mnemonic(phrase).map_err(WalletError::Mnemonic)?;
+        self.install_new(password, seed, SeedSource::Recovered)
+            .await?;
+        info!("wallet restored");
+        Ok(())
+    }
+
+    /// Recreates a wallet from the text of an `epic-wallet` `wallet.seed` file, decrypted with
+    /// `file_password`, stores the seed under `password` and unlocks it. The file is only read.
+    ///
+    /// Fails with [`WalletError::WrongPassword`] when the file does not decrypt, with
+    /// [`WalletError::WalletSeedFile`] when it is malformed, and otherwise as
+    /// [`Wallet::restore`] does.
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub async fn import_wallet_seed(
+        &self,
+        password: Password,
+        file: &str,
+        file_password: Password,
+    ) -> Result<(), WalletError> {
+        self.ensure_locked()?;
+        let file = WalletSeedFile::parse(file).map_err(WalletError::WalletSeedFile)?;
+        let seed = self
+            .blocking(move |_, _| {
+                file.decrypt(file_password.expose_bytes())
+                    .map_err(|error| match error {
+                        WalletSeedError::Decryption => WalletError::WrongPassword,
+                        other => WalletError::WalletSeedFile(other),
+                    })
+            })
+            .await?;
+        self.install_new(password, seed, SeedSource::Recovered)
+            .await?;
+        info!("wallet imported");
+        Ok(())
+    }
+
+    /// Unlocks an existing wallet with its password.
+    ///
+    /// Fails with [`WalletError::WrongPassword`], [`WalletError::NoWallet`] when the secret
+    /// storage holds no wallet, [`WalletError::AlreadyOpen`], or
+    /// [`WalletError::NetworkMismatch`] and [`WalletError::ForeignDatabase`] when the database
+    /// in the data directory is not this wallet's.
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub async fn open(&self, password: Password) -> Result<(), WalletError> {
+        self.ensure_locked()?;
+        let session = self
+            .blocking(move |ports, config| {
+                lifecycle::open(&ports.stores, &ports.secrets, &target(config), &password)
+            })
+            .await?;
+        self.install(session)?;
+        info!("wallet opened");
+        Ok(())
+    }
+
+    /// Drops the root key and closes the database. Does nothing when already locked.
+    /// Operations already running keep the session until they finish.
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub fn lock(&self) {
+        let previous = self
+            .session
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if previous.is_some() {
+            info!("wallet locked");
+            self.emit(Event::Session(SessionState::Locked));
+        }
+    }
+
+    /// Locks the wallet and ends the event stream.
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub fn close(self) {
+        self.lock();
+        info!("wallet closed");
+        self.emit(Event::Session(SessionState::Closed));
+    }
+
+    /// Every account, ordered by index. Fails with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub fn accounts(&self) -> Result<Vec<Account>, WalletError> {
+        let session = self.session()?;
+        session
+            .store
+            .read(|repos| Ok(repos.accounts()?.into_iter().map(Account::from).collect()))
+    }
+
+    /// Fails with [`WalletError::Locked`] or an [`crate::AccountError::UnknownLabel`].
+    #[instrument(skip_all, fields(wallet = %self.config.name, account = %label))]
+    pub fn account(&self, label: &str) -> Result<Account, WalletError> {
+        let session = self.session()?;
+        session
+            .store
+            .read(|repos| account::account_by_label(repos, label))
+    }
+
+    /// Adds an account under the next free index `m/<index>/0`. Fails with
+    /// [`WalletError::Locked`], or an [`crate::AccountError`] when the label is invalid or taken.
+    #[instrument(skip_all, fields(wallet = %self.config.name, account = %label))]
+    pub fn create_account(&self, label: &str) -> Result<Account, WalletError> {
+        let label = AccountLabel::new(label)?;
+        let session = self.session()?;
+        let account = session
+            .store
+            .write(|repos| account::create_account(repos, &label))?;
+        info!("account created");
+        Ok(account)
+    }
+
+    async fn install_new(
+        &self,
+        password: Password,
+        seed: Seed,
+        source: SeedSource,
+    ) -> Result<(), WalletError> {
+        let session = self
+            .blocking(move |ports, config| {
+                lifecycle::create(
+                    &ports.stores,
+                    &ports.secrets,
+                    &target(config),
+                    &password,
+                    &seed,
+                    source,
+                )
+            })
+            .await?;
+        self.install(session)
+    }
+
+    fn install(&self, session: Session<S::Store>) -> Result<(), WalletError> {
+        {
+            let mut slot = self.session.write().unwrap_or_else(PoisonError::into_inner);
+            if slot.is_some() {
+                return Err(WalletError::AlreadyOpen);
+            }
+            *slot = Some(Arc::new(session));
+        }
+        self.emit(Event::Session(SessionState::Unlocked));
+        Ok(())
+    }
+
+    fn ensure_locked(&self) -> Result<(), WalletError> {
+        if self.is_unlocked() {
+            return Err(WalletError::AlreadyOpen);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn session(&self) -> Result<Arc<Session<S::Store>>, WalletError> {
+        self.session
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or(WalletError::Locked)
+    }
+
+    pub(crate) fn emit(&self, event: Event) {
+        // Sending fails only when nobody is subscribed, which is not an error.
+        let _ = self.events.send(event);
+    }
+
+    /// Runs key derivation and database work on the runtime's blocking pool, so an async host
+    /// is never stalled by Argon2 or disk access.
+    async fn blocking<T, F>(&self, work: F) -> Result<T, WalletError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Ports<N, S, V>, &WalletConfig) -> Result<T, WalletError> + Send + 'static,
+    {
+        let ports = Arc::clone(&self.ports);
+        let config = Arc::clone(&self.config);
+        self.ports
+            .runtime
+            .spawn_blocking(move || work(&ports, &config))
+            .await
+            .map_err(WalletError::Task)?
+    }
+}
+
+fn target(config: &WalletConfig) -> Target<'_> {
+    Target {
+        data_dir: &config.data_dir,
+        network: config.network,
+    }
+}
+
+impl<N, S: StoreOpener, V> std::fmt::Debug for Wallet<N, S, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wallet")
+            .field("name", &self.config.name)
+            .field("network", &self.config.network)
+            .finish_non_exhaustive()
+    }
+}

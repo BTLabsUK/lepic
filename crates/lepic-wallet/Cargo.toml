@@ -7,5 +7,29 @@ license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[dependencies]
+blake2 = { workspace = true, features = ["zeroize"] }
+jiff.workspace = true
+lepic-keychain.workspace = true
+lepic-node.workspace = true
+lepic-primitives.workspace = true
+lepic-store.workspace = true
+lepic-transport.workspace = true
+rand_core.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+lepic-node = { workspace = true, features = ["mock"] }
+lepic-primitives.workspace = true
+lepic-telemetry.workspace = true
+lepic-transport = { workspace = true, features = ["loopback"] }
+rand = { workspace = true, features = ["std_rng"] }
+serde_json = { workspace = true, features = ["std"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros"] }
+
 [lints]
 workspace = true
