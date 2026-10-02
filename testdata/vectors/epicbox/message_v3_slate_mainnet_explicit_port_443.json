@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "area": "epicbox",
+  "name": "message_v3_slate_mainnet_explicit_port_443",
+  "generator": "conformance/vectors/epicbox",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "network": "mainnet",
+    "sender_secret_key": "0202020202020202020202020202020202020202020202020202020202020202",
+    "receiver_secret_key": "0101010101010101010101010101010101010101010101010101010101010101",
+    "to": "esYTimgooNuxKXdEEXJk3fbXoy2HWyyY2CaRXYU8Z8B7fSPyz6YL@epicbox.epiccash.com:443",
+    "plaintext": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":6},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b00\",\"tx\":{\"offset\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"body\":{\"inputs\":[],\"outputs\":[],\"kernels\":[]}},\"amount\":\"1000000000\",\"fee\":\"8000000\",\"height\":\"5000\",\"lock_height\":\"0\",\"ttl_cutoff_height\":\"5060\",\"participant_data\":[],\"payment_proof\":null}"
+  },
+  "expected": {
+    "random": [
+      "salt",
+      "nonce"
+    ],
+    "sender_public_key_hex": "024d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+    "receiver_public_key_hex": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+    "from": "esWtu4BwqC58U5YtffP4sVJ7SWV88uYdn3okpEdiv1dFHnYMh6oj@epicbox.epiccash.com",
+    "to": "esYTimgooNuxKXdEEXJk3fbXoy2HWyyY2CaRXYU8Z8B7fSPyz6YL@epicbox.epiccash.com",
+    "key": "ece3110c89c843fed53a9779adacf0e3803be655ef2ab6af76004a7d0ab4d340",
+    "salt": "8cbe9ba2b07d4949",
+    "nonce": "2f874ac4f37f632d436a6069",
+    "encrypted_message": "a2f576e1ff3d6c7897f83854aeb737d2ea175aadc2075096f03c86dde88ab0d73cb26ac10d6c2f5ea056917336d6a2baacfffecd1331d2b09f408574817f5d6ce2787af7c0245ad976d55557d6266a6f4584280102f971e1fb1dcfad679a6afe9be008f369545a6efe060abb94a5b384f8d60709f8418b97109b346e988e35c02796a7dc2c6b4ee860357b4481ce37b5fdbdaba89673015e100de24a217e2cd3da192d66c4feb668e591ff17b02af1ee58afa6c10ba0320c2381a4f5d9a015ec4fa0209840445371ec1e620d2ab6a4911bdd423c37b18e8f48f3f466c65912a76a72466820bc0c2a4a6f5ac71f24a4bd7c091135304ddc5d0b907939b87383a4c9b94e1bae0168ae9f972f72d4ff0558a538d406eddccc8d7ff22a81a1e2133422d7b792e926a7daa88e5b54f64f46db981ac5877b58e6a3573f0d8ccfc421c7ae820e00572c3ee3b07dce830f0023da2aaed0c554f0c8c3377326cb35e2542b2368e1e67dd981f09f9078ae12cd67bff9d3a5e30c542bf6661e4629ae3ab6a36c90ced3072358e49697ca2e6ba381766b5f5ffd3f2006ad90fcea8b3327ea73100e69769facabf74e",
+    "str": "{\"destination\":{\"public_key\":\"esYTimgooNuxKXdEEXJk3fbXoy2HWyyY2CaRXYU8Z8B7fSPyz6YL\",\"domain\":\"epicbox.epiccash.com\",\"port\":443},\"encrypted_message\":\"a2f576e1ff3d6c7897f83854aeb737d2ea175aadc2075096f03c86dde88ab0d73cb26ac10d6c2f5ea056917336d6a2baacfffecd1331d2b09f408574817f5d6ce2787af7c0245ad976d55557d6266a6f4584280102f971e1fb1dcfad679a6afe9be008f369545a6efe060abb94a5b384f8d60709f8418b97109b346e988e35c02796a7dc2c6b4ee860357b4481ce37b5fdbdaba89673015e100de24a217e2cd3da192d66c4feb668e591ff17b02af1ee58afa6c10ba0320c2381a4f5d9a015ec4fa0209840445371ec1e620d2ab6a4911bdd423c37b18e8f48f3f466c65912a76a72466820bc0c2a4a6f5ac71f24a4bd7c091135304ddc5d0b907939b87383a4c9b94e1bae0168ae9f972f72d4ff0558a538d406eddccc8d7ff22a81a1e2133422d7b792e926a7daa88e5b54f64f46db981ac5877b58e6a3573f0d8ccfc421c7ae820e00572c3ee3b07dce830f0023da2aaed0c554f0c8c3377326cb35e2542b2368e1e67dd981f09f9078ae12cd67bff9d3a5e30c542bf6661e4629ae3ab6a36c90ced3072358e49697ca2e6ba381766b5f5ffd3f2006ad90fcea8b3327ea73100e69769facabf74e\",\"salt\":\"8cbe9ba2b07d4949\",\"nonce\":\"2f874ac4f37f632d436a6069\"}",
+    "signature": "3045022100a9876069f3d54855302cb8c15d8599b4b8743b73c197e37cf1ccd331b24f8fd202203f88d41d7427e7ce2e6ca6a788c1e13c5b082c4cea2025ace1d9f38c6098b231"
+  }
+}

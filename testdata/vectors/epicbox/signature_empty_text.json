@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "epicbox",
+  "name": "signature_empty_text",
+  "generator": "conformance/vectors/epicbox",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "secret_key": "0303030303030303030303030303030303030303030303030303030303030303",
+    "signed": "challenge",
+    "text": ""
+  },
+  "expected": {
+    "public_key_hex": "02531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+    "signature": "3045022100d6f016905402fd4e5137a3b7fb79eec4069a1cd94de20ad70e99fc25771ac7db022062480f9c1a632e747334e475e2d73eba6ddcfd838bf98fc6a4b331ed3693e000"
+  }
+}

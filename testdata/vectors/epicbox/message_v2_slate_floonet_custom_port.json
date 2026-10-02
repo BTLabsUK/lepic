@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "area": "epicbox",
+  "name": "message_v2_slate_floonet_custom_port",
+  "generator": "conformance/vectors/epicbox",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "network": "floonet",
+    "sender_secret_key": "0101010101010101010101010101010101010101010101010101010101010101",
+    "receiver_secret_key": "0303030303030303030303030303030303030303030303030303030303030303",
+    "to": "zzNhDvVNvan4xHZgmginw4EVTK5JfZN1b3nD9LXrFouT1xcvtPnF@relay.example.org:13420",
+    "plaintext": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":6},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b00\",\"tx\":{\"offset\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"body\":{\"inputs\":[],\"outputs\":[],\"kernels\":[]}},\"amount\":\"1000000000\",\"fee\":\"8000000\",\"height\":\"5000\",\"lock_height\":\"0\",\"participant_data\":[]}"
+  },
+  "expected": {
+    "random": [
+      "salt",
+      "nonce"
+    ],
+    "sender_public_key_hex": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+    "receiver_public_key_hex": "02531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+    "from": "zzQDUih9cHWequRhSpzCKLTmf4M13trQAHJ9dKb1LCfuxTXQoB7b@epicbox.epiccash.com",
+    "to": "zzNhDvVNvan4xHZgmginw4EVTK5JfZN1b3nD9LXrFouT1xcvtPnF@relay.example.org:13420",
+    "key": "f14be4565612c99e2dcb41ad680598ace4b9882c6bb66d0a0684132cd05b88d0",
+    "salt": "9648eda81649bd67",
+    "nonce": "5df56d4c62d7888c72602c97",
+    "encrypted_message": "71a4d473adc0a28b272ec5577668e40fbfeb0e1bedf0ab499abc38d0fae4177f69cc439495cd6fdb924f83db02f8cece13312326f6eff7cbb38c3e5dd97d566d1666be58b068ff8c8664a34d7ea783bc6e4dc0f926edd9eac9b371c6638807fb187bff3c281fb274b2a0af18458e0d0b45a935693c121408ce448eb40c7a80af15a6b93f2fcb54d25811457eb5e984f1a0e0bf486c2a084771c9ff521432055be4f2e75b6f1caabdc66d48f2b8b2ff6081a8f4f72817d121f473a03efebc9fd13120ed26bae44d161f72b2f80d947df8fbbd930be3a543cb8d0ba20459c8a860d894fe12b512b5f7f329a610cfb31512f3a60b3e0ff102e880773534df231e47a97e268620615f79a05781a519796e126576c234d3b48f442433f4984f818d9edf4831d8917f96fbee4c5efb7acc1e66fa1e6b01b48e3e8156707736c325ae33639f182fe41ab5e31b7b32a1196a4ea5e4f45a8d9d265a4db3828acbe9b2ccc3c4ab7248fab185e46723e46955446c9096270751337b6eb876",
+    "str": "{\"destination\":{\"public_key\":\"zzNhDvVNvan4xHZgmginw4EVTK5JfZN1b3nD9LXrFouT1xcvtPnF\",\"domain\":\"relay.example.org\",\"port\":13420},\"encrypted_message\":\"71a4d473adc0a28b272ec5577668e40fbfeb0e1bedf0ab499abc38d0fae4177f69cc439495cd6fdb924f83db02f8cece13312326f6eff7cbb38c3e5dd97d566d1666be58b068ff8c8664a34d7ea783bc6e4dc0f926edd9eac9b371c6638807fb187bff3c281fb274b2a0af18458e0d0b45a935693c121408ce448eb40c7a80af15a6b93f2fcb54d25811457eb5e984f1a0e0bf486c2a084771c9ff521432055be4f2e75b6f1caabdc66d48f2b8b2ff6081a8f4f72817d121f473a03efebc9fd13120ed26bae44d161f72b2f80d947df8fbbd930be3a543cb8d0ba20459c8a860d894fe12b512b5f7f329a610cfb31512f3a60b3e0ff102e880773534df231e47a97e268620615f79a05781a519796e126576c234d3b48f442433f4984f818d9edf4831d8917f96fbee4c5efb7acc1e66fa1e6b01b48e3e8156707736c325ae33639f182fe41ab5e31b7b32a1196a4ea5e4f45a8d9d265a4db3828acbe9b2ccc3c4ab7248fab185e46723e46955446c9096270751337b6eb876\",\"salt\":\"9648eda81649bd67\",\"nonce\":\"5df56d4c62d7888c72602c97\"}",
+    "signature": "3045022100d373228a451e21d51872351a12271e11a1be1b78b1aa485e54152e8f2ee577fe02206d36bfa6dbef349e44feffbb1a9e336bf359bf645382533db3074b41437719bc"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "area": "epicbox",
+  "name": "message_empty_plaintext",
+  "generator": "conformance/vectors/epicbox",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+  },
+  "inputs": {
+    "network": "mainnet",
+    "sender_secret_key": "0303030303030303030303030303030303030303030303030303030303030303",
+    "receiver_secret_key": "0202020202020202020202020202020202020202020202020202020202020202",
+    "to": "esWtu4BwqC58U5YtffP4sVJ7SWV88uYdn3okpEdiv1dFHnYMh6oj",
+    "plaintext": ""
+  },
+  "expected": {
+    "random": [
+      "salt",
+      "nonce"
+    ],
+    "sender_public_key_hex": "02531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+    "receiver_public_key_hex": "024d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+    "from": "esWwTyV37gBNRumDZP3LfPNFcDkb8eV9Sy4V3ZQyUjQeiwXHTveQ@epicbox.epiccash.com",
+    "to": "esWtu4BwqC58U5YtffP4sVJ7SWV88uYdn3okpEdiv1dFHnYMh6oj@epicbox.epiccash.com",
+    "key": "6aa13581ce799a8eb4a10834a44ea5682174d2174dbd2fdd02aefa109adfedeb",
+    "salt": "213647a744b00932",
+    "nonce": "9663bdbc0e9808f68c433e68",
+    "encrypted_message": "3629e5e1472ee50c1a7f466a2326dfb7",
+    "str": "{\"destination\":{\"public_key\":\"esWtu4BwqC58U5YtffP4sVJ7SWV88uYdn3okpEdiv1dFHnYMh6oj\",\"domain\":\"epicbox.epiccash.com\",\"port\":null},\"encrypted_message\":\"3629e5e1472ee50c1a7f466a2326dfb7\",\"salt\":\"213647a744b00932\",\"nonce\":\"9663bdbc0e9808f68c433e68\"}",
+    "signature": "30440220306a13c36ec6844ff768f86f99c41ca3507ea99a75ed0697e2e4c99b8b50eda80220783b997b1f0a3ddcdc0e607969db04618336c22f7d4a9464aeef49b43157c969"
+  }
+}
