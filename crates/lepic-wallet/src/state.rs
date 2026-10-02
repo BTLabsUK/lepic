@@ -10,6 +10,10 @@
 //!
 //! Moving a transaction to the state it is already in succeeds without a change, so a repeated
 //! step (a slate delivered twice, a second post) is harmless.
+//!
+//! The table ignores direction: it allows every step either side could take. Which side may take
+//! a step, for example that only an invoice issuer finalizes an incoming transaction, is checked
+//! by the stage that takes it.
 
 use jiff::Timestamp;
 use lepic_store::{Repositories, TxId, TxState};
