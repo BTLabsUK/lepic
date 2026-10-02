@@ -7,6 +7,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::context::secp;
 use crate::error::{CryptoError, Item};
 use crate::hex;
+use crate::limits::{MAX_SUM_TERMS, check_batch_len};
 use crate::secret::{SecretKey, SharedSecret};
 
 /// A secp256k1 point, encoded as 33 compressed bytes.
@@ -67,6 +68,16 @@ impl PublicKey {
             .map(Zeroizing::new);
         serialized.as_mut_slice().zeroize();
         x.map(SharedSecret::new).ok_or(CryptoError::Backend)
+    }
+
+    /// The point sum of `keys`, as slates sum the parties' public nonces and blind excesses.
+    /// Fails with [`CryptoError::InvalidPublicKey`] when the keys cancel out.
+    pub fn sum(keys: &[Self]) -> Result<Self, CryptoError> {
+        check_batch_len(keys.len(), MAX_SUM_TERMS, Item::PublicKey)?;
+        let points = keys.iter().map(Self::as_backend).collect();
+        let sum = BackendPublicKey::from_combination(secp(), points)
+            .map_err(|_| CryptoError::InvalidPublicKey)?;
+        Self::from_backend(sum)
     }
 
     pub(crate) fn from_backend(point: BackendPublicKey) -> Result<Self, CryptoError> {
@@ -155,6 +166,41 @@ mod tests {
         bytes[0] = 0x08;
         assert_eq!(
             PublicKey::from_bytes(&bytes),
+            Err(CryptoError::InvalidPublicKey)
+        );
+    }
+
+    #[test]
+    fn sum_of_public_keys_is_the_public_key_of_the_secret_sum() {
+        let (a, b) = (secret(3), secret(5));
+        let sum = PublicKey::sum(&[
+            PublicKey::from_secret_key(&a).unwrap(),
+            PublicKey::from_secret_key(&b).unwrap(),
+        ])
+        .unwrap();
+        assert_eq!(sum, PublicKey::from_secret_key(&secret(8)).unwrap());
+        let single = PublicKey::from_secret_key(&a).unwrap();
+        assert_eq!(PublicKey::sum(&[single]), Ok(single));
+    }
+
+    #[test]
+    fn rejects_an_empty_public_key_sum() {
+        assert_eq!(
+            PublicKey::sum(&[]),
+            Err(CryptoError::EmptyBatch {
+                item: Item::PublicKey
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_public_keys_that_cancel_out() {
+        let key = PublicKey::from_secret_key(&secret(1)).unwrap();
+        let mut negated = key.to_bytes();
+        negated[0] ^= 1;
+        let negated = PublicKey::from_bytes(&negated).unwrap();
+        assert_eq!(
+            PublicKey::sum(&[key, negated]),
             Err(CryptoError::InvalidPublicKey)
         );
     }
