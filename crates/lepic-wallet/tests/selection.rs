@@ -165,6 +165,27 @@ fn rejects_change_too_small_to_split() {
 }
 
 #[test]
+fn selection_error_text_carries_no_amounts() {
+    let errors = [
+        SelectionError::NotEnoughFunds {
+            available: Amount::new(123_456_789),
+            needed: Amount::new(987_654_321),
+        },
+        SelectionError::ChangeTooSmall {
+            change: Amount::new(123_456_789),
+            outputs: 3,
+        },
+    ];
+    for error in errors {
+        let text = error.to_string();
+        assert!(
+            !text.contains("123456789") && !text.contains("987654321"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn rejects_a_send_over_the_transaction_weight_limit() {
     let outputs = unspent(&[u64::MAX / 2]);
     let request = SelectionRequest {

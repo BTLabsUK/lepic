@@ -66,12 +66,13 @@ pub struct Estimate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum SelectionError {
+    // Amounts stay out of the text of every variant because errors are logged above `debug`
+    // (docs/logging.md); callers read them from the fields.
     /// `available` is the value of the best set selection found, `needed` the amount plus the
     /// fee that set would pay.
-    // Amounts stay out of the text because errors are logged above `debug` (docs/logging.md).
     #[error("not enough funds")]
     NotEnoughFunds { available: Amount, needed: Amount },
-    #[error("change of {change} cannot be split into {outputs} outputs")]
+    #[error("change cannot be split into {outputs} outputs")]
     ChangeTooSmall { change: Amount, outputs: usize },
     #[error("transaction with {inputs} inputs and {outputs} outputs exceeds the weight limit")]
     TooHeavy { inputs: usize, outputs: usize },
