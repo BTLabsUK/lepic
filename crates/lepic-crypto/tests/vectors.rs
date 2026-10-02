@@ -11,6 +11,8 @@
     clippy::arithmetic_side_effects
 )]
 
+mod aggsig;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
