@@ -242,7 +242,8 @@ dart run tool/generate.dart
 It runs `flutter_rust_bridge_codegen generate` and then makes every stream decode its errors as
 `WalletError`, since the codegen always decodes stream errors as `AnyhowException`. Running the
 codegen alone leaves stream errors undecodable, which the stream tests in `test/wallet_test.dart`
-catch.
+catch. On Linux `dart run` also runs this package's build hook, which needs the host library in
+`test_native/`; run `cargo xtask mobile --host-test` (below) once first.
 
 Run the tests on x86_64 Linux, from the repository root:
 
