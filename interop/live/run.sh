@@ -37,6 +37,7 @@ INTEROP_DIR="${LIVE_DIR}"
 source "${LIVE_DIR}/../lib.sh"
 # shellcheck source=lib.sh
 source "${LIVE_DIR}/lib.sh"
+hold_stack lepic-live
 
 LIVE_INTEROP_DIR="$(cd "${LIVE_DIR}/.." && pwd)"
 LIVE_UID="$(id -u)"

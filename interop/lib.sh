@@ -8,6 +8,22 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 dc() { docker compose --project-directory "${INTEROP_DIR}" -f "${INTEROP_DIR}/compose.yaml" "$@"; }
 
+# Allows one run of compose project $1 at a time on this host. Every worktree's copy of a stack
+# shares its project name and ports, so a second run's start or teardown removes the first run's
+# containers. The lock is released when the script exits.
+hold_stack() {
+    local lock="${TMPDIR:-/tmp}/$1.lock"
+    if ! command -v flock >/dev/null; then
+        log "flock not found; a concurrent $1 run would not be noticed"
+        return 0
+    fi
+    exec {STACK_LOCK_FD}<>"${lock}"
+    if ! flock -n "${STACK_LOCK_FD}"; then
+        log "another $1 run is active on this host (lock ${lock}); wait for it to end"
+        exit 1
+    fi
+}
+
 # lepic with JSON output; logs go to the run log, and so does a failure's exit status.
 lepic() {
     local status=0

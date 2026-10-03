@@ -38,6 +38,7 @@ while (($# > 0)); do
     esac
     shift
 done
+hold_stack lepic-acceptance
 
 WORK_DIR="${ACCEPTANCE_DIR}/.work"
 STATE_DIR="${WORK_DIR}/state"

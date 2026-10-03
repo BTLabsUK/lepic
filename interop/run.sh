@@ -22,6 +22,7 @@ for arg in "$@"; do
         *) echo "unknown option ${arg}" >&2; exit 2 ;;
     esac
 done
+hold_stack lepic-interop
 
 log_dir="${INTEROP_DIR}/.work/logs/$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "${log_dir}"
