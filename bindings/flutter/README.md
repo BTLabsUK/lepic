@@ -278,3 +278,41 @@ avdmanager create avd -n lepic_test -k "system-images;android-36;google_apis;x86
 emulator -avd lepic_test -read-only -no-window -no-audio -no-boot-anim -no-snapshot &
 adb wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done'
 ```
+
+## Test against a local chain
+
+`interop/acceptance` runs a reference node `v4.0.4` on a usernet chain, an Epicbox relay, a miner
+and an `epic-wallet` `v4.0.2` funder in Docker, on 127.0.0.1 only, with no public service
+involved. The app and the tests below use it with `Chain.mainnet`, because `epic-wallet` derives
+mainnet Epicbox addresses on usernet; there is no separate `Chain` value. Needs Docker with
+Compose, `jq`, `curl` and `flock`; `interop/README.md` lists the rest. From the repository root:
+
+```sh
+interop/acceptance/run.sh --stack-only    # builds once, starts a clean chain, Ctrl-C to stop
+```
+
+It prints the settings for `WalletConfig` and keeps the stack, and the lock that stops a second
+run on this host, until it is stopped; stopping removes the chain and the wallets.
+`interop/acceptance/chain.sh` drives the running stack:
+
+| Command | Does |
+|---|---|
+| `chain.sh env` | prints `LEPIC_INTEROP_NODE_URL`, `LEPIC_INTEROP_NODE_API_SECRET_FILE`, `LEPIC_INTEROP_EPICBOX_DOMAIN`, `LEPIC_INTEROP_EPICBOX_PORT` and `LEPIC_INTEROP_EXCHANGE_DIR` |
+| `chain.sh height` | the node's tip height |
+| `chain.sh mine <blocks>` | waits until that many more blocks are mined; the miner adds one every few seconds |
+| `chain.sh fund <address> <epic>` | the funder sends that amount to an Epicbox address; the wallet answers it with `drainEpicbox()` or its listener, and the funder finalizes and posts |
+| `chain.sh receive <file>` | the funder answers a send file the wallet wrote into the exchange directory, writing `<file>.response` for `finalizeFile` |
+
+A wallet on this chain uses the printed values: `nodeUrl` http://127.0.0.1:43413, `nodeApiSecret`
+the contents of the secret file, `epicboxDomain` `localhost` and `epicboxPort` 3423. Funds become
+spendable after 10 confirmations, about a minute. The funder's first coinbase matures a few blocks
+after the chain starts, so `fund` waits for it.
+
+`test/interop_test.dart` does this end to end: it creates a wallet, is funded 10 EPIC by the
+funder over Epicbox, refreshes until the funds are spendable, sends 2 EPIC back by file and waits
+until the change is spendable. It is skipped unless `LEPIC_INTEROP=1`:
+
+```sh
+cargo build -p lepic-ffi
+cd bindings/flutter && LEPIC_INTEROP=1 flutter test test/interop_test.dart
+```
