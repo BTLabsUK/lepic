@@ -87,3 +87,32 @@ fn every_older_schema_version_migrates_to_the_current_one() {
         );
     }
 }
+
+#[cfg(unix)]
+fn mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[cfg(unix)]
+#[test]
+fn a_new_database_and_its_log_are_readable_by_their_owner_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wallet.sqlite");
+    // Migrating the new file writes the schema, so the write-ahead log exists while it is open.
+    let _store = SqliteStore::open(&path, key()).unwrap();
+    assert_eq!(mode(&path), 0o600);
+    assert_eq!(mode(&dir.path().join("wallet.sqlite-wal")), 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn opening_an_existing_database_restricts_it_to_its_owner() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wallet.sqlite");
+    drop(SqliteStore::open(&path, key()).unwrap());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    drop(SqliteStore::open(&path, key()).unwrap());
+    assert_eq!(mode(&path), 0o600);
+}

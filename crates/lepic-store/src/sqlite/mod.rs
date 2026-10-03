@@ -32,6 +32,7 @@ impl SqliteStore {
     /// database written by a newer version is refused with [`StoreError::SchemaTooNew`] and left
     /// unchanged.
     pub fn open(path: &Path, key: ContextKey) -> Result<Self, StoreError> {
+        restrict_to_owner(path)?;
         let mut conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -45,6 +46,35 @@ impl SqliteStore {
             key,
         })
     }
+}
+
+/// Creates the database file owner-only, or makes an existing one so, before SQLite opens it.
+/// SQLite would create it with the process umask, and gives its `-wal` and `-shm` files the
+/// mode of the database file.
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) -> Result<(), StoreError> {
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    let restricted = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+        .and_then(|file| file.set_permissions(std::fs::Permissions::from_mode(0o600)));
+    // StoreError has no I/O variant, so the failure is reported as SQLite's own "cannot open",
+    // with the OS error text kept as its message.
+    restricted.map_err(|error| {
+        StoreError::from(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
+            Some(error.to_string()),
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_: &Path) -> Result<(), StoreError> {
+    Ok(())
 }
 
 fn configure(conn: &Connection) -> Result<(), StoreError> {
