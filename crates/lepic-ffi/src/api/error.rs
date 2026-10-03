@@ -48,6 +48,16 @@ pub enum WalletErrorKind {
     Unsupported,
     /// A defect inside LEPIC. The operation was abandoned; the wallet stays usable.
     Panic,
+    /// The wallet was restored from its recovery phrase and no full scan has completed since,
+    /// so it cannot create outputs yet. Run `scan` to the end, then try again.
+    RestoreScanRequired,
+    /// Another operation, for example the Epicbox listener finalizing it, changed the
+    /// transaction while it was being cancelled. Nothing was cancelled; cancelling again
+    /// decides from the new state.
+    ChangedDuringCancel,
+    /// The node already holds the transaction's kernel, so it can no longer be cancelled. The
+    /// next refresh confirms it.
+    OnChain,
 }
 
 impl WalletErrorKind {
@@ -75,6 +85,9 @@ impl WalletErrorKind {
             Self::Cancelled => 19,
             Self::Unsupported => 20,
             Self::Panic => 21,
+            Self::RestoreScanRequired => 22,
+            Self::ChangedDuringCancel => 23,
+            Self::OnChain => 24,
         }
     }
 }
@@ -136,6 +149,9 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         E::SecretVault(_) | E::SecretStore(_) => WalletErrorKind::SecretStore,
         // The node reported a chain position the wallet does not believe.
         E::Implausible(_) => WalletErrorKind::NodeUnreachable,
+        E::RestoreScanRequired => WalletErrorKind::RestoreScanRequired,
+        E::ChangedDuringCancel(_) => WalletErrorKind::ChangedDuringCancel,
+        E::OnChain(_) => WalletErrorKind::OnChain,
         _ => WalletErrorKind::Other,
     }
 }
@@ -290,6 +306,9 @@ mod tests {
             (K::Cancelled, 19),
             (K::Unsupported, 20),
             (K::Panic, 21),
+            (K::RestoreScanRequired, 22),
+            (K::ChangedDuringCancel, 23),
+            (K::OnChain, 24),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -307,5 +326,24 @@ mod tests {
             WalletError::from(ScanError::Cancelled).kind,
             WalletErrorKind::Cancelled
         );
+    }
+
+    #[test]
+    fn restore_scan_and_cancel_refusals_have_their_own_kinds() {
+        use lepic_wallet::WalletError as E;
+        let tx = lepic_store::TxId(4);
+        let cases = [
+            (E::RestoreScanRequired, WalletErrorKind::RestoreScanRequired),
+            (
+                E::ChangedDuringCancel(tx),
+                WalletErrorKind::ChangedDuringCancel,
+            ),
+            (E::OnChain(tx), WalletErrorKind::OnChain),
+        ];
+        for (engine, kind) in cases {
+            assert_eq!(WalletError::from(engine).kind, kind);
+        }
+        let receive = WalletError::from(ReceiveError::Wallet(E::RestoreScanRequired));
+        assert_eq!(receive.kind, WalletErrorKind::RestoreScanRequired);
     }
 }

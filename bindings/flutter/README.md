@@ -190,6 +190,12 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 19 | `cancelled` | The operation was cancelled, for example `cancelScan`. |
 | 20 | `unsupported` | Not available in this build or configuration, for example Epicbox without a relay. |
 | 21 | `panic` | A defect inside LEPIC. The operation was abandoned. |
+| 22 | `restoreScanRequired` | The wallet was restored from its phrase and no full scan has completed since, so it cannot receive or make change yet. Run `scan` to the end first. |
+| 23 | `changedDuringCancel` | Another operation, such as the listener finalizing it, changed the transaction while it was being cancelled. Nothing was cancelled; cancel again to decide from the new state. |
+| 24 | `onChain` | The node already holds the transaction's kernel, so it cannot be cancelled. The next refresh confirms it. |
+
+Kinds 22 to 24 used to arrive as `other`. An exhaustive `switch` over `WalletErrorKind` must
+handle them.
 
 ## Switching the app from its earlier binding
 

@@ -3750,6 +3750,9 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             18 => crate::api::error::WalletErrorKind::Cancelled,
             19 => crate::api::error::WalletErrorKind::Unsupported,
             20 => crate::api::error::WalletErrorKind::Panic,
+            21 => crate::api::error::WalletErrorKind::RestoreScanRequired,
+            22 => crate::api::error::WalletErrorKind::ChangedDuringCancel,
+            23 => crate::api::error::WalletErrorKind::OnChain,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -4528,6 +4531,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::Cancelled => 18.into_dart(),
             Self::Unsupported => 19.into_dart(),
             Self::Panic => 20.into_dart(),
+            Self::RestoreScanRequired => 21.into_dart(),
+            Self::ChangedDuringCancel => 22.into_dart(),
+            Self::OnChain => 23.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -5211,6 +5217,9 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::Cancelled => 18,
                 crate::api::error::WalletErrorKind::Unsupported => 19,
                 crate::api::error::WalletErrorKind::Panic => 20,
+                crate::api::error::WalletErrorKind::RestoreScanRequired => 21,
+                crate::api::error::WalletErrorKind::ChangedDuringCancel => 22,
+                crate::api::error::WalletErrorKind::OnChain => 23,
                 _ => {
                     unimplemented!("");
                 }

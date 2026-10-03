@@ -97,6 +97,9 @@ const errorCodes = {
   WalletErrorKind.cancelled: 19,
   WalletErrorKind.unsupported: 20,
   WalletErrorKind.panic: 21,
+  WalletErrorKind.restoreScanRequired: 22,
+  WalletErrorKind.changedDuringCancel: 23,
+  WalletErrorKind.onChain: 24,
 };
 
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(

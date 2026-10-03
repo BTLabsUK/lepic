@@ -85,7 +85,20 @@ enum WalletErrorKind {
   unsupported,
 
   /// A defect inside LEPIC. The operation was abandoned; the wallet stays usable.
-  panic;
+  panic,
+
+  /// The wallet was restored from its recovery phrase and no full scan has completed since,
+  /// so it cannot create outputs yet. Run `scan` to the end, then try again.
+  restoreScanRequired,
+
+  /// Another operation, for example the Epicbox listener finalizing it, changed the
+  /// transaction while it was being cancelled. Nothing was cancelled; cancelling again
+  /// decides from the new state.
+  changedDuringCancel,
+
+  /// The node already holds the transaction's kernel, so it can no longer be cancelled. The
+  /// next refresh confirms it.
+  onChain;
 
   /// The stable number of this kind.
   Future<int> code() =>
