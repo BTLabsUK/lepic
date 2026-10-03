@@ -1,6 +1,7 @@
 // Bundles the prebuilt lepic-ffi library for the Android or iOS target being built, so an app gets
 // it by depending on this package. `cargo xtask mobile --package` puts the libraries in
-// `native/<rust target>/`; the `native_dir` user define points elsewhere.
+// `native/<rust target>/` next to a `SHA256SUMS` manifest, which is checked before bundling; the
+// `native_dir` user define points elsewhere.
 //
 // Desktop and `flutter test` builds get no asset: the generated loader then opens the library from
 // its `ioDirectory`, and the package tests open it by path.
@@ -8,6 +9,7 @@
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
+import 'package:crypto/crypto.dart';
 import 'package:hooks/hooks.dart';
 
 /// The library file stem flutter_rust_bridge opens (`stem` in `lib/src/rust/frb_generated.dart`).
@@ -15,6 +17,40 @@ const libraryStem = 'lepic_ffi';
 
 /// Must match `ANDROID_API_LEVEL` in `xtask/src/mobile.rs`: the libraries link against this API.
 const androidApiLevel = 24;
+
+/// Must match `MANIFEST_FILE` in `xtask/src/mobile.rs`: the `sha256sum` file written next to
+/// each library.
+const manifestFileName = 'SHA256SUMS';
+
+/// Throws unless [manifest] exists and records the SHA-256 of [library], so a truncated,
+/// mixed-up or replaced library is not bundled into the app.
+void verifyLibrary(File library, File manifest, String target) {
+  final repackage =
+      'Run `cargo xtask mobile --package --target $target` in the LEPIC repository.';
+  if (!manifest.existsSync()) {
+    throw StateError(
+      'No $manifestFileName next to ${library.path}. $repackage',
+    );
+  }
+  final name = library.uri.pathSegments.last;
+  final entry = RegExp(r'^([0-9a-f]{64}) [ *](.+)$');
+  final recorded = [
+    for (final line in manifest.readAsLinesSync())
+      if (entry.firstMatch(line) case final match? when match[2] == name)
+        match[1],
+  ];
+  if (recorded.length != 1) {
+    throw StateError(
+      '${manifest.path} does not record one SHA-256 for $name. $repackage',
+    );
+  }
+  final actual = sha256.convert(library.readAsBytesSync()).toString();
+  if (actual != recorded.single) {
+    throw StateError(
+      '${library.path} does not match its SHA-256 in ${manifest.path}. $repackage',
+    );
+  }
+}
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
@@ -46,8 +82,12 @@ void main(List<String> args) async {
         '`cargo xtask mobile --package --target $target` in the LEPIC repository.',
       );
     }
+    final manifest = File.fromUri(library.uri.resolve(manifestFileName));
+    verifyLibrary(library, manifest, target);
 
-    output.dependencies.add(library.uri);
+    output.dependencies
+      ..add(library.uri)
+      ..add(manifest.uri);
     output.assets.code.add(
       CodeAsset(
         package: input.packageName,

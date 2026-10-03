@@ -18,10 +18,21 @@ PackageUserDefines nativeDirDefine() => PackageUserDefines(
   ),
 );
 
-File standIn(String target, String fileName) =>
-    File('${nativeDir.path}/$target/$fileName')
-      ..createSync(recursive: true)
-      ..writeAsBytesSync([0]);
+/// SHA-256 of the single zero byte every stand-in library holds.
+const standInSha256 =
+    '6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d';
+
+/// A stand-in library and, unless [manifest] is false, its `SHA256SUMS` as xtask writes it.
+File standIn(String target, String fileName, {bool manifest = true}) {
+  final library = File('${nativeDir.path}/$target/$fileName')
+    ..createSync(recursive: true)
+    ..writeAsBytesSync([0]);
+  if (manifest) {
+    File('${nativeDir.path}/$target/SHA256SUMS')
+        .writeAsStringSync('$standInSha256  $fileName\n');
+  }
+  return library;
+}
 
 Future<List<CodeAsset>> bundled({
   required OS os,
@@ -94,6 +105,37 @@ void main() {
           contains('cargo xtask mobile --package'),
         ),
       ),
+    );
+  });
+
+  Matcher failsWith(String text) => throwsA(
+    isA<StateError>().having((e) => e.message, 'message', contains(text)),
+  );
+
+  test('fails without the sha256 manifest next to the library', () async {
+    standIn('aarch64-linux-android', 'liblepic_ffi.so', manifest: false);
+    await expectLater(
+      bundled(os: OS.android, arch: Architecture.arm64),
+      failsWith('No SHA256SUMS'),
+    );
+  });
+
+  test('fails when the library does not match its manifest', () async {
+    final library = standIn('aarch64-linux-android', 'liblepic_ffi.so');
+    library.writeAsBytesSync([1]);
+    await expectLater(
+      bundled(os: OS.android, arch: Architecture.arm64),
+      failsWith('does not match its SHA-256'),
+    );
+  });
+
+  test('fails when the manifest names another file', () async {
+    standIn('aarch64-linux-android', 'liblepic_ffi.so');
+    File('${nativeDir.path}/aarch64-linux-android/SHA256SUMS')
+        .writeAsStringSync('$standInSha256  liblepic_ffi.dylib\n');
+    await expectLater(
+      bundled(os: OS.android, arch: Architecture.arm64),
+      failsWith('does not record one SHA-256'),
     );
   });
 

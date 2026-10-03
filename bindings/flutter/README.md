@@ -97,6 +97,10 @@ its own `<rust triple>/` directory, so flatten or rename CI artifact layouts to 
 - The libraries link against Android API 24; the hook fails for an app with a lower `minSdk`.
 - They need no C++ runtime, so the app ships no `libc++_shared.so` for LEPIC.
 - A missing library fails the app build with the `cargo xtask mobile` command that makes it.
+- `cargo xtask mobile --package` writes a `SHA256SUMS` file next to each library, and the hook
+  refuses a library that is not in it with that hash. Keep the file with the library when you
+  move artifacts into a `native_dir`. It catches truncated, stale or mixed-up files; it is not a
+  signature, so it does not stand in for trusting where the directory came from.
 - Desktop builds and `flutter test` get no bundled library; see Develop.
 
 To switch the app from its own Rust crate: depend on this package by path or git, delete the

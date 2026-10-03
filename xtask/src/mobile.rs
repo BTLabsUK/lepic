@@ -1,13 +1,15 @@
 //! Android builds go through `cargo ndk` so the NDK linker, sysroot and API level are set for every
 //! C dependency.
 //!
-//! `--package` builds the `lepic-ffi` shared library in release mode and copies it to
-//! `bindings/flutter/native/<triple>/`, where the Dart package's build hook picks it up.
+//! `--package` builds the `lepic-ffi` shared library in release mode and copies it, with a
+//! `SHA256SUMS` manifest, to `bindings/flutter/native/<triple>/`, where the Dart package's build
+//! hook checks it and picks it up.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 use crate::cargo;
 
@@ -24,6 +26,10 @@ const FFI_LIBRARY_STEM: &str = "lepic_ffi";
 
 /// Where `--package` puts the libraries, relative to the workspace root.
 const PACKAGE_NATIVE_DIR: &str = "bindings/flutter/native";
+
+/// The checksum file `--package` writes next to each library. Must match `manifestFileName`
+/// in `bindings/flutter/hook/build.dart`.
+const MANIFEST_FILE: &str = "SHA256SUMS";
 
 const ANDROID_TARGETS: &[&str] = &[
     "aarch64-linux-android",
@@ -176,6 +182,25 @@ fn copy_into_package(target_dir: &Path, native_dir: &Path, target: &str) -> Resu
     Ok(destination)
 }
 
+/// Writes the `MANIFEST_FILE` next to `library`: its SHA-256 and file name in `sha256sum`
+/// format, which the Dart build hook checks before it bundles the library.
+fn write_manifest(library: &Path) -> Result<PathBuf> {
+    let bytes =
+        fs::read(library).with_context(|| format!("could not read `{}`", library.display()))?;
+    let name = library
+        .file_name()
+        .and_then(|name| name.to_str())
+        .with_context(|| format!("`{}` has no file name", library.display()))?;
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let manifest = library.with_file_name(MANIFEST_FILE);
+    fs::write(&manifest, format!("{digest}  {name}\n"))
+        .with_context(|| format!("could not write `{}`", manifest.display()))?;
+    Ok(manifest)
+}
+
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let host_os = std::env::consts::OS;
     match parse(args)? {
@@ -198,6 +223,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
             for (target, args) in targets.iter().zip(commands) {
                 run_cargo(root, &args)?;
                 let packaged = copy_into_package(&target_dir, &native_dir, target)?;
+                write_manifest(&packaged)?;
                 eprintln!("xtask mobile: packaged {}", packaged.display());
             }
             Ok(())
@@ -370,5 +396,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = copy_into_package(dir.path(), &dir.path().join("native"), "aarch64-apple-ios");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn writes_the_sha256_manifest_next_to_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = dir.path().join("liblepic_ffi.so");
+        fs::write(&library, b"abc").unwrap();
+
+        let manifest = write_manifest(&library).unwrap();
+
+        assert_eq!(manifest, dir.path().join("SHA256SUMS"));
+        assert_eq!(
+            fs::read_to_string(manifest).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  liblepic_ffi.so\n"
+        );
     }
 }
