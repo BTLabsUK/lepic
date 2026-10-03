@@ -108,8 +108,7 @@ fi
 dc up -d --wait --wait-timeout 300 >>"${RUN_LOG}" 2>&1
 
 if [[ "${stack_only}" == true ]]; then
-    dc exec -T node cat /data/node/.foreign_api_secret >"${STATE_DIR}/foreign_api_secret"
-    chmod 600 "${STATE_DIR}/foreign_api_secret"
+    (umask 077 && dc exec -T node cat /data/node/.foreign_api_secret >"${STATE_DIR}/foreign_api_secret")
     "${ACCEPTANCE_DIR}/chain.sh" env
     log "stack up; the miner adds a block every few seconds. Stop with Ctrl-C."
     sleeper=""
