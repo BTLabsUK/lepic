@@ -10,6 +10,9 @@ EXPECTED_TOTAL=0
 PEER_ADDRESS=""
 LEPIC_ADDRESS=""
 LEPIC_KEY=""
+# Redelivered copies lepic has acknowledged, by stage; they are queued again with the rest.
+COPIES_S1=0
+COPIES_S2=0
 
 fail() {
     DETAIL="$*"
@@ -192,7 +195,7 @@ redeliver_to_lepic() {
         done.forEach(d => {
             delete d._id;
             d.made = false;
-            d.messageid = d.messageid + 'dup';
+            d.messageid = d.messageid + 'dup' + Date.now();
             d.createdat = new Date();
             db.slates.insertOne(d);
         });
@@ -224,6 +227,7 @@ scenario_duplicate_open() {
     [[ "$(redeliver_to_lepic 1)" -eq 1 ]] || fail "could not redeliver S1" || return 1
     report="$(lepic epicbox drain)" || fail "drain failed" || return 1
     report_counts_only "${report}" repeated 1 || fail "redelivered S1 not counted repeated: ${report}" || return 1
+    COPIES_S1=$((COPIES_S1 + 1))
 
     local sent
     sent="$(lepic_send_to_peer 0.6)" || fail "lepic send failed" || return 1
@@ -240,6 +244,7 @@ scenario_duplicate_open() {
     [[ "$(redeliver_to_lepic 1)" -eq 1 ]] || fail "could not redeliver S2" || return 1
     report="$(lepic epicbox drain)" || fail "drain failed" || return 1
     report_counts_only "${report}" repeated 1 || fail "redelivered S2 not counted repeated: ${report}" || return 1
+    COPIES_S2=$((COPIES_S2 + 1))
     [[ "$(lepic_tx_state "${tx_id}")" == posted ]] || fail "tx ${tx_id} is not posted" || return 1
     [[ "$(lepic_tx_count)" -eq $((count_before + 1)) ]] || fail "redeliveries created transactions" || return 1
 
@@ -250,15 +255,30 @@ scenario_duplicate_open() {
     DETAIL="redelivered S1 and S2 of open transactions counted repeated, no effect"
 }
 
+# Epicbox transactions of lepic in one direction.
+lepic_epicbox_txs() {
+    lepic tx list | jq --arg dir "$1" '[.transactions[] | select(.transport == "epicbox" and .direction == $dir)] | length'
+}
+
 scenario_duplicate_settled() {
     local count_before copies
     count_before="$(lepic_tx_count)"
+    # Every S1 lepic acknowledged started an incoming transaction, every S2 completed an outgoing
+    # one, and all of them are confirmed by now.
+    local s1 s2
+    s1=$(($(lepic_epicbox_txs incoming) + COPIES_S1))
+    s2=$(($(lepic_epicbox_txs outgoing) + COPIES_S2))
     copies="$(redeliver_to_lepic 0)"
-    ((copies > 0)) || fail "no acknowledged messages to redeliver" || return 1
+    ((copies == s1 + s2)) || fail "redelivered ${copies} messages, expected ${s1} S1 and ${s2} S2" || return 1
 
     local summary
     summary="$(drain_until handled "${copies}" 60 '.repeated + .rejected')" ||
         fail "redeliveries not all settled: ${summary}" || return 1
+    # A copy of an S2 whose transaction is confirmed is counted rejected, not repeated: a known
+    # lepic-wallet defect recorded in the V-02 claim's Found section, to be fixed in its own task.
+    # Require `repeated` for all copies once it is.
+    [[ "$(jq -r .repeated <<<"${summary}")" -eq "${s1}" && "$(jq -r .rejected <<<"${summary}")" -eq "${s2}" ]] ||
+        fail "expected ${s1} repeated S1 and ${s2} rejected S2 copies: ${summary}" || return 1
     local field
     for field in received finalized held; do
         [[ "$(jq -r ".${field}" <<<"${summary}")" -eq 0 ]] ||
@@ -267,9 +287,7 @@ scenario_duplicate_settled() {
     [[ "$(relay_pending_for_lepic)" -eq 0 ]] || fail "redeliveries left unacknowledged on the relay" || return 1
     [[ "$(lepic_tx_count)" -eq "${count_before}" ]] || fail "redeliveries created transactions" || return 1
     check_lepic_total || return 1
-    local split
-    split="$(jq -r '"\(.repeated) repeated, \(.rejected) rejected"' <<<"${summary}")"
-    DETAIL="${copies} redeliveries of settled slates acknowledged with no effect (${split})"
+    DETAIL="${s1} S1 copies repeated, ${s2} S2 copies of confirmed txs rejected, no effect"
 }
 
 SCENARIOS=(

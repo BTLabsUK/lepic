@@ -95,7 +95,8 @@ the fees, so a lost or doubled effect fails the run.
 Redeliveries are injected into the relay's MongoDB queue under a new message id, so `lepic` can only
 recognise them by slate id and stage. In the settled case `lepic` currently counts a copy of an S2
 whose transaction is already confirmed as rejected instead of repeated; it has no effect and is
-acknowledged, and the table prints the split.
+acknowledged. The scenario requires exactly that split: every S1 copy repeated, every S2 copy
+rejected.
 
 ## When a run fails
 
