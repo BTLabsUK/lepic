@@ -58,7 +58,8 @@ CONFIRM_TIMEOUT="${LIVE_CONFIRM_TIMEOUT:-1800}"
 
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 log_dir="${LIVE_INTEROP_DIR}/.work/live/logs/${run_id}"
-mkdir -p "${log_dir}" "${LIVE_DIR}"/data/{funder,peer,lepic,exchange}
+mkdir -p "${log_dir}" "${LIVE_DIR}"/data/{funder,peer,lepic,exchange} "${LIVE_INTEROP_DIR}/.work/live/proxy"
+PROXY_STATS="${LIVE_INTEROP_DIR}/.work/live/proxy/calls.json"
 RUN_LOG="${log_dir}/run.log"
 PUBLIC_LOG="${log_dir}/public-calls.log"
 : >"${RUN_LOG}"
@@ -73,9 +74,15 @@ teardown() {
         dc --profile mining down --remove-orphans >/dev/null 2>&1 || true
     fi
 }
-trap teardown EXIT
+# The exit status is the last line of every run's output, whatever ended it.
+finish() {
+    local status=$?
+    teardown
+    printf 'exit status: %d\n' "${status}"
+}
+trap finish EXIT
 
-log "floonet node ${LIVE_NODE_URL}; lepic node ${LEPIC_TEST_NODE_URL:-${LIVE_NODE_URL}}," \
+log "floonet node ${LIVE_NODE_URL} through the proxy; lepic node ${LEPIC_TEST_NODE_URL:-the proxy}," \
     "relay ${LEPIC_TEST_RELAY:-ws://localhost:33423}"
 
 if [[ "${build}" == true ]]; then
@@ -88,6 +95,11 @@ log "starting the stack"
     dc build
     dc up -d --wait --wait-timeout 300
 } >>"${RUN_LOG}" 2>&1
+
+# The proxy counts every request it sends upstream since it started; the run reports the change.
+proxy_count() { jq -r ".${1}" "${PROXY_STATS}" 2>/dev/null || echo 0; }
+proxy_total_before="$(proxy_count total)"
+proxy_limited_before="$(proxy_count rate_limited)"
 
 names=()
 results=()
@@ -294,7 +306,14 @@ printf '%-38s %-6s %6s  %-66s  %s\n' "----" "------" "----" "-------------" "---
 for i in "${!names[@]}"; do
     printf '%-38s %-6s %6s  %-66s  %s\n' "${names[i]}" "${results[i]}" "${times[i]}" "${kernels[i]}" "${details[i]}"
 done
-printf '\nPublic API calls: %d. Logs: %s\n' "$(public_calls)" "${log_dir}"
+proxy_calls=$(($(proxy_count total) - proxy_total_before))
+proxy_limited=$(($(proxy_count rate_limited) - proxy_limited_before))
+own_calls="$(public_calls)"
+printf '\nPublic node calls: %d in total (%d through the proxy for lepic, epic-wallet and the miner,\n' \
+    "$((proxy_calls + own_calls))" "${proxy_calls}"
+printf '%d by run.sh); the proxy got %d answers of 429; run time %dm%02ds. Logs: %s\n' \
+    "${own_calls}" "${proxy_limited}" "$((SECONDS / 60))" "$((SECONDS % 60))" "${log_dir}"
+cp "${PROXY_STATS}" "${log_dir}/proxy-calls.json" 2>/dev/null || true
 
 if ((failed > 0)); then
     exit 1

@@ -21,29 +21,31 @@ Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`) and HTTP
 
 | Service | What it is |
 |---|---|
-| `nodeproxy` | `docker/node-proxy.py` on 127.0.0.1:33413: forwards `/v2/foreign` to the floonet node, answers owner `get_status` from the node's public `/v1/status`, limits the request rate |
+| `nodeproxy` | `docker/node-proxy.py` on 127.0.0.1:33413: forwards `/v2/foreign` to the floonet node, answers owner `get_status` from the node's public `/v1/status`, limits and counts the requests |
 | `miner` | `miner/`, a RandomX miner on the node's foreign mining API; started only while blocks are needed |
 | `mongodb`, `epicbox` | The public relay code, run locally with domain `localhost` on 127.0.0.1:33423, plain `ws://` |
 | `funder` | `epic-wallet` serving its foreign API on 127.0.0.1:33415; the miner gets every coinbase from it |
 | `peer` | `epic-wallet`, the counterparty |
-| `lepic` | `lepic --network floonet`, talking to the floonet node directly, driven with `docker compose exec` |
+| `lepic` | `lepic --network floonet` through the proxy, driven with `docker compose exec` |
 
 Every service runs in the host's network namespace and listens on 127.0.0.1 only.
 
-`lepic` uses `LEPIC_TEST_NODE_URL` (default `LIVE_NODE_URL`) and `LEPIC_TEST_RELAY` (default the local
-relay, `ws://localhost:33423`).
+`lepic` uses `LEPIC_TEST_NODE_URL` (default the proxy, `http://127.0.0.1:33413`) and
+`LEPIC_TEST_RELAY` (default the local relay, `ws://localhost:33423`).
 
-`epic-wallet` reaches the node through `nodeproxy`. It asks its node's owner API for `get_status` at
+`epic-wallet` also reaches the node through `nodeproxy`. It asks its node's owner API for `get_status` at
 start, and keeps its HTTP and Epicbox listeners paused until that says `no_sync`. A public node does
 not serve its owner API, so the proxy answers that one call from the same node's public status.
 
 ## Request rates
 
 The public node allows 20 reads and 2 writes per second. The proxy sends at most 4 reads per second
-and one write (`push_transaction`, `finalize_block_template`, `submit_block`) every 2 seconds, for both
-`epic-wallet` wallets and the miner. The miner leaves 2 seconds between its own requests. `run.sh`
+and one write (`push_transaction`, `finalize_block_template`, `submit_block`) every 2 seconds, for
+`lepic`, both `epic-wallet` wallets and the miner, and counts every request it sends upstream in
+`../.work/live/proxy/calls.json`, kept across restarts of the proxy. The miner leaves 2 seconds between its own requests. `run.sh`
 polls wallets every 15 seconds (`LIVE_POLL_INTERVAL`) and spaces its own GETs (tip, kernel lookups) at
-least 5 seconds apart, logged with a count at the end of the run. The proxy, the miner and `run.sh`
+least 5 seconds apart. The run ends by printing one total of public node calls, the proxy's and its
+own, and the number of 429 answers. The proxy, the miner and `run.sh`
 retry a 429 answer
 after a pause that doubles from 10 seconds.
 
@@ -107,10 +109,15 @@ lepic sends to epic-wallet, file       PASS      ...  09...           slate ... 
 epic-wallet sends to lepic, file       PASS      ...  08...           ...
 lepic sends to epic-wallet, epicbox    PASS      ...  09...           ...
 epic-wallet sends to lepic, epicbox    PASS      ...  08...           ...
+
+Public node calls: ... in total (... through the proxy for lepic, epic-wallet and the miner,
+... by run.sh); the proxy got 0 answers of 429; run time ... Logs: ...
+exit status: 0
 ```
 
 Each transaction passes when `lepic tx show` and `epic-wallet txs` both report it confirmed, `lepic`'s
 total changed by exactly the amount (and its fee when it sent), and the floonet node reports the
 kernel `epic-wallet` recorded in a block. Logs are in `../.work/live/logs/<time>/`: `run.log` with every
 command's stderr, `compose.log` with the containers' logs (the proxy logs each forwarded call),
+`proxy-calls.json` with the proxy's cumulative counters by method,
 `public-calls.log` with `run.sh`'s own requests.

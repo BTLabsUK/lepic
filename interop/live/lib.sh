@@ -61,7 +61,8 @@ miner_running() { [[ -n "$(dc --profile mining ps -q miner 2>/dev/null)" ]]; }
 miner_start() {
     miner_running && return 0
     log "mining started at height $(public_height)"
-    dc --profile mining up -d miner >>"${RUN_LOG}" 2>&1
+    # Only the miner: a plain `up` could rebuild and recreate the proxy and the funder mid-run.
+    dc --profile mining up -d --no-deps --no-build miner >>"${RUN_LOG}" 2>&1
 }
 
 miner_stop() {

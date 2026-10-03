@@ -1,7 +1,6 @@
-# Live floonet stack with no local node. lepic uses the public floonet node's foreign API
-# (LIVE_NODE_URL) directly. Two epic-wallet v4.0.2 wallets and a RandomX miner reach the same node
-# through node-proxy.py on loopback, which limits the request rate and answers epic-wallet's
-# owner get_status from the node's public status. The miner mines floonet blocks through the
+# Live floonet stack with no local node. lepic, two epic-wallet v4.0.2 wallets and a RandomX miner
+# reach the public floonet node (LIVE_NODE_URL) through node-proxy.py on loopback, which limits and
+# counts the requests and answers epic-wallet's owner get_status from the node's public status. The miner mines floonet blocks through the
 # foreign API with coinbases built by the funder wallet. A local Epicbox relay with its database
 # carries the Epicbox leg.
 #
@@ -33,6 +32,9 @@ services:
     command: ["node-proxy.py"]
     environment:
       LIVE_NODE_URL: "${LIVE_NODE_URL:?}"
+      LIVE_PROXY_STATS: /stats/calls.json
+    volumes:
+      - ../.work/live/proxy:/stats
     healthcheck:
       test: ["CMD", "sh", "-c", "curl -sf -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get_status\",\"params\":[]}' http://127.0.0.1:33413/v2/owner | grep -q '\"no_sync\"'"]
       interval: 10s
@@ -142,7 +144,7 @@ services:
       HOME: /data
       LEPIC_NETWORK: floonet
       LEPIC_DATA_DIR: /data/lepic
-      LEPIC_NODE_URL: "${LEPIC_TEST_NODE_URL:-${LIVE_NODE_URL:?}}"
+      LEPIC_NODE_URL: "${LEPIC_TEST_NODE_URL:-http://127.0.0.1:33413}"
       LEPIC_EPICBOX_RELAY: "${LEPIC_TEST_RELAY:-ws://localhost:33423}"
       LEPIC_OUTPUT: json
       LEPIC_LOG_LEVEL: info
@@ -151,8 +153,8 @@ services:
       - ./data/lepic:/data
       - ./data/exchange:/exchange
     depends_on:
-      funder:
-        condition: service_started
+      nodeproxy:
+        condition: service_healthy
       epicbox:
         condition: service_healthy
 
