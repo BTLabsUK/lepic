@@ -221,9 +221,17 @@ fn io_error(operation: FileOperation) -> impl FnOnce(std::io::Error) -> FileErro
 }
 
 /// Creates or truncates the file, as upstream does, and syncs it before returning so that a
-/// file the user is told is written survives a crash.
+/// file the user is told is written survives a crash. A symbolic link at `path` is refused
+/// rather than followed, so the slate lands in the file the user named and nowhere else.
 async fn write_slate_file(path: &Path, wire: &WireSlate) -> Result<(), FileError> {
-    let mut file = tokio::fs::File::create(path)
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if let Some(flag) = O_NOFOLLOW {
+        options.custom_flags(flag);
+    }
+    let mut file = options
+        .open(path)
         .await
         .map_err(io_error(FileOperation::Create))?;
     file.write_all(wire.as_bytes())
@@ -329,6 +337,41 @@ const O_NONBLOCK: Option<i32> = if cfg!(all(
     None
 };
 
+// `O_NOFOLLOW` from the platform headers, for the same targets as `O_NONBLOCK`. Where it is not
+// known here, a link at the destination is followed, as upstream does.
+#[cfg(unix)]
+const O_NOFOLLOW: Option<i32> = if cfg!(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "riscv64",
+        target_arch = "s390x",
+        target_arch = "loongarch64"
+    )
+)) {
+    Some(0o400000)
+} else if cfg!(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "powerpc64"
+    )
+)) {
+    Some(0o100000)
+} else if cfg!(any(
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+)) {
+    Some(0x0100)
+} else {
+    None
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,6 +413,31 @@ mod tests {
             check_slate_file(&file.metadata().await.unwrap(), 1),
             Err(FileError::NotAFile)
         ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    #[tokio::test]
+    async fn a_link_at_the_destination_is_refused_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::write(&outside, b"untouched").unwrap();
+        let reply = dir.path().join("tx.slate.response");
+        std::os::unix::fs::symlink(&outside, &reply).unwrap();
+
+        let wire = WireSlate::text(MediaType::JSON, "{}".to_owned());
+        assert!(matches!(
+            write_slate_file(&reply, &wire).await,
+            Err(FileError::Io {
+                operation: FileOperation::Create,
+                ..
+            })
+        ));
+        assert_eq!(std::fs::read(&outside).unwrap(), b"untouched");
+
+        let plain = dir.path().join("plain.slate");
+        std::fs::write(&plain, b"older and longer").unwrap();
+        write_slate_file(&plain, &wire).await.unwrap();
+        assert_eq!(std::fs::read(&plain).unwrap(), b"{}");
     }
 
     #[test]
