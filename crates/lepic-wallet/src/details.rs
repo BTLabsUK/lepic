@@ -15,9 +15,9 @@ use crate::wallet::Wallet;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionDetails {
     pub transaction: StoredTransaction,
-    /// The excess of the final kernel, read from the final slate stored with the transaction.
-    /// `None` when no final slate is stored, as for one not yet finalized here, one the peer
-    /// finalized, or an output restored by a scan.
+    /// The excess of the final kernel, read from the final slate stored with the transaction, or
+    /// for an invoice payer from the stored I2. `None` when neither is stored: before this
+    /// wallet finalizes, for a payment taken by receive, and for an output restored by a scan.
     pub kernel_excess: Option<Commitment>,
     /// The height of the output or kernel that confirmed the transaction, or of the restored
     /// output. `None` while it is unconfirmed, and for one confirmed before heights were stored.
