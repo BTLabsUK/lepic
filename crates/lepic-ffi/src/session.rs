@@ -147,7 +147,7 @@ fn epicbox_transport(
 }
 
 impl Session {
-    /// A locked wallet on `config.data_dir`, which must exist and not be open in this runtime.
+    /// A locked wallet on `config.data_dir`, which must exist and not be open anywhere.
     pub(crate) fn new(
         runtime: &Arc<RuntimeInner>,
         config: &WalletConfig,

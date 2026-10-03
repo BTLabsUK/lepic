@@ -128,7 +128,7 @@ impl LepicRuntime {
 
 impl RuntimeInner {
     /// Marks `data_dir` as in use until the returned claim is dropped. Fails with
-    /// [`WalletErrorKind::WalletBusy`] when it already is.
+    /// [`WalletErrorKind::WalletBusy`] when it already is, in this runtime or any other.
     pub(crate) fn claim(self: &Arc<Self>, data_dir: &Path) -> Result<DirClaim, WalletError> {
         let dir = std::fs::canonicalize(data_dir).map_err(|error| {
             WalletError::new(
@@ -137,23 +137,59 @@ impl RuntimeInner {
             )
         })?;
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        if !open.insert(dir.clone()) {
-            return Err(WalletError::new(
-                WalletErrorKind::WalletBusy,
-                "a wallet on this directory is open",
-            ));
+        if open.contains(&dir) {
+            return Err(busy());
         }
+        let lock = lock_dir(&dir)?;
+        open.insert(dir.clone());
         Ok(DirClaim {
             runtime: Arc::clone(self),
             dir,
+            _lock: lock,
         })
     }
 }
+
+fn busy() -> WalletError {
+    WalletError::new(
+        WalletErrorKind::WalletBusy,
+        "a wallet on this directory is open",
+    )
+}
+
+/// An exclusive OS lock on `LOCK_FILE` in `dir`, so other runtimes and processes cannot open
+/// the directory's database at the same time. Released when the file is closed.
+fn lock_dir(dir: &Path) -> Result<std::fs::File, WalletError> {
+    let file = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK_FILE))
+        .map_err(|error| {
+            WalletError::new(
+                WalletErrorKind::Io,
+                format!("wallet directory lock is not usable: {error}"),
+            )
+        })?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(busy()),
+        Err(std::fs::TryLockError::Error(error)) => Err(WalletError::new(
+            WalletErrorKind::Io,
+            format!("wallet directory could not be locked: {error}"),
+        )),
+    }
+}
+
+/// The file in a data directory that holds the directory lock. It stays when the lock is
+/// released: removing it would let two openers lock different files.
+const LOCK_FILE: &str = ".lepic.lock";
 
 /// A data directory a wallet or a deletion is using.
 pub(crate) struct DirClaim {
     pub(crate) runtime: Arc<RuntimeInner>,
     pub(crate) dir: PathBuf,
+    _lock: std::fs::File,
 }
 
 impl Drop for DirClaim {

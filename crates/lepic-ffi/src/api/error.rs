@@ -27,7 +27,8 @@ pub enum WalletErrorKind {
     /// Kept so code written for the earlier binding still compiles. LEPIC keeps no per-process
     /// chain, so it is never returned.
     ChainBusy,
-    /// The wallet is already open in this runtime, or open while it is being deleted.
+    /// The wallet is already open, in this runtime or another one or another process, or open
+    /// while it is being deleted.
     WalletBusy,
     /// The slate's time to live passed. Nothing was signed or posted.
     PaymentExpired,

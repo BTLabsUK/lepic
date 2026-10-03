@@ -59,7 +59,7 @@ pub async fn wallet_exists(
 }
 
 /// Deletes the wallet database in `config.data_dir` and the vault in `store`. Fails with
-/// [`WalletErrorKind::WalletBusy`] while a wallet on that directory is open in `runtime`. Only
+/// [`WalletErrorKind::WalletBusy`] while a wallet on that directory is open in any runtime. Only
 /// the recovery phrase can bring the wallet back.
 pub async fn delete_wallet(
     runtime: &LepicRuntime,

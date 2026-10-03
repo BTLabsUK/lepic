@@ -17,6 +17,7 @@ const PIN_KEY: &str = "lepic.pin-key";
 const FAILURES_KEY: &str = "lepic.pin-failures";
 
 struct Fixture {
+    chain: MockChain,
     runtime: LepicRuntime,
     dir: tempfile::TempDir,
 }
@@ -26,6 +27,7 @@ impl Fixture {
         let chain = MockChain::new(1).unwrap();
         let runtime = chain.runtime(LogLevel::Warn).unwrap();
         Self {
+            chain,
             runtime,
             dir: tempfile::tempdir().unwrap(),
         }
@@ -178,4 +180,29 @@ async fn slate_text_above_the_wire_limit_is_refused_before_it_is_written() {
         kind(wallet.finalize_and_post(text).await),
         WalletErrorKind::InvalidSlate
     );
+}
+
+/// A second runtime in the same process stands in for a second process.
+#[tokio::test]
+async fn a_second_runtime_cannot_open_a_directory_in_use() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+
+    let other = fixture.chain.runtime(LogLevel::Warn).unwrap();
+    let opened = EpicWallet::open_with_pin(
+        &other,
+        fixture.config(),
+        &store,
+        PIN.to_owned(),
+        created.sealed_password.clone(),
+    )
+    .await;
+    assert_eq!(kind(opened), WalletErrorKind::WalletBusy);
+
+    let sealed = created.sealed_password.clone();
+    drop(created);
+    let opened =
+        EpicWallet::open_with_pin(&other, fixture.config(), &store, PIN.to_owned(), sealed);
+    assert!(opened.await.is_ok());
 }

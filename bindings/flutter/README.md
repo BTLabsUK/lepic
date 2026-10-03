@@ -134,7 +134,7 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 8 | `invalidArgument` | An argument or configuration value was rejected. |
 | 9 | `transportFailed` | The Epicbox relay or the slate file failed. |
 | 10 | `chainBusy` | Never returned; kept so code written for the earlier binding compiles. |
-| 11 | `walletBusy` | A wallet on this directory is already open in this runtime. |
+| 11 | `walletBusy` | A wallet on this directory is already open, in this runtime or another one or another process. |
 | 12 | `paymentExpired` | The slate's time to live passed. Nothing was signed or posted. |
 | 13 | `io` | The wallet database or a file could not be used. |
 | 14 | `other` | Anything else. |
