@@ -19,14 +19,16 @@ set_key() {
 
 if [ ! -f "${config}" ]; then
     epic --usernet server config >/dev/null
-    set_key api_http_addr '"0.0.0.0:23413"'
+    set_key api_http_addr '"127.0.0.1:23413"'
     set_key api_secret_path "\"${dir}/.api_secret\""
     set_key foreign_api_secret_path "\"${dir}/.foreign_api_secret\""
+    # Every service shares this network namespace, so the p2p listener needs only loopback too.
+    set_key host '"127.0.0.1"'
     set_key skip_pow_validation false
     set_key skip_sync_wait true
     set_key only_randomx true
     set_key enable_stratum_server true
-    set_key stratum_server_addr '"0.0.0.0:23416"'
+    set_key stratum_server_addr '"127.0.0.1:23416"'
     set_key attempt_time_per_block 2
     set_key cuckatoo_minimum_share_difficulty 1
     set_key randomx_minimum_share_difficulty 1

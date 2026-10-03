@@ -1,8 +1,8 @@
 # Compiles the reference node, the reference wallet, the relay's signature checker and lepic.
 # Sources, CARGO_HOME and target directories are bind-mounted from interop/.work, so the image
 # holds only toolchains and system packages, and build caches stay on the host.
-ARG REFERENCE_RUST=1.89.0
-FROM rust:${REFERENCE_RUST}-bookworm
+# rust:1.89.0-bookworm, pinned by digest. build.sh checks the tag against REFERENCE_RUST.
+FROM rust:1.89.0-bookworm@sha256:948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff
 
 ARG LEPIC_RUST=1.99.0
 
@@ -24,3 +24,6 @@ RUN rustup component add clippy rustfmt \
     && chmod -R a+rwX "${RUSTUP_HOME}"
 
 ENV CARGO_HOME=/work/cargo
+
+# build.sh runs every container as the invoking user; nothing needs root after this point.
+USER 65534:65534

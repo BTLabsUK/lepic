@@ -33,7 +33,14 @@ minutes. Builds use `CARGO_BUILD_JOBS` (default 4).
 Only the node joins the internal compose network; every other service runs in the node's network
 namespace and reaches the others on 127.0.0.1. lepic speaks plain HTTP and WebSocket only to a
 loopback host, so the node is `http://127.0.0.1:23413` and the relay `ws://localhost:3423`, and every
-Epicbox address in the stack ends in `@localhost:3423`.
+Epicbox address in the stack ends in `@localhost:3423`. Every service listens on 127.0.0.1 only;
+the relay's listen call is patched to loopback when its image is built.
+
+Base images are pinned by digest in the Dockerfiles and `compose.yaml`, and every container runs
+as a non-root user: the runtime and relay images set one, and MongoDB runs as its image's
+`mongodb` user. `cargo xtask repo-lint` fails on an unpinned image, a root container or a
+`0.0.0.0` bind anywhere under `interop/`. To move to a newer base image, replace its digest with
+the one `docker buildx imagetools inspect <image>:<tag>` prints.
 
 Pins live in `pins.env`. Sources, the Cargo home, build directories, binaries and run logs live in
 `.work/`, which git ignores. `build.sh` compiles in a container from `docker/builder.Dockerfile` with

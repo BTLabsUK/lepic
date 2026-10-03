@@ -1,6 +1,7 @@
 //! `cargo xtask repo-lint`: repository rules that neither the compiler nor cargo-deny can check.
 //! Each gate returns its findings; this module only gathers the inputs and reports.
 
+mod interop;
 mod lints;
 mod pure;
 mod secp;
@@ -41,6 +42,9 @@ pub(crate) fn run(root: &Path) -> Result<()> {
 
     let lockfile = read(&root.join("Cargo.lock"))?;
     report("secp", boxed(secp::check(&lockfile)));
+
+    let interop_files = repository_files(root, &["interop"])?;
+    report("interop", boxed(interop::check(&interop_files)));
 
     if findings.is_empty() {
         eprintln!("repo-lint: ok");

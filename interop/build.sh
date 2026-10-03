@@ -55,12 +55,16 @@ fetch_sources() {
 }
 
 build_builder_image() {
+    # The base image is pinned by digest, so its tag must name the reference toolchain.
+    if ! grep -q "^FROM rust:${REFERENCE_RUST}-bookworm@sha256:" "${interop_dir}/docker/builder.Dockerfile"; then
+        log "builder.Dockerfile does not build on rust:${REFERENCE_RUST}-bookworm"
+        exit 1
+    fi
     if docker image inspect "${builder_image}" >/dev/null 2>&1; then
         return
     fi
     log "building ${builder_image}"
     docker build -q \
-        --build-arg "REFERENCE_RUST=${REFERENCE_RUST}" \
         --build-arg "LEPIC_RUST=${LEPIC_RUST}" \
         -t "${builder_image}" \
         -f "${interop_dir}/docker/builder.Dockerfile" \
