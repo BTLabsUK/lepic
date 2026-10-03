@@ -349,6 +349,35 @@ void main() {
     }
   });
 
+  test('a locked wallet refuses calls until it is opened again', () async {
+    final dir = walletDir('locked');
+    final store = MemoryStore();
+    final wallet = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
+      password: password,
+    );
+    await wallet.summary(refresh: true);
+    wallet.lock();
+    await expectLater(
+      wallet.summary(refresh: false),
+      throwsWalletError(WalletErrorKind.locked),
+    );
+    await expectLater(
+      wallet.mnemonic(password: password),
+      throwsWalletError(WalletErrorKind.locked),
+    );
+    wallet.dispose();
+    final reopened = await EpicWallet.open(
+      runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
+      password: password,
+    );
+    expect((await reopened.summary(refresh: true)).total, BigInt.zero);
+  });
+
   test('pin unlock keeps the wallet password inside rust', () async {
     final dir = walletDir('pin');
     final store = MemoryStore();

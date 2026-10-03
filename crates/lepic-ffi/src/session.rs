@@ -83,16 +83,7 @@ pub(crate) struct Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if let Some(listener) = lock(&self.listener).take() {
-            listener.stop();
-        }
-        if let Some(scan) = lock(&self.scan).take() {
-            scan.cancel();
-        }
-        if let Some(epicbox) = &self.epicbox {
-            epicbox.detach();
-        }
-        self.engine.lock();
+        self.lock();
     }
 }
 
@@ -222,6 +213,30 @@ impl Session {
         &self.store
     }
 
+    /// Stops the listener and any scan, forgets the cached balance and the relay identity, and
+    /// drops the root key. Operations already running finish with the keys they started with.
+    pub(crate) fn lock(&self) {
+        if let Some(listener) = lock(&self.listener).take() {
+            listener.stop();
+        }
+        if let Some(scan) = lock(&self.scan).take() {
+            scan.cancel();
+        }
+        lock(&self.balance).take();
+        if let Some(epicbox) = &self.epicbox {
+            epicbox.detach();
+        }
+        self.engine.lock();
+    }
+
+    pub(crate) fn ensure_unlocked(&self) -> Result<(), WalletError> {
+        if self.engine.is_unlocked() {
+            Ok(())
+        } else {
+            Err(WalletError::from(lepic_wallet::WalletError::Locked))
+        }
+    }
+
     /// Creates the wallet: from `phrase` when given, from new entropy otherwise.
     pub(crate) async fn create(
         &self,
@@ -256,6 +271,7 @@ impl Session {
         &self,
         password: Zeroizing<String>,
     ) -> Result<String, WalletError> {
+        self.ensure_unlocked()?;
         let bytes = VaultBytes::default();
         bytes.load(&self.store).await?;
         let password = self::password(password);
@@ -329,6 +345,9 @@ impl Session {
 
     /// The balance of the last refresh in this session.
     pub(crate) fn cached(&self) -> Option<WalletSummary> {
+        if !self.engine.is_unlocked() {
+            return None;
+        }
         lock(&self.balance)
             .as_ref()
             .map(|balance| summary(balance, false))

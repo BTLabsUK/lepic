@@ -160,6 +160,35 @@ async fn delete_wallet_removes_the_pin_entries() {
 }
 
 #[tokio::test]
+async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let sealed = created.sealed_password.clone();
+    let wallet = created.wallet;
+    assert!(wallet.summary(true).await.is_ok());
+
+    wallet.lock();
+    wallet.lock();
+    assert_eq!(kind(wallet.summary(false).await), WalletErrorKind::Locked);
+    assert_eq!(kind(wallet.summary(true).await), WalletErrorKind::Locked);
+    assert_eq!(
+        kind(wallet.create_send_slate(1, 1).await),
+        WalletErrorKind::Locked
+    );
+    let phrase = wallet.mnemonic_with_pin(PIN.to_owned(), sealed.clone());
+    assert_eq!(kind(phrase.await), WalletErrorKind::Locked);
+    // Refused before the PIN was tried, so it costs no attempt.
+    let phrase = wallet.mnemonic_with_pin("0000".to_owned(), sealed.clone());
+    assert_eq!(kind(phrase.await), WalletErrorKind::Locked);
+    assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
+
+    drop(wallet);
+    let reopened = fixture.open_with_pin(&store, PIN, &sealed).await.unwrap();
+    assert!(reopened.summary(true).await.is_ok());
+}
+
+#[tokio::test]
 async fn slate_text_above_the_wire_limit_is_refused_before_it_is_written() {
     let fixture = Fixture::new();
     let wallet = EpicWallet::create(

@@ -46,9 +46,11 @@ final wallet = await EpicWallet.create(
 - Store the sealed text before showing the recovery phrase or receiving funds. If the app stops
   between `createWithPin` and storing it, the wallet cannot be opened by PIN: delete it with
   `deleteWallet` and create it again.
-- Dropping (`dispose()`) an `EpicWallet` stops its listener and scan and wipes its keys once
-  calls still running on it finish. Dispose the wallet to lock it, for example when the app goes
-  to the background.
+- `EpicWallet.lock()` locks a wallet at once, for example when the app goes to the background:
+  it stops the listener and any scan and wipes the keys, and every later call on that handle
+  fails with `locked`. Calls already running finish first. To use the wallet again, `dispose()`
+  the handle and open it anew. `dispose()` alone also locks, but only once calls still running
+  on the handle finish.
 - `deleteWallet` needs no password or PIN, so a user who forgot both can delete the wallet and
   restore it from the recovery phrase. Confirm with the user before calling it.
 - A wallet directory is open in one runtime at a time, across processes too; LEPIC holds an OS

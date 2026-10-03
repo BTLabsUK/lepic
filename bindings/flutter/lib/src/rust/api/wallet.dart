@@ -145,6 +145,12 @@ abstract class EpicWallet implements RustOpaqueInterface {
 
   bool listenerRunning();
 
+  /// Locks the wallet now, for example when the app goes to the background: stops the
+  /// listener and any scan and wipes the root key. Every later call on this handle fails with
+  /// `Locked`; calls already running finish first. To use the wallet again, drop this handle
+  /// and open the wallet anew. Locking a locked wallet does nothing.
+  void lock();
+
   /// The recovery phrase, after checking `password` against the stored vault.
   Future<String> mnemonic({required String password});
 

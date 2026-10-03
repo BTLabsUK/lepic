@@ -115,7 +115,8 @@ pub struct PinWallet {
     pub sealed_password: String,
 }
 
-/// An open wallet. Dropping it stops its listener and scan and locks it; the root key is wiped.
+/// An open wallet. Dropping it stops its listener and scan and locks it once calls still
+/// running on it finish; [`EpicWallet::lock`] locks it at once.
 #[frb(opaque)]
 pub struct EpicWallet {
     session: Arc<Session>,
@@ -307,6 +308,8 @@ impl EpicWallet {
     ) -> Result<String, WalletError> {
         let pin = Zeroizing::new(pin);
         self.run("mnemonic_with_pin", |session| async move {
+            // A locked wallet refuses before the attempt is counted.
+            session.ensure_unlocked()?;
             let password = pin::unlock(
                 &session.runtime().pin,
                 session.store(),
@@ -364,6 +367,15 @@ impl EpicWallet {
             session.scan(start_height, &progress).await
         })
         .await
+    }
+
+    /// Locks the wallet now, for example when the app goes to the background: stops the
+    /// listener and any scan and wipes the root key. Every later call on this handle fails with
+    /// `Locked`; calls already running finish first. To use the wallet again, drop this handle
+    /// and open the wallet anew. Locking a locked wallet does nothing.
+    #[frb(sync)]
+    pub fn lock(&self) {
+        self.boundary().guard_or("lock", (), || self.session.lock());
     }
 
     /// Stops a running scan at its next page.
