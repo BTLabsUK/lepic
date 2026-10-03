@@ -10,9 +10,9 @@
 use lepic_crypto::EcdsaSignature;
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::{
-    ClientFrame, Domain, EpicboxAddress, FrameError, MAX_FRAME_LEN, MAX_RELAY_MESSAGE_ID_LEN,
-    Network, Nonce, PROTOCOL_VERSION, RelayErrorKind, RelayFrame, RelayMessageId, Salt,
-    SignedMessage, SlateFrame, WalletMode, verify_text,
+    ClientFrame, Domain, EpicboxAddress, FrameError, MAX_FRAME_LEN, MAX_FRAME_TYPE_LEN,
+    MAX_RELAY_MESSAGE_ID_LEN, Network, Nonce, PROTOCOL_VERSION, RelayErrorKind, RelayFrame,
+    RelayMessageId, Salt, SignedMessage, SlateFrame, WalletMode, verify_text,
 };
 use proptest::prelude::*;
 
@@ -196,6 +196,49 @@ fn tolerates_unknown_frame_types() {
 }
 
 #[test]
+fn bounds_the_names_of_unknown_frame_types() {
+    let long = "T".repeat(MAX_FRAME_TYPE_LEN + 1);
+    let RelayFrame::Unknown { type_name } = relay(&format!(r#"{{"type":"{long}"}}"#)) else {
+        panic!("not an unknown frame");
+    };
+    assert_eq!(type_name, format!("{}...", &long[..MAX_FRAME_TYPE_LEN]));
+
+    assert_eq!(
+        relay(r#"{"type":"a\nb\u0000c é"}"#),
+        RelayFrame::Unknown {
+            type_name: "a?b?c??".to_owned()
+        }
+    );
+    assert!(matches!(
+        ClientFrame::from_json(&format!(r#"{{"type":"{long}"}}"#)),
+        Err(FrameError::UnknownClientType { type_name }) if type_name.len() == MAX_FRAME_TYPE_LEN + 3
+    ));
+}
+
+#[test]
+fn a_known_type_name_with_escapes_is_still_known() {
+    assert_eq!(relay(r#"{"type":"\u004fk"}"#), RelayFrame::Ok);
+}
+
+#[test]
+fn reads_the_type_wherever_it_is_in_the_frame() {
+    assert_eq!(
+        relay(r#"{"str":"c","x":{"type":"Ok"},"type":"Challenge"}"#),
+        RelayFrame::Challenge {
+            str: "c".to_owned()
+        }
+    );
+}
+
+#[test]
+fn rejects_a_frame_with_two_types() {
+    assert!(matches!(
+        RelayFrame::from_json(r#"{"type":"Ok","type":"Challenge","str":"c"}"#),
+        Err(FrameError::Json(_))
+    ));
+}
+
+#[test]
 fn tolerates_non_json_keepalive_text() {
     for text in ["pong", "ping", "", "  pong\n", "[1]", "42"] {
         assert_eq!(relay(text), RelayFrame::Keepalive, "{text:?}");
@@ -324,6 +367,12 @@ fn relay_side_rejects_unknown_client_frame_types() {
         ClientFrame::from_json("pong"),
         Err(FrameError::Json(_))
     ));
+    for text in ["[1]", "42", r#""Ok""#, "null"] {
+        assert!(
+            matches!(ClientFrame::from_json(text), Err(FrameError::MissingType)),
+            "{text}"
+        );
+    }
 }
 
 #[test]

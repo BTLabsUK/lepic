@@ -1,6 +1,8 @@
+use std::fmt;
+
 use lepic_crypto::{CryptoError, SecretKey};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::address::EpicboxAddress;
 use crate::crypto::{MAX_MESSAGE_LEN, SignedMessage, sign_text};
@@ -9,6 +11,8 @@ use crate::crypto::{MAX_MESSAGE_LEN, SignedMessage, sign_text};
 pub const PROTOCOL_VERSION: &str = "3.0.0";
 /// Longer frames are rejected before they are parsed. A frame carries at most one message.
 pub const MAX_FRAME_LEN: usize = MAX_MESSAGE_LEN.saturating_add(64 * 1024);
+/// Frame type names longer than this are cut before they reach an error or a log.
+pub const MAX_FRAME_TYPE_LEN: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -129,12 +133,11 @@ impl ClientFrame {
     /// side must tolerate them.
     pub fn from_json(text: &str) -> Result<Self, FrameError> {
         check_len(text)?;
-        let value = parse_object(text)?;
-        let type_name = type_name(&value)?.to_owned();
+        let type_name = probe_type(text)?;
         if !KNOWN_CLIENT_TYPES.contains(&type_name.as_str()) {
             return Err(FrameError::UnknownClientType { type_name });
         }
-        serde_json::from_value(value).map_err(|source| FrameError::Fields { type_name, source })
+        fields(text, type_name)
     }
 }
 
@@ -255,7 +258,9 @@ pub struct SlateFrame {
     pub ver: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The wire shape of a known relay frame, for encoding. Decoding reads each type's fields
+/// without the tag, so that no buffer of the whole frame is built.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type")]
 enum KnownRelayFrame {
     Challenge {
@@ -302,19 +307,22 @@ impl RelayFrame {
         if !text.trim_start().starts_with('{') {
             return Ok(Self::Keepalive);
         }
-        let value = parse_object(text)?;
-        let type_name = type_name(&value)?.to_owned();
-        if !KNOWN_RELAY_TYPES.contains(&type_name.as_str()) {
-            return Ok(Self::Unknown { type_name });
-        }
-        let known = serde_json::from_value(value)
-            .map_err(|source| FrameError::Fields { type_name, source })?;
-        Ok(match known {
-            KnownRelayFrame::Challenge { str } => Self::Challenge { str },
-            KnownRelayFrame::Ok => Self::Ok,
-            KnownRelayFrame::Error { kind, description } => Self::Error { kind, description },
-            KnownRelayFrame::Slate(slate) => Self::Slate(slate),
-            KnownRelayFrame::GetVersion { str } => Self::GetVersion { str },
+        let type_name = probe_type(text)?;
+        Ok(match type_name.as_str() {
+            "Challenge" => Self::Challenge {
+                str: fields::<TextFields>(text, type_name)?.str,
+            },
+            // The probe has read the whole frame, and `Ok` has no fields.
+            "Ok" => Self::Ok,
+            "Error" => {
+                let ErrorFields { kind, description } = fields(text, type_name)?;
+                Self::Error { kind, description }
+            }
+            "Slate" => Self::Slate(fields(text, type_name)?),
+            "GetVersion" => Self::GetVersion {
+                str: fields::<TextFields>(text, type_name)?.str,
+            },
+            _ => Self::Unknown { type_name },
         })
     }
 
@@ -346,8 +354,6 @@ const KNOWN_CLIENT_TYPES: [&str; 6] = [
     "GetVersion",
 ];
 
-const KNOWN_RELAY_TYPES: [&str; 5] = ["Challenge", "Ok", "Error", "Slate", "GetVersion"];
-
 fn check_len(text: &str) -> Result<(), FrameError> {
     if text.len() > MAX_FRAME_LEN {
         return Err(FrameError::TooLong {
@@ -358,18 +364,196 @@ fn check_len(text: &str) -> Result<(), FrameError> {
     Ok(())
 }
 
-fn parse_object(text: &str) -> Result<Value, FrameError> {
-    let value: Value = serde_json::from_str(text).map_err(FrameError::Json)?;
-    if value.is_object() {
-        Ok(value)
-    } else {
-        Err(FrameError::MissingType)
+#[derive(Deserialize)]
+struct TextFields {
+    str: String,
+}
+
+#[derive(Deserialize)]
+struct ErrorFields {
+    kind: RelayErrorKind,
+    description: String,
+}
+
+/// Reads the fields of a frame whose type is known. The `type` key is ignored like any other
+/// unknown key, which serde skips without keeping it.
+fn fields<T: DeserializeOwned>(text: &str, type_name: String) -> Result<T, FrameError> {
+    serde_json::from_str(text).map_err(|source| FrameError::Fields { type_name, source })
+}
+
+/// The frame's `type`, bounded, after checking that the whole text is one JSON object. Every
+/// other value is skipped without being kept, so the work is bounded by the text alone.
+fn probe_type(text: &str) -> Result<String, FrameError> {
+    match serde_json::from_str::<TypeProbe>(text).map_err(FrameError::Json)? {
+        TypeProbe::Object(Some(TypeTag::Text(name))) => Ok(name),
+        TypeProbe::Object(Some(TypeTag::NotText) | None) | TypeProbe::NotObject => {
+            Err(FrameError::MissingType)
+        }
     }
 }
 
-fn type_name(value: &Value) -> Result<&str, FrameError> {
-    value
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or(FrameError::MissingType)
+/// A JSON value seen only for its `type` key, if it is an object.
+enum TypeProbe {
+    Object(Option<TypeTag>),
+    NotObject,
+}
+
+impl<'de> Deserialize<'de> for TypeProbe {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(ProbeVisitor)
+    }
+}
+
+struct ProbeVisitor;
+
+impl<'de> Visitor<'de> for ProbeVisitor {
+    type Value = TypeProbe;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a json value")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut tag = None;
+        while let Some(key) = map.next_key::<KeyName>()? {
+            match key {
+                KeyName::Type if tag.is_some() => {
+                    return Err(serde::de::Error::duplicate_field("type"));
+                }
+                KeyName::Type => tag = map.next_value::<Option<TypeTag>>()?,
+                KeyName::Other => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(TypeProbe::Object(tag))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(TypeProbe::NotObject)
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(TypeProbe::NotObject)
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(TypeProbe::NotObject)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(TypeProbe::NotObject)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(TypeProbe::NotObject)
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<Self::Value, E> {
+        Ok(TypeProbe::NotObject)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(TypeProbe::NotObject)
+    }
+}
+
+/// An object key, compared without keeping it.
+enum KeyName {
+    Type,
+    Other,
+}
+
+impl<'de> Deserialize<'de> for KeyName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_str(KeyVisitor)
+    }
+}
+
+struct KeyVisitor;
+
+impl Visitor<'_> for KeyVisitor {
+    type Value = KeyName;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an object key")
+    }
+
+    fn visit_str<E>(self, key: &str) -> Result<Self::Value, E> {
+        Ok(if key == "type" {
+            KeyName::Type
+        } else {
+            KeyName::Other
+        })
+    }
+}
+
+/// The value of `type`: its bounded text, or a note that it is not a string.
+enum TypeTag {
+    Text(String),
+    NotText,
+}
+
+impl<'de> Deserialize<'de> for TypeTag {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(TagVisitor)
+    }
+}
+
+struct TagVisitor;
+
+impl<'de> Visitor<'de> for TagVisitor {
+    type Value = TypeTag;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a frame type")
+    }
+
+    fn visit_str<E>(self, name: &str) -> Result<Self::Value, E> {
+        Ok(TypeTag::Text(bounded_type_name(name)))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(TypeTag::NotText)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(TypeTag::NotText)
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(TypeTag::NotText)
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(TypeTag::NotText)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(TypeTag::NotText)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(TypeTag::NotText)
+    }
+}
+
+/// `name` as safe to show in an error or a log: printable ASCII, other characters replaced by
+/// `?`, cut to [`MAX_FRAME_TYPE_LEN`] characters with `...` marking the cut. Known type names
+/// pass unchanged, and a changed name never equals one.
+fn bounded_type_name(name: &str) -> String {
+    let printable = |c: char| if c.is_ascii_graphic() { c } else { '?' };
+    let mut chars = name.chars();
+    let mut bounded: String = chars
+        .by_ref()
+        .take(MAX_FRAME_TYPE_LEN)
+        .map(printable)
+        .collect();
+    if chars.next().is_some() {
+        bounded.push_str("...");
+    }
+    bounded
 }
