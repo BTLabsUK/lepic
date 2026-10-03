@@ -20,7 +20,7 @@ impl Chain {
 }
 
 /// Everything needed to locate a wallet on disk and reach its node and Epicbox relay.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WalletConfig {
     /// Directory owned by this wallet; it must exist. The database is `wallet.sqlite3` in it.
     pub data_dir: String,
@@ -32,6 +32,22 @@ pub struct WalletConfig {
     /// Epicbox relay domain, such as `epicbox.epiccash.com`. Empty disables Epicbox.
     pub epicbox_domain: String,
     pub epicbox_port: u16,
+}
+
+impl std::fmt::Debug for WalletConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalletConfig")
+            .field("data_dir", &self.data_dir)
+            .field("chain", &self.chain)
+            .field("node_url", &self.node_url)
+            .field(
+                "node_api_secret",
+                &self.node_api_secret.as_ref().map(|_| "[redacted]"),
+            )
+            .field("epicbox_domain", &self.epicbox_domain)
+            .field("epicbox_port", &self.epicbox_port)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -237,5 +253,25 @@ impl WalletEvent {
             transport_state: None,
             missed: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wallet_config_debug_redacts_the_node_api_secret() {
+        let config = WalletConfig {
+            data_dir: "/data".to_owned(),
+            chain: Chain::Floonet,
+            node_url: "http://127.0.0.1:3413".to_owned(),
+            node_api_secret: Some("node-secret-value".to_owned()),
+            epicbox_domain: String::new(),
+            epicbox_port: 443,
+        };
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("node-secret-value"));
+        assert!(printed.contains("[redacted]"));
     }
 }

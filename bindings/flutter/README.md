@@ -54,6 +54,7 @@ this list.
 | Dart to Rust | Wallet password the user types | `EpicWallet.create`, `EpicWallet.open`, `EpicWallet.mnemonic` |
 | Dart to Rust | PIN the user types | `EpicWallet.createWithPin`, `EpicWallet.openWithPin`, `EpicWallet.mnemonicWithPin` |
 | Dart to Rust | Recovery phrase the user types, to restore or to check | `EpicWallet.create`, `EpicWallet.createWithPin` (`mnemonic`), `validateMnemonic` |
+| Dart to Rust | Node API secret the user configures (`WalletConfig.node_api_secret`) | every call taking `WalletConfig`: `EpicWallet.create`, `open`, `createWithPin`, `openWithPin`, `deleteWallet`, `nodeTip` |
 | Rust to Dart | Recovery phrase, after the password or PIN is verified, for the backup screen | `EpicWallet.mnemonic`, `EpicWallet.mnemonicWithPin` |
 | Never | Seed bytes, private keys, blinding factors, nonces, vault keys, the generated wallet password of PIN unlock | none |
 
