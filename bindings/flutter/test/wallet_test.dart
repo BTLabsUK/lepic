@@ -1024,10 +1024,9 @@ void main() {
         seedPassword: vector.password,
         password: password,
       );
-      // TODO(U-11): expect restoreScanRequired once the binding has that kind.
       await expectLater(
         imported.receiveSlate(slateJson: s1.json),
-        throwsWalletError(WalletErrorKind.other),
+        throwsWalletError(WalletErrorKind.restoreScanRequired),
       );
       await scanToEnd(imported);
       // The refused attempt stored nothing, so the same slate is still new to the wallet.
