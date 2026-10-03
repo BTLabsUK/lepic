@@ -701,6 +701,7 @@ where
             .await
             .map_err(InvoiceError::Node)?
             .height;
+        self.check_plausible_tip(&session, tip).await?;
         let target = delivery.clone();
         let (tx_id, slate, wire) = self
             .blocking(move |ports, config| {
@@ -805,6 +806,7 @@ where
             .await
             .map_err(InvoiceError::Node)?
             .height;
+        self.check_plausible_tip(&session, tip).await?;
         check_ttl(&i1, tip)?;
         debug!(height = tip.value(), "slate checked");
 
@@ -884,6 +886,7 @@ where
             .await
             .map_err(InvoiceError::Node)?
             .height;
+        self.check_plausible_tip(&session, tip).await?;
         let stored = self
             .blocking(move |ports, _| {
                 let env = InvoiceEnvironment {

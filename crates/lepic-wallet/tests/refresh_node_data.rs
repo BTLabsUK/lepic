@@ -37,8 +37,8 @@ use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::SelectionStrategy;
-use lepic_wallet::send::{Delivery, SendRequest};
-use lepic_wallet::{Ports, SharedRng, Wallet};
+use lepic_wallet::send::{Delivery, SendError, SendRequest};
+use lepic_wallet::{Ports, SharedRng, Wallet, WalletError};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use send_support::{ACCOUNT, PEER, Sender, TIP, legacy_codecs};
@@ -727,4 +727,39 @@ fn a_wallet_with_no_confirmed_tip_is_bounded_by_the_network_checkpoint() {
         "{result:?}"
     );
     assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
+}
+
+#[test]
+fn send_refuses_a_tip_above_the_plausible_height() {
+    let (sender, funding) = funded();
+    refreshed(&sender.harness.block_on(sender.wallet.refresh()));
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![TIP + 100_000],
+            ..Script::default()
+        },
+    );
+    let request = SendRequest {
+        minimum_confirmations: 1,
+        strategy: SelectionStrategy::Smallest,
+        ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+    };
+    let delivery = Delivery::Deliver {
+        transport: LOOPBACK,
+        to: Destination::new(PEER.to_owned()),
+    };
+
+    let result = sender.harness.block_on(wallet.send(request, delivery));
+
+    assert!(
+        matches!(
+            result,
+            Err(SendError::Wallet(WalletError::Implausible(
+                ImplausibleNodeData::TipTooHigh { .. }
+            )))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(status(&sender, &funding), OutputStatus::Unspent);
 }

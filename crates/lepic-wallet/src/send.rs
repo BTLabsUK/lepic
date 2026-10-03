@@ -839,6 +839,7 @@ where
             .await
             .map_err(SendError::Node)?
             .height;
+        self.check_plausible_tip(&session, tip).await?;
         let target = delivery.clone();
         let stored = self
             .blocking(move |ports, config| {

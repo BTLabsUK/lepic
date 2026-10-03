@@ -12,12 +12,20 @@
 //! as pending and confirmed only by a later answer at or above it, so a single wrong answer
 //! cannot leave the wallet waiting for the chain to catch up with it.
 
+use std::sync::Arc;
+
 use jiff::Timestamp;
+use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
-use lepic_store::{Repositories, StoreError};
+use lepic_store::{Repositories, StoreError, WalletStore};
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
+
+use crate::error::WalletError;
+use crate::lifecycle::Session;
+use crate::ports::{SecretVault, StoreOpener};
+use crate::wallet::Wallet;
 
 /// Epic's target block interval, `BLOCK_TIME_SEC` in the node's consensus rules.
 pub const BLOCK_TIME_SECONDS: u64 = 60;
@@ -82,6 +90,13 @@ pub enum ImplausibleNodeData {
     /// changed.
     #[error("node tip moved from {first} to {second} within one refresh")]
     TipChanged { first: Height, second: Height },
+}
+
+/// A tip the wallet confirmed, and when it saw it, for starting a node client from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfirmedTip {
+    pub height: Height,
+    pub seen_at: Timestamp,
 }
 
 /// A tip and when it was seen, in seconds since the Unix epoch.
@@ -294,6 +309,48 @@ pub(crate) fn check_agreement(first: Height, second: Height) -> Result<(), Impla
         return Err(ImplausibleNodeData::TipChanged { first, second });
     }
     Ok(())
+}
+
+impl<N, S, V> Wallet<N, S, V>
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    /// The highest tip the wallet confirmed, or `None` before the first one. A host starts its
+    /// node client from it, so the client bounds the first tip it sees in a session. Fails with
+    /// [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn confirmed_tip(&self) -> Result<Option<ConfirmedTip>, WalletError> {
+        let session = self.session()?;
+        let stored = session
+            .store
+            .read(|repos| Ok::<_, WalletError>(position(repos)?))?;
+        Ok(stored.confirmed.and_then(|reference| {
+            Some(ConfirmedTip {
+                height: reference.height,
+                seen_at: Timestamp::from_second(reference.seen_at).ok()?,
+            })
+        }))
+    }
+
+    /// Refuses a tip a stage is about to act on when it is not plausible for what the wallet
+    /// stored, with [`WalletError::Implausible`].
+    pub(crate) async fn check_plausible_tip(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        tip: Height,
+    ) -> Result<(), WalletError> {
+        let session = Arc::clone(session);
+        self.blocking(move |ports, config| {
+            let stored = session
+                .store
+                .read(|repos| Ok::<_, WalletError>(position(repos)?))?;
+            check_tip(config.network, &stored, tip, ports.clock.now())?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 #[cfg(test)]

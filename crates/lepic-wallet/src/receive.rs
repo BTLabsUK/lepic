@@ -190,6 +190,7 @@ where
             .await
             .map_err(ReceiveError::Node)?
             .height;
+        self.check_plausible_tip(&session, tip).await?;
         check_ttl(&slate, tip)?;
         let context = self.encode_context(&slate).await?;
         debug!(height = tip.value(), "slate checked");

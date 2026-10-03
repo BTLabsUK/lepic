@@ -8,6 +8,7 @@ use lepic_store::{StoreError, TxId};
 use thiserror::Error;
 
 use crate::account::AccountError;
+use crate::chain::ImplausibleNodeData;
 use crate::config::ConfigError;
 use crate::ports::SecretVaultError;
 use crate::state::InvalidTransition;
@@ -67,6 +68,10 @@ pub enum WalletError {
     RestoreScanRequired,
     #[error("node request failed")]
     Node(#[source] NodeError),
+    /// The node's tip is not plausible for what the wallet stored about the chain. Nothing was
+    /// stored.
+    #[error("node data rejected")]
+    Implausible(#[from] ImplausibleNodeData),
     #[error("blocking wallet task did not complete")]
     Task(#[source] tokio::task::JoinError),
 }

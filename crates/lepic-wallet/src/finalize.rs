@@ -674,6 +674,7 @@ where
             .await
             .map_err(FinalizeError::Node)?
             .height;
+        self.check_plausible_tip(&session, tip).await?;
         let stored = self
             .blocking(move |ports, _| {
                 let env = FinalizeEnvironment {
