@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use flutter_rust_bridge::frb;
 use lepic_keychain::KdfParams;
 use lepic_telemetry::{LogFilter, host_dispatch};
+use rand::SeedableRng as _;
+use rand::rngs::StdRng;
 use tokio::runtime::Runtime;
 use tracing::{error, info, warn};
 
@@ -19,12 +21,23 @@ use crate::log::LogForwarder;
 use crate::node::NodeFactory;
 use crate::pin::{PinGuard, PinPolicy};
 
-/// Sets up the library once per process: installs a panic hook that reports where a panic
-/// happened but not its message. `RustLib.init()` calls it; the app never does. The hook
-/// covers every panic in the process.
+/// Sets up the library once per process: blinds the secp256k1 context before any wallet uses
+/// it, and installs a panic hook that reports where a panic happened but not its message.
+/// `RustLib.init()` calls it; the app never does. The hook covers every panic in the process.
 #[frb(init)]
 pub fn init_app() {
-    guard_or("init_app", (), install_panic_hook);
+    guard_or("init_app", (), || {
+        randomize_crypto_context();
+        install_panic_hook();
+    });
+}
+
+/// Without OS randomness the context stays unblinded, which changes no result; a wallet call
+/// that needs randomness then fails on its own.
+fn randomize_crypto_context() {
+    if let Ok(mut rng) = StdRng::try_from_rng(&mut getrandom::SysRng) {
+        lepic_wallet::randomize_crypto_context(&mut rng);
+    }
 }
 
 /// Owns the threads every wallet runs on. Create one when the app starts and keep it; dropping
