@@ -8,6 +8,7 @@ mod commit_hook_tests;
 mod deps_check;
 mod fuzz;
 mod install;
+mod lockfiles;
 mod mobile;
 mod repo_lint;
 mod soak;
@@ -25,7 +26,8 @@ const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
   budget      [--measurements <file.json>]: size, restore and drain against docs/budgets.md
-  check       fmt, clippy, tests, cargo deny, deps-check, ci-lint, repo-lint and vectors verify
+  check       fmt, clippy, tests, cargo deny, deps-check, ci-lint, repo-lint, the conformance
+              and fuzz lockfiles, and vectors verify
   ci-lint     every `uses:` under .github is pinned to a commit sha
   deps-check  crate edges and banned crates against docs/architecture.md
   fuzz        (--smoke | --full) [--target <name>]... [--jobs <n>]: seed and run the fuzz targets

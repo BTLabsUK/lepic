@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{cargo, ci_lint, deps_check, repo_lint, vectors};
+use crate::{cargo, ci_lint, deps_check, lockfiles, repo_lint, vectors};
 
 const STEPS: &[(&str, &[&str])] = &[
     ("fmt", &["fmt", "--all", "--check"]),
@@ -40,6 +40,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         ("deps-check", deps_check::run),
         ("ci-lint", ci_lint::run),
         ("repo-lint", repo_lint::run),
+        ("lockfiles", lockfiles::run),
         ("vectors verify", vectors::verify),
     ];
     for (name, gate) in gates {
