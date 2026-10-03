@@ -25,12 +25,15 @@ use lepic_primitives::params::Network;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
-use lepic_store::{AccountIndex, InboxEntry, InboxStatus, Repositories, StoreError, WalletStore};
+use lepic_store::{
+    AccountIndex, InboxEntry, InboxStatus, Repositories, SlateStage, StoreError, WalletStore,
+};
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Destination, Envelope, Inbound, TransportId};
 use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
+use uuid::Uuid;
 
 use crate::account;
 use crate::error::WalletError;
@@ -75,9 +78,10 @@ pub enum InboxError {
 pub struct InboxSummary {
     /// S1 slates received and answered with S2.
     pub received: u32,
-    /// S2 slates finalized; posting may still be pending.
+    /// S2 slates finalized for the first time; posting may still be pending.
     pub finalized: u32,
-    /// Messages handled before and acknowledged again, an S1 answered again with its stored S2.
+    /// Messages handled before and acknowledged again: an S1 answered again with its stored S2,
+    /// or an S2 that was already finalized.
     pub repeated: u32,
     /// Messages rejected for good, recorded and acknowledged.
     pub rejected: u32,
@@ -692,7 +696,7 @@ where
             .map_err(Refusal::Decode)?;
         match slate.stage() {
             Stage::S1 => self.answer(envelope, &slate, reply_to).await,
-            Stage::S2 => self.complete(envelope).await,
+            Stage::S2 => self.complete(envelope, &slate).await,
             stage => Err(Refusal::UnsupportedStage { stage }.into()),
         }
     }
@@ -766,15 +770,33 @@ where
 
     /// Finalizes an S2 and posts it. A transaction that was finalized but not posted is
     /// settled: it waits in state `finalized` for [`Wallet::post`].
-    async fn complete(&self, envelope: &Envelope) -> Result<Handled, Settlement> {
+    /// An S2 finalized before, which arrives again when the receiver resent it, counts as
+    /// repeated; finalizing it again posts only if the first post did not succeed.
+    async fn complete(&self, envelope: &Envelope, reply: &Slate) -> Result<Handled, Settlement> {
+        let session = self.session().map_err(Hold::from)?;
+        let slate_id = Uuid::from_bytes(*reply.id().as_bytes());
+        let finalized_before = self
+            .blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| repos.slate(slate_id, SlateStage::Standard3))?
+                    .is_some())
+            })
+            .await
+            .map_err(Hold::from)?;
+        let handled = if finalized_before {
+            Handled::Repeated
+        } else {
+            Handled::Finalized
+        };
         match self
             .finalize(TRANSPORT_ID, envelope.wire(), POST_PROPAGATION)
             .await
         {
-            Ok(_) => Ok(Handled::Finalized),
+            Ok(_) => Ok(handled),
             Err(FinalizeError::NotPosted { tx_id, source }) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
-                Ok(Handled::Finalized)
+                Ok(handled)
             }
             Err(error) if finalize_is_permanent(&error) => Err(Refusal::Finalize(error).into()),
             Err(error) => Err(Hold::Finalize(error).into()),

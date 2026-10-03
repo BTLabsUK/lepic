@@ -194,6 +194,38 @@ fn a_crash_after_recording_processed_and_before_acknowledging_sends_no_second_s2
     assert_eq!(world.receiver.transactions(), 1);
 }
 
+/// The crash comes between delivering S2 and recording the message, so the redelivered S1 is
+/// answered again with the same stored S2. The sender finalizes once, posts once, and counts
+/// the copy as repeated.
+#[test]
+fn a_crash_right_after_replying_sends_the_same_s2_again_and_the_sender_posts_once() {
+    let world = World::new();
+    reply_then_crash(&world, false);
+
+    let (restarted, epicbox) = world.restart_receiver();
+    let summary = world.block_on(restarted.epicbox_drain(&epicbox)).unwrap();
+
+    assert_eq!(summary.repeated, 1);
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(world.relay.pending(&world.sender_address), 2);
+    assert_eq!(world.receiver.transactions(), 1);
+
+    let sender = world
+        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .unwrap();
+    assert_eq!(
+        sender,
+        InboxSummary {
+            finalized: 1,
+            repeated: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.sender_address), 0);
+    assert_eq!(world.sender_state(), TxState::Posted);
+    assert_eq!(world.sender.harness.node.pushed_transactions().len(), 1);
+}
+
 #[test]
 fn messages_that_cannot_be_used_are_recorded_and_acknowledged_and_the_next_one_is_handled() {
     let world = World::new();
