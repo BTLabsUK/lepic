@@ -51,6 +51,20 @@ final wallet = await EpicWallet.create(
 - Store the sealed text before showing the recovery phrase or receiving funds. If the app stops
   between `createWithPin` and storing it, the wallet cannot be opened by PIN: delete it with
   `deleteWallet` and create it again.
+- `EpicWallet.changePin(sealedPassword, oldPin, newPin)` returns new sealed text for the same
+  wallet password under the new PIN and a new `lepic.pin-key`, so the old sealed text stops
+  opening. The old PIN attempt is counted and delayed like any other. Store the new text at once;
+  if the app stops before it does, the wallet no longer opens by PIN (delete and restore it).
+- `EpicWallet.importWalletSeed` and `EpicWallet.importWalletSeedWithPin` restore from the text of
+  an `epic-wallet` `wallet.seed` (at most 4096 bytes) and its password, then work as `create` and
+  `createWithPin` with a phrase: scan next. A wrong file password gives `wrongPassword`, text
+  that is no `wallet.seed` `invalidArgument`. LEPIC keeps no copy of the file.
+- `LepicRuntime.openLogRing(dir, maxBytes)` keeps every record at the runtime's log level,
+  redacted, in at most `maxBytes` (4 KiB to 16 MiB) of files in `dir`, which should hold nothing
+  else; `exportSupportBundle()` returns them as text for a feedback report. Only the values of
+  the log vocabulary fields that say nothing about keys, amounts or addresses are kept, every
+  other value becomes `[redacted]`. Messages are kept as they are, including the app's own lines
+  from `logMessage`, so redact those before logging them.
 - `EpicWallet.lock()` locks a wallet at once, for example when the app goes to the background:
   it stops the listener and any scan and wipes the keys, and every later call on that handle
   fails with `locked`. Calls already running finish first. To use the wallet again, `dispose()`
@@ -130,12 +144,13 @@ this list.
 
 | Direction | Value | Calls |
 |---|---|---|
-| Dart to Rust | Wallet password the user types | `EpicWallet.create`, `EpicWallet.open`, `EpicWallet.mnemonic` |
-| Dart to Rust | PIN the user types | `EpicWallet.createWithPin`, `EpicWallet.openWithPin`, `EpicWallet.mnemonicWithPin` |
+| Dart to Rust | Wallet password the user types | `EpicWallet.create`, `EpicWallet.open`, `EpicWallet.mnemonic`, `EpicWallet.importWalletSeed` |
+| Dart to Rust | PIN the user types | `EpicWallet.createWithPin`, `EpicWallet.openWithPin`, `EpicWallet.mnemonicWithPin`, `EpicWallet.importWalletSeedWithPin`, `EpicWallet.changePin` (old and new) |
+| Dart to Rust | Password of an `epic-wallet` `wallet.seed` the user imports | `EpicWallet.importWalletSeed`, `EpicWallet.importWalletSeedWithPin` |
 | Dart to Rust | Recovery phrase the user types, to restore or to check | `EpicWallet.create`, `EpicWallet.createWithPin` (`mnemonic`), `validateMnemonic` |
-| Dart to Rust | Node API secret the user configures (`WalletConfig.node_api_secret`) | every call taking `WalletConfig`: `EpicWallet.create`, `open`, `createWithPin`, `openWithPin`, `nodeTip`; `deleteWallet` takes it and discards it |
+| Dart to Rust | Node API secret the user configures (`WalletConfig.node_api_secret`) | every call taking `WalletConfig`: `EpicWallet.create`, `open`, `createWithPin`, `openWithPin`, `importWalletSeed`, `importWalletSeedWithPin`, `nodeTip`; `deleteWallet` takes it and discards it |
 | Dart to Rust | Recovery phrase of a test wallet, in `mock` builds only | `MockChain.fund` |
-| Rust to the `SecretStore`, and back | PIN key (`lepic.pin-key`), random, one per PIN wallet | written by `EpicWallet.createWithPin`; read by `openWithPin` and `mnemonicWithPin`; deleted by `deleteWallet` |
+| Rust to the `SecretStore`, and back | PIN key (`lepic.pin-key`), random, one per PIN wallet | written by `EpicWallet.createWithPin` and `importWalletSeedWithPin`, replaced by `changePin`; read by `openWithPin`, `mnemonicWithPin` and `changePin`; deleted by `deleteWallet` |
 | Rust to Dart | Recovery phrase, after the password or PIN is verified, for the backup screen | `EpicWallet.mnemonic`, `EpicWallet.mnemonicWithPin` |
 | Never | Seed bytes, private keys, blinding factors, nonces, vault keys, the generated wallet password of PIN unlock | none |
 
@@ -217,12 +232,12 @@ the secret store, which the earlier binding kept in process-wide state.
 | `release_stuck_send(key)` | not provided | The engine never releases a posted send (claim `## Needs`). |
 | `cancel_transaction(tx_id)` | `cancel_transaction(tx_id)` | Same. |
 | `refresh_with`, `scan_with`, `start_listener_with`, `*_for_tests` | none | Rust-only hooks of the earlier binding. Tests use `MockChain`. |
-| `init_logging(dir)` | `LepicRuntime::logs()` stream | The on-disk log ring is task U-04. |
+| `init_logging(dir)` | `LepicRuntime::open_log_ring(dir, max_bytes)`, and the `LepicRuntime::logs()` stream | The ring keeps redacted records within `max_bytes`; it does not return a file path. |
 | `log_message(level, tag, message)` | `LepicRuntime::log_message(level, tag, message)` | Target `dart`, tag as a field. |
-| `read_log_tail(max_bytes)` | not provided | Task U-04 (log ring and redacted export). |
-| `redact_text(text)` | not provided | Task U-04. |
+| `read_log_tail(max_bytes)` | `LepicRuntime::export_support_bundle()` | The whole ring, redacted, with a short header. |
+| `redact_text(text)` | not provided | The ring redacts by field, not free text; redact the app's own text in Dart. |
 | `generate_wallet_password()` | not provided (ADR 0014) | `create_with_pin` generates the password inside Rust. |
-| `seal_password(pin, password)` | not provided (ADR 0014) | `create_with_pin` returns the sealed text. Text sealed by the earlier binding does not open here; users moving from the earlier core restore from their phrase anyway, since LEPIC imports no `epic-wallet` database, and get new sealed text from `create_with_pin`. |
+| `seal_password(pin, password)` | not provided (ADR 0014) | `create_with_pin` returns the sealed text. Text sealed by the earlier binding does not open here; users moving from the earlier core restore from their phrase or their `wallet.seed` anyway, since LEPIC imports no `epic-wallet` database, and get new sealed text from `create_with_pin` or `import_wallet_seed_with_pin`. |
 | `open_password(pin, sealed)` | not provided (ADR 0014) | `open_with_pin(.., pin, sealed_password)` opens the wallet; wrong PIN gives `wrongPassword`, damaged text `invalidArgument`. |
 
 Types: `WalletConfig` keeps its fields; `Chain` has no `usernet`. `WalletError` and

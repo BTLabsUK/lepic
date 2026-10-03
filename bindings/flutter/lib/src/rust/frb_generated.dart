@@ -75,7 +75,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -219934462;
+  int get rustContentHash => -1455886275;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -98,6 +98,13 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiWalletEpicWalletCancelTransaction({
     required EpicWallet that,
     required int txId,
+  });
+
+  Future<String> crateApiWalletEpicWalletChangePin({
+    required EpicWallet that,
+    required String sealedPassword,
+    required String oldPin,
+    required String newPin,
   });
 
   Future<EpicWallet> crateApiWalletEpicWalletCreate({
@@ -142,6 +149,24 @@ abstract class RustLibApi extends BaseApi {
   Future<FinalizedTx> crateApiWalletEpicWalletFinalizeFile({
     required EpicWallet that,
     required String path,
+  });
+
+  Future<EpicWallet> crateApiWalletEpicWalletImportWalletSeed({
+    required LepicRuntime runtime,
+    required WalletConfig config,
+    required AppSecretStore store,
+    required String seedFile,
+    required String seedPassword,
+    required String password,
+  });
+
+  Future<PinWallet> crateApiWalletEpicWalletImportWalletSeedWithPin({
+    required LepicRuntime runtime,
+    required WalletConfig config,
+    required AppSecretStore store,
+    required String seedFile,
+    required String seedPassword,
+    required String pin,
   });
 
   bool crateApiWalletEpicWalletListenerRunning({required EpicWallet that});
@@ -223,6 +248,10 @@ abstract class RustLibApi extends BaseApi {
     required bool refresh,
   });
 
+  Future<String> crateApiRuntimeLepicRuntimeExportSupportBundle({
+    required LepicRuntime that,
+  });
+
   void crateApiRuntimeLepicRuntimeLogMessage({
     required LepicRuntime that,
     required LogLevel level,
@@ -235,6 +264,12 @@ abstract class RustLibApi extends BaseApi {
   });
 
   LepicRuntime crateApiRuntimeLepicRuntimeNew({required LogLevel logLevel});
+
+  Future<void> crateApiRuntimeLepicRuntimeOpenLogRing({
+    required LepicRuntime that,
+    required String dir,
+    required BigInt maxBytes,
+  });
 
   void crateApiRuntimeLepicRuntimeStopLogs({required LepicRuntime that});
 
@@ -450,6 +485,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiWalletEpicWalletChangePin({
+    required EpicWallet that,
+    required String sealedPassword,
+    required String oldPin,
+    required String newPin,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerEpicWallet(
+            that,
+            serializer,
+          );
+          sse_encode_String(sealedPassword, serializer);
+          sse_encode_String(oldPin, serializer);
+          sse_encode_String(newPin, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiWalletEpicWalletChangePinConstMeta,
+        argValues: [that, sealedPassword, oldPin, newPin],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletChangePinConstMeta =>
+      const TaskConstMeta(
+        debugName: "EpicWallet_change_pin",
+        argNames: ["that", "sealedPassword", "oldPin", "newPin"],
+      );
+
+  @override
   Future<EpicWallet> crateApiWalletEpicWalletCreate({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -475,7 +552,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 5,
             port: port_,
           );
         },
@@ -516,7 +593,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 6,
             port: port_,
           );
         },
@@ -563,7 +640,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 7,
             port: port_,
           );
         },
@@ -599,7 +676,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 8,
             port: port_,
           );
         },
@@ -635,7 +712,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -674,7 +751,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 9,
+              funcId: 10,
               port: port_,
             );
           },
@@ -714,7 +791,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -752,7 +829,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -774,6 +851,119 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<EpicWallet> crateApiWalletEpicWalletImportWalletSeed({
+    required LepicRuntime runtime,
+    required WalletConfig config,
+    required AppSecretStore store,
+    required String seedFile,
+    required String seedPassword,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLepicRuntime(
+            runtime,
+            serializer,
+          );
+          sse_encode_box_autoadd_wallet_config(config, serializer);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore(
+            store,
+            serializer,
+          );
+          sse_encode_String(seedFile, serializer);
+          sse_encode_String(seedPassword, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerEpicWallet,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiWalletEpicWalletImportWalletSeedConstMeta,
+        argValues: [runtime, config, store, seedFile, seedPassword, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletImportWalletSeedConstMeta =>
+      const TaskConstMeta(
+        debugName: "EpicWallet_import_wallet_seed",
+        argNames: [
+          "runtime",
+          "config",
+          "store",
+          "seedFile",
+          "seedPassword",
+          "password",
+        ],
+      );
+
+  @override
+  Future<PinWallet> crateApiWalletEpicWalletImportWalletSeedWithPin({
+    required LepicRuntime runtime,
+    required WalletConfig config,
+    required AppSecretStore store,
+    required String seedFile,
+    required String seedPassword,
+    required String pin,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLepicRuntime(
+            runtime,
+            serializer,
+          );
+          sse_encode_box_autoadd_wallet_config(config, serializer);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore(
+            store,
+            serializer,
+          );
+          sse_encode_String(seedFile, serializer);
+          sse_encode_String(seedPassword, serializer);
+          sse_encode_String(pin, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_pin_wallet,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiWalletEpicWalletImportWalletSeedWithPinConstMeta,
+        argValues: [runtime, config, store, seedFile, seedPassword, pin],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletImportWalletSeedWithPinConstMeta =>
+      const TaskConstMeta(
+        debugName: "EpicWallet_import_wallet_seed_with_pin",
+        argNames: [
+          "runtime",
+          "config",
+          "store",
+          "seedFile",
+          "seedPassword",
+          "pin",
+        ],
+      );
+
+  @override
   bool crateApiWalletEpicWalletListenerRunning({required EpicWallet that}) {
     return handler.executeSync(
       SyncTask(
@@ -783,7 +973,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -812,7 +1002,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -845,7 +1035,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 17,
             port: port_,
           );
         },
@@ -885,7 +1075,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 18,
             port: port_,
           );
         },
@@ -930,7 +1120,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 19,
             port: port_,
           );
         },
@@ -978,7 +1168,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 20,
             port: port_,
           );
         },
@@ -1017,7 +1207,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 21,
             port: port_,
           );
         },
@@ -1055,7 +1245,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1094,7 +1284,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 20,
+              funcId: 23,
               port: port_,
             );
           },
@@ -1134,7 +1324,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1175,7 +1365,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 22,
+              funcId: 25,
               port: port_,
             );
           },
@@ -1219,7 +1409,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1261,7 +1451,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1300,7 +1490,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 25,
+              funcId: 28,
               port: port_,
             );
           },
@@ -1333,7 +1523,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1369,7 +1559,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1391,6 +1581,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiRuntimeLepicRuntimeExportSupportBundle({
+    required LepicRuntime that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLepicRuntime(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 31,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiRuntimeLepicRuntimeExportSupportBundleConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRuntimeLepicRuntimeExportSupportBundleConstMeta =>
+      const TaskConstMeta(
+        debugName: "LepicRuntime_export_support_bundle",
+        argNames: ["that"],
+      );
+
+  @override
   void crateApiRuntimeLepicRuntimeLogMessage({
     required LepicRuntime that,
     required LogLevel level,
@@ -1408,7 +1634,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_log_level(level, serializer);
           sse_encode_String(tag, serializer);
           sse_encode_String(message, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1445,7 +1671,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 29,
+              funcId: 33,
               port: port_,
             );
           },
@@ -1475,7 +1701,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_log_level(logLevel, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 34)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -1496,6 +1722,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiRuntimeLepicRuntimeOpenLogRing({
+    required LepicRuntime that,
+    required String dir,
+    required BigInt maxBytes,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLepicRuntime(
+            that,
+            serializer,
+          );
+          sse_encode_String(dir, serializer);
+          sse_encode_u_64(maxBytes, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 35,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiRuntimeLepicRuntimeOpenLogRingConstMeta,
+        argValues: [that, dir, maxBytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRuntimeLepicRuntimeOpenLogRingConstMeta =>
+      const TaskConstMeta(
+        debugName: "LepicRuntime_open_log_ring",
+        argNames: ["that", "dir", "maxBytes"],
+      );
+
+  @override
   void crateApiRuntimeLepicRuntimeStopLogs({required LepicRuntime that}) {
     return handler.executeSync(
       SyncTask(
@@ -1505,7 +1771,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 36)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1544,7 +1810,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_chain(chain, serializer);
           sse_encode_u_64(amount, serializer);
           sse_encode_u_32(child, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 37)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1573,7 +1839,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 38)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_u_64,
@@ -1599,7 +1865,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 34)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 39)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1625,7 +1891,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_u_64(height, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 35)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 40)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -1652,7 +1918,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 36)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 41)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1681,7 +1947,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 37)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 42)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_u_32,
@@ -1714,7 +1980,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_log_level(logLevel, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 38)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 43)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -1748,7 +2014,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_u_64(height, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 39)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1781,7 +2047,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_bool(unreachable, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 40)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1822,7 +2088,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 46,
             port: port_,
           );
         },
@@ -1851,7 +2117,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 47,
             port: port_,
           );
         },
@@ -1886,7 +2152,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 43,
+            funcId: 48,
             port: port_,
           );
         },
@@ -1917,7 +2183,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(address, serializer);
           sse_encode_chain(chain, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 49)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -1943,7 +2209,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(phrase, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 50)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -1971,7 +2237,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 51,
             port: port_,
           );
         },
@@ -2012,7 +2278,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 47,
+            funcId: 52,
             port: port_,
           );
         },
@@ -4286,6 +4552,30 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   Future<void> cancelTransaction({required int txId}) => RustLib.instance.api
       .crateApiWalletEpicWalletCancelTransaction(that: this, txId: txId);
 
+  /// Changes the PIN of a wallet from [`EpicWallet::create_with_pin`] and returns the new
+  /// sealed text, which replaces `sealed_password` in the app's storage. `old_pin` must open
+  /// `sealed_password`; that attempt is counted and delayed as in
+  /// [`EpicWallet::open_with_pin`]. The wallet password stays the same, but it is sealed under
+  /// `new_pin` with a new PIN key that replaces `lepic.pin-key` in the store, so the old
+  /// sealed text no longer opens with any PIN.
+  ///
+  /// Store the new sealed text at once. If the app stops between the call and storing it, the
+  /// wallet cannot be opened by PIN; delete it with [`delete_wallet`] and restore it from its
+  /// recovery phrase.
+  ///
+  /// Fails with `InvalidArgument` when `new_pin` has fewer than four characters, before any
+  /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
+  Future<String> changePin({
+    required String sealedPassword,
+    required String oldPin,
+    required String newPin,
+  }) => RustLib.instance.api.crateApiWalletEpicWalletChangePin(
+    that: this,
+    sealedPassword: sealedPassword,
+    oldPin: oldPin,
+    newPin: newPin,
+  );
+
   /// Step 1 of a manual send: builds the slate, locks the inputs and returns the slate text
   /// for the recipient, whose answer goes to [`EpicWallet::finalize_and_post`].
   Future<Slate> createSendSlate({
@@ -4446,6 +4736,13 @@ class LepicRuntimeImpl extends RustOpaque implements LepicRuntime {
         RustLib.instance.api.rust_arc_decrement_strong_count_LepicRuntimePtr,
   );
 
+  /// The redacted support bundle of the ring from [`LepicRuntime::open_log_ring`]: a short
+  /// header, then its records oldest first, one per line. Records logged meanwhile wait.
+  ///
+  /// Fails with `InvalidArgument` when no ring is open and `Io` when it cannot be read.
+  Future<String> exportSupportBundle() => RustLib.instance.api
+      .crateApiRuntimeLepicRuntimeExportSupportBundle(that: this);
+
   /// Logs one line from the app under the target `dart.<tag>`, through the same stream.
   /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them, and `message` at
   /// most its first 1024 bytes, cut at a character boundary. Never pass secrets.
@@ -4465,6 +4762,25 @@ class LepicRuntimeImpl extends RustOpaque implements LepicRuntime {
   /// `Panic` [`WalletError`] as its error.
   Stream<LogEntry> logs() =>
       RustLib.instance.api.crateApiRuntimeLepicRuntimeLogs(that: this);
+
+  /// Keeps every log record from now on, redacted, in a ring of files in `dir` of at most
+  /// `max_bytes` together, and keeps the records a ring in `dir` already holds. Records reach
+  /// it at the runtime's log level, whether or not a [`LepicRuntime::logs`] stream is
+  /// subscribed. Replaces the ring opened before. `dir` should hold nothing else.
+  ///
+  /// Only the values of the fields in the LEPIC log vocabulary that say nothing about keys,
+  /// amounts or addresses are kept; every other value is written as `[redacted]`, as is text
+  /// quoted inside an `error` value. Messages are kept, including those of
+  /// [`LepicRuntime::log_message`].
+  ///
+  /// Fails with `InvalidArgument` when `max_bytes` is below 4 KiB or above 16 MiB, and `Io`
+  /// when the directory cannot be created or read.
+  Future<void> openLogRing({required String dir, required BigInt maxBytes}) =>
+      RustLib.instance.api.crateApiRuntimeLepicRuntimeOpenLogRing(
+        that: this,
+        dir: dir,
+        maxBytes: maxBytes,
+      );
 
   /// Ends the stream from [`LepicRuntime::logs`]. Cancelling the Dart subscription completes
   /// only once the stream has ended.

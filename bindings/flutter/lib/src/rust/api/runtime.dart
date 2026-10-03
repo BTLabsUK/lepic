@@ -9,12 +9,18 @@ import 'error.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `app_log_message`, `busy`, `claim`, `lock_dir`, `randomize_crypto_context`, `start`
+// These functions are ignored because they are not marked as `pub`: `app_log_message`, `busy`, `claim`, `lock_dir`, `log_ring_error`, `randomize_crypto_context`, `start`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DirClaim`, `RuntimeInner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`, `drop`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<LepicRuntime>>
 abstract class LepicRuntime implements RustOpaqueInterface {
+  /// The redacted support bundle of the ring from [`LepicRuntime::open_log_ring`]: a short
+  /// header, then its records oldest first, one per line. Records logged meanwhile wait.
+  ///
+  /// Fails with `InvalidArgument` when no ring is open and `Io` when it cannot be read.
+  Future<String> exportSupportBundle();
+
   /// Logs one line from the app under the target `dart.<tag>`, through the same stream.
   /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them, and `message` at
   /// most its first 1024 bytes, cut at a character boundary. Never pass secrets.
@@ -33,6 +39,20 @@ abstract class LepicRuntime implements RustOpaqueInterface {
   /// [`LepicRuntime::logs`].
   factory LepicRuntime({required LogLevel logLevel}) =>
       RustLib.instance.api.crateApiRuntimeLepicRuntimeNew(logLevel: logLevel);
+
+  /// Keeps every log record from now on, redacted, in a ring of files in `dir` of at most
+  /// `max_bytes` together, and keeps the records a ring in `dir` already holds. Records reach
+  /// it at the runtime's log level, whether or not a [`LepicRuntime::logs`] stream is
+  /// subscribed. Replaces the ring opened before. `dir` should hold nothing else.
+  ///
+  /// Only the values of the fields in the LEPIC log vocabulary that say nothing about keys,
+  /// amounts or addresses are kept; every other value is written as `[redacted]`, as is text
+  /// quoted inside an `error` value. Messages are kept, including those of
+  /// [`LepicRuntime::log_message`].
+  ///
+  /// Fails with `InvalidArgument` when `max_bytes` is below 4 KiB or above 16 MiB, and `Io`
+  /// when the directory cannot be created or read.
+  Future<void> openLogRing({required String dir, required BigInt maxBytes});
 
   /// Ends the stream from [`LepicRuntime::logs`]. Cancelling the Dart subscription completes
   /// only once the stream has ended.

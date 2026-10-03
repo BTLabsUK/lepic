@@ -12,7 +12,7 @@ import 'runtime.dart';
 import 'secret_store.dart';
 import 'types.dart';
 
-// These functions are ignored because they are not marked as `pub`: `boundary`, `run`
+// These functions are ignored because they are not marked as `pub`: `boundary`, `create_pin_wallet`, `run`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`
 
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
@@ -69,6 +69,25 @@ abstract class EpicWallet implements RustOpaqueInterface {
 
   /// Cancels a transaction that was not posted and unlocks its outputs.
   Future<void> cancelTransaction({required int txId});
+
+  /// Changes the PIN of a wallet from [`EpicWallet::create_with_pin`] and returns the new
+  /// sealed text, which replaces `sealed_password` in the app's storage. `old_pin` must open
+  /// `sealed_password`; that attempt is counted and delayed as in
+  /// [`EpicWallet::open_with_pin`]. The wallet password stays the same, but it is sealed under
+  /// `new_pin` with a new PIN key that replaces `lepic.pin-key` in the store, so the old
+  /// sealed text no longer opens with any PIN.
+  ///
+  /// Store the new sealed text at once. If the app stops between the call and storing it, the
+  /// wallet cannot be opened by PIN; delete it with [`delete_wallet`] and restore it from its
+  /// recovery phrase.
+  ///
+  /// Fails with `InvalidArgument` when `new_pin` has fewer than four characters, before any
+  /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
+  Future<String> changePin({
+    required String sealedPassword,
+    required String oldPin,
+    required String newPin,
+  });
 
   /// Creates a wallet in `config.data_dir` with its vault in `store`. With `mnemonic` it
   /// restores that seed (call [`EpicWallet::scan`] next); without it a fresh seed is
@@ -144,6 +163,49 @@ abstract class EpicWallet implements RustOpaqueInterface {
 
   /// [`EpicWallet::finalize_and_post`] for the answer file at `path`.
   Future<FinalizedTx> finalizeFile({required String path});
+
+  /// [`EpicWallet::create`] from an `epic-wallet` `wallet.seed` instead of a phrase:
+  /// `seed_file` is the file's text and `seed_password` the password it was written with.
+  /// The wallet gets `password`, as `create` does; call [`EpicWallet::scan`] next. The file
+  /// is only read; LEPIC keeps no copy of it.
+  ///
+  /// Fails with `WrongPassword` when `seed_password` does not decrypt the file,
+  /// `InvalidArgument` when the text is not a `wallet.seed` (at most 4096 bytes), and
+  /// otherwise as `create` does.
+  static Future<EpicWallet> importWalletSeed({
+    required LepicRuntime runtime,
+    required WalletConfig config,
+    required AppSecretStore store,
+    required String seedFile,
+    required String seedPassword,
+    required String password,
+  }) => RustLib.instance.api.crateApiWalletEpicWalletImportWalletSeed(
+    runtime: runtime,
+    config: config,
+    store: store,
+    seedFile: seedFile,
+    seedPassword: seedPassword,
+    password: password,
+  );
+
+  /// [`EpicWallet::import_wallet_seed`] with a wallet password LEPIC generates and seals
+  /// under `pin`, as [`EpicWallet::create_with_pin`] does; store `sealed_password` as it
+  /// says. Fails as `import_wallet_seed` and `create_with_pin` do.
+  static Future<PinWallet> importWalletSeedWithPin({
+    required LepicRuntime runtime,
+    required WalletConfig config,
+    required AppSecretStore store,
+    required String seedFile,
+    required String seedPassword,
+    required String pin,
+  }) => RustLib.instance.api.crateApiWalletEpicWalletImportWalletSeedWithPin(
+    runtime: runtime,
+    config: config,
+    store: store,
+    seedFile: seedFile,
+    seedPassword: seedPassword,
+    pin: pin,
+  );
 
   bool listenerRunning();
 

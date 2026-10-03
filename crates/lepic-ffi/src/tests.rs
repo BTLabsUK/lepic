@@ -8,6 +8,7 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
 use crate::api::types::{Chain, WalletConfig};
 use crate::api::wallet::{EpicWallet, PinWallet, delete_wallet};
+use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
 
 const PIN: &str = "4711";
@@ -210,7 +211,10 @@ async fn an_opened_wallet_bounds_the_first_node_tip_by_the_tip_it_confirmed() {
             store.clone(),
         )
         .unwrap();
-        session.create(None, password()).await.unwrap();
+        session
+            .create(SeedOrigin::Generate, password())
+            .await
+            .unwrap();
         // The first tip is confirmed by a second agreeing refresh.
         session.refresh().await.unwrap();
         session.refresh().await.unwrap();
@@ -274,7 +278,10 @@ async fn lock_stops_the_listener_and_closes_its_relay_connection() {
         .unwrap(),
     );
     session
-        .create(None, zeroize::Zeroizing::new("password".to_owned()))
+        .create(
+            SeedOrigin::Generate,
+            zeroize::Zeroizing::new("password".to_owned()),
+        )
         .await
         .unwrap();
 
@@ -479,4 +486,163 @@ fn app_log_messages_reach_the_stream_cut_to_1024_bytes() {
         .find(|record| record.target == "dart")
         .unwrap();
     assert_eq!(record.message.len(), 1024);
+}
+
+/// Golden vector `keys/wallet_seed_seed32`: a `wallet.seed` written by `epic-wallet`.
+const WALLET_SEED_VECTOR: &str =
+    include_str!("../../../testdata/vectors/keys/wallet_seed_seed32.json");
+
+fn wallet_seed_vector() -> (String, String, String, String) {
+    let vector: serde_json::Value = serde_json::from_str(WALLET_SEED_VECTOR).unwrap();
+    let text = |pointer: &str| {
+        vector
+            .pointer(pointer)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    (
+        text("/expected/file"),
+        text("/inputs/password"),
+        text("/inputs/wrong_password"),
+        text("/inputs/mnemonic"),
+    )
+}
+
+#[tokio::test]
+async fn an_imported_wallet_seed_gives_the_wallet_of_its_phrase() {
+    let fixture = Fixture::new();
+    let (file, file_password, wrong_password, phrase) = wallet_seed_vector();
+    let store = AppSecretStore::in_memory();
+    let wrong = EpicWallet::import_wallet_seed(
+        &fixture.runtime,
+        fixture.config(),
+        &store,
+        file.clone(),
+        wrong_password,
+        "password".to_owned(),
+    )
+    .await;
+    assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
+    assert_eq!(store.read(VAULT_KEY).await.unwrap(), None);
+
+    let wallet = EpicWallet::import_wallet_seed(
+        &fixture.runtime,
+        fixture.config(),
+        &store,
+        file,
+        file_password,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        wallet.mnemonic("password".to_owned()).await.unwrap(),
+        phrase
+    );
+}
+
+#[tokio::test]
+async fn import_of_text_that_is_no_wallet_seed_is_an_invalid_argument() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    for text in ["{}".to_owned(), " ".repeat(4097)] {
+        let imported = EpicWallet::import_wallet_seed_with_pin(
+            &fixture.runtime,
+            fixture.config(),
+            &store,
+            text,
+            "x".to_owned(),
+            PIN.to_owned(),
+        )
+        .await;
+        assert_eq!(kind(imported), WalletErrorKind::InvalidArgument);
+    }
+}
+
+#[tokio::test]
+async fn after_a_pin_change_only_the_new_pin_and_sealed_text_open() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let old_sealed = created.sealed_password.clone();
+    let wallet = created.wallet;
+
+    let short = wallet
+        .change_pin(old_sealed.clone(), PIN.to_owned(), "123".to_owned())
+        .await;
+    assert_eq!(kind(short), WalletErrorKind::InvalidArgument);
+    assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
+    let wrong = wallet
+        .change_pin(old_sealed.clone(), "0000".to_owned(), "2468".to_owned())
+        .await;
+    assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
+    assert_eq!(
+        store.read(FAILURES_KEY).await.unwrap().as_deref(),
+        Some("1")
+    );
+
+    let new_sealed = wallet
+        .change_pin(old_sealed.clone(), PIN.to_owned(), "2468".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
+    let phrase = wallet
+        .mnemonic_with_pin("2468".to_owned(), new_sealed.clone())
+        .await
+        .unwrap();
+    drop(wallet);
+
+    for (pin, sealed) in [
+        (PIN, &old_sealed),
+        (PIN, &new_sealed),
+        ("2468", &old_sealed),
+    ] {
+        let opened = fixture.open_with_pin(&store, pin, sealed).await;
+        assert_eq!(kind(opened), WalletErrorKind::WrongPassword, "{pin}");
+    }
+    let opened = fixture
+        .open_with_pin(&store, "2468", &new_sealed)
+        .await
+        .unwrap();
+    assert_eq!(
+        opened
+            .mnemonic_with_pin("2468".to_owned(), new_sealed)
+            .await
+            .unwrap(),
+        phrase
+    );
+}
+
+#[test]
+fn the_log_ring_keeps_redacted_records_for_the_support_bundle() {
+    let fixture = Fixture::new();
+    let runtime = &fixture.runtime;
+    assert_eq!(
+        kind(runtime.export_support_bundle()),
+        WalletErrorKind::InvalidArgument
+    );
+    let dir = fixture.dir.path().join("logs");
+    let dir_text = dir.to_string_lossy().into_owned();
+    for max_bytes in [4 * 1024 - 1, 16 * 1024 * 1024 + 1] {
+        assert_eq!(
+            kind(runtime.open_log_ring(dir_text.clone(), max_bytes)),
+            WalletErrorKind::InvalidArgument
+        );
+    }
+    runtime.open_log_ring(dir_text, 64 * 1024).unwrap();
+    runtime.log_message(LogLevel::Warn, "app".to_owned(), "screen opened".to_owned());
+    tracing::dispatcher::with_default(&runtime.inner.boundary.dispatch, || {
+        tracing::warn!(amount = 123_456_789_u64, tx_id = 7, "slate sent");
+    });
+
+    let bundle = runtime.export_support_bundle().unwrap();
+    assert!(bundle.starts_with("lepic support bundle\n"));
+    assert!(bundle.contains(": screen opened tag=app\n"), "{bundle}");
+    assert!(
+        bundle.contains(": slate sent amount=[redacted] tx_id=7\n"),
+        "{bundle}"
+    );
+    assert!(!bundle.contains("123456789"));
 }

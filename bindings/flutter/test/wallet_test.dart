@@ -138,6 +138,22 @@ Matcher isWalletError(WalletErrorKind kind) => isA<WalletError>()
     .having((e) => e.kind, 'kind', kind)
     .having((e) => e.code, 'code', errorCodes[kind]);
 
+/// Golden vector `keys/wallet_seed_seed32`: a `wallet.seed` that `epic-wallet` wrote.
+({String file, String password, String wrongPassword, String phrase})
+walletSeedVector() {
+  final vector = jsonDecode(
+    File('../../testdata/vectors/keys/wallet_seed_seed32.json')
+        .readAsStringSync(),
+  ) as Map<String, dynamic>;
+  final inputs = vector['inputs'] as Map<String, dynamic>;
+  return (
+    file: (vector['expected'] as Map<String, dynamic>)['file'] as String,
+    password: inputs['password'] as String,
+    wrongPassword: inputs['wrong_password'] as String,
+    phrase: inputs['mnemonic'] as String,
+  );
+}
+
 void main() {
   late Directory root;
   late MockChain chain;
@@ -528,4 +544,245 @@ void main() {
       phrase,
     );
   });
+  test('imports an epic-wallet wallet.seed with its password', () async {
+    final vector = walletSeedVector();
+    final store = MemoryStore();
+    await expectLater(
+      EpicWallet.importWalletSeed(
+        runtime: runtime,
+        config: configFor(walletDir('import-wrong')),
+        store: lepicSecretStore(store),
+        seedFile: vector.file,
+        seedPassword: vector.wrongPassword,
+        password: password,
+      ),
+      throwsWalletError(WalletErrorKind.wrongPassword),
+    );
+    expect(store.values, isEmpty);
+    await expectLater(
+      EpicWallet.importWalletSeed(
+        runtime: runtime,
+        config: configFor(walletDir('import-not-a-seed')),
+        store: lepicSecretStore(store),
+        seedFile: '{"encrypted_seed": "00"}',
+        seedPassword: vector.password,
+        password: password,
+      ),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+
+    final imported = await EpicWallet.importWalletSeed(
+      runtime: runtime,
+      config: configFor(walletDir('import')),
+      store: lepicSecretStore(store),
+      seedFile: vector.file,
+      seedPassword: vector.password,
+      password: password,
+    );
+    expect(await imported.mnemonic(password: password), vector.phrase);
+    expect(store.values.keys, ['lepic.vault']);
+
+    final pinStore = MemoryStore();
+    await expectLater(
+      EpicWallet.importWalletSeedWithPin(
+        runtime: runtime,
+        config: configFor(walletDir('import-pin-wrong')),
+        store: lepicSecretStore(pinStore),
+        seedFile: vector.file,
+        seedPassword: vector.wrongPassword,
+        pin: '1234',
+      ),
+      throwsWalletError(WalletErrorKind.wrongPassword),
+    );
+    expect(
+      await walletExists(runtime: runtime, store: lepicSecretStore(pinStore)),
+      isFalse,
+    );
+    final pinWallet = await EpicWallet.importWalletSeedWithPin(
+      runtime: runtime,
+      config: configFor(walletDir('import-pin')),
+      store: lepicSecretStore(pinStore),
+      seedFile: vector.file,
+      seedPassword: vector.password,
+      pin: '1234',
+    );
+    expect(
+      await pinWallet.wallet.mnemonicWithPin(
+        pin: '1234',
+        sealedPassword: pinWallet.sealedPassword,
+      ),
+      vector.phrase,
+    );
+  });
+
+  test('after a pin change only the new pin opens the wallet', () async {
+    final dir = walletDir('change-pin');
+    final store = MemoryStore();
+    final created = await EpicWallet.createWithPin(
+      runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
+      pin: '1234',
+    );
+    final oldSealed = created.sealedPassword;
+    final phrase = await created.wallet.mnemonicWithPin(
+      pin: '1234',
+      sealedPassword: oldSealed,
+    );
+    await expectLater(
+      created.wallet.changePin(
+        sealedPassword: oldSealed,
+        oldPin: '1234',
+        newPin: '987',
+      ),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+    expect(store.values['lepic.pin-failures'], isNull);
+    final newSealed = await created.wallet.changePin(
+      sealedPassword: oldSealed,
+      oldPin: '1234',
+      newPin: '9876',
+    );
+    expect(newSealed, isNot(oldSealed));
+    expect(newSealed, isNot(contains('9876')));
+    created.wallet.dispose();
+
+    for (final (pin, sealed) in [('1234', oldSealed), ('9876', oldSealed)]) {
+      await expectLater(
+        EpicWallet.openWithPin(
+          runtime: runtime,
+          config: configFor(dir),
+          store: lepicSecretStore(store),
+          pin: pin,
+          sealedPassword: sealed,
+        ),
+        throwsWalletError(WalletErrorKind.wrongPassword),
+        reason: pin,
+      );
+    }
+    final reopened = await EpicWallet.openWithPin(
+      runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
+      pin: '9876',
+      sealedPassword: newSealed,
+    );
+    expect(
+      await reopened.mnemonicWithPin(pin: '9876', sealedPassword: newSealed),
+      phrase,
+    );
+    expect(store.values['lepic.pin-failures'], isNull);
+  });
+
+  test('a wrong old pin is counted and delayed like any pin attempt', () async {
+    final store = MemoryStore();
+    final created = await EpicWallet.createWithPin(
+      runtime: runtime,
+      config: configFor(walletDir('change-pin-backoff')),
+      store: lepicSecretStore(store),
+      pin: '1234',
+    );
+    final sealed = created.sealedPassword;
+    for (var failures = 1; failures <= 3; failures++) {
+      final started = DateTime.now();
+      await expectLater(
+        created.wallet.changePin(
+          sealedPassword: sealed,
+          oldPin: '0000',
+          newPin: '9876',
+        ),
+        throwsWalletError(WalletErrorKind.wrongPassword),
+      );
+      expect(DateTime.now().difference(started).inSeconds, lessThan(5));
+      expect(store.values['lepic.pin-failures'], '$failures');
+    }
+    // After three failures the next attempt, even with the right pin, first waits 30 s.
+    var finished = false;
+    unawaited(
+      created.wallet
+          .changePin(sealedPassword: sealed, oldPin: '1234', newPin: '9876')
+          .then((_) {}, onError: (_) {})
+          .whenComplete(() => finished = true),
+    );
+    await Future<void>.delayed(const Duration(seconds: 3));
+    expect(finished, isFalse);
+    expect(store.values['lepic.pin-failures'], '4');
+  });
+
+  test(
+    'the support bundle holds log lines but no address, amount or key',
+    () async {
+      final debugRuntime = chain.runtime(logLevel: LogLevel.debug);
+      final live = <LogEntry>[];
+      final subscription = debugRuntime.logs().listen(live.add);
+      await debugRuntime.openLogRing(
+        dir: '${root.path}/logs',
+        maxBytes: BigInt.from(256 * 1024),
+      );
+
+      final vector = walletSeedVector();
+      final sender = await EpicWallet.importWalletSeedWithPin(
+        runtime: debugRuntime,
+        config: WalletConfig(
+          dataDir: walletDir('bundle-sender').path,
+          chain: Chain.floonet,
+          nodeUrl: 'http://127.0.0.1:1',
+          epicboxDomain: 'epicbox.example',
+          epicboxPort: 443,
+        ),
+        store: lepicSecretStore(MemoryStore()),
+        seedFile: vector.file,
+        seedPassword: vector.password,
+        pin: '1234',
+      );
+      final address = await sender.wallet.epicboxAddress();
+      chain.fund(
+        mnemonic: vector.phrase,
+        chain: Chain.floonet,
+        amount: BigInt.from(7 * epic),
+        child: 0,
+      );
+      chain.setHeight(height: BigInt.from(20));
+      await scanToEnd(sender.wallet);
+      final receiver = await EpicWallet.create(
+        runtime: debugRuntime,
+        config: configFor(walletDir('bundle-receiver')),
+        store: lepicSecretStore(MemoryStore()),
+        mnemonic: bobPhrase,
+        password: password,
+      );
+      await scanToEnd(receiver);
+      final s1 = await sender.wallet.createSendSlate(
+        amount: BigInt.from(3 * epic),
+        minimumConfirmations: BigInt.one,
+      );
+      final s2 = await receiver.receiveSlate(slateJson: s1.json);
+      await sender.wallet.finalizeAndPost(slateJson: s2.json);
+      final sent = (await sender.wallet.summary(refresh: true)).total;
+
+      final bundle = await debugRuntime.exportSupportBundle();
+      debugRuntime.stopLogs();
+      await subscription.cancel();
+
+      expect(bundle, startsWith('lepic support bundle\n'));
+      expect(bundle, contains('wallet imported'));
+      expect(bundle, contains('slate finalized'));
+      expect(bundle, contains('redacted: values of fields other than'));
+      expect(live, isNotEmpty);
+      final key = address.split('@').first;
+      for (final secret in [
+        key,
+        vector.phrase,
+        vector.password,
+        password,
+        bobPhrase,
+        '${3 * epic}',
+        '${7 * epic}',
+        '$sent',
+        s1.json,
+      ]) {
+        expect(bundle, isNot(contains(secret)));
+      }
+    },
+  );
 }

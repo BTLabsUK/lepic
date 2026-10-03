@@ -68,6 +68,24 @@ impl Clock for SystemClock {
     }
 }
 
+/// Where a new wallet's seed comes from.
+pub(crate) enum SeedOrigin {
+    Generate,
+    /// A recovery phrase the user typed.
+    Phrase(Zeroizing<String>),
+    /// The text of an `epic-wallet` `wallet.seed` file and the password it was written with.
+    SeedFile {
+        text: String,
+        password: Zeroizing<String>,
+    },
+}
+
+impl SeedOrigin {
+    pub(crate) fn phrase(mnemonic: Option<Zeroizing<String>>) -> Self {
+        mnemonic.map_or(Self::Generate, Self::Phrase)
+    }
+}
+
 pub(crate) struct Session {
     engine: EngineWallet,
     network: Network,
@@ -261,21 +279,31 @@ impl Session {
         }
     }
 
-    /// Creates the wallet: from `phrase` when given, from new entropy otherwise.
+    /// Creates the wallet from `origin`'s seed.
     pub(crate) async fn create(
         &self,
-        phrase: Option<Zeroizing<String>>,
+        origin: SeedOrigin,
         password: Zeroizing<String>,
     ) -> Result<(), WalletError> {
         self.vault.load(&self.store).await?;
         let password = self::password(password);
-        match phrase {
-            Some(phrase) => {
+        match origin {
+            SeedOrigin::Phrase(phrase) => {
                 let phrase = normalize_phrase(&phrase);
                 self.engine.restore(password, &phrase).await?;
             }
+            SeedOrigin::SeedFile {
+                text,
+                password: file_password,
+            } => {
+                self.engine
+                    .import_wallet_seed(password, &text, self::password(file_password))
+                    .await?;
+            }
             // The phrase is shown later through `recovery_phrase`, after the user set up a PIN.
-            None => drop(self.engine.create(password, WordCount::TwentyFour).await?),
+            SeedOrigin::Generate => {
+                drop(self.engine.create(password, WordCount::TwentyFour).await?);
+            }
         }
         if let Err(error) = self.vault.flush(&self.store).await {
             self.engine.lock();
@@ -322,10 +350,47 @@ impl Session {
         password: Zeroizing<String>,
     ) -> Result<String, WalletError> {
         self.ensure_unlocked()?;
+        let phrase = self
+            .with_stored_vault(password, |vault| {
+                let name =
+                    SecretName::new(SEED_SECRET).map_err(|error| invalid(error.to_string()))?;
+                let stored = vault
+                    .get(&name)
+                    .map_err(|error| WalletError::from(lepic_wallet::WalletError::from(error)))?
+                    .ok_or_else(|| {
+                        WalletError::new(WalletErrorKind::WalletNotFound, "no seed is stored")
+                    })?;
+                let seed = Seed::from_entropy(stored.expose_bytes()).map_err(|_| {
+                    WalletError::new(WalletErrorKind::SecretStore, "stored seed is malformed")
+                })?;
+                let phrase = seed.to_mnemonic().map_err(|_| {
+                    WalletError::new(WalletErrorKind::SecretStore, "stored seed is malformed")
+                })?;
+                Ok::<_, WalletError>(phrase)
+            })
+            .await?;
+        Ok(phrase.as_str().to_owned())
+    }
+
+    /// Checks `password` against the stored vault: `WrongPassword` when it does not open it.
+    pub(crate) async fn check_password(
+        &self,
+        password: Zeroizing<String>,
+    ) -> Result<(), WalletError> {
+        self.with_stored_vault(password, |_| Ok(())).await
+    }
+
+    /// Opens the vault in the app's store with `password` on the blocking pool and hands it to
+    /// `read`.
+    async fn with_stored_vault<T: Send + 'static>(
+        &self,
+        password: Zeroizing<String>,
+        read: impl FnOnce(&Vault<SharedStorage, StdRng>) -> Result<T, WalletError> + Send + 'static,
+    ) -> Result<T, WalletError> {
         let bytes = VaultBytes::default();
         bytes.load(&self.store).await?;
         let password = self::password(password);
-        let phrase = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let vault = Vault::open(
                 SharedStorage::new(bytes),
                 os_rng()?,
@@ -334,29 +399,10 @@ impl Session {
             .map_err(|error| {
                 WalletError::from(lepic_wallet::WalletError::from(vault_error(error)))
             })?;
-            let name = SecretName::new(SEED_SECRET).map_err(|error| invalid(error.to_string()))?;
-            let stored = vault
-                .get(&name)
-                .map_err(|error| WalletError::from(lepic_wallet::WalletError::from(error)))?
-                .ok_or_else(|| {
-                    WalletError::new(WalletErrorKind::WalletNotFound, "no seed is stored")
-                })?;
-            let seed = Seed::from_entropy(stored.expose_bytes()).map_err(|_| {
-                WalletError::new(WalletErrorKind::SecretStore, "stored seed is malformed")
-            })?;
-            let phrase = seed.to_mnemonic().map_err(|_| {
-                WalletError::new(WalletErrorKind::SecretStore, "stored seed is malformed")
-            })?;
-            Ok::<_, WalletError>(phrase)
+            read(&vault)
         })
         .await
-        .map_err(|_| {
-            WalletError::new(
-                WalletErrorKind::Panic,
-                "recovery phrase failed inside lepic",
-            )
-        })??;
-        Ok(phrase.as_str().to_owned())
+        .map_err(|_| WalletError::new(WalletErrorKind::Panic, "vault failed inside lepic"))?
     }
 
     /// Refreshes against the node and returns the default account's balance.

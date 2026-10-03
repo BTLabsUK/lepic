@@ -2,8 +2,9 @@
 //! returns a Future in Dart. Each fails only with [`WalletError`]; a panic inside LEPIC arrives
 //! as [`WalletErrorKind::Panic`].
 //!
-//! Secrets follow ADR 0014. Into Rust: the password, PIN and recovery phrase the user types, and
-//! the node API secret in [`WalletConfig`]. Out of Rust: the recovery phrase, only from
+//! Secrets follow ADR 0014. Into Rust: the password, PIN and recovery phrase the user types, the
+//! password of a `wallet.seed` file the user imports, and the node API secret in
+//! [`WalletConfig`]. Out of Rust: the recovery phrase, only from
 //! [`EpicWallet::mnemonic`] and [`EpicWallet::mnemonic_with_pin`] after the credential is
 //! checked, and the PIN key, only to the app's store. Seeds, keys, blinding factors, nonces and
 //! the generated wallet password of PIN unlock never leave Rust; Dart holds only encrypted
@@ -29,7 +30,7 @@ use crate::api::types::{
 use crate::boundary::{Boundary, end_stream, guard_or};
 use crate::frb_generated::StreamSink;
 use crate::node::NodeSecret;
-use crate::session::{self, Session, normalize_phrase, relay_network};
+use crate::session::{self, SeedOrigin, Session, normalize_phrase, relay_network};
 
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
 /// whitespace are ignored.
@@ -123,6 +124,48 @@ pub struct EpicWallet {
     session: Arc<Session>,
 }
 
+/// Creates a wallet from `origin` whose generated password is sealed under `pin`.
+async fn create_pin_wallet(
+    runtime: &LepicRuntime,
+    config: WalletConfig,
+    store: &AppSecretStore,
+    origin: SeedOrigin,
+    pin: String,
+    operation: &'static str,
+) -> Result<PinWallet, WalletError> {
+    let mut config = config;
+    let node_secret = NodeSecret::take(&mut config);
+    let pin = Zeroizing::new(pin);
+    let inner = Arc::clone(&runtime.inner);
+    let store = store.clone();
+    let kdf = inner.kdf;
+    runtime
+        .inner
+        .boundary
+        .run(operation, async move {
+            let pin = pin::NewPin::new(pin)?;
+            let session = Session::new(&inner, &config, &node_secret, store.clone())?;
+            // Checked before the PIN key is written, so it never replaces another wallet's
+            // key.
+            if session::wallet_exists(&store).await? {
+                return Err(WalletError::new(
+                    WalletErrorKind::WalletAlreadyExists,
+                    "the app's store holds a wallet",
+                ));
+            }
+            let password = pin::generate_password()?;
+            let sealed_password = pin::seal_new(&store, pin, password.clone(), kdf).await?;
+            session.create(origin, password).await?;
+            Ok(PinWallet {
+                wallet: EpicWallet {
+                    session: Arc::new(session),
+                },
+                sealed_password,
+            })
+        })
+        .await
+}
+
 impl Drop for EpicWallet {
     fn drop(&mut self) {
         self.session.stop_listener();
@@ -171,7 +214,47 @@ impl EpicWallet {
             .boundary
             .run("create", async move {
                 let session = Session::new(&inner, &config, &node_secret, store)?;
-                session.create(mnemonic, password).await?;
+                session
+                    .create(SeedOrigin::phrase(mnemonic), password)
+                    .await?;
+                Ok(EpicWallet {
+                    session: Arc::new(session),
+                })
+            })
+            .await
+    }
+
+    /// [`EpicWallet::create`] from an `epic-wallet` `wallet.seed` instead of a phrase:
+    /// `seed_file` is the file's text and `seed_password` the password it was written with.
+    /// The wallet gets `password`, as `create` does; call [`EpicWallet::scan`] next. The file
+    /// is only read; LEPIC keeps no copy of it.
+    ///
+    /// Fails with `WrongPassword` when `seed_password` does not decrypt the file,
+    /// `InvalidArgument` when the text is not a `wallet.seed` (at most 4096 bytes), and
+    /// otherwise as `create` does.
+    pub async fn import_wallet_seed(
+        runtime: &LepicRuntime,
+        config: WalletConfig,
+        store: &AppSecretStore,
+        seed_file: String,
+        seed_password: String,
+        password: String,
+    ) -> Result<EpicWallet, WalletError> {
+        let mut config = config;
+        let node_secret = NodeSecret::take(&mut config);
+        let origin = SeedOrigin::SeedFile {
+            text: seed_file,
+            password: Zeroizing::new(seed_password),
+        };
+        let password = Zeroizing::new(password);
+        let inner = Arc::clone(&runtime.inner);
+        let store = store.clone();
+        runtime
+            .inner
+            .boundary
+            .run("import_wallet_seed", async move {
+                let session = Session::new(&inner, &config, &node_secret, store)?;
+                session.create(origin, password).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
                 })
@@ -222,38 +305,34 @@ impl EpicWallet {
         mnemonic: Option<String>,
         pin: String,
     ) -> Result<PinWallet, WalletError> {
-        let mut config = config;
-        let node_secret = NodeSecret::take(&mut config);
-        let mnemonic = mnemonic.map(Zeroizing::new);
-        let pin = Zeroizing::new(pin);
-        let inner = Arc::clone(&runtime.inner);
-        let store = store.clone();
-        let kdf = inner.kdf;
-        runtime
-            .inner
-            .boundary
-            .run("create_with_pin", async move {
-                let pin = pin::NewPin::new(pin)?;
-                let session = Session::new(&inner, &config, &node_secret, store.clone())?;
-                // Checked before the PIN key is written, so it never replaces another
-                // wallet's key.
-                if session::wallet_exists(&store).await? {
-                    return Err(WalletError::new(
-                        WalletErrorKind::WalletAlreadyExists,
-                        "the app's store holds a wallet",
-                    ));
-                }
-                let password = pin::generate_password()?;
-                let sealed_password = pin::seal_new(&store, pin, password.clone(), kdf).await?;
-                session.create(mnemonic, password).await?;
-                Ok(PinWallet {
-                    wallet: EpicWallet {
-                        session: Arc::new(session),
-                    },
-                    sealed_password,
-                })
-            })
-            .await
+        let origin = SeedOrigin::phrase(mnemonic.map(Zeroizing::new));
+        create_pin_wallet(runtime, config, store, origin, pin, "create_with_pin").await
+    }
+
+    /// [`EpicWallet::import_wallet_seed`] with a wallet password LEPIC generates and seals
+    /// under `pin`, as [`EpicWallet::create_with_pin`] does; store `sealed_password` as it
+    /// says. Fails as `import_wallet_seed` and `create_with_pin` do.
+    pub async fn import_wallet_seed_with_pin(
+        runtime: &LepicRuntime,
+        config: WalletConfig,
+        store: &AppSecretStore,
+        seed_file: String,
+        seed_password: String,
+        pin: String,
+    ) -> Result<PinWallet, WalletError> {
+        let origin = SeedOrigin::SeedFile {
+            text: seed_file,
+            password: Zeroizing::new(seed_password),
+        };
+        create_pin_wallet(
+            runtime,
+            config,
+            store,
+            origin,
+            pin,
+            "import_wallet_seed_with_pin",
+        )
+        .await
     }
 
     /// [`EpicWallet::open`] with the wallet password sealed in `sealed_password`, opened with
@@ -319,6 +398,40 @@ impl EpicWallet {
             )
             .await?;
             session.recovery_phrase(password).await
+        })
+        .await
+    }
+
+    /// Changes the PIN of a wallet from [`EpicWallet::create_with_pin`] and returns the new
+    /// sealed text, which replaces `sealed_password` in the app's storage. `old_pin` must open
+    /// `sealed_password`; that attempt is counted and delayed as in
+    /// [`EpicWallet::open_with_pin`]. The wallet password stays the same, but it is sealed under
+    /// `new_pin` with a new PIN key that replaces `lepic.pin-key` in the store, so the old
+    /// sealed text no longer opens with any PIN.
+    ///
+    /// Store the new sealed text at once. If the app stops between the call and storing it, the
+    /// wallet cannot be opened by PIN; delete it with [`delete_wallet`] and restore it from its
+    /// recovery phrase.
+    ///
+    /// Fails with `InvalidArgument` when `new_pin` has fewer than four characters, before any
+    /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
+    pub async fn change_pin(
+        &self,
+        sealed_password: String,
+        old_pin: String,
+        new_pin: String,
+    ) -> Result<String, WalletError> {
+        let old_pin = Zeroizing::new(old_pin);
+        let new_pin = Zeroizing::new(new_pin);
+        self.run("change_pin", |session| async move {
+            session.ensure_unlocked()?;
+            let new_pin = pin::NewPin::new(new_pin)?;
+            let runtime = session.runtime();
+            let password =
+                pin::unlock(&runtime.pin, session.store(), old_pin, sealed_password).await?;
+            // Never reseal a password that does not open this wallet's vault.
+            session.check_password(password.clone()).await?;
+            pin::seal_new(session.store(), new_pin, password, runtime.kdf).await
         })
         .await
     }

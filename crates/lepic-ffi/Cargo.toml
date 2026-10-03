@@ -36,6 +36,7 @@ zeroize.workspace = true
 [dev-dependencies]
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 lepic-ffi = { path = ".", features = ["mock"] }
+serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 
