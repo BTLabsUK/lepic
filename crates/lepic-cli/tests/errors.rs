@@ -125,6 +125,28 @@ fn a_data_directory_another_process_holds_is_refused_until_released() {
     wallet.run(&host, &["wallet", "info"]).ok();
 }
 
+#[cfg(unix)]
+#[test]
+fn a_symbolic_link_in_place_of_the_lock_file_is_not_followed() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let target = elsewhere.path().join("created-through-the-link");
+    let lock = wallet.data_dir().join(".lepic.lock");
+    std::fs::remove_file(&lock).unwrap();
+    std::os::unix::fs::symlink(&target, &lock).unwrap();
+
+    let outcome = wallet.run(&host, &["wallet", "info"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (1, "internal")
+    );
+    assert!(!target.exists(), "the lock followed the link");
+}
+
 #[test]
 fn init_on_a_locked_data_directory_creates_nothing() {
     let host = TestHost::new();

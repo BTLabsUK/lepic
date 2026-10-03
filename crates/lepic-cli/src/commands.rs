@@ -753,15 +753,18 @@ fn check_private_dir(_: &Path) -> Result<(), CliError> {
 const LOCK_FILE: &str = ".lepic.lock";
 
 /// An exclusive OS lock on [`LOCK_FILE`], released when the file is closed. A missing data
-/// directory holds no wallet to protect and is left to the wallet to report. Any failure other
-/// than another holder fails closed.
+/// directory holds no wallet to protect and is left to the wallet to report. A symbolic link in
+/// place of the lock file is refused rather than followed, so the lock never creates a file
+/// elsewhere. Any failure other than another holder fails closed.
 fn lock_data_dir(dir: &Path) -> Result<Option<std::fs::File>, CliError> {
-    let file = match std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join(LOCK_FILE))
+    let mut options = std::fs::File::options();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(open_flags::O_NOFOLLOW);
+    }
+    let file = match options.open(dir.join(LOCK_FILE)) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(CliError::io("open the data directory lock")(error)),
@@ -774,6 +777,71 @@ fn lock_data_dir(dir: &Path) -> Result<Option<std::fs::File>, CliError> {
         }
     }
 }
+
+// `O_NOFOLLOW` from the platform headers, as the file transport has it. The value differs
+// between kernels and, on Linux, between architectures. A Unix target not listed here fails to
+// build rather than follow a link.
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "riscv64",
+        target_arch = "s390x",
+        target_arch = "loongarch64"
+    )
+))]
+mod open_flags {
+    pub(super) const O_NOFOLLOW: i32 = 0o400000;
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "powerpc64"
+    )
+))]
+mod open_flags {
+    pub(super) const O_NOFOLLOW: i32 = 0o100000;
+}
+
+#[cfg(any(
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+mod open_flags {
+    pub(super) const O_NOFOLLOW: i32 = 0x0100;
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        all(
+            any(target_os = "linux", target_os = "android"),
+            any(
+                target_arch = "x86",
+                target_arch = "x86_64",
+                target_arch = "riscv64",
+                target_arch = "s390x",
+                target_arch = "loongarch64",
+                target_arch = "arm",
+                target_arch = "aarch64",
+                target_arch = "powerpc64"
+            )
+        ),
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("the cli does not know O_NOFOLLOW for this Unix target");
 
 fn inbox_report(summary: InboxSummary) -> InboxReport {
     InboxReport {
