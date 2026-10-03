@@ -21,3 +21,12 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
+# Read only when this package is the root, so only by its own `flutter test`; an app's pubspec
+# sets its own.
+hooks:
+  user_defines:
+    lepic:
+      # Written by `cargo xtask mobile --host-test`: lepic-ffi built with the `mock` feature, which
+      # an app build never uses, so it is kept apart from `native/`.
+      native_dir: test_native

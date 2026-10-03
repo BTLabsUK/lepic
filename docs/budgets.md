@@ -3,8 +3,9 @@
 ## TL;DR
 
 `cargo xtask budget` measures what a phone pays for LEPIC and fails when a measurement exceeds its
-budget below: the size of the shipped library per mobile target, the time and peak memory of a
-restore over the recorded G-05 node sessions, and the time and peak memory of an Epicbox drain.
+budget below: the size of the shipped library per mobile and Linux target, the time and peak
+memory of a restore over the recorded G-05 node sessions, and the time and peak memory of an
+Epicbox drain.
 The table is the single source of the limits; `xtask/src/budget.rs` reads it.
 
 ## Budgets
@@ -14,6 +15,7 @@ The table is the single source of the limits; `xtask/src/budget.rs` reads it.
 | `size.aarch64-linux-android` | 9216 | KiB | 7133 |
 | `size.armv7-linux-androideabi` | 6144 | KiB | 4841 |
 | `size.x86_64-linux-android` | 9728 | KiB | 7711 |
+| `size.x86_64-unknown-linux-gnu` | 9728 | KiB | 7630 |
 | `restore.time` | 800 | ms | 44 to 191 |
 | `restore.peak_memory` | 12288 | KiB | 6084 |
 | `drain.time` | 500 | ms | 48 to 139 |
@@ -45,6 +47,7 @@ high-water mark (`VmHWM` in `/proc/<pid>/status`) over the runs, read every mill
 ## Limits
 
 - Peak memory is measured on Linux only; elsewhere the rows are reported as not measured.
+- The Linux library builds only on a Linux host, like the iOS ones only on macOS.
 - The iOS targets build only on macOS and have no rows yet. Add `size.aarch64-apple-ios` and
   `size.aarch64-apple-ios-sim` after the first run on a macOS host.
 - The recorded restore sessions are small chains, so `restore.*` catches regressions in the fixed

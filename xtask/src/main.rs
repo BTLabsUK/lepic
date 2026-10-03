@@ -35,6 +35,7 @@ commands:
   mobile      --target <triple> [--release]: build the library crates for a mobile target
               --package [--target <triple>]...: copy release lepic-ffi into bindings/flutter
               --emulator-test [--device <serial>]: run the Flutter integration test on a device
+              --host-test: run flutter test in bindings/flutter against the mock Linux library
   repo-lint   workspace lints and unsafe code, pure crates, the secp256k1-zkp pin, interop images
   soak        --iterations <n> [--seed <s>] [--jobs <j>]: randomized differential soak
   upstream-drift

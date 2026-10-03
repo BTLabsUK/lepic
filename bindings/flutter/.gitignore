@@ -3,3 +3,5 @@ build/
 pubspec.lock
 # Built by `cargo xtask mobile --package`.
 /native/
+# Built by `cargo xtask mobile --host-test`.
+/test_native/

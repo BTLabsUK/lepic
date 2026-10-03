@@ -8,7 +8,7 @@ over its secure storage, and calls `EpicWallet` methods, which return Futures an
 failure is a thrown `WalletError` with a stable numeric code. Only secrets the user types or
 configures enter Rust, only the recovery phrase leaves it for Dart after a credential check, and
 the PIN key leaves it only for the app's secret store (ADR 0014, below).
-The package bundles the Android and iOS libraries through its build hook (below).
+The package bundles the Android, iOS and Linux libraries through its build hook (below).
 
 ## Use
 
@@ -68,7 +68,7 @@ final wallet = await EpicWallet.create(
 ## Native libraries
 
 `hook/build.dart` adds the prebuilt `liblepic_ffi` for the target being built as a Flutter native
-asset, so the app needs no Rust toolchain and no Gradle or Xcode changes. The library keeps the
+asset, so the app needs no Rust toolchain and no Gradle, Xcode or CMake changes. The library keeps the
 flutter_rust_bridge stem `lepic_ffi`, so the generated `RustLib.init()` loads it the same way the
 app loads its current `epic_wallet_core` library.
 
@@ -76,6 +76,7 @@ app loads its current `epic_wallet_core` library.
 |---|---|---|
 | Android arm64-v8a, armeabi-v7a, x86_64 | `native/<rust triple>/liblepic_ffi.so` | Linux or macOS, with the Android NDK and `cargo-ndk` |
 | iOS device and simulator, arm64 | `native/<rust triple>/liblepic_ffi.dylib` | macOS with Xcode |
+| Linux x86_64 | `native/x86_64-unknown-linux-gnu/liblepic_ffi.so` | Linux x86_64 |
 
 Build them from the repository root before building the app:
 
@@ -85,7 +86,7 @@ cargo xtask mobile --package --target aarch64-linux-android
 ```
 
 The CI workflow `mobile.yml` builds the same libraries and uploads them as the artifacts
-`lepic-ffi-android` and `lepic-ffi-ios`. To use libraries kept elsewhere, for example unpacked
+`lepic-ffi-android`, which also holds the Linux library, and `lepic-ffi-ios`. To use libraries kept elsewhere, for example unpacked
 artifacts, set the directory in the app's `pubspec.yaml`:
 
 ```yaml
@@ -101,12 +102,16 @@ its own `<rust triple>/` directory, so flatten or rename CI artifact layouts to 
 
 - The libraries link against Android API 24; the hook fails for an app with a lower `minSdk`.
 - They need no C++ runtime, so the app ships no `libc++_shared.so` for LEPIC.
+- The Linux library links against the glibc of the machine that built it and does not load on
+  an older one, so build it on the oldest distribution the app supports. A Linux app bundles it
+  in `lib/` next to its executable.
 - A missing library fails the app build with the `cargo xtask mobile` command that makes it.
 - `cargo xtask mobile --package` writes a `SHA256SUMS` file next to each library, and the hook
   refuses a library that is not in it with that hash. Keep the file with the library when you
   move artifacts into a `native_dir`. It catches truncated, stale or mixed-up files; it is not a
   signature, so it does not stand in for trusting where the directory came from.
-- Desktop builds and `flutter test` get no bundled library; see Develop.
+- macOS and Windows builds get no bundled library. `flutter test` on Linux gets the Linux
+  library; see Develop.
 
 To switch the app from its own Rust crate: depend on this package by path or git, delete the
 app's `hook/build.dart` and `rust/`, and drop its direct `flutter_rust_bridge_hooks` and
@@ -231,15 +236,18 @@ cd bindings/flutter
 flutter_rust_bridge_codegen generate
 ```
 
-Run the tests on Linux against the library built with the scripted node:
+Run the tests on x86_64 Linux, from the repository root:
 
 ```sh
-cargo build -p lepic-ffi --features mock
-cd bindings/flutter && flutter test
+cargo xtask mobile --host-test
 ```
 
-`LEPIC_FFI_LIB` points the tests at another library path. `MockChain` works only in a `mock`
-build; in any other build it fails with `unsupported`.
+It builds `lepic-ffi` with the scripted node (`mock` feature) for the host, writes it to
+`test_native/`, which this package's `pubspec.yaml` names as `native_dir`, and runs
+`flutter test` here. The build hook bundles the library from there, as it would for a Linux app,
+and the tests open the copy it installed. After a Rust change, run the command again; for Dart
+changes alone `flutter test` is enough. `MockChain` works only in a `mock` build; in any other
+build it fails with `unsupported`.
 
 `emulator_test/` is an app with no UI whose integration test loads the bundled library on an
 Android device and runs create, restore, file send, receive and finalize against `MockChain`.

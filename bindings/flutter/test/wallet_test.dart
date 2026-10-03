@@ -1,8 +1,8 @@
-// Runs against the native library built with the mock node:
-//   cargo build -p lepic-ffi --features mock
-//   flutter test
-// LEPIC_FFI_LIB overrides the library path.
+// Runs on Linux against the library the build hook bundles from `test_native/`, which holds
+// lepic-ffi built with the mock node. From the repository root:
+//   cargo xtask mobile --host-test
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
@@ -43,9 +43,27 @@ class FailingStore implements SecretStore {
   Future<void> delete(String key) async => throw StateError('keystore locked');
 }
 
-String libraryPath() =>
-    Platform.environment['LEPIC_FFI_LIB'] ??
-    '${Directory.current.path}/../../target/debug/liblepic_ffi.so';
+String libraryPath() {
+  // `flutter test` runs hook/build.dart for the host and records where it installed each code
+  // asset; opening that file proves the hook bundled the library.
+  const assetId = 'package:lepic/src/rust/frb_generated.io.dart';
+  final manifest = File('build/native_assets/linux/native_assets.json');
+  if (!manifest.existsSync()) {
+    throw StateError(
+      'No ${manifest.path}: the build hook bundled no library. '
+      'Run `cargo xtask mobile --host-test` from the LEPIC repository.',
+    );
+  }
+  return switch (jsonDecode(manifest.readAsStringSync())) {
+    {
+      'native-assets': {
+        'linux_x64': {assetId: ['absolute', final String path]},
+      },
+    } =>
+      path,
+    _ => throw StateError('${manifest.path} has no absolute path for $assetId'),
+  };
+}
 
 WalletConfig configFor(Directory dir) => WalletConfig(
   dataDir: dir.path,

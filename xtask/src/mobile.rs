@@ -3,11 +3,16 @@
 //!
 //! `--package` builds the `lepic-ffi` shared library in release mode and copies it, with a
 //! `SHA256SUMS` manifest, to `bindings/flutter/native/<triple>/`, where the Dart package's build
-//! hook checks it and picks it up.
+//! hook checks it and picks it up. Besides the mobile targets it builds the Linux desktop library,
+//! on a Linux host only, which links against that host's glibc.
 //!
 //! `--emulator-test` builds the library with the scripted node (`mock`) for the attached Android
 //! device's ABI, puts it in the integration test app `bindings/flutter/emulator_test/native/`, and
 //! runs `flutter test integration_test` there on that device. Start the emulator first.
+//!
+//! `--host-test` builds the library with the scripted node for the Linux host, puts it in
+//! `bindings/flutter/test_native/`, which the package's own `pubspec.yaml` names as `native_dir`,
+//! and runs `flutter test` in `bindings/flutter`, whose build hook bundles it from there.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,6 +46,11 @@ const MANIFEST_FILE: &str = "SHA256SUMS";
 const EMULATOR_TEST_APP: &str = "bindings/flutter/emulator_test";
 const EMULATOR_TEST_NATIVE_DIR: &str = "native";
 
+/// The Dart package, and the directory its own `pubspec.yaml` names as `native_dir` for its
+/// `flutter test` run, both relative to the workspace root.
+const FLUTTER_PACKAGE: &str = "bindings/flutter";
+const HOST_TEST_NATIVE_DIR: &str = "bindings/flutter/test_native";
+
 /// The `lepic-ffi` feature with the in-process scripted node the integration test drives.
 const MOCK_FEATURE: &str = "mock";
 
@@ -50,9 +60,14 @@ const ANDROID_TARGETS: &[&str] = &[
     "x86_64-linux-android",
 ];
 const APPLE_TARGETS: &[&str] = &["aarch64-apple-ios", "aarch64-apple-ios-sim"];
+const LINUX_TARGETS: &[&str] = &["x86_64-unknown-linux-gnu"];
+
+/// The only host `--host-test` runs on: `flutter test` runs the build hook for the host, and the
+/// hook bundles a library for this Linux target only.
+const HOST_TEST_TARGET: &str = "x86_64-unknown-linux-gnu";
 
 const USAGE: &str = "mobile --target <triple> [--release] | mobile --package [--target <triple>]... \
-                     | mobile --emulator-test [--device <serial>]";
+                     | mobile --emulator-test [--device <serial>] | mobile --host-test";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
@@ -64,6 +79,8 @@ enum Request {
     /// Run the Flutter integration test on an attached Android device, the only one attached
     /// when no serial is given.
     EmulatorTest { device: Option<String> },
+    /// Run the Dart package's `flutter test` against the scripted-node library for the host.
+    HostTest,
 }
 
 fn parse(args: &[String]) -> Result<Request> {
@@ -71,6 +88,7 @@ fn parse(args: &[String]) -> Result<Request> {
     let mut release = false;
     let mut package = false;
     let mut emulator_test = false;
+    let mut host_test = false;
     let mut device = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -82,12 +100,19 @@ fn parse(args: &[String]) -> Result<Request> {
             "--release" => release = true,
             "--package" => package = true,
             "--emulator-test" => emulator_test = true,
+            "--host-test" => host_test = true,
             "--device" => {
                 let value = args.next().context("`--device` needs an adb serial")?;
                 device = Some(value.clone());
             }
             other => bail!("unknown argument `{other}`, usage: cargo xtask {USAGE}"),
         }
+    }
+    if host_test {
+        if package || release || emulator_test || device.is_some() || !targets.is_empty() {
+            bail!("`--host-test` takes no other argument; it builds for the host");
+        }
+        return Ok(Request::HostTest);
     }
     if emulator_test {
         if package || release || !targets.is_empty() {
@@ -111,18 +136,21 @@ fn parse(args: &[String]) -> Result<Request> {
     Ok(Request::Build { target, release })
 }
 
-/// The targets `--package` builds when none is named: Android everywhere, iOS on macOS too.
+/// The targets `--package` builds when none is named: Android everywhere, iOS on macOS, Linux on
+/// Linux.
 fn default_package_targets(host_os: &str) -> Vec<String> {
     let mut targets = ANDROID_TARGETS.to_vec();
-    if host_os == "macos" {
-        targets.extend(APPLE_TARGETS);
+    match host_os {
+        "macos" => targets.extend(APPLE_TARGETS),
+        "linux" => targets.extend(LINUX_TARGETS),
+        _ => {}
     }
     targets.into_iter().map(String::from).collect()
 }
 
 /// The start of the cargo command for `target`, up to and including `build`, or an error when the
-/// target is not a supported mobile target or cannot be built on `host_os` (a
-/// `std::env::consts::OS` value).
+/// target is not a supported target or cannot be built on `host_os` (a `std::env::consts::OS`
+/// value).
 fn cargo_build_prefix(target: &str, host_os: &str) -> Result<Vec<String>> {
     if ANDROID_TARGETS.contains(&target) {
         return Ok(["ndk", "-t", target, "-P", ANDROID_API_LEVEL, "build"]
@@ -135,9 +163,18 @@ fn cargo_build_prefix(target: &str, host_os: &str) -> Result<Vec<String>> {
         }
         return Ok(["build", "--target", target].map(String::from).to_vec());
     }
+    if LINUX_TARGETS.contains(&target) {
+        // The library links against the host's glibc, so it is built natively, not cross-built.
+        if host_os != "linux" {
+            bail!("`{target}` builds only on Linux");
+        }
+        return Ok(["build", "--target", target].map(String::from).to_vec());
+    }
     bail!(
-        "`{target}` is not a mobile target, expected one of: {}",
-        [ANDROID_TARGETS, APPLE_TARGETS].concat().join(", ")
+        "`{target}` is not a supported target, expected one of: {}",
+        [ANDROID_TARGETS, APPLE_TARGETS, LINUX_TARGETS]
+            .concat()
+            .join(", ")
     )
 }
 
@@ -167,6 +204,27 @@ fn emulator_test_args(target: &str, host_os: &str) -> Result<Vec<String>> {
     let mut args = package_args(target, host_os)?;
     args.extend(["--features".to_owned(), MOCK_FEATURE.to_owned()]);
     Ok(args)
+}
+
+/// The cargo arguments that build `lepic-ffi` with the scripted node for the host, or an error
+/// when the host (`std::env::consts` `OS` and `ARCH` values) is not `HOST_TEST_TARGET`. A debug
+/// build for the host, without `--target`, so it shares the artifacts of a plain
+/// `cargo build -p lepic-ffi --features mock`.
+fn host_test_args(host_os: &str, host_arch: &str) -> Result<Vec<String>> {
+    if (host_os, host_arch) != ("linux", "x86_64") {
+        bail!("`--host-test` runs only on an x86_64 Linux host ({HOST_TEST_TARGET})");
+    }
+    Ok([
+        "build",
+        "--package",
+        FFI_PACKAGE,
+        "--lib",
+        "--locked",
+        "--features",
+        MOCK_FEATURE,
+    ]
+    .map(String::from)
+    .to_vec())
 }
 
 /// The serials of the devices `adb devices` lists as ready.
@@ -242,18 +300,39 @@ fn run_emulator_test(root: &Path, device: Option<&str>, host_os: &str) -> Result
     run_cargo(root, &emulator_test_args(target, host_os)?)?;
     let app = root.join(EMULATOR_TEST_APP);
     let packaged = copy_into_package(
-        &target_dir(root),
+        &release_library(&target_dir(root), target),
         &app.join(EMULATOR_TEST_NATIVE_DIR),
         target,
     )?;
     write_manifest(&packaged)?;
 
+    if !run_flutter(&app, &["test", "integration_test", "-d", device.as_str()])? {
+        bail!("the integration test failed on `{device}`");
+    }
+    Ok(())
+}
+
+fn run_host_test(root: &Path, host_os: &str, host_arch: &str) -> Result<()> {
+    run_cargo(root, &host_test_args(host_os, host_arch)?)?;
+    let built = target_dir(root)
+        .join("debug")
+        .join(shared_library_name(HOST_TEST_TARGET));
+    let packaged = copy_into_package(&built, &root.join(HOST_TEST_NATIVE_DIR), HOST_TEST_TARGET)?;
+    write_manifest(&packaged)?;
+
+    if !run_flutter(&root.join(FLUTTER_PACKAGE), &["test"])? {
+        bail!("`flutter test` failed in `{FLUTTER_PACKAGE}`");
+    }
+    Ok(())
+}
+
+/// Runs `flutter` with `args` in `dir` and returns whether it succeeded.
+fn run_flutter(dir: &Path, args: &[&str]) -> Result<bool> {
     let flutter = sdk_tool("FLUTTER_ROOT", "bin", "flutter");
-    let args = ["test", "integration_test", "-d", device.as_str()];
     eprintln!("xtask mobile: {} {}", flutter.display(), args.join(" "));
     let status = Command::new(&flutter)
         .args(args)
-        .current_dir(&app)
+        .current_dir(dir)
         .status()
         .with_context(|| {
             format!(
@@ -261,10 +340,7 @@ fn run_emulator_test(root: &Path, device: Option<&str>, host_os: &str) -> Result
                 flutter.display()
             )
         })?;
-    if !status.success() {
-        bail!("the integration test failed on `{device}`");
-    }
-    Ok(())
+    Ok(status.success())
 }
 
 /// The file name of the shared library flutter_rust_bridge loads on `target`.
@@ -302,15 +378,22 @@ fn run_cargo(root: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Copies the built library for `target` into `native_dir/<target>/` and returns its new path.
-fn copy_into_package(target_dir: &Path, native_dir: &Path, target: &str) -> Result<PathBuf> {
+/// Where cargo puts the release library it builds for `target` with `--target`.
+fn release_library(target_dir: &Path, target: &str) -> PathBuf {
+    target_dir
+        .join(target)
+        .join("release")
+        .join(shared_library_name(target))
+}
+
+/// Copies the `built` library for `target` into `native_dir/<target>/` and returns its new path.
+fn copy_into_package(built: &Path, native_dir: &Path, target: &str) -> Result<PathBuf> {
     let name = shared_library_name(target);
-    let built = target_dir.join(target).join("release").join(&name);
     let destination_dir = native_dir.join(target);
     fs::create_dir_all(&destination_dir)
         .with_context(|| format!("could not create `{}`", destination_dir.display()))?;
     let destination = destination_dir.join(&name);
-    fs::copy(&built, &destination).with_context(|| {
+    fs::copy(built, &destination).with_context(|| {
         format!(
             "could not copy `{}` to `{}`",
             built.display(),
@@ -360,13 +443,15 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
             let native_dir = root.join(PACKAGE_NATIVE_DIR);
             for (target, args) in targets.iter().zip(commands) {
                 run_cargo(root, &args)?;
-                let packaged = copy_into_package(&target_dir, &native_dir, target)?;
+                let packaged =
+                    copy_into_package(&release_library(&target_dir, target), &native_dir, target)?;
                 write_manifest(&packaged)?;
                 eprintln!("xtask mobile: packaged {}", packaged.display());
             }
             Ok(())
         }
         Request::EmulatorTest { device } => run_emulator_test(root, device.as_deref(), host_os),
+        Request::HostTest => run_host_test(root, host_os, std::env::consts::ARCH),
     }
 }
 
@@ -431,12 +516,74 @@ mod tests {
     }
 
     #[test]
-    fn package_defaults_to_android_off_macos_and_adds_ios_on_macos() {
-        assert_eq!(default_package_targets("linux"), strings(ANDROID_TARGETS));
+    fn package_defaults_to_android_plus_ios_on_macos_and_linux_on_linux() {
+        assert_eq!(
+            default_package_targets("linux"),
+            strings(&[ANDROID_TARGETS, LINUX_TARGETS].concat())
+        );
         assert_eq!(
             default_package_targets("macos"),
             strings(&[ANDROID_TARGETS, APPLE_TARGETS].concat())
         );
+        assert_eq!(default_package_targets("windows"), strings(ANDROID_TARGETS));
+    }
+
+    #[test]
+    fn package_builds_the_linux_library_natively_on_linux_only() {
+        let args = package_args("x86_64-unknown-linux-gnu", "linux").unwrap();
+        assert_eq!(
+            args,
+            strings(&[
+                "build",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--package",
+                "lepic-ffi",
+                "--lib",
+                "--locked",
+                "--release",
+            ])
+        );
+        assert!(package_args("x86_64-unknown-linux-gnu", "macos").is_err());
+        assert!(build_args("x86_64-unknown-linux-gnu", false, "windows").is_err());
+    }
+
+    #[test]
+    fn host_test_takes_no_other_argument() {
+        assert_eq!(
+            parse(&strings(&["--host-test"])).unwrap(),
+            Request::HostTest
+        );
+        for other in [
+            &["--package"][..],
+            &["--release"],
+            &["--emulator-test"],
+            &["--device", "emulator-5554"],
+            &["--target", "x86_64-unknown-linux-gnu"],
+        ] {
+            let mut args = strings(&["--host-test"]);
+            args.extend(strings(other));
+            assert!(parse(&args).is_err(), "accepted --host-test {other:?}");
+        }
+    }
+
+    #[test]
+    fn host_test_builds_the_mock_debug_library_on_x86_64_linux_only() {
+        assert_eq!(
+            host_test_args("linux", "x86_64").unwrap(),
+            strings(&[
+                "build",
+                "--package",
+                "lepic-ffi",
+                "--lib",
+                "--locked",
+                "--features",
+                "mock",
+            ])
+        );
+        assert!(host_test_args("linux", "aarch64").is_err());
+        assert!(host_test_args("macos", "x86_64").is_err());
+        assert!(LINUX_TARGETS.contains(&HOST_TEST_TARGET));
     }
 
     #[test]
@@ -589,9 +736,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_mobile_targets() {
-        assert!(build_args("x86_64-unknown-linux-gnu", false, "linux").is_err());
-        assert!(package_args("x86_64-unknown-linux-gnu", "linux").is_err());
+    fn rejects_unsupported_targets() {
+        assert!(build_args("x86_64-pc-windows-msvc", false, "linux").is_err());
+        assert!(package_args("aarch64-unknown-linux-gnu", "linux").is_err());
     }
 
     #[test]
@@ -604,6 +751,10 @@ mod tests {
             shared_library_name("aarch64-apple-ios"),
             "liblepic_ffi.dylib"
         );
+        assert_eq!(
+            shared_library_name("x86_64-unknown-linux-gnu"),
+            "liblepic_ffi.so"
+        );
     }
 
     #[test]
@@ -615,7 +766,12 @@ mod tests {
         fs::write(built.join("liblepic_ffi.so"), b"elf").unwrap();
         let native_dir = dir.path().join("native");
 
-        let packaged = copy_into_package(&target_dir, &native_dir, "x86_64-linux-android").unwrap();
+        let packaged = copy_into_package(
+            &release_library(&target_dir, "x86_64-linux-android"),
+            &native_dir,
+            "x86_64-linux-android",
+        )
+        .unwrap();
 
         assert_eq!(
             packaged,
@@ -627,7 +783,11 @@ mod tests {
     #[test]
     fn copy_fails_when_the_library_was_not_built() {
         let dir = tempfile::tempdir().unwrap();
-        let result = copy_into_package(dir.path(), &dir.path().join("native"), "aarch64-apple-ios");
+        let result = copy_into_package(
+            &release_library(dir.path(), "aarch64-apple-ios"),
+            &dir.path().join("native"),
+            "aarch64-apple-ios",
+        );
         assert!(result.is_err());
     }
 

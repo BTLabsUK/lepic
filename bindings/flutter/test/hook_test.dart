@@ -1,5 +1,5 @@
 // Runs hook/build.dart in isolation for each target it handles. Needs no native library: the
-// mobile cases point the `native_dir` user define at stand-in files.
+// bundling cases point the `native_dir` user define at stand-in files.
 
 import 'dart:io';
 
@@ -91,8 +91,18 @@ void main() {
     );
   });
 
-  test('bundles nothing for desktop and host test builds', () async {
-    expect(await bundled(os: OS.linux, arch: Architecture.x64), isEmpty);
+  test('bundles the linux x64 library', () async {
+    final library = standIn('x86_64-unknown-linux-gnu', 'liblepic_ffi.so');
+    final assets = await bundled(os: OS.linux, arch: Architecture.x64);
+    expect(assets, hasLength(1));
+    expect(assets.single.id, 'package:lepic/src/rust/frb_generated.io.dart');
+    expect(assets.single.linkMode, isA<DynamicLoadingBundled>());
+    expect(assets.single.file, library.uri);
+  });
+
+  test('bundles nothing for macos and windows builds', () async {
+    expect(await bundled(os: OS.macOS, arch: Architecture.arm64), isEmpty);
+    expect(await bundled(os: OS.windows, arch: Architecture.x64), isEmpty);
   });
 
   test('fails with the packaging command when the library is missing', () {
@@ -159,6 +169,10 @@ void main() {
         arch: Architecture.x64,
         iosSdk: IOSSdk.iPhoneSimulator,
       ),
+      throwsUnsupportedError,
+    );
+    await expectLater(
+      bundled(os: OS.linux, arch: Architecture.arm64),
       throwsUnsupportedError,
     );
   });
