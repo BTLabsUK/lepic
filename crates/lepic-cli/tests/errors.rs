@@ -186,6 +186,21 @@ fn the_first_tip_of_a_command_is_bounded_by_the_tip_the_wallet_confirmed() {
     });
     let outcome = wallet.run(&host, &["wallet", "info"]);
     assert_eq!((outcome.code, error_kind(&outcome).as_str()), (9, "node"));
+    // The engine refuses such a tip with the same exit code, so the cause shows that the node
+    // client refused it first, from the tip the wallet stored.
+    let refused_by_client = lepic_node::NodeError::ImplausibleTip {
+        previous: lepic_primitives::amount::Height::new(support::TIP),
+        reported: lepic_primitives::amount::Height::new(support::TIP + 10_000),
+    }
+    .to_string();
+    let document = outcome.json();
+    let causes = document["error"]["causes"].as_array().unwrap();
+    assert!(
+        causes
+            .iter()
+            .any(|cause| cause == refused_by_client.as_str()),
+        "{document}"
+    );
 }
 
 #[test]
