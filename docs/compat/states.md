@@ -55,13 +55,13 @@ the transaction before this wallet records finalizing or posting it.
 Upstream cancels and expires any entry whose `tx_type` is still `TxSentCreated` or `TxReceived`,
 which includes a transaction it finalized or posted but has not yet seen in the mempool. LEPIC
 expires neither a finalized nor a posted transaction, because either may still be mined after the
-TTL cutoff; only the owner's explicit cancel ends it before confirmation. Upstream refuses to cancel
-an entry with `confirmed = true`, and so does LEPIC: `confirmed` is final.
+TTL cutoff. The owner may still cancel a finalized one; a posted one ends only by confirmation.
+Upstream refuses to cancel an entry with `confirmed = true`, and so does LEPIC: `confirmed` is final.
 
 Upstream also refuses to cancel an entry whose type is neither `TxSentCreated` nor `TxReceived`, so
 a transaction the mempool has seen (`TxSentMempool`, `TxReceivedMempool`) cannot be cancelled there.
-LEPIC's state machine allows cancelling any `posted` transaction; the task that implements cancel
-decides whether to refuse it once the mempool has seen the transaction.
+LEPIC's state machine allows `posted` to `cancelled` for the scan's repair, but the owner's cancel
+refuses a `posted` transaction; only confirmation ends it.
 
 The state machine does not know the direction of a transaction. Which side may take a step, for
 example that only an invoice issuer finalizes an incoming transaction, is enforced by the stages
