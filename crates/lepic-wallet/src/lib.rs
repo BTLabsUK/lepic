@@ -42,3 +42,17 @@ pub use ports::{DATABASE_FILE, SqliteStores};
 pub use process::{crypto_context_is_randomized, randomize_crypto_context};
 pub use receive::{ReceiveError, ReceiveRequest, Received};
 pub use wallet::Wallet;
+
+/// What a host needs to decode a slate without a wallet, for example to show it to the user
+/// before receiving or finalizing it.
+pub mod slate {
+    pub use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+    pub use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+    pub use lepic_slate::codec::{MediaType, WireSlate};
+    pub use lepic_slate::error::DecodeError;
+    pub use lepic_slate::model::Slate;
+    pub use lepic_slate::origin::WireOrigin;
+    pub use lepic_slate::registry::CodecRegistry;
+    pub use lepic_slate::role::Role;
+    pub use lepic_slate::stage::Stage;
+}
