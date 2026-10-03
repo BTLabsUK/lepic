@@ -153,21 +153,37 @@ impl<H: Host> Run<'_, H> {
     /// Runs `work` to its end. When the user interrupts first, `stop` asks it to end early and
     /// its result is still awaited, so what it stored is reported. With human output, the
     /// wallet's events while it runs become progress lines on stderr.
+    ///
+    /// `receipts`, when given, is the wallet's database: new incoming transactions in it are
+    /// shown as they are stored, because the engine announces state changes only, not the
+    /// transaction a received slate creates.
     async fn until_interrupted<T>(
         &mut self,
         events: broadcast::Receiver<Event>,
+        receipts: Option<SharedStore>,
         work: impl Future<Output = T>,
         stop: impl FnOnce(),
     ) -> T {
         self.graceful.store(true, Ordering::SeqCst);
+        let human = self.settings.output == OutputFormat::Human;
         let mut interrupt = self.interrupt.clone();
         let mut stop = Some(stop);
-        let mut events = (self.settings.output == OutputFormat::Human).then_some(events);
+        let mut events = human.then_some(events);
         let mut progress = Progress::default();
+        let mut receipts = receipts
+            .filter(|_| human)
+            .and_then(|store| Receipts::new(store).ok());
+        let mut ticks = tokio::time::interval(RECEIPT_POLL);
         tokio::pin!(work);
         let result = loop {
             tokio::select! {
                 result = &mut work => break result,
+                _ = ticks.tick(), if receipts.is_some() => {
+                    let lines = receipts.as_mut().map(Receipts::new_lines).unwrap_or_default();
+                    for line in lines {
+                        self.show_line(&line);
+                    }
+                }
                 Ok(_) = interrupt.wait_for(|stopped| *stopped), if stop.is_some() => {
                     if let Some(stop) = stop.take() {
                         stop();
@@ -183,15 +199,26 @@ impl<H: Host> Run<'_, H> {
         while let Some(Ok(event)) = events.as_mut().map(broadcast::Receiver::try_recv) {
             self.show_progress(&mut progress, &event);
         }
+        for line in receipts
+            .as_mut()
+            .map(Receipts::new_lines)
+            .unwrap_or_default()
+        {
+            self.show_line(&line);
+        }
         result
     }
 
     fn show_progress(&mut self, progress: &mut Progress, event: &Event) {
         if let Some(line) = progress.line(event) {
-            // Progress is a courtesy; a closed stderr must not end the command.
-            let _ = writeln!(self.console.stderr, "{line}");
-            let _ = self.console.stderr.flush();
+            self.show_line(&line);
         }
+    }
+
+    fn show_line(&mut self, line: &str) {
+        // Progress is a courtesy; a closed stderr must not end the command.
+        let _ = writeln!(self.console.stderr, "{line}");
+        let _ = self.console.stderr.flush();
     }
 
     async fn wallet(&mut self, command: WalletCommand) -> Result<Report, CliError> {
@@ -260,8 +287,10 @@ impl<H: Host> Run<'_, H> {
             EpicboxCommand::Drain => opened.wallet.epicbox_drain(&opened.epicbox).await?,
             EpicboxCommand::Listen => {
                 let handle = ListenHandle::new();
+                let store = opened.store()?;
                 self.until_interrupted(
                     opened.wallet.subscribe(),
+                    Some(store),
                     opened.wallet.epicbox_listen(&opened.epicbox, &handle),
                     || handle.stop(),
                 )
@@ -350,6 +379,7 @@ impl<H: Host> Run<'_, H> {
             let summary: ScanSummary = self
                 .until_interrupted(
                     opened.wallet.subscribe(),
+                    None,
                     opened
                         .wallet
                         .scan(ScanOptions::restore(self.settings.network), &cancel),
@@ -727,6 +757,71 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
 fn slate_file(path: &Path) -> impl FnOnce(TransportError) -> CliError {
     let path = path.to_owned();
     move |source| CliError::SlateFile { path, source }
+}
+
+/// How often `epicbox listen` looks for transactions a received slate created.
+const RECEIPT_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Incoming transactions stored after a starting point, each reported once.
+struct Receipts {
+    store: SharedStore,
+    /// The highest transaction id already reported or present at the start.
+    seen: u32,
+}
+
+impl Receipts {
+    fn new(store: SharedStore) -> Result<Self, CliError> {
+        let seen = highest_tx_id(&store)?;
+        Ok(Self { store, seen })
+    }
+
+    /// Lines for incoming transactions stored since the last call. A failed read shows
+    /// nothing; the next tick tries again.
+    fn new_lines(&mut self) -> Vec<String> {
+        let Ok(found) = incoming_after(&self.store, self.seen) else {
+            return Vec::new();
+        };
+        found
+            .iter()
+            .map(|tx| {
+                self.seen = self.seen.max(tx.id.0);
+                format!(
+                    "transaction {} received {} EPIC",
+                    tx.id.0,
+                    format_amount(tx.entry.amount_credited)
+                )
+            })
+            .collect()
+    }
+}
+
+fn highest_tx_id(store: &SharedStore) -> Result<u32, CliError> {
+    let accounts = store.read(|repos| repos.accounts())?;
+    let mut highest = 0;
+    for account in accounts {
+        let transactions = store.read(|repos| repos.transactions(account.index))?;
+        highest = transactions
+            .iter()
+            .map(|tx| tx.id.0)
+            .fold(highest, u32::max);
+    }
+    Ok(highest)
+}
+
+/// Incoming transactions in every account with an id above `after`, oldest first.
+fn incoming_after(store: &SharedStore, after: u32) -> Result<Vec<StoredTransaction>, CliError> {
+    let accounts = store.read(|repos| repos.accounts())?;
+    let mut found = Vec::new();
+    for account in accounts {
+        let transactions = store.read(|repos| repos.transactions(account.index))?;
+        found.extend(
+            transactions
+                .into_iter()
+                .filter(|tx| tx.id.0 > after && tx.entry.direction == TxDirection::Incoming),
+        );
+    }
+    found.sort_by_key(|tx| tx.id.0);
+    Ok(found)
 }
 
 /// The next event, or never when there is no subscription.

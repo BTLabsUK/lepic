@@ -409,3 +409,27 @@ fn restore_and_listen_report_progress_on_stderr_for_people() {
     let quiet = sender.run(&host, &["epicbox", "drain"]).ok();
     assert!(quiet.stderr.is_empty(), "{quiet:?}");
 }
+
+#[test]
+fn listen_shows_each_slate_it_receives() {
+    let (mut host, sender, receiver) = two_wallets();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = text(&address, "address").to_owned();
+    sender
+        .run(&host, &["tx", "send", "1", "--to", &address])
+        .ok();
+    let relay = host.relay.clone();
+    let inbox = EpicboxAddress::parse(&address, lepic_epicbox::Network::Floonet).unwrap();
+    host.interrupt_when = Some(Arc::new(move || relay.pending(&inbox) == 0));
+    let mut human = receiver.env();
+    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let listened = receiver
+        .run_with(&host, &["epicbox", "listen"], human, "")
+        .ok();
+    assert!(
+        listened
+            .stderr
+            .contains("transaction 1 received 1.00000000 EPIC"),
+        "{listened:?}"
+    );
+}
