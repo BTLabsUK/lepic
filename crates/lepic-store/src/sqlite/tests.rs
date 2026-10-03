@@ -126,3 +126,19 @@ fn opening_an_existing_database_restricts_it_to_its_owner() {
         assert_eq!(mode(file), 0o600, "{}", file.display());
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_database_path_that_cannot_be_created_is_an_io_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing").join("wallet.sqlite");
+    let error = SqliteStore::open(&path, key()).err().unwrap();
+    assert!(
+        matches!(
+            &error,
+            crate::StoreError::Io { source, .. }
+                if source.kind() == std::io::ErrorKind::NotFound
+        ),
+        "{error:?}"
+    );
+}

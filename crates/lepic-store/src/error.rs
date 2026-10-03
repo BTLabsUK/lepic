@@ -77,6 +77,12 @@ pub enum StoreError {
     Randomness(#[source] getrandom::Error),
     #[error("store is unusable after a panic in another thread")]
     Poisoned,
+    #[error("could not {operation}")]
+    Io {
+        operation: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[cfg(feature = "sqlite")]

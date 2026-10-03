@@ -77,13 +77,9 @@ fn restrict_to_owner(path: &Path) -> Result<(), StoreError> {
             }
             Ok(())
         });
-    // StoreError has no I/O variant, so the failure is reported as SQLite's own "cannot open",
-    // with the OS error text kept as its message.
-    restricted.map_err(|error| {
-        StoreError::from(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
-            Some(error.to_string()),
-        ))
+    restricted.map_err(|source| StoreError::Io {
+        operation: "restrict the database to its owner",
+        source,
     })
 }
 
