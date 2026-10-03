@@ -147,6 +147,7 @@ this list.
 | Dart to Rust | Wallet password the user types | `EpicWallet.create`, `EpicWallet.open`, `EpicWallet.mnemonic`, `EpicWallet.importWalletSeed` |
 | Dart to Rust | PIN the user types | `EpicWallet.createWithPin`, `EpicWallet.openWithPin`, `EpicWallet.mnemonicWithPin`, `EpicWallet.importWalletSeedWithPin`, `EpicWallet.changePin` (old and new) |
 | Dart to Rust | Password of an `epic-wallet` `wallet.seed` the user imports | `EpicWallet.importWalletSeed`, `EpicWallet.importWalletSeedWithPin` |
+| Dart to Rust | Text of an `epic-wallet` `wallet.seed` the user imports (the encrypted seed) | `EpicWallet.importWalletSeed`, `EpicWallet.importWalletSeedWithPin` |
 | Dart to Rust | Recovery phrase the user types, to restore or to check | `EpicWallet.create`, `EpicWallet.createWithPin` (`mnemonic`), `validateMnemonic` |
 | Dart to Rust | Node API secret the user configures (`WalletConfig.node_api_secret`) | every call taking `WalletConfig`: `EpicWallet.create`, `open`, `createWithPin`, `openWithPin`, `importWalletSeed`, `importWalletSeedWithPin`, `nodeTip`; `deleteWallet` takes it and discards it |
 | Dart to Rust | Recovery phrase of a test wallet, in `mock` builds only | `MockChain.fund` |
