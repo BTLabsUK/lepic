@@ -55,7 +55,15 @@ fn commit_lint_relints_edited_titles_with_the_base_branch_hook() {
         .find(|line| line.trim_start().starts_with("types:"))
         .unwrap();
     assert!(types.contains("edited"), "{types}");
-    assert!(workflow.contains("git show \"$BASE_SHA:.githooks/commit-msg\""));
+    // No step may be skipped or allowed to fail, or the lint would pass without running.
+    for line in workflow.lines() {
+        let line = line.trim_start().trim_start_matches("- ");
+        assert!(!line.starts_with("if:"), "{line}");
+        assert!(!line.starts_with("continue-on-error:"), "{line}");
+    }
+    assert!(workflow.contains("hook=\"$RUNNER_TEMP/commit-msg-hook\""));
+    assert!(workflow.contains("git show \"$BASE_SHA:.githooks/commit-msg\" > \"$hook\""));
+    assert!(workflow.contains("echo \"HOOK=$hook\" >> \"$GITHUB_ENV\""));
     assert!(workflow.contains("\"$HOOK\" --subject \"$TITLE\""));
     assert!(workflow.contains("\"$HOOK\" --no-autosquash \"$message\""));
     // The head branch's copy of the hook must never run.
