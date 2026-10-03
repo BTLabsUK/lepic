@@ -261,7 +261,8 @@ async fn write_failures(store: &AppSecretStore, failures: u32) -> Result<(), Wal
 /// PIN clears the count and damaged text restores it.
 ///
 /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a missing or damaged PIN
-/// key `SecretStore`.
+/// key `SecretStore`. That last case keeps the attempt counted, since a store that lost its key
+/// is no reason to allow free attempts.
 pub(crate) async fn unlock(
     guard: &PinGuard,
     store: &AppSecretStore,
