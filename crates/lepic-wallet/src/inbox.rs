@@ -405,8 +405,7 @@ where
         &self,
         epicbox: &EpicboxTransport,
     ) -> Result<InboxSummary, InboxError> {
-        let client = self.inbox_client(epicbox)?;
-        self.prune_relay_inbox().await;
+        let client = self.inbox_client(epicbox).await?;
         let subscription = client.drain().map_err(InboxError::Subscription)?;
         self.run_inbox(&subscription, None, backoff(epicbox)).await
     }
@@ -425,27 +424,25 @@ where
         epicbox: &EpicboxTransport,
         handle: &ListenHandle,
     ) -> Result<InboxSummary, InboxError> {
-        let client = self.inbox_client(epicbox)?;
-        self.prune_relay_inbox().await;
+        let client = self.inbox_client(epicbox).await?;
         let subscription = client.listen().map_err(InboxError::Subscription)?;
         self.run_inbox(&subscription, Some(handle), backoff(epicbox))
             .await
     }
 
-    fn inbox_client(&self, epicbox: &EpicboxTransport) -> Result<EpicboxClient, InboxError> {
+    /// The attached client for a drain or a listen, after pruning the relay inbox. Pruning runs
+    /// before the subscription starts, so the host sees every connection state.
+    async fn inbox_client(&self, epicbox: &EpicboxTransport) -> Result<EpicboxClient, InboxError> {
         if self.ports().transports.get(TRANSPORT_ID).is_none() {
             return Err(InboxError::UnknownTransport {
                 transport: TRANSPORT_ID,
             });
         }
-        self.attached_client(epicbox)
-    }
-
-    /// Runs before the subscription starts, so the host sees every connection state.
-    async fn prune_relay_inbox(&self) {
+        let client = self.attached_client(epicbox)?;
         if let Err(error) = self.inbox_write(prune_inbox).await {
             warn!(error = %ErrorChain(&error), "epicbox inbox not pruned");
         }
+        Ok(client)
     }
 
     /// Consumes the subscription and stops it, while its connection state goes out as events.
