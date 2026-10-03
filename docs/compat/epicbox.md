@@ -9,7 +9,8 @@ the client enables them only when the relay reports support.
 ## Connection
 
 - URL: `wss://<domain>:<port>` (default port 443); `ws://<domain>:<port>` when the insecure flag is set
-  (default port 80). The port is always explicit. Default domain `epicbox.epiccash.com`.
+  (default port 80). The port is always explicit. Default domain `epicbox.epiccash.com`. LEPIC
+  allows `ws://` only to a loopback host.
 - Relays terminate TLS in a reverse proxy with an idle timeout. Keep traffic flowing with websocket
   ping frames.
 - All protocol messages are JSON text frames tagged by `"type"`. The relay also answers the JSON
@@ -88,7 +89,8 @@ and decrypt, then decode the slate.
 
 ## Relay retention
 
-- The relay stores each message with a 24-hour expiration.
+- The relay stores each message for 7 days (MongoDB TTL index `expireAfterSeconds: 604800`). The
+  24-hour `expiration` field it also writes is not enforced.
 - A message that is delivered but not acknowledged is redelivered; after several redelivery rounds
   the relay may drop the address's unacknowledged messages. Acknowledge promptly once the effect is
   stored, and do not hold a delivered message across many challenge intervals.
