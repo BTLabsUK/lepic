@@ -12,14 +12,18 @@ mod receive_harness;
 mod send_support;
 mod support;
 
+use lepic_crypto::aggsig::calculate_partial_sig;
+use lepic_crypto::{PublicKey, SecretKey};
 use lepic_keychain::{ExtKeyVersion, Identifier, Keychain};
 use lepic_node::Propagation;
 use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::validate::ValidationError;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, SlateError};
 use lepic_slate::model::{ProofAddress, SlateId};
+use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
 use lepic_store::{SlateStage, TxId, TxState};
 use lepic_transport::file::FILE;
@@ -30,7 +34,7 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Event, WalletError};
 use receive_harness::{Receiver, json, vector};
-use send_support::{ACCOUNT, PEER, Sender, TIP, uuid};
+use send_support::{ACCOUNT, PEER, Sender, TIP, legacy_codecs, uuid};
 use serde_json::Value;
 use support::LOOPBACK;
 
@@ -349,6 +353,98 @@ fn a_receiver_message_that_does_not_match_its_signature_is_refused() {
 
     assert!(
         matches!(error, FinalizeError::MessageSignature(_)),
+        "{error:?}"
+    );
+    exchange.assert_untouched();
+}
+
+#[test]
+fn a_receiver_output_whose_range_proof_does_not_verify_is_refused() {
+    let exchange = exchange(request(), None);
+    let receiver_commitment = exchange.sender.read(|repos| {
+        let sent = repos.outputs(ACCOUNT, None)?;
+        let s2 = legacy_codecs().decode(&exchange.s2).unwrap();
+        Ok(s2
+            .outputs()
+            .iter()
+            .find(|output| {
+                !sent
+                    .iter()
+                    .any(|own| own.id.commitment == output.commitment)
+            })
+            .unwrap()
+            .commitment
+            .to_hex())
+    });
+    let broken = tampered(&exchange.s2, |slate| {
+        let output = slate["tx"]["body"]["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|output| output["commit"] == receiver_commitment.as_str())
+            .unwrap();
+        let mut proof = output["proof"].as_str().unwrap().to_owned();
+        let flipped = if proof.ends_with('0') { "1" } else { "0" };
+        proof.replace_range(proof.len() - 1.., flipped);
+        output["proof"] = Value::String(proof);
+    });
+
+    let error = exchange.finalize(&broken).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            FinalizeError::InvalidTransaction(ValidationError::RangeProof(_))
+        ),
+        "{error:?}"
+    );
+    exchange.assert_untouched();
+}
+
+#[test]
+fn a_receiver_excess_that_does_not_match_its_output_is_refused() {
+    let exchange = exchange(request(), None);
+    let s2 = legacy_codecs().decode(&exchange.s2).unwrap();
+    let sender = s2.participant(Role::Sender).unwrap();
+    // The receiver drew its nonce from the harness RNG, which repeats the byte 1.
+    let receiver_nonce = SecretKey::from_array([1; 32]).unwrap();
+    assert_eq!(
+        s2.participant(Role::Receiver).unwrap().public_nonce,
+        PublicKey::from_secret_key(&receiver_nonce).unwrap()
+    );
+    // Another key, with a partial signature that verifies for it, but not the key of the
+    // receiver's output: only the kernel check of the final transaction can tell.
+    let other_key = SecretKey::from_array([7; 32]).unwrap();
+    let other_excess = PublicKey::from_secret_key(&other_key).unwrap();
+    let nonce_sum = PublicKey::sum(&[
+        sender.public_nonce,
+        PublicKey::from_secret_key(&receiver_nonce).unwrap(),
+    ])
+    .unwrap();
+    let excess_sum = PublicKey::sum(&[sender.public_blind_excess, other_excess]).unwrap();
+    let signature = calculate_partial_sig(
+        &other_key,
+        &receiver_nonce,
+        &nonce_sum,
+        Some(&excess_sum),
+        &s2.kernel_features().signature_message(),
+    )
+    .unwrap();
+    let forged = tampered(&exchange.s2, |slate| {
+        let receiver = receiver_entry(slate);
+        receiver["public_blind_excess"] = Value::String(other_excess.to_hex());
+        receiver["part_sig"] = Value::String(signature.to_compact_hex());
+    });
+
+    let error = exchange.finalize(&forged).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            FinalizeError::InvalidTransaction(
+                ValidationError::KernelSignature { .. } | ValidationError::KernelSum(_)
+            )
+        ),
         "{error:?}"
     );
     exchange.assert_untouched();

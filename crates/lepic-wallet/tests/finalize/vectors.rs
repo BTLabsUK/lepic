@@ -29,6 +29,9 @@ use crate::receive_harness::{has_vector, json, standard_cases, text, vector, wir
 const ACCOUNT: AccountIndex = AccountIndex(0);
 const BASE_FEE: Fee = Fee::new(MILLI_EPIC);
 
+/// Standard-flow cases G-03 records, each with an S2 and a final transaction.
+const G03_STANDARD_CASES: usize = 13;
+
 /// The protocol version of the node's `ProtocolVersion::local()`, which the vectors serialize
 /// the final transaction at.
 const LOCAL_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::V2;
@@ -169,7 +172,11 @@ fn encode(codec: CodecId, slate: &Slate, vector: &Value) -> Result<WireSlate, Fo
 #[test]
 fn each_g03_s2_finalized_with_the_recorded_randomness_yields_the_g03_final_transaction() {
     let cases = standard_cases();
-    assert!(cases.len() >= 12, "only {} standard cases", cases.len());
+    // Every case with a recorded final transaction is a standard case, and none is lost.
+    assert_eq!(cases.len(), G03_STANDARD_CASES, "{cases:?}");
+    for case in &cases {
+        assert!(has_vector(&format!("{case}_s3_v3")), "{case}");
+    }
     let (mut checked_v2, mut checked_file) = (0, 0);
     for case in &cases {
         let s3_v3 = vector(&format!("{case}_s3_v3"));
