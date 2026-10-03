@@ -281,9 +281,9 @@ States: `sent` (S1 or I2 handed over), `received` (S2 or I1 answered, waiting fo
 `lepic tx show <ID>` adds the slate id, timestamps and the slate stages stored.
 
 `lepic tx cancel <ID>` gives up a transaction that is not posted and unlocks its inputs.
-`lepic tx post <ID>` sends a finalized transaction to the node again, for one the node dropped; a
-node refuses a transaction it already holds. When the node refuses it and its chain already holds
-the transaction's kernel, lepic records the transaction as posted and the next `lepic wallet info`
+`lepic tx post <ID>` sends a finalized transaction to the node again, for one the node dropped. A
+node whose pool already holds it counts as having taken it. When the node refuses it and its chain
+already holds the transaction's kernel, lepic records the transaction as posted and the next `lepic wallet info`
 confirms it. Human output then reads `Transaction <ID> is posted; its kernel is already on chain at
 height <n>.` The JSON document keeps `"state": "posted"` and adds `"already_on_chain": true` and
 `"height": <n>`; for a normal accept `already_on_chain` is `false` and there is no `height`.
@@ -352,4 +352,4 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `epicbox subscription failed` | The relay at `epicbox_relay` is unreachable. |
 | `invoice amount differs from the approved amount` | The amount you typed is not the one in the invoice; nothing was paid. |
 | `was already received as transaction N` | That slate was answered before; give the sender the existing `.response` file. |
-| `finalized but the node did not accept it` (exit 11) | The node refused the transaction. If it was posted before, the node already holds it; watch `wallet info`. |
+| `finalized but the node did not accept it` (exit 11) | The node neither took the transaction nor holds its kernel. Check the node, then `lepic tx post <ID>`. |

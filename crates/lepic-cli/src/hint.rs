@@ -55,9 +55,8 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         CliError::Finalize(FinalizeError::NotPosted { tx_id, .. })
         | CliError::Invoice(InvoiceError::NotPosted { tx_id, .. }) => {
             return Some(format!(
-                "the transaction is stored. A node refuses a transaction it already holds, so \
-                 if this one was posted before, `lepic wallet info` shows when it confirms; \
-                 otherwise `lepic tx post {tx_id}` sends it again"
+                "the transaction is stored, and the node neither took it nor holds its kernel; \
+                 `lepic tx post {tx_id}` sends it again"
             ));
         }
         CliError::Invoice(InvoiceError::AmountMismatch { invoiced, approved }) => {
@@ -234,6 +233,7 @@ mod tests {
             source: NodeError::Timeout,
         }));
         assert!(text.contains("lepic tx post 7"), "{text}");
+        assert!(text.contains("nor holds its kernel"), "{text}");
     }
 
     #[test]
