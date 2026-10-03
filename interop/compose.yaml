@@ -1,0 +1,157 @@
+# Local interop stack: the public Epicbox relay with its database, the reference node on a
+# test-mode chain, a stratum miner, two epic-wallet v4.0.2 wallets and lepic. Nothing here
+# reaches a public relay or node: the relay's domain is the container name `epicbox`, so every
+# address the wallets use resolves inside this network.
+#
+# Run `./build.sh` first; it compiles the binaries the images copy. `./run.sh` does both and
+# then runs the scenarios.
+name: lepic-interop
+
+# The node service builds the shared runtime image; the others only run it.
+x-runtime: &runtime
+  image: lepic-interop-runtime:local
+  pull_policy: never
+  init: true
+  networks: [interop]
+
+services:
+  mongodb:
+    image: mongo:6.0
+    init: true
+    # A test relay holds a handful of messages; keep the cache small and skip diagnostics files.
+    command: ["--wiredTigerCacheSizeGB", "0.25", "--setParameter", "diagnosticDataCollectionEnabled=false"]
+    networks: [interop]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpass
+      MONGO_INITDB_DATABASE: epicbox
+    volumes:
+      - mongo-data:/data/db
+      - ./.work/src/epic-epicbox-docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  epicbox:
+    image: lepic-interop-relay:local
+    build:
+      context: ./.work/src/epic-epicbox-docker
+      dockerfile: ../../../docker/relay.Dockerfile
+      additional_contexts:
+        bin: ./.work/bin
+    init: true
+    networks: [interop]
+    environment:
+      MONGO_URL: mongodb://epicbox:epicboxpass@mongodb:27017/epicbox?authSource=epicbox
+      EPICBOX_INSTANCE_ID: "1"
+      EPICBOX_DOMAIN: epicbox
+      EPICBOX_PORT: "3423"
+      DEBUG: "true"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3423', r => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  node:
+    <<: *runtime
+    build:
+      context: ./.work/bin
+      dockerfile: ../../docker/runtime.Dockerfile
+      additional_contexts:
+        scripts: ./docker
+    pull_policy: build
+    command: ["node.sh"]
+    environment:
+      FUNDER_URL: http://funder:23415
+    volumes:
+      - node-data:/data/node
+    healthcheck:
+      # Healthy once the API answers and the node reports itself synced.
+      test: ["CMD", "sh", "-c", "curl -sf -u epic:$$(cat /data/node/.api_secret) -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get_status\",\"params\":[]}' http://127.0.0.1:23413/v2/owner | grep -q '\"no_sync\"'"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  funder:
+    <<: *runtime
+    command: ["wallet.sh", "listen-http"]
+    environment:
+      WALLET_PASSWORD: funder-password
+    volumes:
+      - funder-data:/data
+      - node-data:/node:ro
+      - exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -s -o /dev/null http://127.0.0.1:23415/v2/foreign"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  miner:
+    <<: *runtime
+    command: ["miner", "node:23416", "2"]
+    depends_on:
+      funder:
+        condition: service_healthy
+
+  peer:
+    <<: *runtime
+    command: ["wallet.sh", "idle"]
+    environment:
+      WALLET_PASSWORD: peer-password
+    volumes:
+      - peer-data:/data
+      - node-data:/node:ro
+      - exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+      epicbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  lepic:
+    <<: *runtime
+    command: ["sleep", "infinity"]
+    environment:
+      LEPIC_NETWORK: mainnet
+      LEPIC_DATA_DIR: /data/lepic
+      LEPIC_NODE_URL: http://node:23413
+      LEPIC_NODE_API_SECRET_FILE: /node/.foreign_api_secret
+      LEPIC_EPICBOX_RELAY: ws://epicbox:3423
+      LEPIC_OUTPUT: json
+      LEPIC_LOG_LEVEL: info
+      LEPIC_PASSWORD: lepic-password
+    volumes:
+      - lepic-data:/data
+      - node-data:/node:ro
+      - exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+      epicbox:
+        condition: service_healthy
+
+networks:
+  interop: {}
+
+volumes:
+  mongo-data: {}
+  node-data: {}
+  funder-data: {}
+  peer-data: {}
+  lepic-data: {}
+  exchange: {}
