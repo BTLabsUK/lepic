@@ -50,7 +50,9 @@ secret.
 5. Cancel transactions at or past their TTL cutoff. LEPIC marks them expired and never expires a
    finalized or posted one.
 6. Store the confirmed height. LEPIC skips the whole refresh when the tip is below the stored
-   confirmed height.
+   confirmed height and reports the node as behind. Upstream applies no output state then, asks
+   `get_kernel` with a `min_height` above the node's tip, gets an error and reports the node as
+   unreachable (`refresh_node_behind_pending_receive`). Neither changes stored state.
 
 ## Hardening LEPIC adds
 
