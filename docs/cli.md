@@ -80,6 +80,9 @@ node_api_secret_file = "/home/me/.epic/floo/.foreign_api_secret"
 epicbox_relay = "wss://epicbox.epiccash.com"
 ```
 
+Without a node of your own, point `node_url` at any floonet node whose foreign API is served
+over `https://`, and leave `node_api_secret_file` out unless that node asks for one.
+
 `node_url` is the API root, without `/v2/foreign`. Plain `http://` and `ws://` are accepted only
 for a loopback host, because the node secret and the relay traffic would otherwise cross the
 network in the clear; use `https://` and `wss://` for anything else. An `epicbox_relay` without a
@@ -223,7 +226,9 @@ it the next time it connects, with either of:
   arrive, printing each change on stderr, until Ctrl-C. Then it prints the same summary.
 
 Receiving over Epicbox needs no command beyond these two: the sender's S1 waits on the relay
-until you drain or listen. `epicbox status` shows the relay, your address and how many of your
+until you drain or listen. `epic-wallet` on the other side handles your answer only while it
+runs `epic-wallet listen -m epicbox`, so a payment from it is finalized once that listener is
+up; until then your side shows the transaction as `received`. `epicbox status` shows the relay, your address and how many of your
 slates the relay has not taken yet.
 
 If a send stores the transaction but the relay does not take the slate, `lepic` exits with code
