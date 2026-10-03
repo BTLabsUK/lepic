@@ -300,21 +300,26 @@ fn measure(root: &Path, budgets: &[Budget]) -> Result<BTreeMap<String, Measured>
                 };
                 match budget.metric {
                     Metric::Time { .. } => Measured::Value(result.median_ms),
-                    _ => result.peak_kib.map_or_else(
-                        || {
-                            Measured::Skipped(format!(
-                                "peak memory is read from /proc, not available on {}",
-                                std::env::consts::OS
-                            ))
-                        },
-                        Measured::Value,
-                    ),
+                    _ => memory_measurement(result.peak_kib, std::env::consts::OS)
+                        .with_context(|| format!("probe `{probe}`"))?,
                 }
             }
         };
         measurements.insert(budget.key.clone(), measured);
     }
     Ok(measurements)
+}
+
+/// Off Linux there is no `/proc` to read, so the budget is skipped. On Linux a missing sample
+/// means every read failed, and passing the budget unchecked would hide that.
+fn memory_measurement(peak_kib: Option<u64>, os: &str) -> Result<Measured> {
+    match (peak_kib, os) {
+        (Some(kib), _) => Ok(Measured::Value(kib)),
+        (None, "linux") => bail!("no memory sample taken from /proc/<pid>/status"),
+        (None, other) => Ok(Measured::Skipped(format!(
+            "peak memory is read from /proc, not available on {other}"
+        ))),
+    }
 }
 
 fn probe_named(name: &str) -> Result<&'static Probe> {
@@ -668,6 +673,19 @@ mod tests {
             "Name:\tvectors\nVmPeak:\t  900000 kB\nVmHWM:\t   23456 kB\nVmRSS:\t  20000 kB\n";
         assert_eq!(parse_vm_hwm(status), Some(23456));
         assert_eq!(parse_vm_hwm("Name:\tzombie\nState:\tZ (zombie)\n"), None);
+    }
+
+    #[test]
+    fn a_missing_memory_sample_fails_on_linux_and_is_skipped_elsewhere() {
+        assert_eq!(
+            memory_measurement(Some(6000), "linux").unwrap(),
+            Measured::Value(6000)
+        );
+        assert!(memory_measurement(None, "linux").is_err());
+        assert!(matches!(
+            memory_measurement(None, "windows").unwrap(),
+            Measured::Skipped(_)
+        ));
     }
 
     #[test]
