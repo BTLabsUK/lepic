@@ -9,6 +9,7 @@ mod deps_check;
 mod fuzz;
 mod mobile;
 mod repo_lint;
+mod soak;
 mod sources;
 mod upstream;
 mod vectors;
@@ -31,6 +32,7 @@ commands:
               --package [--target <triple>]...: copy release lepic-ffi into bindings/flutter
               --emulator-test [--device <serial>]: run the Flutter integration test on a device
   repo-lint   workspace lints and unsafe code, pure crates, the secp256k1-zkp pin, interop images
+  soak        --iterations <n> [--seed <s>] [--jobs <j>]: randomized differential soak
   upstream-drift
               upstream commits since the ones recorded in upstream.toml
   vectors     generate [--area <area>] golden vectors, or verify them";
@@ -63,6 +65,7 @@ fn run() -> Result<()> {
         "fuzz" => fuzz::run(&root, rest),
         "mobile" => mobile::run(&root, rest),
         "repo-lint" => repo_lint::run(&root),
+        "soak" => soak::run(&root, rest),
         "upstream-drift" => upstream::run(&root),
         "vectors" => vectors::run(&root, rest),
         other => bail!("unknown command `{other}`\n\n{USAGE}"),
