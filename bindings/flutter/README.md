@@ -38,7 +38,14 @@ final wallet = await EpicWallet.create(
   `lepic.vault`: the seed encrypted under the wallet password (Argon2id, XChaCha20-Poly1305). Use
   one store per wallet.
 - For PIN unlock use `EpicWallet.createWithPin` and `EpicWallet.openWithPin`: LEPIC generates the
-  wallet password, seals it under the PIN and returns only the sealed text, which the app stores.
+  wallet password, seals it under the PIN together with a random key it writes into the store as
+  `lepic.pin-key`, and returns only the sealed text, which the app stores. PINs have at least four
+  characters. Every attempt is counted in the store as `lepic.pin-failures`; after three failures
+  each attempt waits first, 30 s after the fourth and twice as long after each further one, up to
+  an hour. A right PIN clears the count.
+- Store the sealed text before showing the recovery phrase or receiving funds. If the app stops
+  between `createWithPin` and storing it, the wallet cannot be opened by PIN: delete it with
+  `deleteWallet` and create it again.
 - Dropping (`dispose()`) an `EpicWallet` stops its listener and scan and wipes its keys.
 - `EpicWallet.events()` streams session, balance, transaction, sync and transport changes.
 - A panic inside LEPIC arrives as `WalletError` with kind `panic`; the runtime stays usable.
@@ -103,9 +110,12 @@ this list.
 | Rust to Dart | Recovery phrase, after the password or PIN is verified, for the backup screen | `EpicWallet.mnemonic`, `EpicWallet.mnemonicWithPin` |
 | Never | Seed bytes, private keys, blinding factors, nonces, vault keys, the generated wallet password of PIN unlock | none |
 
-Not secret, and crossing both ways: the sealed password text (useless without the PIN) and the
-encrypted vault the `SecretStore` holds (useless without the password). Dart strings cannot be
-wiped, so keep the phrase on screen only as long as needed.
+Not secret, and crossing both ways: the sealed password text and the encrypted vault the
+`SecretStore` holds. Neither is enough alone. The vault needs the password. The sealed text needs
+the PIN and the PIN key in the store, so whoever holds both the sealed text and the store's
+contents can guess the PIN offline, slowed only by Argon2id. Keep the store on the device: back it
+with the Android Keystore or the iOS Keychain (`ThisDeviceOnly`) and exclude it and the sealed text
+from backups. Dart strings cannot be wiped, so keep the phrase on screen only as long as needed.
 
 ## Errors
 
