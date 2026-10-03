@@ -99,9 +99,10 @@ enum Idempotency {
 
 /// A [`NodeApi`] over any [`RpcTransport`].
 ///
-/// The client remembers the highest tip it accepted. A later tip implausibly far above it is
-/// refused with [`NodeError::ImplausibleTip`], and outputs or kernels in blocks above it are
-/// refused unless a fresh tip covers them. Clones share what was seen.
+/// The client remembers the highest tip it accepted, or the one it was given through
+/// [`NodeClient::with_known_tip`]. A later tip implausibly far above it is refused with
+/// [`NodeError::ImplausibleTip`], and outputs or kernels in blocks above it are refused unless a
+/// fresh tip covers them. Clones share what was seen.
 #[derive(Debug, Clone)]
 pub struct NodeClient<T> {
     transport: T,
@@ -112,7 +113,17 @@ pub struct NodeClient<T> {
 #[derive(Debug, Clone, Copy)]
 struct SeenTip {
     height: Height,
-    first_seen: Instant,
+    recorded_at: Instant,
+    // How long before `recorded_at` the chain was first seen at `height`. Kept apart from the
+    // instant because a stored tip may predate anything an `Instant` can represent.
+    age_when_recorded: Duration,
+}
+
+impl SeenTip {
+    fn age(&self, now: Instant) -> Duration {
+        self.age_when_recorded
+            .saturating_add(now.saturating_duration_since(self.recorded_at))
+    }
 }
 
 impl<T: RpcTransport> NodeClient<T> {
@@ -122,6 +133,19 @@ impl<T: RpcTransport> NodeClient<T> {
             policy,
             highest_tip: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Starts the client from a tip the caller saw earlier, for example the confirmed height a
+    /// wallet stored, `seen_ago` before now. The first tip the node reports is then bounded by
+    /// it, and block heights up to it count as covered by a tip.
+    #[must_use]
+    pub fn with_known_tip(self, height: Height, seen_ago: Duration) -> Self {
+        *self.seen_tip() = Some(SeenTip {
+            height,
+            recorded_at: Instant::now(),
+            age_when_recorded: seen_ago,
+        });
+        self
     }
 
     pub fn transport(&self) -> &T {
@@ -150,8 +174,7 @@ impl<T: RpcTransport> NodeClient<T> {
         let now = Instant::now();
         let mut seen = self.seen_tip();
         if let Some(previous) = *seen {
-            let elapsed = now.saturating_duration_since(previous.first_seen);
-            if reported > plausible::max_tip_after(previous.height, elapsed) {
+            if reported > plausible::max_tip_after(previous.height, previous.age(now)) {
                 return Err(NodeError::ImplausibleTip {
                     previous: previous.height,
                     reported,
@@ -163,7 +186,8 @@ impl<T: RpcTransport> NodeClient<T> {
         }
         *seen = Some(SeenTip {
             height: reported,
-            first_seen: now,
+            recorded_at: now,
+            age_when_recorded: Duration::ZERO,
         });
         Ok(())
     }

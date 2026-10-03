@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use lepic_crypto::Commitment;
 use lepic_node::mock::{ChainOutput, ChainState, MockNode};
@@ -165,6 +166,37 @@ fn a_lower_tip_does_not_lower_the_reference() {
         block_on(client.get_tip()).unwrap().height,
         Height::new(TIP + ALLOWANCE)
     );
+}
+
+#[test]
+fn a_known_tip_bounds_the_first_tip_of_a_session() {
+    let known = Height::new(TIP);
+
+    let (node, _) = node_with_transaction_at(10);
+    set_tip(&node, known.value() + ALLOWANCE + 1);
+    let client = node.client().with_known_tip(known, Duration::ZERO);
+    let error = block_on(client.get_tip()).unwrap_err();
+    assert!(
+        matches!(error, NodeError::ImplausibleTip { previous, .. } if previous == known),
+        "{error:?}"
+    );
+
+    // An hour since the known tip allows 240 blocks more, four times the target rate.
+    let client = node
+        .client()
+        .with_known_tip(known, Duration::from_secs(3_600));
+    assert_eq!(
+        block_on(client.get_tip()).unwrap().height,
+        Height::new(known.value() + ALLOWANCE + 1)
+    );
+    set_tip(&node, known.value() + ALLOWANCE + 241);
+    let client = node
+        .client()
+        .with_known_tip(known, Duration::from_secs(3_600));
+    assert!(matches!(
+        block_on(client.get_tip()),
+        Err(NodeError::ImplausibleTip { .. })
+    ));
 }
 
 #[test]
