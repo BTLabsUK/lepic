@@ -1,6 +1,6 @@
 use lepic_keychain::vault::SecretNameError;
 use lepic_keychain::{
-    IdentifierError, KeychainError, MnemonicError, SecretStoreError, WalletSeedError,
+    AppDataError, IdentifierError, KeychainError, MnemonicError, SecretStoreError, WalletSeedError,
 };
 use lepic_node::NodeError;
 use lepic_primitives::amount::ArithmeticError;
@@ -77,6 +77,8 @@ pub enum WalletError {
     /// stored.
     #[error("node data rejected")]
     Implausible(#[from] ImplausibleNodeData),
+    #[error("app data file rejected")]
+    AppData(#[from] AppDataError),
     #[error("blocking wallet task did not complete")]
     Task(#[source] tokio::task::JoinError),
     #[error("balance out of range")]
