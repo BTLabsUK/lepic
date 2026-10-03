@@ -34,7 +34,9 @@ services:
       - mongo-data:/data/db
       - ./.work/src/epic-epicbox-docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      # Healthy only on the final server: the image first runs the init script on a temporary
+      # server without access control, and a relay that connects then fails to authenticate.
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'try { db.adminCommand({listDatabases: 1}); quit(1) } catch (e) { quit(0) }' && mongosh --quiet -u epicbox -p epicboxpass --authenticationDatabase epicbox epicbox --eval 'db.runCommand({ping: 1}).ok'"]
       interval: 2s
       timeout: 5s
       retries: 30
