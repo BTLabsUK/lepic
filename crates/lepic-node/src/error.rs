@@ -2,6 +2,7 @@ use std::error::Error as StdError;
 use std::fmt;
 
 use lepic_crypto::CryptoError;
+use lepic_primitives::amount::Height;
 use lepic_primitives::hash::HashError;
 
 pub(crate) type BoxError = Box<dyn StdError + Send + Sync>;
@@ -58,6 +59,8 @@ pub enum NodeError {
         method: &'static str,
         rejection: NodeRejection,
     },
+    #[error("node reported tip {reported}, implausibly far above tip {previous} seen before")]
+    ImplausibleTip { previous: Height, reported: Height },
 }
 
 impl NodeError {
@@ -106,6 +109,8 @@ pub enum FieldProblem {
     TooMany,
     #[error("value contradicts the call's contract")]
     Contradiction,
+    #[error("height lies above the node's tip")]
+    AboveTip,
 }
 
 /// The handler error a node returned inside a JSON-RPC result.

@@ -11,6 +11,7 @@ mod error;
 mod http;
 #[cfg(feature = "mock")]
 pub mod mock;
+mod plausible;
 mod rpc;
 mod wire;
 

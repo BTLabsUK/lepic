@@ -136,9 +136,16 @@ fn records_pushed_transactions_and_follows_chain_updates() {
     let page = block_on(client.get_unspent_outputs(1, None, 10)).unwrap();
     assert!(page.outputs.iter().all(|output| output.commitment != spent));
 
+    // The first answer of a session that places outputs in blocks is checked against a tip,
+    // fetched for it.
     assert_eq!(
         node.calls(),
-        ["push_transaction", "get_outputs", "get_unspent_outputs"]
+        [
+            "push_transaction",
+            "get_outputs",
+            "get_unspent_outputs",
+            "get_tip"
+        ]
     );
 }
 

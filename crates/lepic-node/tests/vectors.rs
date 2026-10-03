@@ -205,7 +205,12 @@ fn recorded_outputs_replay_in_any_chunking_and_order() {
         let located: BTreeSet<_> = locations.iter().map(|l| l.commitment).collect();
         assert_eq!(located, found, "{name}");
         assert!(locations.iter().all(|l| l.height.value() > 0), "{name}");
-        assert_eq!(node.calls().len(), requested.len(), "{name}");
+        let output_calls = node
+            .calls()
+            .iter()
+            .filter(|method| *method == "get_outputs")
+            .count();
+        assert_eq!(output_calls, requested.len(), "{name}");
         assert!(
             node.violations().is_empty(),
             "{name}: {:?}",

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::future::Future;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use futures_util::stream::{self, StreamExt, TryStreamExt};
@@ -16,7 +17,8 @@ use crate::api::{
     UnspentOutputs,
 };
 use crate::decode;
-use crate::error::{ErrorChain, NodeError};
+use crate::error::{ErrorChain, FieldProblem, NodeError};
+use crate::plausible;
 use crate::rpc::{FOREIGN_ENDPOINT, encode_request};
 use crate::wire::WireTransaction;
 
@@ -96,19 +98,96 @@ enum Idempotency {
 }
 
 /// A [`NodeApi`] over any [`RpcTransport`].
+///
+/// The client remembers the highest tip it accepted. A later tip implausibly far above it is
+/// refused with [`NodeError::ImplausibleTip`], and outputs or kernels in blocks above it are
+/// refused unless a fresh tip covers them. Clones share what was seen.
 #[derive(Debug, Clone)]
 pub struct NodeClient<T> {
     transport: T,
     policy: CallPolicy,
+    highest_tip: Arc<Mutex<Option<SeenTip>>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SeenTip {
+    height: Height,
+    first_seen: Instant,
 }
 
 impl<T: RpcTransport> NodeClient<T> {
     pub fn new(transport: T, policy: CallPolicy) -> Self {
-        Self { transport, policy }
+        Self {
+            transport,
+            policy,
+            highest_tip: Arc::new(Mutex::new(None)),
+        }
     }
 
     pub fn transport(&self) -> &T {
         &self.transport
+    }
+
+    fn seen_tip(&self) -> MutexGuard<'_, Option<SeenTip>> {
+        self.highest_tip
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    async fn fetch_tip(&self) -> Result<Tip, NodeError> {
+        let body = self
+            .call("get_tip", &Value::Null, Idempotency::Read)
+            .await?;
+        let tip = decode::tip(&body)?;
+        self.accept_tip(tip.height)?;
+        Ok(tip)
+    }
+
+    // A lower tip is accepted without becoming the reference: a reorganisation or a node that is
+    // slightly behind reports one honestly, and keeping the higher reference keeps the bound
+    // from being walked down and then up again.
+    fn accept_tip(&self, reported: Height) -> Result<(), NodeError> {
+        let now = Instant::now();
+        let mut seen = self.seen_tip();
+        if let Some(previous) = *seen {
+            let elapsed = now.saturating_duration_since(previous.first_seen);
+            if reported > plausible::max_tip_after(previous.height, elapsed) {
+                return Err(NodeError::ImplausibleTip {
+                    previous: previous.height,
+                    reported,
+                });
+            }
+            if reported <= previous.height {
+                return Ok(());
+            }
+        }
+        *seen = Some(SeenTip {
+            height: reported,
+            first_seen: now,
+        });
+        Ok(())
+    }
+
+    /// Refuses a block height above the tip. A height above the remembered tip may come from a
+    /// block found since, so the tip is asked for again before refusing.
+    async fn ensure_not_above_tip(
+        &self,
+        method: &'static str,
+        field: &'static str,
+        highest: Option<Height>,
+    ) -> Result<(), NodeError> {
+        let Some(highest) = highest else {
+            return Ok(());
+        };
+        let covered = |client: &Self| client.seen_tip().is_some_and(|tip| highest <= tip.height);
+        if covered(self) {
+            return Ok(());
+        }
+        self.fetch_tip().await?;
+        if covered(self) {
+            return Ok(());
+        }
+        Err(NodeError::invalid(method, field, FieldProblem::AboveTip))
     }
 
     /// Posts one request and returns the response body, retrying transient failures of reads.
@@ -191,10 +270,7 @@ impl<T: RpcTransport> NodeApi for NodeClient<T> {
     }
 
     async fn get_tip(&self) -> Result<Tip, NodeError> {
-        let body = self
-            .call("get_tip", &Value::Null, Idempotency::Read)
-            .await?;
-        decode::tip(&body)
+        self.fetch_tip().await
     }
 
     async fn get_kernel(
@@ -203,13 +279,17 @@ impl<T: RpcTransport> NodeApi for NodeClient<T> {
         min_height: Option<Height>,
         max_height: Option<Height>,
     ) -> Result<Option<LocatedKernel>, NodeError> {
+        const METHOD: &str = "get_kernel";
         let params = json!([
             excess.to_hex(),
             min_height.map(Height::value),
             max_height.map(Height::value),
         ]);
-        let body = self.call("get_kernel", &params, Idempotency::Read).await?;
-        decode::kernel(&body, excess, min_height, max_height)
+        let body = self.call(METHOD, &params, Idempotency::Read).await?;
+        let kernel = decode::kernel(&body, excess, min_height, max_height)?;
+        let height = kernel.as_ref().map(|located| located.height);
+        self.ensure_not_above_tip(METHOD, "height", height).await?;
+        Ok(kernel)
     }
 
     async fn get_outputs(
@@ -232,7 +312,11 @@ impl<T: RpcTransport> NodeApi for NodeClient<T> {
             .buffer_unordered(concurrency)
             .try_collect()
             .await?;
-        Ok(chunks.into_iter().flatten().collect())
+        let outputs: Vec<OutputLocation> = chunks.into_iter().flatten().collect();
+        let highest = outputs.iter().map(|output| output.height).max();
+        self.ensure_not_above_tip("get_outputs", "block_height", highest)
+            .await?;
+        Ok(outputs)
     }
 
     async fn get_unspent_outputs(
@@ -241,11 +325,14 @@ impl<T: RpcTransport> NodeApi for NodeClient<T> {
         end_index: Option<u64>,
         max: u64,
     ) -> Result<UnspentOutputs, NodeError> {
+        const METHOD: &str = "get_unspent_outputs";
         let params = json!([start_index, end_index, max, true]);
-        let body = self
-            .call("get_unspent_outputs", &params, Idempotency::Read)
+        let body = self.call(METHOD, &params, Idempotency::Read).await?;
+        let page = decode::unspent_outputs(&body, start_index, end_index, max)?;
+        let highest = page.outputs.iter().map(|output| output.height).max();
+        self.ensure_not_above_tip(METHOD, "block_height", highest)
             .await?;
-        decode::unspent_outputs(&body, start_index, end_index, max)
+        Ok(page)
     }
 
     async fn get_pmmr_indices(

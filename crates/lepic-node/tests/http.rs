@@ -129,6 +129,21 @@ fn assert_invalid_field(error: NodeError, expected_field: &str) -> FieldProblem 
     }
 }
 
+/// A server that answers `get_tip` with a tip above every block height these tests use, and
+/// every other call with `body`.
+#[cfg(test)]
+async fn serving_with_tip(body: Vec<u8>) -> TestServer {
+    let tip = ok_body(&json!({"height": 1_000, "last_block_pushed": "11".repeat(32)}));
+    TestServer::start(move |request| {
+        if method_of(request) == "get_tip" {
+            Reply::json(tip.clone())
+        } else {
+            Reply::json(body.clone())
+        }
+    })
+    .await
+}
+
 #[tokio::test]
 async fn reads_recorded_answers_and_sends_upstream_requests() {
     let server = TestServer::start(|request| match method_of(request).as_str() {
@@ -482,7 +497,7 @@ async fn rejects_paging_indices_that_do_not_move_forward() {
             true,
         ),
     ] {
-        let server = TestServer::start(move |_| Reply::json(body.clone())).await;
+        let server = serving_with_tip(body).await;
         let result = client(&server)
             .get_unspent_outputs(100, Some(200), 10)
             .await;
@@ -538,7 +553,7 @@ async fn finds_validates_and_misses_kernels() {
     let excess = Commitment::from_hex(&excess_hex).unwrap();
 
     let body = ok_body(&kernel_json(&excess_hex, &sig, 10));
-    let server = TestServer::start(move |_| Reply::json(body.clone())).await;
+    let server = serving_with_tip(body).await;
     let located = client(&server)
         .get_kernel(&excess, Some(Height::new(5)), Some(Height::new(15)))
         .await
