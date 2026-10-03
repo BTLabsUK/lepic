@@ -538,6 +538,23 @@ mod tests {
         assert_eq!(assert_no_secrets(&[exported], &secrets), Ok(()));
     }
 
+    #[test]
+    fn oversized_record_is_cut_to_one_line_not_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let ring = open(dir.path(), 64 * 1024);
+        ring.record(record(&"x".repeat(100_000), vec![]));
+        ring.record(record("record after", vec![]));
+
+        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
+        let (_, body) = bundle.split_once("---\n").unwrap();
+        let lines: Vec<&str> = body.split_inclusive('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("xxxx"));
+        assert!(lines[0].len() <= 4 * 1024, "{} bytes", lines[0].len());
+        assert!(lines[0].ends_with('\n'));
+        assert!(lines[1].ends_with(": record after\n"));
+    }
+
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
