@@ -1,9 +1,10 @@
 #!/bin/sh
-# Starts the reference node on floonet, peered only with the seed in LIVE_SEED (an IP:port; the
-# node rejects host names there). Floonet blocks are RandomX only, so `only_randomx` is required to
-# accept the public chain. The stratum server lets the live miner mine through this node, which
-# pays every coinbase to the funder wallet's foreign API. The APIs and stratum listen on loopback
-# inside the stack's shared network namespace only.
+# Starts the reference node on floonet, peered only with LIVE_SEED (an IP:port; the node rejects
+# host names there): peers_allow keeps it from dialling or accepting anyone else. Floonet blocks
+# are RandomX only, so `only_randomx` is required to accept the chain. The stratum server lets the
+# live miner mine through this node, which pays every coinbase to the funder wallet's foreign API.
+# It runs in the host's network namespace, so every listener is bound to 127.0.0.1 on a 334xx port,
+# clear of the ports of a floonet node the host may already run.
 set -eu
 
 dir=/data/node
@@ -28,17 +29,20 @@ add_key() {
 if [ ! -f "${config}" ]; then
     epic --floonet server config >/dev/null
     set_key chain_type '"Floonet"'
-    set_key api_http_addr '"127.0.0.1:13413"'
+    set_key api_http_addr '"127.0.0.1:33413"'
     set_key api_secret_path "\"${dir}/.api_secret\""
     set_key foreign_api_secret_path "\"${dir}/.foreign_api_secret\""
     set_key only_randomx true
+    set_key host '"127.0.0.1"'
+    set_key port 33414
     set_key seeding_type '"List"'
     add_key server.p2p_config seeds "[\"${LIVE_SEED}\"]"
-    # One outbound peer is the seed. With the default of four the node never starts syncing.
+    add_key server.p2p_config peers_allow "[\"${LIVE_SEED}\"]"
+    # The one outbound peer is the seed. With the default of four the node never starts syncing.
     add_key server.p2p_config peer_min_preferred_outbound_count 1
     set_key enable_stratum_server true
-    set_key stratum_server_addr '"127.0.0.1:13416"'
-    set_key wallet_listener_url '"http://127.0.0.1:13415"'
+    set_key stratum_server_addr '"127.0.0.1:33416"'
+    set_key wallet_listener_url '"http://127.0.0.1:33415"'
     set_key stdout_log_level '"WARN"'
     set_key log_to_file true
     set_key file_log_level '"INFO"'

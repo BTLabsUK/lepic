@@ -12,36 +12,39 @@ LEPIC_LIVE_TESTS=1 interop/live/run.sh --no-build # reuse the images and binarie
 LEPIC_LIVE_TESTS=1 interop/live/run.sh --down     # stop the stack afterwards
 ```
 
-The stack stays up after a run unless `--down` is given, so the node keeps its connection to the
-seed instead of re-dialling it every run.
+The stack stays up after a run unless `--down` is given, so the node keeps its peer connection
+instead of re-dialling it every run.
 
-Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`) plus outbound TCP to the
-floonet seed on port 13414 and HTTPS to the public floonet API.
+Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`), a floonet node on this host
+at `127.0.0.1:13414` that accepts the local node as a peer (or another peer in `LIVE_SEED`), and
+HTTPS to the public floonet API.
 
 ## What runs
 
 | Service | What it is |
 |---|---|
-| `node` | `epic` `v4.0.4` on floonet, `only_randomx`, peered only with the seed, stratum on 127.0.0.1:13416 |
+| `node` | `epic` `v4.0.4` on floonet, `only_randomx`, peered only with `LIVE_SEED`; API 127.0.0.1:33413, p2p 33414, stratum 33416 |
 | `miner` | `miner/`, a multi-threaded RandomX stratum client; started only while blocks are needed |
-| `mongodb`, `epicbox` | The public relay code, run locally with domain `localhost`, port 3423, plain `ws://` |
-| `funder` | `epic-wallet` serving its foreign API on 13415; the node pays every coinbase to it |
+| `mongodb`, `epicbox` | The public relay code, run locally with domain `localhost`, published on 127.0.0.1:33423, plain `ws://` |
+| `funder` | `epic-wallet` serving its foreign API on 127.0.0.1:33415; the node pays every coinbase to it |
 | `peer` | `epic-wallet`, the counterparty |
 | `lepic` | `lepic --network floonet`, driven with `docker compose exec` and `--output json` |
 
-Only the node joins a Docker network with a route out, and it connects only to the seed. Every other
-service shares the node's network namespace and reaches the others on 127.0.0.1. No port is
-published on the host.
+The node, the miner, the wallets and `lepic` run in the host's network namespace, so the node can peer
+with the floonet node the host already runs at `127.0.0.1:13414` (`LIVE_SEED`, an `IP:port`). That
+node is connected to the public seed `floo-node.btlabs.uk`. `peers_allow` restricts the local node
+to that one peer, so it never dials anyone else. Every listener is bound to 127.0.0.1 on a 334xx
+port, clear of the host node's 134xx ports. The relay listens on all interfaces of its container, so
+it and its database run on their own bridge network and only the relay port is published, on
+127.0.0.1.
 
-The node accepts seeds only as `IP:port`, so `run.sh` resolves `floo-node.btlabs.uk` (override with
-`LIVE_SEED_HOST`, or set `LIVE_SEED=IP:port`). Public reads go to `https://floo-node.btlabs.uk`
-(`LIVE_PUBLIC_API`): the tip, to know when the local node has synced, and each kernel, to check that
-it is on the public chain at the height the local node reports. They are GET requests at least ten
-seconds apart, logged with a count at the end of the run. Pushes, mining and everything else use the
-local node.
+Public reads go to `https://floo-node.btlabs.uk` (`LIVE_PUBLIC_API`): the tip, to know when the local
+node has synced, and each kernel, to check that it is on the public chain at the height the local
+node reports. They are GET requests at least ten seconds apart, logged with a count at the end of the
+run. Pushes, mining and everything else use the local node.
 
-`lepic` talks to `LEPIC_TEST_NODE_URL` (default the local node, `http://127.0.0.1:13413`) and
-`LEPIC_TEST_RELAY` (default the local relay, `ws://localhost:3423`). Both must accept writes: the
+`lepic` talks to `LEPIC_TEST_NODE_URL` (default the local node, `http://127.0.0.1:33413`) and
+`LEPIC_TEST_RELAY` (default the local relay, `ws://localhost:33423`). Both must accept writes: the
 public floonet API is read-only.
 
 ## Funds and mining

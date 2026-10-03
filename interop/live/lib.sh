@@ -23,7 +23,7 @@ public_calls() { wc -l <"${PUBLIC_LOG}" 2>/dev/null || echo 0; }
 # GET on the local node's v1 API, from inside the stack's network namespace.
 node_get() {
     # shellcheck disable=SC2016 # expanded by the container's shell
-    dc exec -T node sh -c 'curl -fsS -u "epic:$(cat /data/node/.api_secret)" "http://127.0.0.1:13413$1"' \
+    dc exec -T node sh -c 'curl -fsS -u "epic:$(cat /data/node/.api_secret)" "http://127.0.0.1:33413$1"' \
         sh "$1" 2>>"${RUN_LOG}"
 }
 

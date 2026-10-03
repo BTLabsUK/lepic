@@ -6,7 +6,7 @@
 #   LEPIC_LIVE_TESTS=1 ./run.sh --no-build  reuse the images and binaries already built
 #   LEPIC_LIVE_TESTS=1 ./run.sh --down      stop the stack afterwards
 #
-# The stack stays up by default: the node keeps its one peer, the floonet seed, instead of
+# The stack stays up by default: the node keeps its one peer instead of
 # dropping and re-dialling it on every run, and the wallets stay usable by hand.
 #
 # Mining happens only while the funder lacks mature coinbase, while funding transactions confirm,
@@ -41,13 +41,9 @@ source "${LIVE_DIR}/lib.sh"
 LIVE_INTEROP_DIR="$(cd "${LIVE_DIR}/.." && pwd)"
 LIVE_UID="$(id -u)"
 LIVE_GID="$(id -g)"
-# The node accepts only IP:port seeds, so the seed host name is resolved here.
-LIVE_SEED_HOST="${LIVE_SEED_HOST:-floo-node.btlabs.uk}"
-if [[ -z "${LIVE_SEED:-}" ]]; then
-    seed_ip="$(getent ahostsv4 "${LIVE_SEED_HOST}" | awk 'NR == 1 {print $1}')"
-    [[ -n "${seed_ip}" ]] || { echo "cannot resolve ${LIVE_SEED_HOST}" >&2; exit 1; }
-    LIVE_SEED="${seed_ip}:13414"
-fi
+# The node's only peer, as IP:port: by default the floonet node this host already runs, which is
+# connected to the public floonet seed. The node accepts no host name here.
+LIVE_SEED="${LIVE_SEED:-127.0.0.1:13414}"
 export LIVE_INTEROP_DIR LIVE_UID LIVE_GID LIVE_SEED
 # Compose reads .env from this directory, so `docker compose` here works by hand as well.
 printf 'LIVE_INTEROP_DIR=%s\nLIVE_UID=%s\nLIVE_GID=%s\nLIVE_SEED=%s\n' \
@@ -80,8 +76,8 @@ teardown() {
 }
 trap teardown EXIT
 
-log "floonet via seed ${LIVE_SEED}; lepic node ${LEPIC_TEST_NODE_URL:-http://127.0.0.1:13413}," \
-    "relay ${LEPIC_TEST_RELAY:-ws://localhost:3423}; public reads from ${LIVE_PUBLIC_API}"
+log "floonet via peer ${LIVE_SEED}; lepic node ${LEPIC_TEST_NODE_URL:-http://127.0.0.1:33413}," \
+    "relay ${LEPIC_TEST_RELAY:-ws://localhost:33423}; public reads from ${LIVE_PUBLIC_API}"
 
 if [[ "${build}" == true ]]; then
     log "building binaries (incremental; the first build takes a while)"
@@ -143,7 +139,7 @@ step_wallets() {
     local peer
     peer="$(ew_address peer)"
     [[ -n "${peer}" ]] || fail "no epic-wallet address" || return 1
-    PEER_ADDRESS="${peer%%:*}:3423"
+    PEER_ADDRESS="${peer%%:*}:33423"
     log "lepic ${LEPIC_ADDRESS}, epic-wallet ${PEER_ADDRESS}"
     DETAIL="lepic ${LEPIC_ADDRESS%%@*}, epic-wallet ${PEER_ADDRESS%%@*}"
 }
