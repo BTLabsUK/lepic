@@ -454,14 +454,24 @@ fn decode_stored(base_fee: Fee, stored: StoredSlate) -> Result<Slate, FinalizeEr
         .map_err(FinalizeError::StoredSlate)
 }
 
-/// The stored final slate of a transaction, and its transaction.
+/// The stored S3 of a sent transaction, and its transaction.
 fn stored_s3(
     repos: &dyn Repositories,
     base_fee: Fee,
     slate_id: Uuid,
 ) -> Result<Option<FinalizedSlate>, FinalizeError> {
+    stored_final(repos, base_fee, slate_id, SlateStage::Standard3)
+}
+
+/// The stored final slate at `stage`, S3 or I3, and its transaction.
+fn stored_final(
+    repos: &dyn Repositories,
+    base_fee: Fee,
+    slate_id: Uuid,
+    stage: SlateStage,
+) -> Result<Option<FinalizedSlate>, FinalizeError> {
     let Some(stored) = repos
-        .slate(slate_id, SlateStage::Standard3)?
+        .slate(slate_id, stage)?
         .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
     else {
         return Ok(None);
@@ -610,7 +620,13 @@ fn postable(
     else {
         return Err(not_postable);
     };
-    stored_s3(repos, base_fee, slate_id)?
+    // The sender of a standard flow and the issuer of an invoice finalize; each stores its own
+    // final stage.
+    let stage = match entry.direction {
+        TxDirection::Outgoing => SlateStage::Standard3,
+        TxDirection::Incoming => SlateStage::Invoice3,
+    };
+    stored_final(repos, base_fee, slate_id, stage)?
         .map(|finalized| finalized.transaction)
         .ok_or(not_postable)
 }

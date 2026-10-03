@@ -887,3 +887,23 @@ fn a_payment_without_change_is_confirmed_by_its_kernel() {
         TxState::Confirmed
     );
 }
+
+#[test]
+fn a_finalized_invoice_the_node_refused_is_posted_by_post() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    flow.issuer.finalize(&flow.i2).unwrap_err();
+    assert_eq!(flow.state(), TxState::Finalized);
+
+    flow.issuer
+        .block_on(
+            flow.issuer
+                .wallet
+                .post(flow.tx_id, lepic_node::Propagation::Fluff),
+        )
+        .unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+    assert_eq!(flow.node.pushed_transactions().len(), 1);
+}
