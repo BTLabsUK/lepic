@@ -11,8 +11,8 @@ use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    OutboxStatus, OutputRecord, OutputStatus, ParticipantId, Repositories, TxDirection, TxId,
-    TxState, WalletStore,
+    OutboxStatus, OutputRecord, OutputStatus, ParticipantId, Repositories, TransactionEntry,
+    TxDirection, TxId, TxState, WalletStore,
 };
 use tracing::{debug, info, instrument};
 
@@ -138,6 +138,18 @@ fn cancel_transaction(
     if entry.state != observed {
         return Err(WalletError::ChangedDuringCancel(tx_id));
     }
+    drop_holdings(repos, tx_id, &entry)?;
+    apply_transition(repos, tx_id, TxState::Cancelled, now)
+}
+
+/// What a transaction that ends unconfirmed gives up: its unconfirmed outputs are deleted, the
+/// inputs it locked become spendable again, and its private context and pending deliveries are
+/// dropped.
+pub(crate) fn drop_holdings(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    entry: &TransactionEntry,
+) -> Result<(), WalletError> {
     for output in repos.outputs_of_transaction(tx_id)? {
         match output.status {
             OutputStatus::Unconfirmed => repos.delete_output(output.commitment())?,
@@ -160,7 +172,7 @@ fn cancel_transaction(
             }
         }
     }
-    apply_transition(repos, tx_id, TxState::Cancelled, now)
+    Ok(())
 }
 
 #[cfg(test)]
