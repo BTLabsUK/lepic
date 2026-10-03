@@ -120,7 +120,7 @@ pub enum FinalizeError {
     MessageSignature(#[source] CryptoError),
     #[error("receiver partial signature does not verify")]
     ReceiverSignature(#[source] CryptoError),
-    #[error("fee {fee} is below the minimum {minimum} for the transaction")]
+    #[error("fee is below the minimum for the transaction")]
     FeeBelowMinimum { fee: Fee, minimum: Fee },
     #[error("minimum fee could not be computed")]
     FeeOverflow,

@@ -312,3 +312,16 @@ fn receiver_message_is_cut_to_256_bytes_and_signed() {
     assert_eq!(message.text().len(), 256);
     assert!(long.starts_with(message.text()));
 }
+
+#[test]
+fn fee_error_text_carries_no_amounts() {
+    let text = ReceiveError::FeeBelowMinimum {
+        fee: lepic_primitives::amount::Fee::new(123_456_789),
+        minimum: lepic_primitives::amount::Fee::new(987_654_321),
+    }
+    .to_string();
+    assert!(
+        !text.contains("123456789") && !text.contains("987654321"),
+        "{text}"
+    );
+}

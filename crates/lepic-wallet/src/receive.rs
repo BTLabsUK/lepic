@@ -92,7 +92,7 @@ pub enum ReceiveError {
     AlreadyReceived { slate_id: SlateId, tx_id: TxId },
     #[error("slate expired at height {cutoff}, the chain tip is at {tip}")]
     Expired { cutoff: Height, tip: Height },
-    #[error("fee {fee} is below the minimum {minimum} for the transaction")]
+    #[error("fee is below the minimum for the transaction")]
     FeeBelowMinimum { fee: Fee, minimum: Fee },
     #[error("minimum fee could not be computed")]
     FeeOverflow,

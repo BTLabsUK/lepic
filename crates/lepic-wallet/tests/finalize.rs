@@ -657,3 +657,16 @@ fn a_cancelled_transaction_is_neither_finalized_nor_posted() {
     );
     assert_eq!(exchange.pushed(), 0);
 }
+
+#[test]
+fn fee_error_text_carries_no_amounts() {
+    let text = FinalizeError::FeeBelowMinimum {
+        fee: lepic_primitives::amount::Fee::new(123_456_789),
+        minimum: lepic_primitives::amount::Fee::new(987_654_321),
+    }
+    .to_string();
+    assert!(
+        !text.contains("123456789") && !text.contains("987654321"),
+        "{text}"
+    );
+}
