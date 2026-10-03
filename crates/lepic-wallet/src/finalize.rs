@@ -167,6 +167,16 @@ impl From<KeychainError> for FinalizeError {
     }
 }
 
+/// How a post ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Posted {
+    /// The node accepted the transaction, or its pool already held it.
+    Accepted,
+    /// The node refused the push, and its chain already holds the kernel, in the block at
+    /// `height`.
+    AlreadyOnChain { height: Height },
+}
+
 /// A finalized slate and the transaction it completes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalizedSlate {
@@ -603,12 +613,12 @@ fn pool_holds_transaction(error: &NodeError) -> bool {
     )
 }
 
-/// The stored final transaction of a transaction that may be posted.
+/// The stored final slate and transaction of a transaction that may be posted.
 fn postable(
     repos: &dyn Repositories,
     base_fee: Fee,
     tx_id: TxId,
-) -> Result<Transaction, FinalizeError> {
+) -> Result<FinalizedSlate, FinalizeError> {
     let entry = repos
         .transaction(tx_id)?
         .ok_or(WalletError::UnknownTransaction(tx_id))?;
@@ -626,9 +636,7 @@ fn postable(
         TxDirection::Outgoing => SlateStage::Standard3,
         TxDirection::Incoming => SlateStage::Invoice3,
     };
-    stored_final(repos, base_fee, slate_id, stage)?
-        .map(|finalized| finalized.transaction)
-        .ok_or(not_postable)
+    stored_final(repos, base_fee, slate_id, stage)?.ok_or(not_postable)
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -649,7 +657,7 @@ where
     /// the same slate id fails with [`FinalizeError::AlreadyFinalized`]. Fails with
     /// [`FinalizeError::NotPosted`] when the slate was finalized and stored but the node refused or
     /// could not be reached; the transaction then waits in state `finalized` for [`Wallet::post`].
-    /// A node whose pool already holds the transaction counts as having accepted it. Every other
+    /// A node whose pool or chain already holds the transaction counts as having accepted it. Every other
     /// failure stores nothing.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
@@ -711,7 +719,7 @@ where
             None => debug!("slate already finalized"),
         }
         if stored.state == TxState::Finalized {
-            self.push(stored.tx_id, &stored.finalized.transaction, propagation)
+            self.push(stored.tx_id, &stored.finalized, propagation)
                 .await?;
         }
         Ok(Finalized {
@@ -728,38 +736,51 @@ where
     /// Fails with [`FinalizeError::Wallet`] carrying [`WalletError::UnknownTransaction`], with
     /// [`FinalizeError::NotPostable`] when the transaction is not `finalized` or `posted`, and
     /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached. A node
-    /// whose pool already holds the transaction counts as having accepted it.
+    /// whose pool already holds the transaction counts as having accepted it. When the node
+    /// refuses the push, the kernel is looked up; one already on chain gives
+    /// [`Posted::AlreadyOnChain`], and the next refresh confirms the transaction.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
-    pub async fn post(&self, tx_id: TxId, propagation: Propagation) -> Result<(), FinalizeError> {
+    pub async fn post(
+        &self,
+        tx_id: TxId,
+        propagation: Propagation,
+    ) -> Result<Posted, FinalizeError> {
         let session = self.session()?;
-        let transaction = self
+        let finalized = self
             .blocking(move |_, config| {
                 let base_fee = config.network.params().default_base_fee();
                 Ok(session.store.read(|repos| postable(repos, base_fee, tx_id)))
             })
             .await??;
-        self.push(tx_id, &transaction, propagation).await
+        self.push(tx_id, &finalized, propagation).await
     }
 
     /// Hands the transaction to the node, then records the transaction as posted.
     async fn push(
         &self,
         tx_id: TxId,
-        transaction: &Transaction,
+        finalized: &FinalizedSlate,
         propagation: Propagation,
-    ) -> Result<(), FinalizeError> {
-        match self
+    ) -> Result<Posted, FinalizeError> {
+        let posted = match self
             .ports()
             .node
-            .push_transaction(transaction, propagation)
+            .push_transaction(&finalized.transaction, propagation)
             .await
         {
-            Ok(()) => {}
+            Ok(()) => Posted::Accepted,
             Err(error) if pool_holds_transaction(&error) => {
                 debug!("transaction already in the node pool");
+                Posted::Accepted
             }
-            Err(source) => return Err(FinalizeError::NotPosted { tx_id, source }),
-        }
+            Err(source) => match self.kernel_height(&finalized.slate).await {
+                Some(height) => {
+                    debug!(height = %height, "kernel found on chain");
+                    Posted::AlreadyOnChain { height }
+                }
+                None => return Err(FinalizeError::NotPosted { tx_id, source }),
+            },
+        };
         let session = self.session()?;
         let change = self
             .blocking(move |ports, _| {
@@ -776,7 +797,20 @@ where
             }
             None => debug!("transaction posted again"),
         }
-        Ok(())
+        Ok(posted)
+    }
+
+    /// The height of the block holding the slate's kernel, when the node has one. A failed
+    /// lookup counts as not found, so the refused push is what gets reported.
+    async fn kernel_height(&self, slate: &Slate) -> Option<Height> {
+        let excess = slate.kernel()?.excess;
+        self.ports()
+            .node
+            .get_kernel(&excess, Some(slate.height()), None)
+            .await
+            .ok()
+            .flatten()
+            .map(|located| located.height)
     }
 }
 

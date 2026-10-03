@@ -17,17 +17,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lepic_node::mock::{MockFailure, MockNode};
 use lepic_node::{
-    CallPolicy, NodeClient, NodeError, Propagation, RejectionKind, RetryPolicy, RpcTransport,
+    CallPolicy, LocatedKernel, NodeClient, NodeError, Propagation, RejectionKind, RetryPolicy,
+    RpcTransport,
 };
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
-use lepic_slate::codec::WireSlate;
-use lepic_store::{AccountRecord, MemoryStore, StoreError, TxId, TxState, WalletStore};
+use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_slate::codec::{Codec as _, MediaType, WireSlate};
+use lepic_store::{AccountRecord, MemoryStore, SlateStage, StoreError, TxId, TxState, WalletStore};
 use lepic_transport::file::FILE;
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::event::TransactionState;
-use lepic_wallet::finalize::FinalizeError;
+use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Event, Ports, StoreOpener, Wallet};
@@ -183,9 +185,24 @@ impl Posting {
             .block_on(self.wallet.finalize(LOOPBACK, &self.s2, Propagation::Stem))
     }
 
-    fn post(&self) -> Result<(), FinalizeError> {
+    fn post(&self) -> Result<Posted, FinalizeError> {
         self.harness
             .block_on(self.wallet.post(self.tx_id, Propagation::Stem))
+    }
+
+    /// The S3 the wallet stored when it finalized, read back from its database.
+    fn stored_s3(&self) -> lepic_slate::model::Slate {
+        let stored = self
+            .store
+            .read(|repos| {
+                let entry = repos.transaction(self.tx_id)?.unwrap();
+                repos.slate(entry.slate_id.unwrap(), SlateStage::Standard3)
+            })
+            .unwrap()
+            .unwrap();
+        V3JsonCodec::new(Network::Floonet.params().default_base_fee())
+            .decode(&WireSlate::binary(MediaType::JSON, stored.bytes))
+            .unwrap()
     }
 
     fn state(&self) -> TxState {
@@ -226,6 +243,67 @@ fn a_post_the_node_already_holds_is_recorded_as_posted() {
     posting.pool.answer_next_push_as_duplicate();
     posting.post().unwrap();
 
+    assert_eq!(posting.state(), TxState::Posted);
+    assert_eq!(
+        transaction_events(&mut events),
+        vec![(TxState::Finalized, TxState::Posted)]
+    );
+}
+
+#[test]
+fn a_post_whose_kernel_is_already_on_chain_reports_that() {
+    let posting = Posting::new();
+    let finalized = posting.finalize().unwrap();
+    let mined_at = Height::new(TIP + 1);
+    posting.harness.node.update_chain(|chain| {
+        chain.kernels.push(LocatedKernel {
+            kernel: finalized.slate.kernel().unwrap(),
+            height: mined_at,
+            mmr_index: 1,
+        });
+        chain.tip.height = mined_at;
+    });
+    posting.harness.node.fail_next(
+        "push_transaction",
+        MockFailure::Rejected(RejectionKind::Internal),
+    );
+
+    let posted = posting.post().unwrap();
+
+    assert_eq!(posted, Posted::AlreadyOnChain { height: mined_at });
+    assert_eq!(posting.state(), TxState::Posted);
+}
+
+#[test]
+fn a_finalized_transaction_whose_kernel_is_on_chain_is_recorded_as_posted() {
+    let posting = Posting::new();
+    posting
+        .harness
+        .node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    let error = posting.finalize().unwrap_err();
+    assert!(
+        matches!(error, FinalizeError::NotPosted { .. }),
+        "{error:?}"
+    );
+    let finalized = posting.stored_s3();
+    let mined_at = Height::new(TIP + 1);
+    posting.harness.node.update_chain(|chain| {
+        chain.kernels.push(LocatedKernel {
+            kernel: finalized.kernel().unwrap(),
+            height: mined_at,
+            mmr_index: 1,
+        });
+    });
+    posting.harness.node.fail_next(
+        "push_transaction",
+        MockFailure::Rejected(RejectionKind::Internal),
+    );
+    let mut events = posting.wallet.subscribe();
+
+    let posted = posting.post().unwrap();
+
+    assert_eq!(posted, Posted::AlreadyOnChain { height: mined_at });
     assert_eq!(posting.state(), TxState::Posted);
     assert_eq!(
         transaction_events(&mut events),

@@ -536,7 +536,8 @@ impl Session {
     }
 
     pub(crate) async fn repost(&self, tx_id: u32) -> Result<(), WalletError> {
-        Ok(self.engine.post(TxId(tx_id), Propagation::Fluff).await?)
+        self.engine.post(TxId(tx_id), Propagation::Fluff).await?;
+        Ok(())
     }
 
     pub(crate) async fn cancel(&self, tx_id: u32) -> Result<(), WalletError> {

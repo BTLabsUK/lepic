@@ -30,7 +30,7 @@ use lepic_store::{SlateStage, TxId, TxState, WalletStore};
 use lepic_transport::file::FILE;
 use lepic_transport::transport::Destination;
 use lepic_wallet::event::TransactionState;
-use lepic_wallet::finalize::{FinalizeError, SlateField};
+use lepic_wallet::finalize::{FinalizeError, Posted, SlateField};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Event, WalletError};
@@ -109,7 +109,7 @@ impl Exchange {
             .block_on(self.sender.wallet.finalize(LOOPBACK, s2, Propagation::Stem))
     }
 
-    fn post(&self, tx_id: TxId) -> Result<(), FinalizeError> {
+    fn post(&self, tx_id: TxId) -> Result<Posted, FinalizeError> {
         self.sender
             .harness
             .block_on(self.sender.wallet.post(tx_id, Propagation::Fluff))

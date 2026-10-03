@@ -22,7 +22,7 @@ use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
 use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::event::Balance;
-use lepic_wallet::finalize::FinalizeError;
+use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
@@ -225,10 +225,13 @@ impl<H: Host> Run<'_, H> {
             TxCommand::Post(PostArgs { tx, fluff }) => {
                 let opened = self.open().await?;
                 let tx_id = TxId(tx.tx_id);
-                opened.wallet.post(tx_id, propagation(fluff.fluff)).await?;
+                let state = match opened.wallet.post(tx_id, propagation(fluff.fluff)).await? {
+                    Posted::Accepted => "posted",
+                    Posted::AlreadyOnChain { .. } => "already on chain",
+                };
                 Ok(Report::Post(TxStateReport {
                     tx_id: tx_id.0,
-                    state: "posted".to_owned(),
+                    state: state.to_owned(),
                 }))
             }
             TxCommand::Cancel(args) => {
