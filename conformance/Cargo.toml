@@ -34,6 +34,12 @@ lepic-wallet = { path = "../crates/lepic-wallet", default-features = false }
 # The BLAKE2b implementation the node and wallet hash with, at the version their lockfile resolves.
 blake2-rfc = "=0.2.18"
 serde = { version = "1", features = ["derive"] }
+# The payment proof addresses of the reference wallet, at the version its lockfile resolves.
+ed25519-dalek = "=2.2.0"
+# The runtime, randomness and time the LEPIC wallet ports take, at the product workspace versions.
+jiff = { version = "0.2.37", default-features = false }
+rand = { version = "0.10.3", default-features = false }
+tokio = { version = "1.53.1", default-features = false }
 serde_json = "1"
 thiserror = "2"
 
