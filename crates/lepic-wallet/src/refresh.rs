@@ -136,7 +136,8 @@ where
     /// is held until a later refresh or scan sees the chain at or above it.
     ///
     /// Emits [`Event::Transaction`] for every state change and one [`Event::Balance`] per
-    /// account. Returns [`RefreshOutcome::NodeBehind`], changing nothing, when the node's tip
+    /// account, computed as [`Wallet::balance`] computes it, at the highest confirmed tip
+    /// rather than a tip held as pending. Returns [`RefreshOutcome::NodeBehind`], changing nothing, when the node's tip
     /// is below the last refresh's height.
     ///
     /// Fails with [`RefreshError::Node`], [`RefreshError::Implausible`], or
@@ -254,7 +255,7 @@ where
 
         let balances = {
             let session = Arc::clone(&session);
-            self.blocking(move |_, _| Ok(session.store.read(|repos| balances(repos, tip.height))))
+            self.blocking(move |_, _| Ok(session.store.read(balances)))
                 .await??
         };
         for balance in balances {
@@ -320,15 +321,12 @@ where
             if repos.account(account)?.is_none() {
                 return Err(crate::AccountError::UnknownAccount(account).into());
             }
-            let height = [
-                last_confirmed(repos)?,
-                chain::position(repos)?.confirmed_height(),
-            ]
-            .into_iter()
-            .flatten()
-            .max()
-            .unwrap_or(Height::ZERO);
-            balance(account, &repos.outputs(account, None)?, height).map_err(WalletError::Balance)
+            balance(
+                account,
+                &repos.outputs(account, None)?,
+                balance_height(repos)?,
+            )
+            .map_err(WalletError::Balance)
         })
     }
 
@@ -729,8 +727,24 @@ pub(crate) fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
     codecs
 }
 
-/// The balance of every account at `height`, in the categories of upstream's `retrieve_info`.
-fn balances(repos: &dyn Repositories, height: Height) -> Result<Vec<Balance>, RefreshError> {
+/// The height balances are computed at: the highest tip a refresh or scan confirmed, or zero
+/// before any. A tip held as pending does not count, so the balance a refresh reports equals
+/// what [`Wallet::balance`] reads from the store afterwards.
+fn balance_height(repos: &dyn Repositories) -> Result<Height, StoreError> {
+    Ok([
+        last_confirmed(repos)?,
+        chain::position(repos)?.confirmed_height(),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .unwrap_or(Height::ZERO))
+}
+
+/// The balance of every account at [`balance_height`], in the categories of upstream's
+/// `retrieve_info`.
+fn balances(repos: &dyn Repositories) -> Result<Vec<Balance>, RefreshError> {
+    let height = balance_height(repos)?;
     let mut balances = Vec::new();
     for account in repos.accounts()? {
         balances.push(balance(
