@@ -28,7 +28,7 @@ use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
-use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanSummary};
+use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::state::state_name;
@@ -46,7 +46,7 @@ use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs,
     InvoiceCommand, NodeCommand, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
-    SelectionArg, SendArgs, SpendArgs, TxCommand, WalletCommand, WordsArg,
+    SelectionArg, SendArgs, SpendArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
@@ -54,7 +54,7 @@ use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, FinalizeReport, InboxReport, InfoReport,
     InitReport, InvoiceIssueReport, InvoicePayReport, NodeStatusReport, PostReport, ReceiveReport,
     Report, ResendReport, RestoreReport, ScanReport, SendReport, TxListReport, TxReport,
-    TxStateReport,
+    TxStateReport, WalletScanReport,
 };
 use crate::progress::Progress;
 use crate::settings::{OutputFormat, Settings};
@@ -209,6 +209,7 @@ impl<H: Host> Run<'_, H> {
             WalletCommand::Restore(args) => self.restore(&args).await,
             WalletCommand::ImportSeed(args) => self.import_seed(&args).await,
             WalletCommand::Info => self.info().await,
+            WalletCommand::Scan(args) => self.scan(&args).await,
             WalletCommand::Address => {
                 let opened = self.open().await?;
                 let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
@@ -374,6 +375,47 @@ impl<H: Host> Run<'_, H> {
             network: self.settings.network.to_string(),
             data_dir: self.data_dir_text(),
             scan,
+        }))
+    }
+
+    /// A scan to the node's tip from where the arguments say, or from shortly before the last
+    /// completed scan. A pending restore scan is completed only by a scan from genesis, so it
+    /// starts there unless a start height is given.
+    async fn scan(&mut self, args: &WalletScanArgs) -> Result<Report, CliError> {
+        let opened = self.open().await?;
+        let network = self.settings.network;
+        let start = match args.start_height {
+            Some(0) => ScanStart::Genesis,
+            Some(height) => ScanStart::Height(Height::new(height)),
+            None if opened.wallet.restore_scan_required()? => ScanStart::Genesis,
+            None => ScanOptions::update(network).start,
+        };
+        let options = ScanOptions {
+            start,
+            delete_unconfirmed: args.delete_unconfirmed,
+            ..ScanOptions::update(network)
+        };
+        let cancel = ScanCancel::new();
+        let work = async {
+            if args.reset_chain {
+                opened.wallet.reset_chain_position(options, &cancel).await
+            } else {
+                opened.wallet.scan(options, &cancel).await
+            }
+        };
+        let summary = self
+            .until_interrupted(opened.wallet.subscribe(), work, || cancel.cancel())
+            .await?;
+        Ok(Report::Scan(WalletScanReport {
+            start_height: summary.start_height.value(),
+            end_height: summary.end_height.value(),
+            resumed: summary.resumed,
+            found: summary.found,
+            restored: summary.restored,
+            revived: summary.revived,
+            unlocked: summary.unlocked,
+            deleted: summary.deleted,
+            delete_unconfirmed: args.delete_unconfirmed,
         }))
     }
 

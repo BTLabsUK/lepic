@@ -125,6 +125,29 @@ pub enum WalletCommand {
     Info,
     /// Show the wallet's Epicbox address
     Address,
+    /// Scan the chain for the wallet's outputs and bring the wallet in line with it
+    #[command(after_help = WALLET_SCAN_HELP)]
+    Scan(WalletScanArgs),
+}
+
+const WALLET_SCAN_HELP: &str = "\
+Without options the scan starts shortly before the last completed scan, or at genesis when no
+scan has completed or a restore scan is still pending. It ends at the node's tip. Ctrl-C stops
+it and keeps what it found; the next scan with the same options continues from there.";
+
+#[derive(Debug, Args)]
+pub struct WalletScanArgs {
+    /// Start at this height; 0 scans the whole chain
+    #[arg(long, value_name = "HEIGHT", conflicts_with = "reset_chain")]
+    pub start_height: Option<u64>,
+    /// Also unlock locked outputs found on chain and delete unconfirmed outputs not found,
+    /// cancelling their transactions
+    #[arg(long)]
+    pub delete_unconfirmed: bool,
+    /// Forget the chain heights the wallet stored and scan from genesis, for a wallet ahead of
+    /// its node's chain
+    #[arg(long)]
+    pub reset_chain: bool,
 }
 
 #[derive(Debug, Args)]

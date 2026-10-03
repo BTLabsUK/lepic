@@ -55,6 +55,7 @@ fn the_tree_has_every_planned_command() {
         "wallet import-seed",
         "wallet info",
         "wallet address",
+        "wallet scan",
         "tx send",
         "tx receive",
         "tx finalize",

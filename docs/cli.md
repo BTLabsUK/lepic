@@ -152,9 +152,42 @@ lepic wallet import-seed ~/.epic/floo/wallet_data/wallet.seed
 ```
 
 Both refuse a data directory that already holds a wallet; give `--data-dir` for a new one. Ctrl-C
-stops the scan and keeps what it found. `--no-scan` skips the scan, for a wallet you know is
-empty. The history is not restored: each output found appears in `tx list` as one confirmed
-incoming transaction with no slate.
+stops the scan and keeps what it found. `--no-scan` skips the scan; the wallet then refuses to
+create outputs, so to receive or to send with change, until `lepic wallet scan` has scanned the
+chain from genesis. The history is not restored: each output found appears in `tx list` as one
+confirmed incoming transaction with no slate.
+
+## Scan
+
+`lepic wallet scan` looks for the wallet's outputs on chain, from a start height to the node's
+tip, and brings the wallet in line with what it finds: outputs it did not know are restored with
+a confirmed incoming transaction each, and outputs it took for spent that are still unspent are
+revived.
+
+```
+$ lepic wallet scan
+Scanned heights 952 to 1052: 1 outputs found, 0 restored, 0 revived.
+```
+
+Without options it starts 100 blocks before the end of the last completed scan, so outputs of a
+short reorganisation are found again. It starts at genesis when no scan has completed, or when the
+wallet was restored with `--no-scan` and has not scanned from genesis since. Progress goes to
+stderr. Ctrl-C stops it and keeps what it found (exit 12); the next scan with the same options
+continues where it stopped, and says `Continued an interrupted scan.`
+
+- `--start-height <HEIGHT>` starts there instead; `0` scans the whole chain. Only a scan from 0
+  ends the wait after a `--no-scan` restore.
+- `--delete-unconfirmed` also repairs what unfinished transactions hold, as `epic-wallet scan
+  --delete_unconfirmed` does: locked outputs found on chain are unlocked and unconfirmed outputs
+  not found are deleted, and their transactions are cancelled. The report adds the outputs
+  unlocked and deleted.
+- `--reset-chain` forgets the chain heights the wallet stored and scans from genesis. Use it when
+  `wallet info` says the node is behind the wallet although the node is synced: the wallet
+  stored a height that this chain does not have, after a node reported a false tip or a test
+  network was restarted. It cannot be combined with `--start-height`.
+
+The JSON document has `start_height`, `end_height`, `resumed`, `found`, `restored`, `revived`,
+`unlocked` and `deleted`.
 
 ## How a transaction travels
 
@@ -367,3 +400,5 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `invoice amount differs from the approved amount` | The amount you typed is not the one in the invoice; nothing was paid. |
 | `was already received as transaction N` | The file is a different slate under the id of one received before, or that transaction was cancelled or expired. The same slate again would have rewritten its reply. |
 | `finalized but the node did not accept it` (exit 11) | The node neither took the transaction nor holds its kernel. Check the node, then `lepic tx post <ID>`. |
+| `a restore scan must complete before new outputs are created` (exit 5) | The wallet was restored with `--no-scan`, or its database was rebuilt, and has not scanned the chain from genesis since. Run `lepic wallet scan`. |
+| `The node is behind the last refresh; balances not updated.` from `wallet info` | The node is still syncing, or the wallet stored a height this chain does not have. Once the node is synced, `lepic wallet scan --reset-chain` recovers. |

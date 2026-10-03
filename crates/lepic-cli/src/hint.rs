@@ -115,6 +115,11 @@ fn wallet_hint(error: &WalletError, settings: Option<&Settings>) -> Option<Strin
              a {network} wallet"
         )),
         WalletError::Node(_) | WalletError::Implausible(_) => Some(node_hint_text(settings)),
+        WalletError::RestoreScanRequired => Some(
+            "the wallet was restored, or its database rebuilt, without a scan of the chain, so \
+             the keys already in use are not known; `lepic wallet scan` scans it from genesis"
+                .to_owned(),
+        ),
         _ => None,
     }
 }
@@ -243,6 +248,18 @@ mod tests {
         assert!(text.contains("LEPIC_NODE_URL"), "{text}");
         let refused = hint_for(&CliError::Node(NodeError::Unauthorized));
         assert!(refused.contains("node_api_secret_file"), "{refused}");
+    }
+
+    #[test]
+    fn a_pending_restore_scan_names_wallet_scan() {
+        for error in [
+            CliError::Wallet(WalletError::RestoreScanRequired),
+            CliError::Receive(ReceiveError::Wallet(WalletError::RestoreScanRequired)),
+            CliError::Send(SendError::Wallet(WalletError::RestoreScanRequired)),
+        ] {
+            let text = hint_for(&error);
+            assert!(text.contains("`lepic wallet scan`"), "{text}");
+        }
     }
 
     #[test]

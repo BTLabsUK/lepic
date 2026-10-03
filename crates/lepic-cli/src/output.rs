@@ -17,6 +17,7 @@ use crate::settings::OutputFormat;
 pub enum Report {
     Init(InitReport),
     Restore(RestoreReport),
+    Scan(WalletScanReport),
     Info(InfoReport),
     Address(AddressReport),
     Send(SendReport),
@@ -67,6 +68,28 @@ pub struct ScanReport {
     pub end_height: u64,
     pub found: u64,
     pub restored: u64,
+}
+
+/// What `wallet scan` did: every field of the engine's scan summary.
+#[derive(Debug, Serialize)]
+pub struct WalletScanReport {
+    pub start_height: u64,
+    pub end_height: u64,
+    /// The scan continued one that was interrupted instead of starting over.
+    pub resumed: bool,
+    /// Outputs of this wallet found on chain, stored before or not.
+    pub found: u64,
+    /// Outputs found that were not stored, now stored with a transaction each.
+    pub restored: u64,
+    /// Outputs stored as spent that were found unspent.
+    pub revived: u64,
+    /// Locked outputs unlocked; only `--delete-unconfirmed` unlocks any.
+    pub unlocked: u64,
+    /// Unconfirmed outputs deleted; only `--delete-unconfirmed` deletes any.
+    pub deleted: u64,
+    /// Whether `--delete-unconfirmed` ran, so human output names its counts.
+    #[serde(skip)]
+    pub delete_unconfirmed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -375,12 +398,27 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                 None => writeln!(out, "Chain not scanned."),
             }
         }
+        Report::Scan(r) => {
+            if r.resumed {
+                writeln!(out, "Continued an interrupted scan.")?;
+            }
+            write!(
+                out,
+                "Scanned heights {} to {}: {} outputs found, {} restored, {} revived",
+                r.start_height, r.end_height, r.found, r.restored, r.revived
+            )?;
+            if r.delete_unconfirmed {
+                write!(out, ", {} unlocked, {} deleted", r.unlocked, r.deleted)?;
+            }
+            writeln!(out, ".")
+        }
         Report::Info(r) => {
             writeln!(out, "Network {}, chain height {}.", r.network, r.height)?;
             if r.node_behind {
                 writeln!(
                     out,
-                    "The node is behind the last refresh; balances not updated."
+                    "The node is behind the last refresh; balances not updated. If the node is \
+                     synced,\n`lepic wallet scan --reset-chain` recovers the wallet."
                 )?;
             }
             for account in &r.accounts {
@@ -567,6 +605,63 @@ mod tests {
         }
     }
 
+    fn scan_report(delete_unconfirmed: bool) -> WalletScanReport {
+        WalletScanReport {
+            start_height: 900,
+            end_height: 1000,
+            resumed: false,
+            found: 5,
+            restored: 2,
+            revived: 1,
+            unlocked: 3,
+            deleted: 4,
+            delete_unconfirmed,
+        }
+    }
+
+    #[test]
+    fn a_scan_names_unlocked_and_deleted_outputs_only_for_the_repair() {
+        let plain = render(&Report::Scan(scan_report(false)), OutputFormat::Human).to_string();
+        assert_eq!(
+            plain,
+            "Scanned heights 900 to 1000: 5 outputs found, 2 restored, 1 revived.\n"
+        );
+        let repair = render(&Report::Scan(scan_report(true)), OutputFormat::Human).to_string();
+        assert_eq!(
+            repair,
+            "Scanned heights 900 to 1000: 5 outputs found, 2 restored, 1 revived, 3 unlocked, \
+             4 deleted.\n"
+        );
+        let resumed = Report::Scan(WalletScanReport {
+            resumed: true,
+            ..scan_report(false)
+        });
+        let resumed = render(&resumed, OutputFormat::Human).to_string();
+        assert!(
+            resumed.starts_with("Continued an interrupted scan.\n"),
+            "{resumed}"
+        );
+    }
+
+    #[test]
+    fn a_node_behind_the_wallet_names_the_reset_scan() {
+        let info = |node_behind| {
+            let report = Report::Info(InfoReport {
+                network: text("floonet"),
+                height: 20,
+                node_behind,
+                accounts: vec![],
+            });
+            render(&report, OutputFormat::Human).to_string()
+        };
+        assert!(
+            info(true).contains("`lepic wallet scan --reset-chain` recovers"),
+            "{}",
+            info(true)
+        );
+        assert!(!info(false).contains("reset-chain"), "{}", info(false));
+    }
+
     /// The field names are the CLI's JSON interface; a change here is a breaking change.
     #[test]
     fn every_json_document_keeps_its_field_names() {
@@ -608,6 +703,19 @@ mod tests {
                     scan: None,
                 }),
                 vec!["data_dir", "network", "scan"],
+            ),
+            (
+                Report::Scan(scan_report(true)),
+                vec![
+                    "deleted",
+                    "end_height",
+                    "found",
+                    "restored",
+                    "resumed",
+                    "revived",
+                    "start_height",
+                    "unlocked",
+                ],
             ),
             (
                 Report::Info(InfoReport {
