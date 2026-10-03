@@ -1,6 +1,6 @@
 //! Cancelling a transaction that is not confirmed, as `epic-wallet`'s `cancel_tx` does: its
 //! unconfirmed outputs are dropped, the inputs it locked become spendable again, and its private
-//! context and pending deliveries are dropped with it.
+//! context and pending deliveries are dropped with it. A posted transaction is not cancelled.
 
 use jiff::Timestamp;
 use lepic_node::NodeApi;
@@ -13,7 +13,7 @@ use tracing::{debug, info, instrument};
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::send::SENDER_CONTEXT;
-use crate::state::{StateChange, apply_transition, check_transition};
+use crate::state::{InvalidTransition, StateChange, apply_transition, check_transition};
 use crate::wallet::Wallet;
 
 /// The private context of the party that adds only an output, under the participant id
@@ -34,7 +34,7 @@ where
     /// transaction can no longer be finalized here.
     ///
     /// Fails with [`WalletError::Locked`], [`WalletError::UnknownTransaction`], or
-    /// [`WalletError::Transition`] when the transaction is confirmed or expired.
+    /// [`WalletError::Transition`] when the transaction is posted, confirmed or expired.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn cancel(&self, tx_id: TxId) -> Result<(), WalletError> {
         let session = self.session()?;
@@ -65,6 +65,16 @@ fn cancel_transaction(
     let entry = repos
         .transaction(tx_id)?
         .ok_or(WalletError::UnknownTransaction(tx_id))?;
+    // A posted transaction may still be mined, so releasing its inputs and dropping its change
+    // would show funds the chain may already have spent. Upstream refuses it as well once the
+    // mempool has seen it.
+    if entry.state == TxState::Posted {
+        return Err(InvalidTransition {
+            from: TxState::Posted,
+            to: TxState::Cancelled,
+        }
+        .into());
+    }
     if check_transition(tx_id, entry.state, TxState::Cancelled)?.is_none() {
         return Ok(None);
     }

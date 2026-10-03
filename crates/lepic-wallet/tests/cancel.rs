@@ -138,38 +138,45 @@ fn cancelling_twice_changes_nothing_the_second_time() {
 }
 
 #[test]
-fn rejects_cancelling_a_confirmed_or_unknown_transaction() {
-    let sender = Sender::new();
-    let sent = sender
-        .harness
-        .block_on(sender.wallet.send(request(), to(PEER)))
-        .unwrap();
-    sender
-        .store
-        .write(|repos| {
-            let mut entry = repos.transaction(sent.tx_id)?.unwrap();
-            entry.state = TxState::Confirmed;
-            repos.update_transaction(sent.tx_id, &entry)
-        })
-        .unwrap();
-    let outputs = sender.outputs();
-    let error = sender
-        .harness
-        .block_on(sender.wallet.cancel(sent.tx_id))
-        .unwrap_err();
-    assert!(
-        matches!(
-            error,
-            WalletError::Transition(InvalidTransition {
-                from: TxState::Confirmed,
-                to: TxState::Cancelled,
+fn rejects_cancelling_a_posted_confirmed_or_expired_transaction() {
+    for state in [TxState::Posted, TxState::Confirmed, TxState::Expired] {
+        let sender = Sender::new();
+        let sent = sender
+            .harness
+            .block_on(sender.wallet.send(request(), to(PEER)))
+            .unwrap();
+        sender
+            .store
+            .write(|repos| {
+                let mut entry = repos.transaction(sent.tx_id)?.unwrap();
+                entry.state = state;
+                repos.update_transaction(sent.tx_id, &entry)
             })
-        ),
-        "{error:?}"
-    );
-    assert_eq!(sender.outputs(), outputs);
-    assert!(sender.has_sender_context(uuid(sent.slate_id)));
+            .unwrap();
+        let outputs = sender.outputs();
+        let error = sender
+            .harness
+            .block_on(sender.wallet.cancel(sent.tx_id))
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                WalletError::Transition(InvalidTransition {
+                    from,
+                    to: TxState::Cancelled,
+                }) if from == state
+            ),
+            "{state:?}: {error:?}"
+        );
+        assert_eq!(sender.outputs(), outputs, "{state:?}");
+        assert_eq!(sender.transactions()[0].entry.state, state);
+        assert!(sender.has_sender_context(uuid(sent.slate_id)), "{state:?}");
+    }
+}
 
+#[test]
+fn rejects_cancelling_an_unknown_transaction() {
+    let sender = Sender::new();
     let unknown = sender
         .harness
         .block_on(sender.wallet.cancel(TxId(99)))
