@@ -426,6 +426,31 @@ impl TransactionRepository for SqliteRepos<'_> {
             decode_transaction,
         )
     }
+
+    fn set_confirmed_height(&mut self, id: TxId, height: Height) -> Result<(), StoreError> {
+        let updated = self.conn.execute(
+            "UPDATE transactions SET confirmed_height = ?2 WHERE id = ?1",
+            params![i64::from(id.0), u64_to_column(height.value())],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::UnknownTransaction(id));
+        }
+        Ok(())
+    }
+
+    fn confirmed_height(&self, id: TxId) -> Result<Option<Height>, StoreError> {
+        let height: Option<Option<i64>> = self
+            .conn
+            .query_row(
+                "SELECT confirmed_height FROM transactions WHERE id = ?1",
+                [i64::from(id.0)],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(height
+            .flatten()
+            .map(|height| Height::new(u64_from_column(height))))
+    }
 }
 
 const SLATE_COLUMNS: &str = "slate_id, stage, codec, bytes";

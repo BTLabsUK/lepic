@@ -93,10 +93,15 @@ CREATE TABLE settings (
 INSERT INTO schema_version (id, version) VALUES (1, 0);
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1];
+/// The block height at which refresh or a scan confirmed a transaction; NULL when unknown.
+const V2: &str = "
+ALTER TABLE transactions ADD COLUMN confirmed_height INTEGER;
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

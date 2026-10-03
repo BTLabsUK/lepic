@@ -1,7 +1,7 @@
 use std::fmt;
 
 use jiff::Timestamp;
-use lepic_primitives::amount::{Amount, Fee};
+use lepic_primitives::amount::{Amount, Fee, Height};
 use uuid::Uuid;
 
 use crate::account::AccountIndex;
@@ -76,4 +76,12 @@ pub trait TransactionRepository {
 
     /// Entries of an account, ordered by id.
     fn transactions(&self, account: AccountIndex) -> Result<Vec<StoredTransaction>, StoreError>;
+
+    /// Records the block height at which the chain confirmed an entry, replacing any height
+    /// recorded before. Updating the entry keeps it. Fails with
+    /// [`StoreError::UnknownTransaction`] when no entry has the id.
+    fn set_confirmed_height(&mut self, id: TxId, height: Height) -> Result<(), StoreError>;
+
+    /// `None` when no height was recorded, as for an entry confirmed before heights were stored.
+    fn confirmed_height(&self, id: TxId) -> Result<Option<Height>, StoreError>;
 }

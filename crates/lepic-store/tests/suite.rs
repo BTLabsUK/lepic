@@ -603,6 +603,37 @@ fn fee_and_amount_extremes_round_trip<B: Backend>() {
     );
 }
 
+fn confirmed_height_is_recorded_and_survives_updates<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let mut entry = transaction(DEFAULT, Some(SLATE_A));
+    let id = write(store, |repos| repos.insert_transaction(&entry)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.confirmed_height(id)).unwrap(),
+        None
+    );
+    write(store, |repos| {
+        repos.set_confirmed_height(id, Height::new(10))?;
+        repos.set_confirmed_height(id, Height::new(u64::MAX))
+    })
+    .unwrap();
+    entry.state = TxState::Confirmed;
+    write(store, |repos| repos.update_transaction(id, &entry)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.confirmed_height(id)).unwrap(),
+        Some(Height::new(u64::MAX))
+    );
+    assert!(matches!(
+        write(store, |repos| repos
+            .set_confirmed_height(TxId(9), Height::new(1))),
+        Err(StoreError::UnknownTransaction(TxId(9)))
+    ));
+    assert_eq!(
+        read(store, |repos| repos.confirmed_height(TxId(9))).unwrap(),
+        None
+    );
+}
+
 macro_rules! shared_suite {
     ($backend:ty: $($test:ident),+ $(,)?) => {
         $(
@@ -648,6 +679,7 @@ for_each_backend!(
     store_error_inside_write_rolls_back_earlier_changes,
     write_sees_its_own_changes_and_commits_them_together,
     fee_and_amount_extremes_round_trip,
+    confirmed_height_is_recorded_and_survives_updates,
 );
 
 #[test]

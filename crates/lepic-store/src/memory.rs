@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
+use lepic_primitives::amount::Height;
 use uuid::Uuid;
 
 use crate::account::{AccountIndex, AccountRecord, AccountRepository};
@@ -28,6 +29,7 @@ struct State {
     accounts: BTreeMap<AccountIndex, AccountRecord>,
     outputs: BTreeMap<CommitmentBytes, OutputRecord>,
     transactions: BTreeMap<TxId, TransactionEntry>,
+    confirmed_heights: BTreeMap<TxId, Height>,
     slates: BTreeMap<SlateKey, StoredSlate>,
     contexts: BTreeMap<([u8; 16], ParticipantId), Vec<u8>>,
     inbox: BTreeMap<String, InboxEntry>,
@@ -276,6 +278,18 @@ impl TransactionRepository for MemoryRepos<'_> {
                 entry: entry.clone(),
             })
             .collect())
+    }
+
+    fn set_confirmed_height(&mut self, id: TxId, height: Height) -> Result<(), StoreError> {
+        if !self.state.transactions.contains_key(&id) {
+            return Err(StoreError::UnknownTransaction(id));
+        }
+        self.state.confirmed_heights.insert(id, height);
+        Ok(())
+    }
+
+    fn confirmed_height(&self, id: TxId) -> Result<Option<Height>, StoreError> {
+        Ok(self.state.confirmed_heights.get(&id).copied())
     }
 }
 

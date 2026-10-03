@@ -4,13 +4,16 @@
 //! is written in that older version's schema, and the check reads it back through the current
 //! repositories.
 
+use lepic_primitives::amount::Height;
 use rusqlite::Connection;
 
 use super::SqliteStore;
 use super::schema::{SCHEMA_VERSION, migrate_to, stored_version};
 use crate::account::{AccountIndex, AccountRecord};
 use crate::context::ContextKey;
+use crate::error::StoreError;
 use crate::store::WalletStore;
+use crate::transaction::{TxId, TxState};
 
 struct UpgradeCase {
     from: u32,
@@ -35,7 +38,33 @@ fn check_v1_seed(store: &SqliteStore) {
     );
     let setting = store.read(|repos| repos.setting("network")).unwrap();
     assert_eq!(setting.as_deref(), Some("floonet"));
+    let (entry, height) = store
+        .read(|repos| {
+            Ok::<_, StoreError>((
+                repos.transaction(TxId(1))?,
+                repos.confirmed_height(TxId(1))?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(entry.map(|entry| entry.state), Some(TxState::Confirmed));
+    assert_eq!(height, None);
+    store
+        .write(|repos| repos.set_confirmed_height(TxId(1), Height::new(321)))
+        .unwrap();
+    let height = store.read(|repos| repos.confirmed_height(TxId(1))).unwrap();
+    assert_eq!(height, Some(Height::new(321)));
 }
+
+fn check_v2_seed(store: &SqliteStore) {
+    let height = store.read(|repos| repos.confirmed_height(TxId(1))).unwrap();
+    assert_eq!(height, Some(Height::new(654)));
+}
+
+const V1_SEED: &str = "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 4);
+    INSERT INTO settings (key, value) VALUES ('network', 'floonet');
+    INSERT INTO transactions (id, account, direction, state, amount_credited, amount_debited,
+        created_at, updated_at)
+    VALUES (1, 0, 'incoming', 'confirmed', 5, 0, 1, 1);";
 
 const UPGRADES: &[UpgradeCase] = &[
     UpgradeCase {
@@ -45,9 +74,16 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 1,
-        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 4);
-               INSERT INTO settings (key, value) VALUES ('network', 'floonet');",
+        seed: V1_SEED,
         check: check_v1_seed,
+    },
+    UpgradeCase {
+        from: 2,
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, amount_credited,
+                   amount_debited, created_at, updated_at, confirmed_height)
+               VALUES (1, 0, 'incoming', 'confirmed', 5, 0, 1, 1, 654);",
+        check: check_v2_seed,
     },
 ];
 
