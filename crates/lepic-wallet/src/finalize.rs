@@ -18,7 +18,7 @@ use lepic_crypto::aggsig::{
 };
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey};
 use lepic_keychain::{Keychain, KeychainError};
-use lepic_node::{NodeApi, NodeError, Propagation};
+use lepic_node::{NodeApi, NodeError, NodeRejection, Propagation, RejectionKind};
 use lepic_primitives::amount::{Fee, Height};
 use lepic_primitives::committed::{KernelSumError, sum_commitments};
 use lepic_primitives::crypto_ser::BlindingFactor;
@@ -574,6 +574,26 @@ fn finalize_stored(
     })
 }
 
+/// What the node's pool API answers, as `Error::Internal("Failed to update pool: {PoolError}")`,
+/// when its pool already holds the transaction: a repeated push of a transaction it accepted
+/// before, for example after the first answer was lost.
+const POOL_HOLDS_TRANSACTION: &str = "Failed to update pool: Duplicate tx";
+
+/// Whether the node refused a push only because it already has the transaction. The text is the
+/// node's own, but trusting it gives a node no power it lacks: it could as well answer `Ok`.
+fn pool_holds_transaction(error: &NodeError) -> bool {
+    matches!(
+        error,
+        NodeError::Rejected {
+            rejection: NodeRejection {
+                kind: RejectionKind::Internal,
+                message: Some(message),
+            },
+            ..
+        } if message == POOL_HOLDS_TRANSACTION
+    )
+}
+
 /// The stored final transaction of a transaction that may be posted.
 fn postable(
     repos: &dyn Repositories,
@@ -613,8 +633,9 @@ where
     /// posts only if the first post did not succeed; another S2 under the same slate id fails
     /// with [`FinalizeError::AlreadyFinalized`]. Fails with [`FinalizeError::NotPosted`] when
     /// the slate was finalized and stored but the node refused or could not be reached; the
-    /// transaction then waits in state `finalized` for [`Wallet::post`]. Every other failure
-    /// stores nothing.
+    /// transaction then waits in state `finalized` for [`Wallet::post`]. A node whose pool
+    /// already holds the transaction counts as having accepted it. Every other failure stores
+    /// nothing.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
         transport = %transport,
@@ -690,7 +711,8 @@ where
     ///
     /// Fails with [`FinalizeError::Wallet`] carrying [`WalletError::UnknownTransaction`], with
     /// [`FinalizeError::NotPostable`] when the transaction is not `finalized` or `posted`, and
-    /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached.
+    /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached. A node
+    /// whose pool already holds the transaction counts as having accepted it.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn post(&self, tx_id: TxId, propagation: Propagation) -> Result<(), FinalizeError> {
         let session = self.session()?;
@@ -710,11 +732,18 @@ where
         transaction: &Transaction,
         propagation: Propagation,
     ) -> Result<(), FinalizeError> {
-        self.ports()
+        match self
+            .ports()
             .node
             .push_transaction(transaction, propagation)
             .await
-            .map_err(|source| FinalizeError::NotPosted { tx_id, source })?;
+        {
+            Ok(()) => {}
+            Err(error) if pool_holds_transaction(&error) => {
+                debug!("transaction already in the node pool");
+            }
+            Err(source) => return Err(FinalizeError::NotPosted { tx_id, source }),
+        }
         let session = self.session()?;
         let change = self
             .blocking(move |ports, _| {
@@ -838,5 +867,43 @@ mod tests {
             json["participant_data"][1]["message"] = Value::from("another reply");
         });
         assert!(!finalized_from(&s3, &other));
+    }
+}
+
+#[cfg(test)]
+mod pool_answer_tests {
+    use super::*;
+
+    fn rejected(kind: RejectionKind, message: Option<&str>) -> NodeError {
+        NodeError::Rejected {
+            method: "push_transaction",
+            rejection: NodeRejection {
+                kind,
+                message: message.map(str::to_owned),
+            },
+        }
+    }
+
+    #[test]
+    fn only_the_pools_duplicate_answer_counts_as_posted() {
+        assert!(pool_holds_transaction(&rejected(
+            RejectionKind::Internal,
+            Some("Failed to update pool: Duplicate tx"),
+        )));
+        for other in [
+            rejected(
+                RejectionKind::Internal,
+                Some("Failed to update pool: Duplicate commitment"),
+            ),
+            rejected(RejectionKind::Internal, Some("Failed to get chain head")),
+            rejected(RejectionKind::Internal, None),
+            rejected(
+                RejectionKind::Argument,
+                Some("Failed to update pool: Duplicate tx"),
+            ),
+            NodeError::Timeout,
+        ] {
+            assert!(!pool_holds_transaction(&other), "{other:?}");
+        }
     }
 }
