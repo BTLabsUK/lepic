@@ -4,12 +4,16 @@ use jiff::Timestamp;
 
 use crate::error::{Record, StoreError};
 
+// Helpers marked `allow(dead_code)` without the `sqlite` feature serve only the SQLite backend.
+
 /// SQLite integers are signed. Unsigned values are stored with their bits unchanged so that the
 /// whole `u64` range round-trips; values below `2^63` read the same in an SQL shell.
+#[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
 pub(crate) const fn u64_to_column(value: u64) -> i64 {
     i64::from_be_bytes(value.to_be_bytes())
 }
 
+#[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
 pub(crate) const fn u64_from_column(value: i64) -> u64 {
     u64::from_be_bytes(value.to_be_bytes())
 }
@@ -18,6 +22,7 @@ pub(crate) fn timestamp_to_column(time: Timestamp) -> Result<i64, StoreError> {
     i64::try_from(time.as_nanosecond()).map_err(|_| StoreError::OutOfRange { field: "timestamp" })
 }
 
+#[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
 pub(crate) fn timestamp_from_column(
     value: i64,
     record: Record,
@@ -36,6 +41,8 @@ macro_rules! stored_enum {
             $($(#[$vmeta])* $variant),+
         }
 
+        // Only the SQLite backend reads and writes the codes.
+        #[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
         impl $name {
             pub(crate) const fn code(self) -> &'static str {
                 match self {

@@ -38,7 +38,14 @@ impl fmt::Display for Record {
 /// A failure of the underlying database engine.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct DatabaseError(#[from] rusqlite::Error);
+pub struct DatabaseError(#[from] DatabaseSource);
+
+#[cfg(feature = "sqlite")]
+type DatabaseSource = rusqlite::Error;
+
+// Without a database backend no database operation exists, so the error cannot occur.
+#[cfg(not(feature = "sqlite"))]
+type DatabaseSource = std::convert::Infallible;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -72,6 +79,7 @@ pub enum StoreError {
     Poisoned,
 }
 
+#[cfg(feature = "sqlite")]
 impl From<rusqlite::Error> for StoreError {
     fn from(error: rusqlite::Error) -> Self {
         Self::Database(DatabaseError(error))

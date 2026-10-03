@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use jiff::Timestamp;
 use lepic_keychain::SecretStore;
 use lepic_keychain::vault::BackendError;
-use lepic_store::{ContextKey, SqliteStore, StoreError, WalletStore};
+#[cfg(feature = "sqlite")]
+use lepic_store::SqliteStore;
+use lepic_store::{ContextKey, StoreError, WalletStore};
 use lepic_transport::registry::TransportRegistry;
 use rand_core::CryptoRng;
 use thiserror::Error;
@@ -49,14 +51,17 @@ pub trait StoreOpener: Send + Sync {
     fn open(&self, data_dir: &Path, key: ContextKey) -> Result<Self::Store, StoreError>;
 }
 
+#[cfg(feature = "sqlite")]
 /// File name of the wallet database inside the data directory.
 pub const DATABASE_FILE: &str = "wallet.sqlite3";
 
+#[cfg(feature = "sqlite")]
 /// The product store: SQLite in [`DATABASE_FILE`] inside the configured data directory, which
 /// must exist.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SqliteStores;
 
+#[cfg(feature = "sqlite")]
 impl StoreOpener for SqliteStores {
     type Store = SqliteStore;
 

@@ -12,6 +12,7 @@ mod output;
 mod relay;
 mod settings;
 mod slate;
+#[cfg(feature = "sqlite")]
 mod sqlite;
 mod store;
 mod transaction;
@@ -29,6 +30,7 @@ pub use relay::{
 };
 pub use settings::SettingsRepository;
 pub use slate::{SlateRepository, SlateStage, StoredSlate};
+#[cfg(feature = "sqlite")]
 pub use sqlite::{SCHEMA_VERSION, SqliteStore};
 pub use store::{Repositories, WalletStore};
 pub use transaction::{

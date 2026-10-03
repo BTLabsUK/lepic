@@ -17,7 +17,7 @@ lepic-keychain.workspace = true
 lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-slate.workspace = true
-lepic-store.workspace = true
+lepic-store = { workspace = true, default-features = false }
 lepic-transport.workspace = true
 rand_core.workspace = true
 thiserror.workspace = true
@@ -25,6 +25,10 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 uuid.workspace = true
 zeroize.workspace = true
+
+[features]
+default = ["sqlite"]
+sqlite = ["lepic-store/sqlite"]
 
 [dev-dependencies]
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
@@ -37,6 +41,10 @@ rand = { workspace = true, features = ["std_rng"] }
 serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros"] }
+
+[[test]]
+name = "lifecycle"
+required-features = ["sqlite"]
 
 [lints]
 workspace = true

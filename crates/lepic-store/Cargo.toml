@@ -12,13 +12,25 @@ chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
 getrandom = { workspace = true, features = ["std"] }
 jiff.workspace = true
 lepic-primitives.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, optional = true }
 thiserror.workspace = true
 uuid.workspace = true
 zeroize = { workspace = true, features = ["alloc"] }
 
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite"]
+
 [dev-dependencies]
 tempfile.workspace = true
+
+[[test]]
+name = "sqlite"
+required-features = ["sqlite"]
+
+[[test]]
+name = "suite"
+required-features = ["sqlite"]
 
 [lints]
 workspace = true
