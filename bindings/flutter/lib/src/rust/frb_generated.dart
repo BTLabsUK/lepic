@@ -356,7 +356,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         codec: SseCodec(
           decodeSuccessData:
               sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore,
-          decodeErrorData: null,
+          decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiSecretStoreAppSecretStoreNewConstMeta,
         argValues: [read, write, delete],
@@ -4238,7 +4238,8 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
       .crateApiWalletEpicWalletMnemonic(that: this, password: password);
 
   /// [`EpicWallet::mnemonic`] for a wallet from [`EpicWallet::create_with_pin`]: `pin` opens
-  /// `sealed_password`, which is then checked against the stored vault.
+  /// `sealed_password`, which is then checked against the stored vault. PIN attempts are
+  /// counted and delayed as in [`EpicWallet::open_with_pin`].
   Future<String> mnemonicWithPin({
     required String pin,
     required String sealedPassword,
@@ -4335,7 +4336,8 @@ class LepicRuntimeImpl extends RustOpaque implements LepicRuntime {
   );
 
   /// Logs one line from the app under the target `dart.<tag>`, through the same stream.
-  /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them. Never pass secrets.
+  /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them, and `message` at
+  /// most its first 1024 bytes, cut at a character boundary. Never pass secrets.
   void logMessage({
     required LogLevel level,
     required String tag,
@@ -4377,7 +4379,7 @@ class MockChainImpl extends RustOpaque implements MockChain {
   );
 
   /// Mines a plain output of `amount` for key `m/0/0/<child>` of the wallet with `mnemonic`
-  /// into the tip block.
+  /// into the tip block. The phrase is a test wallet's; never pass a real one.
   void fund({
     required String mnemonic,
     required Chain chain,

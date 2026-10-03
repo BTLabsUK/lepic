@@ -17,7 +17,7 @@ import 'types.dart';
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MockChain>>
 abstract class MockChain implements RustOpaqueInterface {
   /// Mines a plain output of `amount` for key `m/0/0/<child>` of the wallet with `mnemonic`
-  /// into the tip block.
+  /// into the tip block. The phrase is a test wallet's; never pass a real one.
   void fund({
     required String mnemonic,
     required Chain chain,

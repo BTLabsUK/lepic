@@ -25,7 +25,7 @@ use crate::api::types::{
     Chain, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip, RefreshProgress,
     ScanProgress, SentTx, Slate, WalletConfig, WalletEvent, WalletSummary,
 };
-use crate::boundary::Boundary;
+use crate::boundary::{Boundary, guard_or};
 use crate::frb_generated::StreamSink;
 use crate::node::NodeSecret;
 use crate::session::{self, Session, normalize_phrase, relay_network};
@@ -34,14 +34,18 @@ use crate::session::{self, Session, normalize_phrase, relay_network};
 /// whitespace are ignored.
 #[frb(sync)]
 pub fn validate_mnemonic(phrase: String) -> bool {
-    let phrase = normalize_phrase(&Zeroizing::new(phrase));
-    Seed::from_mnemonic(&phrase).is_ok()
+    guard_or("validate_mnemonic", false, || {
+        let phrase = normalize_phrase(&Zeroizing::new(phrase));
+        Seed::from_mnemonic(&phrase).is_ok()
+    })
 }
 
 /// True for `<address>@<relay>[:port]` whose key is valid and belongs to `chain`.
 #[frb(sync)]
 pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
-    EpicboxAddress::parse(&address, relay_network(chain.network())).is_ok()
+    guard_or("validate_epicbox_address", false, || {
+        EpicboxAddress::parse(&address, relay_network(chain.network())).is_ok()
+    })
 }
 
 /// True when `store` holds a wallet vault.
@@ -365,7 +369,8 @@ impl EpicWallet {
     /// Stops a running scan at its next page.
     #[frb(sync)]
     pub fn cancel_scan(&self) {
-        self.session.cancel_scan();
+        self.boundary()
+            .guard_or("cancel_scan", (), || self.session.cancel_scan());
     }
 
     /// Step 1 of a manual send: builds the slate, locks the inputs and returns the slate text
@@ -489,11 +494,12 @@ impl EpicWallet {
         &self,
         events: StreamSink<ListenerEvent>,
     ) -> Result<(), WalletError> {
-        let Some(handle) = self.session.claim_listener()? else {
+        let boundary = self.boundary();
+        let Some(handle) = boundary.guard("start_listener", || self.session.claim_listener())?
+        else {
             return Ok(());
         };
         let session = Arc::clone(&self.session);
-        let boundary = self.boundary();
         let runner = boundary.clone();
         boundary.handle.spawn(async move {
             let sink = events.clone();
@@ -522,20 +528,24 @@ impl EpicWallet {
     /// Stops the listener. Its stream ends with `Stopped` shortly after.
     #[frb(sync)]
     pub fn stop_listener(&self) {
-        self.session.stop_listener();
+        self.boundary()
+            .guard_or("stop_listener", (), || self.session.stop_listener());
     }
 
     #[frb(sync)]
     pub fn listener_running(&self) -> bool {
-        self.session.listener_running()
+        self.boundary().guard_or("listener_running", false, || {
+            self.session.listener_running()
+        })
     }
 
     /// Everything the wallet reports from now on: session, balance, transaction, sync and
     /// transport changes. The stream ends when the wallet is dropped.
     pub fn events(&self, sink: StreamSink<WalletEvent>) {
-        let events = self.session.subscribe();
-        self.boundary()
-            .handle
-            .spawn(session::forward_events(events, sink));
+        let boundary = self.boundary();
+        boundary.guard_or("events", (), || {
+            let events = self.session.subscribe();
+            boundary.handle.spawn(session::forward_events(events, sink));
+        });
     }
 }

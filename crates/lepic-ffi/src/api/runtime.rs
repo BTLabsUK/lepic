@@ -97,14 +97,18 @@ impl LepicRuntime {
 
     /// Sends every log record from now on to `sink`, replacing the stream subscribed before.
     pub fn logs(&self, sink: StreamSink<LogEntry>) {
-        self.inner.logs.replace(Some(sink));
+        self.inner
+            .boundary
+            .guard_or("logs", (), || self.inner.logs.replace(Some(sink)));
     }
 
     /// Ends the stream from [`LepicRuntime::logs`]. Cancelling the Dart subscription completes
     /// only once the stream has ended.
     #[frb(sync)]
     pub fn stop_logs(&self) {
-        self.inner.logs.replace(None);
+        self.inner
+            .boundary
+            .guard_or("stop_logs", (), || self.inner.logs.replace(None));
     }
 
     /// Logs one line from the app under the target `dart.<tag>`, through the same stream.
@@ -112,18 +116,20 @@ impl LepicRuntime {
     /// most its first 1024 bytes, cut at a character boundary. Never pass secrets.
     #[frb(sync)]
     pub fn log_message(&self, level: LogLevel, tag: String, message: String) {
-        let tag: String = tag
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
-            .take(32)
-            .collect();
-        let message = app_log_message(&message);
-        tracing::dispatcher::with_default(&self.inner.boundary.dispatch, || match level {
-            LogLevel::Error => error!(target: "dart", tag, "{message}"),
-            LogLevel::Warn => warn!(target: "dart", tag, "{message}"),
-            LogLevel::Info => info!(target: "dart", tag, "{message}"),
-            LogLevel::Debug => tracing::debug!(target: "dart", tag, "{message}"),
-            LogLevel::Trace => tracing::trace!(target: "dart", tag, "{message}"),
+        self.inner.boundary.guard_or("log_message", (), || {
+            let tag: String = tag
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .take(32)
+                .collect();
+            let message = app_log_message(&message);
+            match level {
+                LogLevel::Error => error!(target: "dart", tag, "{message}"),
+                LogLevel::Warn => warn!(target: "dart", tag, "{message}"),
+                LogLevel::Info => info!(target: "dart", tag, "{message}"),
+                LogLevel::Debug => tracing::debug!(target: "dart", tag, "{message}"),
+                LogLevel::Trace => tracing::trace!(target: "dart", tag, "{message}"),
+            }
         });
     }
 }

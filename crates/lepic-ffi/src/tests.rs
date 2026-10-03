@@ -262,6 +262,50 @@ fn the_node_api_secret_is_taken_out_of_the_config_before_the_client_is_built() {
         .unwrap();
 }
 
+/// flutter_rust_bridge hands the payload of a panic in a synchronous function to Dart, so each
+/// one runs its body through `boundary::guard` or `boundary::guard_or`.
+#[test]
+fn every_synchronous_api_function_runs_under_the_panic_guard() {
+    let sources = [
+        ("diagnostics.rs", include_str!("api/diagnostics.rs")),
+        ("error.rs", include_str!("api/error.rs")),
+        ("runtime.rs", include_str!("api/runtime.rs")),
+        ("secret_store.rs", include_str!("api/secret_store.rs")),
+        ("testing.rs", include_str!("api/testing.rs")),
+        ("types.rs", include_str!("api/types.rs")),
+        ("wallet.rs", include_str!("api/wallet.rs")),
+    ];
+    let mut unguarded = Vec::new();
+    for (file, source) in sources {
+        let lines: Vec<&str> = source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let signature = line.trim_start();
+            // `pub async fn` runs through `Boundary::run`; `pub const fn` cannot unwind.
+            if !signature.starts_with("pub fn ")
+                || index > 0 && lines[index - 1].contains("#[frb(ignore)]")
+            {
+                continue;
+            }
+            let close = format!("{}}}", &line[..line.len() - signature.len()]);
+            let guarded = lines[index..]
+                .iter()
+                .take_while(|line| **line != close)
+                .any(|line| line.contains("guard"));
+            if !guarded {
+                unguarded.push(format!("{file}: {signature}"));
+            }
+        }
+    }
+    assert!(unguarded.is_empty(), "{unguarded:#?}");
+}
+
+#[test]
+fn a_panic_in_a_call_without_an_error_gives_its_fallback() {
+    #[allow(clippy::panic)]
+    let answered = crate::boundary::guard_or("test", false, || panic!("inside lepic"));
+    assert!(!answered);
+}
+
 struct CapturedLogs(std::sync::Mutex<Vec<lepic_telemetry::LogRecord>>);
 
 impl lepic_telemetry::LogSink for CapturedLogs {

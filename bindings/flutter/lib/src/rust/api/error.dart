@@ -58,7 +58,8 @@ enum WalletErrorKind {
   /// chain, so it is never returned.
   chainBusy,
 
-  /// The wallet is already open in this runtime, or open while it is being deleted.
+  /// The wallet is already open, in this runtime or another one or another process, or open
+  /// while it is being deleted.
   walletBusy,
 
   /// The slate's time to live passed. Nothing was signed or posted.

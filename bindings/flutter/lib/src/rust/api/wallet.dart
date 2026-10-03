@@ -37,8 +37,12 @@ Future<bool> walletExists({
 );
 
 /// Deletes the wallet database in `config.data_dir` and the vault in `store`. Fails with
-/// [`WalletErrorKind::WalletBusy`] while a wallet on that directory is open in `runtime`. Only
-/// the recovery phrase can bring the wallet back.
+/// [`WalletErrorKind::WalletBusy`] while a wallet on that directory is open in any runtime. Only
+/// the recovery phrase can bring the wallet back. Also removes the PIN key and failure count.
+///
+/// It takes no password or PIN on purpose: a user who forgot both deletes the wallet and
+/// restores it from the recovery phrase, and whoever can call it can also clear the app's data.
+/// Ask the user to confirm in the app.
 Future<void> deleteWallet({
   required LepicRuntime runtime,
   required WalletConfig config,
@@ -96,7 +100,15 @@ abstract class EpicWallet implements RustOpaqueInterface {
   });
 
   /// [`EpicWallet::create`] with a wallet password LEPIC generates, seals under `pin` and
-  /// never hands to Dart. Fails as `create` does.
+  /// never hands to Dart. The sealed text is bound to a random key LEPIC writes into `store`
+  /// as `lepic.pin-key`, so it opens only together with that store.
+  ///
+  /// Store `sealed_password` before showing the recovery phrase or receiving funds. If the
+  /// app stops before storing it, the wallet cannot be opened by PIN; delete it with
+  /// [`delete_wallet`] and create it again (a restored wallet from its phrase).
+  ///
+  /// Fails with `InvalidArgument` when `pin` has fewer than four characters, and otherwise
+  /// as `create` does.
   static Future<PinWallet> createWithPin({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -137,7 +149,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   Future<String> mnemonic({required String password});
 
   /// [`EpicWallet::mnemonic`] for a wallet from [`EpicWallet::create_with_pin`]: `pin` opens
-  /// `sealed_password`, which is then checked against the stored vault.
+  /// `sealed_password`, which is then checked against the stored vault. PIN attempts are
+  /// counted and delayed as in [`EpicWallet::open_with_pin`].
   Future<String> mnemonicWithPin({
     required String pin,
     required String sealedPassword,
@@ -158,7 +171,13 @@ abstract class EpicWallet implements RustOpaqueInterface {
   );
 
   /// [`EpicWallet::open`] with the wallet password sealed in `sealed_password`, opened with
-  /// `pin`. A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`.
+  /// `pin` and the PIN key in `store`. Every attempt is counted in `store` as
+  /// `lepic.pin-failures` until a right PIN clears it. The first three attempts never wait;
+  /// after the third failure each attempt first waits 30 seconds, twice as long after each
+  /// further failure, up to an hour. Attempts of one runtime run one at a time.
+  ///
+  /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a store without the
+  /// PIN key `SecretStore`.
   static Future<EpicWallet> openWithPin({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -221,8 +240,9 @@ abstract class EpicWallet implements RustOpaqueInterface {
 }
 
 /// A wallet created by [`EpicWallet::create_with_pin`], and its wallet password sealed under the
-/// PIN. Store `sealed_password`; it is not secret without the PIN, and
-/// [`EpicWallet::open_with_pin`] needs it.
+/// PIN and the PIN key in the app's store. Store `sealed_password`;
+/// [`EpicWallet::open_with_pin`] needs it. With the store's contents it allows guessing the
+/// PIN offline, so keep it where the store is, not in backups.
 class PinWallet {
   final EpicWallet wallet;
   final String sealedPassword;

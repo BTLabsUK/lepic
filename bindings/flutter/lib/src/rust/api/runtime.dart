@@ -9,14 +9,15 @@ import 'error.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `claim`, `start`
+// These functions are ignored because they are not marked as `pub`: `app_log_message`, `busy`, `claim`, `lock_dir`, `start`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DirClaim`, `RuntimeInner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`, `drop`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<LepicRuntime>>
 abstract class LepicRuntime implements RustOpaqueInterface {
   /// Logs one line from the app under the target `dart.<tag>`, through the same stream.
-  /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them. Never pass secrets.
+  /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them, and `message` at
+  /// most its first 1024 bytes, cut at a character boundary. Never pass secrets.
   void logMessage({
     required LogLevel level,
     required String tag,

@@ -7,6 +7,7 @@ use flutter_rust_bridge::DartFnFuture;
 use flutter_rust_bridge::frb;
 
 use crate::api::error::{WalletError, WalletErrorKind};
+use crate::boundary::guard;
 
 /// The answer of one store call. The Dart wrapper in `package:lepic` builds it, so an exception
 /// in the app's store becomes `ok: false` instead of an unanswered call.
@@ -52,14 +53,16 @@ impl AppSecretStore {
         read: impl Fn(String) -> DartFnFuture<SecretReply> + Send + Sync + 'static,
         write: impl Fn(String, String) -> DartFnFuture<SecretReply> + Send + Sync + 'static,
         delete: impl Fn(String) -> DartFnFuture<SecretReply> + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            backend: Backend::Dart {
-                read: Arc::new(read),
-                write: Arc::new(write),
-                delete: Arc::new(delete),
-            },
-        }
+    ) -> Result<Self, WalletError> {
+        guard("secret_store", || {
+            Ok(Self {
+                backend: Backend::Dart {
+                    read: Arc::new(read),
+                    write: Arc::new(write),
+                    delete: Arc::new(delete),
+                },
+            })
+        })
     }
 
     /// A store in memory, for Rust tests.

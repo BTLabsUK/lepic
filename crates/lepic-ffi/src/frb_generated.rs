@@ -82,10 +82,9 @@ fn wire__crate__api__secret_store__AppSecretStore_new_impl(
                 <flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer),
             );
             deserializer.end();
-            transform_result_sse::<_, ()>((move || {
-                let output_ok = Ok::<_, ()>(crate::api::secret_store::AppSecretStore::new(
-                    api_read, api_write, api_delete,
-                ))?;
+            transform_result_sse::<_, crate::api::error::WalletError>((move || {
+                let output_ok =
+                    crate::api::secret_store::AppSecretStore::new(api_read, api_write, api_delete)?;
                 std::result::Result::Ok(output_ok)
             })())
         },

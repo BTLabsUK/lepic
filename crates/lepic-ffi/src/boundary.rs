@@ -46,10 +46,31 @@ impl Boundary {
             )),
         }
     }
+
+    /// [`guard_or`] under the runtime's log subscriber.
+    pub(crate) fn guard_or<T>(
+        &self,
+        operation: &'static str,
+        fallback: T,
+        work: impl FnOnce() -> T,
+    ) -> T {
+        tracing::dispatcher::with_default(&self.dispatch, || guard_or(operation, fallback, work))
+    }
+
+    /// [`guard`] under the runtime's log subscriber.
+    pub(crate) fn guard<T>(
+        &self,
+        operation: &'static str,
+        work: impl FnOnce() -> Result<T, WalletError>,
+    ) -> Result<T, WalletError> {
+        tracing::dispatcher::with_default(&self.dispatch, || guard(operation, work))
+    }
 }
 
 /// Runs `work`, turning a panic into an error. The panic payload is not reported: it is text
-/// from inside LEPIC that no test has checked for secrets.
+/// from inside LEPIC that no test has checked for secrets. Every synchronous API function runs
+/// its body through this or [`guard_or`], since flutter_rust_bridge would hand the payload to
+/// Dart.
 pub(crate) fn guard<T>(
     operation: &'static str,
     work: impl FnOnce() -> Result<T, WalletError>,
@@ -59,6 +80,11 @@ pub(crate) fn guard<T>(
         error!(operation, "operation panicked");
         Err(panicked(operation))
     })
+}
+
+/// [`guard`] for a call with no error to return: after a panic it returns `fallback`.
+pub(crate) fn guard_or<T>(operation: &'static str, fallback: T, work: impl FnOnce() -> T) -> T {
+    guard(operation, || Ok(work())).unwrap_or(fallback)
 }
 
 fn panicked(operation: &'static str) -> WalletError {
