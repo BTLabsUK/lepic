@@ -7,6 +7,8 @@
 //!   and optionally a rotating log file.
 //! - [`HostLayer`] for the mobile binding: every record is handed to a
 //!   [`LogSink`] that the host app implements.
+//! - [`LogRing`], a [`LogSink`] that keeps redacted records on the device
+//!   within a size limit and exports them as a support bundle.
 //!
 //! [`capture`] and [`assert_no_secrets`] let tests in any crate check what
 //! their code logs.
@@ -21,6 +23,7 @@ mod cli;
 mod error;
 mod filter;
 mod host;
+mod mobile;
 mod record;
 
 pub use capture::{Captured, Encoding, LeakCheckError, assert_no_secrets, capture};
@@ -28,4 +31,5 @@ pub use cli::{CliConfig, CliTelemetry, FileLog, LogFormat, Rotation};
 pub use error::TelemetryError;
 pub use filter::{LOG_FILTER_ENV, LogFilter};
 pub use host::{HostLayer, LogSink, host_dispatch};
+pub use mobile::{LogRing, LogRingError, LogRingLimit};
 pub use record::{ErrorChain, LogLevel, LogRecord};
