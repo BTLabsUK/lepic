@@ -684,6 +684,18 @@ fn cache_dir_name(repo: &str) -> Result<String> {
     Ok(name.to_owned())
 }
 
+/// Variables that point git at a repository. Git exports them to hooks and to
+/// `git rebase --exec` commands, where they would redirect every command here,
+/// fixtures included, to the repository being rebased.
+const GIT_REPOSITORY_ENV: [&str; 6] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
+
 /// How git is run. Production uses the developer's git configuration; tests
 /// point it at an empty file so local settings cannot change the result.
 struct Git {
@@ -699,6 +711,9 @@ impl Git {
 
     fn command(&self, dir: &Path) -> Command {
         let mut command = Command::new("git");
+        for name in GIT_REPOSITORY_ENV {
+            command.env_remove(name);
+        }
         command
             .current_dir(dir)
             // Never wait on a credential prompt; a public upstream needs none.
@@ -767,6 +782,20 @@ mod tests {
 
     fn parse_error(text: &str) -> ManifestErrorKind {
         Manifest::parse(text).unwrap_err().kind
+    }
+
+    #[test]
+    fn git_ignores_the_repository_variables_of_a_calling_git() {
+        let dir = TempDir::new().unwrap();
+        let command = Git::user().command(dir.path());
+        let removed: Vec<&std::ffi::OsStr> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name)
+            .collect();
+        for name in GIT_REPOSITORY_ENV {
+            assert!(removed.contains(&std::ffi::OsStr::new(name)), "{name}");
+        }
     }
 
     #[test]
