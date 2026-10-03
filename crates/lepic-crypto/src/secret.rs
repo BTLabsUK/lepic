@@ -2,7 +2,7 @@ use std::fmt;
 
 use secp256k1zkp::constants::SECRET_KEY_SIZE;
 use secp256k1zkp::key::SecretKey as BackendSecretKey;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::context::secp;
 use crate::error::{CryptoError, Item};
@@ -36,10 +36,9 @@ impl SecretKey {
     }
 
     pub fn from_hex(hex: &str) -> Result<Self, CryptoError> {
-        let mut bytes = hex::decode_array::<SECRET_KEY_SIZE>(hex, Item::SecretKey)?;
-        let key = Self::from_bytes(&bytes);
-        bytes.zeroize();
-        key
+        let mut bytes = Zeroizing::new([0u8; SECRET_KEY_SIZE]);
+        hex::decode_into(hex, bytes.as_mut_slice(), Item::SecretKey)?;
+        Self::from_bytes(bytes.as_slice())
     }
 
     /// The raw scalar, for hashing and serialization. Callers must not log or copy it into
@@ -71,11 +70,18 @@ impl fmt::Debug for SecretKey {
 pub struct SharedSecret(Zeroizing<[u8; 32]>);
 
 impl SharedSecret {
-    pub(crate) fn new(bytes: Zeroizing<[u8; 32]>) -> Self {
-        Self(bytes)
+    pub const LEN: usize = 32;
+
+    /// All zero, to be filled in place so the secret is never held in an unwiped temporary.
+    pub(crate) fn zeroed() -> Self {
+        Self(Zeroizing::new([0u8; Self::LEN]))
     }
 
-    pub fn expose_bytes(&self) -> &[u8; 32] {
+    pub(crate) fn as_mut_bytes(&mut self) -> &mut [u8; Self::LEN] {
+        &mut self.0
+    }
+
+    pub fn expose_bytes(&self) -> &[u8; Self::LEN] {
         &self.0
     }
 }
@@ -147,6 +153,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_secret_key_hex_in_either_case() {
+        let hex = format!("{}0A", "00".repeat(31));
+        let key = SecretKey::from_hex(&hex).unwrap();
+        let mut expected = [0u8; 32];
+        expected[31] = 10;
+        assert_eq!(key.expose_bytes(), &expected);
+        assert_eq!(
+            SecretKey::from_hex(&hex.to_lowercase())
+                .unwrap()
+                .expose_bytes(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn rejects_secret_key_hex_with_bad_digits_or_a_zero_scalar() {
+        assert_eq!(
+            SecretKey::from_hex(&format!("{}zz", "00".repeat(31))).err(),
+            Some(CryptoError::InvalidHex {
+                item: Item::SecretKey
+            })
+        );
+        assert_eq!(
+            SecretKey::from_hex(&"00".repeat(32)).err(),
+            Some(CryptoError::InvalidSecretKey)
+        );
+    }
+
+    #[test]
     fn rejects_secret_key_hex_of_the_wrong_length() {
         assert_eq!(
             SecretKey::from_hex("01").err(),
@@ -168,7 +203,8 @@ mod tests {
 
     #[test]
     fn redacts_shared_secret_in_debug() {
-        let secret = SharedSecret::new(Zeroizing::new([7u8; 32]));
+        let mut secret = SharedSecret::zeroed();
+        secret.as_mut_bytes().fill(7);
         assert_eq!(format!("{secret:?}"), "SharedSecret([redacted])");
     }
 }

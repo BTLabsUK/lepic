@@ -3,14 +3,13 @@
 
 use std::fmt;
 
-use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
+use blake2::{Blake2b256, Blake2bMac};
 use lepic_crypto::{Commitment, CryptoError, ProofMessage, RangeProof, SecretKey};
-use lepic_primitives::hash::blake2b_256;
 use lepic_primitives::output::{Output, OutputFeatures};
 use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::identifier::{Identifier, MAX_DEPTH};
 use crate::keychain::{Keychain, KeychainError, SwitchCommitment};
@@ -64,16 +63,25 @@ pub struct ProofBuilder<'a> {
 
 impl<'a> ProofBuilder<'a> {
     pub fn new(keychain: &'a Keychain) -> Result<Self, ProofError> {
-        let root = keychain.derive_key(0, &Identifier::ROOT, SwitchCommitment::None)?;
-        let private_hash = Zeroizing::new(*blake2b_256(root.expose_bytes()).as_bytes());
-        let public_root = keychain.master_public_key()?.to_bytes();
-        let rewind_hash = Zeroizing::new(*blake2b_256(&public_root).as_bytes());
-        Ok(Self {
+        let mut builder = Self {
             keychain,
-            rewind_hash,
-            private_hash,
-        })
+            rewind_hash: Zeroizing::new([0u8; 32]),
+            private_hash: Zeroizing::new([0u8; 32]),
+        };
+        let root = keychain.derive_key(0, &Identifier::ROOT, SwitchCommitment::None)?;
+        blake2b_256_into(root.expose_bytes(), &mut builder.private_hash);
+        let public_root = keychain.master_public_key()?.to_bytes();
+        blake2b_256_into(&public_root, &mut builder.rewind_hash);
+        Ok(builder)
     }
+}
+
+/// Unkeyed BLAKE2b-256 of `data`, written straight into `out` so the digest of a secret never
+/// sits in an unwiped temporary. The hasher state wipes itself on drop.
+fn blake2b_256_into(data: &[u8], out: &mut [u8; 32]) {
+    let mut state = Blake2b256::default();
+    state.update(data);
+    state.finalize_into(out.into());
 }
 
 impl ProofBuild for ProofBuilder<'_> {
@@ -185,10 +193,9 @@ fn nonce(commit: &Commitment, secret: &[u8]) -> Result<SecretKey, ProofError> {
     let mut state = <Blake2bMac<U32> as KeyInit>::new_from_slice(commit.as_bytes())
         .map_err(|_| ProofError::InvalidNonce)?;
     state.update(secret);
-    let mut hash = state.finalize_fixed();
-    let key = SecretKey::from_bytes(&hash).map_err(|_| ProofError::InvalidNonce);
-    hash.as_mut_slice().zeroize();
-    key
+    let mut hash = Zeroizing::new([0u8; 32]);
+    state.finalize_into((&mut *hash).into());
+    SecretKey::from_bytes(hash.as_slice()).map_err(|_| ProofError::InvalidNonce)
 }
 
 /// The range proof for the output `keychain` derives for `amount` at `id`, built by `builder`.
@@ -273,5 +280,35 @@ impl<'a> OutputRewinder<'a> {
             Some(output) => Ok(Some(output)),
             None => rewind(&self.legacy, commit, proof),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_primitives::hash::{blake2b_256, blake2b_256_keyed};
+
+    use super::*;
+
+    #[test]
+    fn hash_written_in_place_equals_the_primitives_hash() {
+        for data in [&b""[..], b"abc", &[0x5a; 200]] {
+            let mut out = [0u8; 32];
+            blake2b_256_into(data, &mut out);
+            assert_eq!(&out, blake2b_256(data).as_bytes());
+        }
+    }
+
+    #[test]
+    fn nonce_is_the_hash_of_the_secret_keyed_by_the_commitment() {
+        let mut blinding = [0u8; 32];
+        blinding[31] = 9;
+        let blinding = SecretKey::from_bytes(&blinding).unwrap();
+        let commit = Commitment::commit(5, &blinding).unwrap();
+        let secret = [0x33; 32];
+        let expected = blake2b_256_keyed(commit.as_bytes(), &secret).unwrap();
+        assert_eq!(
+            nonce(&commit, &secret).unwrap().expose_bytes(),
+            expected.as_bytes()
+        );
     }
 }

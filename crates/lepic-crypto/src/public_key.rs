@@ -2,7 +2,7 @@ use std::fmt;
 
 use secp256k1zkp::constants::COMPRESSED_PUBLIC_KEY_SIZE;
 use secp256k1zkp::key::PublicKey as BackendPublicKey;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 use crate::context::secp;
 use crate::error::{CryptoError, Item};
@@ -60,14 +60,19 @@ impl PublicKey {
     /// hashed output of libsecp256k1's own ECDH function.
     pub fn shared_secret(&self, secret: &SecretKey) -> Result<SharedSecret, CryptoError> {
         let mut point = self.point;
-        point.mul_assign(secp(), secret.as_backend())?;
-        let mut serialized = point.serialize_vec(secp(), true);
-        let x = serialized
+        let serialized = point
+            .mul_assign(secp(), secret.as_backend())
+            .map(|()| point.serialize_vec(secp(), true));
+        // The product point is the shared secret in another encoding.
+        point.0.0.zeroize();
+        let mut serialized = serialized?;
+        let mut shared = SharedSecret::zeroed();
+        let copied = serialized
             .get(1..COMPRESSED_PUBLIC_KEY_SIZE)
-            .and_then(|x| <[u8; 32]>::try_from(x).ok())
-            .map(Zeroizing::new);
+            .filter(|x| x.len() == SharedSecret::LEN)
+            .map(|x| shared.as_mut_bytes().copy_from_slice(x));
         serialized.as_mut_slice().zeroize();
-        x.map(SharedSecret::new).ok_or(CryptoError::Backend)
+        copied.map(|()| shared).ok_or(CryptoError::Backend)
     }
 
     /// The point sum of `keys`, as slates sum the parties' public nonces and blind excesses.

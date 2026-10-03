@@ -33,7 +33,9 @@ pub(crate) fn decode_bounded(
     Ok(out)
 }
 
-fn decode_into(hex: &str, out: &mut [u8], item: Item) -> Result<(), CryptoError> {
+/// Decodes hex of exactly `out.len()` bytes into `out`, so a secret can be decoded straight into
+/// memory that is wiped. On error `out` may hold part of the input.
+pub(crate) fn decode_into(hex: &str, out: &mut [u8], item: Item) -> Result<(), CryptoError> {
     let digits = hex.as_bytes();
     if !digits.len().is_multiple_of(2) {
         return Err(CryptoError::InvalidHex { item });
