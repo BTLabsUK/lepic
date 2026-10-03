@@ -102,6 +102,23 @@ impl TestChain {
         test_framework::add_block_with_reward(&self.chain, txs.to_vec(), output, kernel);
     }
 
+    /// A second chain in `dir` holding this chain's blocks up to `height`, as a node that has not
+    /// synced past it holds them.
+    pub(crate) fn prefix(&self, dir: &Path, height: u64) -> Result<TestChain, Failure> {
+        let copy = TestChain::new(dir)?;
+        for at in 1..=height {
+            let hash = self.header_at(at)?.hash();
+            let block = self.chain.get_block(&hash).map_err(Failure::upstream)?;
+            copy.chain
+                .process_block(block, Options::SKIP_POW)
+                .map_err(Failure::upstream)?;
+        }
+        if copy.head()?.hash() != self.header_at(height)?.hash() {
+            return Err(Failure::Story("the chain prefix did not reach its height"));
+        }
+        Ok(copy)
+    }
+
     /// Appends a fork block on `prev`, which need not be the head. Mirrors `add_block_with_reward`
     /// step for step, except that difficulty and timestamp follow `prev` instead of the head, and
     /// the placeholder proof is offset by `FORK_PROOF_OFFSET`. Returns the new header, which is

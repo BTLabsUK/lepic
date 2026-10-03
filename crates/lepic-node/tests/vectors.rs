@@ -130,6 +130,14 @@ fn recorded_pmmr_indices_replay() {
 #[test]
 fn recorded_unspent_listing_validates_whole_and_paged() {
     for (name, text, vector) in sessions() {
+        // Upstream stopped this session before its scan, so it recorded no listing.
+        if vector["expected"]["node_unreachable"] == true {
+            assert!(
+                exchanges(&vector, "get_unspent_outputs").is_empty(),
+                "{name}"
+            );
+            continue;
+        }
         let node = MockNode::from_recording(&text).unwrap();
         let client = node.client();
         let exchange = exchanges(&vector, "get_unspent_outputs")[0];

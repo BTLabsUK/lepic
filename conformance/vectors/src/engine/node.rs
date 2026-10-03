@@ -36,7 +36,7 @@ pub(crate) struct Exchange {
     pub(crate) built: bool,
 }
 
-fn is_false(value: &bool) -> bool {
+pub(crate) fn is_false(value: &bool) -> bool {
     !*value
 }
 
@@ -116,6 +116,13 @@ impl NodeServer {
 
     pub(crate) fn url(&self) -> &str {
         &self.url
+    }
+
+    /// Answers from `next` from now on, so the wallet sees the node's tip move to `next`'s head.
+    pub(crate) fn serve(&self, next: Arc<Chain>) {
+        if let Backend::Live { chain, .. } = &mut *self.backend.lock() {
+            *chain = next;
+        }
     }
 
     pub(crate) fn start_recording(&self) {

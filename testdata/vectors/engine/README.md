@@ -28,7 +28,24 @@ response regenerate byte for byte. `inputs.subject.mnemonic` is the subject's se
 whole chain) or `refresh` (the existing wallet runs `update_wallet_state`, the update behind
 `epic-wallet info` and `txs`). `inputs.before` is the subject's state before a refresh.
 `expected.exchanges` is every node call of the session, in order, and `expected.after` the state
-upstream ended in.
+upstream ended in. `inputs.node_tip`, when present, is the height up to which the node held the
+chain during the session; it served a copy of the chain's blocks up to there, as a node that has
+not synced further. `expected.node_unreachable`, when present, is `true`: upstream's update
+returned `false`, its report that it could not reach the node, after the recorded exchanges, and
+stopped before its scan.
+
+The node's tip moves backwards and forwards in three consecutive refresh sessions:
+
+- `refresh_node_behind`: the node's tip is two blocks below the subject's last confirmed height.
+  Upstream applies no output state when the tip is below that height, so outputs and transactions
+  stay as they were; its scan still runs to the lower tip and records it as the last scanned
+  block.
+- `refresh_node_behind_pending_receive`: the same node, after the subject received a transaction
+  built and mined above the node's tip. Upstream's kernel lookup for it asks for a height range
+  that starts above the tip, the node answers with an error, and upstream stops with
+  `node_unreachable`.
+- `refresh_node_caught_up`: the node holds the whole chain again, one block above the subject's
+  last confirmed height; the refresh confirms the received output and its transaction.
 
 Wallet state (`before`, `after`) holds every stored output (sorted by `n_child`), every transaction
 log entry (sorted by `id`), `last_confirmed_height`, `last_scanned_block`, the account's

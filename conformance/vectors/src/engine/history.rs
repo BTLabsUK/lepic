@@ -16,7 +16,7 @@ use epic_wallet_libwallet::{BlockFees, InitTxArgs};
 use serde::Serialize;
 
 use super::chain::{ScratchDir, TestChain, use_test_chain_settings};
-use super::node::{Exchange, NodeServer, ReplayReport};
+use super::node::{Exchange, NodeServer, ReplayReport, is_false};
 use super::wallet::{UpstreamWallet, WalletState, copy_dir};
 use super::{Failure, render};
 use crate::{Rendered, Upstream, hex};
@@ -31,6 +31,10 @@ const SUBJECT_ENTROPY: [u8; 32] = [0x53; 32];
 const MINER_TO_SUBJECT_CONFIRMED: u64 = 300_000_000;
 const SUBJECT_TO_MINER: u64 = 100_000_000;
 const MINER_TO_SUBJECT_REORGANISED: u64 = 200_000_000;
+const MINER_TO_SUBJECT_WHILE_BEHIND: u64 = 150_000_000;
+
+/// How far below the subject's last refresh the lagging node's tip is.
+const NODE_LAG_BLOCKS: u64 = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Who {
@@ -94,12 +98,20 @@ struct SessionInputs<'a> {
     chain: Chain<'a>,
     session: &'static str,
     before: Option<WalletState>,
+    /// Present when the node served `chain` only up to this height, as a node that has not
+    /// synced further.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node_tip: Option<String>,
 }
 
 #[derive(Serialize)]
 struct SessionExpected {
     exchanges: Vec<Exchange>,
     after: WalletState,
+    /// Upstream's update returned `false`, its report that it could not reach the node, after
+    /// the recorded exchanges.
+    #[serde(skip_serializing_if = "is_false")]
+    node_unreachable: bool,
 }
 
 struct Story {
@@ -112,6 +124,8 @@ struct Story {
     blocks: Vec<BlockNote>,
     txs: Vec<TxNote>,
     subject_mnemonic: String,
+    /// The height the node serves the chain up to, when it serves a prefix.
+    node_tip: Option<u64>,
     scratch: ScratchDir,
 }
 
@@ -121,10 +135,12 @@ struct Session {
     description: &'static str,
     session: &'static str,
     before: Option<WalletState>,
+    node_tip: Option<u64>,
     blocks: Vec<BlockNote>,
     txs: Vec<TxNote>,
     exchanges: Vec<Exchange>,
     after: WalletState,
+    node_unreachable: bool,
 }
 
 pub(crate) fn generate(upstream: &Upstream) -> Result<Vec<Rendered>, Failure> {
@@ -181,6 +197,42 @@ pub(crate) fn generate(upstream: &Upstream) -> Result<Vec<Rendered>, Failure> {
          the change of the spend, an output lost to the reorganisation, and an immature coinbase.",
     )?);
 
+    // The node falls behind the subject's last refresh. It serves the whole chain again while the
+    // subject receives a transaction mined above the lagging tip, falls behind again, and then
+    // catches up.
+    story.refresh_subject()?;
+    let lagging_tip = story
+        .chain
+        .head()?
+        .height
+        .checked_sub(NODE_LAG_BLOCKS)
+        .ok_or(Failure::Overflow)?;
+    let lagging = story
+        .chain
+        .prefix(&story.scratch.path().join("lagging"), lagging_tip)?;
+    story.serve_prefix(&lagging)?;
+    sessions.push(story.refresh_session(
+        "refresh_node_behind",
+        "The subject last refreshed at the chain's tip. The node now holds the chain only up to \
+         two blocks below that; the refresh runs against the lower tip.",
+    )?);
+    story.serve_chain();
+    let tx = story.transfer(Who::Miner, "while_behind", MINER_TO_SUBJECT_WHILE_BEHIND)?;
+    story.reward(Who::Miner, &[("while_behind", &tx)])?;
+    story.serve_prefix(&lagging)?;
+    sessions.push(story.refresh_session(
+        "refresh_node_behind_pending_receive",
+        "As refresh_node_behind, after the subject received a transaction built and mined at \
+         heights above the node's tip; the refresh runs against the lower tip.",
+    )?);
+    story.serve_chain();
+    sessions.push(story.refresh_session(
+        "refresh_node_caught_up",
+        "After refresh_node_behind_pending_receive, the node holds the whole chain again, one \
+         block above the subject's last complete refresh; the refresh confirms the transaction \
+         received meanwhile.",
+    )?);
+
     let subject = Subject {
         mnemonic: story.subject_mnemonic.clone(),
         password: "",
@@ -199,10 +251,12 @@ pub(crate) fn generate(upstream: &Upstream) -> Result<Vec<Rendered>, Failure> {
             },
             session: s.session,
             before: s.before,
+            node_tip: s.node_tip.map(|height| height.to_string()),
         };
         let expected = SessionExpected {
             exchanges: s.exchanges,
             after: s.after,
+            node_unreachable: s.node_unreachable,
         };
         vectors.push(render(s.name, upstream, inputs, expected)?);
     }
@@ -233,6 +287,7 @@ impl Story {
             blocks: Vec::new(),
             txs: Vec::new(),
             subject_mnemonic,
+            node_tip: None,
             scratch,
         })
     }
@@ -406,6 +461,19 @@ impl Story {
         Ok(slate.tx)
     }
 
+    /// Makes the node answer from `prefix`, a copy of the chain up to a lower height.
+    fn serve_prefix(&mut self, prefix: &TestChain) -> Result<(), Failure> {
+        self.node_tip = Some(prefix.head()?.height);
+        self.server.serve(prefix.chain().clone());
+        Ok(())
+    }
+
+    /// Makes the node answer from the whole chain again.
+    fn serve_chain(&mut self) {
+        self.node_tip = None;
+        self.server.serve(self.chain.chain().clone());
+    }
+
     /// An unrecorded refresh, to move the subject's state forward between cases.
     fn refresh_subject(&self) -> Result<(), Failure> {
         refresh(&self.subject, "a setup refresh")
@@ -425,15 +493,18 @@ impl Story {
         self.subject = Wallet::reopen(self.subject.dir(), client(&self.server)?)?;
 
         self.server.start_recording();
-        refresh(&self.subject, name)?;
+        let reached = update(&self.subject)?;
         let exchanges = self.server.stop_recording();
         let after = self.subject.state()?;
 
         let replay = NodeServer::replay(exchanges.clone()).map_err(Failure::Io)?;
         let replica = Wallet::reopen(&replica_dir, client(&replay)?)?;
-        check_replay(name, &replay, &replica, &after)?;
+        check_replay(name, &replay, &replica, reached, &after)?;
 
-        Ok(self.session(name, description, "refresh", Some(before), exchanges, after))
+        let mut session =
+            self.session(name, description, "refresh", Some(before), exchanges, after);
+        session.node_unreachable = !reached;
+        Ok(session)
     }
 
     /// Records a new wallet's first update from the subject's mnemonic, then replays it into
@@ -460,7 +531,7 @@ impl Story {
             &self.subject_mnemonic,
             client(&replay)?,
         )?;
-        check_replay(name, &replay, &replica, &after)?;
+        check_replay(name, &replay, &replica, true, &after)?;
 
         Ok(self.session(name, description, "restore", None, exchanges, after))
     }
@@ -479,19 +550,24 @@ impl Story {
             description,
             session,
             before,
+            node_tip: self.node_tip,
             blocks: self.blocks.clone(),
             txs: self.txs.clone(),
             exchanges,
             after,
+            node_unreachable: false,
         }
     }
 }
 
-/// The update the CLI and the owner API run before showing balances and outputs.
+/// The update the CLI and the owner API run before showing balances and outputs. Returns
+/// `false` where upstream reports that it could not reach the node.
+fn update(wallet: &Wallet) -> Result<bool, Failure> {
+    owner::update_wallet_state(wallet.instance(), None, &None, false).map_err(Failure::Wallet)
+}
+
 fn refresh(wallet: &Wallet, during: &'static str) -> Result<(), Failure> {
-    let reached = owner::update_wallet_state(wallet.instance(), None, &None, false)
-        .map_err(Failure::Wallet)?;
-    if reached {
+    if update(wallet)? {
         Ok(())
     } else {
         Err(Failure::NodeUnreachable(during))
@@ -503,9 +579,18 @@ fn check_replay(
     name: &str,
     replay: &NodeServer,
     replica: &Wallet,
+    reached: bool,
     recorded: &WalletState,
 ) -> Result<(), Failure> {
-    let replayed = replay_into(replica)?;
+    let (replayed_reached, replayed) = replay_into(replica)?;
+    if replayed_reached != reached {
+        return Err(Failure::Replay {
+            case: name.to_owned(),
+            detail: format!(
+                "update reached the node: recorded {reached}, replayed {replayed_reached}"
+            ),
+        });
+    }
     verify_replay(
         name,
         &replay.replay_report(),
@@ -514,11 +599,11 @@ fn check_replay(
     )
 }
 
-fn replay_into(replica: &Wallet) -> Result<WalletState, Failure> {
-    refresh(replica, "a replay")?;
+fn replay_into(replica: &Wallet) -> Result<(bool, WalletState), Failure> {
+    let reached = update(replica)?;
     let replayed = replica.state()?;
     replica.close()?;
-    Ok(replayed)
+    Ok((reached, replayed))
 }
 
 /// A replay matches when every request found a recorded answer, every recorded answer was asked
@@ -596,7 +681,10 @@ mod tests {
             .ok_or("vector has no mnemonic")?;
         let replay = NodeServer::replay(exchanges)?;
         let replica = Wallet::restore(&scratch.path().join("replica"), mnemonic, client(&replay)?)?;
-        let replayed = replay_into(&replica)?;
+        let (reached, replayed) = replay_into(&replica)?;
+        if !reached {
+            return Err(Failure::NodeUnreachable("a replay").into());
+        }
         verify_replay(
             "restore_full_scan",
             &replay.replay_report(),
