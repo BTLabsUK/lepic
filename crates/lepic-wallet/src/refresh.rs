@@ -32,6 +32,7 @@ use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
+use crate::chain::{self, ChainReference, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Balance, Event};
 use crate::ports::{SecretVault, StoreOpener};
@@ -43,7 +44,7 @@ use crate::wallet::Wallet;
 /// `epic-wallet info` counts by default.
 pub const BALANCE_MINIMUM_CONFIRMATIONS: u64 = 10;
 
-const LAST_CONFIRMED_SETTING: &str = "refresh.last_confirmed_height";
+pub(crate) const LAST_CONFIRMED_SETTING: &str = "refresh.last_confirmed_height";
 
 /// The private context of the party that adds only an output, under the participant id
 /// `epic-wallet` gives the receiver.
@@ -59,6 +60,10 @@ pub enum RefreshError {
     /// stored are kept.
     #[error("node request failed")]
     Node(#[from] NodeError),
+    /// The node's answer cannot be true. Steps already stored are kept; nothing derived from
+    /// the answer is.
+    #[error("node data rejected")]
+    Implausible(#[from] ImplausibleNodeData),
     #[error("balance out of range")]
     Balance(#[from] ArithmeticError),
 }
@@ -83,7 +88,7 @@ pub enum RefreshOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RefreshSummary {
-    /// The node's tip, now the last confirmed height.
+    /// The node's tip. It becomes the last confirmed height unless it expired transactions.
     pub height: Height,
     /// Unconfirmed outputs found on chain, now unspent.
     pub confirmed_outputs: u64,
@@ -118,27 +123,37 @@ where
 {
     /// Refreshes every account against the node: asks it for every output not stored as spent,
     /// marks the ones it holds unspent and confirms their transactions, marks unspent and
-    /// locked ones it does not hold spent, confirms open transactions with no change output by
-    /// their kernel, and expires transactions at or past their TTL cutoff, releasing their
-    /// inputs. A posted transaction is never expired, since it may still be mined.
+    /// locked ones it does not hold spent once a second request misses them too, confirms open
+    /// transactions with no change output by their kernel, and expires transactions at or past
+    /// their TTL cutoff, releasing their inputs. A posted or finalized transaction is never
+    /// expired, since it may still be mined.
+    ///
+    /// The tip must be plausible: at most a bounded number of blocks above the highest tip the
+    /// wallet stored, for the time since it stored it (see [`crate::chain`]). Output and kernel
+    /// heights must not be above the tip. Before expiring anything the tip is asked for again,
+    /// and the two must agree. The tip becomes the last confirmed height only when it expired
+    /// nothing; otherwise the next refresh stores it.
     ///
     /// Emits [`Event::Transaction`] for every state change and one [`Event::Balance`] per
     /// account. Returns [`RefreshOutcome::NodeBehind`], changing nothing, when the node's tip
     /// is below the last refresh's height.
     ///
-    /// Fails with [`RefreshError::Node`], or [`WalletError::Locked`] inside
-    /// [`RefreshError::Wallet`]. Steps stored before a failure are kept.
+    /// Fails with [`RefreshError::Node`], [`RefreshError::Implausible`], or
+    /// [`WalletError::Locked`] inside [`RefreshError::Wallet`]. Steps stored before a failure
+    /// are kept.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn refresh(&self) -> Result<RefreshOutcome, RefreshError> {
         let session = self.session()?;
         let node = &self.ports().node;
         let tip = node.get_tip().await?;
-        let (last_confirmed, tracked) = {
+        let now = self.ports().clock.now();
+        let known = {
             let session = Arc::clone(&session);
-            self.blocking(move |_, _| Ok(session.store.read(tracked_outputs)))
+            self.blocking(move |_, _| Ok(session.store.read(known_state)))
                 .await??
         };
-        if let Some(last_confirmed) = last_confirmed
+        chain::check_tip(known.reference, tip.height, now)?;
+        if let Some(last_confirmed) = known.last_confirmed
             && tip.height < last_confirmed
         {
             warn!(height = %tip.height, "refresh skipped behind the last confirmed height");
@@ -147,27 +162,21 @@ where
                 last_confirmed,
             });
         }
-        let found = if tracked.is_empty() {
-            BTreeMap::new()
-        } else {
-            node.get_outputs(&tracked)
-                .await?
-                .into_iter()
-                .map(|location| (location.commitment, location))
-                .collect()
-        };
+        let tracked = known.tracked;
+        let commitments: Vec<Commitment> =
+            tracked.iter().map(|(commitment, _)| *commitment).collect();
+        let found = self.locate(&commitments, &tracked, tip.height).await?;
         let mut summary = RefreshSummary {
             height: tip.height,
             ..RefreshSummary::default()
         };
 
-        let now = self.ports().clock.now();
         let outcome = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
                 Ok(session
                     .store
-                    .write(|repos| apply_outputs(repos, &tracked, &found, tip.height, now)))
+                    .write(|repos| apply_outputs(repos, &commitments, &found, now)))
             })
             .await??
         };
@@ -188,7 +197,8 @@ where
             let kernel = node
                 .get_kernel(&lookup.excess, Some(lookup.min_height), Some(tip.height))
                 .await?;
-            if kernel.is_some() {
+            if let Some(kernel) = kernel {
+                chain::check_kernel_height(kernel.height, lookup.min_height, tip.height)?;
                 kernel_confirmed.push(lookup.tx_id);
             }
         }
@@ -205,12 +215,39 @@ where
         }
 
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
-        let changes = {
+        let due = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
                 Ok(session
                     .store
-                    .write(|repos| expire_all(repos, &codecs, tip.height, now)))
+                    .read(|repos| expiry_due(repos, &codecs, tip.height)))
+            })
+            .await??
+        };
+        if due {
+            let second = node.get_tip().await?;
+            chain::check_agreement(tip.height, second.height)?;
+        }
+        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let changes = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(session.store.write(|repos| {
+                    // Only a tip that was confirmed by a second one expires anything.
+                    let changes = if due {
+                        expire_all(repos, &codecs, tip.height, now)?
+                    } else {
+                        Vec::new()
+                    };
+                    // A tip that expired transactions is not trusted as a reference until a
+                    // later refresh sees the chain there without expiring anything.
+                    if changes.is_empty() {
+                        repos
+                            .put_setting(LAST_CONFIRMED_SETTING, &tip.height.value().to_string())?;
+                        chain::record_tip(repos, tip.height, now)?;
+                    }
+                    Ok::<_, RefreshError>(changes)
+                }))
             })
             .await??
         };
@@ -226,6 +263,42 @@ where
         }
         info!(height = %tip.height, "refresh completed");
         Ok(RefreshOutcome::Refreshed(summary))
+    }
+
+    /// Where the node holds the tracked outputs. An unspent or locked output missing from the
+    /// first answer is asked for again, and counts as missing only when the second answer
+    /// misses it too.
+    async fn locate(
+        &self,
+        commitments: &[Commitment],
+        tracked: &[(Commitment, OutputStatus)],
+        tip: Height,
+    ) -> Result<BTreeMap<Commitment, OutputLocation>, RefreshError> {
+        if commitments.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let node = &self.ports().node;
+        let mut found = BTreeMap::new();
+        for location in node.get_outputs(commitments).await? {
+            chain::check_output_height(location.height, tip)?;
+            found.insert(location.commitment, location);
+        }
+        let missing: Vec<Commitment> = tracked
+            .iter()
+            .filter(|(commitment, status)| {
+                matches!(status, OutputStatus::Unspent | OutputStatus::Locked)
+                    && !found.contains_key(commitment)
+            })
+            .map(|(commitment, _)| *commitment)
+            .collect();
+        if !missing.is_empty() {
+            for location in node.get_outputs(&missing).await? {
+                chain::check_output_height(location.height, tip)?;
+                debug!(height = %location.height, "output found on the second request");
+                found.insert(location.commitment, location);
+            }
+        }
+        Ok(found)
     }
 
     /// The node's tip at the last refresh that applied, or `None` before the first one. Fails
@@ -258,7 +331,7 @@ where
 
 /// A stored height that does not parse is ignored: the next refresh applies whatever the node
 /// says, as on a new wallet.
-fn last_confirmed(repos: &dyn Repositories) -> Result<Option<Height>, StoreError> {
+pub(crate) fn last_confirmed(repos: &dyn Repositories) -> Result<Option<Height>, StoreError> {
     Ok(match repos.setting(LAST_CONFIRMED_SETTING)? {
         Some(text) => {
             let height = text.parse().ok().map(Height::new);
@@ -271,11 +344,15 @@ fn last_confirmed(repos: &dyn Repositories) -> Result<Option<Height>, StoreError
     })
 }
 
-/// The last confirmed height and every commitment the node is asked about: all outputs not
-/// stored as spent, in every account.
-fn tracked_outputs(
-    repos: &dyn Repositories,
-) -> Result<(Option<Height>, Vec<Commitment>), RefreshError> {
+/// What a refresh starts from.
+struct KnownState {
+    last_confirmed: Option<Height>,
+    reference: Option<ChainReference>,
+    /// Every output the node is asked about, all those not stored as spent, in every account.
+    tracked: Vec<(Commitment, OutputStatus)>,
+}
+
+fn known_state(repos: &dyn Repositories) -> Result<KnownState, RefreshError> {
     let mut tracked = Vec::new();
     for account in repos.accounts()? {
         tracked.extend(
@@ -283,10 +360,14 @@ fn tracked_outputs(
                 .outputs(account.index, None)?
                 .into_iter()
                 .filter(|output| output.status != OutputStatus::Spent)
-                .map(|output| output.id.commitment),
+                .map(|output| (output.id.commitment, output.status)),
         );
     }
-    Ok((last_confirmed(repos)?, tracked))
+    Ok(KnownState {
+        last_confirmed: last_confirmed(repos)?,
+        reference: chain::reference(repos)?,
+        tracked,
+    })
 }
 
 /// Upstream's `apply_api_outputs`: what the node holds becomes unspent and confirms its
@@ -295,7 +376,6 @@ fn apply_outputs(
     repos: &mut dyn Repositories,
     tracked: &[Commitment],
     found: &BTreeMap<Commitment, OutputLocation>,
-    tip: Height,
     now: Timestamp,
 ) -> Result<StepOutcome, RefreshError> {
     let mut outcome = StepOutcome::default();
@@ -312,7 +392,6 @@ fn apply_outputs(
             repos.put_output(&updated)?;
         }
     }
-    repos.put_setting(LAST_CONFIRMED_SETTING, &tip.value().to_string())?;
     Ok(outcome)
 }
 
@@ -393,33 +472,43 @@ fn kernel_lookups(
         let Some(slate_id) = entry.slate_id else {
             continue;
         };
-        let final_slate = [SlateStage::Standard3, SlateStage::Invoice3]
-            .into_iter()
-            .find_map(|stage| stored_slate(repos, codecs, stored.id, slate_id, stage).transpose())
-            .transpose()?;
-        if let Some(slate) = final_slate
-            && let Some(kernel) = slate.kernel()
-        {
+        if let Some((excess, min_height)) = final_kernel(repos, codecs, stored.id, slate_id)? {
             lookups.push(KernelLookup {
                 tx_id: stored.id,
-                excess: kernel.excess,
-                min_height: slate.height(),
+                excess,
+                min_height,
             });
         }
     }
     Ok(lookups)
 }
 
-/// Expires every transaction past its TTL that is not yet posted, as upstream cancels it.
-fn expire_all(
-    repos: &mut dyn Repositories,
+/// The kernel excess of the final slate stored for a transaction, and the height the slate was
+/// created at, below which the kernel cannot be.
+pub(crate) fn final_kernel(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+    slate_id: Uuid,
+) -> Result<Option<(Commitment, Height)>, StoreError> {
+    let final_slate = [SlateStage::Standard3, SlateStage::Invoice3]
+        .into_iter()
+        .find_map(|stage| stored_slate(repos, codecs, tx_id, slate_id, stage).transpose())
+        .transpose()?;
+    Ok(final_slate.and_then(|slate| slate.kernel().map(|kernel| (kernel.excess, slate.height()))))
+}
+
+/// Open transactions at or past their TTL cutoff at `tip`. A finalized or posted transaction
+/// is left out, as upstream leaves out what it has finalized: its kernel may reach the chain
+/// whatever the TTL says.
+fn expiring(
+    repos: &dyn Repositories,
     codecs: &CodecRegistry,
     tip: Height,
-    now: Timestamp,
-) -> Result<Vec<StateChange>, RefreshError> {
-    let mut changes = Vec::new();
+) -> Result<Vec<StoredTransaction>, RefreshError> {
+    let mut expiring = Vec::new();
     for stored in open_transactions(repos)? {
-        if stored.entry.state == TxState::Posted {
+        if matches!(stored.entry.state, TxState::Posted | TxState::Finalized) {
             continue;
         }
         let Some(slate_id) = stored.entry.slate_id else {
@@ -429,8 +518,30 @@ fn expire_all(
             continue;
         };
         if tip >= cutoff {
-            changes.extend(expire(repos, &stored, now)?);
+            expiring.push(stored);
         }
+    }
+    Ok(expiring)
+}
+
+fn expiry_due(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tip: Height,
+) -> Result<bool, RefreshError> {
+    Ok(!expiring(repos, codecs, tip)?.is_empty())
+}
+
+/// Expires every transaction [`expiring`] lists, as upstream cancels it.
+fn expire_all(
+    repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
+    tip: Height,
+    now: Timestamp,
+) -> Result<Vec<StateChange>, RefreshError> {
+    let mut changes = Vec::new();
+    for stored in expiring(repos, codecs, tip)? {
+        changes.extend(expire(repos, &stored, now)?);
     }
     Ok(changes)
 }
@@ -500,7 +611,7 @@ fn stored_slate(
     tx_id: TxId,
     slate_id: Uuid,
     stage: SlateStage,
-) -> Result<Option<Slate>, RefreshError> {
+) -> Result<Option<Slate>, StoreError> {
     Ok(repos
         .slate(slate_id, stage)?
         .and_then(|stored| decode_stored(codecs, tx_id, &stored.bytes)))
@@ -536,7 +647,7 @@ impl fmt::Display for ErrorChain<'_> {
 }
 
 /// The codecs stored slates are written in, in the detection order `receive` uses.
-fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
+pub(crate) fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
     let mut codecs = CodecRegistry::new();
     // Registration fails only for a duplicate id, and these ids differ.
     let _ = codecs.register(Box::new(V3JsonCodec::new(base_fee)));

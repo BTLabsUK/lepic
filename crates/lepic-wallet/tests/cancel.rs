@@ -204,6 +204,7 @@ fn cancel_of_a_received_transaction_drops_its_output_and_context() {
     harness
         .block_on(receiver.restore(password("receiver"), RECEIVER_MNEMONIC))
         .unwrap();
+    support::complete_restore_scan(&harness.runtime, &receiver);
     let received = harness
         .block_on(receiver.receive(LOOPBACK, &wire, ReceiveRequest::default()))
         .unwrap();
@@ -233,4 +234,89 @@ fn cancel_of_a_received_transaction_drops_its_output_and_context() {
     assert_eq!(state, TxState::Cancelled);
     assert!(outputs.is_empty());
     assert!(!has_context);
+}
+
+/// The G-03 `send_file_plain` S3 as upstream's sender finalized it.
+const SEND_FILE_PLAIN_S3: &str =
+    include_str!("../../../testdata/vectors/slates/send_file_plain_s3_v3.json");
+
+/// A finalized send whose final slate is stored, and the kernel that slate carries.
+fn finalized_send(sender: &Sender) -> (TxId, lepic_node::LocatedKernel) {
+    let vector: serde_json::Value = serde_json::from_str(SEND_FILE_PLAIN_S3).unwrap();
+    let json = vector["expected"]["json"].as_str().unwrap().to_owned();
+    let slate = send_support::legacy_codecs()
+        .decode(&lepic_slate::codec::WireSlate::binary(
+            lepic_slate::codec::MediaType::JSON,
+            json.clone().into_bytes(),
+        ))
+        .unwrap();
+    let slate_id = uuid::Uuid::from_bytes(*slate.id().as_bytes());
+    let tx_id = sender
+        .store
+        .write(|repos| {
+            let tx_id = repos.insert_transaction(&lepic_store::TransactionEntry {
+                account: ACCOUNT,
+                direction: lepic_store::TxDirection::Outgoing,
+                state: TxState::Finalized,
+                slate_id: Some(slate_id),
+                transport: None,
+                amount_credited: Amount::ZERO,
+                amount_debited: Amount::new(100_000_000),
+                fee: None,
+                created_at: support::fixed_time(),
+                updated_at: support::fixed_time(),
+            })?;
+            repos.insert_slate(&lepic_store::StoredSlate {
+                slate_id,
+                stage: lepic_store::SlateStage::Standard3,
+                codec: "legacy-v3".to_owned(),
+                bytes: json.into_bytes(),
+            })?;
+            Ok::<_, lepic_store::StoreError>(tx_id)
+        })
+        .unwrap();
+    let kernel = lepic_node::LocatedKernel {
+        kernel: slate.kernel().unwrap(),
+        height: slate.height(),
+        mmr_index: 1,
+    };
+    (tx_id, kernel)
+}
+
+fn state_of(sender: &Sender, tx_id: TxId) -> TxState {
+    sender.read(|repos| repos.transaction(tx_id)).unwrap().state
+}
+
+#[test]
+fn a_finalized_transaction_whose_kernel_the_node_holds_is_not_cancelled() {
+    let sender = Sender::new();
+    let (tx_id, kernel) = finalized_send(&sender);
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.kernels.push(kernel));
+
+    let error = sender
+        .harness
+        .block_on(sender.wallet.cancel(tx_id))
+        .unwrap_err();
+
+    assert!(
+        matches!(error, WalletError::OnChain(id) if id == tx_id),
+        "{error:?}"
+    );
+    assert_eq!(state_of(&sender, tx_id), TxState::Finalized);
+}
+
+#[test]
+fn a_finalized_transaction_the_node_does_not_know_is_cancelled() {
+    let sender = Sender::new();
+    let (tx_id, _) = finalized_send(&sender);
+
+    sender
+        .harness
+        .block_on(sender.wallet.cancel(tx_id))
+        .unwrap();
+
+    assert_eq!(state_of(&sender, tx_id), TxState::Cancelled);
 }

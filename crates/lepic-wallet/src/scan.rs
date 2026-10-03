@@ -8,11 +8,12 @@
 //! holds one huge transaction, and a scan that was cancelled, failed or was killed resumes after
 //! the last stored page.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use jiff::Timestamp;
+use lepic_crypto::Commitment;
 use lepic_keychain::{Identifier, OutputRewinder, ProofError, SwitchCommitment};
 use lepic_node::{NodeApi, NodeError, UnspentOutput};
 use lepic_primitives::amount::{Amount, ArithmeticError, Height};
@@ -28,9 +29,10 @@ use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
 
 use crate::account::FIRST_HARDENED;
+use crate::chain::{self, ChainReference, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Event, SyncProgress};
-use crate::lifecycle::Session;
+use crate::lifecycle::{self, Session};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
@@ -68,6 +70,9 @@ pub enum ScanError {
     /// The node's paging did not move past the last page.
     #[error("node paged its unspent outputs backwards")]
     Paging,
+    /// The node's answer cannot be true. Pages already stored are kept.
+    #[error("node data rejected")]
+    Implausible(#[from] ImplausibleNodeData),
     /// What earlier pages stored is kept; the next scan resumes after it.
     #[error("scan was cancelled")]
     Cancelled,
@@ -85,8 +90,8 @@ pub enum ScanStart {
     /// The whole chain: what a wallet restored from its recovery phrase needs.
     Genesis,
     Height(Height),
-    /// [`UPDATE_RESCAN_BLOCKS`] behind the last completed scan, or the whole chain when no scan
-    /// has completed.
+    /// [`UPDATE_RESCAN_BLOCKS`] behind the last completed scan, or behind the node's tip when
+    /// that is lower, or the whole chain when no scan has completed.
     LastScanned,
 }
 
@@ -287,10 +292,14 @@ where
     /// transactions cancelled. Emits [`Event::Sync`] after each page and
     /// [`Event::Transaction`] for every cancelled transaction.
     ///
+    /// An output stored as spent is revived only when the node, asked for it again, still holds
+    /// it. The tip must be plausible as [`Wallet::refresh`] checks it, and no output may be
+    /// above it.
+    ///
     /// Every page is stored as it is scanned. When the scan fails or is cancelled, the next scan
     /// from the same start resumes after the last stored page. Fails with
-    /// [`ScanError::Cancelled`], [`ScanError::Node`], or [`WalletError::Locked`] inside
-    /// [`ScanError::Wallet`].
+    /// [`ScanError::Cancelled`], [`ScanError::Node`], [`ScanError::Implausible`], or
+    /// [`WalletError::Locked`] inside [`ScanError::Wallet`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn scan(
         &self,
@@ -300,12 +309,14 @@ where
         let session = self.session()?;
         let node = &self.ports().node;
         let tip = until_cancelled(cancel, node.get_tip()).await?;
-        let (last_scanned, checkpoint) = {
+        let state = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| Ok(session.store.read(|repos| scan_state(repos))))
                 .await??
         };
-        let start_height = resolve_start(options.start, last_scanned.as_ref());
+        chain::check_tip(state.reference, tip.height, self.ports().clock.now())?;
+        let checkpoint = state.checkpoint;
+        let start_height = resolve_start(options.start, state.last_scanned.as_ref(), tip.height);
         let mut summary = ScanSummary {
             start_height,
             end_height: tip.height,
@@ -356,6 +367,9 @@ where
             if after <= next_index {
                 return Err(ScanError::Paging);
             }
+            for output in &page.outputs {
+                chain::check_output_height(output.height, tip.height)?;
+            }
             if let Some(highest) = page.outputs.iter().map(|output| output.height).max() {
                 progress = progress.max(highest.min(tip.height));
             }
@@ -366,7 +380,14 @@ where
                 delete_unconfirmed: options.delete_unconfirmed,
             };
             let outcome = self
-                .store_page(Arc::clone(&session), page.outputs, options, checkpoint)
+                .store_page(
+                    Arc::clone(&session),
+                    page.outputs,
+                    options,
+                    checkpoint,
+                    tip.height,
+                    cancel,
+                )
                 .await?;
             summary.add(&outcome);
             self.emit_changes(outcome.changes);
@@ -391,7 +412,7 @@ where
             self.blocking(move |_, _| {
                 Ok(session
                     .store
-                    .write(|repos| finish(repos, options, &block, now)))
+                    .write(|repos| finish(repos, options, start_height, &block, now)))
             })
             .await??
         };
@@ -413,26 +434,81 @@ where
         session.store.read(|repos| Ok(last_scanned(repos)?))
     }
 
+    /// Forgets where the chain was, the last confirmed height, the last scanned block and the
+    /// tip the wallet measures new tips against, then scans the whole chain with `options`
+    /// starting from genesis. This recovers a wallet that stored a height the chain has not
+    /// reached, which leaves every later refresh behind it.
+    ///
+    /// Fails as [`Wallet::scan`] does. The stored heights are forgotten even when the scan
+    /// fails; the next refresh or scan stores them again.
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub async fn reset_chain_position(
+        &self,
+        options: ScanOptions,
+        cancel: &ScanCancel,
+    ) -> Result<ScanSummary, ScanError> {
+        let session = self.session()?;
+        self.blocking(move |_, _| {
+            session.store.write(|repos| {
+                repos.delete_setting(crate::refresh::LAST_CONFIRMED_SETTING)?;
+                repos.delete_setting(LAST_SCANNED_SETTING)?;
+                repos.delete_setting(CHECKPOINT_SETTING)?;
+                chain::forget(repos)?;
+                Ok::<_, WalletError>(())
+            })
+        })
+        .await?;
+        info!("chain position reset");
+        self.scan(
+            ScanOptions {
+                start: ScanStart::Genesis,
+                ..options
+            },
+            cancel,
+        )
+        .await
+    }
+
     /// Identifies a page on the blocking pool, since rewinding a full page of proofs takes a
-    /// while, and stores it with its checkpoint in one transaction.
+    /// while, asks the node again about the outputs found that are stored as spent, and stores
+    /// the page with its checkpoint in one transaction.
     async fn store_page(
         &self,
         session: Arc<Session<S::Store>>,
         outputs: Vec<UnspentOutput>,
         options: ScanOptions,
         checkpoint: Checkpoint,
+        tip: Height,
+        cancel: &ScanCancel,
     ) -> Result<PageOutcome, ScanError> {
+        let (found, spent) = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(
+                    identify(&session.keychain, &outputs, options.coinbase_maturity).and_then(
+                        |found| {
+                            let spent =
+                                session.store.read(|repos| stored_as_spent(repos, &found))?;
+                            Ok((found, spent))
+                        },
+                    ),
+                )
+            })
+            .await??
+        };
+        let mut revivable = BTreeSet::new();
+        if !spent.is_empty() {
+            let held = until_cancelled(cancel, self.ports().node.get_outputs(&spent)).await?;
+            for location in held {
+                chain::check_output_height(location.height, tip)?;
+                revivable.insert(location.commitment);
+            }
+        }
         let now = self.ports().clock.now();
         self.blocking(move |_, _| {
-            Ok(
-                identify(&session.keychain, &outputs, options.coinbase_maturity).and_then(
-                    |found| {
-                        session
-                            .store
-                            .write(|repos| store_found(repos, &found, options, checkpoint, now))
-                    },
-                ),
-            )
+            Ok(session
+                .store
+                .write(|repos| store_found(repos, &found, &revivable, options, checkpoint, now)))
         })
         .await?
     }
@@ -465,19 +541,32 @@ async fn until_cancelled<T>(
     }
 }
 
-fn resolve_start(start: ScanStart, last_scanned: Option<&ScannedBlock>) -> Height {
+/// A last scanned block above the tip is from a node that was ahead, or on another fork, so the
+/// scan reaches back from the tip instead.
+fn resolve_start(start: ScanStart, last_scanned: Option<&ScannedBlock>, tip: Height) -> Height {
     match start {
         ScanStart::Genesis => Height::ZERO,
         ScanStart::Height(height) => height,
         ScanStart::LastScanned => last_scanned.map_or(Height::ZERO, |block| {
-            Height::new(block.height.value().saturating_sub(UPDATE_RESCAN_BLOCKS))
+            Height::new(
+                block
+                    .height
+                    .min(tip)
+                    .value()
+                    .saturating_sub(UPDATE_RESCAN_BLOCKS),
+            )
         }),
     }
 }
 
-fn scan_state(
-    repos: &dyn Repositories,
-) -> Result<(Option<ScannedBlock>, Option<Checkpoint>), ScanError> {
+/// What a scan starts from.
+struct ScanState {
+    last_scanned: Option<ScannedBlock>,
+    checkpoint: Option<Checkpoint>,
+    reference: Option<ChainReference>,
+}
+
+fn scan_state(repos: &dyn Repositories) -> Result<ScanState, ScanError> {
     let checkpoint = match repos.setting(CHECKPOINT_SETTING)? {
         Some(text) => {
             let checkpoint = Checkpoint::decode(&text);
@@ -488,7 +577,29 @@ fn scan_state(
         }
         None => None,
     };
-    Ok((last_scanned(repos)?, checkpoint))
+    Ok(ScanState {
+        last_scanned: last_scanned(repos)?,
+        checkpoint,
+        reference: chain::reference(repos)?,
+    })
+}
+
+/// The found outputs that are stored as spent.
+fn stored_as_spent(
+    repos: &dyn Repositories,
+    found: &[FoundOutput],
+) -> Result<Vec<Commitment>, ScanError> {
+    let mut spent = Vec::new();
+    for output in found {
+        let commitment = output.id.commitment;
+        if repos
+            .output(commitment.as_bytes())?
+            .is_some_and(|stored| stored.status == OutputStatus::Spent)
+        {
+            spent.push(commitment);
+        }
+    }
+    Ok(spent)
 }
 
 /// A stored position that does not parse is ignored, which costs a full scan and loses nothing.
@@ -564,6 +675,7 @@ fn placement(key_id: &Identifier) -> (AccountIndex, Option<u32>) {
 fn store_found(
     repos: &mut dyn Repositories,
     found: &[FoundOutput],
+    revivable: &BTreeSet<Commitment>,
     options: ScanOptions,
     checkpoint: Checkpoint,
     now: Timestamp,
@@ -573,7 +685,10 @@ fn store_found(
     for output in found {
         outcome.found = outcome.found.saturating_add(1);
         match repos.output(output.id.commitment.as_bytes())? {
-            Some(stored) => reconcile(repos, stored, output, options, now, &mut outcome)?,
+            Some(stored) => {
+                let revivable = revivable.contains(&output.id.commitment);
+                reconcile(repos, stored, output, revivable, options, now, &mut outcome)?;
+            }
             None => {
                 restore_missing(repos, output, now)?;
                 outcome.restored = outcome.restored.saturating_add(1);
@@ -593,10 +708,12 @@ fn store_found(
 }
 
 /// Brings a stored output in line with the chain without touching what only a refresh decides.
+/// A spent output is revived only when `revivable`: the node held it when asked again.
 fn reconcile(
     repos: &mut dyn Repositories,
     mut stored: OutputRecord,
     found: &FoundOutput,
+    revivable: bool,
     options: ScanOptions,
     now: Timestamp,
     outcome: &mut PageOutcome,
@@ -604,6 +721,9 @@ fn reconcile(
     let mut changed = stored.mmr_index != Some(found.mmr_index);
     stored.mmr_index = Some(found.mmr_index);
     match stored.status {
+        OutputStatus::Spent if !revivable => {
+            debug!(height = %found.height, "output revival not confirmed");
+        }
         OutputStatus::Spent => {
             stored.status = OutputStatus::Unspent;
             changed = true;
@@ -725,10 +845,11 @@ fn cancel_transaction(
 }
 
 /// Ends a scan: the `delete_unconfirmed` repair, then the scanned position replaces the
-/// checkpoint.
+/// checkpoint. A scan from genesis has found every output key in use.
 fn finish(
     repos: &mut dyn Repositories,
     options: ScanOptions,
+    start_height: Height,
     block: &ScannedBlock,
     now: Timestamp,
 ) -> Result<PageOutcome, ScanError> {
@@ -744,6 +865,10 @@ fn finish(
     }
     repos.put_setting(LAST_SCANNED_SETTING, &block.encode())?;
     repos.delete_setting(CHECKPOINT_SETTING)?;
+    chain::record_tip(repos, block.height, now)?;
+    if start_height == Height::ZERO {
+        lifecycle::restore_scan_completed(repos)?;
+    }
     Ok(outcome)
 }
 
@@ -798,15 +923,23 @@ mod tests {
             last_pmmr_index: 1,
         };
         let last = ScanStart::LastScanned;
-        assert_eq!(resolve_start(last, None), Height::ZERO);
-        assert_eq!(resolve_start(last, Some(&block(14))), Height::ZERO);
-        assert_eq!(resolve_start(last, Some(&block(250))), Height::new(150));
+        let tip = Height::new(300);
+        assert_eq!(resolve_start(last, None, tip), Height::ZERO);
+        assert_eq!(resolve_start(last, Some(&block(14)), tip), Height::ZERO);
         assert_eq!(
-            resolve_start(ScanStart::Height(Height::new(5)), Some(&block(250))),
+            resolve_start(last, Some(&block(250)), tip),
+            Height::new(150)
+        );
+        assert_eq!(
+            resolve_start(last, Some(&block(u64::MAX)), tip),
+            Height::new(200)
+        );
+        assert_eq!(
+            resolve_start(ScanStart::Height(Height::new(5)), Some(&block(250)), tip),
             Height::new(5)
         );
         assert_eq!(
-            resolve_start(ScanStart::Genesis, Some(&block(250))),
+            resolve_start(ScanStart::Genesis, Some(&block(250)), tip),
             Height::ZERO
         );
     }

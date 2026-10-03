@@ -10,7 +10,7 @@ use blake2::digest::{FixedOutput, KeyInit, Update};
 use lepic_keychain::vault::SecretName;
 use lepic_keychain::{ExtKeyVersion, Keychain, SecretBytes, SecretStore, Seed};
 use lepic_primitives::params::Network;
-use lepic_store::{CONTEXT_KEY_LEN, ContextKey, Repositories, WalletStore};
+use lepic_store::{CONTEXT_KEY_LEN, ContextKey, Repositories, StoreError, WalletStore};
 use rand_core::CryptoRng;
 use tracing::debug;
 use zeroize::Zeroizing;
@@ -24,6 +24,9 @@ const SEED_SECRET: &str = "wallet/seed";
 
 const NETWORK_SETTING: &str = "wallet.network";
 const FINGERPRINT_SETTING: &str = "wallet.fingerprint";
+
+/// Present while a database rebuilt from a seed has not been scanned from genesis.
+const RESTORE_SCAN_SETTING: &str = "wallet.restore_scan_required";
 
 /// Domain separator of the key private transaction contexts are sealed under.
 const CONTEXT_KEY_DOMAIN: &[u8] = b"lepic-wallet private context key v1";
@@ -154,7 +157,14 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     let mut vault = secrets.create(password)?;
     vault.put(&seed_name()?, &SecretBytes::from_slice(seed.expose_bytes()))?;
     debug!("secret storage created");
-    store.write(|repos| initialise(repos, target.network, &fingerprint))?;
+    let rebuilt = identity == StoredIdentity::Empty && source == SeedSource::Recovered;
+    store.write(|repos| {
+        initialise(repos, target.network, &fingerprint)?;
+        if rebuilt {
+            require_restore_scan(repos)?;
+        }
+        Ok::<_, WalletError>(())
+    })?;
     debug!("wallet database prepared");
     Ok(Session { keychain, store })
 }
@@ -173,10 +183,15 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     let keychain = Keychain::from_seed(&seed, ext_key_version(target.network))?;
     let fingerprint = fingerprint(&keychain)?;
     let store = stores.open(target.data_dir, context_key(&seed)?)?;
-    // A missing database is rebuilt empty: everything in it but history is recovered by a scan.
+    // A missing database is rebuilt empty: everything in it but history is recovered by a scan,
+    // which must run before new outputs are created.
     store.write(|repos| {
-        stored_identity(repos, target.network, &fingerprint)?;
-        initialise(repos, target.network, &fingerprint)
+        let identity = stored_identity(repos, target.network, &fingerprint)?;
+        initialise(repos, target.network, &fingerprint)?;
+        if identity == StoredIdentity::Empty {
+            require_restore_scan(repos)?;
+        }
+        Ok::<_, WalletError>(())
     })?;
     debug!("wallet database prepared");
     Ok(Session { keychain, store })
@@ -219,6 +234,29 @@ fn initialise(
     repos.put_setting(NETWORK_SETTING, network.as_str())?;
     repos.put_setting(FINGERPRINT_SETTING, fingerprint)?;
     ensure_default_account(repos)
+}
+
+fn require_restore_scan(repos: &mut dyn Repositories) -> Result<(), WalletError> {
+    repos.put_setting(RESTORE_SCAN_SETTING, "true")?;
+    debug!("restore scan required");
+    Ok(())
+}
+
+/// Refuses to hand out output keys on a rebuilt database before a scan from genesis found the
+/// keys already in use on chain.
+pub(crate) fn ensure_restore_scanned(repos: &dyn Repositories) -> Result<(), WalletError> {
+    if restore_scan_pending(repos)? {
+        return Err(WalletError::RestoreScanRequired);
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_scan_pending(repos: &dyn Repositories) -> Result<bool, StoreError> {
+    Ok(repos.setting(RESTORE_SCAN_SETTING)?.is_some())
+}
+
+pub(crate) fn restore_scan_completed(repos: &mut dyn Repositories) -> Result<(), StoreError> {
+    repos.delete_setting(RESTORE_SCAN_SETTING)
 }
 
 fn seed_name() -> Result<SecretName, WalletError> {

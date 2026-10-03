@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use jiff::Timestamp;
 use lepic_keychain::vault::BackendError;
 use lepic_keychain::{KdfParams, Vault, VaultError, VaultStorage};
+use lepic_node::NodeApi;
 use lepic_node::mock::{ChainState, MockNode};
 use lepic_node::{NodeClient, NodeVersion, Tip};
 use lepic_primitives::amount::Height;
@@ -23,6 +24,7 @@ use lepic_transport::file::FilePolicy;
 use lepic_transport::loopback::LoopbackTransport;
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, TransportId};
+use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::{
     Clock, NodeEndpoint, Password, Ports, SecretVault, SecretVaultError, SharedRng, StoreOpener,
     Wallet, WalletConfig, WalletName,
@@ -236,6 +238,20 @@ impl Harness {
     pub fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
         self.runtime.block_on(future)
     }
+}
+
+/// Runs the scan from genesis a wallet restored onto an empty database needs before it creates
+/// outputs.
+pub fn complete_restore_scan<N, S, V>(runtime: &Runtime, wallet: &Wallet<N, S, V>)
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    let options = ScanOptions::restore(wallet.config().network);
+    runtime
+        .block_on(wallet.scan(options, &ScanCancel::new()))
+        .unwrap();
 }
 
 pub fn password(text: &str) -> Password {

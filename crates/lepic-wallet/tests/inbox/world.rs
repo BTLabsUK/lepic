@@ -8,7 +8,9 @@ use std::future::Future;
 use std::time::Duration;
 
 use crate::send_support::{ACCOUNT, Sender, context_key};
-use crate::support::{Harness, MemoryStores, TestVault, TestWallet, password};
+use crate::support::{
+    Harness, MemoryStores, TestVault, TestWallet, complete_restore_scan, password,
+};
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::mock_relay::MockRelay;
 use lepic_epicbox::transport::EpicboxTransport;
@@ -187,6 +189,7 @@ impl World {
         runtime
             .block_on(receiver_wallet.restore(password(RECEIVER_PASSWORD), RECEIVER_MNEMONIC))
             .unwrap();
+        complete_restore_scan(&runtime, &receiver_wallet);
         let receiver_address = receiver_wallet.epicbox_attach(&receiver_epicbox).unwrap();
         Self {
             runtime,

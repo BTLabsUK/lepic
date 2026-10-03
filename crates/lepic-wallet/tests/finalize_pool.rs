@@ -121,6 +121,7 @@ impl Posting {
         harness
             .block_on(wallet.restore(password("sender"), SENDER_MNEMONIC))
             .unwrap();
+        support::complete_restore_scan(&harness.runtime, &wallet);
         harness
             .node
             .update_chain(|chain| chain.tip.height = Height::new(TIP));

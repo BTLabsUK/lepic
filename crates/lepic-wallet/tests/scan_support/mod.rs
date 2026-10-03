@@ -16,16 +16,21 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use lepic_node::NodeApi;
+use lepic_crypto::Commitment;
 use lepic_node::mock::MockNode;
+use lepic_node::{
+    LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation, PmmrIndices,
+    Propagation, Tip, UnspentOutputs,
+};
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
+use lepic_primitives::tx::Transaction;
 use lepic_store::{
     AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, MemoryStore, OutputRecord,
     OutputStatus, Repositories, StoreError, StoredTransaction, TxDirection, TxState, WalletStore,
 };
 use lepic_wallet::scan::{ScanOptions, ScannedBlock};
-use lepic_wallet::{StoreOpener, Wallet};
+use lepic_wallet::{Ports, StoreOpener, Wallet};
 use serde_json::Value;
 
 use crate::support::{Harness, MemoryStores, TestVault, password};
@@ -98,6 +103,118 @@ pub fn options(vector: &Value) -> ScanOptions {
     ScanOptions {
         coinbase_maturity: number(&vector["inputs"]["chain"]["coinbase_maturity"]),
         ..ScanOptions::restore(Network::Mainnet)
+    }
+}
+
+/// The mock node's client with answers the recorded session does not cover: `get_outputs`
+/// answers from `held`, and every height a page of unspent outputs reports is raised.
+pub struct Rechecking {
+    pub inner: NodeClient<MockNode>,
+    pub held: Vec<OutputLocation>,
+    pub raise_heights: u64,
+}
+
+impl NodeApi for Rechecking {
+    fn get_version(&self) -> impl Future<Output = Result<NodeVersion, NodeError>> + Send {
+        self.inner.get_version()
+    }
+
+    fn get_tip(&self) -> impl Future<Output = Result<Tip, NodeError>> + Send {
+        self.inner.get_tip()
+    }
+
+    fn get_kernel(
+        &self,
+        excess: &Commitment,
+        min_height: Option<Height>,
+        max_height: Option<Height>,
+    ) -> impl Future<Output = Result<Option<LocatedKernel>, NodeError>> + Send {
+        self.inner.get_kernel(excess, min_height, max_height)
+    }
+
+    fn get_outputs(
+        &self,
+        commitments: &[Commitment],
+    ) -> impl Future<Output = Result<Vec<OutputLocation>, NodeError>> + Send {
+        let held: Vec<OutputLocation> = self
+            .held
+            .iter()
+            .filter(|location| commitments.contains(&location.commitment))
+            .copied()
+            .collect();
+        std::future::ready(Ok(held))
+    }
+
+    fn get_unspent_outputs(
+        &self,
+        start_index: u64,
+        end_index: Option<u64>,
+        max: u64,
+    ) -> impl Future<Output = Result<UnspentOutputs, NodeError>> + Send {
+        let answer = self.inner.get_unspent_outputs(start_index, end_index, max);
+        let raise = self.raise_heights;
+        async move {
+            let mut page = answer.await?;
+            for output in &mut page.outputs {
+                output.height = Height::new(output.height.value() + raise);
+            }
+            Ok(page)
+        }
+    }
+
+    fn get_pmmr_indices(
+        &self,
+        start_height: Height,
+        end_height: Option<Height>,
+    ) -> impl Future<Output = Result<PmmrIndices, NodeError>> + Send {
+        self.inner.get_pmmr_indices(start_height, end_height)
+    }
+
+    fn push_transaction(
+        &self,
+        transaction: &Transaction,
+        propagation: Propagation,
+    ) -> impl Future<Output = Result<(), NodeError>> + Send {
+        self.inner.push_transaction(transaction, propagation)
+    }
+}
+
+/// A second, unlocked handle on the harness's restored wallet over a [`Rechecking`] node.
+pub fn rechecking_wallet(
+    harness: &Harness,
+    held: Vec<OutputLocation>,
+    raise_heights: u64,
+) -> AnyWallet<Rechecking> {
+    let ports = harness.ports(harness.vault.clone());
+    let node = Rechecking {
+        inner: ports.node,
+        held,
+        raise_heights,
+    };
+    let wallet = Wallet::new(
+        harness.config(Network::Mainnet),
+        Ports {
+            node,
+            stores: ports.stores,
+            secrets: ports.secrets,
+            transports: ports.transports,
+            clock: ports.clock,
+            rng: ports.rng,
+            runtime: ports.runtime,
+        },
+    )
+    .unwrap();
+    harness.block_on(wallet.open(password(PASSWORD))).unwrap();
+    wallet
+}
+
+/// Where the node holds a stored output, as `get_outputs` reports it.
+pub fn location(output: &OutputRecord) -> OutputLocation {
+    OutputLocation {
+        commitment: Commitment::from_bytes(output.commitment()).unwrap(),
+        features: output.id.features,
+        height: output.height,
+        mmr_index: output.mmr_index.unwrap(),
     }
 }
 

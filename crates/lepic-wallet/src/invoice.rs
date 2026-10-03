@@ -53,6 +53,7 @@ pub use build::{
 use crate::account::{AccountError, next_output_key};
 use crate::error::WalletError;
 use crate::finalize::{Finalized, FinalizedSlate};
+use crate::lifecycle;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
 use crate::send::{ChangeOutput, Delivery, SendRequest, block_header_version};
@@ -377,6 +378,7 @@ fn issue_stored(
     if repos.account(request.account)?.is_none() {
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
+    lifecycle::ensure_restore_scanned(repos)?;
     let key_id = next_output_key(repos, request.account)?;
     let built = build_i1(
         env.keychain,
@@ -673,7 +675,8 @@ where
     /// transport's rule for a new slate.
     ///
     /// Asks the node for its tip. Fails, with nothing stored, with [`InvoiceError::Wallet`]
-    /// carrying [`WalletError::Locked`] or an unknown account, [`InvoiceError::Node`],
+    /// carrying [`WalletError::Locked`], an unknown account or
+    /// [`WalletError::RestoreScanRequired`], [`InvoiceError::Node`],
     /// [`InvoiceError::UnknownTransport`], [`InvoiceError::CannotDeliver`] or
     /// [`InvoiceError::CannotExport`]. Fails with [`InvoiceError::Undelivered`] when the
     /// invoice was stored but the transport failed; [`Wallet::cancel`] withdraws it.

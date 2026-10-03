@@ -257,6 +257,54 @@ fn messages_that_cannot_be_used_are_recorded_and_acknowledged_and_the_next_one_i
 }
 
 #[test]
+fn an_s1_expired_by_the_tip_alone_stays_on_the_relay_until_a_refresh_confirms_the_height() {
+    let world = World::new();
+    let path = format!(
+        "{}/../../testdata/vectors/slates/send_file_ttl_s1_v3.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let vector: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let s1 = support::vector_text(&vector, "/expected/json");
+    let slate: serde_json::Value = serde_json::from_str(&s1).unwrap();
+    let cutoff: u64 = slate["ttl_cutoff_height"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let msg_id = world.post_to_receiver(7, 7, &s1);
+    world.receiver.harness.node.update_chain(|chain| {
+        chain.tip.height = lepic_primitives::amount::Height::new(cutoff);
+    });
+
+    let held = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+
+    assert_eq!(
+        held,
+        InboxSummary {
+            held: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 1);
+    assert_ne!(
+        world.receiver.inbox(&msg_id).map(|entry| entry.status),
+        Some(InboxStatus::Rejected)
+    );
+
+    world.block_on(world.receiver_wallet.refresh()).unwrap();
+    let rejected = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+
+    assert_eq!(rejected.rejected, 1);
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(world.receiver.transactions(), 0);
+}
+
+#[test]
 fn a_transient_failure_leaves_the_message_on_the_relay_for_the_next_drain() {
     let world = World::new();
     world.block_on(world.send());

@@ -1,7 +1,9 @@
 //! The Epicbox inbox: what the engine does with each message the relay hands out (ADR 0004).
 //!
 //! A message is decoded with the Epicbox policy and routed by stage: an S1 is received and
-//! answered with S2 through the same transport, an S2 is finalized and posted. Its relay message
+//! answered with S2 through the same transport, an S2 is finalized and posted. A slate the
+//! node's tip says has expired is held, not rejected, until a refresh confirms a height at or
+//! past its cutoff. Its relay message
 //! id is tracked in the store's relay inbox. A message is acknowledged once its effect is stored,
 //! or once it was rejected for good and the rejection is recorded, under its relay message id
 //! when the relay gave it one; a transient failure leaves it
@@ -42,6 +44,7 @@ use crate::finalize::FinalizeError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::redelivery::{answers, decode_reply, stored_reply};
 use crate::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
+use crate::refresh::last_confirmed;
 use crate::wallet::Wallet;
 
 /// `epic-wallet` always uses the address key at index 0 of the account.
@@ -241,6 +244,7 @@ fn receive_is_permanent(error: &ReceiveError) -> bool {
         | ReceiveError::Codecs(_) => false,
         ReceiveError::Decode(_)
         | ReceiveError::WrongStage { .. }
+        | ReceiveError::ZeroAmount
         | ReceiveError::AlreadyReceived { .. }
         | ReceiveError::Expired { .. }
         | ReceiveError::FeeBelowMinimum { .. }
@@ -738,6 +742,13 @@ where
                 .answer_again(proposal, reply_to)
                 .await?
                 .ok_or_else(|| Refusal::SlateIdReused.into()),
+            Err(error @ ReceiveError::Expired { cutoff, .. }) => {
+                if self.confirmed_at(cutoff).await? {
+                    Err(Refusal::Receive(error).into())
+                } else {
+                    Err(Hold::Receive(error).into())
+                }
+            }
             Err(error) if receive_is_permanent(&error) => Err(Refusal::Receive(error).into()),
             Err(error) => Err(Hold::Receive(error).into()),
         }
@@ -813,9 +824,27 @@ where
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
                 Ok(handled)
             }
+            Err(error @ FinalizeError::Expired { cutoff, .. }) => {
+                if self.confirmed_at(cutoff).await? {
+                    Err(Refusal::Finalize(error).into())
+                } else {
+                    Err(Hold::Finalize(error).into())
+                }
+            }
             Err(error) if finalize_is_permanent(&error) => Err(Refusal::Finalize(error).into()),
             Err(error) => Err(Hold::Finalize(error).into()),
         }
+    }
+
+    /// Whether a refresh stored a confirmed height at or past `cutoff`. Only then is a slate
+    /// that expired by the node's tip refused for good; until then the tip alone may be wrong,
+    /// so the message stays on the relay.
+    async fn confirmed_at(&self, cutoff: lepic_primitives::amount::Height) -> Result<bool, Hold> {
+        let session = self.session()?;
+        let confirmed = self
+            .blocking(move |_, _| Ok(session.store.read(|repos| last_confirmed(repos))?))
+            .await?;
+        Ok(confirmed.is_some_and(|height| height >= cutoff))
     }
 
     async fn inbox_write<T: Send + 'static>(

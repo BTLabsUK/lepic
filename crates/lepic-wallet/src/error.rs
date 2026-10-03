@@ -2,6 +2,7 @@ use lepic_keychain::vault::SecretNameError;
 use lepic_keychain::{
     IdentifierError, KeychainError, MnemonicError, SecretStoreError, WalletSeedError,
 };
+use lepic_node::NodeError;
 use lepic_primitives::params::Network;
 use lepic_store::{StoreError, TxId};
 use thiserror::Error;
@@ -56,6 +57,16 @@ pub enum WalletError {
     UnknownTransaction(TxId),
     #[error("transaction state change rejected")]
     Transition(#[from] InvalidTransition),
+    /// The node holds the transaction's kernel, so it can no longer be cancelled; the next
+    /// refresh confirms it.
+    #[error("transaction {0} is already on chain")]
+    OnChain(TxId),
+    /// The database was rebuilt from the seed and no scan from genesis has completed since, so
+    /// the next unused output key is not known yet.
+    #[error("a restore scan must complete before new outputs are created")]
+    RestoreScanRequired,
+    #[error("node request failed")]
+    Node(#[source] NodeError),
     #[error("blocking wallet task did not complete")]
     Task(#[source] tokio::task::JoinError),
 }

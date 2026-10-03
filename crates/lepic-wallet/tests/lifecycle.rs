@@ -7,9 +7,11 @@ mod support;
 use std::path::PathBuf;
 
 use lepic_keychain::{SecretName, SecretStore, Seed};
+use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_store::AccountIndex;
 use lepic_transport::transport::TransportId;
+use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
 use lepic_wallet::{
     AccountError, ConfigError, DEFAULT_ACCOUNT_LABEL, Event, SecretVault, SessionState,
     SqliteStores, Wallet, WalletError, WordCount,
@@ -224,6 +226,39 @@ fn open_rebuilds_a_missing_database() {
     harness.block_on(wallet.open(password(PASSWORD))).unwrap();
 
     assert_eq!(wallet.accounts().unwrap().len(), 1);
+    assert!(wallet.restore_scan_required().unwrap());
+}
+
+#[test]
+fn only_a_database_rebuilt_from_a_seed_needs_a_restore_scan() {
+    let harness = Harness::new();
+    let created = harness.wallet();
+    harness
+        .block_on(created.create(password(PASSWORD), WordCount::default()))
+        .unwrap();
+    assert!(!created.restore_scan_required().unwrap());
+
+    let other = Harness::new();
+    let restored = other.wallet();
+    other
+        .block_on(restored.restore(password(PASSWORD), &vector_phrase()))
+        .unwrap();
+    assert!(restored.restore_scan_required().unwrap());
+    // A scan that does not start at genesis does not cover every key in use.
+    other
+        .block_on(restored.scan(
+            ScanOptions {
+                start: ScanStart::Height(Height::new(5)),
+                ..ScanOptions::restore(Network::Mainnet)
+            },
+            &ScanCancel::new(),
+        ))
+        .unwrap();
+    assert!(restored.restore_scan_required().unwrap());
+    other
+        .block_on(restored.scan(ScanOptions::restore(Network::Mainnet), &ScanCancel::new()))
+        .unwrap();
+    assert!(!restored.restore_scan_required().unwrap());
 }
 
 #[test]

@@ -185,6 +185,18 @@ where
         self.emit(Event::Session(SessionState::Closed));
     }
 
+    /// Whether the database was rebuilt from the seed, by [`Wallet::restore`],
+    /// [`Wallet::import_wallet_seed`] or [`Wallet::open`] on a missing database, and no scan from
+    /// genesis has completed since. Until one does, receiving and issuing invoices fail with
+    /// [`WalletError::RestoreScanRequired`]. Fails with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub fn restore_scan_required(&self) -> Result<bool, WalletError> {
+        let session = self.session()?;
+        session
+            .store
+            .read(|repos| Ok(lifecycle::restore_scan_pending(repos)?))
+    }
+
     /// Every account, ordered by index. Fails with [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config.name))]
     pub fn accounts(&self) -> Result<Vec<Account>, WalletError> {

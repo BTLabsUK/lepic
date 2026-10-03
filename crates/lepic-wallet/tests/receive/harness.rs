@@ -11,7 +11,9 @@ use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::support::{FixedClock, MemoryStores, TestVault, fixed_time, password};
+use crate::support::{
+    FixedClock, MemoryStores, TestVault, complete_restore_scan, fixed_time, password,
+};
 use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
@@ -191,7 +193,15 @@ pub struct Receiver {
 }
 
 impl Receiver {
+    /// The wallet restored and scanned, ready to receive.
     pub fn new(mnemonic: &str, tip: u64) -> Self {
+        let receiver = Self::restored_without_scan(mnemonic, tip);
+        receiver.complete_restore_scan();
+        receiver
+    }
+
+    /// The wallet restored onto an empty database, before the scan it needs.
+    pub fn restored_without_scan(mnemonic: &str, tip: u64) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -235,6 +245,10 @@ impl Receiver {
             seed: Seed::from_mnemonic(mnemonic).unwrap(),
             wallet,
         }
+    }
+
+    pub fn complete_restore_scan(&self) {
+        complete_restore_scan(&self.runtime, &self.wallet);
     }
 
     pub fn receive(

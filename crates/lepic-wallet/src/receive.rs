@@ -11,7 +11,7 @@ use lepic_keychain::{
     Identifier, Keychain, KeychainError, ProofBuilder, ProofError, SwitchCommitment,
 };
 use lepic_node::{NodeApi, NodeError};
-use lepic_primitives::amount::{Fee, Height};
+use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::committed::{KernelSumError, sum_commitments};
 use lepic_primitives::crypto_ser::BlindingFactor;
 use lepic_primitives::fee::BodyCounts;
@@ -46,7 +46,7 @@ use zeroize::Zeroizing;
 
 use crate::account::{self, DEFAULT_ACCOUNT_LABEL};
 use crate::error::WalletError;
-use crate::lifecycle::Session;
+use crate::lifecycle::{self, Session};
 use crate::ports::{Ports, SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
@@ -92,6 +92,8 @@ pub enum ReceiveError {
     Decode(#[source] DecodeError),
     #[error("slate at stage {stage} is not a payment to receive")]
     WrongStage { stage: Stage },
+    #[error("slate pays an amount of zero")]
+    ZeroAmount,
     /// The S2 stored for `tx_id` answers a redelivery of the same S1. A different slate that
     /// reuses the id is refused the same way.
     #[error("slate {slate_id} was already received as transaction {tx_id}")]
@@ -153,7 +155,9 @@ where
     /// [`WalletError::Locked`] when the wallet is locked, with [`ReceiveError::AlreadyReceived`]
     /// for a slate id this wallet has received before, with [`ReceiveError::Expired`] when the
     /// tip has reached the slate's TTL cutoff, and with a typed rejection for any slate that is
-    /// malformed, not an S1, or whose fee or messages do not check. Nothing is stored on failure.
+    /// malformed, not an S1, pays nothing, or whose fee or messages do not check. Fails with
+    /// [`WalletError::RestoreScanRequired`] inside [`ReceiveError::Wallet`] on a database rebuilt
+    /// from the seed before a scan from genesis completed. Nothing is stored on failure.
     #[instrument(
         skip_all,
         fields(wallet = %self.config().name, transport = %transport, slate_id, stage)
@@ -295,6 +299,9 @@ fn check_proposal(slate: &Slate) -> Result<(), ReceiveError> {
             stage: slate.stage(),
         });
     }
+    if slate.amount() == Amount::ZERO {
+        return Err(ReceiveError::ZeroAmount);
+    }
     for (role, participant) in slate.participants() {
         if let Some(message) = &participant.message {
             verify_message(message, &participant.public_blind_excess)
@@ -358,6 +365,7 @@ fn respond<D>(
             tx_id: stored.id,
         });
     }
+    lifecycle::ensure_restore_scanned(repos)?;
     let label = request.account.as_deref().unwrap_or(DEFAULT_ACCOUNT_LABEL);
     let account = account::account_by_label(repos, label)?;
     let key_id = account::next_output_key(repos, account.index)?;

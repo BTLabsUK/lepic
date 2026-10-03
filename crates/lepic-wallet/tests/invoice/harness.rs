@@ -33,7 +33,9 @@ use lepic_wallet::{Finalized, NodeEndpoint, Ports, SharedRng, Wallet, WalletConf
 use rand_core::{TryCryptoRng, TryRng};
 use tokio::runtime::Runtime;
 
-use crate::support::{FixedClock, MemoryStores, TestVault, fixed_time, password};
+use crate::support::{
+    FixedClock, MemoryStores, TestVault, complete_restore_scan, fixed_time, password,
+};
 
 pub const ACCOUNT: AccountIndex = AccountIndex(0);
 
@@ -120,6 +122,7 @@ impl Party {
         runtime
             .block_on(wallet.restore(password("invoice party"), mnemonic))
             .unwrap();
+        complete_restore_scan(&runtime, &wallet);
         let seed = Seed::from_mnemonic(mnemonic).unwrap();
         Self {
             runtime,

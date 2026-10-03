@@ -32,7 +32,9 @@ use lepic_transport::transport::{Destination, Inbound, Transport};
 use lepic_wallet::{Ports, StoreOpener, Wallet, WalletConfig};
 use uuid::Uuid;
 
-use crate::support::{Harness, LOOPBACK, MemoryStores, TestVault, TestWallet, password};
+use crate::support::{
+    Harness, LOOPBACK, MemoryStores, TestVault, TestWallet, complete_restore_scan, password,
+};
 
 pub const SENDER_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon \
     abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -120,6 +122,7 @@ impl Sender {
         harness
             .block_on(wallet.restore(password("sender"), SENDER_MNEMONIC))
             .unwrap();
+        complete_restore_scan(&harness.runtime, &wallet);
         harness
             .node
             .update_chain(|chain| chain.tip.height = Height::new(TIP));

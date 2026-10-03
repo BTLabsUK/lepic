@@ -252,7 +252,7 @@ fn never_expires_a_send_without_a_ttl_or_one_already_posted() {
         })
         .unwrap();
 
-    set_tip(&sender, TIP + 100);
+    set_tip(&sender, TIP + 50);
     let summary = refresh(&sender);
 
     assert_eq!(summary.expired_transactions, 0);

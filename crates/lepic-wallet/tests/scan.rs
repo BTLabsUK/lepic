@@ -477,6 +477,9 @@ fn spent_output_found_unspent_is_revived_and_its_transaction_cancelled() {
     output.tx = Some(spending);
     output.mmr_index = None;
     set_output(&harness, &output);
+    wallet.close();
+    let wallet =
+        scan_support::rechecking_wallet(&harness, vec![scan_support::location(&original)], 0);
     let mut events = wallet.subscribe();
 
     let summary = harness
@@ -499,8 +502,11 @@ fn revived_output_of_a_confirmed_transaction_leaves_it_confirmed() {
     let (harness, wallet, _) = scanned();
     let mut output = output_by_child(&harness, 0);
     let confirmed = output.tx.unwrap();
+    let held = scan_support::location(&output);
     output.status = OutputStatus::Spent;
     set_output(&harness, &output);
+    wallet.close();
+    let wallet = scan_support::rechecking_wallet(&harness, vec![held], 0);
 
     harness
         .block_on(wallet.scan(ScanOptions::update(Network::Mainnet), &ScanCancel::new()))

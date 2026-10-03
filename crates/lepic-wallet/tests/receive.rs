@@ -144,6 +144,46 @@ fn rejects_a_slate_whose_ttl_the_tip_has_reached() {
 }
 
 #[test]
+fn rejects_a_slate_that_pays_nothing() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let mut slate: Value = serde_json::from_str(&json(&s1)).unwrap();
+    slate["amount"] = Value::String("0".to_owned());
+    let receiver = Receiver::new(
+        &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+        slate_height(&s1),
+    );
+
+    let error = receiver
+        .receive(transport, &slate.to_string(), None)
+        .unwrap_err();
+
+    assert!(matches!(error, ReceiveError::ZeroAmount), "{error:?}");
+    assert_eq!(receiver.transaction_count(), 0);
+}
+
+#[test]
+fn a_restored_wallet_receives_only_after_its_restore_scan() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let receiver = Receiver::restored_without_scan(
+        &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+        slate_height(&s1),
+    );
+
+    let error = receiver.receive(transport, &json(&s1), None).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            ReceiveError::Wallet(WalletError::RestoreScanRequired)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(receiver.transaction_count(), 0);
+    receiver.complete_restore_scan();
+    receiver.receive(transport, &json(&s1), None).unwrap();
+}
+
+#[test]
 fn rejects_malformed_participant_data() {
     let receiver = Receiver::new(&receiver_mnemonic(&vector("send_file_plain_s2_v3")), 10);
     for name in [
