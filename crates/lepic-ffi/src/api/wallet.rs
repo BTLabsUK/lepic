@@ -60,7 +60,11 @@ pub async fn wallet_exists(
 
 /// Deletes the wallet database in `config.data_dir` and the vault in `store`. Fails with
 /// [`WalletErrorKind::WalletBusy`] while a wallet on that directory is open in any runtime. Only
-/// the recovery phrase can bring the wallet back.
+/// the recovery phrase can bring the wallet back. Also removes the PIN key and failure count.
+///
+/// It takes no password or PIN on purpose: a user who forgot both deletes the wallet and
+/// restores it from the recovery phrase, and whoever can call it can also clear the app's data.
+/// Ask the user to confirm in the app.
 pub async fn delete_wallet(
     runtime: &LepicRuntime,
     config: WalletConfig,
