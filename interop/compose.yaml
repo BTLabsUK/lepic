@@ -1,7 +1,7 @@
 # Local interop stack: the public Epicbox relay with its database, the reference node on a
 # test-mode chain, a stratum miner, two epic-wallet v4.0.2 wallets and lepic. Nothing here
-# reaches a public relay or node: the relay's domain is the container name `epicbox`, so every
-# address the wallets use resolves inside this network.
+# reaches a public relay or node: the network is internal, and the relay's domain is the
+# container name `epicbox`, so every address the wallets use resolves inside it.
 #
 # Run `./build.sh` first; it compiles the binaries the images copy. `./run.sh` does both and
 # then runs the scenarios.
@@ -53,7 +53,8 @@ services:
       mongodb:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3423', r => process.exit(0)).on('error', () => process.exit(1))"]
+      # A bare TCP connect: an HTTP request would make the relay's status page query public relays.
+      test: ["CMD", "node", "-e", "require('net').connect(3423, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -146,7 +147,9 @@ services:
         condition: service_healthy
 
 networks:
-  interop: {}
+  # No route out: nothing in the stack can reach a public relay, node or any other host.
+  interop:
+    internal: true
 
 volumes:
   mongo-data: {}

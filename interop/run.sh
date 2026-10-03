@@ -45,8 +45,13 @@ log "starting a clean stack"
 {
     dc down -v --remove-orphans
     dc build
-    dc up -d --wait --wait-timeout 300
+    dc up --no-start
 } >>"${RUN_LOG}" 2>&1
+if [[ "$(docker network inspect lepic-interop_interop --format '{{.Internal}}')" != true ]]; then
+    log "the interop network has a route out; refusing to start"
+    exit 1
+fi
+dc up -d --wait --wait-timeout 300 >>"${RUN_LOG}" 2>&1
 
 names=()
 results=()

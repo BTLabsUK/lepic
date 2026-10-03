@@ -5,7 +5,8 @@
 `interop/run.sh` builds the public Epicbox relay, the reference node `v4.0.4`, `epic-wallet` `v4.0.2`
 and `lepic`, starts them on a private Docker network with a local test-mode chain, funds both wallets,
 runs every scenario below and prints a pass or fail table. It exits 0 only when every scenario
-passed. Nothing in the stack talks to a public relay or node.
+passed. The compose network is internal, with no route out, so nothing in the stack can reach a
+public relay or node; `run.sh` refuses to run if it is not.
 
 ```
 interop/run.sh            # build what changed, start a clean stack, run, tear it down
