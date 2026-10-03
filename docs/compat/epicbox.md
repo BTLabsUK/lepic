@@ -47,8 +47,10 @@ the client enables them only when the relay reports support.
    message id. The relay answers `Ok` and later sends a new `Challenge`.
 
 Always sign the most recent challenge received. Pending messages persist on the relay until `Made`; a
-socket that subscribes while one is in flight can receive it again. The relay keeps one listening
-socket per address.
+socket that subscribes while one is in flight can receive it again. The relay keeps the first
+listening socket per address and forgets it when any of that address's sockets closes; a client
+closes its old socket before it reconnects, and live messages missed in between arrive on the next
+subscribe.
 
 ## Addresses
 
