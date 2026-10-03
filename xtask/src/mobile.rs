@@ -4,9 +4,14 @@
 //! `--package` builds the `lepic-ffi` shared library in release mode and copies it, with a
 //! `SHA256SUMS` manifest, to `bindings/flutter/native/<triple>/`, where the Dart package's build
 //! hook checks it and picks it up.
+//!
+//! `--emulator-test` builds the library with the scripted node (`mock`) for the attached Android
+//! device's ABI, puts it in the integration test app `bindings/flutter/emulator_test/native/`, and
+//! runs `flutter test integration_test` there on that device. Start the emulator first.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
@@ -31,6 +36,14 @@ const PACKAGE_NATIVE_DIR: &str = "bindings/flutter/native";
 /// in `bindings/flutter/hook/build.dart`.
 const MANIFEST_FILE: &str = "SHA256SUMS";
 
+/// The Flutter app that runs `package:lepic` on a device, relative to the workspace root, and the
+/// directory under it its `pubspec.yaml` names as `native_dir`.
+const EMULATOR_TEST_APP: &str = "bindings/flutter/emulator_test";
+const EMULATOR_TEST_NATIVE_DIR: &str = "native";
+
+/// The `lepic-ffi` feature with the in-process scripted node the integration test drives.
+const MOCK_FEATURE: &str = "mock";
+
 const ANDROID_TARGETS: &[&str] = &[
     "aarch64-linux-android",
     "armv7-linux-androideabi",
@@ -38,8 +51,8 @@ const ANDROID_TARGETS: &[&str] = &[
 ];
 const APPLE_TARGETS: &[&str] = &["aarch64-apple-ios", "aarch64-apple-ios-sim"];
 
-const USAGE: &str =
-    "mobile --target <triple> [--release] | mobile --package [--target <triple>]...";
+const USAGE: &str = "mobile --target <triple> [--release] | mobile --package [--target <triple>]... \
+                     | mobile --emulator-test [--device <serial>]";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
@@ -48,12 +61,17 @@ enum Request {
     /// Build the `lepic-ffi` release library for each target and copy it into the Dart package.
     /// An empty list means every target the host can build.
     Package { targets: Vec<String> },
+    /// Run the Flutter integration test on an attached Android device, the only one attached
+    /// when no serial is given.
+    EmulatorTest { device: Option<String> },
 }
 
 fn parse(args: &[String]) -> Result<Request> {
     let mut targets = Vec::new();
     let mut release = false;
     let mut package = false;
+    let mut emulator_test = false;
+    let mut device = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -63,8 +81,22 @@ fn parse(args: &[String]) -> Result<Request> {
             }
             "--release" => release = true,
             "--package" => package = true,
+            "--emulator-test" => emulator_test = true,
+            "--device" => {
+                let value = args.next().context("`--device` needs an adb serial")?;
+                device = Some(value.clone());
+            }
             other => bail!("unknown argument `{other}`, usage: cargo xtask {USAGE}"),
         }
+    }
+    if emulator_test {
+        if package || release || !targets.is_empty() {
+            bail!("`--emulator-test` takes only `--device`; the target follows the device's ABI");
+        }
+        return Ok(Request::EmulatorTest { device });
+    }
+    if device.is_some() {
+        bail!("`--device` goes with `--emulator-test`, usage: cargo xtask {USAGE}");
     }
     if package {
         if release {
@@ -127,6 +159,112 @@ fn package_args(target: &str, host_os: &str) -> Result<Vec<String>> {
     let mut args = cargo_build_prefix(target, host_os)?;
     args.extend(["--package", FFI_PACKAGE, "--lib", "--locked", "--release"].map(String::from));
     Ok(args)
+}
+
+/// The cargo arguments that build `lepic-ffi` with the scripted node for `target`. Release, so
+/// the wallet's key stretching runs at app speed on the device.
+fn emulator_test_args(target: &str, host_os: &str) -> Result<Vec<String>> {
+    let mut args = package_args(target, host_os)?;
+    args.extend(["--features".to_owned(), MOCK_FEATURE.to_owned()]);
+    Ok(args)
+}
+
+/// The serials of the devices `adb devices` lists as ready.
+fn ready_devices(adb_devices_output: &str) -> Vec<String> {
+    adb_devices_output
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            match (fields.next(), fields.next()) {
+                (Some(serial), Some("device")) => Some(serial.to_owned()),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The device to test on: `requested` when it is ready, otherwise the only ready device.
+fn choose_device(requested: Option<&str>, ready: &[String]) -> Result<String> {
+    match (requested, ready) {
+        (Some(serial), _) if ready.iter().any(|d| d == serial) => Ok(serial.to_owned()),
+        (Some(serial), _) => bail!("device `{serial}` is not attached and ready (`adb devices`)"),
+        (None, [only]) => Ok(only.clone()),
+        (None, []) => bail!("no Android device is attached; start an emulator first"),
+        (None, _) => bail!(
+            "several devices are attached ({}); pick one with `--device`",
+            ready.join(", ")
+        ),
+    }
+}
+
+/// The Rust target for a device's primary ABI (`ro.product.cpu.abi`).
+fn android_target_for_abi(abi: &str) -> Result<&'static str> {
+    match abi.trim() {
+        "arm64-v8a" => Ok("aarch64-linux-android"),
+        "armeabi-v7a" => Ok("armv7-linux-androideabi"),
+        "x86_64" => Ok("x86_64-linux-android"),
+        other => bail!("LEPIC has no Android build for the device ABI `{other}`"),
+    }
+}
+
+/// `name` from `<$root_var>/<dir>/` when that variable is set, so the documented SDK wins over
+/// whatever is first on `PATH`.
+fn sdk_tool(root_var: &str, dir: &str, name: &str) -> PathBuf {
+    std::env::var_os(root_var)
+        .map(|root| PathBuf::from(root).join(dir).join(name))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
+fn adb_output(adb: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new(adb).args(args).output().with_context(|| {
+        format!(
+            "could not start `{}`; is the Android SDK installed?",
+            adb.display()
+        )
+    })?;
+    if !output.status.success() {
+        bail!("`adb {}` failed", args.join(" "));
+    }
+    String::from_utf8(output.stdout).context("adb printed non-UTF-8 output")
+}
+
+fn run_emulator_test(root: &Path, device: Option<&str>, host_os: &str) -> Result<()> {
+    let adb = sdk_tool("ANDROID_HOME", "platform-tools", "adb");
+    let device = choose_device(device, &ready_devices(&adb_output(&adb, &["devices"])?))?;
+    let abi = adb_output(
+        &adb,
+        &["-s", &device, "shell", "getprop", "ro.product.cpu.abi"],
+    )?;
+    let target = android_target_for_abi(&abi)?;
+
+    run_cargo(root, &emulator_test_args(target, host_os)?)?;
+    let app = root.join(EMULATOR_TEST_APP);
+    let packaged = copy_into_package(
+        &target_dir(root),
+        &app.join(EMULATOR_TEST_NATIVE_DIR),
+        target,
+    )?;
+    write_manifest(&packaged)?;
+
+    let flutter = sdk_tool("FLUTTER_ROOT", "bin", "flutter");
+    let args = ["test", "integration_test", "-d", device.as_str()];
+    eprintln!("xtask mobile: {} {}", flutter.display(), args.join(" "));
+    let status = Command::new(&flutter)
+        .args(args)
+        .current_dir(&app)
+        .status()
+        .with_context(|| {
+            format!(
+                "could not start `{}`; is Flutter installed?",
+                flutter.display()
+            )
+        })?;
+    if !status.success() {
+        bail!("the integration test failed on `{device}`");
+    }
+    Ok(())
 }
 
 /// The file name of the shared library flutter_rust_bridge loads on `target`.
@@ -228,6 +366,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
             }
             Ok(())
         }
+        Request::EmulatorTest { device } => run_emulator_test(root, device.as_deref(), host_os),
     }
 }
 
@@ -341,6 +480,100 @@ mod tests {
                 "--release",
             ])
         );
+    }
+
+    #[test]
+    fn emulator_test_takes_only_a_device() {
+        assert_eq!(
+            parse(&strings(&["--emulator-test"])).unwrap(),
+            Request::EmulatorTest { device: None }
+        );
+        assert_eq!(
+            parse(&strings(&["--emulator-test", "--device", "emulator-5554"])).unwrap(),
+            Request::EmulatorTest {
+                device: Some("emulator-5554".to_owned())
+            }
+        );
+        assert!(parse(&strings(&["--emulator-test", "--device"])).is_err());
+        assert!(parse(&strings(&["--emulator-test", "--package"])).is_err());
+        assert!(parse(&strings(&["--emulator-test", "--release"])).is_err());
+        assert!(
+            parse(&strings(&[
+                "--emulator-test",
+                "--target",
+                "x86_64-linux-android"
+            ]))
+            .is_err()
+        );
+        assert!(parse(&strings(&["--package", "--device", "emulator-5554"])).is_err());
+    }
+
+    #[test]
+    fn emulator_test_builds_the_mock_ffi_library_in_release() {
+        let args = emulator_test_args("x86_64-linux-android", "linux").unwrap();
+        assert_eq!(
+            args,
+            strings(&[
+                "ndk",
+                "-t",
+                "x86_64-linux-android",
+                "-P",
+                "24",
+                "build",
+                "--package",
+                "lepic-ffi",
+                "--lib",
+                "--locked",
+                "--release",
+                "--features",
+                "mock",
+            ])
+        );
+    }
+
+    #[test]
+    fn lists_only_ready_devices() {
+        let output = "List of devices attached\n\
+                      emulator-5554\tdevice\n\
+                      emulator-5556\toffline\n\
+                      R58M\tunauthorized\n\
+                      0a1b2c\tdevice product:x model:y\n\n";
+        assert_eq!(ready_devices(output), strings(&["emulator-5554", "0a1b2c"]));
+        assert!(ready_devices("List of devices attached\n\n").is_empty());
+    }
+
+    #[test]
+    fn chooses_the_requested_or_the_only_device() {
+        let one = strings(&["emulator-5554"]);
+        let two = strings(&["emulator-5554", "emulator-5556"]);
+        assert_eq!(choose_device(None, &one).unwrap(), "emulator-5554");
+        assert_eq!(
+            choose_device(Some("emulator-5556"), &two).unwrap(),
+            "emulator-5556"
+        );
+        assert!(choose_device(None, &[]).is_err());
+        assert!(choose_device(None, &two).is_err());
+        assert!(choose_device(Some("emulator-5558"), &two).is_err());
+    }
+
+    #[test]
+    fn maps_device_abis_to_android_targets() {
+        assert_eq!(
+            android_target_for_abi("x86_64\n").unwrap(),
+            "x86_64-linux-android"
+        );
+        assert_eq!(
+            android_target_for_abi("arm64-v8a").unwrap(),
+            "aarch64-linux-android"
+        );
+        assert_eq!(
+            android_target_for_abi("armeabi-v7a").unwrap(),
+            "armv7-linux-androideabi"
+        );
+        assert!(android_target_for_abi("x86").is_err());
+        for abi in ["x86_64", "arm64-v8a", "armeabi-v7a"] {
+            assert!(ANDROID_TARGETS.contains(&android_target_for_abi(abi).unwrap()));
+        }
     }
 
     #[test]

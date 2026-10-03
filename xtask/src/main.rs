@@ -29,6 +29,7 @@ commands:
   fuzz        (--smoke | --full) [--target <name>]... [--jobs <n>]: seed and run the fuzz targets
   mobile      --target <triple> [--release]: build the library crates for a mobile target
               --package [--target <triple>]...: copy release lepic-ffi into bindings/flutter
+              --emulator-test [--device <serial>]: run the Flutter integration test on a device
   repo-lint   workspace lints and unsafe code, pure crates, the secp256k1-zkp pin, interop images
   upstream-drift
               upstream commits since the ones recorded in upstream.toml
