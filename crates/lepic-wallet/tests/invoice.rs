@@ -16,7 +16,7 @@ mod support;
 use invoice_harness::{ACCOUNT, FUNDING, ISSUER_MNEMONIC, PAYER_MNEMONIC, Party};
 use lepic_node::mock::{ChainState, MockFailure, MockNode};
 use lepic_node::{NodeVersion, Tip};
-use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::hash::Hash;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::role::Role;
@@ -552,4 +552,25 @@ fn a_locked_wallet_issues_nothing() {
         "{error:?}"
     );
     assert!(issuer.delivered().is_none());
+}
+
+#[test]
+fn invoice_error_text_carries_no_amounts() {
+    let errors = [
+        InvoiceError::AmountMismatch {
+            invoiced: Amount::new(123_456_789),
+            approved: Amount::new(987_654_321),
+        },
+        InvoiceError::FeeBelowMinimum {
+            fee: Fee::new(123_456_789),
+            minimum: Fee::new(987_654_321),
+        },
+    ];
+    for error in errors {
+        let text = error.to_string();
+        assert!(
+            !text.contains("123456789") && !text.contains("987654321"),
+            "{text}"
+        );
+    }
 }

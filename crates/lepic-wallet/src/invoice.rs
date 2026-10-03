@@ -88,6 +88,8 @@ impl std::fmt::Display for InvoiceField {
 }
 
 /// Why an invoice was not issued, paid or finalized.
+// Amounts and fees stay out of the text of every variant because errors are logged above
+// `debug` (docs/logging.md); callers read them from the fields.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum InvoiceError {
@@ -108,7 +110,7 @@ pub enum InvoiceError {
     #[error("output selection failed")]
     Selection(#[from] SelectionError),
     /// The invoice asks for another amount than the one the payer approved.
-    #[error("invoice asks for {invoiced}, the payer approved {approved}")]
+    #[error("invoice amount differs from the approved amount")]
     AmountMismatch { invoiced: Amount, approved: Amount },
     #[error("invoice {slate_id} was already paid as transaction {tx_id}")]
     AlreadyPaid { slate_id: SlateId, tx_id: TxId },
@@ -133,7 +135,7 @@ pub enum InvoiceError {
     Signing(#[source] CryptoError),
     #[error("payer partial signature does not verify")]
     PayerSignature(#[source] CryptoError),
-    #[error("fee {fee} is below the minimum {minimum} for the transaction")]
+    #[error("fee is below the minimum for the transaction")]
     FeeBelowMinimum { fee: Fee, minimum: Fee },
     #[error("minimum fee could not be computed")]
     FeeOverflow,
