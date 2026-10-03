@@ -35,4 +35,5 @@ The chain is usernet, where `epic-wallet` derives mainnet Epicbox addresses, so 
 says `network = mainnet`. `epic-wallet` prints its address without the relay port; the steps
 add `:3423`.
 
-Logs of each run, with every failed command and its JSON error, are in `.work/logs/<time>/`.
+Each run writes `.work/logs/<time>/`: `results.txt` with the table, the lepic version and the
+git tree it ran from; `run.log` with every failed command and its JSON error; and `compose.log`.

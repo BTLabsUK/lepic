@@ -124,11 +124,17 @@ if [[ "${results[0]}" == PASS ]]; then
 fi
 peer_listen_stop >/dev/null 2>&1 || true
 
-printf '\n%-40s %-6s %6s  %s\n' "Step" "Result" "Time" "Detail"
-printf '%-40s %-6s %6s  %s\n' "----" "------" "----" "------"
-for i in "${!names[@]}"; do
-    printf '%-40s %-6s %6s  %s\n' "${names[i]}" "${results[i]}" "${times[i]}" "${details[i]}"
-done
+# The table goes to stdout and into the log directory, so a run can be checked afterwards.
+{
+    printf 'lepic: %s at %s\n' "$("${LEPIC_BIN}" --version)" "${LEPIC_BIN}"
+    printf 'tree: %s\n' "$(git -C "${REPO_DIR}" describe --always --dirty 2>/dev/null || echo unknown)"
+    printf '\n%-40s %-6s %6s  %s\n' "Step" "Result" "Time" "Detail"
+    printf '%-40s %-6s %6s  %s\n' "----" "------" "----" "------"
+    for i in "${!names[@]}"; do
+        printf '%-40s %-6s %6s  %s\n' "${names[i]}" "${results[i]}" "${times[i]}" "${details[i]}"
+    done
+    printf '\n%d of %d steps passed\n' "$((${#names[@]} - failed))" "${#names[@]}"
+} | tee "${log_dir}/results.txt"
 printf '\nLogs: %s\n' "${log_dir}"
 
 if ((failed > 0)); then
