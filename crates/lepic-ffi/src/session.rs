@@ -56,9 +56,9 @@ const WALLET_NAME: &str = "default";
 
 const DEFAULT_ACCOUNT: AccountIndex = AccountIndex(0);
 
-/// The longest slate text the file method imports (`lepic_slate::codec::MAX_WIRE_SLATE_LEN`),
-/// checked before the text is written to a scratch file.
-const MAX_SLATE_TEXT_LEN: usize = 8 * 1024 * 1024;
+/// The longest slate text the file method imports, checked before the text is written to a
+/// scratch file.
+const MAX_SLATE_TEXT_LEN: usize = lepic_transport::file::MAX_WIRE_SLATE_LEN;
 
 struct SystemClock;
 

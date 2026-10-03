@@ -4,9 +4,10 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+pub use lepic_slate::codec::MAX_WIRE_SLATE_LEN;
 use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
-use lepic_slate::codec::{Codec, CodecId, EncodeContext, MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
+use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::DecodeError;
 use lepic_slate::model::Slate;
 use lepic_slate::origin::{LegacyHeader, WireOrigin};
