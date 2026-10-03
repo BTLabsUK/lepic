@@ -242,6 +242,11 @@ fn check(case: &Case) -> Vec<String> {
     let name = case.name();
     let reference = run(case, SubjectKind::Reference);
     let lepic = run(case, SubjectKind::Lepic);
+    assert_eq!(
+        lepic.checkpoints.len(),
+        reference.checkpoints.len(),
+        "{name}: both runs record every checkpoint"
+    );
     let mut found = Vec::new();
     for (observed, expected) in lepic.checkpoints.iter().zip(&reference.checkpoints) {
         // The initiator records the transaction at once, the responder once it has replied.
