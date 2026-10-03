@@ -337,6 +337,9 @@ fn library_size(root: &Path, target: &str) -> Result<Measured> {
             "`{target}` builds only on macOS"
         )));
     }
+    eprintln!(
+        "xtask budget: building the release lepic-ffi library for {target}, this takes minutes"
+    );
     mobile::run(
         root,
         &[
