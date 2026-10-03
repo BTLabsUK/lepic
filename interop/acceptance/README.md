@@ -22,11 +22,14 @@ directory under `.work/state`. `lepic` runs with a cleared environment (`env -i`
 in.
 
 The stack is `../compose.yaml` without the lepic container, under the project name
-`lepic-acceptance`. Its services have no route out, as in V-02; a `gateway` service bridges
-`127.0.0.1:43413` to the node API and `127.0.0.1:3423` to the relay so the host's `lepic` can
-reach them, and nothing else. The relay keeps port 3423 because Epicbox addresses name it.
-`run.sh` refuses to start when either port is taken. Slate files are exchanged through
-`.work/exchange`, mounted into the wallets as `/exchange`.
+`lepic-acceptance`. Its services have no route out and listen on loopback, as in V-02. Two TCP
+forwarders (`forward.js`, each listening on its own interface addresses, never a wildcard) carry
+the node API to `127.0.0.1:43413` and the relay to `127.0.0.1:3423` on the host, and nothing
+else: `node-port` in the node's namespace and `gateway` on the internal network and a host
+bridge, since Docker publishes ports only from a container on a non-internal network. The relay
+keeps port 3423 because Epicbox addresses name it. `run.sh` refuses to start when either port is
+taken. Slate files are exchanged through `.work/exchange` (mode 1777, because the wallet
+containers run as their own uid), mounted into the wallets as `/exchange`.
 
 The chain is usernet, where `epic-wallet` derives mainnet Epicbox addresses, so the config file
 says `network = mainnet`. `epic-wallet` prints its address without the relay port; the steps

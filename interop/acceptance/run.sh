@@ -85,6 +85,9 @@ log "testing $("${LEPIC_BIN}" --version) at ${LEPIC_BIN}"
 log "starting a clean stack"
 rm -rf "${STATE_DIR}" "${EXCHANGE_DIR}"
 mkdir -p "${STATE_DIR}" "${EXCHANGE_DIR}"
+# The wallet containers run as their own uid and write slate files here, and the host's lepic
+# answers them. Sticky, so neither side can remove or replace the other's files.
+chmod 1777 "${EXCHANGE_DIR}"
 {
     dc build
     dc up --no-start

@@ -4,9 +4,12 @@
 # `gateway` on 127.0.0.1 only.
 #
 # Every service but `gateway` sits on the internal network or in the node's network namespace,
-# with no route out, as in ../compose.yaml. `gateway` joins the internal network and a host
-# bridge, because Docker publishes ports only from a container with a non-internal network; it
-# runs nothing but a TCP relay to the node's two ports.
+# with no route out, and listens on loopback, as in ../compose.yaml. Two TCP forwarders
+# (forward.js) bridge the gap, each listening on its own interface addresses only: `node-port`,
+# in the node's namespace, exposes the node API and the relay on the internal network, and
+# `gateway`, on the internal network and a host bridge, carries them to ports Docker publishes
+# on the host's 127.0.0.1. Docker publishes ports only from a container on a non-internal
+# network, hence the second hop.
 #
 # `./run.sh` builds the binaries with ../build.sh, writes .work/env and starts this file.
 name: lepic-acceptance
@@ -18,9 +21,12 @@ x-runtime: &runtime
 
 services:
   mongodb:
-    image: mongo:6.0
+    # mongo:6.0, pinned by digest.
+    image: mongo@sha256:8b6d8f5bbedb25cb73517b65cf99f13aeb75ad5b157a56c479287a840bbad3ac
+    # The image's own mongodb user, which owns /data/db.
+    user: "999:999"
     init: true
-    command: ["--wiredTigerCacheSizeGB", "0.25", "--setParameter", "diagnosticDataCollectionEnabled=false"]
+    command: ["--bind_ip", "127.0.0.1", "--wiredTigerCacheSizeGB", "0.25", "--setParameter", "diagnosticDataCollectionEnabled=false"]
     network_mode: service:node
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
@@ -127,35 +133,34 @@ services:
       timeout: 5s
       retries: 60
 
-  gateway:
+  node-port:
     image: lepic-acceptance-relay:local
     pull_policy: never
     init: true
-    networks: [internal, host-bridge]
-    # Forwards each published port to the same service on the node: 43413 to the node API,
-    # 3423 to the relay. The relay port stays 3423 on the host because Epicbox addresses name it.
-    command:
-      - node
-      - -e
-      - |
-        const net = require('net');
-        for (const [listen, port] of [[43413, 23413], [3423, 3423]]) {
-          net.createServer((client) => {
-            const upstream = net.connect(port, 'node');
-            client.pipe(upstream).pipe(client);
-            const close = () => { client.destroy(); upstream.destroy(); };
-            client.on('error', close);
-            upstream.on('error', close);
-          }).listen(listen, '0.0.0.0');
-        }
-    ports:
-      - "127.0.0.1:43413:43413"
-      - "127.0.0.1:3423:3423"
+    network_mode: service:node
+    command: ["node", "/forward.js", "43413=127.0.0.1:23413", "3423=127.0.0.1:3423"]
+    volumes:
+      - ./forward.js:/forward.js:ro
     depends_on:
       node:
         condition: service_healthy
       epicbox:
         condition: service_healthy
+
+  gateway:
+    image: lepic-acceptance-relay:local
+    pull_policy: never
+    init: true
+    networks: [internal, host-bridge]
+    # The relay port stays 3423 on the host because Epicbox addresses name it.
+    command: ["node", "/forward.js", "43413=node:43413", "3423=node:3423"]
+    volumes:
+      - ./forward.js:/forward.js:ro
+    ports:
+      - "127.0.0.1:43413:43413"
+      - "127.0.0.1:3423:3423"
+    depends_on:
+      - node-port
 
 networks:
   internal:
