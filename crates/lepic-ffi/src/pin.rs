@@ -35,6 +35,9 @@ pub(crate) const MIN_PIN_LEN: usize = 4;
 
 const KEY_LEN: usize = 32;
 
+/// The length of the PIN key in padded base64.
+const KEY_TEXT_LEN: usize = 44;
+
 /// How long PIN attempts wait after failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PinPolicy {
@@ -105,7 +108,21 @@ impl PinKey {
     }
 
     async fn store(&self, store: &AppSecretStore) -> Result<(), WalletError> {
-        store.write(KEY_KEY, STANDARD.encode(*self.0)).await
+        store.write(KEY_KEY, self.to_text()?).await
+    }
+
+    /// Encodes straight from the key's buffer into another wiped buffer: no copy of the array,
+    /// and no encoder scratch space, holds the key. Only the text for the store is left.
+    fn to_text(&self) -> Result<String, WalletError> {
+        let mut text = Zeroizing::new([0u8; KEY_TEXT_LEN]);
+        let written = STANDARD
+            .encode_slice(self.0.as_slice(), text.as_mut_slice())
+            .map_err(|error| other(&error))?;
+        let text = text
+            .get(..written)
+            .and_then(|text| std::str::from_utf8(text).ok())
+            .ok_or_else(bad_key)?;
+        Ok(text.to_owned())
     }
 
     async fn load(store: &AppSecretStore) -> Result<Self, WalletError> {
@@ -115,13 +132,16 @@ impl PinKey {
                 "the app's store holds no pin key",
             )
         })?);
-        let bytes = Zeroizing::new(STANDARD.decode(text.as_bytes()).map_err(|_| bad_key())?);
+        Self::from_text(&text)
+    }
+
+    /// Decodes into the key's own wiped buffer, without an intermediate vector.
+    fn from_text(text: &str) -> Result<Self, WalletError> {
         let mut key = Zeroizing::new([0u8; KEY_LEN]);
-        if bytes.len() != KEY_LEN {
-            return Err(bad_key());
+        match STANDARD.decode_slice(text.as_bytes(), key.as_mut_slice()) {
+            Ok(KEY_LEN) => Ok(Self(key)),
+            _ => Err(bad_key()),
         }
-        key.copy_from_slice(&bytes);
-        Ok(Self(key))
     }
 
     /// The vault passphrase: this key, then the PIN.
@@ -415,6 +435,23 @@ mod tests {
         }
         assert_eq!(started.elapsed(), Duration::from_secs(30 + 60 + 120));
         assert_eq!(read_failures(&store).await.unwrap(), 6);
+    }
+
+    #[test]
+    fn pin_key_text_round_trips_and_refuses_other_lengths() {
+        let key = PinKey::generate().unwrap();
+        let text = key.to_text().unwrap();
+        assert_eq!(text.len(), KEY_TEXT_LEN);
+        assert_eq!(*PinKey::from_text(&text).unwrap().0, *key.0);
+        let short = STANDARD.encode([7u8; KEY_LEN - 1]);
+        let long = STANDARD.encode([7u8; KEY_LEN + 1]);
+        for text in [short.as_str(), long.as_str(), "", "not base64!"] {
+            assert_eq!(
+                PinKey::from_text(text).err().map(|error| error.kind),
+                Some(WalletErrorKind::SecretStore),
+                "{text:?}"
+            );
+        }
     }
 
     #[tokio::test]
