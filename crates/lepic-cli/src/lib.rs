@@ -10,6 +10,7 @@ pub mod amount;
 pub mod cli;
 mod commands;
 pub mod exit;
+pub mod hint;
 pub mod host;
 pub mod output;
 pub mod secret;
@@ -67,33 +68,43 @@ pub fn run<H: Host>(
         }
     };
     let format = output_format(&cli.global, &console.env);
-    let result = Settings::resolve(&cli.global, &console.env)
-        .map_err(CliError::from)
-        .and_then(|settings| execute(host, cli, &settings, console).map(|text| (settings, text)));
-    match result {
-        Ok((settings, text)) => {
-            let written = console
-                .stdout
-                .write_all(text.as_bytes())
-                .and_then(|()| console.stdout.flush());
-            match written {
-                Ok(()) => 0,
-                Err(source) => report_error(
-                    console,
-                    settings.output,
-                    &CliError::Io {
-                        what: "write the command output",
-                        source,
-                    },
-                ),
-            }
-        }
-        Err(error) => report_error(console, format, &error),
+    let settings = match Settings::resolve(&cli.global, &console.env) {
+        Ok(settings) => settings,
+        Err(error) => return report_error(console, format, &error.into(), None),
+    };
+    let text = match execute(host, cli, &settings, console) {
+        Ok(text) => text,
+        Err(error) => return report_error(console, settings.output, &error, Some(&settings)),
+    };
+    let written = console
+        .stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| console.stdout.flush());
+    match written {
+        Ok(()) => 0,
+        Err(source) => report_error(
+            console,
+            settings.output,
+            &CliError::Io {
+                what: "write the command output",
+                source,
+            },
+            Some(&settings),
+        ),
     }
 }
 
-fn report_error(console: &mut Console, format: OutputFormat, error: &CliError) -> u8 {
-    let text = render_error(error, format);
+fn report_error(
+    console: &mut Console,
+    format: OutputFormat,
+    error: &CliError,
+    settings: Option<&Settings>,
+) -> u8 {
+    let hint = match format {
+        OutputFormat::Human => hint::hint(error, settings),
+        OutputFormat::Json => None,
+    };
+    let text = render_error(error, format, hint.as_deref());
     let stream = match format {
         OutputFormat::Json => &mut console.stdout,
         OutputFormat::Human => &mut console.stderr,

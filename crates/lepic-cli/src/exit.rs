@@ -128,6 +128,12 @@ pub enum CliError {
     Node(#[from] NodeError),
     #[error("slate file failed")]
     Transport(#[from] TransportError),
+    #[error("slate file {}", path.display())]
+    SlateFile {
+        path: std::path::PathBuf,
+        #[source]
+        source: TransportError,
+    },
     #[error("wallet database failed")]
     Store(#[from] StoreError),
     #[error("give --to or --to-file")]
@@ -178,7 +184,7 @@ impl CliError {
             | Self::Scan(ScanError::Node(_) | ScanError::Implausible(_))
             | Self::Node(_) => ErrorKind::Node,
             Self::Scan(ScanError::Cancelled) | Self::Interrupted => ErrorKind::Interrupted,
-            Self::Transport(_) => ErrorKind::Transport,
+            Self::Transport(_) | Self::SlateFile { .. } => ErrorKind::Transport,
             Self::Refresh(_)
             | Self::Scan(_)
             | Self::Store(_)

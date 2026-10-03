@@ -274,7 +274,7 @@ fn an_interrupt_at_a_password_prompt_ends_the_command() {
         let (_keep_open, never) = std::sync::mpsc::channel();
         let outcome = run_reading(
             &host,
-            &["wallet", "info"],
+            &["wallet", "init"],
             env,
             Box::new(std::io::BufReader::new(SilentInput(never))),
         );
@@ -335,4 +335,117 @@ fn a_data_directory_other_users_can_access_is_refused() {
 
     set_mode(0o700);
     wallet.run(&host, &["wallet", "info"]).ok();
+}
+
+/// The instance's environment with human output.
+fn human_env(instance: &Instance) -> Vec<(String, String)> {
+    let mut env = instance.env();
+    env.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    env
+}
+
+#[test]
+fn a_missing_wallet_is_reported_before_the_password_is_asked_for() {
+    let host = TestHost::new();
+    let empty = Instance::new("test password");
+    let mut env = human_env(&empty);
+    env.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    let outcome = empty.run_with(&host, &["wallet", "info"], env, "");
+    assert_eq!(outcome.code, 5, "{outcome:?}");
+    let hint = format!("hint: no floonet wallet in {}", empty.data_dir().display());
+    assert!(outcome.stderr.contains(&hint), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("lepic wallet init"),
+        "{}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn human_errors_end_with_a_hint_and_json_errors_carry_none() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("test password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let send = ["tx", "send", "500", "--to-file", "unused.slate"];
+    let outcome = wallet.run_with(&host, &send, human_env(&wallet), "");
+    assert_eq!(outcome.code, 8);
+    assert!(
+        outcome
+            .stderr
+            .contains("hint: 10.00000000 EPIC is spendable and 500."),
+        "{}",
+        outcome.stderr
+    );
+    let json = wallet.run(&host, &send);
+    assert!(!json.stdout.contains("hint"), "{}", json.stdout);
+
+    // A slate file in a directory that does not exist cannot be written: the transaction is
+    // stored and the hint says how to deliver it again or give it up.
+    let unwritable = wallet.path("missing/payment.slate");
+    let outcome = wallet.run_with(
+        &host,
+        &["tx", "send", "1", "--to-file", unwritable.to_str().unwrap()],
+        human_env(&wallet),
+        "",
+    );
+    assert_eq!(outcome.code, 11, "{outcome:?}");
+    for expected in [
+        "hint: the inputs stay locked",
+        "lepic tx resend ",
+        "lepic tx cancel ",
+    ] {
+        assert!(outcome.stderr.contains(expected), "{}", outcome.stderr);
+    }
+    assert!(
+        !outcome.stderr.contains("must name its port"),
+        "{}",
+        outcome.stderr
+    );
+    // Over the relay the hint adds that a non-default relay port belongs in the address.
+    let receiver = Instance::new("receiver password");
+    receiver.run(&host, &["wallet", "init"]).ok();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let tx_id = wallet.run(&host, &["tx", "list"]).ok().json()["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tx| tx["state"] == "sent")
+        .unwrap()["tx_id"]
+        .to_string();
+    host.relay.set_refusing(true);
+    let outcome = wallet.run_with(
+        &host,
+        &["tx", "resend", &tx_id, "--to", text(&address, "address")],
+        human_env(&wallet),
+        "",
+    );
+    assert_eq!(outcome.code, 11, "{outcome:?}");
+    for expected in ["hint: the inputs stay locked", "<key>@127.0.0.1:80"] {
+        assert!(outcome.stderr.contains(expected), "{}", outcome.stderr);
+    }
+}
+
+#[test]
+fn a_slate_file_error_names_the_file() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("test password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let missing = wallet.path("missing.slate");
+    for args in [
+        vec!["tx", "receive", missing.to_str().unwrap()],
+        vec!["tx", "finalize", missing.to_str().unwrap()],
+        vec!["invoice", "pay", missing.to_str().unwrap(), "1"],
+    ] {
+        let outcome = wallet.run(&host, &args);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            (10, "transport"),
+            "{args:?}"
+        );
+        let message = format!("slate file {}", missing.display());
+        assert_eq!(outcome.json()["error"]["message"], message, "{args:?}");
+    }
 }

@@ -262,8 +262,9 @@ fn rendered_len_bound(report: &Report) -> usize {
     }
 }
 
-/// The text a failed command prints: on stdout as JSON, or on stderr for people.
-pub fn render_error(error: &CliError, format: OutputFormat) -> String {
+/// The text a failed command prints: on stdout as JSON, or on stderr for people, with the hint
+/// on a line of its own.
+pub fn render_error(error: &CliError, format: OutputFormat, hint: Option<&str>) -> String {
     let chain = error.chain();
     let kind = error.kind();
     match format {
@@ -282,6 +283,9 @@ pub fn render_error(error: &CliError, format: OutputFormat) -> String {
         }
         OutputFormat::Human => {
             let mut text = format!("error: {}\n", chain.join(": "));
+            if let Some(hint) = hint {
+                let _ = writeln!(text, "hint: {hint}");
+            }
             let _ = writeln!(text, "exit code {} ({})", kind.exit_code(), kind.name());
             text
         }
@@ -736,7 +740,7 @@ mod tests {
 
     #[test]
     fn the_error_document_keeps_its_field_names() {
-        let rendered = render_error(&CliError::Interrupted, OutputFormat::Json);
+        let rendered = render_error(&CliError::Interrupted, OutputFormat::Json, None);
         assert_eq!(keys(&rendered), ["error"]);
         let value: Value = serde_json::from_str(&rendered).unwrap();
         let mut inner: Vec<&str> = value["error"]

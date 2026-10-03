@@ -1,0 +1,257 @@
+//! The line a human error ends with, saying what to try next. It is built from the error's
+//! typed fields and the settings the command ran with, so it can name the data directory, the
+//! node or the relay the command used. JSON errors carry no hint; scripts branch on `kind`.
+
+use lepic_epicbox::DEFAULT_PORT;
+use lepic_node::NodeError;
+use lepic_transport::error::TransportError;
+use lepic_wallet::finalize::FinalizeError;
+use lepic_wallet::inbox::InboxError;
+use lepic_wallet::invoice::InvoiceError;
+use lepic_wallet::refresh::RefreshError;
+use lepic_wallet::scan::ScanError;
+use lepic_wallet::selection::SelectionError;
+use lepic_wallet::send::SendError;
+use lepic_wallet::{ReceiveError, WalletError};
+
+use crate::amount::format_amount;
+use crate::exit::{CliError, ErrorKind};
+use crate::settings::Settings;
+
+/// What to try next, when there is something better to say than the error itself.
+pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
+    if let Some(wallet) = wallet_error(error) {
+        return wallet_hint(wallet, settings);
+    }
+    if let Some(SelectionError::NotEnoughFunds { available, needed }) = selection_error(error) {
+        return Some(format!(
+            "{} EPIC is spendable and {} EPIC is needed with the fee. Outputs become spendable \
+             after --min-confirmations blocks, and change stays locked until its transaction \
+             confirms; `lepic wallet info` shows the balance",
+            format_amount(*available),
+            format_amount(*needed)
+        ));
+    }
+    match error {
+        CliError::Send(SendError::Undelivered { tx_id, source, .. })
+        | CliError::Invoice(InvoiceError::Undelivered { tx_id, source, .. }) => {
+            let mut text = format!(
+                "the inputs stay locked; deliver it again with `lepic tx resend {tx_id} --to \
+                 <ADDRESS>` or `--to-file <FILE>`, or give up with `lepic tx cancel {tx_id}`"
+            );
+            if let Some(settings) = settings
+                && !matches!(source, TransportError::File(_))
+                && settings.relay.port() != DEFAULT_PORT
+            {
+                text.push_str(&format!(
+                    ". Addresses on {} must name its port, as in <key>@{}:{}",
+                    settings.relay.url(),
+                    settings.relay.domain(),
+                    settings.relay.port()
+                ));
+            }
+            return Some(text);
+        }
+        CliError::Finalize(FinalizeError::NotPosted { tx_id, .. })
+        | CliError::Invoice(InvoiceError::NotPosted { tx_id, .. }) => {
+            return Some(format!(
+                "the transaction is stored; `lepic tx post {tx_id}` sends it to the node again"
+            ));
+        }
+        CliError::Invoice(InvoiceError::AmountMismatch { invoiced, approved }) => {
+            return Some(format!(
+                "the invoice asks for {} EPIC and {} EPIC was approved; nothing was paid",
+                format_amount(*invoiced),
+                format_amount(*approved)
+            ));
+        }
+        CliError::Inbox(InboxError::Subscription(_) | InboxError::Transport(_)) => {
+            return settings.map(|settings| {
+                format!(
+                    "check that the relay {} is reachable; set another with epicbox_relay in the \
+                     config file or LEPIC_EPICBOX_RELAY",
+                    settings.relay.url()
+                )
+            });
+        }
+        CliError::DataDirInUse => {
+            return Some(
+                "another lepic command, such as `lepic epicbox listen`, is using this wallet; \
+                 stop it or wait for it to end"
+                    .to_owned(),
+            );
+        }
+        CliError::SharedDataDir => {
+            return settings.map(|settings| {
+                format!(
+                    "make it private with `chmod 700 {}`",
+                    settings.data_dir.display()
+                )
+            });
+        }
+        _ => {}
+    }
+    if error.kind() == ErrorKind::Node {
+        return settings.map(|settings| node_hint(error, settings));
+    }
+    None
+}
+
+fn wallet_hint(error: &WalletError, settings: Option<&Settings>) -> Option<String> {
+    let settings = settings?;
+    let dir = settings.data_dir.display();
+    let network = settings.network;
+    match error {
+        WalletError::NoWallet => Some(format!(
+            "no {network} wallet in {dir}. Create one with `lepic wallet init` or `lepic wallet \
+             restore`, or point --data-dir and --network at an existing one"
+        )),
+        WalletError::WalletExists => Some(format!(
+            "{dir} already holds a wallet; give --data-dir to create another"
+        )),
+        WalletError::NetworkMismatch { stored, .. } => Some(format!(
+            "{dir} holds a {stored} wallet; run with --network {stored}, or give --data-dir for \
+             a {network} wallet"
+        )),
+        WalletError::Node(_) | WalletError::Implausible(_) => Some(node_hint_text(settings)),
+        _ => None,
+    }
+}
+
+fn node_hint(error: &CliError, settings: &Settings) -> String {
+    let unauthorized = matches!(
+        error,
+        CliError::Node(NodeError::Unauthorized)
+            | CliError::Refresh(RefreshError::Node(NodeError::Unauthorized))
+            | CliError::Scan(ScanError::Node(NodeError::Unauthorized))
+    );
+    if unauthorized {
+        return format!(
+            "the node at {} refused the api secret; point node_api_secret_file or \
+             LEPIC_NODE_API_SECRET_FILE at its .foreign_api_secret",
+            settings.node.as_str()
+        );
+    }
+    node_hint_text(settings)
+}
+
+fn node_hint_text(settings: &Settings) -> String {
+    format!(
+        "check that the {} node at {} is running and synced; set another with node_url in the \
+         config file or LEPIC_NODE_URL",
+        settings.network,
+        settings.node.as_str()
+    )
+}
+
+/// The wallet error under any of the engine errors that wrap one.
+fn wallet_error(error: &CliError) -> Option<&WalletError> {
+    match error {
+        CliError::Wallet(error)
+        | CliError::Send(SendError::Wallet(error))
+        | CliError::Receive(ReceiveError::Wallet(error))
+        | CliError::Finalize(FinalizeError::Wallet(error))
+        | CliError::Invoice(InvoiceError::Wallet(error))
+        | CliError::Inbox(InboxError::Wallet(error))
+        | CliError::Refresh(RefreshError::Wallet(error))
+        | CliError::Scan(ScanError::Wallet(error)) => Some(error),
+        _ => None,
+    }
+}
+
+fn selection_error(error: &CliError) -> Option<&SelectionError> {
+    match error {
+        CliError::Send(SendError::Selection(error))
+        | CliError::Invoice(InvoiceError::Selection(error)) => Some(error),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_primitives::amount::Amount;
+    use lepic_store::TxId;
+
+    use super::*;
+    use crate::cli::GlobalArgs;
+    use crate::settings::Env;
+
+    fn settings(relay: &str) -> Settings {
+        let env = Env::new([
+            ("HOME".to_owned(), "/home/u".to_owned()),
+            ("LEPIC_NETWORK".to_owned(), "floonet".to_owned()),
+            ("LEPIC_DATA_DIR".to_owned(), "/w".to_owned()),
+            ("LEPIC_EPICBOX_RELAY".to_owned(), relay.to_owned()),
+        ]);
+        Settings::resolve(&GlobalArgs::default(), &env).unwrap()
+    }
+
+    fn hint_for(error: &CliError) -> String {
+        hint(error, Some(&settings("ws://localhost:3423"))).unwrap()
+    }
+
+    #[test]
+    fn a_missing_wallet_names_the_directory_and_the_commands_that_create_one() {
+        for error in [
+            CliError::Wallet(WalletError::NoWallet),
+            CliError::Send(SendError::Wallet(WalletError::NoWallet)),
+        ] {
+            let text = hint_for(&error);
+            assert!(text.contains("no floonet wallet in /w"), "{text}");
+            assert!(text.contains("lepic wallet init"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_wallet_of_another_network_names_the_flag_that_opens_it() {
+        let text = hint_for(&CliError::Wallet(WalletError::NetworkMismatch {
+            stored: "mainnet".to_owned(),
+            configured: lepic_primitives::params::Network::Floonet,
+        }));
+        assert!(text.contains("--network mainnet"), "{text}");
+    }
+
+    #[test]
+    fn missing_funds_show_what_is_spendable_and_what_is_needed() {
+        let text = hint_for(&CliError::Send(SendError::Selection(
+            SelectionError::NotEnoughFunds {
+                available: Amount::new(150_000_000),
+                needed: Amount::new(200_800_000),
+            },
+        )));
+        assert!(
+            text.starts_with("1.50000000 EPIC is spendable and 2.00800000 EPIC"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_finalized_transaction_the_node_refused_names_tx_post() {
+        let text = hint_for(&CliError::Finalize(FinalizeError::NotPosted {
+            tx_id: TxId(7),
+            source: NodeError::Timeout,
+        }));
+        assert!(text.contains("lepic tx post 7"), "{text}");
+    }
+
+    #[test]
+    fn node_failures_name_the_node_and_the_setting() {
+        let text = hint_for(&CliError::Node(NodeError::Timeout));
+        assert!(text.contains("http://127.0.0.1:13413"), "{text}");
+        assert!(text.contains("LEPIC_NODE_URL"), "{text}");
+        let refused = hint_for(&CliError::Node(NodeError::Unauthorized));
+        assert!(refused.contains("node_api_secret_file"), "{refused}");
+    }
+
+    #[test]
+    fn errors_that_say_everything_get_no_hint() {
+        assert_eq!(
+            hint(
+                &CliError::Interrupted,
+                Some(&settings("ws://localhost:3423"))
+            ),
+            None
+        );
+        assert_eq!(hint(&CliError::Wallet(WalletError::NoWallet), None), None);
+    }
+}

@@ -16,6 +16,7 @@ use lepic_primitives::params::Network;
 use lepic_store::{
     OutboxStatus, Repositories, SlateStage, StoredTransaction, TxDirection, TxId, WalletStore,
 };
+use lepic_transport::error::TransportError;
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
@@ -53,7 +54,7 @@ use crate::output::{
 };
 use crate::settings::Settings;
 use crate::stores::{CliStores, SharedStore};
-use crate::vault::FileVault;
+use crate::vault::{FileVault, VAULT_FILE};
 
 /// Every CLI wallet has this name in logs; one data directory holds one wallet.
 const WALLET_NAME: &str = "default";
@@ -457,7 +458,8 @@ impl<H: Host> Run<'_, H> {
         let files = FileTransport::new();
         let wire = files
             .import(&Location::File(args.slate.file.clone()))
-            .await?;
+            .await
+            .map_err(slate_file(&args.slate.file))?;
         let received = opened
             .wallet
             .receive(
@@ -475,7 +477,8 @@ impl<H: Host> Run<'_, H> {
             .unwrap_or_else(|| response_path(&args.slate.file));
         files
             .export(&received.reply, &Location::File(reply.clone()))
-            .await?;
+            .await
+            .map_err(slate_file(&reply))?;
         Ok(Report::Receive(ReceiveReport {
             tx_id: received.tx_id.0,
             slate_id: received.slate.id().to_string(),
@@ -488,7 +491,8 @@ impl<H: Host> Run<'_, H> {
         let opened = self.open().await?;
         let wire = FileTransport::new()
             .import(&Location::File(args.slate.file.clone()))
-            .await?;
+            .await
+            .map_err(slate_file(&args.slate.file))?;
         let propagation = propagation(args.fluff.fluff);
         // Which flow the file answers is known only once it is decoded, which the engine does.
         let finalized = match opened.wallet.finalize(FILE, &wire, propagation).await {
@@ -547,7 +551,8 @@ impl<H: Host> Run<'_, H> {
                 let files = FileTransport::new();
                 let wire = files
                     .import(&Location::File(args.slate.file.clone()))
-                    .await?;
+                    .await
+                    .map_err(slate_file(&args.slate.file))?;
                 let request = PayRequest {
                     minimum_confirmations: spend.minimum_confirmations,
                     change_outputs: spend.change_outputs,
@@ -563,7 +568,8 @@ impl<H: Host> Run<'_, H> {
                     .unwrap_or_else(|| response_path(&args.slate.file));
                 files
                     .export(&paid.reply, &Location::File(reply.clone()))
-                    .await?;
+                    .await
+                    .map_err(slate_file(&reply))?;
                 Ok(Report::InvoicePay(InvoicePayReport {
                     tx_id: paid.tx_id.0,
                     slate_id: paid.slate.id().to_string(),
@@ -584,8 +590,12 @@ impl<H: Host> Run<'_, H> {
         Ok(password_from(password))
     }
 
-    /// Unlocks the wallet in the data directory.
+    /// Unlocks the wallet in the data directory. A directory without a vault is reported before
+    /// the password is asked for, which would otherwise be typed for nothing.
     async fn open(&mut self) -> Result<Opened<HostNode<H>>, CliError> {
+        if !self.settings.data_dir.join(VAULT_FILE).exists() {
+            return Err(WalletError::NoWallet.into());
+        }
         let password = self
             .console
             .secrets
@@ -669,6 +679,12 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
         .clone()
         .with_known_tip(tip.height, seen_ago);
     Ok(())
+}
+
+/// Names the slate file in a file transport error, which knows only what failed.
+fn slate_file(path: &Path) -> impl FnOnce(TransportError) -> CliError {
+    let path = path.to_owned();
+    move |source| CliError::SlateFile { path, source }
 }
 
 /// The spending options shared by `tx send` and `invoice pay`.
