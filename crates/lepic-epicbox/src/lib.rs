@@ -28,6 +28,6 @@ pub use frame::{
     PROTOCOL_VERSION, RelayErrorKind, RelayFrame, RelayMessageId, SlateFrame, WalletMode,
 };
 pub use session::{
-    Connector, DEFAULT_PLAIN_PORT, ProtocolVersion, RelayEndpoint, RelayStream, Security,
-    TcpConnector,
+    Connector, DEFAULT_PLAIN_PORT, EndpointError, ProtocolVersion, RelayEndpoint, RelayStream,
+    Security, TcpConnector,
 };

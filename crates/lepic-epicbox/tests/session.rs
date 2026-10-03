@@ -12,8 +12,8 @@ use client_support::{
 };
 use lepic_epicbox::mock_relay::MockRelay;
 use lepic_epicbox::{
-    ClientError, ConnectionState, Domain, EpicboxClient, Identity, Network, ProtocolVersion,
-    RelayEndpoint, Security, TcpConnector,
+    ClientError, ConnectionState, Connector, Domain, EndpointError, EpicboxClient, Identity,
+    Network, ProtocolVersion, RelayEndpoint, Security, TcpConnector,
 };
 use lepic_transport::transport::Inbound;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
@@ -127,4 +127,48 @@ async fn tcp_connector_reaches_a_plain_relay() {
     within(LONG, bob.finished()).await.unwrap();
     assert_eq!(relay.pending(&address(BOB)), 0);
     server.abort();
+}
+
+fn connector_without_roots() -> TcpConnector {
+    let tls = ClientConfig::builder_with_provider(Arc::new(
+        tokio_rustls::rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(RootCertStore::empty())
+    .with_no_client_auth();
+    TcpConnector::new(Arc::new(tls))
+}
+
+#[tokio::test]
+async fn tcp_connector_refuses_plain_websockets_to_a_remote_host() {
+    // `.invalid` never resolves and 192.0.2.1 is a documentation address, so nothing is reached.
+    for host in ["relay.invalid", "192.0.2.1", "127.example.invalid"] {
+        let endpoint = RelayEndpoint::new(Domain::parse(host).unwrap(), Some(9), Security::Plain);
+        let Err(error) = within(LONG, connector_without_roots().connect(&endpoint)).await else {
+            panic!("connected to {host} without tls");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{host}");
+        assert_eq!(
+            error
+                .get_ref()
+                .and_then(|e| e.downcast_ref::<EndpointError>()),
+            Some(&EndpointError::PlainToRemoteHost),
+            "{host}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn tcp_connector_allows_plain_websockets_to_loopback() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    for host in ["127.0.0.1", "localhost"] {
+        let endpoint =
+            RelayEndpoint::new(Domain::parse(host).unwrap(), Some(port), Security::Plain);
+        let connected = within(LONG, connector_without_roots().connect(&endpoint)).await;
+        assert!(connected.is_ok(), "{host}");
+    }
 }

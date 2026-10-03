@@ -101,7 +101,26 @@ pub trait Connector: Send + Sync {
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>>;
 }
 
+/// Why [`TcpConnector`] refused an endpoint without connecting. Carried inside the
+/// [`io::Error`] it returns, with kind [`io::ErrorKind::InvalidInput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum EndpointError {
+    #[error("plain websocket relay is not a loopback host")]
+    PlainToRemoteHost,
+}
+
+/// `localhost` or an IPv4 loopback address, the only hosts a plain websocket may reach.
+fn is_loopback(domain: &Domain) -> bool {
+    let host = domain.as_str();
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 /// TCP, with TLS from the given rustls configuration when the endpoint asks for it (ADR 0006).
+/// A plain endpoint is refused unless its host is loopback.
 pub struct TcpConnector {
     tls: Arc<ClientConfig>,
 }
@@ -124,6 +143,12 @@ impl Connector for TcpConnector {
         endpoint: &'a RelayEndpoint,
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
         Box::pin(async move {
+            if endpoint.security() == Security::Plain && !is_loopback(endpoint.domain()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    EndpointError::PlainToRemoteHost,
+                ));
+            }
             let tcp = TcpStream::connect((endpoint.domain().as_str(), endpoint.port())).await?;
             tcp.set_nodelay(true)?;
             match endpoint.security() {
