@@ -7,6 +7,7 @@ mod ci_lint;
 mod commit_hook_tests;
 mod deps_check;
 mod fuzz;
+mod install;
 mod mobile;
 mod repo_lint;
 mod soak;
@@ -28,6 +29,7 @@ commands:
   ci-lint     every `uses:` under .github is pinned to a commit sha
   deps-check  crate edges and banned crates against docs/architecture.md
   fuzz        (--smoke | --full) [--target <name>]... [--jobs <n>]: seed and run the fuzz targets
+  install     [--dir <directory>]: build release lepic and install it, default ~/.local/bin
   mobile      --target <triple> [--release]: build the library crates for a mobile target
               --package [--target <triple>]...: copy release lepic-ffi into bindings/flutter
               --emulator-test [--device <serial>]: run the Flutter integration test on a device
@@ -63,6 +65,7 @@ fn run() -> Result<()> {
         "ci-lint" => ci_lint::run(&root),
         "deps-check" => deps_check::run(&root),
         "fuzz" => fuzz::run(&root, rest),
+        "install" => install::run(&root, rest),
         "mobile" => mobile::run(&root, rest),
         "repo-lint" => repo_lint::run(&root),
         "soak" => soak::run(&root, rest),
