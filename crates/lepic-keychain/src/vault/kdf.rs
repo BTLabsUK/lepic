@@ -10,10 +10,12 @@ use zeroize::Zeroizing;
 pub const SALT_LEN: usize = 16;
 pub const KEY_LEN: usize = 32;
 
-/// Upper bounds on parameters read from a vault file, so a crafted file cannot demand more memory
-/// or time than the largest setting LEPIC would ever choose.
-pub const MAX_MEMORY_KIB: u32 = 1024 * 1024;
-pub const MAX_ITERATIONS: u32 = 16;
+/// Upper bounds on parameters read from a vault file or sealed text, so a crafted header cannot
+/// demand more memory or time than LEPIC itself spends. They are the largest settings LEPIC
+/// writes: [`KdfParams::DEFAULT`] and the candidates its Argon2 benchmark measures. The Argon2
+/// implementation runs lanes one after another, so the lane count adds no memory or time.
+pub const MAX_MEMORY_KIB: u32 = 128 * 1024;
+pub const MAX_ITERATIONS: u32 = 4;
 pub const MAX_PARALLELISM: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

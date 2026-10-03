@@ -305,6 +305,34 @@ mod tests {
     }
 
     #[test]
+    fn refuses_a_header_asking_for_more_than_lepic_writes() {
+        let header = |memory_kib: u32, iterations: u32| {
+            let mut bytes = VaultHeader {
+                params: KdfParams::DEFAULT,
+                salt: [0; SALT_LEN],
+                nonce: [0; NONCE_LEN],
+            }
+            .encode();
+            bytes[10..14].copy_from_slice(&memory_kib.to_be_bytes());
+            bytes[14..18].copy_from_slice(&iterations.to_be_bytes());
+            bytes.extend_from_slice(&[0; 2 + TAG_LEN]);
+            bytes
+        };
+        for (memory_kib, iterations) in [(1024 * 1024, 1), (64 * 1024, 16), (256 * 1024, 3)] {
+            assert!(
+                matches!(
+                    VaultFile::decode(&header(memory_kib, iterations)),
+                    Err(VaultError::KdfParams(_))
+                ),
+                "m={memory_kib} t={iterations}"
+            );
+        }
+        let default = KdfParams::DEFAULT;
+        let file = VaultFile::decode(&header(default.memory_kib(), default.iterations())).unwrap();
+        assert_eq!(file.header().params, default);
+    }
+
+    #[test]
     fn payload_round_trips() {
         let secrets = secrets(&[
             ("a", b""),
