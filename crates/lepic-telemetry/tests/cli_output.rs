@@ -114,6 +114,7 @@ fn json_lines_carry_documented_field_names() {
             attempt = 1_u32,
             elapsed_ms = 12_u64,
             error = %ErrorChain(&error),
+            tag = "t",
             "slate sent"
         );
     });
