@@ -275,6 +275,19 @@ impl Connection {
             .map_err(websocket_error)
     }
 
+    /// Sends `frame`, or times out at `deadline` awaiting the answer that the frame requests.
+    pub(crate) async fn send_before(
+        &mut self,
+        frame: &ClientFrame,
+        deadline: Instant,
+    ) -> Result<(), ClientError> {
+        timeout_at(deadline, self.send(frame))
+            .await
+            .map_err(|_| ClientError::Timeout {
+                awaiting: Awaiting::Answer,
+            })?
+    }
+
     /// A websocket ping frame, which keeps proxies from closing an idle connection. Never the
     /// JSON `ping`, whose answer is not JSON.
     pub(crate) async fn ping(&mut self) -> Result<(), ClientError> {
@@ -345,9 +358,12 @@ impl Connection {
     ) -> Result<Greeting, ClientError> {
         let mut challenge = self.first_challenge(settings.response_timeout).await?;
 
-        self.send(&ClientFrame::client_details(&settings.wallet_version, mode))
-            .await?;
         let deadline = deadline_after(settings.response_timeout);
+        self.send_before(
+            &ClientFrame::client_details(&settings.wallet_version, mode),
+            deadline,
+        )
+        .await?;
         loop {
             match self.receive_before(deadline, Awaiting::Answer).await? {
                 RelayFrame::Ok => break,
@@ -357,8 +373,9 @@ impl Connection {
             }
         }
 
-        self.send(&ClientFrame::GetVersion).await?;
         let deadline = deadline_after(settings.response_timeout);
+        // A version request that cannot be written fails the session, unlike an unanswered one.
+        self.send_before(&ClientFrame::GetVersion, deadline).await?;
         let version = loop {
             match self.receive_before(deadline, Awaiting::Answer).await {
                 Ok(RelayFrame::GetVersion { str }) => break ProtocolVersion::parse(&str),
@@ -387,9 +404,9 @@ impl Connection {
         }
     }
 
-    /// Waits for the answer to a request that the relay answers with `Ok` or `Error`.
-    pub(crate) async fn answer(&mut self, wait: Duration) -> Result<(), ClientError> {
-        let deadline = deadline_after(wait);
+    /// Waits until `deadline` for the answer to a request that the relay answers with `Ok` or
+    /// `Error`.
+    pub(crate) async fn answer(&mut self, deadline: Instant) -> Result<(), ClientError> {
         loop {
             match self.receive_before(deadline, Awaiting::Answer).await? {
                 RelayFrame::Ok => return Ok(()),

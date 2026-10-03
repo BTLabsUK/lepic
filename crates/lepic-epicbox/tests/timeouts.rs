@@ -97,6 +97,38 @@ async fn post_ends_when_the_post_is_not_answered() {
     assert_eq!(relay.received("PostSlate"), 1);
 }
 
+/// A post to a relay that reads `frames` frames on the connection and then stops reading, so
+/// the next frame the client writes cannot leave.
+async fn post_to_a_relay_that_stops_reading_after(frames: usize) -> MockRelay {
+    let relay = MockRelay::new(Network::Mainnet);
+    relay.set_stop_reading_after(Some(frames));
+    let started = Instant::now();
+    assert_timed_out(post_to_bob(&relay).await, Awaiting::Answer);
+    // Writing a request and receiving its answer share one response timeout.
+    assert_ended_within(started, RESPONSE);
+    relay
+}
+
+#[tokio::test(start_paused = true)]
+async fn post_ends_when_client_details_cannot_be_written() {
+    let relay = post_to_a_relay_that_stops_reading_after(0).await;
+    assert_eq!(relay.received("ClientDetails"), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn post_ends_when_the_version_request_cannot_be_written() {
+    let relay = post_to_a_relay_that_stops_reading_after(1).await;
+    assert_eq!(relay.received("ClientDetails"), 1);
+    assert_eq!(relay.received("GetVersion"), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn post_ends_when_the_post_cannot_be_written() {
+    let relay = post_to_a_relay_that_stops_reading_after(2).await;
+    assert_eq!(relay.received("GetVersion"), 1);
+    assert_eq!(relay.received("PostSlate"), 0);
+}
+
 #[tokio::test(start_paused = true)]
 async fn drain_ends_when_the_subscribe_is_not_answered() {
     let relay = MockRelay::new(Network::Mainnet);

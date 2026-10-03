@@ -19,7 +19,7 @@ use crate::address::{AddressError, EpicboxAddress};
 use crate::client_inbox::{Mode, Subscription};
 use crate::crypto::{MessageError, NONCE_LEN, Nonce, SALT_LEN, Salt, SignedMessage};
 use crate::frame::{ClientFrame, FrameError, RelayErrorKind, WalletMode};
-use crate::session::{Connection, Connector, ProtocolVersion, RelayEndpoint};
+use crate::session::{Connection, Connector, ProtocolVersion, RelayEndpoint, deadline_after};
 
 /// The transport id of the Epicbox method.
 pub const TRANSPORT_ID: TransportId = TransportId::new("epicbox");
@@ -282,8 +282,9 @@ impl EpicboxClient {
             .await?;
             let result = async {
                 connection.greet(WalletMode::Send, settings).await?;
-                connection.send(&frame).await?;
-                connection.answer(settings.response_timeout).await
+                let deadline = deadline_after(settings.response_timeout);
+                connection.send_before(&frame, deadline).await?;
+                connection.answer(deadline).await
             }
             .await;
             connection.close().await;
