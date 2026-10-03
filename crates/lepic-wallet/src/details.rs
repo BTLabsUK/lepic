@@ -21,6 +21,9 @@ pub struct TransactionDetails {
     pub kernel_excess: Option<Commitment>,
     /// The height of the output or kernel that confirmed the transaction, or of the restored
     /// output. `None` while it is unconfirmed, and for one confirmed before heights were stored.
+    /// Refresh moves it when a reorganisation mines the confirming output at another height. A
+    /// transaction confirmed by its kernel keeps the height of its first confirmation: refresh
+    /// stops looking up the kernel once it is confirmed, so a reorganisation is not followed.
     pub confirmed_height: Option<Height>,
 }
 

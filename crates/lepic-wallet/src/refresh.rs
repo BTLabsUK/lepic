@@ -426,10 +426,30 @@ fn on_chain(
                 .changes
                 .extend(confirm(repos, tx_id, location.height, now)?);
         }
+    } else if let Some(tx_id) = output.tx
+        && location.height != output.height
+    {
+        follow_confirmation(repos, tx_id, output.height, location.height)?;
     }
     output.height = location.height;
     output.mmr_index = Some(location.mmr_index);
     Ok(output)
+}
+
+/// Moves a transaction's confirmation height with the output that confirmed it, which a
+/// reorganisation mined again at another height. The confirming output is the one whose stored
+/// height is the transaction's: an input it spent was mined earlier, below it.
+fn follow_confirmation(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    stored: Height,
+    found: Height,
+) -> Result<(), StoreError> {
+    if repos.confirmed_height(tx_id)? == Some(stored) {
+        repos.set_confirmed_height(tx_id, found)?;
+        debug!(tx_id = %tx_id, height = %found, "confirmation height moved");
+    }
+    Ok(())
 }
 
 fn missing(mut output: OutputRecord, outcome: &mut StepOutcome) -> OutputRecord {

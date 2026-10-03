@@ -665,6 +665,74 @@ fn details_of_a_send_confirmed_by_its_change_show_the_change_height() {
 }
 
 #[test]
+fn a_reorganisation_that_moves_the_confirming_change_moves_the_confirmation_height() {
+    let (sender, funding) = funded();
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(request(None), to_peer()))
+        .unwrap();
+    let change = change(&sender, &funding);
+    sender.harness.node.update_chain(|chain| {
+        chain.outputs[0].spent = true;
+        chain.outputs.push(on_chain(&change, TIP + 1, 3));
+        chain.tip.height = Height::new(TIP + 1);
+    });
+    refresh(&sender);
+    assert_eq!(
+        details(&sender, sent.tx_id).confirmed_height,
+        Some(Height::new(TIP + 1))
+    );
+
+    // The block holding the change is replaced; the change is mined again two blocks later.
+    sender.harness.node.update_chain(|chain| {
+        let moved = chain
+            .outputs
+            .iter_mut()
+            .find(|output| output.commitment == change.id.commitment)
+            .unwrap();
+        moved.height = Height::new(TIP + 3);
+        chain.tip.height = Height::new(TIP + 3);
+    });
+    refresh(&sender);
+
+    assert_eq!(
+        output(&sender, &change).unwrap().height,
+        Height::new(TIP + 3)
+    );
+    let moved = details(&sender, sent.tx_id);
+    assert_eq!(moved.transaction.entry.state, TxState::Confirmed);
+    assert_eq!(moved.confirmed_height, Some(Height::new(TIP + 3)));
+}
+
+#[test]
+fn a_kernel_confirmation_keeps_its_first_height_after_a_reorganisation() {
+    let (sender, _) = funded();
+    let (tx_id, kernel) = posted_with_final_slate(&sender, Amount::ZERO);
+    sender.harness.node.update_chain(|chain| {
+        chain.kernels.push(kernel);
+        chain.tip.height = kernel.height;
+    });
+    refresh(&sender);
+    assert_eq!(
+        details(&sender, tx_id).confirmed_height,
+        Some(kernel.height)
+    );
+
+    let moved = kernel.height.checked_add_blocks(2).unwrap();
+    sender.harness.node.update_chain(|chain| {
+        chain.kernels[0].height = moved;
+        chain.tip.height = moved;
+    });
+    refresh(&sender);
+
+    // A confirmed transaction leaves the kernel lookups, so the move is not seen.
+    assert_eq!(
+        details(&sender, tx_id).confirmed_height,
+        Some(kernel.height)
+    );
+}
+
+#[test]
 fn details_of_an_unknown_transaction_fail() {
     let (sender, _) = funded();
     let result = sender
