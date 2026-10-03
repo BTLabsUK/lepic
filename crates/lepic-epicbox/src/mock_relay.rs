@@ -9,7 +9,7 @@
 //! answers the JSON `ping` with bare `pong` text, and closes sockets that send text that is not
 //! JSON. Unlike the public relay it stores every message itself instead of forwarding to other
 //! domains, and its messages do not expire. Switches make it refuse or stall connections, leave
-//! chosen frames unanswered, or stop reading subscribed sockets. Tests wait on its state with
+//! chosen frames unanswered, or stop reading a connection. Tests wait on its state with
 //! [`MockRelay::wait_until`] instead of polling.
 
 use std::collections::{HashMap, HashSet};
@@ -46,6 +46,9 @@ const RESEND_AFTER: u32 = 3;
 
 /// The largest payload a websocket control frame carries.
 const MAX_CONTROL_PAYLOAD: usize = 125;
+
+/// Pings that fill a connection which is not read: their pongs exceed [`PIPE_CAPACITY`].
+const FILL_PINGS: usize = 1024;
 
 /// A frame the relay can be told to leave unanswered with [`MockRelay::set_unanswered`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,6 +97,8 @@ struct Socket {
     resend_attempts: u32,
     /// Redeliveries made after `RESEND_AFTER` such subscribes.
     resend_rounds: u32,
+    /// Frames still read before the socket stops reading, when that switch is set.
+    reads_left: Option<usize>,
 }
 
 enum Outgoing {
@@ -114,6 +119,7 @@ struct RelayState {
     stalling: bool,
     stalled: Vec<DuplexStream>,
     unanswered: HashSet<Unanswered>,
+    stop_reading_after: Option<usize>,
     version: Option<String>,
     received: HashMap<String, usize>,
     deliveries: HashMap<String, usize>,
@@ -137,6 +143,7 @@ impl MockRelay {
                     stalling: false,
                     stalled: Vec::new(),
                     unanswered: HashSet::new(),
+                    stop_reading_after: None,
                     version: Some(PROTOCOL_VERSION.to_owned()),
                     received: HashMap::new(),
                     deliveries: HashMap::new(),
@@ -201,6 +208,15 @@ impl MockRelay {
         }
     }
 
+    /// Makes each connection opened from now on read `frames` protocol frames, then stop reading
+    /// and fill itself with pings before it answers the last frame read, as a relay that hangs
+    /// mid-conversation does. With `Some(0)` it stops before the first challenge; `None` restores
+    /// normal reading.
+    pub fn set_stop_reading_after(&self, frames: Option<usize>) {
+        self.update(|state| state.stop_reading_after = frames);
+    }
+
+    // Not through `update`: nothing a query reports changes, so no `wait_until` needs waking.
     fn send_to_subscribed(&self, outgoing: impl Fn() -> Outgoing) {
         for socket in self.lock().sockets.values() {
             if socket.address.is_some() {
@@ -367,8 +383,10 @@ impl MockRelay {
                     in_flight: None,
                     resend_attempts: 0,
                     resend_rounds: 0,
+                    reads_left: state.stop_reading_after,
                 },
             );
+            state.count_read(id, 0);
             state.challenge(id);
             id
         });
@@ -397,7 +415,10 @@ impl MockRelay {
                 },
                 incoming = ws.next(), if reading => match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        self.update(|state| state.handle(id, self.inner.network, text.as_str()));
+                        self.update(|state| {
+                            state.count_read(id, 1);
+                            state.handle(id, self.inner.network, text.as_str());
+                        });
                     }
                     Some(Ok(Message::Ping(_))) => {
                         self.update(|state| state.pings = state.pings.saturating_add(1));
@@ -462,6 +483,27 @@ impl RelayState {
     fn send(&self, id: u64, text: String) {
         if let Some(socket) = self.sockets.get(&id) {
             let _ = socket.outgoing.send(Outgoing::Text(text));
+        }
+    }
+
+    /// Counts `frames` read from socket `id`. Once its reads are used up it stops reading and
+    /// queues pings ahead of anything it answers next, so the client's next write waits.
+    fn count_read(&mut self, id: u64, frames: usize) {
+        let Some(socket) = self.sockets.get_mut(&id) else {
+            return;
+        };
+        let Some(left) = socket.reads_left else {
+            return;
+        };
+        let left = left.saturating_sub(frames);
+        if left > 0 {
+            socket.reads_left = Some(left);
+            return;
+        }
+        socket.reads_left = None;
+        let _ = socket.outgoing.send(Outgoing::StopReading);
+        for _ in 0..FILL_PINGS {
+            let _ = socket.outgoing.send(Outgoing::Ping);
         }
     }
 
