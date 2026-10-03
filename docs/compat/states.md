@@ -82,8 +82,8 @@ Upstream's output transitions, which W-03, W-06 and W-07 follow:
 - Cancel: `Locked` inputs become `Unspent`; the transaction's `Unconfirmed` outputs are deleted.
 - Refresh, output found on chain: `Unconfirmed` becomes `Unspent`; other statuses are unchanged.
 - Refresh, output missing from the UTXO set: `Unspent` and `Locked` become `Spent`.
-- Scan: every output found is stored `Unspent`. A stored `Spent` or `Locked` output found unspent
-  becomes `Unspent`, and in a scan run with `delete_unconfirmed` a stored `Unconfirmed` output not
-  found is deleted; in both cases the
+- Scan: every output found and not stored is stored `Unspent`. A stored `Spent` output found unspent
+  becomes `Unspent`. In a scan run with `delete_unconfirmed`, a stored `Locked` output found unspent
+  becomes `Unspent` and every stored `Unconfirmed` output is deleted. In each case the
   transaction log entry the output belongs to is cancelled (`TxSentCreated` to `TxSentCancelled`,
   `TxReceived` to `TxReceivedCancelled`; other types are left alone).
