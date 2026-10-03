@@ -16,7 +16,7 @@ The table is the single source of the limits; `xtask/src/budget.rs` reads it.
 | `size.x86_64-linux-android` | 9728 | KiB | 7711 |
 | `restore.time` | 800 | ms | 44 to 191 |
 | `restore.peak_memory` | 12288 | KiB | 6084 |
-| `drain.time` | 500 | ms | 48 to 130 |
+| `drain.time` | 500 | ms | 48 to 139 |
 | `drain.peak_memory` | 10240 | KiB | 5224 |
 
 Measured on Linux x86_64 with the 1.99.0 toolchain while other builds shared the machine. Times are
