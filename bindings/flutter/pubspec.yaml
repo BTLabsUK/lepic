@@ -11,6 +11,10 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_rust_bridge: 2.13.0
+  # hook/build.dart. The versions the Flutter SDK's own build runner uses, so app and SDK agree on
+  # the hook protocol.
+  code_assets: 1.2.1
+  hooks: 2.0.2
 
 dev_dependencies:
   flutter_test:

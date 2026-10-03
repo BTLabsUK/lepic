@@ -1,3 +1,5 @@
 .dart_tool/
 build/
 pubspec.lock
+# Built by `cargo xtask mobile --package`.
+/native/
