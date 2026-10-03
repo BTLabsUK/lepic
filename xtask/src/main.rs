@@ -1,5 +1,6 @@
 //! Repository automation, run as `cargo xtask <command>`.
 
+mod budget;
 mod check;
 mod ci_lint;
 mod deps_check;
@@ -18,6 +19,7 @@ use anyhow::{Context, Result, bail};
 const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
+  budget      [--measurements <file.json>]: size, restore and drain against docs/budgets.md
   check       fmt, clippy, tests, cargo deny and deps-check
   ci-lint     every `uses:` under .github is pinned to a commit sha
   deps-check  crate edges and banned crates against docs/architecture.md
@@ -48,6 +50,7 @@ fn run() -> Result<()> {
     };
     let root = workspace_root()?;
     match command.as_str() {
+        "budget" => budget::run(&root, rest),
         "check" => check::run(&root),
         "ci-lint" => ci_lint::run(&root),
         "deps-check" => deps_check::run(&root),
