@@ -96,12 +96,74 @@ impl Host for ProcessHost {
     }
 }
 
-/// The node's `.foreign_api_secret`, as `epic-wallet` reads it: the file's text, trimmed.
+/// The node's `.foreign_api_secret`, as `epic-wallet` reads it: the file's text, trimmed, cut at
+/// [`MAX_API_SECRET_LEN`] bytes.
 fn read_api_secret(path: &std::path::Path) -> Result<SecretString, CliError> {
     let file = std::fs::File::open(path).map_err(CliError::io("read the node api secret file"))?;
-    let mut text = Zeroizing::new(String::new());
+    let mut bytes = api_secret_buffer();
     file.take(MAX_API_SECRET_LEN)
-        .read_to_string(&mut text)
+        .read_to_end(&mut bytes)
         .map_err(CliError::io("read the node api secret file"))?;
-    Ok(SecretString::from(text.trim().to_owned()))
+    api_secret_from(&bytes)
+}
+
+/// Holds the most a read takes from the start, and one byte more so a full read never makes the
+/// reader grow it: a growing `Vec` leaves the bytes it moved out of in freed memory, where
+/// `Zeroizing` cannot wipe them.
+fn api_secret_buffer() -> Zeroizing<Vec<u8>> {
+    let capacity = usize::try_from(MAX_API_SECRET_LEN)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1);
+    Zeroizing::new(Vec::with_capacity(capacity))
+}
+
+/// The one copy that leaves is sized exactly, so the secret type keeps it without moving it.
+fn api_secret_from(bytes: &[u8]) -> Result<SecretString, CliError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| {
+        CliError::io("read the node api secret file")(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the node api secret is not valid utf-8",
+        ))
+    })?;
+    Ok(SecretString::from(text.trim()))
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap (docs/rules.md).
+    #![allow(clippy::unwrap_used)]
+
+    use secrecy::ExposeSecret as _;
+
+    use super::*;
+
+    #[test]
+    fn the_longest_api_secret_is_read_without_moving_the_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".foreign_api_secret");
+        let limit = usize::try_from(MAX_API_SECRET_LEN).unwrap();
+        std::fs::write(&path, "k".repeat(limit + 10)).unwrap();
+        let mut bytes = api_secret_buffer();
+        let start = bytes.as_ptr();
+        std::fs::File::open(&path)
+            .unwrap()
+            .take(MAX_API_SECRET_LEN)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes.len(), limit);
+        assert_eq!(bytes.as_ptr(), start);
+    }
+
+    #[test]
+    fn reads_the_api_secret_trimmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".foreign_api_secret");
+        std::fs::write(&path, "  s3cret\r\n").unwrap();
+        assert_eq!(read_api_secret(&path).unwrap().expose_secret(), "s3cret");
+        std::fs::write(&path, [0xff, b'\n']).unwrap();
+        assert!(matches!(
+            read_api_secret(&path),
+            Err(CliError::Io { source, .. }) if source.kind() == std::io::ErrorKind::InvalidData
+        ));
+    }
 }
