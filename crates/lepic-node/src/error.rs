@@ -13,6 +13,8 @@ pub(crate) type BoxError = Box<dyn StdError + Send + Sync>;
 pub enum NodeError {
     #[error("node url is invalid")]
     InvalidUrl,
+    #[error("node url uses plain http to a host that is not loopback")]
+    PlainHttpToRemoteHost,
     #[error("node api secret cannot be sent in an http header")]
     InvalidApiSecret,
     #[error("tls configuration could not be built")]

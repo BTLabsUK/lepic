@@ -838,3 +838,44 @@ fn rejects_bad_node_urls_before_any_io() {
         );
     }
 }
+
+#[test]
+fn allows_plain_http_only_to_loopback() {
+    let tls = webpki_tls_config().unwrap();
+    let with_secret = HttpSettings {
+        api_secret: Some(SecretString::from("s3cret")),
+        ..settings()
+    };
+    for url in [
+        "http://node.example:3413",
+        "http://10.0.0.2:3413",
+        "http://192.168.1.10",
+        "http://127.0.0.1.node.example",
+        "http://localhost.node.example",
+        "http://[2001:db8::1]:3413",
+    ] {
+        for settings in [settings(), with_secret.clone()] {
+            assert!(
+                matches!(
+                    HttpTransport::new(url, &settings, tls.clone()),
+                    Err(NodeError::PlainHttpToRemoteHost)
+                ),
+                "{url}"
+            );
+        }
+    }
+    for url in [
+        "http://127.0.0.1:3413",
+        "http://127.8.9.10",
+        "http://localhost:3413",
+        "http://LOCALHOST",
+        "http://[::1]:3413",
+        "https://node.example:3413",
+        "https://10.0.0.2",
+    ] {
+        assert!(
+            HttpTransport::new(url, &with_secret, tls.clone()).is_ok(),
+            "{url}"
+        );
+    }
+}

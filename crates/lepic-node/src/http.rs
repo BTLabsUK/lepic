@@ -1,5 +1,6 @@
 //! The HTTP transport: hyper over rustls (ADR 0006), with the limits the node client relies on.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -82,7 +83,9 @@ impl std::fmt::Debug for HttpTransport {
 
 impl HttpTransport {
     /// `node_url` is the node's API root, such as `https://node.example:3413`. Credentials go
-    /// in `settings.api_secret`, never in the URL.
+    /// in `settings.api_secret`, never in the URL. Plain `http` is refused with
+    /// [`NodeError::PlainHttpToRemoteHost`] unless the host is loopback, so the secret never
+    /// crosses a network unencrypted.
     ///
     /// Must be called inside a Tokio runtime only when requests are made; construction itself
     /// does no I/O.
@@ -193,8 +196,12 @@ impl RpcTransport for HttpTransport {
     }
 }
 
-/// Accepts `http` and `https` URLs with a host and an optional path prefix, and nothing that
-/// could carry credentials or change the endpoint: no user info, query or fragment.
+/// Accepts `https` URLs, and `http` URLs to a loopback host, with a host and an optional path
+/// prefix, and nothing that could carry credentials or change the endpoint: no user info, query
+/// or fragment.
+///
+/// Plain HTTP is limited to loopback because the API secret and every answer the wallet acts on
+/// would otherwise cross the network unprotected.
 fn parse_node_url(node_url: &str) -> Result<(String, String), NodeError> {
     let uri: Uri = node_url.trim().parse().map_err(|_| NodeError::InvalidUrl)?;
     let scheme = uri.scheme_str().ok_or(NodeError::InvalidUrl)?;
@@ -208,9 +215,26 @@ fn parse_node_url(node_url: &str) -> Result<(String, String), NodeError> {
     if uri.query().is_some() || node_url.contains('#') {
         return Err(NodeError::InvalidUrl);
     }
+    if scheme == "http" && !is_loopback_host(authority.host()) {
+        return Err(NodeError::PlainHttpToRemoteHost);
+    }
     let path = uri.path().trim_end_matches('/');
     let base_url = format!("{scheme}://{}{path}", authority.as_str());
     Ok((base_url, authority.host().to_owned()))
+}
+
+/// `localhost` or a loopback IP literal. Any other name could resolve anywhere.
+fn is_loopback_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    literal
+        .parse::<IpAddr>()
+        .is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
 fn basic_authorization(secret: &SecretString) -> Result<HeaderValue, NodeError> {
