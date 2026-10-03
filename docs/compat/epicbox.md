@@ -34,7 +34,7 @@ the client enables them only when the relay reports support.
 | `Challenge` | `str` |
 | `Ok` | none; answers several requests, so it is not correlated to one |
 | `Error` | `kind` (`InvalidSignature`, `InvalidRequest`, `UnknownError`, `InvalidChallenge`, `TooManySubscriptions`), `description` |
-| `Slate` | `from`, `str`, `signature`, `challenge`, and when the subscription carried `ver`: `epicboxmsgid`, `ver` |
+| `Slate` | `from`, `str`, `signature`, `challenge` (always present, empty for a live push), and when the subscription carried `ver`: `epicboxmsgid`, `ver` |
 | `GetVersion` | `str`, the relay's protocol version |
 
 ## Session
@@ -73,6 +73,8 @@ Byte-compatible with `EncryptedMessage` in `libwallet/src/message.rs` and the re
 3. Ciphertext = ChaCha20-Poly1305 (IETF, 12-byte random nonce, empty AAD), ciphertext followed by the
    16-byte tag.
 4. `str` = JSON `{"destination":{"public_key":"<base58>","domain":"<domain>","port":<u16 or null>},"encrypted_message":"<hex>","salt":"<16 hex>","nonce":"<24 hex>"}`.
+   An explicit port 443 stays in `destination.port` although the text form omits it (vector
+   `message_v3_slate_mainnet_explicit_port_443`).
 5. Plaintext: the slate JSON in a legacy version (`docs/compat/legacy-slates.md`).
 
 ## Signatures
