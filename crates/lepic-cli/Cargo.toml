@@ -7,9 +7,38 @@ license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+name = "lepic_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "lepic"
 path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
+jiff = { workspace = true, features = ["std"] }
+lepic-epicbox.workspace = true
+lepic-keychain.workspace = true
+lepic-node.workspace = true
+lepic-primitives.workspace = true
+lepic-store.workspace = true
+lepic-telemetry.workspace = true
+lepic-transport.workspace = true
+lepic-wallet.workspace = true
+rand = { workspace = true, features = ["std", "std_rng", "sys_rng"] }
+secrecy.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt", "time", "net", "signal", "macros"] }
+tracing = { workspace = true, features = ["std"] }
+zeroize = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+lepic-epicbox = { workspace = true, features = ["mock-relay"] }
+lepic-node = { workspace = true, features = ["mock"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

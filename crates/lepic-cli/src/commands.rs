@@ -1,0 +1,623 @@
+//! Each command: what it asks the engine and what it reports.
+
+use std::future::Future;
+use std::io::Read as _;
+use std::num::NonZeroUsize;
+use std::path::Path;
+use std::sync::Arc;
+
+use jiff::Timestamp;
+use lepic_epicbox::transport::EpicboxTransport;
+use lepic_epicbox::{ClientSettings, Network as RelayNetwork, TRANSPORT_ID};
+use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
+use lepic_node::{NodeApi, Propagation};
+use lepic_primitives::params::Network;
+use lepic_store::{
+    OutboxStatus, Repositories, SlateStage, StoredTransaction, TxDirection, TxId, WalletStore,
+};
+use lepic_transport::file::{FILE, FileTransport, response_path};
+use lepic_transport::registry::TransportRegistry;
+use lepic_transport::transport::{Destination, Exchange as _, Location};
+use lepic_wallet::event::Balance;
+use lepic_wallet::inbox::{InboxSummary, ListenHandle};
+use lepic_wallet::refresh::RefreshOutcome;
+use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanSummary};
+use lepic_wallet::selection::SelectionStrategy;
+use lepic_wallet::send::{Delivery, SendRequest};
+use lepic_wallet::state::state_name;
+use lepic_wallet::{
+    Clock, Event, Password, Ports, ReceiveRequest, SharedRng, Wallet, WalletConfig, WalletError,
+    WalletName, WordCount,
+};
+use rand::SeedableRng as _;
+use rand::rngs::{StdRng, SysRng};
+use zeroize::Zeroizing;
+
+use crate::Console;
+use crate::amount::{format_amount, format_fee, format_units, parse_amount};
+use crate::cli::{
+    Command, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs, NodeCommand, PostArgs,
+    ReceiveArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, TxCommand, WalletCommand, WordsArg,
+};
+use crate::exit::CliError;
+use crate::host::Host;
+use crate::output::{
+    AccountReport, AddressReport, EpicboxStatusReport, FinalizeReport, InboxReport, InfoReport,
+    InitReport, NodeStatusReport, ReceiveReport, Report, RestoreReport, ScanReport, SendReport,
+    TxListReport, TxReport, TxStateReport,
+};
+use crate::settings::Settings;
+use crate::stores::{CliStores, SharedStore};
+use crate::vault::FileVault;
+
+/// Every CLI wallet has this name in logs; one data directory holds one wallet.
+const WALLET_NAME: &str = "default";
+
+type CliWallet<N> = Wallet<N, CliStores, FileVault>;
+
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp {
+        Timestamp::now()
+    }
+}
+
+/// One command's wallet handle and the Epicbox transport registered in it.
+struct Opened<N: NodeApi + 'static> {
+    wallet: CliWallet<N>,
+    epicbox: EpicboxTransport,
+}
+
+impl<N: NodeApi + 'static> Opened<N> {
+    /// The database the wallet opened when it was unlocked.
+    fn store(&self) -> Result<SharedStore, CliError> {
+        self.wallet
+            .ports()
+            .stores
+            .opened()
+            .ok_or(CliError::Wallet(WalletError::Locked))
+    }
+}
+
+struct Run<'a, H: Host> {
+    host: &'a H,
+    settings: &'a Settings,
+    console: &'a mut Console,
+}
+
+pub(crate) async fn execute<H: Host>(
+    host: &H,
+    command: Command,
+    settings: &Settings,
+    console: &mut Console,
+) -> Result<Report, CliError> {
+    let mut run = Run {
+        host,
+        settings,
+        console,
+    };
+    match command {
+        Command::Wallet(command) => run.wallet(command).await,
+        Command::Tx(command) => run.tx(command).await,
+        Command::Epicbox(command) => run.epicbox(command).await,
+        Command::Node(NodeCommand::Status) => run.node_status().await,
+    }
+}
+
+impl<H: Host> Run<'_, H> {
+    async fn wallet(&mut self, command: WalletCommand) -> Result<Report, CliError> {
+        match command {
+            WalletCommand::Init(args) => self.init(&args).await,
+            WalletCommand::Restore(args) => self.restore(&args).await,
+            WalletCommand::ImportSeed(args) => self.import_seed(&args).await,
+            WalletCommand::Info => self.info().await,
+            WalletCommand::Address => {
+                let opened = self.open().await?;
+                let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
+                Ok(Report::Address(AddressReport {
+                    address: address.to_string(),
+                }))
+            }
+        }
+    }
+
+    async fn tx(&mut self, command: TxCommand) -> Result<Report, CliError> {
+        match command {
+            TxCommand::Send(args) => self.send(args).await,
+            TxCommand::Receive(args) => self.receive(args).await,
+            TxCommand::Finalize(args) => self.finalize(&args).await,
+            TxCommand::Post(PostArgs { tx, fluff }) => {
+                let opened = self.open().await?;
+                let tx_id = TxId(tx.tx_id);
+                opened.wallet.post(tx_id, propagation(fluff.fluff)).await?;
+                Ok(Report::Post(TxStateReport {
+                    tx_id: tx_id.0,
+                    state: "posted".to_owned(),
+                }))
+            }
+            TxCommand::Cancel(args) => {
+                let opened = self.open().await?;
+                let tx_id = TxId(args.tx_id);
+                opened.wallet.cancel(tx_id).await?;
+                Ok(Report::Cancel(TxStateReport {
+                    tx_id: tx_id.0,
+                    state: "cancelled".to_owned(),
+                }))
+            }
+            TxCommand::List(args) => {
+                let opened = self.open().await?;
+                let account = opened.wallet.account(&args.account.account)?;
+                let transactions = opened
+                    .store()?
+                    .read(|repos| repos.transactions(account.index))?;
+                Ok(Report::List(TxListReport {
+                    account: account.label,
+                    transactions: transactions.iter().map(|tx| tx_report(tx, None)).collect(),
+                }))
+            }
+            TxCommand::Show(args) => {
+                let opened = self.open().await?;
+                let tx_id = TxId(args.tx_id);
+                let report = opened.store()?.read(|repos| show(repos, tx_id))?;
+                Ok(Report::Show(report))
+            }
+        }
+    }
+
+    async fn epicbox(&mut self, command: EpicboxCommand) -> Result<Report, CliError> {
+        let opened = self.open().await?;
+        let summary = match command {
+            EpicboxCommand::Drain => opened.wallet.epicbox_drain(&opened.epicbox).await?,
+            EpicboxCommand::Listen => {
+                let handle = ListenHandle::new();
+                until_interrupted(
+                    opened.wallet.epicbox_listen(&opened.epicbox, &handle),
+                    self.host.interrupted(),
+                    || handle.stop(),
+                )
+                .await?
+            }
+            EpicboxCommand::Status => {
+                let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
+                let pending = opened
+                    .store()?
+                    .read(|repos| repos.outbox(OutboxStatus::Pending))?
+                    .len();
+                return Ok(Report::EpicboxStatus(EpicboxStatusReport {
+                    relay: self.settings.relay.url(),
+                    address: address.to_string(),
+                    pending_deliveries: pending,
+                }));
+            }
+        };
+        Ok(Report::Inbox(inbox_report(summary)))
+    }
+
+    async fn node_status(&mut self) -> Result<Report, CliError> {
+        let node = self.host.node(self.settings)?;
+        let version = node.get_version().await?;
+        let tip = node.get_tip().await?;
+        Ok(Report::NodeStatus(NodeStatusReport {
+            node: self.settings.node.host().to_owned(),
+            node_version: version.node_version,
+            block_header_version: version.block_header_version,
+            height: tip.height.value(),
+            last_block: tip.last_block_pushed.to_hex(),
+        }))
+    }
+
+    async fn init(&mut self, args: &InitArgs) -> Result<Report, CliError> {
+        let password = self.new_password()?;
+        let wallet = self.prepare(true)?;
+        let phrase = wallet
+            .wallet
+            .create(password, word_count(args.words))
+            .await?;
+        Ok(Report::Init(InitReport {
+            network: self.settings.network.to_string(),
+            data_dir: self.data_dir_text(),
+            recovery_phrase: Zeroizing::new(phrase.expose().to_owned()),
+        }))
+    }
+
+    async fn restore(&mut self, args: &RestoreArgs) -> Result<Report, CliError> {
+        let phrase = self
+            .console
+            .secrets
+            .read("recovery phrase", "Recovery phrase: ")?;
+        let password = self.new_password()?;
+        let opened = self.prepare(true)?;
+        opened.wallet.restore(password, phrase.trim()).await?;
+        self.restored(&opened, &args.scan).await
+    }
+
+    async fn import_seed(&mut self, args: &ImportSeedArgs) -> Result<Report, CliError> {
+        let file = read_seed_file(&args.seed_file)?;
+        let file_password = self
+            .console
+            .secrets
+            .read("wallet.seed password", "Password of the wallet.seed file: ")?;
+        let password = self.new_password()?;
+        let opened = self.prepare(true)?;
+        opened
+            .wallet
+            .import_wallet_seed(password, &file, password_from(file_password))
+            .await?;
+        self.restored(&opened, &args.scan).await
+    }
+
+    async fn restored(
+        &self,
+        opened: &Opened<H::Node>,
+        args: &ScanArgs,
+    ) -> Result<Report, CliError> {
+        let scan = if args.no_scan {
+            None
+        } else {
+            let cancel = ScanCancel::new();
+            let summary: ScanSummary = until_interrupted(
+                opened
+                    .wallet
+                    .scan(ScanOptions::restore(self.settings.network), &cancel),
+                self.host.interrupted(),
+                || cancel.cancel(),
+            )
+            .await?;
+            Some(ScanReport {
+                start_height: summary.start_height.value(),
+                end_height: summary.end_height.value(),
+                found: summary.found,
+                restored: summary.restored,
+            })
+        };
+        Ok(Report::Restore(RestoreReport {
+            network: self.settings.network.to_string(),
+            data_dir: self.data_dir_text(),
+            scan,
+        }))
+    }
+
+    async fn info(&mut self) -> Result<Report, CliError> {
+        let opened = self.open().await?;
+        let mut events = opened.wallet.subscribe();
+        let outcome = opened.wallet.refresh().await?;
+        let mut balances: Vec<Balance> = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let Event::Balance(balance) = event {
+                balances.push(balance);
+            }
+        }
+        let (height, node_behind) = match outcome {
+            RefreshOutcome::Refreshed(summary) => (summary.height, false),
+            RefreshOutcome::NodeBehind { tip, .. } => (tip, true),
+        };
+        let accounts = opened
+            .wallet
+            .accounts()?
+            .into_iter()
+            .map(|account| {
+                let balance = balances.iter().find(|b| b.account == account.index);
+                let field = |pick: fn(&Balance) -> u64| balance.map(|b| format_units(pick(b)));
+                AccountReport {
+                    index: account.index.0,
+                    label: account.label,
+                    total: field(|b| b.total.value()),
+                    spendable: field(|b| b.spendable.value()),
+                    awaiting_confirmation: field(|b| b.awaiting_confirmation.value()),
+                    awaiting_finalization: field(|b| b.awaiting_finalization.value()),
+                    immature: field(|b| b.immature.value()),
+                    locked: field(|b| b.locked.value()),
+                }
+            })
+            .collect();
+        Ok(Report::Info(InfoReport {
+            network: self.settings.network.to_string(),
+            height: height.value(),
+            node_behind,
+            accounts,
+        }))
+    }
+
+    async fn send(&mut self, args: SendArgs) -> Result<Report, CliError> {
+        let amount = parse_amount(&args.amount)?;
+        let change_outputs = NonZeroUsize::new(args.change_outputs).ok_or(CliError::Zero {
+            what: "--change-outputs",
+        })?;
+        let opened = self.open().await?;
+        let account = opened.wallet.account(&args.account.account)?;
+        let (delivery, destination) = match (args.destination.to, args.destination.to_file) {
+            (Some(address), _) => {
+                opened.wallet.epicbox_attach(&opened.epicbox)?;
+                (
+                    Delivery::Deliver {
+                        transport: TRANSPORT_ID,
+                        to: Destination::new(address.clone()),
+                    },
+                    address,
+                )
+            }
+            (None, Some(path)) => {
+                let text = path.display().to_string();
+                (
+                    Delivery::Export {
+                        transport: FILE,
+                        to: Location::File(path),
+                    },
+                    text,
+                )
+            }
+            (None, None) => return Err(CliError::NoDestination),
+        };
+        let transport = delivery.transport();
+        let request = SendRequest {
+            minimum_confirmations: args.min_confirmations,
+            change_outputs,
+            strategy: match args.selection {
+                SelectionArg::All => SelectionStrategy::All,
+                SelectionArg::Smallest => SelectionStrategy::Smallest,
+            },
+            ttl_blocks: args.ttl_blocks,
+            message: args.message.message,
+            ..SendRequest::new(account.index, amount)
+        };
+        let sent = opened.wallet.send(request, delivery).await?;
+        Ok(Report::Send(SendReport {
+            tx_id: sent.tx_id.0,
+            slate_id: sent.slate_id.to_string(),
+            amount: format_amount(sent.amount),
+            fee: format_fee(sent.fee),
+            transport: transport.to_string(),
+            destination,
+        }))
+    }
+
+    async fn receive(&mut self, args: ReceiveArgs) -> Result<Report, CliError> {
+        let opened = self.open().await?;
+        let files = FileTransport::new();
+        let wire = files
+            .import(&Location::File(args.slate.file.clone()))
+            .await?;
+        let received = opened
+            .wallet
+            .receive(
+                FILE,
+                &wire,
+                ReceiveRequest {
+                    account: Some(args.account.account),
+                    message: args.message.message,
+                },
+            )
+            .await?;
+        let reply = args
+            .reply_file
+            .unwrap_or_else(|| response_path(&args.slate.file));
+        files
+            .export(&received.reply, &Location::File(reply.clone()))
+            .await?;
+        Ok(Report::Receive(ReceiveReport {
+            tx_id: received.tx_id.0,
+            slate_id: received.slate.id().to_string(),
+            amount: format_amount(received.slate.amount()),
+            reply_file: reply.display().to_string(),
+        }))
+    }
+
+    async fn finalize(&mut self, args: &FinalizeArgs) -> Result<Report, CliError> {
+        let opened = self.open().await?;
+        let wire = FileTransport::new()
+            .import(&Location::File(args.slate.file.clone()))
+            .await?;
+        let finalized = opened
+            .wallet
+            .finalize(FILE, &wire, propagation(args.fluff.fluff))
+            .await?;
+        Ok(Report::Finalize(FinalizeReport {
+            tx_id: finalized.tx_id.0,
+            slate_id: finalized.slate.id().to_string(),
+            state: "posted".to_owned(),
+        }))
+    }
+
+    fn new_password(&mut self) -> Result<Password, CliError> {
+        let password = self
+            .console
+            .secrets
+            .wallet_password(&self.console.env, true)?;
+        Ok(password_from(password))
+    }
+
+    /// Unlocks the wallet in the data directory.
+    async fn open(&mut self) -> Result<Opened<H::Node>, CliError> {
+        let password = self
+            .console
+            .secrets
+            .wallet_password(&self.console.env, false)?;
+        let opened = self.prepare(false)?;
+        opened.wallet.open(password_from(password)).await?;
+        Ok(opened)
+    }
+
+    /// A locked wallet handle on the data directory, which a new wallet creates.
+    fn prepare(&self, create_dir: bool) -> Result<Opened<H::Node>, CliError> {
+        if create_dir {
+            create_private_dir(&self.settings.data_dir)?;
+        }
+        let relay = ClientSettings::new(self.settings.relay.clone());
+        let epicbox = EpicboxTransport::new(
+            relay,
+            relay_network(self.settings.network),
+            self.host.relay_connector()?,
+        );
+        let mut transports = TransportRegistry::new();
+        for transport in [
+            Box::new(FileTransport::new()) as Box<dyn lepic_transport::transport::Transport>,
+            Box::new(epicbox.clone()),
+        ] {
+            transports.register(transport)?;
+        }
+        let rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
+            what: "seed the random number generator",
+            source: std::io::Error::other(error),
+        })?;
+        let ports = Ports {
+            node: self.host.node(self.settings)?,
+            stores: CliStores::default(),
+            secrets: FileVault::new(&self.settings.data_dir, self.host.vault_kdf()),
+            transports,
+            clock: Arc::new(SystemClock),
+            rng: SharedRng::new(rng),
+            runtime: tokio::runtime::Handle::current(),
+        };
+        let config = WalletConfig {
+            name: WalletName::new(WALLET_NAME).map_err(WalletError::from)?,
+            network: self.settings.network,
+            data_dir: self.settings.data_dir.clone(),
+            node: self.settings.node.clone(),
+            transports: vec![FILE, TRANSPORT_ID],
+        };
+        Ok(Opened {
+            wallet: Wallet::new(config, ports)?,
+            epicbox,
+        })
+    }
+
+    fn data_dir_text(&self) -> String {
+        self.settings.data_dir.display().to_string()
+    }
+}
+
+/// Runs `work` to its end; when the user interrupts first, `stop` asks it to end early and its
+/// result is still awaited, so what it stored is reported.
+async fn until_interrupted<T>(
+    work: impl Future<Output = T>,
+    interrupt: crate::host::Interrupt,
+    stop: impl FnOnce(),
+) -> T {
+    tokio::pin!(work);
+    tokio::select! {
+        result = &mut work => result,
+        () = interrupt => {
+            stop();
+            work.await
+        }
+    }
+}
+
+fn password_from(mut secret: Zeroizing<String>) -> Password {
+    Password::new(std::mem::take(&mut *secret))
+}
+
+const fn propagation(fluff: bool) -> Propagation {
+    if fluff {
+        Propagation::Fluff
+    } else {
+        Propagation::Stem
+    }
+}
+
+const fn word_count(words: WordsArg) -> WordCount {
+    match words {
+        WordsArg::Twelve => WordCount::Twelve,
+        WordsArg::Fifteen => WordCount::Fifteen,
+        WordsArg::Eighteen => WordCount::Eighteen,
+        WordsArg::TwentyOne => WordCount::TwentyOne,
+        WordsArg::TwentyFour => WordCount::TwentyFour,
+    }
+}
+
+const fn relay_network(network: Network) -> RelayNetwork {
+    match network {
+        Network::Mainnet => RelayNetwork::Mainnet,
+        Network::Floonet => RelayNetwork::Floonet,
+    }
+}
+
+fn read_seed_file(path: &Path) -> Result<String, CliError> {
+    let file = std::fs::File::open(path).map_err(CliError::io("read the wallet.seed file"))?;
+    let mut text = String::new();
+    // One byte over the limit lets the parser refuse the file as too long.
+    file.take(
+        u64::try_from(MAX_WALLET_SEED_FILE_LEN)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
+    )
+    .read_to_string(&mut text)
+    .map_err(CliError::io("read the wallet.seed file"))?;
+    Ok(text)
+}
+
+#[cfg(unix)]
+fn create_private_dir(dir: &Path) -> Result<(), CliError> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(CliError::io("create the data directory"))
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(dir: &Path) -> Result<(), CliError> {
+    std::fs::create_dir_all(dir).map_err(CliError::io("create the data directory"))
+}
+
+fn inbox_report(summary: InboxSummary) -> InboxReport {
+    InboxReport {
+        received: summary.received,
+        finalized: summary.finalized,
+        repeated: summary.repeated,
+        rejected: summary.rejected,
+        held: summary.held,
+    }
+}
+
+fn show(repos: &dyn Repositories, tx_id: TxId) -> Result<TxReport, CliError> {
+    let entry = repos
+        .transaction(tx_id)?
+        .ok_or(CliError::Wallet(WalletError::UnknownTransaction(tx_id)))?;
+    let stages = match entry.slate_id {
+        Some(slate_id) => repos
+            .slates(slate_id)?
+            .iter()
+            .map(|slate| stage_name(slate.stage).to_owned())
+            .collect(),
+        None => Vec::new(),
+    };
+    Ok(tx_report(
+        &StoredTransaction { id: tx_id, entry },
+        Some(stages),
+    ))
+}
+
+fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
+    let entry = &tx.entry;
+    TxReport {
+        tx_id: tx.id.0,
+        direction: match entry.direction {
+            TxDirection::Outgoing => "outgoing",
+            TxDirection::Incoming => "incoming",
+        }
+        .to_owned(),
+        state: state_name(entry.state).to_owned(),
+        amount_credited: format_amount(entry.amount_credited),
+        amount_debited: format_amount(entry.amount_debited),
+        fee: entry.fee.map(format_fee),
+        slate_id: entry.slate_id.map(|id| id.to_string()),
+        transport: entry.transport.clone(),
+        created_at: entry.created_at.to_string(),
+        updated_at: entry.updated_at.to_string(),
+        stages,
+    }
+}
+
+const fn stage_name(stage: SlateStage) -> &'static str {
+    match stage {
+        SlateStage::Standard1 => "S1",
+        SlateStage::Standard2 => "S2",
+        SlateStage::Standard3 => "S3",
+        SlateStage::Invoice1 => "I1",
+        SlateStage::Invoice2 => "I2",
+        SlateStage::Invoice3 => "I3",
+    }
+}
