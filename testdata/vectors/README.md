@@ -113,6 +113,12 @@ Binary layouts, unkeyed and keyed BLAKE2b-256, kernel signature messages, weight
 count grid, mainnet and floonet chain parameters, weight limits, and valid and invalid transactions
 with the rule each breaks. Files and conventions are in [primitives/README.md](primitives/README.md).
 
+### keys
+
+Mnemonics, BIP32 derivation on both networks, commitments, Bulletproofs and their rewind, address
+and payment-proof keys, and the `wallet.seed` file. Files and what each pins down are in
+[keys/README.md](keys/README.md).
+
 ### aggsig
 
 The two-party aggregate-signature flow for a plain and a height-locked kernel, and single-signer
@@ -125,6 +131,17 @@ separate upstream's `verify_completed_sig` from kernel verification. The generat
 Stage vectors of the standard and invoice flows over the file and Epicbox methods, and upstream's
 parse outcomes for malformed slates. Case setup, file names and fields are described in
 [slates/README.md](slates/README.md).
+
+### epicbox
+
+Upstream is `epic-wallet`. `address_*`: a text and the network it is read on; accepted cases record
+the base58 key, the 33-byte key in hex, domain, port, upstream's `Display` (the `from`/`to` form)
+and the destination JSON; rejected cases record only `"accepted": false`. `signature_*`: ECDSA over
+SHA-256 of `text`, DER hex, for a challenge, a `str` and a message id. `message_*`: randomized;
+`expected.random` names the drawn values. `str` is the exact posted text, `salt`, `nonce` and
+`encrypted_message` are copied from it, `key` is the PBKDF2 output, `signature` is over `str`.
+The generator keeps a committed message while its inputs and pin match and upstream still opens
+it, so regeneration is byte for byte unless a case or the pin changed.
 
 ### engine
 
@@ -196,7 +213,9 @@ state rather than a script:
    does, set `highest_index` to `end`, and `last_retrieved_index` to the `mmr_index` of the last
    output returned when `max` cut the window short, or to `end` otherwise. A window that reaches
    past the recorded listing's `highest_index` is a test failure. The recordings exercise only one
-   full window, so the shortened-window rule is the node's, not shown by a vector.
+   full window, so the shortened-window rule is the node's, not shown by a vector. A null `end`
+   means the last position of the output MMR, which for a recording is its `highest_index`.
+   Upstream also caps `max` at 10,000; no recorded request asks for more.
 5. Any other request is a test failure.
 6. The session passes when LEPIC's wallet ends in `expected.after`, mapped through
    `docs/compat/states.md`. Unused exchanges do not fail it.
