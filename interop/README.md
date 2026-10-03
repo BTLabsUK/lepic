@@ -1,4 +1,4 @@
-# Epicbox interop with real binaries
+# Epicbox and file interop with real binaries
 
 ## TL;DR
 
@@ -96,6 +96,17 @@ the fees, so a lost or doubled effect fails the run.
 | lepic offline, then one drain | `epic-wallet` sends twice while `lepic` is not connected; one drain answers both |
 | duplicates of open transactions | an S1 and an S2 already acknowledged are queued again under new relay message ids while their transactions are open; each counts as repeated |
 | duplicates of settled slates | every message `lepic` acknowledged is queued again after all transactions confirmed; none may create, change or hold anything, and all must be acknowledged |
+| lepic sends to epic-wallet by file | `lepic tx send --to-file --ttl-blocks`, `epic-wallet receive -i`, `lepic tx finalize` on the reply |
+| epic-wallet sends to lepic by file | `epic-wallet send -m file`, `lepic tx receive`, `epic-wallet finalize -i` on the reply |
+| lepic invoices epic-wallet by file | `lepic invoice issue --to-file`, `epic-wallet pay -i`, `lepic tx finalize` on the reply |
+| epic-wallet invoices lepic by file | `epic-wallet invoice -d`, `lepic invoice pay --ttl-blocks`, `epic-wallet finalize -i` on the reply |
+
+`lepic` writes every slate file in the V3 shape with header `3/3/<b>` (ADR 0015), while `epic-wallet`
+writes V2 unless the slate carries a TTL or payment proof. Each file scenario checks that the file
+`lepic` wrote is V3 at 3/3, with the TTL where one was asked for, and that a reply keeps the block
+header version of the file it answers. `epic-wallet pay` asks for the invoice amount on a terminal
+prompt, so the scenario runs it under `script` and types the amount in. Setup also funds `lepic` by
+file, so `epic-wallet finalize` reads a `lepic` V3 reply there too.
 
 Redeliveries are injected into the relay's MongoDB queue under a new message id, so `lepic` can only
 recognise them by slate id and stage. Every copy, including an S2 whose transaction is already

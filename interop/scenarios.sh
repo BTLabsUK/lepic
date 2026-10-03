@@ -287,6 +287,112 @@ scenario_duplicate_settled() {
     DETAIL="${s1} S1 and ${s2} S2 copies of confirmed txs repeated, no effect"
 }
 
+# The slate file lepic wrote at `path` is in the V3 shape with header 3/3 (ADR 0015), and carries
+# a TTL when `ttl` is "ttl".
+lepic_file_is_v3() {
+    local path="$1" ttl="${2:-}"
+    dc exec -T lepic cat "${path}" | jq -e --arg ttl "${ttl}" '
+        .version_info.version == 3 and .version_info.orig_version == 3
+        and has("ttl_cutoff_height") and has("payment_proof")
+        and (($ttl != "ttl") or (.ttl_cutoff_height != null))' >/dev/null
+}
+
+# The block header version a slate file carries.
+file_block_header_version() { dc exec -T lepic cat "$1" | jq -r .version_info.block_header_version; }
+
+# lepic writes S1 with a TTL to a file, epic-wallet answers it, lepic finalizes and posts.
+scenario_file_lepic_sends() {
+    peer_listen_stop
+    local slate=/exchange/file-lepic-sends.slate
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(($(to_units 1.1) + UNIT))" ||
+        fail "lepic has no spendable funds" || return 1
+    local sent
+    sent="$(lepic tx send 1.1 --to-file "${slate}" --ttl-blocks 60)" || fail "lepic send failed" || return 1
+    lepic_file_is_v3 "${slate}" ttl || fail "lepic's S1 is not V3 at 3/3 with a TTL" || return 1
+    ew peer receive -i "${slate}" >>"${RUN_LOG}" || fail "epic-wallet refused lepic's V3 S1" || return 1
+    local finalized
+    finalized="$(lepic tx finalize "${slate}.response")" || fail "lepic could not finalize the S2" || return 1
+    local tx_id slate_id fee
+    tx_id="$(jq -r .tx_id <<<"${sent}")"
+    slate_id="$(jq -r .slate_id <<<"${sent}")"
+    fee="$(to_units "$(jq -r .fee <<<"${sent}")")"
+    [[ "$(jq -r .slate_id <<<"${finalized}")" == "${slate_id}" ]] || fail "finalized another slate: ${finalized}" || return 1
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 1.1) - fee))
+    check_lepic_total || return 1
+    DETAIL="V3 S1 with TTL read by epic-wallet; slate ${slate_id} confirmed on both sides"
+}
+
+# epic-wallet writes S1 (V2 at 2/2), lepic answers in V3 at 3/3, epic-wallet finalizes and posts.
+scenario_file_epic_wallet_sends() {
+    peer_listen_stop
+    local slate=/exchange/file-epic-wallet-sends.slate
+    wait_until "peer spendable" 180 ew_spendable_at_least peer "$(($(to_units 1.2) + UNIT))" ||
+        fail "epic-wallet has no spendable funds" || return 1
+    ew peer send -m file -d "${slate}" -c 1 -s smallest 1.2 >>"${RUN_LOG}" || fail "epic-wallet send failed" || return 1
+    local received
+    received="$(lepic tx receive "${slate}")" || fail "lepic could not receive the S1" || return 1
+    local reply
+    reply="$(jq -r .reply_file <<<"${received}")"
+    lepic_file_is_v3 "${reply}" || fail "lepic's S2 is not V3 at 3/3" || return 1
+    [[ "$(file_block_header_version "${reply}")" == "$(file_block_header_version "${slate}")" ]] ||
+        fail "lepic's S2 changed the block header version" || return 1
+    ew peer finalize -i "${reply}" >>"${RUN_LOG}" || fail "epic-wallet could not finalize lepic's V3 S2" || return 1
+    local tx_id slate_id
+    tx_id="$(jq -r .tx_id <<<"${received}")"
+    slate_id="$(jq -r .slate_id <<<"${received}")"
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 1.2)))
+    check_lepic_total || return 1
+    DETAIL="V3 S2 finalized by epic-wallet; slate ${slate_id} confirmed on both sides"
+}
+
+# lepic issues I1 to a file, epic-wallet pays it, lepic finalizes and posts.
+scenario_file_lepic_invoices() {
+    peer_listen_stop
+    local slate=/exchange/file-lepic-invoices.slate
+    wait_until "peer spendable" 180 ew_spendable_at_least peer "$(($(to_units 0.8) + UNIT))" ||
+        fail "epic-wallet has no spendable funds" || return 1
+    local issued
+    issued="$(lepic invoice issue 0.8 --to-file "${slate}")" || fail "lepic invoice issue failed" || return 1
+    lepic_file_is_v3 "${slate}" || fail "lepic's I1 is not V3 at 3/3" || return 1
+    ew_pay peer "$(jq -r .amount <<<"${issued}")" -i "${slate}" -d "${slate}.response" -c 1 -s smallest ||
+        fail "epic-wallet could not pay lepic's V3 I1" || return 1
+    local finalized
+    finalized="$(lepic tx finalize "${slate}.response")" || fail "lepic could not finalize the I2" || return 1
+    local tx_id slate_id
+    tx_id="$(jq -r .tx_id <<<"${issued}")"
+    slate_id="$(jq -r .slate_id <<<"${issued}")"
+    [[ "$(jq -r .slate_id <<<"${finalized}")" == "${slate_id}" ]] || fail "finalized another slate: ${finalized}" || return 1
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 0.8)))
+    check_lepic_total || return 1
+    DETAIL="V3 I1 paid by epic-wallet; slate ${slate_id} confirmed on both sides"
+}
+
+# epic-wallet issues I1 (V2 at 2/2), lepic pays with a TTL in V3 at 3/3, epic-wallet finalizes.
+scenario_file_epic_wallet_invoices() {
+    peer_listen_stop
+    local slate=/exchange/file-epic-wallet-invoices.slate
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(($(to_units 0.7) + UNIT))" ||
+        fail "lepic has no spendable funds" || return 1
+    ew peer invoice -d "${slate}" 0.7 >>"${RUN_LOG}" || fail "epic-wallet invoice failed" || return 1
+    local paid
+    paid="$(lepic invoice pay "${slate}" 0.7 --ttl-blocks 60)" || fail "lepic could not pay the I1" || return 1
+    local reply
+    reply="$(jq -r .reply_file <<<"${paid}")"
+    lepic_file_is_v3 "${reply}" ttl || fail "lepic's I2 is not V3 at 3/3 with a TTL" || return 1
+    ew peer finalize -i "${reply}" >>"${RUN_LOG}" || fail "epic-wallet could not finalize lepic's V3 I2" || return 1
+    local tx_id slate_id fee
+    tx_id="$(jq -r .tx_id <<<"${paid}")"
+    slate_id="$(jq -r .slate_id <<<"${paid}")"
+    fee="$(to_units "$(jq -r .fee <<<"${paid}")")"
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 0.7) - fee))
+    check_lepic_total || return 1
+    DETAIL="V3 I2 with TTL finalized by epic-wallet; slate ${slate_id} confirmed on both sides"
+}
+
 SCENARIOS=(
     "lepic sends to epic-wallet:scenario_lepic_sends"
     "epic-wallet sends to lepic:scenario_epic_wallet_sends"
@@ -294,4 +400,8 @@ SCENARIOS=(
     "lepic offline, then one drain:scenario_offline_then_drain"
     "duplicates of open transactions:scenario_duplicate_open"
     "duplicates of settled slates:scenario_duplicate_settled"
+    "lepic sends to epic-wallet by file:scenario_file_lepic_sends"
+    "epic-wallet sends to lepic by file:scenario_file_epic_wallet_sends"
+    "lepic invoices epic-wallet by file:scenario_file_lepic_invoices"
+    "epic-wallet invoices lepic by file:scenario_file_epic_wallet_invoices"
 )

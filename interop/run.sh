@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs every Epicbox interop scenario between lepic and epic-wallet v4.0.2 on a fresh local
-# stack and prints a pass or fail table. Exits 0 only when every scenario passed.
+# Runs every Epicbox and file interop scenario between lepic and epic-wallet v4.0.2 on a fresh
+# local stack and prints a pass or fail table. Exits 0 only when every scenario passed.
 #
 #   ./run.sh            build what changed, start a clean stack, run, tear it down
 #   ./run.sh --keep     leave the stack running afterwards for inspection

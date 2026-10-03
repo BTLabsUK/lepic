@@ -26,6 +26,20 @@ ew() {
     return "${status}"
 }
 
+# Pays an invoice slate file from the epic-wallet in `wallet`. Its `pay` asks for the invoice
+# amount on a prompt that needs a terminal, so it runs under `script` and the amount is typed in.
+ew_pay() {
+    local wallet="$1" amount="$2" status
+    shift 2
+    local command
+    command="ew pay $(printf '%q ' "$@")"
+    printf '%s\n' "${amount}" |
+        dc exec -T "${wallet}" timeout 120 script -qec "${command}" /dev/null >>"${RUN_LOG}" 2>&1
+    status="${PIPESTATUS[1]}"
+    ((status == 0)) || printf 'epic-wallet (%s) pay %s exited %d\n' "${wallet}" "$*" "${status}" >>"${RUN_LOG}"
+    return "${status}"
+}
+
 # "12.34000000" or "12.34" -> 1234000000
 to_units() {
     local text="$1" whole frac
