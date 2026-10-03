@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Builds what the live floonet stack runs. ../build.sh compiles the pinned reference node and
-# wallet, the relay's checker and lepic; this script adds the live miner and stages the binaries
-# the runtime image copies in ../.work/live/bin. Rerunning it is incremental.
+# Builds what the live floonet stack runs. ../build.sh compiles the pinned reference wallet, the
+# relay's checker and lepic (and the reference node, which the live stack does not run); this
+# script adds the live miner and stages the binaries the runtime image copies in
+# ../.work/live/bin. Rerunning it is incremental.
 set -euo pipefail
 
 live_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,8 +44,8 @@ miner_cargo build --release --locked
 
 bin="${work_dir}/live/bin"
 mkdir -p "${bin}"
-for file in epic epic-wallet lepic foundation_floonet.json; do
-    install -m "$([[ "${file}" == *.json ]] && echo 0644 || echo 0755)" "${work_dir}/bin/${file}" "${bin}/${file}"
+for file in epic-wallet lepic; do
+    install -m 0755 "${work_dir}/bin/${file}" "${bin}/${file}"
 done
 install -m 0755 "${work_dir}/target/live-miner/release/lepic-live-miner" "${bin}/miner"
 log "binaries are in ${bin}"

@@ -1,9 +1,9 @@
 #!/bin/sh
-# Creates an epic-wallet v4.0.2 floonet wallet on first start, points it at the local node and
-# the local relay (127.0.0.1, 334xx ports, in the host's network namespace), then either serves
-# the foreign API (the funder, which the node pays coinbase rewards to) or idles so the live test
-# can drive it with `ew`. The wallet directory is
-# bind-mounted from interop/live/data, so the wallet and its funds survive between runs.
+# Creates an epic-wallet v4.0.2 floonet wallet on first start, points it at the public floonet
+# node through the loopback node proxy (node-proxy.py) and at the local relay, then either serves the foreign API on loopback
+# (the funder, whose build_coinbase the live miner calls) or idles so the live test can drive it
+# with `ew`. The wallet directory is bind-mounted from interop/live/data, so the wallet and its
+# funds survive between runs.
 set -eu
 
 mode="$1"
@@ -21,8 +21,9 @@ if [ ! -f "${config}" ]; then
     set_key api_listen_interface '"127.0.0.1"'
     set_key api_listen_port 33415
     set_key owner_api_listen_port 33420
+    # The proxy needs no secret; a path with no file sends none.
+    set_key node_api_secret_path '"/data/no-node-api-secret"'
     set_key check_node_api_http_addr '"http://127.0.0.1:33413"'
-    set_key node_api_secret_path '"/node/.foreign_api_secret"'
     set_key use_tor_listener false
     set_key epicbox_domain '"localhost"'
     set_key epicbox_port 33423

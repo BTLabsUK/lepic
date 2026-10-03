@@ -1,67 +1,73 @@
 # Helpers for the live floonet test. Sourced by run.sh after ../lib.sh, whose generic helpers
-# (dc, lepic, ew, to_units, wait_until, balances, ew_tx_confirmed, drain_until) it reuses with
-# INTEROP_DIR pointing at this directory.
+# (dc, lepic, ew, to_units, balances, ew_tx_confirmed, drain_until) it reuses with INTEROP_DIR
+# pointing at this directory.
 # shellcheck shell=bash
 
-# Public read-only floonet API, used for the tip and kernel lookups only. Calls are at least
-# PUBLIC_MIN_GAP seconds apart and each is recorded in PUBLIC_LOG (set by run.sh), which also
-# carries the spacing across the subshells that command substitution creates.
-LIVE_PUBLIC_API="${LIVE_PUBLIC_API:-https://floo-node.btlabs.uk}"
-PUBLIC_MIN_GAP=10
+# Every wallet command refreshes against the public node, so checks that poll wallets wait
+# POLL_INTERVAL seconds between attempts instead of ../lib.sh's two.
+POLL_INTERVAL="${LIVE_POLL_INTERVAL:-15}"
+
+# Runs a check every POLL_INTERVAL seconds until it succeeds or `timeout` seconds pass.
+poll_until() {
+    local what="$1" timeout="$2"
+    shift 2
+    local deadline=$((SECONDS + timeout))
+    until "$@"; do
+        if ((SECONDS >= deadline)); then
+            log "timed out after ${timeout}s waiting for ${what}"
+            return 1
+        fi
+        sleep "${POLL_INTERVAL}"
+    done
+}
+
+# GET on the public node's read-only v1 API. Calls are at least PUBLIC_MIN_GAP seconds apart and
+# each is recorded in PUBLIC_LOG (set by run.sh), which also carries the spacing across the
+# subshells that command substitution creates. A 429 answer is retried after a growing pause.
+PUBLIC_MIN_GAP=5
 
 public_get() {
-    local last wait
-    last="$(tail -n 1 "${PUBLIC_LOG}" 2>/dev/null | cut -d' ' -f1)"
-    wait=$((${last:-0} + PUBLIC_MIN_GAP - $(date +%s)))
-    if ((wait > 0)); then sleep "${wait}"; fi
-    echo "$(date +%s) GET $1" >>"${PUBLIC_LOG}"
-    curl -fsS -m 20 "${LIVE_PUBLIC_API}$1" 2>>"${RUN_LOG}"
+    local last wait attempt=1 pause=10 status
+    while :; do
+        last="$(tail -n 1 "${PUBLIC_LOG}" 2>/dev/null | cut -d' ' -f1)"
+        wait=$((${last:-0} + PUBLIC_MIN_GAP - $(date +%s)))
+        if ((wait > 0)); then sleep "${wait}"; fi
+        echo "$(date +%s) GET $1" >>"${PUBLIC_LOG}"
+        status="$(curl -sS -m 20 -o "${PUBLIC_LOG}.body" -w '%{http_code}' "${LIVE_NODE_URL}$1" 2>>"${RUN_LOG}")" || status=000
+        if [[ "${status}" == 429 && attempt -lt 6 ]]; then
+            log "public node rate limited ${1}; retrying in ${pause}s"
+            sleep "${pause}"
+            pause=$((pause * 2))
+            attempt=$((attempt + 1))
+            continue
+        fi
+        [[ "${status}" == 200 ]] || { printf 'GET %s: HTTP %s\n' "$1" "${status}" >>"${RUN_LOG}"; return 1; }
+        cat "${PUBLIC_LOG}.body"
+        return 0
+    done
 }
 
 public_calls() { wc -l <"${PUBLIC_LOG}" 2>/dev/null || echo 0; }
 
-# GET on the local node's v1 API, from inside the stack's network namespace.
-node_get() {
-    # shellcheck disable=SC2016 # expanded by the container's shell
-    dc exec -T node sh -c 'curl -fsS -u "epic:$(cat /data/node/.api_secret)" "http://127.0.0.1:33413$1"' \
-        sh "$1" 2>>"${RUN_LOG}"
-}
-
-local_height() { node_get /v1/chain | jq -r .height; }
-
 public_height() { public_get /v1/chain | jq -r .height; }
 
-# Waits until the local node has a peer and has caught up with the public tip.
-wait_synced() {
-    local timeout="$1"
-    local deadline=$((SECONDS + timeout)) public height
-    public="$(public_height)" || return 1
-    while :; do
-        height="$(local_height)" || height=0
-        if ((height >= public)); then
-            log "local node at ${height}, public tip ${public}"
-            return 0
-        fi
-        if ((SECONDS >= deadline)); then
-            log "local node at ${height} after ${timeout}s, public tip ${public}"
-            return 1
-        fi
-        sleep 15
-    done
-}
+# Height of the block holding a kernel, as the public node reports it.
+public_kernel_height() { public_get "/v1/chain/kernels/$1" | jq -r '.height // empty'; }
+
+public_has_kernel() { [[ -n "$(public_kernel_height "$1")" ]]; }
 
 miner_running() { [[ -n "$(dc --profile mining ps -q miner 2>/dev/null)" ]]; }
 
 miner_start() {
     miner_running && return 0
-    log "mining started at height $(local_height)"
+    log "mining started at height $(public_height)"
     dc --profile mining up -d miner >>"${RUN_LOG}" 2>&1
 }
 
 miner_stop() {
     miner_running || return 0
     dc --profile mining stop miner >>"${RUN_LOG}" 2>&1
-    log "mining stopped at height $(local_height)"
+    log "mining stopped at height $(public_height)"
 }
 
 # Mines only while a check is pending: starts the miner, waits for the check, stops the miner.
@@ -69,7 +75,7 @@ mine_until() {
     local what="$1" timeout="$2" status=0
     shift 2
     miner_start || return 1
-    wait_until "${what}" "${timeout}" "$@" || status=$?
+    poll_until "${what}" "${timeout}" "$@" || status=$?
     miner_stop
     return "${status}"
 }
@@ -78,13 +84,6 @@ mine_until() {
 ew_tx_kernel() {
     ew "$1" txs -t "$2" | grep -oE '\b0[89][0-9a-f]{64}\b' | head -n 1
 }
-
-# Height of the block holding a kernel, as the local or the public node reports it.
-local_kernel_height() { node_get "/v1/chain/kernels/$1" | jq -r .height; }
-
-public_kernel_height() { public_get "/v1/chain/kernels/$1" | jq -r '.height // empty'; }
-
-public_has_kernel() { [[ -n "$(public_kernel_height "$1")" ]]; }
 
 wallet_log_lines() {
     # shellcheck disable=SC2016 # expanded by the container's shell

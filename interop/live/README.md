@@ -4,75 +4,81 @@
 
 `run.sh` sends EPIC between `lepic` and `epic-wallet` `v4.0.2` on the public floonet chain, both ways
 over slate files and both ways over a local Epicbox relay, waits for each transaction to confirm and
-prints a table with every kernel excess. It runs only with `LEPIC_LIVE_TESTS=1` and never in CI.
+prints a table with every kernel excess. No node runs locally: the wallets use the public floonet
+node's foreign API, and the miner funds them by mining floonet blocks through that same API. It runs
+only with `LEPIC_LIVE_TESTS=1` and never in CI.
 
 ```
-LEPIC_LIVE_TESTS=1 interop/live/run.sh            # build, start or reuse the stack, sync, fund, test
+LEPIC_LIVE_TESTS=1 interop/live/run.sh            # build, start or reuse the stack, fund, test
 LEPIC_LIVE_TESTS=1 interop/live/run.sh --no-build # reuse the images and binaries already built
 LEPIC_LIVE_TESTS=1 interop/live/run.sh --down     # stop the stack afterwards
 ```
 
-The stack stays up after a run unless `--down` is given, so the node keeps its peer connection
-instead of re-dialling it every run.
-
-Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`), outbound TCP to the floonet
-seed on port 13414, and HTTPS to the public floonet API.
+Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`) and HTTPS to the floonet node,
+`https://floo-node.btlabs.uk` by default (`LIVE_NODE_URL`).
 
 ## What runs
 
 | Service | What it is |
 |---|---|
-| `node` | `epic` `v4.0.4` on floonet, `only_randomx`, peered only with `LIVE_SEED`; API 127.0.0.1:33413, p2p 33414, stratum 33416 |
-| `miner` | `miner/`, a multi-threaded RandomX stratum client; started only while blocks are needed |
-| `mongodb`, `epicbox` | The public relay code, run locally with domain `localhost`, published on 127.0.0.1:33423, plain `ws://` |
-| `funder` | `epic-wallet` serving its foreign API on 127.0.0.1:33415; the node pays every coinbase to it |
+| `nodeproxy` | `docker/node-proxy.py` on 127.0.0.1:33413: forwards `/v2/foreign` to the floonet node, answers owner `get_status` from the node's public `/v1/status`, limits the request rate |
+| `miner` | `miner/`, a RandomX miner on the node's foreign mining API; started only while blocks are needed |
+| `mongodb`, `epicbox` | The public relay code, run locally with domain `localhost` on 127.0.0.1:33423, plain `ws://` |
+| `funder` | `epic-wallet` serving its foreign API on 127.0.0.1:33415; the miner gets every coinbase from it |
 | `peer` | `epic-wallet`, the counterparty |
-| `lepic` | `lepic --network floonet`, driven with `docker compose exec` and `--output json` |
+| `lepic` | `lepic --network floonet`, talking to the floonet node directly, driven with `docker compose exec` |
 
-The node, the miner, the wallets and `lepic` run in the host's network namespace, with every listener
-bound to 127.0.0.1 on a 334xx port, clear of the 134xx ports of any floonet node the host runs itself.
-The node's one peer is `LIVE_SEED`, an `IP:port` because the node accepts no host name there. By
-default `run.sh` resolves the public seed `floo-node.btlabs.uk` (`LIVE_SEED_HOST`) to
-`<ip>:13414`. `peers_allow` restricts the node to that peer, so it never dials anyone else. The
-relay listens on all interfaces of its container, so it and its database run on their own bridge
-network and only the relay port is published, on 127.0.0.1.
+Every service runs in the host's network namespace and listens on 127.0.0.1 only.
 
-Keep the node running. A seed records a failed handshake as `BadHandshake` and refuses that address
-for its ban window (3 hours upstream), and stopping the node while it is handshaking is one way to
-cause one.
+`lepic` uses `LEPIC_TEST_NODE_URL` (default `LIVE_NODE_URL`) and `LEPIC_TEST_RELAY` (default the local
+relay, `ws://localhost:33423`).
 
-Public reads go to `https://floo-node.btlabs.uk` (`LIVE_PUBLIC_API`): the tip, to know when the local
-node has synced, and each kernel, to check that it is on the public chain at the height the local
-node reports. They are GET requests at least ten seconds apart, logged with a count at the end of the
-run. Pushes, mining and everything else use the local node.
+`epic-wallet` reaches the node through `nodeproxy`. It asks its node's owner API for `get_status` at
+start, and keeps its HTTP and Epicbox listeners paused until that says `no_sync`. A public node does
+not serve its owner API, so the proxy answers that one call from the same node's public status.
 
-`lepic` talks to `LEPIC_TEST_NODE_URL` (default the local node, `http://127.0.0.1:33413`) and
-`LEPIC_TEST_RELAY` (default the local relay, `ws://localhost:33423`). Both must accept writes: the
-public floonet API is read-only.
+## Request rates
+
+The public node allows 20 reads and 2 writes per second. The proxy sends at most 4 reads per second
+and one write (`push_transaction`, `finalize_block_template`, `submit_block`) every 2 seconds, for both
+`epic-wallet` wallets and the miner. The miner leaves 2 seconds between its own requests. `run.sh`
+polls wallets every 15 seconds (`LIVE_POLL_INTERVAL`) and spaces its own GETs (tip, kernel lookups) at
+least 5 seconds apart, logged with a count at the end of the run. The proxy, the miner and `run.sh`
+retry a 429 answer
+after a pause that doubles from 10 seconds.
 
 ## Funds and mining
 
 Floonet blocks are RandomX only, the reward is 16 EPIC and coinbase matures after 30 blocks. The miner
-runs only while it is needed and stops as soon as the condition holds:
+follows the reference node's own stratum flow, through the foreign API:
+
+1. `get_block_template` gives the next height, the mineable transactions, the next difficulty and the
+   chain-chosen header fields (RandomX seed, secondary scaling, policy, bottles).
+2. The funder's `build_coinbase` builds the reward output and kernel, as it does for a node's stratum
+   server.
+3. `finalize_block_template` returns the header with the roots for that body.
+4. The header takes the template's chain fields and a total difficulty of the previous total plus the
+   next difficulty, as the stratum server sets it. The block is validated locally with the node's own
+   code before hashing.
+5. A solution goes to `submit_block`, which validates the block in full before it joins the chain.
+
+The miner refuses foundation heights (every 1,440 blocks on floonet), whose block needs an output only
+a node can add, and pauses 10 seconds after each block. `LIVE_MINER_THREADS` (4) sets the thread
+count; each thread needs about 256 MB. It runs only while it is needed:
 
 1. Funding, when `lepic` or the peer holds less than `LIVE_FUND_MINIMUM` (8) spendable EPIC: mine
    until the funder has enough mature coinbase, send `LIVE_FUND_OUTPUTS` (3) slate files of
    `LIVE_FUND_AMOUNT` (5) EPIC to each wallet that is short, one at a time, until each is confirmed.
 2. Each test transaction: mine until both wallets show it confirmed.
 
-The miner submits through the local node, which validates every block before relaying it, so only
-valid blocks reach floonet. `LIVE_MINER_THREADS` (4) sets the thread count; each thread needs about
-256 MB.
-
 ## Persistent wallets
 
-Wallets and the node's chain are bind mounts under `data/`, which git ignores, so funds carry over
-from run to run and later tasks can reuse them. Stopping the stack (`run.sh --down`, or
-`docker compose --profile mining down` without `-v`) keeps them.
+Wallets are bind mounts under `data/`, which git ignores, so funds carry over from run to run and later
+tasks can reuse them. Stopping the stack (`run.sh --down`, or `docker compose --profile mining down`
+without `-v`) keeps them.
 
 | Directory | Contents | Unlock |
 |---|---|---|
-| `data/node` | floonet chain, `epic-server.toml`, API secrets (`.api_secret`, `.foreign_api_secret`) | |
 | `data/funder` | `epic-wallet` floonet wallet in `.epic/floo`, coinbase recipient | password `live-funder-password` |
 | `data/peer` | `epic-wallet` floonet wallet in `.epic/floo`, the counterparty | password `live-peer-password` |
 | `data/lepic` | `lepic` floonet wallet in `lepic/` | password `live-lepic-password` |
@@ -88,23 +94,23 @@ docker compose exec lepic lepic wallet info
 docker compose exec peer ew info
 ```
 
-Delete `data/` to start over with new wallets; the node then resyncs and funding mines again.
+Delete `data/` to start over with new wallets; funding then mines again.
 
 ## Output
 
 ```
 Step                                   Result   Time  Kernel excess   Detail
-sync with floonet                      PASS      ...  -               local node synced at height ...
+floonet node                           PASS      ...  -               floonet node at height ...
 wallets                                PASS      ...  -               ...
 funding                                PASS      ...  -               ...
-lepic sends to epic-wallet, file       PASS      ...  09...           slate ... confirmed on both sides, kernel at height ...
+lepic sends to epic-wallet, file       PASS      ...  09...           slate ... confirmed on both sides, kernel in block ...
 epic-wallet sends to lepic, file       PASS      ...  08...           ...
 lepic sends to epic-wallet, epicbox    PASS      ...  09...           ...
 epic-wallet sends to lepic, epicbox    PASS      ...  08...           ...
 ```
 
 Each transaction passes when `lepic tx show` and `epic-wallet txs` both report it confirmed, `lepic`'s
-total changed by exactly the amount (and its fee when it sent), and the kernel `epic-wallet` recorded
-is on the local chain and on the public floonet node at the same height. Logs are in
-`../.work/live/logs/<time>/`: `run.log` with every command's stderr, `compose.log` with the containers'
-logs, `public-calls.log` with every public request.
+total changed by exactly the amount (and its fee when it sent), and the floonet node reports the
+kernel `epic-wallet` recorded in a block. Logs are in `../.work/live/logs/<time>/`: `run.log` with every
+command's stderr, `compose.log` with the containers' logs (the proxy logs each forwarded call),
+`public-calls.log` with `run.sh`'s own requests.

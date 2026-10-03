@@ -2,12 +2,12 @@
 # Live floonet smoke test between lepic and epic-wallet v4.0.2, over slate files and over a local
 # Epicbox relay, on the public floonet chain. Opt-in: does nothing unless LEPIC_LIVE_TESTS=1.
 #
-#   LEPIC_LIVE_TESTS=1 ./run.sh             build what changed, start the stack, sync, fund, test
+#   LEPIC_LIVE_TESTS=1 ./run.sh             build what changed, start the stack, fund, test
 #   LEPIC_LIVE_TESTS=1 ./run.sh --no-build  reuse the images and binaries already built
 #   LEPIC_LIVE_TESTS=1 ./run.sh --down      stop the stack afterwards
 #
-# The stack stays up by default: the node keeps its one peer instead of
-# dropping and re-dialling it on every run, and the wallets stay usable by hand.
+# No node runs locally: both wallets and the miner use the public floonet node's foreign API
+# (LIVE_NODE_URL), and the stack stays up by default so the wallets stay usable by hand.
 #
 # Mining happens only while the funder lacks mature coinbase, while funding transactions confirm,
 # and while each test transaction waits for its block. Prints a table with every kernel excess
@@ -41,30 +41,24 @@ source "${LIVE_DIR}/lib.sh"
 LIVE_INTEROP_DIR="$(cd "${LIVE_DIR}/.." && pwd)"
 LIVE_UID="$(id -u)"
 LIVE_GID="$(id -g)"
-# The node's only peer, as IP:port, because the node accepts no host name there: by default the
-# public floonet seed, resolved here. Any other floonet node can be given in LIVE_SEED.
-LIVE_SEED_HOST="${LIVE_SEED_HOST:-floo-node.btlabs.uk}"
-if [[ -z "${LIVE_SEED:-}" ]]; then
-    seed_ip="$(getent ahostsv4 "${LIVE_SEED_HOST}" | awk 'NR == 1 {print $1}')"
-    [[ -n "${seed_ip}" ]] || { echo "cannot resolve ${LIVE_SEED_HOST}" >&2; exit 1; }
-    LIVE_SEED="${seed_ip}:13414"
-fi
-export LIVE_INTEROP_DIR LIVE_UID LIVE_GID LIVE_SEED
+# The floonet node every wallet and the miner use, through its foreign API.
+LIVE_NODE_URL="${LIVE_NODE_URL:-https://floo-node.btlabs.uk}"
+export LIVE_INTEROP_DIR LIVE_UID LIVE_GID LIVE_NODE_URL
 # Compose reads .env from this directory, so `docker compose` here works by hand as well.
-printf 'LIVE_INTEROP_DIR=%s\nLIVE_UID=%s\nLIVE_GID=%s\nLIVE_SEED=%s\n' \
-    "${LIVE_INTEROP_DIR}" "${LIVE_UID}" "${LIVE_GID}" "${LIVE_SEED}" >"${LIVE_DIR}/.env"
+printf 'LIVE_INTEROP_DIR=%s\nLIVE_UID=%s\nLIVE_GID=%s\nLIVE_NODE_URL=%s\n' \
+    "${LIVE_INTEROP_DIR}" "${LIVE_UID}" "${LIVE_GID}" "${LIVE_NODE_URL}" >"${LIVE_DIR}/.env"
 
 # Each wallet is topped up with this many funding outputs of this size when its spendable
 # balance is below the minimum, which leaves room for several test transactions.
 FUND_OUTPUTS="${LIVE_FUND_OUTPUTS:-3}"
 FUND_AMOUNT="${LIVE_FUND_AMOUNT:-5}"
 FUND_MINIMUM=$((${LIVE_FUND_MINIMUM:-8} * UNIT))
-# Floonet targets one block a minute; a confirmation wait covers many blocks of slack.
+# A confirmation wait covers many blocks of slack.
 CONFIRM_TIMEOUT="${LIVE_CONFIRM_TIMEOUT:-1800}"
 
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 log_dir="${LIVE_INTEROP_DIR}/.work/live/logs/${run_id}"
-mkdir -p "${log_dir}" "${LIVE_DIR}"/data/{node,funder,peer,lepic,exchange}
+mkdir -p "${log_dir}" "${LIVE_DIR}"/data/{funder,peer,lepic,exchange}
 RUN_LOG="${log_dir}/run.log"
 PUBLIC_LOG="${log_dir}/public-calls.log"
 : >"${RUN_LOG}"
@@ -75,24 +69,24 @@ teardown() {
     listen_stop >/dev/null 2>&1 || true
     dc --profile mining logs --no-color --timestamps >"${log_dir}/compose.log" 2>&1 || true
     if [[ "${down}" == true ]]; then
-        # Without -v: wallets and chain are bind mounts and stay; only containers go.
+        # Without -v: the wallets are bind mounts and stay; only containers go.
         dc --profile mining down --remove-orphans >/dev/null 2>&1 || true
     fi
 }
 trap teardown EXIT
 
-log "floonet via peer ${LIVE_SEED}; lepic node ${LEPIC_TEST_NODE_URL:-http://127.0.0.1:33413}," \
-    "relay ${LEPIC_TEST_RELAY:-ws://localhost:33423}; public reads from ${LIVE_PUBLIC_API}"
+log "floonet node ${LIVE_NODE_URL}; lepic node ${LEPIC_TEST_NODE_URL:-${LIVE_NODE_URL}}," \
+    "relay ${LEPIC_TEST_RELAY:-ws://localhost:33423}"
 
 if [[ "${build}" == true ]]; then
     log "building binaries (incremental; the first build takes a while)"
     "${LIVE_DIR}/build.sh" >>"${RUN_LOG}" 2>&1
 fi
 
-log "starting the stack and syncing the node (minutes on a first run)"
+log "starting the stack"
 {
     dc build
-    dc up -d --wait --wait-timeout 1800
+    dc up -d --wait --wait-timeout 300
 } >>"${RUN_LOG}" 2>&1
 
 names=()
@@ -126,9 +120,10 @@ fail() {
 LEPIC_ADDRESS=""
 PEER_ADDRESS=""
 
-step_sync() {
-    wait_synced 1800 || fail "the local node did not catch up with the public tip" || return 1
-    DETAIL="local node synced at height $(local_height)"
+step_node() {
+    local height
+    height="$(public_height)" || fail "the floonet node does not answer" || return 1
+    DETAIL="floonet node at height ${height}"
 }
 
 lepic_wallet_exists() { [[ -n "$(ls -A "${LIVE_DIR}/data/lepic/lepic" 2>/dev/null)" ]]; }
@@ -162,7 +157,7 @@ fund_one() {
         ew "${wallet}" receive -i "${slate}" >>"${RUN_LOG}" || return 1
     fi
     ew funder finalize -i "${slate}.response" >>"${RUN_LOG}" || return 1
-    wait_until "funding ${name} confirmed" "${CONFIRM_TIMEOUT}" ew_tx_confirmed funder "${slate_id}"
+    poll_until "funding ${name} confirmed" "${CONFIRM_TIMEOUT}" ew_tx_confirmed funder "${slate_id}"
 }
 
 lepic_spendable() { lepic_balance spendable; }
@@ -182,7 +177,7 @@ step_funding() {
     local funder_need=$(((need * FUND_AMOUNT + 1) * UNIT))
     miner_start || fail "the miner did not start" || return 1
     log "waiting for ${funder_need} units of mature coinbase in the funder"
-    wait_until "funder funds" 7200 ew_spendable_at_least funder "${funder_need}" ||
+    poll_until "funder funds" 7200 ew_spendable_at_least funder "${funder_need}" ||
         fail "the funder did not get mature coinbase" || return 1
     if ((lepic_has < FUND_MINIMUM)); then
         for ((n = 1; n <= FUND_OUTPUTS; n++)); do
@@ -194,12 +189,12 @@ step_funding() {
             fund_one peer "${run_id}-peer-${n}" || fail "funding epic-wallet failed" || return 1
         done
     fi
-    wait_until "lepic funded" "${CONFIRM_TIMEOUT}" lepic_spendable_now "${FUND_MINIMUM}" ||
+    poll_until "lepic funded" "${CONFIRM_TIMEOUT}" lepic_spendable_now "${FUND_MINIMUM}" ||
         fail "lepic funds did not confirm" || return 1
-    wait_until "peer funded" "${CONFIRM_TIMEOUT}" ew_spendable_at_least peer "${FUND_MINIMUM}" ||
+    poll_until "peer funded" "${CONFIRM_TIMEOUT}" ew_spendable_at_least peer "${FUND_MINIMUM}" ||
         fail "epic-wallet funds did not confirm" || return 1
     miner_stop
-    DETAIL="funded at height $(local_height): lepic $(jq -n "$(lepic_spendable) / ${UNIT}") EPIC, epic-wallet $(jq -n "$(ew_spendable peer) / ${UNIT}") EPIC spendable"
+    DETAIL="funded at height $(public_height): lepic $(jq -n "$(lepic_spendable) / ${UNIT}") EPIC, epic-wallet $(jq -n "$(ew_spendable peer) / ${UNIT}") EPIC spendable"
 }
 
 both_confirmed() { lepic_tx_confirmed "$1" && ew_tx_confirmed peer "$2"; }
@@ -207,25 +202,20 @@ both_confirmed() { lepic_tx_confirmed "$1" && ew_tx_confirmed peer "$2"; }
 lepic_total_is() { (($(lepic_balance total) == $1)); }
 
 # Mines until both wallets confirm the transaction, then checks lepic's balance, and that the
-# kernel epic-wallet recorded is on the local chain and on the public floonet node at the same
-# height. Sets DETAIL and KERNEL.
+# kernel epic-wallet recorded is in a block of the floonet chain. Sets DETAIL and KERNEL.
 settle() {
     local tx_id="$1" slate_id="$2" expected="$3"
     mine_until "tx ${tx_id} confirmed on both sides" "${CONFIRM_TIMEOUT}" both_confirmed "${tx_id}" "${slate_id}" ||
         fail "slate ${slate_id} not confirmed: lepic $(lepic_tx_state "${tx_id}")" || return 1
-    wait_until "lepic total" 120 lepic_total_is "${expected}" ||
+    poll_until "lepic total" 120 lepic_total_is "${expected}" ||
         fail "lepic total is $(lepic_balance total), expected ${expected}" || return 1
-    local kernel local_at public_at
+    local kernel height
     kernel="$(ew_tx_kernel peer "${slate_id}")"
     [[ -n "${kernel}" ]] || fail "epic-wallet recorded no kernel for ${slate_id}" || return 1
     KERNEL="${kernel}"
-    local_at="$(local_kernel_height "${kernel}")" || fail "local node has no kernel ${kernel}" || return 1
-    wait_until "kernel on the public node" 600 public_has_kernel "${kernel}" ||
-        fail "public node has no kernel ${kernel}" || return 1
-    public_at="$(public_kernel_height "${kernel}")"
-    [[ "${public_at}" == "${local_at}" ]] ||
-        fail "kernel at ${local_at} locally, ${public_at} on the public node" || return 1
-    DETAIL="slate ${slate_id} confirmed on both sides, kernel at height ${public_at} on the public node"
+    height="$(public_kernel_height "${kernel}")"
+    [[ -n "${height}" ]] || fail "the floonet node has no kernel ${kernel}" || return 1
+    DETAIL="slate ${slate_id} confirmed on both sides, kernel in block ${height}"
 }
 
 scenario_lepic_sends_file() {
@@ -289,7 +279,7 @@ scenario_peer_sends_epicbox() {
     return "${status}"
 }
 
-run_step "sync with floonet" step_sync
+run_step "floonet node" step_node
 [[ "${results[0]}" == PASS ]] && run_step "wallets" step_wallets
 [[ "${results[-1]}" == PASS ]] && run_step "funding" step_funding
 if [[ "${results[-1]}" == PASS ]]; then
