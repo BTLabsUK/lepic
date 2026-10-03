@@ -128,6 +128,7 @@ void main() {
       password: password,
     );
     expect(await bob.mnemonic(password: password), bobPhrase);
+    await scanToEnd(bob);
 
     // Alice sends 3 EPIC as text, Bob signs it, Alice finalizes and posts.
     final s1 = await alice.createSendSlate(
