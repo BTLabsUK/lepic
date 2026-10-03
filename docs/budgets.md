@@ -14,14 +14,16 @@ The table is the single source of the limits; `xtask/src/budget.rs` reads it.
 | `size.aarch64-linux-android` | 9216 | KiB | 7133 |
 | `size.armv7-linux-androideabi` | 6144 | KiB | 4841 |
 | `size.x86_64-linux-android` | 9728 | KiB | 7711 |
-| `restore.time` | 400 | ms | 104 |
+| `restore.time` | 800 | ms | 44 to 191 |
 | `restore.peak_memory` | 12288 | KiB | 6084 |
-| `drain.time` | 250 | ms | 59 |
+| `drain.time` | 500 | ms | 48 to 130 |
 | `drain.peak_memory` | 10240 | KiB | 5224 |
 
-Measured on Linux x86_64 with the 1.99.0 toolchain while other builds shared the machine. Sizes get
-about 25% headroom, times about three to four times the median, memory about twice the peak, so the
-check catches a regression of that order and not run-to-run noise.
+Measured on Linux x86_64 with the 1.99.0 toolchain while other builds shared the machine. Times are
+the lowest and highest median seen across runs on that machine; load alone moved them by a factor of
+four. Sizes get about 25% headroom, times about four times the highest median, memory about twice
+the peak, so the check catches a regression of that order and not load or run-to-run noise. Most of
+`drain.time` is the fixed cost of the test process and its setup, not the drain itself.
 
 ## What is measured
 
