@@ -99,9 +99,9 @@ impl TestHost {
 }
 
 impl Host for TestHost {
-    type Node = NodeClient<MockNode>;
+    type Transport = MockNode;
 
-    fn node(&self, _: &Settings) -> Result<Self::Node, CliError> {
+    fn node(&self, _: &Settings) -> Result<NodeClient<MockNode>, CliError> {
         Ok(self.node.client())
     }
 

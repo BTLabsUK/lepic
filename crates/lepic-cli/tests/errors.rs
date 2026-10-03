@@ -151,6 +151,22 @@ fn init_on_a_locked_data_directory_creates_nothing() {
 }
 
 #[test]
+fn the_first_tip_of_a_command_is_bounded_by_the_tip_the_wallet_confirmed() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    wallet.run(&host, &["wallet", "info"]).ok();
+
+    // More than a day of blocks above the confirmed tip, moments after it was seen.
+    host.node.update_chain(|chain| {
+        chain.tip.height = lepic_primitives::amount::Height::new(support::TIP + 10_000);
+    });
+    let outcome = wallet.run(&host, &["wallet", "info"]);
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (9, "node"));
+}
+
+#[test]
 fn human_errors_go_to_stderr_and_json_errors_to_stdout() {
     let host = TestHost::new();
     let empty = Instance::new("test password");

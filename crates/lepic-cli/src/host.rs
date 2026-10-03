@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use lepic_epicbox::{Connector, TcpConnector};
 use lepic_keychain::KdfParams;
-use lepic_node::{CallPolicy, HttpNodeClient, HttpSettings, HttpTransport, NodeApi, NodeClient};
+use lepic_node::{CallPolicy, HttpSettings, HttpTransport, NodeClient, RpcTransport};
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
@@ -16,15 +16,20 @@ use crate::settings::Settings;
 
 pub type Interrupt = Pin<Box<dyn Future<Output = ()> + Send>>;
 
+/// The node client a [`Host`] hands out.
+pub type HostNode<H> = NodeClient<<H as Host>::Transport>;
+
 /// Longer than any node API secret.
 const MAX_API_SECRET_LEN: u64 = 1024;
 
 /// The outside world of one command. [`ProcessHost`] is the real one; tests substitute a mock
 /// node, an in-memory relay and a cheap key derivation.
 pub trait Host {
-    type Node: NodeApi + 'static;
+    /// How node requests leave the process. The client around it is always a [`NodeClient`],
+    /// so a command can start it from the tip the wallet stored.
+    type Transport: RpcTransport + Clone + 'static;
 
-    fn node(&self, settings: &Settings) -> Result<Self::Node, CliError>;
+    fn node(&self, settings: &Settings) -> Result<HostNode<Self>, CliError>;
 
     fn relay_connector(&self) -> Result<Arc<dyn Connector>, CliError>;
 
@@ -41,9 +46,9 @@ pub trait Host {
 pub struct ProcessHost;
 
 impl Host for ProcessHost {
-    type Node = HttpNodeClient;
+    type Transport = HttpTransport;
 
-    fn node(&self, settings: &Settings) -> Result<HttpNodeClient, CliError> {
+    fn node(&self, settings: &Settings) -> Result<HostNode<Self>, CliError> {
         let api_secret = match &settings.node_api_secret_file {
             Some(path) => Some(read_api_secret(path)?),
             None => None,

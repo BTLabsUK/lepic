@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{ClientSettings, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
-use lepic_node::{NodeApi, Propagation};
+use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::params::Network;
 use lepic_store::{
     OutboxStatus, Repositories, SlateStage, StoredTransaction, TxDirection, TxId, WalletStore,
@@ -45,7 +45,7 @@ use crate::cli::{
     WalletCommand, WordsArg,
 };
 use crate::exit::CliError;
-use crate::host::Host;
+use crate::host::{Host, HostNode};
 use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, FinalizeReport, InboxReport, InfoReport,
     InitReport, InvoiceIssueReport, InvoicePayReport, NodeStatusReport, ReceiveReport, Report,
@@ -306,7 +306,7 @@ impl<H: Host> Run<'_, H> {
 
     async fn restored(
         &self,
-        opened: &Opened<H::Node>,
+        opened: &Opened<HostNode<H>>,
         args: &ScanArgs,
     ) -> Result<Report, CliError> {
         let scan = if args.no_scan {
@@ -557,7 +557,7 @@ impl<H: Host> Run<'_, H> {
     }
 
     /// Unlocks the wallet in the data directory.
-    async fn open(&mut self) -> Result<Opened<H::Node>, CliError> {
+    async fn open(&mut self) -> Result<Opened<HostNode<H>>, CliError> {
         let password = self
             .console
             .secrets
@@ -565,11 +565,12 @@ impl<H: Host> Run<'_, H> {
             .await?;
         let opened = self.prepare(false)?;
         opened.wallet.open(password_from(password)).await?;
+        start_from_confirmed_tip(&opened.wallet)?;
         Ok(opened)
     }
 
     /// A locked wallet handle on the data directory, which a new wallet creates.
-    fn prepare(&self, create_dir: bool) -> Result<Opened<H::Node>, CliError> {
+    fn prepare(&self, create_dir: bool) -> Result<Opened<HostNode<H>>, CliError> {
         if create_dir {
             create_private_dir(&self.settings.data_dir)?;
         }
@@ -618,6 +619,28 @@ impl<H: Host> Run<'_, H> {
     fn data_dir_text(&self) -> String {
         self.settings.data_dir.display().to_string()
     }
+}
+
+/// Starts the wallet's node client from the tip the wallet last confirmed, so the first tip a
+/// node reports in this command is bounded by how far the chain can have grown since, not only
+/// by later answers. Must run before the command's first node request: the client takes the
+/// given tip as its reference unconditionally. Clones of a client share what it has seen.
+fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
+    wallet: &CliWallet<NodeClient<T>>,
+) -> Result<(), CliError> {
+    let Some(tip) = wallet.confirmed_tip()? else {
+        return Ok(());
+    };
+    let now = wallet.ports().clock.now();
+    // A tip stamped after now, from a clock that was ahead, counts as just seen.
+    let seen_ago = std::time::Duration::try_from(now.duration_since(tip.seen_at))
+        .unwrap_or(std::time::Duration::ZERO);
+    let _started = wallet
+        .ports()
+        .node
+        .clone()
+        .with_known_tip(tip.height, seen_ago);
+    Ok(())
 }
 
 /// The spending options shared by `tx send` and `invoice pay`.
