@@ -38,15 +38,19 @@ pub const RECEIVER_PASSWORD: &str = "receiver";
 /// Generous for a loaded machine; every wait ends as soon as its condition holds.
 pub const PATIENCE: Duration = Duration::from_secs(20);
 
+/// The client's timeouts and ping interval. Longer than any wait, so that however slow the
+/// machine is, a client reconnects only when a test makes the relay drop it.
+const CLIENT_TIMERS: Duration = Duration::from_secs(60);
+
 pub fn settings() -> ClientSettings {
     let mut settings = ClientSettings::new(RelayEndpoint::new(
         Domain::parse("relay.test").unwrap(),
         None,
         Security::Plain,
     ));
-    settings.connect_timeout = Duration::from_secs(5);
-    settings.response_timeout = Duration::from_secs(5);
-    settings.ping_interval = Duration::from_secs(5);
+    settings.connect_timeout = CLIENT_TIMERS;
+    settings.response_timeout = CLIENT_TIMERS;
+    settings.ping_interval = CLIENT_TIMERS;
     settings.backoff = Backoff {
         initial: Duration::from_millis(20),
         max: Duration::from_millis(100),
@@ -66,15 +70,6 @@ pub async fn within<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(PATIENCE, future)
         .await
         .expect("timed out")
-}
-
-pub async fn until(condition: impl Fn() -> bool) {
-    within(async {
-        while !condition() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await;
 }
 
 pub async fn transport_reaches(events: &mut broadcast::Receiver<Event>, wanted: TransportState) {
@@ -220,6 +215,12 @@ impl World {
             )
             .await
             .unwrap();
+    }
+
+    /// Waits until the relay holds no unacknowledged message for `address`. A wallet
+    /// acknowledges a message only once its effect is stored.
+    pub async fn until_acknowledged(&self, address: &EpicboxAddress) {
+        within(self.relay.wait_until(|relay| relay.pending(address) == 0)).await;
     }
 
     pub fn sender_state(&self) -> TxState {

@@ -22,7 +22,7 @@ use lepic_epicbox::RELAY_RETENTION;
 use lepic_store::{InboxEntry, InboxStatus, WalletStore};
 use lepic_wallet::event::TransportState;
 use lepic_wallet::inbox::ListenHandle;
-use world::{World, transport_reaches, until};
+use world::{World, transport_reaches};
 
 const ONE_HOUR: Duration = Duration::from_secs(60 * 60);
 
@@ -77,7 +77,7 @@ fn a_long_listen_prunes_inbox_entries_as_messages_settle() {
             transport_reaches(&mut events, TransportState::Connected).await;
             store_expired_and_recent_entries(&world);
             world.send().await;
-            until(|| world.relay.pending(&world.receiver_address) == 0).await;
+            world.until_acknowledged(&world.receiver_address).await;
             handle.stop();
         };
         tokio::join!(listen, script).0

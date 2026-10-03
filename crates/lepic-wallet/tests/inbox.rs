@@ -27,9 +27,7 @@ use lepic_transport::transport::{Inbound, Transport};
 use lepic_wallet::event::TransportState;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::{ReceiveRequest, WalletError};
-use world::{
-    RECEIVER_MNEMONIC, World, settings, transport_reaches, transport_states, until, within,
-};
+use world::{RECEIVER_MNEMONIC, World, settings, transport_reaches, transport_states, within};
 
 #[test]
 fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
@@ -57,13 +55,10 @@ fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
                 .epicbox_drain(&world.receiver_epicbox)
                 .await
                 .unwrap();
-            // The relay drops S2 only once the listen has recorded it, which happens after
-            // the transaction is posted; stopping earlier would leave S2 held.
-            until(|| {
-                world.sender_state() == TxState::Posted
-                    && world.relay.pending(&world.sender_address) == 0
-            })
-            .await;
+            // The listen acknowledges S2 only after posting and recording it; a stop before
+            // then would abandon S2 in hand and count it as held.
+            world.until_acknowledged(&world.sender_address).await;
+            assert_eq!(world.sender_state(), TxState::Posted);
             handle.stop();
             received
         };
@@ -357,7 +352,7 @@ fn a_listener_retries_a_held_message_until_it_settles() {
             .receiver_wallet
             .epicbox_listen(&world.receiver_epicbox, &handle);
         let script = async {
-            until(|| world.relay.pending(&world.receiver_address) == 0).await;
+            world.until_acknowledged(&world.receiver_address).await;
             handle.stop();
         };
         tokio::join!(listen, script).0
