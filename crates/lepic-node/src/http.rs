@@ -223,7 +223,8 @@ fn parse_node_url(node_url: &str) -> Result<(String, String), NodeError> {
     Ok((base_url, authority.host().to_owned()))
 }
 
-/// `localhost` or a loopback IP literal. Any other name could resolve anywhere.
+/// `localhost` or a loopback IP literal. `localhost` relies on the resolver keeping the name on
+/// loopback, as RFC 6761 requires; any other name could resolve anywhere.
 fn is_loopback_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return true;
