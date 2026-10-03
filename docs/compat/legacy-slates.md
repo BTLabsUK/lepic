@@ -107,5 +107,8 @@ Exact hex lengths, valid curve points and signatures, range proof size within th
 `num_participants` equal to 2 (upstream accepts any value but only creates 2; see
 `malformed_num_participants_zero`), participant count not above `num_participants`, ids below `num_participants`,
 no duplicate ids, exactly one kernel, fees consistent between slate, kernel and transaction, fee not
-below the weight-based minimum. These are LEPIC's own rules and stricter than upstream's parse step.
+below the weight-based minimum, `version_info.version` 2 or 3 (upstream's Epicbox path accepts any
+version for the V2 shape; see `malformed_header_version_1` and `_4`), and no non-null
+`payment_proof` in a V2-shaped slate (the V2 codec refuses it rather than reading the slate
+without it; the file path removes the V3-only keys before a header-2 file reaches it). These are LEPIC's own rules and stricter than upstream's parse step.
 Any slate `epic-wallet` emits must still decode; the vectors prove it.
