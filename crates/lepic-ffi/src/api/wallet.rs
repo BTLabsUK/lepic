@@ -42,11 +42,13 @@ pub fn validate_mnemonic(phrase: String) -> bool {
     })
 }
 
-/// True for `<address>@<relay>[:port]` whose key is valid and belongs to `chain`.
+/// True for `<address>@<relay>[:port]` whose key is valid and belongs to `chain`. A key without
+/// `@<relay>` is refused: Epicbox would send it to a default relay the user never named.
 #[frb(sync)]
 pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
     guard_or("validate_epicbox_address", false, || {
-        EpicboxAddress::parse(&address, relay_network(chain.network())).is_ok()
+        address.contains('@')
+            && EpicboxAddress::parse(&address, relay_network(chain.network())).is_ok()
     })
 }
 

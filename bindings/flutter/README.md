@@ -210,7 +210,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `validate_mnemonic(phrase)` | `validate_mnemonic(phrase)` | Same. |
 | `wallet_exists(config)` | `wallet_exists(runtime, store)` | Asks the secret store, not the directory. |
 | `inspect_slate(json)` | not provided | Needs a slate decoding API in the engine (claim `## Needs`). |
-| `validate_epicbox_address(address)` | `validate_epicbox_address(address, chain)` | Chain is explicit. |
+| `validate_epicbox_address(address)` | `validate_epicbox_address(address, chain)` | Chain is explicit, and the `@<relay>` part is required: a bare key is refused. |
 | `delete_wallet(config)` | `delete_wallet(runtime, config, store)` | Fails with `walletBusy` at once instead of waiting 20 s. Also deletes the vault. |
 | `node_tip(config)` | `node_tip(runtime, config)` | Same result. |
 | `EpicWallet::create(config, mnemonic, password)` | `EpicWallet::create(runtime, config, store, mnemonic, password)`, or `EpicWallet::create_with_pin(runtime, config, store, mnemonic, pin) -> PinWallet` | Same semantics. The PIN form returns the wallet and `sealed_password`. |

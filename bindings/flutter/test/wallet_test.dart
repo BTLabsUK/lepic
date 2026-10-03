@@ -435,6 +435,42 @@ void main() {
     expect(store.values, isEmpty);
   });
 
+  test('an epicbox address needs its relay', () async {
+    final wallet = await EpicWallet.create(
+      runtime: runtime,
+      config: WalletConfig(
+        dataDir: walletDir('address').path,
+        chain: Chain.floonet,
+        nodeUrl: 'http://127.0.0.1:1',
+        epicboxDomain: 'epicbox.example',
+        epicboxPort: 443,
+      ),
+      store: lepicSecretStore(MemoryStore()),
+      password: password,
+    );
+    final address = await wallet.epicboxAddress();
+    final key = address.split('@').first;
+    expect(address, '$key@epicbox.example');
+    for (final valid in [address, '$key@epicbox.example:443']) {
+      expect(
+        validateEpicboxAddress(address: valid, chain: Chain.floonet),
+        isTrue,
+        reason: valid,
+      );
+    }
+    for (final invalid in [key, '$key@', '$key@epicbox.example:x']) {
+      expect(
+        validateEpicboxAddress(address: invalid, chain: Chain.floonet),
+        isFalse,
+        reason: invalid,
+      );
+    }
+    expect(
+      validateEpicboxAddress(address: address, chain: Chain.mainnet),
+      isFalse,
+    );
+  });
+
   test('every error kind has its documented code', () async {
     expect(WalletErrorKind.values.toSet(), errorCodes.keys.toSet());
     for (final MapEntry(key: kind, value: code) in errorCodes.entries) {

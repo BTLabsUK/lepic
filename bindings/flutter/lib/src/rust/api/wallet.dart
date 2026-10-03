@@ -20,7 +20,8 @@ import 'types.dart';
 bool validateMnemonic({required String phrase}) =>
     RustLib.instance.api.crateApiWalletValidateMnemonic(phrase: phrase);
 
-/// True for `<address>@<relay>[:port]` whose key is valid and belongs to `chain`.
+/// True for `<address>@<relay>[:port]` whose key is valid and belongs to `chain`. A key without
+/// `@<relay>` is refused: Epicbox would send it to a default relay the user never named.
 bool validateEpicboxAddress({required String address, required Chain chain}) =>
     RustLib.instance.api.crateApiWalletValidateEpicboxAddress(
       address: address,
