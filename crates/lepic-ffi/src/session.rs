@@ -1088,6 +1088,71 @@ mod tests {
     }
 
     #[test]
+    fn every_engine_detail_reaches_the_binding_type() {
+        use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
+        use lepic_store::{StoredTransaction, TransactionEntry, TxDirection};
+        use lepic_transport::transport::Destination;
+
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+                      abandon abandon about";
+        let keychain = Keychain::from_mnemonic(phrase, Network::Floonet).unwrap();
+        let id = Identifier::new(3, [0, 0, 7, 0]).unwrap();
+        let excess = keychain.commit(5, &id, SwitchCommitment::Regular).unwrap();
+        let created = Timestamp::from_millisecond(1_790_000_000_123).unwrap();
+        let confirmed = Timestamp::from_millisecond(1_790_000_600_456).unwrap();
+        let slate_id = "0436430c-2b02-624c-2032-570501212b0e";
+        let address = "zzRMBr82zhzvz6hAxJMecEchV4ohxJkrNtDKLqwJMq7EQ4y2ibhQ@epicbox.example:443";
+        let details = EngineTransactionDetails {
+            transaction: StoredTransaction {
+                id: TxId(12),
+                entry: TransactionEntry {
+                    account: DEFAULT_ACCOUNT,
+                    direction: TxDirection::Outgoing,
+                    state: TxState::Confirmed,
+                    slate_id: Some(slate_id.parse().unwrap()),
+                    transport: Some("epicbox".to_owned()),
+                    amount_credited: Amount::new(400),
+                    amount_debited: Amount::new(1_500),
+                    fee: Some(Fee::new(100)),
+                    created_at: created,
+                    updated_at: confirmed,
+                },
+            },
+            kernel_excess: Some(excess),
+            confirmed_height: Some(Height::new(321)),
+            counterparty: Some(Destination::new(address.to_owned())),
+            ttl_cutoff_height: Some(Height::new(360)),
+            confirmed_at: Some(confirmed),
+        };
+
+        assert_eq!(
+            transaction_details(&details),
+            TransactionDetails {
+                tx_id: 12,
+                direction: crate::api::types::TxDirection::Outgoing,
+                status: TxStatus::Confirmed,
+                slate_id: Some(slate_id.to_owned()),
+                transport: Some("epicbox".to_owned()),
+                amount_credited: 400,
+                amount_debited: 1_500,
+                fee: Some(100),
+                created_at_ms: 1_790_000_000_123,
+                confirmed_at_ms: Some(1_790_000_600_456),
+                confirmed_height: Some(321),
+                kernel_excess: Some(excess.to_hex()),
+                counterparty: Some(address.to_owned()),
+                ttl_cutoff_height: Some(360),
+            }
+        );
+        let hex = excess.to_hex();
+        assert_eq!(hex.len(), 66);
+        assert!(
+            hex.bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        );
+    }
+
+    #[test]
     fn a_received_slate_reaches_the_listener_as_received() {
         let event = listener_event(&received()).unwrap();
         assert_eq!(event.kind, ListenerEventKind::Received);
