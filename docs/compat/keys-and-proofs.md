@@ -65,6 +65,11 @@ address, also shown in onion v3 form. Vectors: `testdata/vectors/keys/address_ke
 - Kernel signature message: BLAKE2b-256 of the feature byte (coinbase), the feature byte then the fee
   as u64 big-endian (plain), or the feature byte, fee and lock height, each u64 big-endian
   (height-locked).
+- Kernel hash: unkeyed BLAKE2b-256 of the protocol version 1 layout (feature u8, fee u64 BE, lock
+  height u64 BE, 33-byte excess, 64-byte signature), whatever protocol version is spoken; version 2
+  drops the unused fee and lock height fields. Both binary layouts carry the signature in the secp
+  wrapper's internal form, the compact form with each 32-byte half byte-reversed; JSON uses the
+  compact form (`testdata/vectors/smoke/plain_kernel_hash.json`).
 - Fee = transaction weight times base fee. Base fee is `MILLI_EPIC` = 100,000 base units, where
   1 EPIC = 100,000,000 base units (`EPIC_BASE`). Weight is `max(4 * outputs + kernels - inputs, 1)`,
   with the subtraction saturating at 0.
