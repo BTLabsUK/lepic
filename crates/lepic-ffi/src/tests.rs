@@ -188,6 +188,45 @@ async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
     assert!(reopened.summary(true).await.is_ok());
 }
 
+/// Without the stored reference the client would take any first tip of the session as its
+/// reference.
+#[tokio::test]
+async fn an_opened_wallet_bounds_the_first_node_tip_by_the_tip_it_confirmed() {
+    use lepic_node::{NodeApi as _, NodeError};
+
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let password = || zeroize::Zeroizing::new("password".to_owned());
+    let secret = || {
+        let mut config = fixture.config();
+        crate::node::NodeSecret::take(&mut config)
+    };
+    fixture.chain.set_height(20);
+    {
+        let session = crate::session::Session::new(
+            &fixture.runtime.inner,
+            &fixture.config(),
+            &secret(),
+            store.clone(),
+        )
+        .unwrap();
+        session.create(None, password()).await.unwrap();
+        // The first tip is confirmed by a second agreeing refresh.
+        session.refresh().await.unwrap();
+        session.refresh().await.unwrap();
+    }
+
+    let session =
+        crate::session::Session::new(&fixture.runtime.inner, &fixture.config(), &secret(), store)
+            .unwrap();
+    session.open(password()).await.unwrap();
+    fixture.chain.set_height(20 + 100_000);
+    assert!(matches!(
+        session.node().get_tip().await,
+        Err(NodeError::ImplausibleTip { .. })
+    ));
+}
+
 #[test]
 fn an_implausible_node_answer_reaches_the_app_as_a_node_error() {
     let error = lepic_wallet::WalletError::Implausible(

@@ -14,6 +14,7 @@ use crate::api::types::WalletConfig;
 
 pub(crate) type Node = NodeClient<NodeBackend>;
 
+#[derive(Clone)]
 pub(crate) enum NodeBackend {
     Http(Box<HttpTransport>),
     #[cfg(feature = "mock")]

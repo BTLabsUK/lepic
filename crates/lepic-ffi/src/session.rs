@@ -257,13 +257,39 @@ impl Session {
             self.engine.lock();
             return Err(error);
         }
-        Ok(())
+        self.seed_node_tip()
     }
 
     pub(crate) async fn open(&self, password: Zeroizing<String>) -> Result<(), WalletError> {
         self.vault.load(&self.store).await?;
         self.engine.open(self::password(password)).await?;
+        self.seed_node_tip()
+    }
+
+    /// Starts the node client from the tip the wallet confirmed last, so the first tip a node
+    /// reports in this session is bounded by it rather than accepted as the new reference.
+    fn seed_node_tip(&self) -> Result<(), WalletError> {
+        let Some(confirmed) = self.engine.confirmed_tip()? else {
+            return Ok(());
+        };
+        // A device clock behind the stored time counts as no time passed.
+        let seen_ago =
+            std::time::Duration::try_from(Timestamp::now().duration_since(confirmed.seen_at))
+                .unwrap_or_default();
+        // Clones of the client share what it has seen, so this seeds the engine's client.
+        drop(
+            self.engine
+                .ports()
+                .node
+                .clone()
+                .with_known_tip(confirmed.height, seen_ago),
+        );
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn node(&self) -> &Node {
+        &self.engine.ports().node
     }
 
     /// The recovery phrase, after checking `password` against the stored vault.
