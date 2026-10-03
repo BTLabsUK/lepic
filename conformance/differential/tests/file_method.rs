@@ -20,7 +20,7 @@
 
 mod support;
 
-use support::view::differences;
+use support::compare::{SubjectFile, compare};
 use support::{AMOUNT, Offer, Pay, SlateShape, Spend, SubjectKind, TTL_BLOCKS, Who, World};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,107 +193,20 @@ fn run(case: &Case, kind: SubjectKind) -> World {
 }
 
 /// The file the subject wrote, and whether the subject created the slate in it.
-fn subject_file(case: &Case) -> (&'static str, bool) {
-    match (case.flow, case.initiator) {
+fn subject_file(case: &Case) -> SubjectFile {
+    let (name, created) = match (case.flow, case.initiator) {
         (Flow::Standard, Who::Subject) => ("case.tx", true),
         (Flow::Standard, Who::Peer) => ("case.tx.response", false),
         (Flow::Invoice, Who::Subject) => ("case.invoice", true),
         (Flow::Invoice, Who::Peer) => ("case.paid", false),
-    }
-}
-
-/// The shape of a slate file: its header and its top-level keys, which tell V2 from V3.
-fn file_shape(world: &World, case: &Case) -> (Vec<Option<u64>>, Vec<String>) {
-    let (file, created) = subject_file(case);
-    let text = std::fs::read_to_string(world.file(file)).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let header = |key: &str| {
-        value
-            .pointer(&format!("/version_info/{key}"))
-            .and_then(serde_json::Value::as_u64)
     };
-    let mut version = vec![header("version"), header("orig_version")];
-    // A new slate records the block header version of the creator's network at the tip, and
-    // the test chain changes header version far earlier than floonet, where LEPIC runs. A reply
-    // carries the header it received, so there the whole header is compared.
-    if !created {
-        version.push(header("block_header_version"));
-    }
-    let keys = value
-        .as_object()
-        .map(|object| object.keys().cloned().collect())
-        .unwrap_or_default();
-    (version, keys)
-}
-
-/// The file LEPIC wrote is in the V3 shape with `version` and `orig_version` 3 (ADR 0015).
-fn check_v3_file(world: &World, case: &Case) -> Option<String> {
-    let (version, keys) = file_shape(world, case);
-    let v3_keys = ["ttl_cutoff_height", "payment_proof"]
-        .iter()
-        .all(|key| keys.iter().any(|k| k == key));
-    let header_three = version.get(..2) == Some(&[Some(3), Some(3)][..]);
-    (!v3_keys || !header_three)
-        .then(|| format!("subject wrote header {version:?} and keys {keys:?}, not V3 at 3/3"))
-}
-
-/// The peer, when it recorded a kernel, recorded the one the chain mined.
-fn check_kernel(world: &World) -> Option<String> {
-    let mined = support::hex(&world.mined[0].body.kernels[0].excess.0);
-    let recorded = world
-        .checkpoints
-        .last()?
-        .peer
-        .tx
-        .as_ref()?
-        .kernel_excess
-        .clone()??;
-    (recorded != mined).then(|| format!("peer recorded kernel {recorded}, the chain mined {mined}"))
+    SubjectFile { name, created }
 }
 
 fn check(case: &Case) -> Vec<String> {
-    let name = case.name();
     let reference = run(case, SubjectKind::Reference);
     let lepic = run(case, SubjectKind::Lepic);
-    assert_eq!(
-        lepic.checkpoints.len(),
-        reference.checkpoints.len(),
-        "{name}: both runs record every checkpoint"
-    );
-    let mut found = Vec::new();
-    for (observed, expected) in lepic.checkpoints.iter().zip(&reference.checkpoints) {
-        // The initiator records the transaction at once, the responder once it has replied.
-        if observed.label != "initiated"
-            && (observed.peer.tx.is_none() || observed.subject.tx.is_none())
-        {
-            found.push(format!("{name} {}: a wallet has no entry", observed.label));
-        }
-        for difference in differences(&observed.peer, &expected.peer) {
-            found.push(format!("{name} {}: peer {difference}", observed.label));
-        }
-        for difference in differences(&observed.subject, &expected.subject) {
-            found.push(format!("{name} {}: subject {difference}", observed.label));
-        }
-    }
-    if lepic.mined_shapes() != reference.mined_shapes() {
-        found.push(format!(
-            "{name}: mined {:?}, reference {:?}",
-            lepic.mined_shapes(),
-            reference.mined_shapes()
-        ));
-    }
-    if lepic.height() != reference.height() {
-        found.push(format!("{name}: chain heights differ"));
-    }
-    let (shape, reference_shape) = (file_shape(&lepic, case), file_shape(&reference, case));
-    if shape != reference_shape {
-        found.push(format!(
-            "{name}: subject wrote {shape:?}, reference {reference_shape:?}"
-        ));
-    }
-    found.extend(check_v3_file(&lepic, case).map(|d| format!("{name}: {d}")));
-    found.extend(check_kernel(&lepic).map(|d| format!("{name}: {d}")));
-    found
+    compare(&case.name(), &lepic, &reference, subject_file(case), false)
 }
 
 fn check_all(flow: Flow, initiator: Who) {

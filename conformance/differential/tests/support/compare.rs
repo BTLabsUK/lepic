@@ -75,8 +75,20 @@ pub fn compare(
             "{name}: subject wrote {shape:?}, reference {reference_shape:?}"
         ));
     }
+    found.extend(check_v3_file(lepic, subject_file).map(|d| format!("{name}: {d}")));
     found.extend(check_kernel(lepic).map(|d| format!("{name}: {d}")));
     found
+}
+
+/// The file LEPIC wrote is in the V3 shape with `version` and `orig_version` 3 (ADR 0015).
+fn check_v3_file(world: &World, file: SubjectFile) -> Option<String> {
+    let (version, keys) = file_shape(world, file);
+    let v3_keys = ["ttl_cutoff_height", "payment_proof"]
+        .iter()
+        .all(|key| keys.iter().any(|k| k == key));
+    let header_three = version.get(..2) == Some(&[Some(3), Some(3)][..]);
+    (!v3_keys || !header_three)
+        .then(|| format!("subject wrote header {version:?} and keys {keys:?}, not V3 at 3/3"))
 }
 
 /// The mined transactions without their commitments, which a restarted run derived from other
