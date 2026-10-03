@@ -775,6 +775,7 @@ fn restore_missing(
         created_at: now,
         updated_at: now,
     })?;
+    repos.set_confirmed_height(tx, output.height)?;
     repos.put_output(&OutputRecord {
         id: output.id,
         key_id: KeyId(output.key_id.to_bytes()),

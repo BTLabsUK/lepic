@@ -828,3 +828,19 @@ fn restore_finds_outputs_on_every_path_the_proofs_rewind_to() {
     );
     assert_eq!(harness.node.violations(), []);
 }
+
+#[test]
+fn details_of_a_restored_output_show_its_height_and_no_kernel() {
+    let (harness, wallet, _) = scanned();
+    let restored = snapshot(&harness).outputs;
+    assert!(!restored.is_empty());
+    for output in restored {
+        let details = harness
+            .block_on(wallet.transaction_details(output.tx.unwrap()))
+            .unwrap();
+        assert_eq!(details.transaction.entry.state, TxState::Confirmed);
+        assert_eq!(details.transaction.entry.slate_id, None);
+        assert_eq!(details.kernel_excess, None);
+        assert_eq!(details.confirmed_height, Some(output.height));
+    }
+}

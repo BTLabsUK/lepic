@@ -200,7 +200,7 @@ where
                 .await?;
             if let Some(kernel) = kernel {
                 chain::check_kernel_height(kernel.height, lookup.min_height, tip.height)?;
-                kernel_confirmed.push(lookup.tx_id);
+                kernel_confirmed.push((lookup.tx_id, kernel.height));
             }
         }
         if !kernel_confirmed.is_empty() {
@@ -422,7 +422,9 @@ fn on_chain(
         debug!(height = %location.height, "output confirmed");
         // One output on chain is enough to confirm the transaction that created it.
         if let Some(tx_id) = output.tx {
-            outcome.changes.extend(confirm(repos, tx_id, now)?);
+            outcome
+                .changes
+                .extend(confirm(repos, tx_id, location.height, now)?);
         }
     }
     output.height = location.height;
@@ -439,11 +441,13 @@ fn missing(mut output: OutputRecord, outcome: &mut StepOutcome) -> OutputRecord 
     output
 }
 
-/// Confirms an open transaction. A cancelled or expired one stays as it is: the user ended it
-/// here, even though the peer completed it; its outputs still count once found.
+/// Confirms an open transaction at `height`, the height of the output or kernel that confirmed
+/// it. A cancelled or expired one stays as it is: the user ended it here, even though the peer
+/// completed it; its outputs still count once found.
 fn confirm(
     repos: &mut dyn Repositories,
     tx_id: TxId,
+    height: Height,
     now: Timestamp,
 ) -> Result<Option<StateChange>, RefreshError> {
     let Some(entry) = repos.transaction(tx_id)? else {
@@ -455,17 +459,19 @@ fn confirm(
         }
         return Ok(None);
     }
-    Ok(apply_transition(repos, tx_id, TxState::Confirmed, now)?)
+    let change = apply_transition(repos, tx_id, TxState::Confirmed, now)?;
+    repos.set_confirmed_height(tx_id, height)?;
+    Ok(change)
 }
 
 fn confirm_all(
     repos: &mut dyn Repositories,
-    tx_ids: &[TxId],
+    confirmed: &[(TxId, Height)],
     now: Timestamp,
 ) -> Result<Vec<StateChange>, RefreshError> {
     let mut changes = Vec::new();
-    for &tx_id in tx_ids {
-        changes.extend(confirm(repos, tx_id, now)?);
+    for &(tx_id, height) in confirmed {
+        changes.extend(confirm(repos, tx_id, height, now)?);
     }
     Ok(changes)
 }

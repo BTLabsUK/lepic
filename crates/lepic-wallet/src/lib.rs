@@ -12,6 +12,7 @@ pub mod account;
 mod cancel;
 pub mod chain;
 pub mod config;
+pub mod details;
 pub mod error;
 pub mod event;
 pub mod finalize;

@@ -23,6 +23,7 @@ use lepic_store::{
 };
 use lepic_transport::transport::Destination;
 use lepic_wallet::WalletError;
+use lepic_wallet::details::TransactionDetails;
 use lepic_wallet::event::{Event, TransactionState};
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome, RefreshSummary};
 use lepic_wallet::selection::SelectionStrategy;
@@ -601,4 +602,81 @@ fn refresh_needs_an_unlocked_wallet() {
         matches!(result, Err(RefreshError::Wallet(WalletError::Locked))),
         "{result:?}"
     );
+}
+
+fn details(sender: &Sender, tx_id: TxId) -> TransactionDetails {
+    sender
+        .harness
+        .block_on(sender.wallet.transaction_details(tx_id))
+        .unwrap()
+}
+
+#[test]
+fn details_of_a_send_show_its_kernel_and_the_height_its_kernel_confirmed_it_at() {
+    let (sender, _) = funded();
+    let (tx_id, kernel) = posted_with_final_slate(&sender, Amount::ZERO);
+    set_tip(&sender, kernel.height.value());
+
+    refresh(&sender);
+    let unconfirmed = details(&sender, tx_id);
+    assert_eq!(unconfirmed.transaction.id, tx_id);
+    assert_eq!(unconfirmed.transaction.entry.state, TxState::Posted);
+    assert_eq!(unconfirmed.kernel_excess, Some(kernel.kernel.excess));
+    assert_eq!(unconfirmed.confirmed_height, None);
+
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.kernels.push(kernel));
+    refresh(&sender);
+    let confirmed = details(&sender, tx_id);
+    assert_eq!(confirmed.transaction.entry.state, TxState::Confirmed);
+    assert_eq!(confirmed.kernel_excess, Some(kernel.kernel.excess));
+    assert_eq!(confirmed.confirmed_height, Some(kernel.height));
+}
+
+#[test]
+fn details_of_a_send_confirmed_by_its_change_show_the_change_height() {
+    let (sender, funding) = funded();
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(request(None), to_peer()))
+        .unwrap();
+    let change = change(&sender, &funding);
+    let unconfirmed = details(&sender, sent.tx_id);
+    assert_eq!(unconfirmed.transaction.entry.state, TxState::Sent);
+    // Nothing is finalized here yet, so no final slate holds a kernel.
+    assert_eq!(unconfirmed.kernel_excess, None);
+    assert_eq!(unconfirmed.confirmed_height, None);
+
+    sender.harness.node.update_chain(|chain| {
+        chain.outputs[0].spent = true;
+        chain.outputs.push(on_chain(&change, TIP + 1, 3));
+        chain.tip.height = Height::new(TIP + 2);
+    });
+    refresh(&sender);
+    // A second refresh finds nothing new to confirm and keeps the recorded height.
+    set_tip(&sender, TIP + 3);
+    refresh(&sender);
+
+    let confirmed = details(&sender, sent.tx_id);
+    assert_eq!(confirmed.transaction.entry.state, TxState::Confirmed);
+    assert_eq!(confirmed.confirmed_height, Some(Height::new(TIP + 1)));
+}
+
+#[test]
+fn details_of_an_unknown_transaction_fail() {
+    let (sender, _) = funded();
+    let result = sender
+        .harness
+        .block_on(sender.wallet.transaction_details(TxId(99)));
+    assert!(
+        matches!(result, Err(WalletError::UnknownTransaction(TxId(99)))),
+        "{result:?}"
+    );
+    sender.wallet.lock();
+    let result = sender
+        .harness
+        .block_on(sender.wallet.transaction_details(TxId(1)));
+    assert!(matches!(result, Err(WalletError::Locked)), "{result:?}");
 }
