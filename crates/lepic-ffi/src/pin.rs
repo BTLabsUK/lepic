@@ -38,9 +38,9 @@ const KEY_LEN: usize = 32;
 /// How long PIN attempts wait after failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PinPolicy {
-    /// Failures that cost no wait, for typing mistakes.
+    /// Failures before attempts start to wait, for typing mistakes.
     pub(crate) free_failures: u32,
-    /// The wait after the first failure past the free ones; it doubles with each further one.
+    /// The wait once `free_failures` failures are counted; it doubles with each further one.
     pub(crate) first_delay: Duration,
     pub(crate) max_delay: Duration,
 }

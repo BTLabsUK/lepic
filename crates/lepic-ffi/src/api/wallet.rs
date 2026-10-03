@@ -245,9 +245,9 @@ impl EpicWallet {
 
     /// [`EpicWallet::open`] with the wallet password sealed in `sealed_password`, opened with
     /// `pin` and the PIN key in `store`. Every attempt is counted in `store` as
-    /// `lepic.pin-failures` until a right PIN clears it. After three failures each attempt
-    /// first waits, 30 seconds after the fourth and twice as long after each further one, up
-    /// to an hour; attempts of one runtime run one at a time.
+    /// `lepic.pin-failures` until a right PIN clears it. The first three attempts never wait;
+    /// after the third failure each attempt first waits 30 seconds, twice as long after each
+    /// further failure, up to an hour. Attempts of one runtime run one at a time.
     ///
     /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a store without the
     /// PIN key `SecretStore`.
