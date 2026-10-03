@@ -427,6 +427,51 @@ async fn reconnects_with_backoff_after_the_relay_returns() {
     bob.stop().await.unwrap();
 }
 
+fn slow_backoff(ping_interval: Duration) -> lepic_epicbox::ClientSettings {
+    let mut settings = settings();
+    settings.ping_interval = ping_interval;
+    settings.backoff = lepic_epicbox::Backoff {
+        initial: Duration::from_millis(200),
+        max: Duration::from_secs(2),
+    };
+    settings
+}
+
+#[tokio::test]
+async fn backoff_keeps_growing_while_sessions_drop_right_after_subscribing() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = client_with(&relay, BOB, slow_backoff(LONG))
+        .listen()
+        .unwrap();
+    for subscribed in 1..=3 {
+        until(|| relay.received("Subscribe") >= subscribed).await;
+        reach(&bob, |s| s == ConnectionState::Subscribed).await;
+        relay.disconnect_all();
+    }
+    reach(&bob, |s| {
+        matches!(s, ConnectionState::Waiting { attempt: 3, .. })
+    })
+    .await;
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn backoff_starts_over_after_a_session_stays_up_for_a_ping_interval() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let ping_interval = Duration::from_millis(100);
+    let bob = client_with(&relay, BOB, slow_backoff(ping_interval))
+        .listen()
+        .unwrap();
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    tokio::time::sleep(ping_interval * 3).await;
+    relay.disconnect_all();
+    reach(&bob, |s| {
+        matches!(s, ConnectionState::Waiting { attempt: 0, .. })
+    })
+    .await;
+    bob.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn stop_returns_within_a_second_during_connect() {
     let relay = MockRelay::new(Network::Mainnet);

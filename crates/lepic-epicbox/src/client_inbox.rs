@@ -631,7 +631,7 @@ struct Session<'a> {
     /// After `Made` is accepted the relay sends a new challenge, and the next message follows the
     /// `Subscribe` that answers it.
     challenge_due: Option<Instant>,
-    subscribed: bool,
+    subscribed_at: Option<Instant>,
 }
 
 impl<'a> Session<'a> {
@@ -644,11 +644,26 @@ impl<'a> Session<'a> {
             queue: VecDeque::from([Request::Subscribe]),
             outstanding: None,
             challenge_due: None,
-            subscribed: false,
+            subscribed_at: None,
         }
     }
 
+    /// Runs the session to its end. The reconnect backoff starts over only after a session
+    /// stayed subscribed for a ping interval, so a relay that accepts and then drops every
+    /// subscription is retried with growing delays.
     async fn run(mut self, attempt: &mut u32) -> Result<End, ClientError> {
+        let outcome = self.serve().await;
+        let ping_every = self.manager.context.settings.ping_interval;
+        if self
+            .subscribed_at
+            .is_some_and(|at| at.elapsed() >= ping_every)
+        {
+            *attempt = 0;
+        }
+        outcome
+    }
+
+    async fn serve(&mut self) -> Result<End, ClientError> {
         let settings = &self.manager.context.settings;
         let ping_every = settings.ping_interval;
         let response_timeout = settings.response_timeout;
@@ -680,7 +695,7 @@ impl<'a> Session<'a> {
                     }),
                     None => return Ok(self.leave().await),
                 },
-                frame = connection.receive() => self.handle(frame?, attempt)?,
+                frame = connection.receive() => self.handle(frame?)?,
                 _ = pings.tick() => {
                     if connection.idle_for() > silence_limit {
                         return Err(ClientError::Timeout { awaiting: Awaiting::Traffic });
@@ -725,7 +740,7 @@ impl<'a> Session<'a> {
 
     fn is_drained(&self) -> bool {
         self.manager.mode == Mode::Drain
-            && self.subscribed
+            && self.subscribed_at.is_some()
             && self.outstanding.is_none()
             && self.queue.is_empty()
             && self.challenge_due.is_none()
@@ -773,7 +788,7 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    fn handle(&mut self, frame: RelayFrame, attempt: &mut u32) -> Result<(), ClientError> {
+    fn handle(&mut self, frame: RelayFrame) -> Result<(), ClientError> {
         match frame {
             RelayFrame::Challenge { str } => {
                 self.challenge = str;
@@ -784,7 +799,7 @@ impl<'a> Session<'a> {
                 }
             }
             RelayFrame::Ok => match self.outstanding.take().map(|o| o.sent) {
-                Some(Sent::Subscribe { .. }) => self.mark_subscribed(attempt),
+                Some(Sent::Subscribe { .. }) => self.mark_subscribed(),
                 Some(Sent::Made { msg_id, reply }) => {
                     self.manager
                         .shared
@@ -821,7 +836,7 @@ impl<'a> Session<'a> {
                     Some(Sent::Subscribe { .. })
                 ) {
                     self.outstanding = None;
-                    self.mark_subscribed(attempt);
+                    self.mark_subscribed();
                 }
                 self.receive_slate(slate);
             }
@@ -832,10 +847,9 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    fn mark_subscribed(&mut self, attempt: &mut u32) {
-        if !self.subscribed {
-            self.subscribed = true;
-            *attempt = 0;
+    fn mark_subscribed(&mut self) {
+        if self.subscribed_at.is_none() {
+            self.subscribed_at = Some(Instant::now());
             info!("epicbox subscribed");
             self.manager.shared.set_state(ConnectionState::Subscribed);
         }
