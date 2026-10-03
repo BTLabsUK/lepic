@@ -181,6 +181,11 @@ Slate c3160940-aa63-461b-963b-3cda6d320cf9.
 `--reply-file <FILE>` writes the answer elsewhere. The amount shows under awaiting finalization
 until the sender posts, then under awaiting confirmation until it is mined.
 
+Receiving the same slate file again, for example after the reply file was lost, writes the reply
+stored the first time again, byte for byte, and stores nothing new; the JSON report has
+`"repeated": true`. A different slate that reuses the slate id is refused, and so is the same
+slate once its transaction was cancelled.
+
 Send. Write S1 to a file, give it to the receiver, and finalize their answer:
 
 ```
@@ -359,5 +364,5 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `stored but was not delivered` (exit 11) | The relay did not take the slate; check the address and its port, then `tx resend` or `tx cancel`. |
 | `epicbox subscription failed` | The relay at `epicbox_relay` is unreachable. |
 | `invoice amount differs from the approved amount` | The amount you typed is not the one in the invoice; nothing was paid. |
-| `was already received as transaction N` | That slate was answered before; give the sender the existing `.response` file. |
+| `was already received as transaction N` | The file is a different slate under the id of one received before, or that transaction was cancelled. The same slate again would have rewritten its reply. |
 | `finalized but the node did not accept it` (exit 11) | The node neither took the transaction nor holds its kernel. Check the node, then `lepic tx post <ID>`. |

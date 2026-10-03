@@ -533,6 +533,7 @@ impl<H: Host> Run<'_, H> {
             slate_id: received.slate.id().to_string(),
             amount: format_amount(received.slate.amount()),
             reply_file: reply.display().to_string(),
+            repeated: received.repeated,
         }))
     }
 

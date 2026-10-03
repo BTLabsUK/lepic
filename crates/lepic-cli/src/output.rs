@@ -121,6 +121,8 @@ pub struct ReceiveReport {
     pub slate_id: String,
     pub amount: String,
     pub reply_file: String,
+    /// The slate was received before; `reply_file` holds the reply stored then.
+    pub repeated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -408,6 +410,12 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             "Transaction {} sent again by {} to {}.",
             r.tx_id, r.transport, r.destination
         ),
+        Report::Receive(r) if r.repeated => writeln!(
+            out,
+            "Transaction {} received this slate before; its reply is written again. Return {} \
+             to the sender.\nSlate {}.",
+            r.tx_id, r.reply_file, r.slate_id
+        ),
         Report::Receive(r) => writeln!(
             out,
             "Transaction {} receives {} EPIC. Return {} to the sender.\nSlate {}.",
@@ -646,8 +654,9 @@ mod tests {
                     slate_id: text("s"),
                     amount: text("1"),
                     reply_file: text("f"),
+                    repeated: false,
                 }),
-                vec!["amount", "reply_file", "slate_id", "tx_id"],
+                vec!["amount", "repeated", "reply_file", "slate_id", "tx_id"],
             ),
             (
                 Report::Finalize(FinalizeReport {
@@ -878,6 +887,32 @@ mod tests {
         let unknown = render(&Report::Show(tx(Some(vec![]))), OutputFormat::Human).to_string();
         assert!(unknown.contains("\nKernel       -\n"), "{unknown}");
         assert!(unknown.contains("\nConfirmed at -\n"), "{unknown}");
+    }
+
+    #[test]
+    fn a_repeated_receive_says_the_reply_was_written_again() {
+        let rendered = |repeated| {
+            let report = Report::Receive(ReceiveReport {
+                tx_id: 4,
+                slate_id: text("s"),
+                amount: text("1.50000000"),
+                reply_file: text("pay.slate.response"),
+                repeated,
+            });
+            render(&report, OutputFormat::Human).to_string()
+        };
+        let first = rendered(false);
+        let again = rendered(true);
+        assert!(
+            first.starts_with("Transaction 4 receives 1.50000000 EPIC."),
+            "{first}"
+        );
+        assert!(
+            again.starts_with(
+                "Transaction 4 received this slate before; its reply is written again."
+            ) && again.contains("Return pay.slate.response to the sender."),
+            "{again}"
+        );
     }
 
     #[test]

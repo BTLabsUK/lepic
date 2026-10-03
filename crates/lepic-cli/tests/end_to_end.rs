@@ -94,8 +94,9 @@ fn send_receive_and_finalize_through_files() {
         .json();
     assert_eq!(
         keys(&received),
-        ["amount", "reply_file", "slate_id", "tx_id"]
+        ["amount", "repeated", "reply_file", "slate_id", "tx_id"]
     );
+    assert_eq!(received["repeated"], false);
     assert_eq!(received["slate_id"], sent["slate_id"]);
     assert_eq!(received["amount"], "1.50000000");
     let reply = text(&received, "reply_file").to_owned();
@@ -156,6 +157,58 @@ fn send_receive_and_finalize_through_files() {
         "{:?}",
         host.node.violations()
     );
+}
+
+/// A reply file lost after the receive stored it is written again by receiving the same slate,
+/// and the sender finalizes that copy. Another slate under the same id is refused.
+#[test]
+fn receiving_the_same_slate_again_writes_the_same_reply() {
+    let (host, sender, receiver) = two_wallets();
+    let slate = sender.path("payment.slate");
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1.5", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let receive = ["tx", "receive", slate.to_str().unwrap()];
+    let first = receiver.run(&host, &receive).ok().json();
+    let reply = text(&first, "reply_file").to_owned();
+    let first_bytes = std::fs::read(&reply).unwrap();
+    std::fs::remove_file(&reply).unwrap();
+
+    let again = receiver.run(&host, &receive).ok().json();
+
+    assert_eq!(again["repeated"], true, "{again}");
+    assert_eq!(again["tx_id"], first["tx_id"]);
+    assert_eq!(again["slate_id"], first["slate_id"]);
+    assert_eq!(again["reply_file"], first["reply_file"]);
+    assert_eq!(std::fs::read(&reply).unwrap(), first_bytes);
+    let finalized = sender.run(&host, &["tx", "finalize", &reply]).ok().json();
+    assert_eq!(finalized["tx_id"], sent["tx_id"]);
+    assert_eq!(finalized["state"], "posted");
+    assert_eq!(host.node.pushed_transactions().len(), 1);
+    let list = receiver.run(&host, &["tx", "list"]).ok().json();
+    assert_eq!(list["transactions"].as_array().unwrap().len(), 1, "{list}");
+
+    let mut changed: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&slate).unwrap()).unwrap();
+    changed["amount"] = serde_json::Value::String("1".to_owned());
+    let changed_path = sender.path("changed.slate");
+    std::fs::write(&changed_path, changed.to_string()).unwrap();
+    let refused = receiver.run(&host, &["tx", "receive", changed_path.to_str().unwrap()]);
+    assert_eq!(refused.code, 7, "{refused:?}");
+    let error = &refused.json()["error"];
+    assert_eq!(error["kind"], "rejected");
+    assert!(
+        error["causes"][0]
+            .as_str()
+            .unwrap()
+            .contains("was already received as transaction"),
+        "{error}"
+    );
+    assert!(!sender.path("changed.slate.response").exists());
 }
 
 #[test]
