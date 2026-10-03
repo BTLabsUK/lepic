@@ -397,7 +397,8 @@ enum WalletEventKind {
   /// The balance of one account after a refresh: `account` and `balance` are set.
   balance,
 
-  /// A transaction changed state: `tx_id`, `from` and `to` are set.
+  /// A transaction changed state: `tx_id`, `from` and `to` are set. A transaction a received
+  /// slate just created has `to` set to `Received` and no `from`.
   transaction,
 
   /// Scan progress: `height` and `target_height` are set.
