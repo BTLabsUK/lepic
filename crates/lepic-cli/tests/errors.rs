@@ -209,3 +209,25 @@ fn an_invoice_for_another_amount_is_refused_and_writes_no_reply() {
     );
     assert!(!issuer.path("invoice.slate.response").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_data_directory_other_users_can_access_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let host = TestHost::new();
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let set_mode = |mode| {
+        std::fs::set_permissions(wallet.data_dir(), std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+
+    set_mode(0o755);
+    let outcome = wallet.run(&host, &["wallet", "info"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (1, "internal")
+    );
+
+    set_mode(0o700);
+    wallet.run(&host, &["wallet", "info"]).ok();
+}
