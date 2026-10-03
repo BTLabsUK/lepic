@@ -73,6 +73,10 @@ hooks:
       native_dir: ../lepic-native # holds <rust triple>/liblepic_ffi.*
 ```
 
+A relative `native_dir` is resolved against the directory of the app's `pubspec.yaml` (the
+workspace root pubspec in a pub workspace), not against this package. Under it, each target needs
+its own `<rust triple>/` directory, so flatten or rename CI artifact layouts to match.
+
 - The libraries link against Android API 24; the hook fails for an app with a lower `minSdk`.
 - They need no C++ runtime, so the app ships no `libc++_shared.so` for LEPIC.
 - A missing library fails the app build with the `cargo xtask mobile` command that makes it.
@@ -80,7 +84,10 @@ hooks:
 
 To switch the app from its own Rust crate: depend on this package by path or git, delete the
 app's `hook/build.dart` and `rust/`, and drop its direct `flutter_rust_bridge_hooks` and
-`code_assets` dependencies unless something else uses them. `await RustLib.init()` stays.
+`code_assets` dependencies unless something else uses them. `await RustLib.init()` stays. This is
+not a drop-in swap: the app's imports of its own generated bindings
+(`package:epic_wallet/src/rust/...`) change to `package:lepic/lepic.dart`, and its calls change to
+the API in "Switching the app from its earlier binding" below.
 
 ## Secrets at the boundary
 
