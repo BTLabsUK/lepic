@@ -130,6 +130,21 @@ fn password(mut text: Zeroizing<String>) -> Password {
     Password::new(std::mem::take(&mut *text))
 }
 
+fn relay_endpoint(config: &WalletConfig) -> Result<RelayEndpoint, WalletError> {
+    let domain = Domain::parse(&config.epicbox_domain)
+        .map_err(|_| invalid("epicbox domain is not a host name"))?;
+    let security = if domain.is_loopback() {
+        Security::Plain
+    } else {
+        Security::Tls
+    };
+    Ok(RelayEndpoint::new(
+        domain,
+        Some(config.epicbox_port),
+        security,
+    ))
+}
+
 fn epicbox_transport(
     runtime: &RuntimeInner,
     config: &WalletConfig,
@@ -138,9 +153,7 @@ fn epicbox_transport(
     if config.epicbox_domain.is_empty() {
         return Ok(None);
     }
-    let domain = Domain::parse(&config.epicbox_domain)
-        .map_err(|_| invalid("epicbox domain is not a host name"))?;
-    let endpoint = RelayEndpoint::new(domain, Some(config.epicbox_port), Security::Tls);
+    let endpoint = relay_endpoint(config)?;
     #[cfg(test)]
     if let Some(relay) = &runtime.relay {
         return Ok(Some(EpicboxTransport::new(
@@ -903,6 +916,35 @@ mod tests {
             amount: Amount::new(100_000_000),
             transport: TRANSPORT_ID,
         })
+    }
+
+    fn relay_config(domain: &str) -> WalletConfig {
+        WalletConfig {
+            data_dir: String::new(),
+            chain: crate::api::types::Chain::Mainnet,
+            node_url: String::new(),
+            node_api_secret: None,
+            epicbox_domain: domain.to_owned(),
+            epicbox_port: 3423,
+        }
+    }
+
+    #[test]
+    fn a_loopback_relay_is_reached_without_tls_and_any_other_with_tls() {
+        for domain in ["localhost", "LocalHost", "127.0.0.1", "127.1.2.3"] {
+            let endpoint = relay_endpoint(&relay_config(domain)).unwrap();
+            assert_eq!(endpoint.security(), Security::Plain, "{domain}");
+            assert_eq!(endpoint.port(), 3423, "{domain}");
+        }
+        for domain in [
+            "epicbox.epiccash.com",
+            "localhost.example",
+            "128.0.0.1",
+            "10.0.0.1",
+        ] {
+            let endpoint = relay_endpoint(&relay_config(domain)).unwrap();
+            assert_eq!(endpoint.security(), Security::Tls, "{domain}");
+        }
     }
 
     #[test]

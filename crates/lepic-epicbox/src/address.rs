@@ -70,6 +70,16 @@ impl Domain {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// `localhost` or an IPv4 loopback address: the only hosts a plain websocket may reach.
+    /// IPv6 `::1` is absent because a domain cannot hold an IPv6 literal.
+    pub fn is_loopback(&self) -> bool {
+        self.0.eq_ignore_ascii_case("localhost")
+            || self
+                .0
+                .parse::<std::net::Ipv4Addr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    }
 }
 
 impl Default for Domain {

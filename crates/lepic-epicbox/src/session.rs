@@ -73,7 +73,7 @@ impl RelayEndpoint {
 
     /// Refuses a plain websocket to a host that is not loopback; TLS may reach any host.
     pub fn check_security(&self) -> Result<(), EndpointError> {
-        if self.security == Security::Plain && !is_loopback(&self.domain) {
+        if self.security == Security::Plain && !self.domain.is_loopback() {
             return Err(EndpointError::PlainToRemoteHost);
         }
         Ok(())
@@ -116,16 +116,6 @@ pub trait Connector: Send + Sync {
 pub enum EndpointError {
     #[error("plain websocket relay is not a loopback host")]
     PlainToRemoteHost,
-}
-
-/// `localhost` or an IPv4 loopback address, the only hosts a plain websocket may reach. IPv6
-/// `::1` is absent because [`Domain`] cannot hold an IPv6 literal.
-fn is_loopback(domain: &Domain) -> bool {
-    let host = domain.as_str();
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::Ipv4Addr>()
-            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// TCP, with TLS from the given rustls configuration when the endpoint asks for it (ADR 0006).

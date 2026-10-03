@@ -290,7 +290,8 @@ class WalletConfig {
   /// Basic-auth secret for the node, when it needs one.
   final String? nodeApiSecret;
 
-  /// Epicbox relay domain, such as `epicbox.epiccash.com`. Empty disables Epicbox.
+  /// Epicbox relay domain, such as `epicbox.epiccash.com`. Empty disables Epicbox. A loopback
+  /// host (`localhost` or `127.x.x.x`) is reached over a plain websocket, any other over TLS.
   final String epicboxDomain;
   final int epicboxPort;
 

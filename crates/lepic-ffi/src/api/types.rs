@@ -29,7 +29,8 @@ pub struct WalletConfig {
     pub node_url: String,
     /// Basic-auth secret for the node, when it needs one.
     pub node_api_secret: Option<String>,
-    /// Epicbox relay domain, such as `epicbox.epiccash.com`. Empty disables Epicbox.
+    /// Epicbox relay domain, such as `epicbox.epiccash.com`. Empty disables Epicbox. A loopback
+    /// host (`localhost` or `127.x.x.x`) is reached over a plain websocket, any other over TLS.
     pub epicbox_domain: String,
     pub epicbox_port: u16,
 }
