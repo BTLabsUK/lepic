@@ -517,10 +517,11 @@ impl EpicWallet {
         boundary.handle.spawn(async move {
             let sink = events.clone();
             let listening = runner
-                .run(
-                    "listen",
-                    async move { session.listen(&handle, &sink).await },
-                )
+                .run("listen", async move {
+                    // A closed stream only means the app stopped listening.
+                    let report = |event| drop(sink.add(event));
+                    session.listen(&handle, report).await
+                })
                 .await;
             if let Err(error) = listening {
                 let _ = events.add(ListenerEvent {

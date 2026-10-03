@@ -34,6 +34,7 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 lepic-ffi = { path = ".", features = ["mock"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }

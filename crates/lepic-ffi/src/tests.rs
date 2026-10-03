@@ -241,6 +241,61 @@ fn an_implausible_node_answer_reaches_the_app_as_a_node_error() {
     );
 }
 
+/// Polls `done` every 10 ms for up to five seconds.
+async fn eventually(done: impl Fn() -> bool) -> bool {
+    for _ in 0..500 {
+        if done() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    done()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lock_stops_the_listener_and_closes_its_relay_connection() {
+    let relay = lepic_epicbox::mock_relay::MockRelay::new(lepic_epicbox::Network::Floonet);
+    let mut fixture = Fixture::new();
+    std::sync::Arc::get_mut(&mut fixture.runtime.inner)
+        .unwrap()
+        .relay = Some(relay.connector());
+    let mut config = WalletConfig {
+        epicbox_domain: "epicbox.example".to_owned(),
+        ..fixture.config()
+    };
+    let secret = crate::node::NodeSecret::take(&mut config);
+    let session = std::sync::Arc::new(
+        crate::session::Session::new(
+            &fixture.runtime.inner,
+            &config,
+            &secret,
+            AppSecretStore::in_memory(),
+        )
+        .unwrap(),
+    );
+    session
+        .create(None, zeroize::Zeroizing::new("password".to_owned()))
+        .await
+        .unwrap();
+
+    let handle = session.claim_listener().unwrap().unwrap();
+    let listening = tokio::spawn({
+        let session = std::sync::Arc::clone(&session);
+        async move { session.listen(&handle, |_| {}).await }
+    });
+    assert!(eventually(|| relay.connections() == 1).await);
+    assert!(session.listener_running());
+
+    session.lock();
+    assert!(!session.listener_running());
+    assert!(eventually(|| relay.connections() == 0).await);
+    tokio::time::timeout(std::time::Duration::from_secs(5), listening)
+        .await
+        .expect("the listener ended")
+        .unwrap()
+        .unwrap();
+}
+
 #[tokio::test]
 async fn slate_text_above_the_wire_limit_is_refused_before_it_is_written() {
     let fixture = Fixture::new();

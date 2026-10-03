@@ -131,6 +131,7 @@ fn password(mut text: Zeroizing<String>) -> Password {
 }
 
 fn epicbox_transport(
+    runtime: &RuntimeInner,
     config: &WalletConfig,
     network: Network,
 ) -> Result<Option<EpicboxTransport>, WalletError> {
@@ -140,6 +141,16 @@ fn epicbox_transport(
     let domain = Domain::parse(&config.epicbox_domain)
         .map_err(|_| invalid("epicbox domain is not a host name"))?;
     let endpoint = RelayEndpoint::new(domain, Some(config.epicbox_port), Security::Tls);
+    #[cfg(test)]
+    if let Some(relay) = &runtime.relay {
+        return Ok(Some(EpicboxTransport::new(
+            ClientSettings::new(endpoint),
+            relay_network(network),
+            Arc::clone(relay),
+        )));
+    }
+    #[cfg(not(test))]
+    let _ = runtime;
     let tls = webpki_tls_config().map_err(|error| node_error(&error))?;
     Ok(Some(EpicboxTransport::new(
         ClientSettings::new(endpoint),
@@ -160,7 +171,7 @@ impl Session {
         let data_dir = PathBuf::from(&config.data_dir);
         let claim = runtime.claim(&data_dir)?;
         let node = runtime.nodes.client(config, node_secret)?;
-        let epicbox = epicbox_transport(config, network)?;
+        let epicbox = epicbox_transport(runtime, config, network)?;
         let mut transports = TransportRegistry::new();
         let mut ids = vec![FILE];
         transports
@@ -592,11 +603,11 @@ impl Session {
         Ok(Some(handle))
     }
 
-    /// Runs the listener until `handle` is stopped, forwarding what it does to `sink`.
+    /// Runs the listener until `handle` is stopped, handing what it does to `report`.
     pub(crate) async fn listen(
         &self,
         handle: &ListenHandle,
-        sink: &StreamSink<ListenerEvent>,
+        report: impl Fn(ListenerEvent),
     ) -> Result<(), WalletError> {
         let epicbox = self.epicbox()?;
         let mut events = self.engine.subscribe();
@@ -608,7 +619,7 @@ impl Session {
                 event = events.recv() => match event {
                     Ok(event) => {
                         if let Some(event) = listener_event(&event) {
-                            let _ = sink.add(event);
+                            report(event);
                         }
                     }
                     Err(RecvError::Lagged(_)) => {}
