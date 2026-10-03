@@ -8,6 +8,7 @@ use lepic_store::{AccountIndex, AccountRecord, Repositories};
 use thiserror::Error;
 
 use crate::error::WalletError;
+use crate::lifecycle;
 
 pub const MAX_ACCOUNT_LABEL_LEN: usize = 64;
 
@@ -144,10 +145,15 @@ pub(crate) fn account_by_label(
 
 /// Reserves the account's next output key, `m/<index>/0/<child>`, and advances its counter in
 /// the same store transaction, so a key is never handed out twice.
+///
+/// Fails with [`WalletError::RestoreScanRequired`] on a database rebuilt from the seed before a
+/// scan from genesis completed, since a key the counter has not passed may already be in use on
+/// chain.
 pub fn next_output_key(
     repos: &mut dyn Repositories,
     account: AccountIndex,
 ) -> Result<Identifier, WalletError> {
+    lifecycle::ensure_restore_scanned(repos)?;
     let mut record = repos
         .account(account)?
         .ok_or(AccountError::UnknownAccount(account))?;
@@ -287,6 +293,23 @@ mod tests {
                 AccountIndex(0)
             )))
         ));
+    }
+
+    #[test]
+    fn refuses_output_keys_until_the_restore_scan_of_a_rebuilt_database_completes() {
+        let store = store_with_default_account();
+        store
+            .write(|repos| repos.put_setting("wallet.restore_scan_required", "true"))
+            .unwrap();
+        let result = store.write(|repos| next_output_key(repos, AccountIndex(0)));
+        assert!(matches!(result, Err(WalletError::RestoreScanRequired)));
+        store
+            .write(|repos| Ok::<_, WalletError>(lifecycle::restore_scan_completed(repos)?))
+            .unwrap();
+        let key = store
+            .write(|repos| next_output_key(repos, AccountIndex(0)))
+            .unwrap();
+        assert_eq!(key.to_bip32_path(), "m/0/0/0");
     }
 
     #[test]

@@ -53,7 +53,6 @@ pub use build::{
 use crate::account::{AccountError, next_output_key};
 use crate::error::WalletError;
 use crate::finalize::{Finalized, FinalizedSlate};
-use crate::lifecycle;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
 use crate::send::{ChangeOutput, Delivery, SendRequest, block_header_version};
@@ -378,7 +377,6 @@ fn issue_stored(
     if repos.account(request.account)?.is_none() {
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
-    lifecycle::ensure_restore_scanned(repos)?;
     let key_id = next_output_key(repos, request.account)?;
     let built = build_i1(
         env.keychain,
@@ -765,8 +763,9 @@ where
     /// for another amount than `request.amount`, [`InvoiceError::AlreadyPaid`] for an invoice
     /// this wallet paid before, [`InvoiceError::Expired`] when the tip has reached the
     /// invoice's TTL cutoff, a [`InvoiceError::Selection`] error, and a typed rejection for
-    /// any slate that is malformed, not an I1, or whose message does not verify. Nothing is
-    /// stored on failure.
+    /// any slate that is malformed, not an I1, or whose message does not verify. A payment with
+    /// change fails with [`WalletError::RestoreScanRequired`] on a database rebuilt from the
+    /// seed before a scan from genesis completed. Nothing is stored on failure.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
         transport = %transport,

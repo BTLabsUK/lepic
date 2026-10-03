@@ -250,6 +250,30 @@ fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() 
 }
 
 #[test]
+fn a_send_with_change_waits_for_the_restore_scan_of_a_rebuilt_database() {
+    let sender = Sender::new();
+    // As after a restore whose scan from genesis stopped part way: the funding output is
+    // stored, the change key counter may still be behind keys in use on chain.
+    sender
+        .store
+        .write(|repos| repos.put_setting("wallet.restore_scan_required", "true"))
+        .unwrap();
+
+    let error = sender
+        .harness
+        .block_on(sender.wallet.send(request(AMOUNT), to(PEER)))
+        .unwrap_err();
+
+    assert!(
+        matches!(error, SendError::Wallet(WalletError::RestoreScanRequired)),
+        "{error:?}"
+    );
+    assert!(sender.transactions().is_empty());
+    assert_eq!(sender.next_child(), NEXT_CHILD);
+    assert!(sender.received().is_none());
+}
+
+#[test]
 fn refuses_a_send_the_outputs_cannot_cover_before_storing_anything() {
     let sender = Sender::new();
     let error = sender

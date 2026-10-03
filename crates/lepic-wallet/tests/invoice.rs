@@ -201,6 +201,34 @@ fn a_restored_wallet_issues_invoices_only_after_its_restore_scan() {
 }
 
 #[test]
+fn a_restored_wallet_pays_an_invoice_with_change_only_after_its_restore_scan() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = issuer.delivered().unwrap();
+    let payer = Party::restored_without_scan(PAYER_MNEMONIC, &node);
+    payer.fund(0, FUNDING);
+    payer.set_next_child(1);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::Wallet(WalletError::RestoreScanRequired)
+        ),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+    let funding = payer.read(|repos| repos.outputs(ACCOUNT, None));
+    assert!(
+        funding
+            .iter()
+            .all(|output| output.status == OutputStatus::Unspent)
+    );
+}
+
+#[test]
 fn issuing_stores_the_invoice_and_delivers_the_i1() {
     let node = node();
     let issuer = Party::new(ISSUER_MNEMONIC, &node);

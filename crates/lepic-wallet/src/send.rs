@@ -815,7 +815,9 @@ where
     /// when the wallet is locked, [`SendError::Node`] when the chain tip is unavailable, [`SendError::UnknownTransport`],
     /// [`SendError::CannotDeliver`] or [`SendError::CannotExport`], a
     /// [`SendError::Selection`] error, or [`SendError::Unrepresentable`] when the transport's
-    /// format cannot carry the slate. Fails with [`SendError::Undelivered`] when the slate was
+    /// format cannot carry the slate. A send with change fails with
+    /// [`WalletError::RestoreScanRequired`] on a database rebuilt from the seed before a scan
+    /// from genesis completed. Fails with [`SendError::Undelivered`] when the slate was
     /// stored but the transport failed; the transaction then waits for
     /// [`Wallet::resend`] or [`Wallet::cancel`].
     #[instrument(skip_all, fields(

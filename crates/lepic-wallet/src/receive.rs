@@ -46,7 +46,7 @@ use zeroize::Zeroizing;
 
 use crate::account::{self, DEFAULT_ACCOUNT_LABEL};
 use crate::error::WalletError;
-use crate::lifecycle::{self, Session};
+use crate::lifecycle::Session;
 use crate::ports::{Ports, SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
@@ -366,7 +366,6 @@ fn respond<D>(
             tx_id: stored.id,
         });
     }
-    lifecycle::ensure_restore_scanned(repos)?;
     let label = request.account.as_deref().unwrap_or(DEFAULT_ACCOUNT_LABEL);
     let account = account::account_by_label(repos, label)?;
     let key_id = account::next_output_key(repos, account.index)?;
