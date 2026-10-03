@@ -1,10 +1,12 @@
 // Runs the binding against the local interop chain: a reference node, an Epicbox relay and
 // the epic-wallet funder of interop/acceptance. Skipped unless LEPIC_INTEROP=1. With the stack
-// running (interop/acceptance/run.sh --stack-only, see README.md):
-//   cargo build -p lepic-ffi
-//   LEPIC_INTEROP=1 flutter test test/interop_test.dart
-// LEPIC_FFI_LIB overrides the library path.
+// running (interop/acceptance/run.sh --stack-only, see README.md), from the repository root:
+//   cargo xtask mobile --host-test
+//   cd bindings/flutter && LEPIC_INTEROP=1 flutter test test/interop_test.dart
+// The first command fills `test_native/`, which the build hook bundles as wallet_test.dart
+// describes; the mock build reaches the real node and relay like any other.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
@@ -19,9 +21,26 @@ final bool enabled = Platform.environment['LEPIC_INTEROP'] == '1';
 final String chainScript =
     '${Directory.current.path}/../../interop/acceptance/chain.sh';
 
-String libraryPath() =>
-    Platform.environment['LEPIC_FFI_LIB'] ??
-    '${Directory.current.path}/../../target/debug/liblepic_ffi.so';
+/// The library the build hook installed, as recorded in its manifest; see wallet_test.dart.
+String libraryPath() {
+  const assetId = 'package:lepic/src/rust/frb_generated.io.dart';
+  final manifest = File('build/native_assets/linux/native_assets.json');
+  if (!manifest.existsSync()) {
+    throw StateError(
+      'No ${manifest.path}: the build hook bundled no library. '
+      'Run `cargo xtask mobile --host-test` from the LEPIC repository.',
+    );
+  }
+  return switch (jsonDecode(manifest.readAsStringSync())) {
+    {
+      'native-assets': {
+        'linux_x64': {assetId: ['absolute', final String path]},
+      },
+    } =>
+      path,
+    _ => throw StateError('${manifest.path} has no absolute path for $assetId'),
+  };
+}
 
 class MemoryStore implements SecretStore {
   final Map<String, String> values = {};

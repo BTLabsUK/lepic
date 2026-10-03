@@ -310,9 +310,10 @@ after the chain starts, so `fund` waits for it.
 
 `test/interop_test.dart` does this end to end: it creates a wallet, is funded 10 EPIC by the
 funder over Epicbox, refreshes until the funds are spendable, sends 2 EPIC back by file and waits
-until the change is spendable. It is skipped unless `LEPIC_INTEROP=1`:
+until the change is spendable. It is skipped unless `LEPIC_INTEROP=1`. With the stack running,
+from the repository root (the first command fills `test_native/`, see Develop):
 
 ```sh
-cargo build -p lepic-ffi
+cargo xtask mobile --host-test
 cd bindings/flutter && LEPIC_INTEROP=1 flutter test test/interop_test.dart
 ```
