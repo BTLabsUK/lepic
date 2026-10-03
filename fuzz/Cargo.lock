@@ -637,6 +637,7 @@ name = "lepic-transport"
 version = "0.1.0"
 dependencies = [
  "lepic-slate",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
