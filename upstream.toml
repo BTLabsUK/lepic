@@ -98,6 +98,41 @@ upstream.paths = ["core/src/core/transaction.rs", "core/src/core/committed.rs"]
 upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
 
 [[module]]
+path = "crates/lepic-crypto/src/public_key"
+task = "C-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = ["libwallet/src/message.rs"]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-crypto/src/limits"
+task = "C-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/consensus.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-crypto/src/commitment"
+task = "C-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/ser.rs", "core/src/libtx/secp_ser.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-crypto/src/signature"
+task = "C-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/ser.rs", "core/src/libtx/secp_ser.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
+path = "crates/lepic-crypto/src/proof"
+task = "C-01"
+upstream.repo = "https://github.com/EpicCash/epic"
+upstream.paths = ["core/src/ser.rs", "core/src/libtx/secp_ser.rs"]
+upstream.commit = "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+
+[[module]]
 path = "crates/lepic-crypto/src/aggsig"
 task = "C-02"
 upstream.repo = "https://github.com/EpicCash/epic"
