@@ -23,7 +23,7 @@ use tracing::{Instrument, debug, info, info_span, warn};
 use crate::address::EpicboxAddress;
 use crate::client::{Awaiting, CancelToken, ClientContext, ClientError, ErrorChain, TRANSPORT_ID};
 use crate::crypto::{MessageError, ReceivedMessage};
-use crate::frame::{ClientFrame, RelayFrame, SlateFrame, WalletMode};
+use crate::frame::{ClientFrame, RelayFrame, RelayMessageId, SlateFrame, WalletMode};
 use crate::session::{Connection, Greeting, ProtocolVersion, deadline_after};
 
 /// Acknowledged message ids remembered per subscription, so a redelivery after a lost `Made`
@@ -115,7 +115,7 @@ impl From<&MessageError> for RejectionReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejection {
     ack_token: AckToken,
-    msg_id: Option<String>,
+    msg_id: Option<RelayMessageId>,
     sender: Option<String>,
     reason: RejectionReason,
 }
@@ -127,7 +127,7 @@ impl Rejection {
 
     /// The relay message id, when the relay sent one.
     pub fn msg_id(&self) -> Option<&str> {
-        self.msg_id.as_deref()
+        self.msg_id.as_ref().map(RelayMessageId::as_str)
     }
 
     /// The sender's address text, when `from` parsed. A sender that did not sign the message is
@@ -331,7 +331,7 @@ impl Inbound for Subscription {
 }
 
 struct Command {
-    msg_id: String,
+    msg_id: RelayMessageId,
     reply: oneshot::Sender<Result<(), ClientError>>,
 }
 
@@ -373,12 +373,12 @@ struct InboxState {
     /// Whether the relay may still deliver without the caller doing anything.
     expecting: bool,
     relay_version: Option<ProtocolVersion>,
-    ready: VecDeque<(Option<String>, Envelope)>,
+    ready: VecDeque<(Option<RelayMessageId>, Envelope)>,
     rejected: VecDeque<Rejection>,
     /// Handed-out envelopes and rejections by token, with the relay message id to acknowledge, if any.
-    handed_out: HashMap<AckToken, Option<String>>,
-    acknowledged: HashSet<String>,
-    acknowledged_order: VecDeque<String>,
+    handed_out: HashMap<AckToken, Option<RelayMessageId>>,
+    acknowledged: HashSet<RelayMessageId>,
+    acknowledged_order: VecDeque<RelayMessageId>,
     local_tokens: u64,
 }
 
@@ -411,18 +411,15 @@ impl InboxState {
         }
     }
 
-    fn seen(&self, msg_id: &str) -> Seen {
+    fn seen(&self, msg_id: &RelayMessageId) -> Seen {
         if self.acknowledged.contains(msg_id) {
             Seen::Acknowledged
         } else if self.handed_out.values().flatten().any(|id| id == msg_id)
-            || self
-                .ready
-                .iter()
-                .any(|(id, _)| id.as_deref() == Some(msg_id))
+            || self.ready.iter().any(|(id, _)| id.as_ref() == Some(msg_id))
             || self
                 .rejected
                 .iter()
-                .any(|rejection| rejection.msg_id.as_deref() == Some(msg_id))
+                .any(|rejection| rejection.msg_id.as_ref() == Some(msg_id))
         {
             Seen::Held
         } else {
@@ -430,29 +427,32 @@ impl InboxState {
         }
     }
 
-    fn token_for(&mut self, msg_id: Option<&str>) -> AckToken {
+    /// A relay message is acknowledged by its id, so the id is its token. A message without one
+    /// gets a local token containing `:`, which no [`RelayMessageId`] contains, so the two never
+    /// collide and [`crate::transport::relay_message_id`] tells them apart.
+    fn token_for(&mut self, msg_id: Option<&RelayMessageId>) -> AckToken {
         match msg_id {
-            Some(msg_id) => AckToken::new(msg_id.to_owned()),
+            Some(msg_id) => AckToken::new(msg_id.to_string()),
             None => {
                 self.local_tokens = self.local_tokens.wrapping_add(1);
-                AckToken::new(format!("local-{}", self.local_tokens))
+                AckToken::new(format!("local:{}", self.local_tokens))
             }
         }
     }
 
-    fn push(&mut self, msg_id: Option<String>, reply_to: Destination, wire: WireSlate) {
-        let token = self.token_for(msg_id.as_deref());
+    fn push(&mut self, msg_id: Option<RelayMessageId>, reply_to: Destination, wire: WireSlate) {
+        let token = self.token_for(msg_id.as_ref());
         self.ready
             .push_back((msg_id, Envelope::new(token, Some(reply_to), wire)));
     }
 
     fn push_rejection(
         &mut self,
-        msg_id: Option<String>,
+        msg_id: Option<RelayMessageId>,
         sender: Option<String>,
         reason: RejectionReason,
     ) {
-        let ack_token = self.token_for(msg_id.as_deref());
+        let ack_token = self.token_for(msg_id.as_ref());
         self.rejected.push_back(Rejection {
             ack_token,
             msg_id,
@@ -465,11 +465,10 @@ impl InboxState {
         self.ready.len().saturating_add(self.rejected.len())
     }
 
-    fn record_acknowledged(&mut self, msg_id: &str) {
-        self.handed_out
-            .retain(|_, id| id.as_deref() != Some(msg_id));
-        if self.acknowledged.insert(msg_id.to_owned()) {
-            self.acknowledged_order.push_back(msg_id.to_owned());
+    fn record_acknowledged(&mut self, msg_id: &RelayMessageId) {
+        self.handed_out.retain(|_, id| id.as_ref() != Some(msg_id));
+        if self.acknowledged.insert(msg_id.clone()) {
+            self.acknowledged_order.push_back(msg_id.clone());
         }
         while self.acknowledged_order.len() > REMEMBERED_ACKNOWLEDGEMENTS {
             if let Some(oldest) = self.acknowledged_order.pop_front() {
@@ -601,7 +600,7 @@ impl Manager {
 enum Request {
     Subscribe,
     Made {
-        msg_id: String,
+        msg_id: RelayMessageId,
         reply: Option<oneshot::Sender<Result<(), ClientError>>>,
     },
 }
@@ -610,7 +609,7 @@ enum Sent {
     /// Carries the number of the challenge it signed.
     Subscribe { challenge: u64 },
     Made {
-        msg_id: String,
+        msg_id: RelayMessageId,
         reply: Option<oneshot::Sender<Result<(), ClientError>>>,
     },
 }
@@ -860,7 +859,7 @@ impl<'a> Session<'a> {
             (_, msg_id) => {
                 if shared.lock().waiting() >= MAX_READY {
                     debug!(
-                        msg_id = msg_id.as_deref().unwrap_or(""),
+                        msg_id = msg_id.as_ref().map_or("", RelayMessageId::as_str),
                         "epicbox delivery deferred"
                     );
                     return;
@@ -874,7 +873,10 @@ impl<'a> Session<'a> {
                     identity.secret(),
                 ) {
                     Ok(received) => {
-                        info!(msg_id = msg_id.as_deref().unwrap_or(""), "slate received");
+                        info!(
+                            msg_id = msg_id.as_ref().map_or("", RelayMessageId::as_str),
+                            "slate received"
+                        );
                         let reply_to = Destination::new(received.sender.to_string());
                         let wire = WireSlate::text(
                             MediaType::JSON,
@@ -884,7 +886,7 @@ impl<'a> Session<'a> {
                     }
                     Err(error) => {
                         warn!(
-                            msg_id = msg_id.as_deref().unwrap_or(""),
+                            msg_id = msg_id.as_ref().map_or("", RelayMessageId::as_str),
                             error = %ErrorChain(&error),
                             "epicbox message rejected"
                         );
@@ -900,7 +902,7 @@ impl<'a> Session<'a> {
         }
     }
 
-    fn acknowledge_unasked(&mut self, msg_id: String) {
+    fn acknowledge_unasked(&mut self, msg_id: RelayMessageId) {
         let queued = self
             .queue
             .iter()

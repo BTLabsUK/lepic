@@ -10,9 +10,9 @@
 use lepic_crypto::EcdsaSignature;
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::{
-    ClientFrame, Domain, EpicboxAddress, FrameError, MAX_FRAME_LEN, Network, Nonce,
-    PROTOCOL_VERSION, RelayErrorKind, RelayFrame, Salt, SignedMessage, SlateFrame, WalletMode,
-    verify_text,
+    ClientFrame, Domain, EpicboxAddress, FrameError, MAX_FRAME_LEN, MAX_RELAY_MESSAGE_ID_LEN,
+    Network, Nonce, PROTOCOL_VERSION, RelayErrorKind, RelayFrame, RelayMessageId, Salt,
+    SignedMessage, SlateFrame, WalletMode, verify_text,
 };
 use proptest::prelude::*;
 
@@ -31,6 +31,23 @@ fn address(byte: u8, port: Option<u16>) -> EpicboxAddress {
 
 fn relay(text: &str) -> RelayFrame {
     RelayFrame::from_json(text).unwrap()
+}
+
+fn msg_id(text: &str) -> RelayMessageId {
+    RelayMessageId::parse(text).unwrap()
+}
+
+fn slate_with_message_id(id: &str) -> String {
+    serde_json::json!({
+        "type": "Slate",
+        "from": "a",
+        "str": "s",
+        "signature": "30",
+        "challenge": "",
+        "epicboxmsgid": id,
+        "ver": "3.0.0",
+    })
+    .to_string()
 }
 
 #[test]
@@ -53,7 +70,7 @@ fn client_frames_serialize_in_upstream_shape() {
         @r#"{"type":"Subscribe","address":"esYTimgooNuxKXdEEXJk3fbXoy2HWyyY2CaRXYU8Z8B7fSPyz6YL","ver":"3.0.0","signature":"304402207aa124804523b62e52206f7711254c8756e6780a124b504d106c3b68b6b2864e02207dc6396ecf47517cdffa1a3932325dfe2b8dbcda563611097b3d407bbcb4bda2"}"#
     );
     insta::assert_snapshot!(
-        ClientFrame::made(&address(2, None), "Rk4pW7nZ2cT9sLb3XyQ6vH1mJ8dG5fUa", &secret(2))
+        ClientFrame::made(&address(2, None), &msg_id("Rk4pW7nZ2cT9sLb3XyQ6vH1mJ8dG5fUa"), &secret(2))
             .unwrap()
             .to_json()
             .unwrap(),
@@ -129,7 +146,7 @@ fn decodes_every_relay_frame_the_public_relay_sends() {
             str: "{}".to_owned(),
             signature: "30".to_owned(),
             challenge: String::new(),
-            epicboxmsgid: Some("id1".to_owned()),
+            epicboxmsgid: Some(msg_id("id1")),
             ver: Some(PROTOCOL_VERSION.to_owned()),
         })
     );
@@ -230,6 +247,51 @@ fn rejects_known_type_with_mistyped_fields() {
 }
 
 #[test]
+fn accepts_relay_message_ids_up_to_the_limit() {
+    for id in [
+        "Rk4pW7nZ2cT9sLb3XyQ6vH1mJ8dG5fUa",
+        "a",
+        "local-1",
+        "under_score",
+        &"x".repeat(MAX_RELAY_MESSAGE_ID_LEN),
+    ] {
+        let RelayFrame::Slate(slate) = relay(&slate_with_message_id(id)) else {
+            panic!("not a Slate frame");
+        };
+        assert_eq!(slate.epicboxmsgid.unwrap().as_str(), id);
+    }
+}
+
+#[test]
+fn rejects_slate_with_an_oversized_or_unsafe_message_id_as_malformed() {
+    let oversized = "x".repeat(MAX_RELAY_MESSAGE_ID_LEN + 1);
+    for id in [
+        oversized.as_str(),
+        "",
+        "has space",
+        "local:1",
+        "caf\u{e9}",
+        "line\nbreak",
+        "a/b",
+    ] {
+        assert!(
+            matches!(
+                RelayFrame::from_json(&slate_with_message_id(id)),
+                Err(FrameError::Fields { type_name, .. }) if type_name == "Slate"
+            ),
+            "accepted {id:?}"
+        );
+    }
+}
+
+#[test]
+fn relay_message_id_parse_enforces_the_same_rules() {
+    assert!(RelayMessageId::parse("abc-_09").is_ok());
+    assert!(RelayMessageId::parse(&"x".repeat(MAX_RELAY_MESSAGE_ID_LEN + 1)).is_err());
+    assert!(RelayMessageId::parse("é").is_err());
+}
+
+#[test]
 fn rejects_frame_over_the_length_limit_before_parsing() {
     let text = format!(
         "{{\"type\":\"Challenge\",\"str\":\"{}\"}}",
@@ -304,7 +366,7 @@ fn relay_frame() -> impl Strategy<Value = RelayFrame> {
             wire_text(),
             wire_text(),
             wire_text(),
-            proptest::option::of(wire_text()),
+            proptest::option::of("[A-Za-z0-9_-]{1,64}".prop_map(|id| msg_id(&id))),
             proptest::option::of(wire_text()),
         )
             .prop_map(|(from, str, signature, challenge, epicboxmsgid, ver)| {

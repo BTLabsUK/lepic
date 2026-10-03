@@ -104,14 +104,14 @@ impl ClientFrame {
 
     pub fn made(
         own: &EpicboxAddress,
-        epicboxmsgid: &str,
+        epicboxmsgid: &RelayMessageId,
         key: &SecretKey,
     ) -> Result<Self, FrameError> {
         Ok(Self::Made {
             address: own.key_text(),
-            signature: signed(epicboxmsgid, key)?,
+            signature: signed(epicboxmsgid.as_str(), key)?,
             ver: PROTOCOL_VERSION.to_owned(),
-            epicboxmsgid: epicboxmsgid.to_owned(),
+            epicboxmsgid: epicboxmsgid.to_string(),
         })
     }
 
@@ -182,6 +182,65 @@ impl From<RelayErrorKind> for String {
     }
 }
 
+/// Relay message ids longer than this are refused. The public relay issues 32 characters.
+pub const MAX_RELAY_MESSAGE_ID_LEN: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "relay message id is empty, longer than {MAX_RELAY_MESSAGE_ID_LEN} bytes or not [A-Za-z0-9_-]"
+)]
+pub struct InvalidRelayMessageId;
+
+/// The id a relay gives a stored message, which `Made` names to acknowledge it. Never empty, at
+/// most [`MAX_RELAY_MESSAGE_ID_LEN`] bytes of ASCII letters, digits, `-` and `_`, so it is safe to
+/// log and store.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct RelayMessageId(String);
+
+impl RelayMessageId {
+    pub fn parse(text: &str) -> Result<Self, InvalidRelayMessageId> {
+        if Self::is_valid(text) {
+            Ok(Self(text.to_owned()))
+        } else {
+            Err(InvalidRelayMessageId)
+        }
+    }
+
+    pub fn is_valid(text: &str) -> bool {
+        let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+        !text.is_empty() && text.len() <= MAX_RELAY_MESSAGE_ID_LEN && text.bytes().all(allowed)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for RelayMessageId {
+    type Error = InvalidRelayMessageId;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        if Self::is_valid(&text) {
+            Ok(Self(text))
+        } else {
+            Err(InvalidRelayMessageId)
+        }
+    }
+}
+
+impl From<RelayMessageId> for String {
+    fn from(id: RelayMessageId) -> Self {
+        id.0
+    }
+}
+
+impl std::fmt::Display for RelayMessageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A pending message pushed by the relay. `epicboxmsgid` and `ver` are present only when the
 /// subscription carried `ver`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,7 +250,7 @@ pub struct SlateFrame {
     pub signature: String,
     pub challenge: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub epicboxmsgid: Option<String>,
+    pub epicboxmsgid: Option<RelayMessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ver: Option<String>,
 }

@@ -22,17 +22,15 @@ use lepic_transport::transport::{
 
 use crate::address::Network;
 use crate::client::{ClientSettings, EpicboxClient, Identity, TRANSPORT_ID};
+use crate::frame::RelayMessageId;
 use crate::session::Connector;
 
-/// The prefix of the tokens a subscription gives messages that arrived without a relay message
-/// id. Such a message cannot be acknowledged and has nothing to be remembered by.
-const LOCAL_TOKEN_PREFIX: &str = "local-";
-
 /// The relay message id an acknowledgement token stands for, or `None` when the relay sent the
-/// message without one.
+/// message without one. Such a message cannot be acknowledged and has nothing to be remembered
+/// by; its local token is never a valid [`RelayMessageId`].
 pub fn relay_message_id(token: &AckToken) -> Option<&str> {
     let token = token.as_str();
-    (!token.starts_with(LOCAL_TOKEN_PREFIX)).then_some(token)
+    RelayMessageId::is_valid(token).then_some(token)
 }
 
 /// The Epicbox policy of ADR 0003, as `epic-wallet` `v4.0.2` speaks it: the V3 and V2 shapes are
@@ -249,7 +247,15 @@ mod tests {
             relay_message_id(&AckToken::new("mockmsg3".to_owned())),
             Some("mockmsg3")
         );
-        assert_eq!(relay_message_id(&AckToken::new("local-1".to_owned())), None);
+        assert_eq!(relay_message_id(&AckToken::new("local:1".to_owned())), None);
+    }
+
+    #[test]
+    fn relay_ids_that_look_local_still_name_a_relay_message() {
+        assert_eq!(
+            relay_message_id(&AckToken::new("local-1".to_owned())),
+            Some("local-1")
+        );
     }
 
     #[tokio::test]

@@ -24,8 +24,8 @@ pub use crypto::{
     TAG_LEN, sign_text, verify_text,
 };
 pub use frame::{
-    ClientFrame, FrameError, MAX_FRAME_LEN, PROTOCOL_VERSION, RelayErrorKind, RelayFrame,
-    SlateFrame, WalletMode,
+    ClientFrame, FrameError, InvalidRelayMessageId, MAX_FRAME_LEN, MAX_RELAY_MESSAGE_ID_LEN,
+    PROTOCOL_VERSION, RelayErrorKind, RelayFrame, RelayMessageId, SlateFrame, WalletMode,
 };
 pub use session::{
     Connector, DEFAULT_PLAIN_PORT, ProtocolVersion, RelayEndpoint, RelayStream, Security,

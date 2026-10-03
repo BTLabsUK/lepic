@@ -304,6 +304,90 @@ async fn message_with_a_bad_signature_is_rejected_with_its_reason() {
     bob.stop().await.unwrap();
 }
 
+fn slate_frame(from: u8, to: u8, plaintext: &str, msg_id: &str) -> String {
+    let sealed = sealed(from, to, plaintext);
+    serde_json::json!({
+        "type": "Slate",
+        "from": address(from).to_string(),
+        "str": sealed.str,
+        "signature": sealed.signature.to_der_hex(),
+        "challenge": "",
+        "epicboxmsgid": msg_id,
+        "ver": "3.0.0",
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn relay_id_shaped_like_a_local_token_is_still_acknowledged_to_the_relay() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = client(&relay, BOB).listen().unwrap();
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    relay.broadcast(&slate_frame(ALICE, BOB, "slate", "local-1"));
+    within(LONG, bob.delivery_available()).await;
+    let envelope = next(&bob).await.unwrap();
+    assert_eq!(
+        lepic_epicbox::transport::relay_message_id(envelope.ack_token()),
+        Some("local-1")
+    );
+    within(LONG, bob.acknowledge(envelope.ack_token()))
+        .await
+        .unwrap();
+    assert_eq!(relay.received("Made"), 1);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_message_without_an_id_and_a_relay_id_never_share_a_token() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = client(&relay, BOB).listen().unwrap();
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    let unversioned = sealed(ALICE, BOB, "without id");
+    let frame = serde_json::json!({
+        "type": "Slate",
+        "from": address(ALICE).to_string(),
+        "str": unversioned.str,
+        "signature": unversioned.signature.to_der_hex(),
+        "challenge": "",
+    });
+    relay.broadcast(&frame.to_string());
+    relay.broadcast(&slate_frame(ALICE, BOB, "with id", "local-1"));
+    within(LONG, bob.delivery_available()).await;
+    let without_id = next(&bob).await.unwrap();
+    within(LONG, bob.delivery_available()).await;
+    let with_id = next(&bob).await.unwrap();
+    assert_eq!(text(&with_id), "with id");
+    assert_ne!(without_id.ack_token(), with_id.ack_token());
+    assert_eq!(
+        lepic_epicbox::transport::relay_message_id(without_id.ack_token()),
+        None
+    );
+
+    within(LONG, bob.acknowledge(without_id.ack_token()))
+        .await
+        .unwrap();
+    assert_eq!(relay.received("Made"), 0);
+    within(LONG, bob.acknowledge(with_id.ack_token()))
+        .await
+        .unwrap();
+    assert_eq!(relay.received("Made"), 1);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn slate_with_an_oversized_message_id_is_ignored() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = client(&relay, BOB).listen().unwrap();
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    let oversized = "x".repeat(lepic_epicbox::MAX_RELAY_MESSAGE_ID_LEN + 1);
+    relay.broadcast(&slate_frame(ALICE, BOB, "oversized", &oversized));
+    relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "valid"));
+    within(LONG, bob.delivery_available()).await;
+    assert_eq!(text(&next(&bob).await.unwrap()), "valid");
+    assert!(bob.next_rejection().is_none());
+    bob.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn acknowledging_an_unknown_token_fails() {
     let relay = MockRelay::new(Network::Mainnet);
