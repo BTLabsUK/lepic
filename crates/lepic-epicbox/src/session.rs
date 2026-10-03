@@ -110,7 +110,8 @@ pub enum EndpointError {
     PlainToRemoteHost,
 }
 
-/// `localhost` or an IPv4 loopback address, the only hosts a plain websocket may reach.
+/// `localhost` or an IPv4 loopback address, the only hosts a plain websocket may reach. IPv6
+/// `::1` is absent because [`Domain`] cannot hold an IPv6 literal.
 fn is_loopback(domain: &Domain) -> bool {
     let host = domain.as_str();
     host.eq_ignore_ascii_case("localhost")

@@ -973,3 +973,15 @@ fn fail_sent(sent: Sent, error: ClientError) {
         let _ = reply.send(Err(error));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The public relay's MongoDB TTL index is `expireAfterSeconds: 604800` (`mongo-init.js` in
+    // `epic-epicbox-docker`). A shorter retention would forget ids the relay can still deliver.
+    #[test]
+    fn relay_retention_matches_the_public_relay_ttl() {
+        assert_eq!(RELAY_RETENTION, Duration::from_secs(604_800));
+    }
+}
