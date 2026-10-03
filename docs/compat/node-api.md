@@ -42,9 +42,15 @@ secret.
 
 1. `get_tip`.
 2. `get_outputs` for every commitment the wallet tracks.
-3. Found: mark unspent and confirm the related transaction; for coinbase, look up the kernel. Missing
-   and previously unspent: mark spent.
-4. Store the confirmed height. Skip applying results if the tip is below the stored confirmed height.
+3. Found: mark unconfirmed outputs unspent and confirm their transaction. Missing and previously
+   unspent or locked: mark spent.
+4. Confirm open transactions without a change output by `get_kernel` on their excess (upstream
+   `update_txs_via_kernel`); an invoice payer takes the excess from its I2. Upstream also builds a
+   confirmed coinbase entry for an unconfirmed coinbase output found on chain.
+5. Cancel transactions at or past their TTL cutoff. LEPIC marks them expired and never expires a
+   finalized or posted one.
+6. Store the confirmed height. LEPIC skips the whole refresh when the tip is below the stored
+   confirmed height.
 
 ## Hardening LEPIC adds
 
