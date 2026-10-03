@@ -89,7 +89,15 @@ pub struct Party {
 }
 
 impl Party {
+    /// The wallet restored and scanned, ready to issue and pay.
     pub fn new(mnemonic: &str, node: &MockNode) -> Self {
+        let party = Self::restored_without_scan(mnemonic, node);
+        complete_restore_scan(&party.runtime, &party.wallet);
+        party
+    }
+
+    /// The wallet restored onto an empty database, before the scan it needs.
+    pub fn restored_without_scan(mnemonic: &str, node: &MockNode) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -122,7 +130,6 @@ impl Party {
         runtime
             .block_on(wallet.restore(password("invoice party"), mnemonic))
             .unwrap();
-        complete_restore_scan(&runtime, &wallet);
         let seed = Seed::from_mnemonic(mnemonic).unwrap();
         Self {
             runtime,

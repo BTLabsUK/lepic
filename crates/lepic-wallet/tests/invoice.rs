@@ -176,6 +176,31 @@ fn transaction_events(
 }
 
 #[test]
+fn a_restored_wallet_issues_invoices_only_after_its_restore_scan() {
+    let node = node();
+    let issuer = Party::restored_without_scan(ISSUER_MNEMONIC, &node);
+
+    let error = issuer.issue(AMOUNT, None).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::Wallet(WalletError::RestoreScanRequired)
+        ),
+        "{error:?}"
+    );
+    assert!(issuer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+    assert!(issuer.delivered().is_none());
+    issuer
+        .block_on(issuer.wallet.scan(
+            lepic_wallet::scan::ScanOptions::restore(Network::Floonet),
+            &lepic_wallet::scan::ScanCancel::new(),
+        ))
+        .unwrap();
+    issuer.issue(AMOUNT, None).unwrap();
+}
+
+#[test]
 fn issuing_stores_the_invoice_and_delivers_the_i1() {
     let node = node();
     let issuer = Party::new(ISSUER_MNEMONIC, &node);

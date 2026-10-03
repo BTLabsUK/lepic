@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use lepic_crypto::{Commitment, RangeProof};
 use lepic_node::mock::{ChainOutput, MockNode};
 use lepic_node::{
-    LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation, PmmrIndices,
-    Propagation, Tip, UnspentOutputs,
+    CallPolicy, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation,
+    PmmrIndices, Propagation, RetryPolicy, RpcTransport, Tip, UnspentOutputs,
 };
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::tx::Transaction;
@@ -50,15 +50,28 @@ const TTL_BLOCKS: u64 = 5;
 const SEND_FILE_PLAIN_S3: &str =
     include_str!("../../../testdata/vectors/slates/send_file_plain_s3_v3.json");
 
-/// The mock node's client, with answers a test scripts on top of the chain's.
+/// Answers a test scripts on top of the mock chain's.
+#[derive(Default)]
+struct Script {
+    /// Tips answered instead of the chain's, in order.
+    tips: Vec<u64>,
+    /// The next `get_outputs` answers that no output is on chain.
+    hide_outputs_once: bool,
+    /// Blocks added to every output height `get_outputs` reports.
+    raise_outputs: u64,
+    /// Blocks added to every kernel height `get_kernel` reports.
+    raise_kernels: u64,
+}
+
+/// The mock node's client with scripted answers applied after the client's own checks, so the
+/// wallet sees them exactly as a node would send them to a client that checks nothing. This is
+/// what shows the wallet's checks hold on their own.
 struct Scripted {
     inner: NodeClient<MockNode>,
-    /// Tips answered instead of the chain's, in order.
     tips: Mutex<VecDeque<u64>>,
-    /// The next `get_outputs` answers that no output is on chain.
     hide_outputs_once: AtomicBool,
-    /// `get_kernel` ignores the height range it is asked for.
-    unbounded_kernels: bool,
+    raise_outputs: u64,
+    raise_kernels: u64,
 }
 
 impl NodeApi for Scripted {
@@ -84,10 +97,13 @@ impl NodeApi for Scripted {
         min_height: Option<Height>,
         max_height: Option<Height>,
     ) -> impl Future<Output = Result<Option<LocatedKernel>, NodeError>> + Send {
-        if self.unbounded_kernels {
-            self.inner.get_kernel(excess, None, None)
-        } else {
-            self.inner.get_kernel(excess, min_height, max_height)
+        let answer = self.inner.get_kernel(excess, min_height, max_height);
+        let raise = self.raise_kernels;
+        async move {
+            Ok(answer.await?.map(|mut located| {
+                located.height = Height::new(located.height.value() + raise);
+                located
+            }))
         }
     }
 
@@ -97,8 +113,12 @@ impl NodeApi for Scripted {
     ) -> impl Future<Output = Result<Vec<OutputLocation>, NodeError>> + Send {
         let hide = self.hide_outputs_once.swap(false, Ordering::SeqCst);
         let answer = self.inner.get_outputs(commitments);
+        let raise = self.raise_outputs;
         async move {
-            let found = answer.await?;
+            let mut found = answer.await?;
+            for location in &mut found {
+                location.height = Height::new(location.height.value() + raise);
+            }
             Ok(if hide { Vec::new() } else { found })
         }
     }
@@ -132,25 +152,17 @@ impl NodeApi for Scripted {
 type ScriptedWallet = Wallet<Scripted, MemoryStores, TestVault>;
 
 /// A second handle on the sender's wallet, unlocked, whose node answers as scripted.
-fn scripted(sender: &Sender, tips: &[u64], hide_outputs_once: bool) -> ScriptedWallet {
-    scripted_with(sender, tips, hide_outputs_once, false)
-}
-
-fn scripted_with(
-    sender: &Sender,
-    tips: &[u64],
-    hide_outputs_once: bool,
-    unbounded_kernels: bool,
-) -> ScriptedWallet {
+fn scripted(sender: &Sender, script: Script) -> ScriptedWallet {
     let ports = sender.wallet.ports();
     let wallet = Wallet::new(
         sender.wallet.config().clone(),
         Ports {
             node: Scripted {
                 inner: sender.harness.node.client(),
-                tips: Mutex::new(tips.iter().copied().collect()),
-                hide_outputs_once: AtomicBool::new(hide_outputs_once),
-                unbounded_kernels,
+                tips: Mutex::new(script.tips.into_iter().collect()),
+                hide_outputs_once: AtomicBool::new(script.hide_outputs_once),
+                raise_outputs: script.raise_outputs,
+                raise_kernels: script.raise_kernels,
             },
             stores: ports.stores.clone(),
             secrets: ports.secrets.clone(),
@@ -235,9 +247,16 @@ fn refreshed(outcome: &Result<RefreshOutcome, RefreshError>) {
 fn refuses_a_tip_beyond_any_plausible_chain_height() {
     let (sender, funding) = funded();
     let sent = send_with_ttl(&sender);
-    set_tip(&sender, u64::MAX);
+    let wallet = scripted(
+        &sender,
+        Script {
+            // Two equal tips, so only the plausibility check can refuse them.
+            tips: vec![u64::MAX, u64::MAX],
+            ..Script::default()
+        },
+    );
 
-    let result = sender.harness.block_on(sender.wallet.refresh());
+    let result = sender.harness.block_on(wallet.refresh());
 
     assert!(
         matches!(result, Err(RefreshError::Implausible(_))),
@@ -256,12 +275,44 @@ fn refuses_a_tip_beyond_any_plausible_chain_height() {
     );
 }
 
+/// Whichever layer refuses the answer, the node client or the wallet, the refresh fails and
+/// nothing is stored.
+fn assert_refused(result: &Result<RefreshOutcome, RefreshError>) {
+    assert!(
+        matches!(
+            result,
+            Err(RefreshError::Implausible(_) | RefreshError::Node(_))
+        ),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_tip_beyond_any_plausible_height_changes_nothing_through_the_node_client() {
+    let (sender, funding) = funded();
+    let sent = send_with_ttl(&sender);
+    set_tip(&sender, u64::MAX);
+
+    let result = sender.harness.block_on(sender.wallet.refresh());
+
+    assert_refused(&result);
+    assert_eq!(state(&sender, sent), TxState::Sent);
+    assert_eq!(status(&sender, &funding), OutputStatus::Locked);
+    assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
+}
+
 #[test]
 fn expires_nothing_when_a_second_tip_disagrees() {
     let (sender, funding) = funded();
     let sent = send_with_ttl(&sender);
     set_tip(&sender, TIP + TTL_BLOCKS);
-    let wallet = scripted(&sender, &[TIP + TTL_BLOCKS, TIP], false);
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![TIP + TTL_BLOCKS, TIP],
+            ..Script::default()
+        },
+    );
 
     let result = sender.harness.block_on(wallet.refresh());
 
@@ -279,7 +330,13 @@ fn expiry_needs_a_second_agreeing_tip_and_keeps_the_stored_height() {
     let (sender, funding) = funded();
     let sent = send_with_ttl(&sender);
     refreshed(&sender.harness.block_on(sender.wallet.refresh()));
-    let wallet = scripted(&sender, &[TIP + TTL_BLOCKS, TIP + TTL_BLOCKS + 1], false);
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![TIP + TTL_BLOCKS, TIP + TTL_BLOCKS + 1],
+            ..Script::default()
+        },
+    );
 
     refreshed(&sender.harness.block_on(wallet.refresh()));
 
@@ -301,7 +358,13 @@ fn expiry_needs_a_second_agreeing_tip_and_keeps_the_stored_height() {
 #[test]
 fn marks_an_output_spent_only_when_two_answers_miss_it() {
     let (sender, funding) = funded();
-    let wallet = scripted(&sender, &[], true);
+    let wallet = scripted(
+        &sender,
+        Script {
+            hide_outputs_once: true,
+            ..Script::default()
+        },
+    );
 
     let summary = sender.harness.block_on(wallet.refresh()).unwrap();
 
@@ -322,6 +385,30 @@ fn marks_an_output_spent_only_when_two_answers_miss_it() {
 #[test]
 fn refuses_an_output_height_above_the_tip() {
     let (sender, funding) = funded();
+    let wallet = scripted(
+        &sender,
+        Script {
+            raise_outputs: TIP + 50,
+            ..Script::default()
+        },
+    );
+
+    let result = sender.harness.block_on(wallet.refresh());
+
+    assert!(
+        matches!(result, Err(RefreshError::Implausible(_))),
+        "{result:?}"
+    );
+    let stored = sender
+        .read(|repos| repos.output(funding.commitment()))
+        .unwrap();
+    assert_eq!(stored, funding);
+    assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
+}
+
+#[test]
+fn an_output_height_above_the_tip_changes_nothing_through_the_node_client() {
+    let (sender, funding) = funded();
     sender
         .harness
         .node
@@ -329,10 +416,7 @@ fn refuses_an_output_height_above_the_tip() {
 
     let result = sender.harness.block_on(sender.wallet.refresh());
 
-    assert!(
-        matches!(result, Err(RefreshError::Implausible(_))),
-        "{result:?}"
-    );
+    assert_refused(&result);
     let stored = sender
         .read(|repos| repos.output(funding.commitment()))
         .unwrap();
@@ -387,15 +471,18 @@ fn posted_without_change(sender: &Sender) -> (TxId, LocatedKernel) {
 fn refuses_a_kernel_height_above_the_tip() {
     let (sender, _) = funded();
     let (tx_id, kernel) = posted_without_change(&sender);
-    let tip = kernel.height.value();
-    set_tip(&sender, tip);
-    sender.harness.node.update_chain(|chain| {
-        chain.kernels.push(LocatedKernel {
-            height: Height::new(tip + 40),
-            ..kernel
-        });
-    });
-    let wallet = scripted_with(&sender, &[], false, true);
+    set_tip(&sender, kernel.height.value());
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.kernels.push(kernel));
+    let wallet = scripted(
+        &sender,
+        Script {
+            raise_kernels: 40,
+            ..Script::default()
+        },
+    );
 
     let result = sender.harness.block_on(wallet.refresh());
 
@@ -403,6 +490,77 @@ fn refuses_a_kernel_height_above_the_tip() {
         matches!(result, Err(RefreshError::Implausible(_))),
         "{result:?}"
     );
+    assert_eq!(state(&sender, tx_id), TxState::Posted);
+}
+
+/// The raw mock node with every `get_kernel` answer raised by some blocks, below the node
+/// client, as a node would send it.
+struct RaisedKernels {
+    node: MockNode,
+    blocks: u64,
+}
+
+impl RpcTransport for RaisedKernels {
+    async fn post(&self, endpoint: &'static str, body: Vec<u8>) -> Result<Vec<u8>, NodeError> {
+        let kernel_request = serde_json::from_slice::<serde_json::Value>(&body)
+            .is_ok_and(|request| request["method"] == "get_kernel");
+        let response = self.node.post(endpoint, body).await?;
+        if !kernel_request {
+            return Ok(response);
+        }
+        let mut response: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        if let Some(height) = response.pointer_mut("/result/Ok/height") {
+            *height = serde_json::json!(height.as_u64().unwrap() + self.blocks);
+        }
+        Ok(serde_json::to_vec(&response).unwrap())
+    }
+
+    fn node_label(&self) -> &str {
+        "raised kernels"
+    }
+}
+
+#[test]
+fn a_kernel_height_above_the_tip_changes_nothing_through_the_node_client() {
+    let (sender, _) = funded();
+    let (tx_id, kernel) = posted_without_change(&sender);
+    set_tip(&sender, kernel.height.value());
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.kernels.push(kernel));
+    let ports = sender.wallet.ports();
+    let client = NodeClient::new(
+        RaisedKernels {
+            node: sender.harness.node.clone(),
+            blocks: 40,
+        },
+        CallPolicy {
+            retry: RetryPolicy::NONE,
+            ..CallPolicy::default()
+        },
+    );
+    let wallet = Wallet::new(
+        sender.wallet.config().clone(),
+        Ports {
+            node: client,
+            stores: ports.stores.clone(),
+            secrets: ports.secrets.clone(),
+            transports: sender.harness.transports(),
+            clock: Arc::new(FixedClock(fixed_time())),
+            rng: SharedRng::new(StdRng::seed_from_u64(44)),
+            runtime: sender.harness.runtime.handle().clone(),
+        },
+    )
+    .unwrap();
+    sender
+        .harness
+        .block_on(wallet.open(password("sender")))
+        .unwrap();
+
+    let result = sender.harness.block_on(wallet.refresh());
+
+    assert_refused(&result);
     assert_eq!(state(&sender, tx_id), TxState::Posted);
 }
 
@@ -433,9 +591,13 @@ fn never_expires_a_finalized_transaction() {
 #[test]
 fn reset_recovers_a_wallet_whose_stored_height_is_ahead_of_the_chain() {
     let sender = Sender::new();
+    let stale_reference = format!("1000000 {}", fixed_time().as_second());
     sender
         .store
-        .write(|repos| repos.put_setting("refresh.last_confirmed_height", &u64::MAX.to_string()))
+        .write(|repos| {
+            repos.put_setting("refresh.last_confirmed_height", &u64::MAX.to_string())?;
+            repos.put_setting("chain.reference", &stale_reference)
+        })
         .unwrap();
     let behind = sender.harness.block_on(sender.wallet.refresh()).unwrap();
     assert!(
@@ -452,6 +614,11 @@ fn reset_recovers_a_wallet_whose_stored_height_is_ahead_of_the_chain() {
         .unwrap();
 
     assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
+    // The stale reference is gone; the rescan recorded the tip it reached instead.
+    assert_eq!(
+        sender.read(|repos| repos.setting("chain.reference")),
+        Some(format!("{TIP} {}", fixed_time().as_second()))
+    );
     refreshed(&sender.harness.block_on(sender.wallet.refresh()));
     assert_eq!(
         sender.wallet.last_confirmed_height().unwrap(),
