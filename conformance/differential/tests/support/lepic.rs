@@ -23,6 +23,7 @@ use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::Location;
 use lepic_wallet::event::Event;
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
+use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{
@@ -98,6 +99,9 @@ impl LepicParty {
         let wallet = Wallet::new(config, ports).unwrap();
         runtime
             .block_on(wallet.restore(password(), mnemonic))
+            .unwrap();
+        runtime
+            .block_on(wallet.scan(ScanOptions::restore(NETWORK), &ScanCancel::new()))
             .unwrap();
         LepicParty {
             name,
