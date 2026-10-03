@@ -3,6 +3,8 @@
 mod budget;
 mod check;
 mod ci_lint;
+#[cfg(test)]
+mod commit_hook_tests;
 mod deps_check;
 mod fuzz;
 mod mobile;

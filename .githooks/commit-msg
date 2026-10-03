@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Enforces the Conventional Commits rules of this repository.
-# Usage: commit-msg <message-file>        (git hook)
-#        commit-msg --subject "<subject>" (pull request titles in CI)
+# Usage: commit-msg <message-file>                  (git hook)
+#        commit-msg --no-autosquash <message-file>  (commits in CI)
+#        commit-msg --subject "<subject>"           (pull request titles in CI)
 set -euo pipefail
 
 types='feat|fix|perf|refactor|test|docs|build|ci|chore|revert'
@@ -25,12 +26,22 @@ if [[ "${1:-}" == "--subject" ]]; then
     exit 0
 fi
 
+# Autosquash subjects are fine while a branch is reworked locally, but must be squashed before
+# review, so CI passes --no-autosquash and they then fail the subject rule.
+allow_autosquash=true
+if [[ "${1:-}" == "--no-autosquash" ]]; then
+    allow_autosquash=false
+    shift
+fi
+
 msg_file="$1"
 subject="$(grep -v '^#' "$msg_file" | head -n 1)"
 
-case "$subject" in
-    fixup!\ *|squash!\ *|amend!\ *) exit 0 ;;
-esac
+if [[ "$allow_autosquash" == true ]]; then
+    case "$subject" in
+        fixup!\ *|squash!\ *|amend!\ *) exit 0 ;;
+    esac
+fi
 
 check_subject
 

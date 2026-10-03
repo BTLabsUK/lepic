@@ -1,5 +1,6 @@
 //! A tag or branch can be moved to different code after review; a full commit SHA cannot.
-//! This keeps every external action and reusable workflow under `.github` pinned to one.
+//! This keeps every external action and reusable workflow under `.github` pinned to one, and
+//! keeps Dependabot pointed only at directories that exist, since it fails on the others.
 
 use std::fmt;
 use std::fs;
@@ -10,12 +11,14 @@ use anyhow::{Context, Result, bail};
 const GITHUB_DIR: &str = ".github";
 const SHA_LEN: usize = 40;
 const USES_KEY: &str = "uses";
+const DEPENDABOT_CONFIG: &str = ".github/dependabot.yml";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Problem {
     NotPinned,
     /// A key spelled with escapes may decode to `uses`, so its value cannot be trusted unchecked.
     EscapedKey,
+    NoSuchDirectory,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -38,6 +41,7 @@ impl fmt::Display for Finding {
         match self.problem {
             Problem::NotPinned => write!(f, "is not pinned to a {SHA_LEN}-character commit sha"),
             Problem::EscapedKey => write!(f, "is a quoted key written with escapes"),
+            Problem::NoSuchDirectory => write!(f, "is not a directory in the repository"),
         }
     }
 }
@@ -51,10 +55,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     for finding in &findings {
         eprintln!("ci-lint: {finding}");
     }
-    bail!(
-        "{} unpinned or unreadable `uses:` reference(s)",
-        findings.len()
-    )
+    bail!("{} problem(s) under {GITHUB_DIR}", findings.len())
 }
 
 fn check(root: &Path) -> Result<Vec<Finding>> {
@@ -89,8 +90,43 @@ fn check(root: &Path) -> Result<Vec<Finding>> {
                 report(key, Problem::EscapedKey);
             }
         }
+        if relative == Path::new(DEPENDABOT_CONFIG) {
+            for (line, directory) in dependabot_directories(&text) {
+                let relative_dir = directory.trim_start_matches('/');
+                if !root.join(relative_dir).is_dir() {
+                    findings.push(Finding {
+                        file: relative.clone(),
+                        line,
+                        reference: directory.to_owned(),
+                        problem: Problem::NoSuchDirectory,
+                    });
+                }
+            }
+        }
     }
     Ok(findings)
+}
+
+/// The values of `directory:` keys and of the items of `directories:` lists, with their lines.
+fn dependabot_directories<'a>(text: &'a str) -> Vec<(usize, &'a str)> {
+    let unquote = |value: &'a str| -> &'a str { value.trim().trim_matches(['"', '\'']) };
+    let mut found = Vec::new();
+    let mut in_list = false;
+    for (line, content) in (1..).zip(text.lines()) {
+        let code = content.split(" #").next().unwrap_or(content).trim();
+        if code.is_empty() || code.starts_with('#') {
+            continue;
+        }
+        if let Some(item) = code.strip_prefix("- ").filter(|_| in_list) {
+            found.push((line, unquote(item)));
+            continue;
+        }
+        in_list = code == "directories:";
+        if let Some(value) = code.strip_prefix("directory:") {
+            found.push((line, unquote(value)));
+        }
+    }
+    found
 }
 
 fn collect_yaml(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -333,6 +369,26 @@ mod tests {
                 reference: "actions/cache@v4".to_owned(),
                 problem: Problem::NotPinned,
             }]
+        );
+    }
+
+    #[test]
+    fn rejects_dependabot_directories_that_do_not_exist() {
+        let config = "version: 2\nupdates:\n  - package-ecosystem: cargo\n    directories:\n      - \"/\"\n      - \"/conformance\"\n      - '/fuzz' # until it exists\n    schedule:\n      interval: weekly\n  - package-ecosystem: github-actions\n    directory: \"/missing\"\n";
+        let dir = fixture(&[
+            (".github/dependabot.yml", config),
+            ("conformance/Cargo.toml", ""),
+        ]);
+        assert_eq!(
+            check(dir.path())
+                .unwrap()
+                .into_iter()
+                .map(|finding| (finding.line, finding.reference, finding.problem))
+                .collect::<Vec<_>>(),
+            [
+                (7, "/fuzz".to_owned(), Problem::NoSuchDirectory),
+                (11, "/missing".to_owned(), Problem::NoSuchDirectory),
+            ]
         );
     }
 
