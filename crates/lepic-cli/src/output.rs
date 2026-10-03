@@ -8,6 +8,7 @@ use std::io::Write as _;
 use serde::{Serialize, Serializer};
 use zeroize::Zeroizing;
 
+use crate::amount::{AmountError, format_units, parse_amount};
 use crate::exit::CliError;
 use crate::settings::OutputFormat;
 
@@ -250,7 +251,7 @@ pub fn render(report: &Report, format: OutputFormat) -> Zeroizing<String> {
 /// escape a byte as `\u00XX`, and the fixed text of both formats is shorter than the margin.
 /// Other reports carry no secret and start empty.
 fn rendered_len_bound(report: &Report) -> usize {
-    const FIXED_TEXT: usize = 256;
+    const FIXED_TEXT: usize = 512;
     const ESCAPED_BYTE: usize = 6;
     match report {
         Report::Init(r) => [r.network.len(), r.data_dir.len(), r.recovery_phrase.len()]
@@ -299,6 +300,37 @@ fn json_line(value: &impl Serialize) -> String {
     text
 }
 
+/// What a transaction moved for the wallet, without the fee: credited minus debited, with the
+/// fee given back for an outgoing one, whose debit includes it. Negative when sent.
+fn net_amount(tx: &TxReport) -> String {
+    let units = |text: &str| match parse_amount(text) {
+        Ok(amount) => Some(i128::from(amount.value())),
+        Err(AmountError::Zero) => Some(0),
+        Err(_) => None,
+    };
+    let fee = match (tx.direction.as_str(), tx.fee.as_deref()) {
+        ("outgoing", Some(fee)) => units(fee),
+        _ => Some(0),
+    };
+    let net = units(&tx.amount_credited)
+        .zip(units(&tx.amount_debited))
+        .zip(fee)
+        .and_then(|((credited, debited), fee)| credited.checked_sub(debited)?.checked_add(fee));
+    match net.map(|net| (net < 0, u64::try_from(net.unsigned_abs()))) {
+        Some((negative, Ok(units))) => {
+            format!("{}{}", if negative { "-" } else { "" }, format_units(units))
+        }
+        _ => "-".to_owned(),
+    }
+}
+
+/// `2026-10-03T11:24:52.099175357Z` reads `2026-10-03 11:24:52`.
+fn short_time(timestamp: &str) -> String {
+    timestamp
+        .get(..19)
+        .map_or_else(|| timestamp.to_owned(), |text| text.replacen('T', " ", 1))
+}
+
 fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
         Report::Init(r) => {
@@ -307,7 +339,11 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                 out,
                 "Write down the recovery phrase. It is not shown again:\n"
             )?;
-            writeln!(out, "    {}\n", r.recovery_phrase.as_str())
+            writeln!(out, "    {}\n", r.recovery_phrase.as_str())?;
+            writeln!(
+                out,
+                "To receive, give the sender the address `lepic wallet address` prints, or\nanswer their slate file with `lepic tx receive <FILE>`."
+            )
         }
         Report::Restore(r) => {
             writeln!(out, "Wallet restored on {} in {}.", r.network, r.data_dir)?;
@@ -374,19 +410,20 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             }
             writeln!(
                 out,
-                "{:>5}  {:<8}  {:<9}  {:>21}  {:>21}  {:<20}",
-                "ID", "DIR", "STATE", "CREDITED", "DEBITED", "CREATED"
+                "{:>5}  {:<8}  {:<9}  {:>20}  {:>11}  {:<9}  CREATED (UTC)",
+                "ID", "DIR", "STATE", "AMOUNT", "FEE", "TRANSPORT"
             )?;
             for tx in &r.transactions {
                 writeln!(
                     out,
-                    "{:>5}  {:<8}  {:<9}  {:>21}  {:>21}  {:<20}",
+                    "{:>5}  {:<8}  {:<9}  {:>20}  {:>11}  {:<9}  {}",
                     tx.tx_id,
                     tx.direction,
                     tx.state,
-                    tx.amount_credited,
-                    tx.amount_debited,
-                    tx.created_at
+                    net_amount(tx),
+                    tx.fee.as_deref().unwrap_or("-"),
+                    tx.transport.as_deref().unwrap_or("-"),
+                    short_time(&tx.created_at)
                 )?;
             }
             Ok(())
@@ -736,6 +773,42 @@ mod tests {
                 "json output changed"
             );
         }
+    }
+
+    #[test]
+    fn the_transaction_list_shows_net_amounts_fees_and_short_times() {
+        let mut sent = tx(None);
+        sent.amount_credited = text("18.49200000");
+        sent.amount_debited = text("20.00000000");
+        sent.fee = Some(text("0.00800000"));
+        sent.transport = Some(text("epicbox"));
+        sent.created_at = text("2026-10-03T11:24:52.099175357Z");
+        let mut received = tx(None);
+        received.tx_id = 2;
+        received.direction = text("incoming");
+        received.amount_credited = text("2.25000000");
+        received.amount_debited = text("0.00000000");
+        let report = Report::List(TxListReport {
+            account: text("default"),
+            transactions: vec![sent, received],
+        });
+        let rendered = render(&report, OutputFormat::Human).to_string();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert!(
+            lines[0].contains("AMOUNT") && lines[0].contains("FEE"),
+            "{rendered}"
+        );
+        assert!(
+            lines[1].contains("-1.50000000")
+                && lines[1].contains("0.00800000")
+                && lines[1].contains("epicbox")
+                && lines[1].ends_with("2026-10-03 11:24:52"),
+            "{rendered}"
+        );
+        assert!(
+            lines[2].contains(" 2.25000000") && !lines[2].contains("-2"),
+            "{rendered}"
+        );
     }
 
     #[test]
