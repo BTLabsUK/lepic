@@ -9,6 +9,8 @@
 #   ./run.sh --keep           leave the stack running afterwards
 #   ./run.sh --no-build       use the binaries already built and the lepic already installed
 #   ./run.sh --lepic <path>   test this lepic binary instead of the installed one
+#   ./run.sh --stack-only     start a clean stack, fund nothing, print where it listens and
+#                             keep it, and the stack lock, until stopped; ./chain.sh drives it
 set -euo pipefail
 
 ACCEPTANCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,10 +24,12 @@ source "${ACCEPTANCE_DIR}/steps.sh"
 
 keep=false
 build=true
+stack_only=false
 LEPIC_BIN=""
 while (($# > 0)); do
     case "$1" in
         --keep) keep=true ;;
+        --stack-only) stack_only=true ;;
         --no-build) build=false ;;
         --lepic)
             LEPIC_BIN="${2:?--lepic needs a path}"
@@ -70,18 +74,22 @@ trap teardown EXIT
 if [[ "${build}" == true ]]; then
     log "building the stack's binaries (incremental; the first build takes a while)"
     "${ACCEPTANCE_DIR}/../build.sh" >>"${RUN_LOG}" 2>&1
-    log "installing lepic with cargo xtask install"
-    (cd "${REPO_DIR}" && cargo xtask install) >>"${RUN_LOG}" 2>&1
+    if [[ "${stack_only}" == false ]]; then
+        log "installing lepic with cargo xtask install"
+        (cd "${REPO_DIR}" && cargo xtask install) >>"${RUN_LOG}" 2>&1
+    fi
 fi
-if [[ -z "${LEPIC_BIN}" ]]; then
-    LEPIC_BIN="$(type -P lepic || true)"
-    [[ -n "${LEPIC_BIN}" ]] || LEPIC_BIN="${HOME}/.local/bin/lepic"
+if [[ "${stack_only}" == false ]]; then
+    if [[ -z "${LEPIC_BIN}" ]]; then
+        LEPIC_BIN="$(type -P lepic || true)"
+        [[ -n "${LEPIC_BIN}" ]] || LEPIC_BIN="${HOME}/.local/bin/lepic"
+    fi
+    [[ -x "${LEPIC_BIN}" ]] || {
+        log "no lepic binary at ${LEPIC_BIN}"
+        exit 1
+    }
+    log "testing $("${LEPIC_BIN}" --version) at ${LEPIC_BIN}"
 fi
-[[ -x "${LEPIC_BIN}" ]] || {
-    log "no lepic binary at ${LEPIC_BIN}"
-    exit 1
-}
-log "testing $("${LEPIC_BIN}" --version) at ${LEPIC_BIN}"
 
 log "starting a clean stack"
 rm -rf "${STATE_DIR}" "${EXCHANGE_DIR}"
@@ -98,6 +106,26 @@ if [[ "$(docker network inspect lepic-acceptance_internal --format '{{.Internal}
     exit 1
 fi
 dc up -d --wait --wait-timeout 300 >>"${RUN_LOG}" 2>&1
+
+if [[ "${stack_only}" == true ]]; then
+    dc exec -T node cat /data/node/.foreign_api_secret >"${STATE_DIR}/foreign_api_secret"
+    chmod 600 "${STATE_DIR}/foreign_api_secret"
+    "${ACCEPTANCE_DIR}/chain.sh" env
+    log "stack up; the miner adds a block every few seconds. Stop with Ctrl-C."
+    sleeper=""
+    trap '[[ -z "${sleeper}" ]] || kill "${sleeper}" 2>/dev/null; exit 0' INT TERM
+    # The lock and the EXIT trap's teardown last as long as this wait. The sleep gets no copy
+    # of the lock, so the lock ends with this script.
+    while :; do
+        if [[ -n "${STACK_LOCK_FD:-}" ]]; then
+            sleep 3600 {STACK_LOCK_FD}>&- &
+        else
+            sleep 3600 &
+        fi
+        sleeper=$!
+        wait "${sleeper}"
+    done
+fi
 
 names=()
 results=()

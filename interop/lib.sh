@@ -140,31 +140,43 @@ fund_by_file() {
     wait_until "funding ${name} mined" 120 ew_tx_confirmed funder "${slate_id}"
 }
 
-listener_starts() { dc exec -T peer sh -c 'grep -c "Starting epicbox listener" /data/.epic/user/epic-wallet.log 2>/dev/null || true'; }
+listener_starts() { dc exec -T "$1" sh -c 'grep -c "Starting epicbox listener" /data/.epic/user/epic-wallet.log 2>/dev/null || true'; }
 
-# Starts epic-wallet's Epicbox listener in the peer container and waits until it subscribed.
-peer_listen_start() {
-    peer_listen_stop
+# Starts epic-wallet's Epicbox listener in the funder or peer container and waits until it
+# subscribed.
+ew_listen_start() {
+    local wallet="$1"
+    ew_listen_stop "${wallet}"
     local before
-    before="$(listener_starts)"
+    before="$(listener_starts "${wallet}")"
     # shellcheck disable=SC2016 # expanded by the container's shell
-    dc exec -d peer sh -c 'echo $$ >/data/listen.pid; exec ew listen -m epicbox >>/data/listen.log 2>&1'
-    wait_until "the peer listener" 30 listener_started_after "${before}" || return 1
+    dc exec -d "${wallet}" sh -c 'echo $$ >/data/listen.pid; exec ew listen -m epicbox >>/data/listen.log 2>&1'
+    wait_until "the ${wallet} listener" 30 listener_started_after "${wallet}" "${before}" || return 1
     # The subscription follows the log line.
     sleep 2
 }
 
-listener_started_after() { (($(listener_starts) > $1)); }
+listener_started_after() { (($(listener_starts "$1") > $2)); }
 
-peer_listen_stop() {
+ew_listen_stop() {
     # shellcheck disable=SC2016 # expanded by the container's shell
-    dc exec -T peer sh -c '
+    dc exec -T "$1" sh -c '
         [ -f /data/listen.pid ] || exit 0
         pid="$(cat /data/listen.pid)"
         kill "${pid}" 2>/dev/null || true
         while kill -0 "${pid}" 2>/dev/null; do sleep 0.2; done
         rm -f /data/listen.pid'
 }
+
+# True while the Epicbox listener ew_listen_start started in that container runs.
+ew_listening() {
+    # shellcheck disable=SC2016 # expanded by the container's shell
+    dc exec -T "$1" sh -c '[ -f /data/listen.pid ] && kill -0 "$(cat /data/listen.pid)" 2>/dev/null'
+}
+
+peer_listen_start() { ew_listen_start peer; }
+
+peer_listen_stop() { ew_listen_stop peer; }
 
 # Drains lepic's Epicbox inbox until a jq expression over the summed counters (by default the
 # counter `name`) reaches `want`, then prints the summed counters as JSON.

@@ -14,7 +14,15 @@ interop/acceptance/run.sh               # build, install, start a clean stack, r
 interop/acceptance/run.sh --no-build    # reuse the built binaries and the installed lepic
 interop/acceptance/run.sh --keep        # leave the stack running afterwards
 interop/acceptance/run.sh --lepic PATH  # test another lepic binary
+interop/acceptance/run.sh --stack-only  # start a clean stack and keep it until Ctrl-C
 ```
+
+`--stack-only` funds nothing and runs no step: it prints the node URL, the node API secret file,
+the relay and the exchange directory, and holds the stack and its lock until stopped, for a
+lepic outside this script such as the Flutter binding's tests. `chain.sh` drives that stack:
+`env`, `height`, `mine <blocks>`, `fund <address> <epic>` (the funder sends over Epicbox) and
+`receive <file>` (the funder answers a send file in the exchange directory).
+`bindings/flutter/README.md` shows the whole workflow.
 
 Needs what `../README.md` lists, plus a Rust toolchain for `cargo xtask install`. Every run
 starts from nothing: a new chain and new wallets, and a lepic home, config file and data
