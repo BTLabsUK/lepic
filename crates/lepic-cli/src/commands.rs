@@ -710,10 +710,7 @@ fn check_private_dir(dir: &Path) -> Result<(), CliError> {
         Err(error) => return Err(CliError::io("inspect the data directory")(error)),
     };
     if mode & 0o077 != 0 {
-        return Err(CliError::io("use the data directory")(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "other users can access the data directory",
-        )));
+        return Err(CliError::SharedDataDir);
     }
     Ok(())
 }
@@ -801,11 +798,7 @@ mod tests {
         for mode in [0o755, 0o750, 0o701] {
             let dir = with_mode(mode);
             assert!(
-                matches!(
-                    check_private_dir(dir.path()),
-                    Err(CliError::Io { source, .. })
-                        if source.kind() == std::io::ErrorKind::PermissionDenied
-                ),
+                matches!(check_private_dir(dir.path()), Err(CliError::SharedDataDir)),
                 "{mode:o}"
             );
         }

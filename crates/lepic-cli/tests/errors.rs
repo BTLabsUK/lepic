@@ -223,10 +223,7 @@ fn a_data_directory_other_users_can_access_is_refused() {
 
     set_mode(0o755);
     let outcome = wallet.run(&host, &["wallet", "info"]);
-    assert_eq!(
-        (outcome.code, error_kind(&outcome).as_str()),
-        (1, "internal")
-    );
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (3, "config"));
 
     set_mode(0o700);
     wallet.run(&host, &["wallet", "info"]).ok();

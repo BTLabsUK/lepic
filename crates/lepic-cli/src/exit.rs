@@ -142,6 +142,8 @@ pub enum CliError {
     },
     #[error("stopped before it finished")]
     Interrupted,
+    #[error("other users can access the data directory")]
+    SharedDataDir,
 }
 
 impl CliError {
@@ -151,7 +153,7 @@ impl CliError {
 
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::Settings(_) | Self::Telemetry(_) => ErrorKind::Config,
+            Self::Settings(_) | Self::Telemetry(_) | Self::SharedDataDir => ErrorKind::Config,
             Self::Secret(SecretError::Mismatch) => ErrorKind::Rejected,
             Self::Secret(_) | Self::Amount(_) | Self::Zero { .. } | Self::NoDestination => {
                 ErrorKind::Usage
