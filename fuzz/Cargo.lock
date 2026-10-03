@@ -607,6 +607,7 @@ dependencies = [
  "tokio",
  "tracing",
  "webpki-roots",
+ "zeroize",
 ]
 
 [[package]]
