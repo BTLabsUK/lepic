@@ -165,8 +165,8 @@ impl CliError {
             Self::Refresh(RefreshError::Wallet(error)) | Self::Scan(ScanError::Wallet(error)) => {
                 wallet_kind(error)
             }
-            Self::Refresh(RefreshError::Node(_))
-            | Self::Scan(ScanError::Node(_))
+            Self::Refresh(RefreshError::Node(_) | RefreshError::Implausible(_))
+            | Self::Scan(ScanError::Node(_) | ScanError::Implausible(_))
             | Self::Node(_) => ErrorKind::Node,
             Self::Scan(ScanError::Cancelled) | Self::Interrupted => ErrorKind::Interrupted,
             Self::Transport(_) => ErrorKind::Transport,
@@ -203,7 +203,9 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         | WalletError::Locked
         | WalletError::AlreadyOpen
         | WalletError::NetworkMismatch { .. }
-        | WalletError::ForeignDatabase => ErrorKind::WalletState,
+        | WalletError::ForeignDatabase
+        | WalletError::RestoreScanRequired => ErrorKind::WalletState,
+        WalletError::Node(_) => ErrorKind::Node,
         WalletError::UnknownTransaction(_)
         | WalletError::Account(AccountError::UnknownLabel | AccountError::UnknownAccount(_)) => {
             ErrorKind::NotFound
@@ -211,7 +213,8 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         WalletError::Mnemonic(_)
         | WalletError::WalletSeedFile(_)
         | WalletError::Account(_)
-        | WalletError::Transition(_) => ErrorKind::Rejected,
+        | WalletError::Transition(_)
+        | WalletError::OnChain(_) => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }
@@ -245,7 +248,8 @@ fn receive_kind(error: &ReceiveError) -> ErrorKind {
         | ReceiveError::FeeBelowMinimum { .. }
         | ReceiveError::FeeOverflow
         | ReceiveError::MessageSignature { .. }
-        | ReceiveError::ForeignProofAddress => ErrorKind::Rejected,
+        | ReceiveError::ForeignProofAddress
+        | ReceiveError::ZeroAmount => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }
@@ -318,6 +322,9 @@ fn inbox_kind(error: &InboxError) -> ErrorKind {
 
 #[cfg(test)]
 mod tests {
+    use lepic_primitives::amount::Height;
+    use lepic_wallet::chain::ImplausibleNodeData;
+
     use super::*;
 
     #[test]
@@ -378,6 +385,35 @@ mod tests {
             ),
             (AmountError::Syntax.into(), ErrorKind::Usage),
             (CliError::Interrupted, ErrorKind::Interrupted),
+            (
+                RefreshError::Implausible(ImplausibleNodeData::TipTooHigh {
+                    tip: Height::new(2),
+                    limit: Height::new(1),
+                })
+                .into(),
+                ErrorKind::Node,
+            ),
+            (
+                ScanError::Implausible(ImplausibleNodeData::TipTooHigh {
+                    tip: Height::new(2),
+                    limit: Height::new(1),
+                })
+                .into(),
+                ErrorKind::Node,
+            ),
+            (
+                WalletError::OnChain(lepic_store::TxId(5)).into(),
+                ErrorKind::Rejected,
+            ),
+            (
+                WalletError::RestoreScanRequired.into(),
+                ErrorKind::WalletState,
+            ),
+            (
+                WalletError::Node(NodeError::Timeout).into(),
+                ErrorKind::Node,
+            ),
+            (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
         ];
         for (error, kind) in cases {
             assert_eq!(error.kind(), kind, "{error:?}");
