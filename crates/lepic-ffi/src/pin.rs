@@ -209,18 +209,26 @@ pub(crate) fn generate_password() -> Result<Zeroizing<String>, WalletError> {
     Ok(text)
 }
 
-/// Seals `password` under `pin` and a new PIN key, which goes into `store` first; the failure
-/// count starts again at zero. Returns the sealed text.
+/// Seals `password` under `pin` and a new PIN key, then starts the failure count again at zero
+/// and puts that key into `store`. Returns the sealed text.
+///
+/// The store is touched only once sealing succeeded, and the key is written last, so a call
+/// that fails leaves the PIN key, and with it the sealed text the app holds, working.
 pub(crate) async fn seal_new(
     store: &AppSecretStore,
     pin: NewPin,
     password: Zeroizing<String>,
     kdf: KdfParams,
 ) -> Result<String, WalletError> {
-    let key = PinKey::generate()?;
-    key.store(store).await?;
+    let (key, sealed) = blocking(move || {
+        let key = PinKey::generate()?;
+        let sealed = seal(&key, &pin.0, &password, kdf)?;
+        Ok((key, sealed))
+    })
+    .await?;
     store.delete(FAILURES_KEY).await?;
-    blocking(move || seal(&key, &pin.0, &password, kdf)).await
+    key.store(store).await?;
+    Ok(sealed)
 }
 
 fn seal(key: &PinKey, pin: &str, password: &str, kdf: KdfParams) -> Result<String, WalletError> {
@@ -496,6 +504,41 @@ mod tests {
         assert_eq!(counted, 4);
         assert_eq!(opened.unwrap_err().kind, WalletErrorKind::WrongPassword);
         assert_eq!(read_failures(&store).await.unwrap(), 4);
+    }
+
+    /// A PIN change whose seal fails must not lock the wallet: the old key, the old sealed text
+    /// and the failure count stay as they were.
+    #[tokio::test]
+    async fn a_failed_seal_leaves_the_old_sealed_text_working() {
+        let store = AppSecretStore::in_memory();
+        let guard = PinGuard::new(PinPolicy::DEFAULT);
+        let password = generate_password().unwrap();
+        let sealed = seal_new(
+            &store,
+            NewPin::new(pin("1234")).unwrap(),
+            password.clone(),
+            cheap(),
+        )
+        .await
+        .unwrap();
+        store.write(FAILURES_KEY, "2".to_owned()).await.unwrap();
+        let old_key = store.read(KEY_KEY).await.unwrap();
+
+        // A secret longer than a vault holds cannot be sealed.
+        let unsealable = Zeroizing::new("x".repeat(lepic_keychain::vault::MAX_SECRET_LEN + 1));
+        let failed = seal_new(
+            &store,
+            NewPin::new(pin("9876")).unwrap(),
+            unsealable,
+            cheap(),
+        )
+        .await;
+        assert!(failed.is_err());
+        assert_eq!(store.read(KEY_KEY).await.unwrap(), old_key);
+        assert_eq!(read_failures(&store).await.unwrap(), 2);
+
+        let opened = unlock(&guard, &store, pin("1234"), sealed).await.unwrap();
+        assert_eq!(*opened, *password);
     }
 
     #[tokio::test]
