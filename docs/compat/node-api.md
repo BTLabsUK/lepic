@@ -15,10 +15,10 @@ recordings skip the owner exchange.
 |---|---|---|
 | `get_version` | none | `node_version`, `block_header_version` |
 | `get_tip` | none | `height`, `last_block_pushed` |
-| `get_kernel` | `[excess_hex, min_height or null, max_height or null]` | `tx_kernel`, `height`, `mmr_index`; error `NotFound` means none |
-| `get_outputs` | `[commits_hex[], null, null, false, false]` | `commit`, `block_height`, `mmr_index` |
-| `get_unspent_outputs` | `[start_index, end_index or null, max, true]` | `highest_index`, `last_retrieved_index`, `outputs[]` with `commit`, `range_proof`, `output_type`, `spent`, `block_height`, `mmr_index` |
-| `get_pmmr_indices` | `[start_height, end_height or null]` | `last_retrieved_index`, `highest_index` |
+| `get_kernel` | `[excess_hex, min_height or null, max_height or null]` | `tx_kernel`, `height`, `mmr_index`; `{"Err": "NotFound"}` inside `result` means none |
+| `get_outputs` | `[commits_hex[], null, null, false, false]` | `commit`, `block_height`, `mmr_index`; only the outputs found are answered |
+| `get_unspent_outputs` | `[start_index, end_index or null, max, true]` | `highest_index`, `last_retrieved_index`, `outputs[]` with `commit`, `proof`, `output_type` (`Coinbase` or `Transaction`), `spent`, `block_height`, `mmr_index` |
+| `get_pmmr_indices` | `[start_height, end_height or null]` | `last_retrieved_index` (the first index of the range), `highest_index` (the last) |
 | `push_transaction` | `[tx, fluff]` | none |
 
 Requests are JSON-RPC 2.0. The reference client sends `get_outputs` in chunks of 500 commitments in
