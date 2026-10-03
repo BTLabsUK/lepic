@@ -5,11 +5,13 @@
 
 mod client_support;
 
+use std::pin::pin;
 use std::time::{Duration, Instant};
 
 use client_support::{
     ALICE, BOB, CAROL, address, client, client_with, reach, sealed, settings, until, within,
 };
+use futures_util::FutureExt;
 use lepic_epicbox::mock_relay::MockRelay;
 use lepic_epicbox::{ClientError, ConnectionState, Network, RejectionReason, RelayMessageId};
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -25,6 +27,29 @@ fn text(envelope: &Envelope) -> &str {
 
 async fn next(inbound: &dyn Inbound) -> Option<Envelope> {
     within(LONG, inbound.next_envelope()).await.unwrap()
+}
+
+#[tokio::test]
+async fn the_mock_relay_wakes_a_waiter_once_its_condition_holds() {
+    let relay = MockRelay::new(Network::Mainnet);
+    relay.store(
+        &address(ALICE),
+        &address(BOB),
+        &sealed(ALICE, BOB, "slate one"),
+    );
+    let mut acknowledged = pin!(relay.wait_until(|relay| relay.pending(&address(BOB)) == 0));
+    assert!(acknowledged.as_mut().now_or_never().is_none());
+
+    let bob = client(&relay, BOB).listen().unwrap();
+    let envelope = next(&bob).await.unwrap();
+    assert!(acknowledged.as_mut().now_or_never().is_none());
+
+    let ((), acknowledgement) = tokio::join!(
+        within(LONG, acknowledged),
+        bob.acknowledge(envelope.ack_token())
+    );
+    acknowledgement.unwrap();
+    bob.stop().await.unwrap();
 }
 
 #[tokio::test]

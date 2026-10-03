@@ -8,10 +8,12 @@
 //! live listener per address, passes each newly posted message through to an idle listener,
 //! answers the JSON `ping` with bare `pong` text, and closes sockets that send text that is not
 //! JSON. Unlike the public relay it stores every message itself instead of forwarding to other
-//! domains, and its messages do not expire.
+//! domains, and its messages do not expire. Tests wait on its state with
+//! [`MockRelay::wait_until`] instead of polling.
 
 use std::collections::HashMap;
 use std::io;
+use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use futures_util::{SinkExt, StreamExt};
@@ -20,7 +22,7 @@ use serde_json::{Value, json};
 use tokio::io::DuplexStream;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
@@ -50,6 +52,8 @@ pub struct MockRelay {
 struct Inner {
     network: Network,
     state: Mutex<RelayState>,
+    /// Woken after every change that the relay's queries can report.
+    changed: Notify,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +122,7 @@ impl MockRelay {
                     deliveries: HashMap::new(),
                     pings: 0,
                 }),
+                changed: Notify::new(),
             }),
         }
     }
@@ -142,17 +147,17 @@ impl MockRelay {
 
     /// Refuses new connections, as an unreachable relay does.
     pub fn set_refusing(&self, refusing: bool) {
-        self.lock().refusing = refusing;
+        self.update(|state| state.refusing = refusing);
     }
 
     /// Accepts new connections but never answers on them, as a relay stuck mid-handshake does.
     pub fn set_stalling(&self, stalling: bool) {
-        self.lock().stalling = stalling;
+        self.update(|state| state.stalling = stalling);
     }
 
     /// The version `GetVersion` reports; `None` leaves `GetVersion` unanswered.
     pub fn set_version(&self, version: Option<&str>) {
-        self.lock().version = version.map(str::to_owned);
+        self.update(|state| state.version = version.map(str::to_owned));
     }
 
     /// Stores a message as if another wallet had posted it, and returns its message id.
@@ -162,15 +167,16 @@ impl MockRelay {
         to: &EpicboxAddress,
         message: &SignedMessage,
     ) -> String {
-        let mut state = self.lock();
-        let id = state.store(
-            to.key_text(),
-            from.to_string(),
-            message.str.clone(),
-            message.signature.to_der_hex(),
-        );
-        state.pass_through(&to.key_text(), &id);
-        id
+        self.update(|state| {
+            let id = state.store(
+                to.key_text(),
+                from.to_string(),
+                message.str.clone(),
+                message.signature.to_der_hex(),
+            );
+            state.pass_through(&to.key_text(), &id);
+            id
+        })
     }
 
     /// How often the message with this id was sent to any socket.
@@ -216,27 +222,42 @@ impl MockRelay {
 
     /// Sends a fresh challenge to every subscribed connection, as the relay's interval does.
     pub fn send_challenges(&self) {
-        let mut state = self.lock();
-        let ids: Vec<u64> = state
-            .sockets
-            .iter()
-            .filter(|(_, socket)| socket.address.is_some())
-            .map(|(id, _)| *id)
-            .collect();
-        for id in ids {
-            state.challenge(id);
-        }
+        self.update(|state| {
+            let ids: Vec<u64> = state
+                .sockets
+                .iter()
+                .filter(|(_, socket)| socket.address.is_some())
+                .map(|(id, _)| *id)
+                .collect();
+            for id in ids {
+                state.challenge(id);
+            }
+        });
     }
 
     /// Closes every connection and keeps every stored message, as a relay restart does.
     pub fn disconnect_all(&self) {
-        let mut state = self.lock();
-        for socket in state.sockets.values() {
-            let _ = socket.outgoing.send(Outgoing::Close(1001));
+        self.update(|state| {
+            for socket in state.sockets.values() {
+                let _ = socket.outgoing.send(Outgoing::Close(1001));
+            }
+            state.sockets.clear();
+            state.listeners.clear();
+            state.stalled.clear();
+        });
+    }
+
+    /// Resolves once `condition` holds. It is checked now and again after every change the
+    /// relay's queries can report, so a test waits on what the relay saw rather than on time.
+    pub async fn wait_until(&self, condition: impl Fn(&Self) -> bool) {
+        loop {
+            let mut changed = pin!(self.inner.changed.notified());
+            changed.as_mut().enable();
+            if condition(self) {
+                return;
+            }
+            changed.await;
         }
-        state.sockets.clear();
-        state.listeners.clear();
-        state.stalled.clear();
     }
 
     // Every update leaves the state consistent before it can panic, so a poisoned lock is still
@@ -246,6 +267,13 @@ impl MockRelay {
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Applies `change` and wakes every [`Self::wait_until`].
+    fn update<T>(&self, change: impl FnOnce(&mut RelayState) -> T) -> T {
+        let result = change(&mut self.lock());
+        self.inner.changed.notify_waiters();
+        result
     }
 
     fn accept<S>(&self, stream: S)
@@ -271,8 +299,7 @@ impl MockRelay {
             return;
         };
         let (outgoing, mut queued) = mpsc::unbounded_channel();
-        let id = {
-            let mut state = self.lock();
+        let id = self.update(|state| {
             let id = state.next_socket;
             state.next_socket = state.next_socket.wrapping_add(1);
             state.sockets.insert(
@@ -290,7 +317,7 @@ impl MockRelay {
             );
             state.challenge(id);
             id
-        };
+        });
         loop {
             tokio::select! {
                 next = queued.recv() => match next {
@@ -307,17 +334,18 @@ impl MockRelay {
                     None => break,
                 },
                 incoming = ws.next() => match incoming {
-                    Some(Ok(Message::Text(text))) => self.lock().handle(id, self.inner.network, text.as_str()),
+                    Some(Ok(Message::Text(text))) => {
+                        self.update(|state| state.handle(id, self.inner.network, text.as_str()));
+                    }
                     Some(Ok(Message::Ping(_))) => {
-                        let mut state = self.lock();
-                        state.pings = state.pings.saturating_add(1);
+                        self.update(|state| state.pings = state.pings.saturating_add(1));
                     }
                     Some(Ok(Message::Binary(_) | Message::Pong(_) | Message::Frame(_))) => {}
                     Some(Ok(Message::Close(_)) | Err(_)) | None => break,
                 },
             }
         }
-        self.lock().drop_socket(id);
+        self.update(|state| state.drop_socket(id));
     }
 }
 
