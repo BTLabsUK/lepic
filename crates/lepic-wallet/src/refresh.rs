@@ -11,6 +11,8 @@
 //! a separate [`Wallet::scan`] with [`crate::scan::ScanOptions::update`], run after a refresh.
 
 use std::collections::BTreeMap;
+use std::error::Error as StdError;
+use std::fmt;
 use std::sync::Arc;
 
 use jiff::Timestamp;
@@ -510,9 +512,26 @@ fn decode_stored(codecs: &CodecRegistry, tx_id: TxId, bytes: &[u8]) -> Option<Sl
     match codecs.decode(&WireSlate::binary(MediaType::JSON, bytes.to_vec())) {
         Ok(slate) => Some(slate),
         Err(error) => {
-            warn!(tx_id = %tx_id, error = %error, "stored slate unreadable");
+            warn!(tx_id = %tx_id, error = %ErrorChain(&error), "stored slate unreadable");
             None
         }
+    }
+}
+
+/// Errors nested deeper than this are cut from a log line.
+const MAX_ERROR_SOURCES: usize = 16;
+
+/// Displays an error followed by its sources, separated by `": "`, for the `error` log field.
+struct ErrorChain<'a>(&'a (dyn StdError + 'static));
+
+impl fmt::Display for ErrorChain<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)?;
+        let sources = std::iter::successors(self.0.source(), |&error| error.source());
+        for source in sources.take(MAX_ERROR_SOURCES) {
+            write!(f, ": {source}")?;
+        }
+        Ok(())
     }
 }
 
