@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 
 use crate::api::diagnostics::{LogEntry, LogLevel};
 use crate::api::error::{WalletError, WalletErrorKind};
-use crate::boundary::{Boundary, guard, guard_or, install_panic_hook};
+use crate::boundary::{Boundary, end_stream, guard, guard_or, install_panic_hook};
 use crate::frb_generated::StreamSink;
 use crate::log::LogForwarder;
 use crate::node::NodeFactory;
@@ -122,10 +122,15 @@ impl LepicRuntime {
     }
 
     /// Sends every log record from now on to `sink`, replacing the stream subscribed before.
+    /// A failure to subscribe, which only a defect inside LEPIC causes, ends the stream with a
+    /// `Panic` [`WalletError`] as its error.
     pub fn logs(&self, sink: StreamSink<LogEntry>) {
-        self.inner
-            .boundary
-            .guard_or("logs", (), || self.inner.logs.replace(Some(sink)));
+        let failed = sink.clone();
+        let subscribed = self.inner.boundary.guard("logs", || {
+            self.inner.logs.replace(Some(sink));
+            Ok(())
+        });
+        end_stream(&failed, subscribed);
     }
 
     /// Ends the stream from [`LepicRuntime::logs`]. Cancelling the Dart subscription completes

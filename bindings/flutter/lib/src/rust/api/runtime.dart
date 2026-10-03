@@ -25,6 +25,8 @@ abstract class LepicRuntime implements RustOpaqueInterface {
   });
 
   /// Sends every log record from now on to `sink`, replacing the stream subscribed before.
+  /// A failure to subscribe, which only a defect inside LEPIC causes, ends the stream with a
+  /// `Panic` [`WalletError`] as its error.
   Stream<LogEntry> logs();
 
   /// Starts the runtime. Records at `log_level` and above go to the stream from

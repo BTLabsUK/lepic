@@ -75,7 +75,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1391601429;
+  int get rustContentHash => -219934462;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -264,6 +264,11 @@ abstract class RustLibApi extends BaseApi {
   void crateApiTestingMockChainSetHeight({
     required MockChain that,
     required BigInt height,
+  });
+
+  void crateApiTestingMockChainSetNodeUnreachable({
+    required MockChain that,
+    required bool unreachable,
   });
 
   Future<void> crateApiWalletDeleteWallet({
@@ -1095,7 +1100,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           },
           codec: SseCodec(
             decodeSuccessData: sse_decode_unit,
-            decodeErrorData: sse_decode_wallet_error,
+            decodeErrorData: null,
           ),
           constMeta: kCrateApiWalletEpicWalletRefreshConstMeta,
           argValues: [that, progress],
@@ -1176,7 +1181,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           },
           codec: SseCodec(
             decodeSuccessData: sse_decode_unit,
-            decodeErrorData: sse_decode_wallet_error,
+            decodeErrorData: null,
           ),
           constMeta: kCrateApiWalletEpicWalletScanConstMeta,
           argValues: [that, startHeight, progress],
@@ -1301,7 +1306,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           },
           codec: SseCodec(
             decodeSuccessData: sse_decode_unit,
-            decodeErrorData: sse_decode_wallet_error,
+            decodeErrorData: null,
           ),
           constMeta: kCrateApiWalletEpicWalletStartListenerConstMeta,
           argValues: [that, events],
@@ -1763,6 +1768,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  void crateApiTestingMockChainSetNodeUnreachable({
+    required MockChain that,
+    required bool unreachable,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
+            that,
+            serializer,
+          );
+          sse_encode_bool(unreachable, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 40)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTestingMockChainSetNodeUnreachableConstMeta,
+        argValues: [that, unreachable],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTestingMockChainSetNodeUnreachableConstMeta =>
+      const TaskConstMeta(
+        debugName: "MockChain_set_node_unreachable",
+        argNames: ["that", "unreachable"],
+      );
+
+  @override
   Future<void> crateApiWalletDeleteWallet({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -1784,7 +1822,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 40,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1813,7 +1851,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1848,7 +1886,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1879,7 +1917,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(address, serializer);
           sse_encode_chain(chain, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 43)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -1905,7 +1943,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(phrase, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -1933,7 +1971,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 45,
+            funcId: 46,
             port: port_,
           );
         },
@@ -1974,7 +2012,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 47,
             port: port_,
           );
         },
@@ -3666,7 +3704,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       self.setupAndSerialize(
         codec: SseCodec(
           decodeSuccessData: sse_decode_listener_event,
-          decodeErrorData: sse_decode_AnyhowException,
+          decodeErrorData: sse_decode_wallet_error,
         ),
       ),
       serializer,
@@ -3683,7 +3721,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       self.setupAndSerialize(
         codec: SseCodec(
           decodeSuccessData: sse_decode_log_entry,
-          decodeErrorData: sse_decode_AnyhowException,
+          decodeErrorData: sse_decode_wallet_error,
         ),
       ),
       serializer,
@@ -3700,7 +3738,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       self.setupAndSerialize(
         codec: SseCodec(
           decodeSuccessData: sse_decode_refresh_progress,
-          decodeErrorData: sse_decode_AnyhowException,
+          decodeErrorData: sse_decode_wallet_error,
         ),
       ),
       serializer,
@@ -3717,7 +3755,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       self.setupAndSerialize(
         codec: SseCodec(
           decodeSuccessData: sse_decode_scan_progress,
-          decodeErrorData: sse_decode_AnyhowException,
+          decodeErrorData: sse_decode_wallet_error,
         ),
       ),
       serializer,
@@ -3734,7 +3772,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       self.setupAndSerialize(
         codec: SseCodec(
           decodeSuccessData: sse_decode_wallet_event,
-          decodeErrorData: sse_decode_AnyhowException,
+          decodeErrorData: sse_decode_wallet_error,
         ),
       ),
       serializer,
@@ -4270,7 +4308,9 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
       RustLib.instance.api.crateApiWalletEpicWalletEpicboxAddress(that: this);
 
   /// Everything the wallet reports from now on: session, balance, transaction, sync and
-  /// transport changes. The stream ends when the wallet is dropped.
+  /// transport changes. The stream ends when the wallet is dropped. A failure to subscribe,
+  /// which only a defect inside LEPIC causes, ends the stream with a `Panic` [`WalletError`]
+  /// as its error.
   Stream<WalletEvent> events() =>
       RustLib.instance.api.crateApiWalletEpicWalletEvents(that: this);
 
@@ -4326,7 +4366,8 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
       .crateApiWalletEpicWalletReceiveSlate(that: this, slateJson: slateJson);
 
   /// `summary(refresh: true)` as a stream: a first event at 0 percent, then one with
-  /// `summary` set at 100. A failure ends the stream with the error.
+  /// `summary` set at 100. A failure ends the stream with its [`WalletError`] as the stream's
+  /// error, after the first event.
   Stream<RefreshProgress> refresh() =>
       RustLib.instance.api.crateApiWalletEpicWalletRefresh(that: this);
 
@@ -4336,7 +4377,8 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
 
   /// Scans the chain for this wallet's outputs from `start_height`, or, by default, from
   /// shortly before the last completed scan (the whole chain after a restore), streaming
-  /// progress until an event with `finished`. A cancelled scan fails with `Cancelled` and
+  /// progress until an event with `finished`. A failure ends the stream with its
+  /// [`WalletError`] as the stream's error; a cancelled scan ends it with `Cancelled` and
   /// resumes where it stopped next time.
   Stream<ScanProgress> scan({BigInt? startHeight}) => RustLib.instance.api
       .crateApiWalletEpicWalletScan(that: this, startHeight: startHeight);
@@ -4367,7 +4409,11 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   );
 
   /// Starts the Epicbox listener, unless it runs already, and streams what it does until
-  /// [`EpicWallet::stop_listener`]. The last event is `Stopped`.
+  /// [`EpicWallet::stop_listener`]. The last event is `Stopped`; a listener that fails while
+  /// running reports an `Error` event first. When the listener cannot start, for example
+  /// with `Unsupported` when the configuration names no relay, the stream ends with that
+  /// [`WalletError`] as its error and no event. A second call while the listener runs gets
+  /// a stream that ends at once.
   Stream<ListenerEvent> startListener() =>
       RustLib.instance.api.crateApiWalletEpicWalletStartListener(that: this);
 
@@ -4415,6 +4461,8 @@ class LepicRuntimeImpl extends RustOpaque implements LepicRuntime {
   );
 
   /// Sends every log record from now on to `sink`, replacing the stream subscribed before.
+  /// A failure to subscribe, which only a defect inside LEPIC causes, ends the stream with a
+  /// `Panic` [`WalletError`] as its error.
   Stream<LogEntry> logs() =>
       RustLib.instance.api.crateApiRuntimeLepicRuntimeLogs(that: this);
 
@@ -4480,4 +4528,11 @@ class MockChainImpl extends RustOpaque implements MockChain {
 
   void setHeight({required BigInt height}) => RustLib.instance.api
       .crateApiTestingMockChainSetHeight(that: this, height: height);
+
+  /// While `unreachable`, every node request fails as if the node refused the connection.
+  void setNodeUnreachable({required bool unreachable}) =>
+      RustLib.instance.api.crateApiTestingMockChainSetNodeUnreachable(
+        that: this,
+        unreachable: unreachable,
+      );
 }

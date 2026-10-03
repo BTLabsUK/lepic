@@ -2,6 +2,7 @@
 // lepic-ffi built with the mock node. From the repository root:
 //   cargo xtask mobile --host-test
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -108,6 +109,34 @@ Future<void> scanToEnd(EpicWallet wallet) async {
   final events = await wallet.scan().toList();
   expect(events.last.finished, isTrue);
 }
+
+/// What a stream call delivered: its events, the errors on the stream, and the errors that
+/// escaped to the zone the call was made in.
+typedef StreamOutcome = ({
+  List<Object> events,
+  List<Object> errors,
+  List<Object> zoneErrors,
+});
+
+Future<StreamOutcome> collect<T extends Object>(
+  Stream<T> Function() call,
+) async {
+  final events = <Object>[];
+  final errors = <Object>[];
+  final zoneErrors = <Object>[];
+  final done = Completer<void>();
+  runZonedGuarded(() {
+    call().listen(events.add, onError: errors.add, onDone: done.complete);
+  }, (error, _) => zoneErrors.add(error));
+  await done.future.timeout(const Duration(seconds: 30));
+  // The call's own result may arrive after the stream ended.
+  await Future<void>.delayed(const Duration(milliseconds: 200));
+  return (events: events, errors: errors, zoneErrors: zoneErrors);
+}
+
+Matcher isWalletError(WalletErrorKind kind) => isA<WalletError>()
+    .having((e) => e.kind, 'kind', kind)
+    .having((e) => e.code, 'code', errorCodes[kind]);
 
 void main() {
   late Directory root;
@@ -270,6 +299,50 @@ void main() {
     // The wallet and the runtime keep working after the panic.
     final summary = await wallet.summary(refresh: true);
     expect(summary.total, BigInt.zero);
+  });
+
+  test(
+    'a refresh with the node failing ends its stream with the error',
+    () async {
+      final wallet = await EpicWallet.create(
+        runtime: runtime,
+        config: configFor(walletDir('refresh-fails')),
+        store: lepicSecretStore(MemoryStore()),
+        password: password,
+      );
+      chain.setNodeUnreachable(unreachable: true);
+      final outcome = await collect(wallet.refresh);
+      expect(outcome.errors, [isWalletError(WalletErrorKind.nodeUnreachable)]);
+      expect(outcome.zoneErrors, isEmpty);
+      expect(outcome.events, [isA<RefreshProgress>()]);
+    },
+  );
+
+  test('a scan with the node failing ends its stream with the error', () async {
+    final wallet = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(walletDir('scan-fails')),
+      store: lepicSecretStore(MemoryStore()),
+      password: password,
+    );
+    chain.setNodeUnreachable(unreachable: true);
+    final outcome = await collect(wallet.scan);
+    expect(outcome.errors, [isWalletError(WalletErrorKind.nodeUnreachable)]);
+    expect(outcome.zoneErrors, isEmpty);
+    expect(outcome.events, isEmpty);
+  });
+
+  test('a listener without a relay ends its stream with the error', () async {
+    final wallet = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(walletDir('listener-no-relay')),
+      store: lepicSecretStore(MemoryStore()),
+      password: password,
+    );
+    final outcome = await collect(wallet.startListener);
+    expect(outcome.errors, [isWalletError(WalletErrorKind.unsupported)]);
+    expect(outcome.zoneErrors, isEmpty);
+    expect(outcome.events, isEmpty);
   });
 
   test('errors carry stable kinds and codes', () async {

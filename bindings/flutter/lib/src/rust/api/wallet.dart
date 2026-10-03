@@ -132,7 +132,9 @@ abstract class EpicWallet implements RustOpaqueInterface {
   Future<String> epicboxAddress();
 
   /// Everything the wallet reports from now on: session, balance, transaction, sync and
-  /// transport changes. The stream ends when the wallet is dropped.
+  /// transport changes. The stream ends when the wallet is dropped. A failure to subscribe,
+  /// which only a defect inside LEPIC causes, ends the stream with a `Panic` [`WalletError`]
+  /// as its error.
   Stream<WalletEvent> events();
 
   /// Sender side: finalizes the recipient's answer and posts the transaction to the node.
@@ -206,7 +208,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   Future<Slate> receiveSlate({required String slateJson});
 
   /// `summary(refresh: true)` as a stream: a first event at 0 percent, then one with
-  /// `summary` set at 100. A failure ends the stream with the error.
+  /// `summary` set at 100. A failure ends the stream with its [`WalletError`] as the stream's
+  /// error, after the first event.
   Stream<RefreshProgress> refresh();
 
   /// Posts the stored final transaction of `tx_id` to the node again.
@@ -214,7 +217,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
 
   /// Scans the chain for this wallet's outputs from `start_height`, or, by default, from
   /// shortly before the last completed scan (the whole chain after a restore), streaming
-  /// progress until an event with `finished`. A cancelled scan fails with `Cancelled` and
+  /// progress until an event with `finished`. A failure ends the stream with its
+  /// [`WalletError`] as the stream's error; a cancelled scan ends it with `Cancelled` and
   /// resumes where it stopped next time.
   Stream<ScanProgress> scan({BigInt? startHeight});
 
@@ -234,7 +238,11 @@ abstract class EpicWallet implements RustOpaqueInterface {
   });
 
   /// Starts the Epicbox listener, unless it runs already, and streams what it does until
-  /// [`EpicWallet::stop_listener`]. The last event is `Stopped`.
+  /// [`EpicWallet::stop_listener`]. The last event is `Stopped`; a listener that fails while
+  /// running reports an `Error` event first. When the listener cannot start, for example
+  /// with `Unsupported` when the configuration names no relay, the stream ends with that
+  /// [`WalletError`] as its error and no event. A second call while the listener runs gets
+  /// a stream that ends at once.
   Stream<ListenerEvent> startListener();
 
   /// Stops the listener. Its stream ends with `Stopped` shortly after.

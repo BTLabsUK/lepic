@@ -45,4 +45,7 @@ abstract class MockChain implements RustOpaqueInterface {
   LepicRuntime runtime({required LogLevel logLevel});
 
   void setHeight({required BigInt height});
+
+  /// While `unreachable`, every node request fails as if the node refused the connection.
+  void setNodeUnreachable({required bool unreachable});
 }

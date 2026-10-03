@@ -21,6 +21,7 @@ use crate::node::{Node, NodeBackend};
 pub(crate) struct MockBackend {
     node: MockNode,
     panic_next: Arc<AtomicBool>,
+    unreachable: Arc<AtomicBool>,
 }
 
 impl MockBackend {
@@ -39,6 +40,7 @@ impl MockBackend {
         Ok(Self {
             node: MockNode::from_chain(chain),
             panic_next: Arc::default(),
+            unreachable: Arc::default(),
         })
     }
 
@@ -63,6 +65,11 @@ impl MockBackend {
         if self.panic_next.swap(false, Ordering::SeqCst) {
             panic!("mock node asked to panic");
         }
+        if self.unreachable.load(Ordering::SeqCst) {
+            return Err(NodeError::Connect(Box::new(std::io::Error::from(
+                std::io::ErrorKind::ConnectionRefused,
+            ))));
+        }
         self.node.post(endpoint, body).await
     }
 
@@ -72,6 +79,10 @@ impl MockBackend {
 
     pub(crate) fn panic_on_next_call(&self) {
         self.panic_next.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_unreachable(&self, unreachable: bool) {
+        self.unreachable.store(unreachable, Ordering::SeqCst);
     }
 
     pub(crate) fn height(&self) -> u64 {

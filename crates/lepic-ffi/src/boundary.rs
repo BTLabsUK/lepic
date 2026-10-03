@@ -12,6 +12,7 @@ use tracing::instrument::WithSubscriber as _;
 use tracing::{Dispatch, error};
 
 use crate::api::error::{WalletError, WalletErrorKind};
+use crate::frb_generated::{SseEncode, StreamSink};
 
 /// What an operation runs with.
 #[derive(Clone)]
@@ -86,6 +87,16 @@ pub(crate) fn guard<T>(
 /// [`guard`] for a call with no error to return: after a panic it returns `fallback`.
 pub(crate) fn guard_or<T>(operation: &'static str, fallback: T, work: impl FnOnce() -> T) -> T {
     guard(operation, || Ok(work())).unwrap_or(fallback)
+}
+
+/// Hands a stream call's failure to its stream, which ends the Dart stream with that error.
+/// Stream calls return nothing to Dart: the generated code does not await them, so an error
+/// they returned would reach the app's zone instead of the stream.
+pub(crate) fn end_stream<T: SseEncode>(sink: &StreamSink<T>, result: Result<(), WalletError>) {
+    if let Err(error) = result {
+        // A closed stream only means the app stopped listening.
+        let _ = sink.add_error(error);
+    }
 }
 
 /// Replaces the process's panic hook with one that reports where a panic happened but not its

@@ -153,4 +153,15 @@ impl MockChain {
             self.backend.panic_on_next_call();
         });
     }
+
+    /// While `unreachable`, every node request fails as if the node refused the connection.
+    #[frb(sync)]
+    pub fn set_node_unreachable(&self, unreachable: bool) {
+        guard_or("mock_chain_set_node_unreachable", (), || {
+            #[cfg(feature = "mock")]
+            self.backend.set_unreachable(unreachable);
+            #[cfg(not(feature = "mock"))]
+            let _ = unreachable;
+        });
+    }
 }

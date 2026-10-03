@@ -26,7 +26,7 @@ use crate::api::types::{
     Chain, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip, RefreshProgress,
     ScanProgress, SentTx, Slate, WalletConfig, WalletEvent, WalletSummary,
 };
-use crate::boundary::{Boundary, guard_or};
+use crate::boundary::{Boundary, end_stream, guard_or};
 use crate::frb_generated::StreamSink;
 use crate::node::NodeSecret;
 use crate::session::{self, Session, normalize_phrase, relay_network};
@@ -336,38 +336,42 @@ impl EpicWallet {
     }
 
     /// `summary(refresh: true)` as a stream: a first event at 0 percent, then one with
-    /// `summary` set at 100. A failure ends the stream with the error.
-    pub async fn refresh(&self, progress: StreamSink<RefreshProgress>) -> Result<(), WalletError> {
-        self.run("refresh", |session| async move {
-            let _ = progress.add(RefreshProgress {
-                percent: 0,
-                message: "checking your funds".to_owned(),
-                summary: None,
-            });
-            let summary = session.refresh().await?;
-            let _ = progress.add(RefreshProgress {
-                percent: 100,
-                message: "up to date".to_owned(),
-                summary: Some(summary),
-            });
-            Ok(())
-        })
-        .await
+    /// `summary` set at 100. A failure ends the stream with its [`WalletError`] as the stream's
+    /// error, after the first event.
+    pub async fn refresh(&self, progress: StreamSink<RefreshProgress>) {
+        let sink = progress.clone();
+        let result = self
+            .run("refresh", |session| async move {
+                let _ = progress.add(RefreshProgress {
+                    percent: 0,
+                    message: "checking your funds".to_owned(),
+                    summary: None,
+                });
+                let summary = session.refresh().await?;
+                let _ = progress.add(RefreshProgress {
+                    percent: 100,
+                    message: "up to date".to_owned(),
+                    summary: Some(summary),
+                });
+                Ok(())
+            })
+            .await;
+        end_stream(&sink, result);
     }
 
     /// Scans the chain for this wallet's outputs from `start_height`, or, by default, from
     /// shortly before the last completed scan (the whole chain after a restore), streaming
-    /// progress until an event with `finished`. A cancelled scan fails with `Cancelled` and
+    /// progress until an event with `finished`. A failure ends the stream with its
+    /// [`WalletError`] as the stream's error; a cancelled scan ends it with `Cancelled` and
     /// resumes where it stopped next time.
-    pub async fn scan(
-        &self,
-        start_height: Option<u64>,
-        progress: StreamSink<ScanProgress>,
-    ) -> Result<(), WalletError> {
-        self.run("scan", |session| async move {
-            session.scan(start_height, &progress).await
-        })
-        .await
+    pub async fn scan(&self, start_height: Option<u64>, progress: StreamSink<ScanProgress>) {
+        let sink = progress.clone();
+        let result = self
+            .run("scan", |session| async move {
+                session.scan(start_height, &progress).await
+            })
+            .await;
+        end_stream(&sink, result);
     }
 
     /// Locks the wallet now, for example when the app goes to the background: stops the
@@ -502,15 +506,17 @@ impl EpicWallet {
     }
 
     /// Starts the Epicbox listener, unless it runs already, and streams what it does until
-    /// [`EpicWallet::stop_listener`]. The last event is `Stopped`.
-    pub async fn start_listener(
-        &self,
-        events: StreamSink<ListenerEvent>,
-    ) -> Result<(), WalletError> {
+    /// [`EpicWallet::stop_listener`]. The last event is `Stopped`; a listener that fails while
+    /// running reports an `Error` event first. When the listener cannot start, for example
+    /// with `Unsupported` when the configuration names no relay, the stream ends with that
+    /// [`WalletError`] as its error and no event. A second call while the listener runs gets
+    /// a stream that ends at once.
+    pub async fn start_listener(&self, events: StreamSink<ListenerEvent>) {
         let boundary = self.boundary();
-        let Some(handle) = boundary.guard("start_listener", || self.session.claim_listener())?
-        else {
-            return Ok(());
+        let handle = match boundary.guard("start_listener", || self.session.claim_listener()) {
+            Ok(Some(handle)) => handle,
+            Ok(None) => return,
+            Err(error) => return end_stream(&events, Err(error)),
         };
         let session = Arc::clone(&self.session);
         let runner = boundary.clone();
@@ -536,7 +542,6 @@ impl EpicWallet {
                 message: String::new(),
             });
         });
-        Ok(())
     }
 
     /// Stops the listener. Its stream ends with `Stopped` shortly after.
@@ -554,12 +559,17 @@ impl EpicWallet {
     }
 
     /// Everything the wallet reports from now on: session, balance, transaction, sync and
-    /// transport changes. The stream ends when the wallet is dropped.
+    /// transport changes. The stream ends when the wallet is dropped. A failure to subscribe,
+    /// which only a defect inside LEPIC causes, ends the stream with a `Panic` [`WalletError`]
+    /// as its error.
     pub fn events(&self, sink: StreamSink<WalletEvent>) {
         let boundary = self.boundary();
-        boundary.guard_or("events", (), || {
+        let failed = sink.clone();
+        let subscribed = boundary.guard("events", || {
             let events = self.session.subscribe();
             boundary.handle.spawn(session::forward_events(events, sink));
+            Ok(())
         });
+        end_stream(&failed, subscribed);
     }
 }

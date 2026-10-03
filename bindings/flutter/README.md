@@ -61,6 +61,9 @@ final wallet = await EpicWallet.create(
 - A wallet directory is open in one runtime at a time, across processes too; LEPIC holds an OS
   lock on `.lepic.lock` in it while a wallet is open.
 - `EpicWallet.events()` streams session, balance, transaction, sync and transport changes.
+- The stream calls `refresh`, `scan`, `startListener`, `events` and `logs` report a failure as
+  the stream's error: the same `WalletError` the other calls throw, after which the stream ends.
+  Listen with `onError`; no error from a stream call reaches the app's zone.
 - A panic inside LEPIC arrives as `WalletError` with kind `panic`; the runtime stays usable.
   `RustLib.init()` installs a process-wide panic hook that prints only where a panic happened,
   never its message, so no text from inside LEPIC reaches the platform log.
@@ -233,8 +236,13 @@ version pinned in the root `Cargo.toml`:
 
 ```sh
 cd bindings/flutter
-flutter_rust_bridge_codegen generate
+dart run tool/generate.dart
 ```
+
+It runs `flutter_rust_bridge_codegen generate` and then makes every stream decode its errors as
+`WalletError`, since the codegen always decodes stream errors as `AnyhowException`. Running the
+codegen alone leaves stream errors undecodable, which the stream tests in `test/wallet_test.dart`
+catch.
 
 Run the tests on x86_64 Linux, from the repository root:
 
