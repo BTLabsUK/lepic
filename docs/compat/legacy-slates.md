@@ -90,8 +90,9 @@ File naming has no enforced extension. The CLI writes the receiver's reply to `<
    `ttl_cutoff_height` = tip + TTL. Adds inputs and change, the fee, one kernel, and the first random
    offset. Adds its public blind excess, public nonce, optional message and message signature. Locks
    the inputs. With a recipient address, sets the payment proof addresses.
-2. Receiver (S2): checks TTL, rejects a slate id it already received, adds its output, its public data
-   and its partial signature, and with a payment proof request signs the proof.
+2. Receiver (S2): checks TTL, rejects a slate id it already received, adds its output (the body's
+   outputs stay sorted by hash, as the node requires), its public data and its partial signature,
+   and with a payment proof request signs the proof.
 3. Sender (S3): verifies the receiver's data and the payment proof, adds its partial signature,
    aggregates, builds the final kernel, verifies the transaction, and posts it to the node.
 
