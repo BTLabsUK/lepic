@@ -1,0 +1,5 @@
+# Regenerate with `flutter_rust_bridge_codegen generate` in this directory, with the codegen at
+# exactly the flutter_rust_bridge version pinned in the root Cargo.toml (ADR 0007).
+rust_input: crate::api
+rust_root: ../../crates/lepic-ffi
+dart_output: lib/src/rust

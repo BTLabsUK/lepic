@@ -10,6 +10,34 @@ publish.workspace = true
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
 
+[features]
+# An in-process scripted node for the Dart package tests (`bindings/flutter/test`). Never in an
+# app build.
+mock = ["lepic-node/mock"]
+
+[dependencies]
+base64 = { workspace = true, features = ["alloc"] }
+flutter_rust_bridge = { workspace = true, features = ["anyhow", "dart-opaque", "portable-atomic", "rust-async", "thread-pool"] }
+getrandom = { workspace = true, features = ["std", "sys_rng"] }
+jiff = { workspace = true, features = ["std"] }
+lepic-epicbox.workspace = true
+lepic-keychain.workspace = true
+lepic-node.workspace = true
+lepic-primitives.workspace = true
+lepic-store.workspace = true
+lepic-telemetry.workspace = true
+lepic-transport.workspace = true
+lepic-wallet.workspace = true
+rand = { workspace = true, features = ["std_rng"] }
+tokio = { workspace = true, features = ["fs", "rt", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+lepic-ffi = { path = ".", features = ["mock"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
 # Copy of [workspace.lints] in the root Cargo.toml without `unsafe_code`, because
 # flutter_rust_bridge generates unsafe glue here. xtask/src/lint_tables.rs fails
 # when the two differ.
