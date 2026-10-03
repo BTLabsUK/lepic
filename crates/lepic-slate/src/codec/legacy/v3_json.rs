@@ -9,6 +9,7 @@ use lepic_primitives::output::{Output, OutputFeatures};
 use lepic_primitives::params::MAX_TX_WEIGHT;
 use serde::Deserialize;
 
+use super::bounded::{self, Bounded, check_participants, only_kernel};
 use super::fields::{
     ObjectWriter, Scalar, field_error, integer, missing, number, optional_integer, optional_parsed,
     optional_text, parsed, text, write_array, write_hex, write_integer_string, write_null,
@@ -21,11 +22,10 @@ use crate::origin::{LegacyHeader, WireOrigin};
 use crate::role::Role;
 use crate::stage::Stage;
 use crate::validate::{
-    KERNEL_PLACEHOLDER, LEGACY_PARTICIPANTS, check_kernel_features, check_minimum_fee,
-    check_participant_ids, check_size, decode_hex_array, kernel_from_wire, legacy_participant_id,
-    legacy_stage, parse_commitment, parse_offset, parse_proof_address, parse_proof_signature,
-    parse_public_key, parse_range_proof, parse_signature, parse_slate_id, role_from_legacy_id,
-    single_kernel,
+    KERNEL_PLACEHOLDER, LEGACY_PARTICIPANTS, check_kernel_features, check_minimum_fee, check_size,
+    decode_hex_array, kernel_from_wire, legacy_participant_id, legacy_stage, parse_commitment,
+    parse_offset, parse_proof_address, parse_proof_signature, parse_public_key, parse_range_proof,
+    parse_signature, parse_slate_id, role_from_legacy_id,
 };
 
 pub const LEGACY_V3_JSON: CodecId = CodecId::new("legacy-v3");
@@ -128,7 +128,8 @@ struct SlateV3 {
     height: Scalar,
     lock_height: Scalar,
     ttl_cutoff_height: Scalar,
-    participant_data: Option<Vec<ParticipantDataV3>>,
+    #[serde(deserialize_with = "bounded::participants")]
+    participant_data: Option<Bounded<ParticipantDataV3>>,
     payment_proof: Option<PaymentInfoV3>,
 }
 
@@ -150,9 +151,12 @@ struct TransactionV3 {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct TransactionBodyV3 {
-    inputs: Option<Vec<InputV3>>,
-    outputs: Option<Vec<OutputV3>>,
-    kernels: Option<Vec<TxKernelV3>>,
+    #[serde(deserialize_with = "bounded::inputs")]
+    inputs: Option<Bounded<InputV3>>,
+    #[serde(deserialize_with = "bounded::outputs")]
+    outputs: Option<Bounded<OutputV3>>,
+    #[serde(deserialize_with = "bounded::kernels")]
+    kernels: Option<Bounded<TxKernelV3>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -213,18 +217,20 @@ impl SlateV3 {
         let declared = number::<u64>("num_participants", &self.num_participants)?;
         let participant_data = self.participant_data.ok_or(missing("participant_data"))?;
         let ids = participant_data
+            .kept()
             .iter()
             .map(|data| integer("participant_data.id", &data.id))
             .collect::<Result<Vec<_>, _>>()?;
-        check_participant_ids(declared, &ids)?;
+        check_participants(declared, &participant_data, &ids)?;
 
         let tx = self.tx.ok_or(missing("tx"))?;
         let body = tx.body.ok_or(missing("tx.body"))?;
         let inputs = body.inputs.ok_or(missing("tx.body.inputs"))?;
         let outputs = body.outputs.ok_or(missing("tx.body.outputs"))?;
         let kernels = body.kernels.ok_or(missing("tx.body.kernels"))?;
+        // The full counts, so a truncated input or output array is refused here.
         check_body_weight(inputs.len(), outputs.len(), kernels.len())?;
-        let kernel = single_kernel(&kernels)?;
+        let kernel = only_kernel(&kernels)?;
 
         let fee = Fee::new(integer("fee", &self.fee)?);
         let lock = KernelLock::at_height(Height::new(integer("lock_height", &self.lock_height)?));
@@ -233,8 +239,8 @@ impl SlateV3 {
 
         let mut sender = None;
         let mut receiver = None;
-        let mut entries = Vec::with_capacity(participant_data.len());
-        for (data, id) in participant_data.iter().zip(ids) {
+        let mut entries = Vec::with_capacity(ids.len());
+        for (data, id) in participant_data.kept().iter().zip(ids) {
             let role = role_from_legacy_id(id)?;
             let participant = data.parse()?;
             entries.push((role, participant.is_signed()));
@@ -258,10 +264,12 @@ impl SlateV3 {
             sender,
             receiver,
             inputs: inputs
+                .kept()
                 .iter()
                 .map(InputV3::parse)
                 .collect::<Result<_, _>>()?,
             outputs: outputs
+                .kept()
                 .iter()
                 .map(OutputV3::parse)
                 .collect::<Result<_, _>>()?,

@@ -334,6 +334,34 @@ mod participants {
     }
 
     #[test]
+    fn counts_participants_beyond_the_two_kept_without_parsing_them() {
+        assert_eq!(
+            decode_mutated(S2, |value| {
+                let participants = value["participant_data"].as_array_mut().unwrap();
+                participants.extend([json!(7), json!("not a participant"), json!([[]])]);
+            }),
+            invalid(ValidationError::TooManyParticipants {
+                count: 5,
+                declared: 2
+            })
+        );
+    }
+
+    #[test]
+    fn reports_an_unsupported_declared_count_before_extra_participants() {
+        assert_eq!(
+            decode_mutated(S2, |value| {
+                value["num_participants"] = json!(3);
+                value["participant_data"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({}));
+            }),
+            invalid(ValidationError::UnsupportedParticipantCount { declared: 3 })
+        );
+    }
+
+    #[test]
     fn rejects_participant_id_not_below_the_declared_count() {
         assert_eq!(
             decode_mutated(S1, set("/participant_data/0/id", json!("2"))),
@@ -438,6 +466,31 @@ mod kernel_and_fees {
             }),
             invalid(ValidationError::KernelCount { count: 2 })
         );
+    }
+
+    #[test]
+    fn counts_kernels_beyond_the_one_kept_without_parsing_them() {
+        assert_eq!(
+            decode_mutated(S1, |value| {
+                let kernels = value["tx"]["body"]["kernels"].as_array_mut().unwrap();
+                kernels.extend([json!(7), json!("not a kernel"), json!([[]])]);
+            }),
+            invalid(ValidationError::KernelCount { count: 4 })
+        );
+    }
+
+    #[test]
+    fn rejects_outputs_above_the_transaction_weight_before_parsing_them() {
+        let result = decode_mutated(S1, |value| {
+            value["tx"]["body"]["outputs"] = Value::Array(vec![json!({}); 2_000]);
+        });
+        assert!(matches!(
+            result,
+            Err(DecodeError::Model(SlateError::BodyTooHeavy {
+                max: MAX_TX_WEIGHT,
+                ..
+            }))
+        ));
     }
 
     #[test]

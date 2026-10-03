@@ -364,6 +364,16 @@ mod shared_rules {
             })
         );
         assert_eq!(
+            decode_mutated(S2, |value| {
+                let participants = value["participant_data"].as_array_mut().unwrap();
+                participants.extend([json!(7), json!("not a participant"), json!([[]])]);
+            }),
+            invalid(ValidationError::TooManyParticipants {
+                count: 5,
+                declared: 2
+            })
+        );
+        assert_eq!(
             decode_mutated(S1, set("/participant_data/0/message_sig", Value::Null)),
             field("participant_data.message_sig", FieldProblem::Missing)
         );
@@ -374,6 +384,13 @@ mod shared_rules {
         assert_eq!(
             decode_mutated(S1, set("/tx/body/kernels", json!([]))),
             invalid(ValidationError::KernelCount { count: 0 })
+        );
+        assert_eq!(
+            decode_mutated(S1, |value| {
+                let kernels = value["tx"]["body"]["kernels"].as_array_mut().unwrap();
+                kernels.extend([json!(7), json!("not a kernel"), json!([[]])]);
+            }),
+            invalid(ValidationError::KernelCount { count: 4 })
         );
         assert_eq!(
             decode_mutated(S1, set("/tx/body/kernels/0/fee", json!("900000"))),
