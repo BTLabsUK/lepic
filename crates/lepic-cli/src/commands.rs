@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
-use lepic_epicbox::{ClientSettings, Network as RelayNetwork, TRANSPORT_ID};
+use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::params::Network;
@@ -40,9 +40,9 @@ use zeroize::Zeroizing;
 use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
-    Command, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs, InvoiceCommand, NodeCommand,
-    PostArgs, ReceiveArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs, TxCommand,
-    WalletCommand, WordsArg,
+    Command, DestinationArgs, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs,
+    InvoiceCommand, NodeCommand, PostArgs, ReceiveArgs, RestoreArgs, ScanArgs, SelectionArg,
+    SendArgs, SpendArgs, TxCommand, WalletCommand, WordsArg,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
@@ -379,31 +379,12 @@ impl<H: Host> Run<'_, H> {
     async fn send(&mut self, args: SendArgs) -> Result<Report, CliError> {
         let amount = parse_amount(&args.amount)?;
         let spend = Spend::from_args(&args.spend)?;
+        let (delivery, destination) = self.delivery(args.destination)?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
-        let (delivery, destination) = match (args.destination.to, args.destination.to_file) {
-            (Some(address), _) => {
-                opened.wallet.epicbox_attach(&opened.epicbox)?;
-                (
-                    Delivery::Deliver {
-                        transport: TRANSPORT_ID,
-                        to: Destination::new(address.clone()),
-                    },
-                    address,
-                )
-            }
-            (None, Some(path)) => {
-                let text = path.display().to_string();
-                (
-                    Delivery::Export {
-                        transport: FILE,
-                        to: Location::File(path),
-                    },
-                    text,
-                )
-            }
-            (None, None) => return Err(CliError::NoDestination),
-        };
+        if delivery.transport() == TRANSPORT_ID {
+            opened.wallet.epicbox_attach(&opened.epicbox)?;
+        }
         let transport = delivery.transport();
         let request = SendRequest {
             minimum_confirmations: spend.minimum_confirmations,
@@ -422,6 +403,36 @@ impl<H: Host> Run<'_, H> {
             transport: transport.to_string(),
             destination,
         }))
+    }
+
+    /// Where a first slate goes, and how the report names it. An Epicbox address is parsed
+    /// here, before the wallet stores anything: a send to an address that cannot be delivered
+    /// to would leave a transaction behind with its inputs locked.
+    fn delivery(&self, destination: DestinationArgs) -> Result<(Delivery, String), CliError> {
+        match (destination.to, destination.to_file) {
+            (Some(address), _) => {
+                EpicboxAddress::parse(&address, relay_network(self.settings.network))
+                    .map_err(CliError::Address)?;
+                Ok((
+                    Delivery::Deliver {
+                        transport: TRANSPORT_ID,
+                        to: Destination::new(address.clone()),
+                    },
+                    address,
+                ))
+            }
+            (None, Some(path)) => {
+                let text = path.display().to_string();
+                Ok((
+                    Delivery::Export {
+                        transport: FILE,
+                        to: Location::File(path),
+                    },
+                    text,
+                ))
+            }
+            (None, None) => Err(CliError::NoDestination),
+        }
     }
 
     async fn receive(&mut self, args: ReceiveArgs) -> Result<Report, CliError> {

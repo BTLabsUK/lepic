@@ -132,6 +132,8 @@ pub enum CliError {
     Store(#[from] StoreError),
     #[error("give --to or --to-file")]
     NoDestination,
+    #[error("epicbox address rejected")]
+    Address(#[source] lepic_epicbox::AddressError),
     #[error("transport registration failed")]
     Registry(#[from] lepic_transport::error::RegistryError),
     #[error("could not {what}")]
@@ -157,9 +159,11 @@ impl CliError {
         match self {
             Self::Settings(_) | Self::Telemetry(_) | Self::SharedDataDir => ErrorKind::Config,
             Self::Secret(SecretError::Mismatch) => ErrorKind::Rejected,
-            Self::Secret(_) | Self::Amount(_) | Self::Zero { .. } | Self::NoDestination => {
-                ErrorKind::Usage
-            }
+            Self::Secret(_)
+            | Self::Amount(_)
+            | Self::Zero { .. }
+            | Self::NoDestination
+            | Self::Address(_) => ErrorKind::Usage,
             Self::Wallet(error) => wallet_kind(error),
             Self::DataDirInUse => ErrorKind::WalletState,
             Self::Send(error) => send_kind(error),

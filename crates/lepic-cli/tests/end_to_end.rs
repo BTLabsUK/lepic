@@ -275,3 +275,25 @@ fn issue_pay_and_finalize_an_invoice_through_files() {
         host.node.violations()
     );
 }
+
+#[test]
+fn a_send_to_an_invalid_address_stores_nothing() {
+    let (host, sender, receiver) = two_wallets();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = text(&address, "address");
+    let (key, relay) = address.split_once('@').unwrap();
+    let truncated = format!("{}@{relay}", &key[1..]);
+    for bad in ["bogus", truncated.as_str()] {
+        let outcome = sender.run(&host, &["tx", "send", "1", "--to", bad]);
+        assert_eq!(outcome.code, 2, "{bad}: {outcome:?}");
+        assert_eq!(outcome.json()["error"]["kind"], "usage");
+    }
+    let list = sender.run(&host, &["tx", "list"]).ok().json();
+    let restored_only = list["transactions"].as_array().unwrap();
+    assert!(
+        restored_only.iter().all(|tx| tx["direction"] == "incoming"),
+        "{list}"
+    );
+    let info = sender.run(&host, &["wallet", "info"]).ok().json();
+    assert_eq!(info["accounts"][0]["locked"], "0.00000000");
+}
