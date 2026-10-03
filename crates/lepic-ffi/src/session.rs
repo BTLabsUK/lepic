@@ -43,7 +43,7 @@ use crate::api::types::{
     Slate, TransportState, WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
-use crate::node::{Node, node_error};
+use crate::node::{Node, NodeSecret, node_error};
 use crate::vault_port::{AppVault, SharedStorage, VAULT_KEY, VaultBytes, vault_error};
 
 type EngineWallet = Wallet<Node, SqliteStores, AppVault>;
@@ -161,13 +161,14 @@ impl Session {
     /// A locked wallet on `config.data_dir`, which must exist and not be open anywhere.
     pub(crate) fn new(
         runtime: &Arc<RuntimeInner>,
-        config: &mut WalletConfig,
+        config: &WalletConfig,
+        node_secret: &NodeSecret,
         store: AppSecretStore,
     ) -> Result<Self, WalletError> {
         let network = config.chain.network();
         let data_dir = PathBuf::from(&config.data_dir);
         let claim = runtime.claim(&data_dir)?;
-        let node = runtime.nodes.client(config)?;
+        let node = runtime.nodes.client(config, node_secret)?;
         let epicbox = epicbox_transport(config, network)?;
         let mut transports = TransportRegistry::new();
         let mut ids = vec![FILE];
@@ -787,9 +788,10 @@ impl Drop for ScratchFile {
 /// The tip and version of the node `config` names, without opening a wallet.
 pub(crate) async fn node_tip(
     runtime: &Arc<RuntimeInner>,
-    config: &mut WalletConfig,
+    config: &WalletConfig,
+    node_secret: &NodeSecret,
 ) -> Result<NodeTip, WalletError> {
-    let node = runtime.nodes.client(config)?;
+    let node = runtime.nodes.client(config, node_secret)?;
     let tip = node.get_tip().await.map_err(|error| node_error(&error))?;
     let version = node
         .get_version()

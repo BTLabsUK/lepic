@@ -27,6 +27,7 @@ use crate::api::types::{
 };
 use crate::boundary::Boundary;
 use crate::frb_generated::StreamSink;
+use crate::node::NodeSecret;
 use crate::session::{self, Session, normalize_phrase, relay_network};
 
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
@@ -70,6 +71,8 @@ pub async fn delete_wallet(
     config: WalletConfig,
     store: &AppSecretStore,
 ) -> Result<(), WalletError> {
+    let mut config = config;
+    drop(NodeSecret::take(&mut config));
     let inner = Arc::clone(&runtime.inner);
     let store = store.clone();
     runtime
@@ -86,13 +89,14 @@ pub async fn node_tip(
     runtime: &LepicRuntime,
     config: WalletConfig,
 ) -> Result<NodeTip, WalletError> {
+    let mut config = config;
+    let node_secret = NodeSecret::take(&mut config);
     let inner = Arc::clone(&runtime.inner);
     runtime
         .inner
         .boundary
         .run("node_tip", async move {
-            let mut config = config;
-            session::node_tip(&inner, &mut config).await
+            session::node_tip(&inner, &config, &node_secret).await
         })
         .await
 }
@@ -150,6 +154,8 @@ impl EpicWallet {
         mnemonic: Option<String>,
         password: String,
     ) -> Result<EpicWallet, WalletError> {
+        let mut config = config;
+        let node_secret = NodeSecret::take(&mut config);
         let mnemonic = mnemonic.map(Zeroizing::new);
         let password = Zeroizing::new(password);
         let inner = Arc::clone(&runtime.inner);
@@ -158,8 +164,7 @@ impl EpicWallet {
             .inner
             .boundary
             .run("create", async move {
-                let mut config = config;
-                let session = Session::new(&inner, &mut config, store)?;
+                let session = Session::new(&inner, &config, &node_secret, store)?;
                 session.create(mnemonic, password).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
@@ -176,6 +181,8 @@ impl EpicWallet {
         store: &AppSecretStore,
         password: String,
     ) -> Result<EpicWallet, WalletError> {
+        let mut config = config;
+        let node_secret = NodeSecret::take(&mut config);
         let password = Zeroizing::new(password);
         let inner = Arc::clone(&runtime.inner);
         let store = store.clone();
@@ -183,8 +190,7 @@ impl EpicWallet {
             .inner
             .boundary
             .run("open", async move {
-                let mut config = config;
-                let session = Session::new(&inner, &mut config, store)?;
+                let session = Session::new(&inner, &config, &node_secret, store)?;
                 session.open(password).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
@@ -210,6 +216,8 @@ impl EpicWallet {
         mnemonic: Option<String>,
         pin: String,
     ) -> Result<PinWallet, WalletError> {
+        let mut config = config;
+        let node_secret = NodeSecret::take(&mut config);
         let mnemonic = mnemonic.map(Zeroizing::new);
         let pin = Zeroizing::new(pin);
         let inner = Arc::clone(&runtime.inner);
@@ -219,9 +227,8 @@ impl EpicWallet {
             .inner
             .boundary
             .run("create_with_pin", async move {
-                let mut config = config;
                 let pin = pin::NewPin::new(pin)?;
-                let session = Session::new(&inner, &mut config, store.clone())?;
+                let session = Session::new(&inner, &config, &node_secret, store.clone())?;
                 // Checked before the PIN key is written, so it never replaces another
                 // wallet's key.
                 if session::wallet_exists(&store).await? {
@@ -258,6 +265,8 @@ impl EpicWallet {
         pin: String,
         sealed_password: String,
     ) -> Result<EpicWallet, WalletError> {
+        let mut config = config;
+        let node_secret = NodeSecret::take(&mut config);
         let pin = Zeroizing::new(pin);
         let inner = Arc::clone(&runtime.inner);
         let store = store.clone();
@@ -265,8 +274,7 @@ impl EpicWallet {
             .inner
             .boundary
             .run("open_with_pin", async move {
-                let mut config = config;
-                let session = Session::new(&inner, &mut config, store.clone())?;
+                let session = Session::new(&inner, &config, &node_secret, store.clone())?;
                 let password = pin::unlock(&inner.pin, &store, pin, sealed_password).await?;
                 session.open(password).await?;
                 Ok(EpicWallet {

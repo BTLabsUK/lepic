@@ -46,15 +46,28 @@ pub(crate) enum NodeFactory {
     Mock(crate::mock::MockBackend),
 }
 
+/// The node API secret of a [`WalletConfig`], in a buffer wiped on drop.
+pub(crate) struct NodeSecret(Zeroizing<Option<String>>);
+
+impl NodeSecret {
+    /// Moves the secret out of `config`. Every binding call that receives a config does this
+    /// first, so no early return leaves the secret behind in a buffer that is not wiped.
+    pub(crate) fn take(config: &mut WalletConfig) -> Self {
+        Self(Zeroizing::new(config.node_api_secret.take()))
+    }
+}
+
 impl NodeFactory {
-    /// A client for the node `config` names. Takes the API secret out of `config`, so the
-    /// only copy left is the one the client wipes.
-    pub(crate) fn client(&self, config: &mut WalletConfig) -> Result<Node, WalletError> {
-        let api_secret = Zeroizing::new(config.node_api_secret.take());
+    /// A client for the node `config` names, authenticating with `secret`.
+    pub(crate) fn client(
+        &self,
+        config: &WalletConfig,
+        secret: &NodeSecret,
+    ) -> Result<Node, WalletError> {
         match self {
             Self::Http => {
                 let settings = HttpSettings {
-                    api_secret: api_secret.as_deref().map(Into::into),
+                    api_secret: secret.0.as_deref().map(Into::into),
                     connect_timeout: Duration::from_secs(15),
                     ..HttpSettings::default()
                 };

@@ -249,14 +249,17 @@ fn normalized_phrase_is_built_in_one_buffer() {
 }
 
 #[test]
-fn the_node_client_takes_the_api_secret_out_of_the_config() {
+fn the_node_api_secret_is_taken_out_of_the_config_before_the_client_is_built() {
     let fixture = Fixture::new();
     let mut config = WalletConfig {
         node_api_secret: Some("node-secret".to_owned()),
         ..fixture.config()
     };
-    crate::node::NodeFactory::Http.client(&mut config).unwrap();
+    let secret = crate::node::NodeSecret::take(&mut config);
     assert_eq!(config.node_api_secret, None);
+    crate::node::NodeFactory::Http
+        .client(&config, &secret)
+        .unwrap();
 }
 
 struct CapturedLogs(std::sync::Mutex<Vec<lepic_telemetry::LogRecord>>);
