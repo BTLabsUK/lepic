@@ -62,6 +62,10 @@ pub enum WalletError {
     /// refresh confirms it.
     #[error("transaction {0} is already on chain")]
     OnChain(TxId),
+    /// Another operation, for example the inbox finalizing it, changed the transaction while
+    /// it was being cancelled. Nothing was changed by the cancel.
+    #[error("transaction {0} changed while it was being cancelled")]
+    ChangedDuringCancel(TxId),
     /// The database was rebuilt from the seed and no scan from genesis has completed since, so
     /// the next unused output key is not known yet.
     #[error("a restore scan must complete before new outputs are created")]

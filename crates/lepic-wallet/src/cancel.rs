@@ -41,17 +41,21 @@ where
     /// transaction can no longer be finalized here.
     ///
     /// A finalized transaction may have reached the node even though posting it failed, so its
-    /// kernel is looked up first; the node must be reachable to cancel one.
+    /// kernel is looked up first; the node must be reachable to cancel one. A posted
+    /// transaction, which includes one the node's pool answered it already holds, counts as on
+    /// chain and is not cancelled.
     ///
     /// Fails with [`WalletError::Locked`], [`WalletError::UnknownTransaction`],
     /// [`WalletError::Transition`] when the transaction is posted, confirmed or expired,
-    /// [`WalletError::OnChain`] when the node holds the kernel of a finalized one, and
-    /// [`WalletError::Node`] when that lookup fails.
+    /// [`WalletError::OnChain`] when the node holds the kernel of a finalized one,
+    /// [`WalletError::Node`] when that lookup fails, and [`WalletError::ChangedDuringCancel`]
+    /// when another operation moved the transaction on after its state was read; cancelling
+    /// again then decides from the new state.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn cancel(&self, tx_id: TxId) -> Result<(), WalletError> {
         let session = self.session()?;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
-        let lookup = {
+        let (observed, lookup) = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
                 session
@@ -77,7 +81,7 @@ where
                 let now = ports.clock.now();
                 session
                     .store
-                    .write(|repos| cancel_transaction(repos, tx_id, now))
+                    .write(|repos| cancel_transaction(repos, tx_id, observed, now))
             })
             .await?;
         match change {
@@ -91,24 +95,28 @@ where
     }
 }
 
-/// The kernel of a finalized transaction, to look up before it is cancelled.
+/// The state a cancel starts from, and the kernel of a finalized transaction, to look up
+/// before it is cancelled.
 fn finalized_kernel(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
     tx_id: TxId,
-) -> Result<Option<(Commitment, Height)>, WalletError> {
+) -> Result<(TxState, Option<(Commitment, Height)>), WalletError> {
     let entry = repos
         .transaction(tx_id)?
         .ok_or(WalletError::UnknownTransaction(tx_id))?;
     let Some(slate_id) = entry.slate_id.filter(|_| entry.state == TxState::Finalized) else {
-        return Ok(None);
+        return Ok((entry.state, None));
     };
-    Ok(final_kernel(repos, codecs, tx_id, slate_id)?)
+    Ok((entry.state, final_kernel(repos, codecs, tx_id, slate_id)?))
 }
 
+/// Cancels the transaction if it is still in the state `observed`, the one the kernel lookup
+/// was decided on. A transaction finalized or posted since may be on its way to the chain.
 fn cancel_transaction(
     repos: &mut dyn Repositories,
     tx_id: TxId,
+    observed: TxState,
     now: Timestamp,
 ) -> Result<Option<StateChange>, WalletError> {
     let entry = repos
@@ -126,6 +134,9 @@ fn cancel_transaction(
     }
     if check_transition(tx_id, entry.state, TxState::Cancelled)?.is_none() {
         return Ok(None);
+    }
+    if entry.state != observed {
+        return Err(WalletError::ChangedDuringCancel(tx_id));
     }
     for output in repos.outputs_of_transaction(tx_id)? {
         match output.status {
@@ -150,4 +161,87 @@ fn cancel_transaction(
         }
     }
     apply_transition(repos, tx_id, TxState::Cancelled, now)
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_primitives::amount::Amount;
+    use lepic_store::{
+        AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, MemoryStore, TransactionEntry,
+    };
+
+    use super::*;
+
+    fn at() -> Timestamp {
+        Timestamp::from_second(1_790_000_000).unwrap()
+    }
+
+    fn store_with(state: TxState) -> (MemoryStore, TxId) {
+        let store = MemoryStore::new(ContextKey::from_bytes([2; CONTEXT_KEY_LEN]));
+        let tx_id = store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(0),
+                    label: "default".to_owned(),
+                    next_child: 0,
+                })?;
+                repos.insert_transaction(&TransactionEntry {
+                    account: AccountIndex(0),
+                    direction: TxDirection::Outgoing,
+                    state,
+                    slate_id: None,
+                    transport: None,
+                    amount_credited: Amount::ZERO,
+                    amount_debited: Amount::ZERO,
+                    fee: None,
+                    created_at: at(),
+                    updated_at: at(),
+                })
+            })
+            .unwrap();
+        (store, tx_id)
+    }
+
+    fn state(store: &MemoryStore, tx_id: TxId) -> TxState {
+        store
+            .read(|repos| repos.transaction(tx_id))
+            .unwrap()
+            .unwrap()
+            .state
+    }
+
+    #[test]
+    fn refuses_a_transaction_finalized_after_its_state_was_read() {
+        let (store, tx_id) = store_with(TxState::Finalized);
+
+        let result = store.write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, at()));
+
+        assert!(
+            matches!(result, Err(WalletError::ChangedDuringCancel(id)) if id == tx_id),
+            "{result:?}"
+        );
+        assert_eq!(state(&store, tx_id), TxState::Finalized);
+    }
+
+    #[test]
+    fn cancels_a_transaction_still_in_the_state_that_was_read() {
+        let (store, tx_id) = store_with(TxState::Sent);
+
+        let change = store
+            .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, at()))
+            .unwrap();
+
+        assert_eq!(change.map(|change| change.to), Some(TxState::Cancelled));
+    }
+
+    #[test]
+    fn a_transaction_cancelled_meanwhile_stays_cancelled_without_an_error() {
+        let (store, tx_id) = store_with(TxState::Cancelled);
+
+        let change = store
+            .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, at()))
+            .unwrap();
+
+        assert_eq!(change, None);
+    }
 }
