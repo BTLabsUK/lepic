@@ -51,6 +51,10 @@ const GENESIS_SECONDS: i64 = 1_565_370_278;
 
 /// A mainnet tip read from the public explorer, and a time at or before which it was read. The
 /// chain had not passed this height at that time.
+///
+/// Move it forward when a release is prepared: read the tip from a node's `get_tip` or a public
+/// explorer, and record it with a time at or before the reading. The bound stays safe only while
+/// the chain had not passed the height at the recorded time; a newer checkpoint makes it tighter.
 const MAINNET_CHECKPOINT: ChainReference = ChainReference {
     height: Height::new(3_737_173),
     seen_at: 1_791_011_820,
