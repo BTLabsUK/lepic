@@ -8,7 +8,7 @@ record that supersedes the old one; accepted records are not rewritten.
 |---|---|---|
 | [0001](0001-port-not-depend.md) | Port the node and wallet logic; no Epic crates in the product graph | accepted |
 | [0002](0002-slate-domain-and-codecs.md) | One version-free slate model, one codec per wire format | accepted |
-| [0003](0003-transport-format-policy.md) | Transports declare the slate formats they speak | accepted |
+| [0003](0003-transport-format-policy.md) | Transports declare the slate formats they speak | accepted, file row superseded by 0015 |
 | [0004](0004-epicbox-client.md) | Async Epicbox client with listen and drain modes, acknowledge after store | accepted |
 | [0005](0005-storage.md) | SQLite storage, platform keystore for secrets, legacy seed import | accepted |
 | [0006](0006-tls-and-http.md) | rustls with ring, hyper for HTTP, tokio-tungstenite for websockets | accepted |
@@ -20,6 +20,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0012](0012-native-slate-format.md) | A compact native slate format for LEPIC-to-LEPIC methods | proposed |
 | [0013](0013-network-parameters.md) | Network parameters live with the format that uses them | accepted |
 | [0014](0014-secrets-at-the-flutter-boundary.md) | Which secrets may cross the Flutter boundary | accepted |
+| [0015](0015-file-method-writes-v3.md) | The file method writes V3; Epicbox stays V2 | accepted |
 
 Template:
 
