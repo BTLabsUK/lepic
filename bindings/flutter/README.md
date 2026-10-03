@@ -231,7 +231,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `receive_slate(slate_json)` | `receive_slate(slate_json)` | Same. New file form: `receive_file(path)`, writes `<path>.response`. |
 | `finalize_and_post(slate_json)` | `finalize_and_post(slate_json)` | Returns `FinalizedTx`; a refused post fails with `notPosted`. New: `finalize_file(path)`. |
 | `send_http(amount, minimum_confirmations, url)` | not provided | LEPIC 1.0 speaks Epicbox and files only. |
-| `send_epicbox(amount, minimum_confirmations, address)` | `send_epicbox(amount, minimum_confirmations, address)` | Returns `SentTx`. |
+| `send_epicbox(amount, minimum_confirmations, address)` | `send_epicbox(amount, minimum_confirmations, address)` | Returns `SentTx`. Like `validate_epicbox_address`, refuses a bare key without `@<relay>` with `invalidArgument` and stores nothing. |
 | `start_listener(events)` | `start_listener()` stream | Kinds `connected`, `disconnected`, `received`, `finalized`, `error`, `stopped`. New: `drain_epicbox()` for background work. |
 | `stop_listener()` | `stop_listener()` | Same. |
 | `listener_running()` | `listener_running()` | Same. |

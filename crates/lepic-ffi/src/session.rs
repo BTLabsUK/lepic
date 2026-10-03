@@ -132,6 +132,15 @@ pub(crate) const fn relay_network(network: Network) -> RelayNetwork {
     }
 }
 
+/// `address` as an Epicbox address of `network` that names its relay. A bare key is refused:
+/// the engine would send it to a default relay the user never named.
+pub(crate) fn relay_address(address: &str, network: Network) -> Option<EpicboxAddress> {
+    if !address.contains('@') {
+        return None;
+    }
+    EpicboxAddress::parse(address, relay_network(network)).ok()
+}
+
 /// Words separated by single spaces, lowercase, as the engine expects. Built in one buffer
 /// large enough that it never moves, so no copy of the phrase is left unwiped.
 pub(crate) fn normalize_phrase(phrase: &str) -> Zeroizing<String> {
@@ -669,8 +678,8 @@ impl Session {
         address: String,
     ) -> Result<SentTx, WalletError> {
         let epicbox = self.epicbox()?;
-        EpicboxAddress::parse(&address, relay_network(self.network))
-            .map_err(|_| invalid("not an epicbox address of this network"))?;
+        relay_address(&address, self.network)
+            .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
         self.engine.epicbox_attach(epicbox)?;
         let sent = self
             .engine

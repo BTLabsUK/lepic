@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use flutter_rust_bridge::frb;
-use lepic_epicbox::EpicboxAddress;
 use lepic_keychain::Seed;
 use zeroize::Zeroizing;
 
@@ -32,7 +31,7 @@ use crate::api::types::{
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
 use crate::node::NodeSecret;
-use crate::session::{self, SeedOrigin, Session, normalize_phrase, relay_network};
+use crate::session::{self, SeedOrigin, Session, normalize_phrase};
 
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
 /// whitespace are ignored.
@@ -49,8 +48,7 @@ pub fn validate_mnemonic(phrase: String) -> bool {
 #[frb(sync)]
 pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
     guard_or("validate_epicbox_address", false, || {
-        address.contains('@')
-            && EpicboxAddress::parse(&address, relay_network(chain.network())).is_ok()
+        session::relay_address(&address, chain.network()).is_some()
     })
 }
 
@@ -655,7 +653,8 @@ impl EpicWallet {
     }
 
     /// Sends to `<address>@<relay>[:port]` over Epicbox. The listener or a drain finalizes and
-    /// posts it when the answer arrives.
+    /// posts it when the answer arrives. Fails with `InvalidArgument`, storing nothing, for an
+    /// address that [`validate_epicbox_address`] refuses, such as a key without `@<relay>`.
     pub async fn send_epicbox(
         &self,
         amount: u64,

@@ -5328,7 +5328,8 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
       .crateApiWalletEpicWalletScan(that: this, startHeight: startHeight);
 
   /// Sends to `<address>@<relay>[:port]` over Epicbox. The listener or a drain finalizes and
-  /// posts it when the answer arrives.
+  /// posts it when the answer arrives. Fails with `InvalidArgument`, storing nothing, for an
+  /// address that [`validate_epicbox_address`] refuses, such as a key without `@<relay>`.
   Future<SentTx> sendEpicbox({
     required BigInt amount,
     required BigInt minimumConfirmations,

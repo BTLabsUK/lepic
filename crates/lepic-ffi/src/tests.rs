@@ -415,6 +415,41 @@ async fn summary_without_refresh_needs_no_node() {
     );
 }
 
+/// As `validate_epicbox_address` refuses it: without `@<relay>` the engine would pick a relay
+/// the user never named.
+#[tokio::test]
+async fn send_epicbox_refuses_an_address_without_its_relay() {
+    let relay = lepic_epicbox::mock_relay::MockRelay::new(lepic_epicbox::Network::Floonet);
+    let mut fixture = Fixture::new();
+    std::sync::Arc::get_mut(&mut fixture.runtime.inner)
+        .unwrap()
+        .relay = Some(relay.connector());
+    let config = WalletConfig {
+        epicbox_domain: "epicbox.example".to_owned(),
+        ..fixture.config()
+    };
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        config,
+        &AppSecretStore::in_memory(),
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    let address = wallet.epicbox_address().await.unwrap();
+    let key = address.split('@').next().unwrap().to_owned();
+    for bare in [key.clone(), format!("epicbox://{key}")] {
+        assert_eq!(
+            kind(wallet.send_epicbox(1, 1, bare.clone()).await),
+            WalletErrorKind::InvalidArgument,
+            "{bare}"
+        );
+    }
+    assert!(wallet.transactions().await.unwrap().is_empty());
+    assert_eq!(relay.connections(), 0);
+}
+
 #[test]
 fn inspect_slate_refuses_text_that_is_no_slate() {
     use crate::api::wallet::inspect_slate;
