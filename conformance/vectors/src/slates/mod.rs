@@ -39,6 +39,8 @@ const LONG_MESSAGE: &str = concat!(
 const HEADER_6_BLOCKS: usize = 4;
 const HEADER_7_BLOCKS: usize = 7;
 const TTL_BLOCKS: u64 = 30;
+/// One above the tip the slate is built at, so the final transaction is mined at its lock height.
+const LOCK_HEIGHT: u64 = 5;
 
 const fn case(name: &'static str, flow: Flow, method: Method, amount: u64) -> Case {
     Case {
@@ -53,6 +55,7 @@ const fn case(name: &'static str, flow: Flow, method: Method, amount: u64) -> Ca
         change_outputs: 1,
         blocks_before: HEADER_6_BLOCKS,
         funding: Funding::Coinbase,
+        lock_height: None,
     }
 }
 
@@ -145,6 +148,10 @@ const CASES: &[Case] = &[
         blocks_before: HEADER_7_BLOCKS,
         ..case("invoice_file_header_7", INVOICE, FILE, 330_000_000)
     },
+    Case {
+        lock_height: Some(LOCK_HEIGHT),
+        ..case("send_file_height_locked", STANDARD, FILE, 190_000_000)
+    },
 ];
 
 /// Upstream's counter is a `u8` with checked arithmetic in debug builds, so one process can
@@ -163,6 +170,8 @@ struct Options {
     selection_strategy: &'static str,
     blocks_before: usize,
     funding: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lock_height: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -312,6 +321,7 @@ fn options(case: &Case) -> Options {
         selection_strategy: "smallest",
         blocks_before: case.blocks_before,
         funding: case.funding.name(),
+        lock_height: case.lock_height.map(|height| height.to_string()),
     }
 }
 

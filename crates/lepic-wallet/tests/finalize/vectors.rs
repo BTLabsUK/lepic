@@ -30,7 +30,7 @@ const ACCOUNT: AccountIndex = AccountIndex(0);
 const BASE_FEE: Fee = Fee::new(MILLI_EPIC);
 
 /// Standard-flow cases G-03 records, each with an S2 and a final transaction.
-const G03_STANDARD_CASES: usize = 13;
+const G03_STANDARD_CASES: usize = 14;
 
 /// The protocol version of the node's `ProtocolVersion::local()`, which the vectors serialize
 /// the final transaction at.

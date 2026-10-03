@@ -60,13 +60,18 @@ result, the shape it read, the upstream error text, and the V3 JSON upstream wri
 parsed slate. These are parse outcomes only; LEPIC's decoder is stricter where
 `docs/compat/legacy-slates.md` says so.
 
-## No height-locked slates
+## Height-locked slates
 
-The area has no slate with a lock height because `epic-wallet` v4.0.2 cannot create one. The two
-slate constructors, `init_send_tx` and `issue_invoice_tx` (`libwallet/src/api_impl/owner.rs`), both
-call `new_tx_slate` (`libwallet/src/internal/tx.rs`), which sets `lock_height` to 0. No other code
+`epic-wallet` v4.0.2 cannot create a slate with a lock height. Its two slate constructors,
+`init_send_tx` and `issue_invoice_tx` (`libwallet/src/api_impl/owner.rs`), both call
+`new_tx_slate` (`libwallet/src/internal/tx.rs`), which sets `lock_height` to 0. No other code
 assigns a slate's lock height, and neither `InitTxArgs` nor `IssueInvoiceTxArgs` has a lock height
-field. Every stage vector here records `lock_height` `"0"` and a `Plain` kernel. A slate built by
-another wallet may carry a lock height; upstream then signs a `HeightLocked` kernel
-(`Slate::kernel_features`, `libwallet/src/slate.rs`). The `aggsig` and `primitives` areas pin the
-signature message and kernel layout of a height-locked kernel.
+field. Every case except `send_file_height_locked` records `lock_height` `"0"` and a `Plain` kernel.
+
+Upstream still receives and finalizes a height-locked slate that another wallet built: it signs
+the kernel features the slate's `lock_height` gives (`Slate::kernel_features`,
+`libwallet/src/slate.rs`). `send_file_height_locked` shows this. The generator sets
+`lock_height` on upstream's S1 and rebuilds the kernel with `Slate::update_kernel`, as a sending
+wallet that locks would, before the file method writes it. `options.lock_height` records the
+value. The S1 is built at height 4 with lock height 5. Upstream's receiver signs the S2, its
+sender finalizes a `HeightLocked` kernel, and the chain accepts the transaction in block 5.

@@ -204,7 +204,9 @@ fn build(case: &str, v3: &Value) -> (Slate, EncodeContext) {
         amount,
         fee: selected.fee,
         height: tip,
-        lock: KernelLock::NONE,
+        lock: optional_text(options, "/lock_height").map_or(KernelLock::NONE, |height| {
+            KernelLock::at_height(Height::new(height.parse().unwrap()))
+        }),
         ttl_cutoff_height,
         inputs: selected.inputs,
         change,

@@ -70,6 +70,9 @@ pub(super) struct Case {
     /// block version follows the tip height, so this picks it.
     pub(super) blocks_before: usize,
     pub(super) funding: Funding,
+    /// A lock height the generator sets on upstream's S1 before writing it, as a wallet that
+    /// builds height-locked slates would. Upstream itself always writes 0.
+    pub(super) lock_height: Option<u64>,
 }
 
 /// What the sender (or payer) spends.
@@ -239,9 +242,13 @@ fn send_args(chain: &TestChain, case: &Case) -> Result<InitTxArgs, Error> {
 
 fn standard_file(chain: &TestChain, files: &Path, case: &Case) -> Result<FlowRecord, Error> {
     let args = send_args(chain, case)?;
-    let s1 = with_backend(&chain.sender, "init_send_tx", |w| {
+    let mut s1 = with_backend(&chain.sender, "init_send_tx", |w| {
         owner::init_send_tx(w, NO_MASK, args, true)
     })?;
+    if let Some(lock_height) = case.lock_height {
+        s1.lock_height = lock_height;
+        s1.update_kernel();
+    }
     let sender_keys = context_keys(&chain.sender, Role::Sender, &s1, 0)?;
     let tx_path = files.join(format!("{}.tx", case.name));
     let s1_wire = put_file(&tx_path, &s1)?;
