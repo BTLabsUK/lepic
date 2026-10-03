@@ -14,7 +14,9 @@ LEPIC takes contributions under the rules below.
 - Commits follow Conventional Commits with a `Refs: <task-id>` footer and a DCO sign-off
   (`git commit -s`). The full rules are in `CONTRIBUTING.md`.
 - Every commit builds and passes `cargo xtask check`. Run it from a git checkout: its repository
-  gates and their tests list files through `git`, so they fail in an unpacked source archive.
+  gates and their tests list files through `git`, so they fail in an unpacked source archive. It
+  also reads the `conformance/` and `fuzz/` lockfiles, which needs their dependencies fetched once,
+  with network.
 - Changes to wire formats, keys, proofs or storage need golden vectors (`docs/rules.md`).
 
 ## Enabling the local commit-message check

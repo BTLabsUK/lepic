@@ -18,20 +18,37 @@ fn check(root: &Path, workspaces: &[&str]) -> Result<()> {
     for workspace in workspaces {
         // The product cargo, called directly, so the workspace's own toolchain file (nightly for
         // fuzz/) need not be installed to read its lockfile.
-        let status = cargo()
+        let output = cargo()
             .args(["fetch", "--locked", "--quiet", "--manifest-path"])
             .arg(root.join(workspace).join("Cargo.toml"))
             .current_dir(root)
-            .status()
+            .output()
             .with_context(|| format!("could not start `cargo fetch` for {workspace}/"))?;
-        if !status.success() {
+        if output.status.success() {
+            continue;
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if says_lockfile_is_stale(&stderr) {
             bail!(
                 "{workspace}/Cargo.lock is not up to date; run \
                  `cargo fetch --manifest-path {workspace}/Cargo.toml` and commit the lockfile"
             );
         }
+        // Anything else, such as no network for a dependency not fetched yet, says nothing
+        // about the lockfile.
+        bail!(
+            "could not check {workspace}/Cargo.lock: cargo fetch failed: {}",
+            stderr.trim()
+        );
     }
     Ok(())
+}
+
+/// Whether cargo refused to run only because `--locked` forbids rewriting the lockfile. Cargo
+/// has worded this both ways.
+fn says_lockfile_is_stale(stderr: &str) -> bool {
+    stderr.contains("needs to be updated but --locked was passed")
+        || stderr.contains("cannot update the lock file")
 }
 
 #[cfg(test)]
@@ -89,8 +106,40 @@ mod tests {
         )
         .unwrap();
         let error = check(root.path(), &["ws"]).unwrap_err();
-        assert!(error.to_string().contains("ws/Cargo.lock"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("ws/Cargo.lock is not up to date"),
+            "{error}"
+        );
         let after = fs::read_to_string(root.path().join("ws/Cargo.lock")).unwrap();
         assert_eq!(before, after, "the check rewrote the lockfile");
+    }
+
+    #[test]
+    fn a_fetch_that_fails_for_another_reason_is_not_called_stale() {
+        let root = tempfile::tempdir().unwrap();
+        workspace(root.path());
+        fs::remove_dir_all(root.path().join("leaf")).unwrap();
+        let error = check(root.path(), &["ws"]).unwrap_err().to_string();
+        assert!(
+            error.starts_with("could not check ws/Cargo.lock: cargo fetch failed"),
+            "{error}"
+        );
+        assert!(error.contains("leaf"), "{error}");
+    }
+
+    #[test]
+    fn recognises_both_wordings_of_a_stale_lockfile() {
+        assert!(says_lockfile_is_stale(
+            "error: the lock file /w/Cargo.lock needs to be updated but --locked was passed to \
+             prevent this"
+        ));
+        assert!(says_lockfile_is_stale(
+            "error: cannot update the lock file /w/Cargo.lock because --locked was passed"
+        ));
+        assert!(!says_lockfile_is_stale(
+            "error: failed to load manifest for dependency `leaf`"
+        ));
     }
 }
