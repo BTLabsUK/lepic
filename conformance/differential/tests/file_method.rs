@@ -224,6 +224,17 @@ fn file_shape(world: &World, case: &Case) -> (Vec<Option<u64>>, Vec<String>) {
     (version, keys)
 }
 
+/// The file LEPIC wrote is in the V3 shape with `version` and `orig_version` 3 (ADR 0015).
+fn check_v3_file(world: &World, case: &Case) -> Option<String> {
+    let (version, keys) = file_shape(world, case);
+    let v3_keys = ["ttl_cutoff_height", "payment_proof"]
+        .iter()
+        .all(|key| keys.iter().any(|k| k == key));
+    let header_three = version.get(..2) == Some(&[Some(3), Some(3)][..]);
+    (!v3_keys || !header_three)
+        .then(|| format!("subject wrote header {version:?} and keys {keys:?}, not V3 at 3/3"))
+}
+
 /// The peer, when it recorded a kernel, recorded the one the chain mined.
 fn check_kernel(world: &World) -> Option<String> {
     let mined = support::hex(&world.mined[0].body.kernels[0].excess.0);
@@ -278,6 +289,7 @@ fn check(case: &Case) -> Vec<String> {
             "{name}: subject wrote {shape:?}, reference {reference_shape:?}"
         ));
     }
+    found.extend(check_v3_file(&lepic, case).map(|d| format!("{name}: {d}")));
     found.extend(check_kernel(&lepic).map(|d| format!("{name}: {d}")));
     found
 }

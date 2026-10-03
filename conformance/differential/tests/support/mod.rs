@@ -39,6 +39,9 @@ pub enum SlateShape {
     /// Always the V3 shape, as wallets that write V3 files produce, and as `epic-wallet`'s file
     /// method reads them.
     V3,
+    /// The V3 shape with `version` and `orig_version` 3, as LEPIC's file method writes every
+    /// slate (ADR 0015).
+    V3Header3,
 }
 
 /// What an initiating sender asks for.
@@ -167,13 +170,14 @@ impl World {
                 node.url(),
                 7,
             )),
-            // LEPIC writes as the file method does, so its reference does too.
+            // The reference writes files as LEPIC's file method does, so the runs differ only in
+            // the wallet, not in what the peer reads.
             SubjectKind::Reference => Box::new(UpstreamParty::restore(
                 "subject",
                 &dir.join("subject"),
                 &phrase(&SUBJECT_ENTROPY),
                 node.url(),
-                SlateShape::FileMethod,
+                SlateShape::V3Header3,
             )),
         };
         let files = dir.join("files");

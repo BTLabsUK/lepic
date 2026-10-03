@@ -120,6 +120,13 @@ impl UpstreamParty {
                 let versioned = VersionedSlate::into_version(slate.clone(), SlateVersion::V3);
                 std::fs::write(path, serde_json::to_string(&versioned).unwrap()).unwrap();
             }
+            SlateShape::V3Header3 => {
+                let mut slate = slate.clone();
+                slate.version_info.version = 3;
+                slate.version_info.orig_version = 3;
+                let versioned = VersionedSlate::into_version(slate, SlateVersion::V3);
+                std::fs::write(path, serde_json::to_string(&versioned).unwrap()).unwrap();
+            }
         }
     }
 
