@@ -26,6 +26,7 @@ use lepic_wallet::send::{ChangeOutput, S1Plan, S1Randomness, build_s1};
 use serde_json::Value;
 
 use crate::receive_harness::{has_vector, json, standard_cases, text, vector, wire};
+use crate::support::as_file_v3;
 
 const ACCOUNT: AccountIndex = AccountIndex(0);
 const BASE_FEE: Fee = Fee::new(MILLI_EPIC);
@@ -231,7 +232,7 @@ fn each_g03_s2_finalized_with_the_recorded_randomness_yields_the_g03_final_trans
                 .unwrap();
             assert_eq!(
                 encoded.as_text().unwrap(),
-                json(&vector(&file_name)),
+                as_file_v3(&json(&s3_v3)),
                 "{case}: file"
             );
             checked_file += 1;

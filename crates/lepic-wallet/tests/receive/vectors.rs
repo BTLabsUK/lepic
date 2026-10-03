@@ -9,6 +9,7 @@ use lepic_slate::stage::Stage;
 use lepic_store::WalletStore;
 
 use crate::receive_harness::*;
+use crate::support::as_file_v3;
 
 #[test]
 fn each_g03_s1_received_with_the_recorded_randomness_yields_the_g03_s2() {
@@ -36,7 +37,12 @@ fn each_g03_s1_received_with_the_recorded_randomness_yields_the_g03_s2() {
             .unwrap()[0]
             .key_id;
         assert_eq!(stored_key.0, key_id.to_bytes(), "{case}: output key");
-        let expected_reply = json(&vector(&format!("{case}_s2_{method}")));
+        // Over Epicbox the reply is what upstream sent; in a file it is upstream's V3 with
+        // header 3 (ADR 0015).
+        let expected_reply = match method {
+            "file" => as_file_v3(&json(&s2_v3)),
+            _ => json(&vector(&format!("{case}_s2_{method}"))),
+        };
         assert_eq!(
             received.reply.as_text().unwrap(),
             expected_reply,

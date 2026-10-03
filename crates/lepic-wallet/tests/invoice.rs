@@ -238,8 +238,9 @@ fn issuing_stores_the_invoice_and_delivers_the_i1() {
     assert_eq!(issued.amount, Amount::new(AMOUNT));
     let delivered = issuer.delivered().unwrap();
     let text = delivered.as_text().unwrap();
-    // The file method writes a new slate without TTL in the V2 shape with a version 2 header.
-    assert!(text.starts_with(r#"{"version_info":{"version":2,"orig_version":2,"#));
+    // The file method writes every slate in the V3 shape with a version 3 header (ADR 0015).
+    assert!(text.starts_with(r#"{"version_info":{"version":3,"orig_version":3,"#));
+    assert!(text.contains(r#""ttl_cutoff_height":null"#));
     let slate_id = Uuid::from_bytes(*issued.slate_id.as_bytes());
     let entry = transaction(&issuer, slate_id, TxDirection::Incoming);
     assert_eq!(entry.id, issued.tx_id);
@@ -379,7 +380,7 @@ fn a_post_the_node_refused_is_retried_by_finalizing_again() {
 }
 
 #[test]
-fn a_payers_ttl_does_not_reach_the_issuer_over_the_file_method() {
+fn a_payers_ttl_reaches_the_issuer_over_the_file_method() {
     let flow = flow(
         None,
         PayRequest {
@@ -387,14 +388,42 @@ fn a_payers_ttl_does_not_reach_the_issuer_over_the_file_method() {
             ..request()
         },
     );
-    // The payer wrote the V3 shape for its TTL under the version 2 header of the I1.
+    // The payer raised the version 2 header of the I1 to 3, so the issuer reads the TTL.
     let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
     assert_eq!(i2["ttl_cutoff_height"], "6");
-    assert_eq!(i2["version_info"]["version"], 2);
+    assert_eq!(i2["version_info"]["version"], 3);
+    assert_eq!(i2["version_info"]["orig_version"], 3);
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 1));
+
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(
+        finalized.slate.ttl_cutoff_height(),
+        Some(Height::new(TIP + 2))
+    );
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
+#[test]
+fn a_ttl_under_a_version_two_header_does_not_reach_the_issuer() {
+    let flow = flow(
+        None,
+        PayRequest {
+            ttl_blocks: Some(2),
+            ..request()
+        },
+    );
+    // A payer that writes the V3 shape under the version 2 header of the I1, as `epic-wallet`'s
+    // file method does; the file method then reads the slate without its TTL.
+    let i2 = tampered(&flow.i2, |slate| {
+        slate["version_info"]["version"] = Value::from(2);
+        slate["version_info"]["orig_version"] = Value::from(2);
+    });
     flow.node
         .update_chain(|chain| chain.tip.height = Height::new(TIP + 5));
 
-    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+    let finalized = flow.issuer.finalize(&i2).unwrap();
 
     assert_eq!(finalized.slate.ttl_cutoff_height(), None);
     assert_eq!(flow.state(), TxState::Posted);
@@ -694,7 +723,7 @@ fn finalizing_refuses_a_payer_message_whose_signature_does_not_verify() {
 }
 
 #[test]
-fn finalizing_refuses_an_i2_past_the_ttl_its_header_lets_the_issuer_read() {
+fn finalizing_refuses_an_i2_past_its_ttl() {
     let flow = flow(
         None,
         PayRequest {
@@ -702,15 +731,10 @@ fn finalizing_refuses_an_i2_past_the_ttl_its_header_lets_the_issuer_read() {
             ..request()
         },
     );
-    // A payer that writes header 3 under the V3 shape, which the file method reads with its TTL.
-    let i2 = tampered(&flow.i2, |slate| {
-        slate["version_info"]["version"] = Value::from(3);
-        slate["version_info"]["orig_version"] = Value::from(3);
-    });
     flow.node
         .update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
 
-    let error = flow.issuer.finalize(&i2).unwrap_err();
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
 
     assert!(
         matches!(error, InvoiceError::Expired { cutoff, tip }

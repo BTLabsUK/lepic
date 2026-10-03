@@ -36,6 +36,7 @@ use uuid::Uuid;
 
 use crate::invoice_harness::{ACCOUNT, FUNDING, Party};
 use crate::receive_harness::{has_vector, json, text, vector, vector_dir, wire};
+use crate::support::as_file_v3;
 
 const BASE_FEE: Fee = Fee::new(MILLI_EPIC);
 
@@ -155,8 +156,8 @@ fn encode(codec: CodecId, slate: &Slate, vector: &Value) -> Result<WireSlate, Fo
     encode_with(&codecs(), encoding, slate, &context)
 }
 
-/// Checks `slate` against the case's V3, V2 and file vectors of `stage`. Upstream's V2
-/// conversion drops a TTL; LEPIC refuses instead.
+/// Checks `slate` against the case's V3 and V2 vectors of `stage`, and `file` against the V3
+/// vector with header 3 (ADR 0015). Upstream's V2 conversion drops a TTL; LEPIC refuses instead.
 fn assert_encodings(case: &str, stage: &str, slate: &Slate, file: &WireSlate) {
     let v3 = vector(&format!("{case}_{stage}_v3"));
     let encoded = encode(LEGACY_V3_JSON, slate, &v3).unwrap();
@@ -172,8 +173,11 @@ fn assert_encodings(case: &str, stage: &str, slate: &Slate, file: &WireSlate) {
         Err(error) => panic!("{case}_{stage}_v2: {error:?}"),
     }
 
-    let expected = json(&vector(&format!("{case}_{stage}_file")));
-    assert_eq!(file.as_text().unwrap(), expected, "{case}_{stage}_file");
+    assert_eq!(
+        file.as_text().unwrap(),
+        as_file_v3(&json(&v3)),
+        "{case}_{stage}_file"
+    );
 }
 
 /// The issuer's I1 of a case, with the slate id, offset and nonces upstream's test RNG fixed.
@@ -332,11 +336,14 @@ fn each_g03_invoice_is_reproduced_at_every_stage() {
         let reply = FilePolicy.encode_reply(&codecs(), &paid, &context).unwrap();
         assert_encodings(case, "i2", &paid, &reply);
 
-        // The file method reads by header version, and the I2 header says 2 even when the
-        // payer wrote the V3 shape for its TTL, so the issuer finalizes without the TTL.
+        // The file method reads by header version, and upstream's I2 header says 2 even when the
+        // payer wrote the V3 shape for its TTL, so the issuer finalizes without the TTL. LEPIC's
+        // own I2 says 3 and keeps it.
         let i2 = read_file(case, "i2");
         if paid.ttl_cutoff_height().is_some() {
             assert_eq!(i2.ttl_cutoff_height(), None, "{case}");
+            let own = FilePolicy.decode(&codecs(), &reply).unwrap();
+            assert_eq!(own.ttl_cutoff_height(), paid.ttl_cutoff_height(), "{case}");
             dropped_ttl += 1;
         }
         let finalized =
@@ -375,7 +382,7 @@ fn node_at(height: u64) -> MockNode {
 }
 
 #[test]
-fn each_g03_i1_paid_through_the_engine_yields_the_g03_i2_file() {
+fn each_g03_i1_paid_through_the_engine_yields_the_g03_i2_as_a_v3_file() {
     for case in invoice_cases() {
         let i2 = vector(&format!("{case}_i2_file"));
         let payer_entry = party(&i2, "payer");
@@ -398,7 +405,11 @@ fn each_g03_i1_paid_through_the_engine_yields_the_g03_i2_file() {
             .pay(&i1, request)
             .unwrap_or_else(|error| panic!("{case}: {error:?}"));
 
-        assert_eq!(paid.reply.as_text().unwrap(), json(&i2), "{case}");
+        assert_eq!(
+            paid.reply.as_text().unwrap(),
+            as_file_v3(&json(&vector(&format!("{case}_i2_v3")))),
+            "{case}"
+        );
         let slate_id = Uuid::from_bytes(*paid.slate.id().as_bytes());
         let entry = payer
             .read(|repos| repos.transaction_by_slate(slate_id, TxDirection::Outgoing))

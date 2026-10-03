@@ -141,7 +141,7 @@ fn send_stores_the_s1_with_its_inputs_locked_and_delivers_it() {
 }
 
 #[test]
-fn send_writes_a_v2_file_unless_the_slate_needs_v3() {
+fn send_writes_a_v3_file_with_header_three_with_or_without_ttl() {
     let sender = Sender::new();
     sender.fund(1, FUNDING);
     let plain = sender
@@ -150,9 +150,12 @@ fn send_writes_a_v2_file_unless_the_slate_needs_v3() {
         .unwrap();
     let (wire, slate) = sender.received().unwrap();
     assert_eq!(slate.id(), plain.slate_id);
-    assert!(wire.as_text().unwrap().starts_with(
-        r#"{"version_info":{"version":2,"orig_version":2,"block_header_version":6},"#
+    let text = wire.as_text().unwrap();
+    assert!(text.starts_with(
+        r#"{"version_info":{"version":3,"orig_version":3,"block_header_version":6},"#
     ));
+    assert!(text.contains(r#""ttl_cutoff_height":null"#));
+    assert!(text.contains(r#""payment_proof":null"#));
 
     let with_ttl = SendRequest {
         ttl_blocks: Some(30),

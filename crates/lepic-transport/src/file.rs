@@ -1,5 +1,5 @@
-//! The file method: the user carries a slate file between wallets. Matches the file method of
-//! `epic-wallet` `v4.0.2` (`docs/compat/legacy-slates.md`).
+//! The file method: the user carries a slate file between wallets. Reads files as the file
+//! method of `epic-wallet` `v4.0.2` does (`docs/compat/legacy-slates.md`) and writes V3 (ADR 0015).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -23,52 +23,40 @@ use crate::transport::{BoxFuture, Exchange, Location, Transport, TransportId};
 
 pub const FILE: TransportId = TransportId::new("file");
 
-/// Upstream's file method writes `version` and `orig_version` 2 whenever it writes the V2
-/// shape, whatever the slate's header says.
-const V2_FILE_VERSION: u16 = 2;
+/// `version` and `orig_version` of every file LEPIC writes. A reader dispatches on `version`
+/// (`Slate::deserialize_upgrade` upstream), so a V3-shaped file must say 3 or its TTL and payment
+/// proof are dropped on read.
+const V3_FILE_VERSION: u16 = 3;
 
 /// The receiving wallet writes its reply next to the file it read, under this suffix.
 const RESPONSE_SUFFIX: &str = ".response";
 
-/// The file policy of ADR 0003: V2 and V3 accepted; a slate is written in the V2 shape unless
-/// it carries a TTL or a payment proof, which only V3 can hold. Replies follow the same rule.
+/// The file policy of ADR 0015: V2 and V3 accepted; new slates and replies are written in the V3
+/// shape with header `3/3/<b>`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FilePolicy;
 
 impl FilePolicy {
     const ACCEPTED: [CodecId; 2] = [LEGACY_V2_JSON, LEGACY_V3_JSON];
 
-    /// The file rule over what it depends on: whether the slate needs V3, and the header the
-    /// slate was received with, if any. V3 keeps that header; V2 keeps only its block header
-    /// version.
-    pub fn choose(
-        needs_v3: bool,
-        received: Option<LegacyHeader>,
-        context: &EncodeContext,
-    ) -> Encoding {
-        if needs_v3 {
-            return Encoding {
-                codec: LEGACY_V3_JSON,
-                legacy_header: received,
-            };
-        }
+    /// The file rule over the header the slate was received with, if any: `<b>` is that header's
+    /// block header version, or the chain's for a slate this wallet starts.
+    pub fn choose(received: Option<LegacyHeader>, context: &EncodeContext) -> Encoding {
         let block_header_version = received.map_or(context.block_header_version, |header| {
             header.block_header_version
         });
         Encoding {
-            codec: LEGACY_V2_JSON,
+            codec: LEGACY_V3_JSON,
             legacy_header: Some(LegacyHeader {
-                version: V2_FILE_VERSION,
-                orig_version: V2_FILE_VERSION,
+                version: V3_FILE_VERSION,
+                orig_version: V3_FILE_VERSION,
                 block_header_version,
             }),
         }
     }
 
     fn choose_for(slate: &Slate, context: &EncodeContext) -> Encoding {
-        let needs_v3 = slate.ttl_cutoff_height().is_some() || slate.payment_proof().is_some();
-        let received = slate.origin().and_then(WireOrigin::legacy_header);
-        Self::choose(needs_v3, received, context)
+        Self::choose(slate.origin().and_then(WireOrigin::legacy_header), context)
     }
 }
 
@@ -403,31 +391,35 @@ mod tests {
     }
 
     #[test]
-    fn new_slate_without_v3_fields_is_v2_with_file_header_at_chain_version() {
-        let encoding = FilePolicy::choose(false, None, &CONTEXT);
-        assert_eq!(encoding.codec, LEGACY_V2_JSON);
-        assert_eq!(encoding.legacy_header, Some(header(2, 7)));
-    }
-
-    #[test]
-    fn v2_keeps_the_received_block_header_version_but_forces_version_two() {
-        let encoding = FilePolicy::choose(false, Some(header(3, 6)), &CONTEXT);
-        assert_eq!(encoding.codec, LEGACY_V2_JSON);
-        assert_eq!(encoding.legacy_header, Some(header(2, 6)));
-    }
-
-    #[test]
-    fn slate_needing_v3_is_v3_with_the_received_header_unchanged() {
-        let encoding = FilePolicy::choose(true, Some(header(2, 6)), &CONTEXT);
+    fn new_slate_is_v3_with_header_three_at_chain_version() {
+        let encoding = FilePolicy::choose(None, &CONTEXT);
         assert_eq!(encoding.codec, LEGACY_V3_JSON);
-        assert_eq!(encoding.legacy_header, Some(header(2, 6)));
+        assert_eq!(encoding.legacy_header, Some(header(3, 7)));
     }
 
     #[test]
-    fn new_slate_needing_v3_leaves_the_header_to_the_codec() {
-        let encoding = FilePolicy::choose(true, None, &CONTEXT);
+    fn reply_to_a_version_two_file_is_v3_with_header_three_at_the_received_version() {
+        let encoding = FilePolicy::choose(Some(header(2, 6)), &CONTEXT);
         assert_eq!(encoding.codec, LEGACY_V3_JSON);
-        assert_eq!(encoding.legacy_header, None);
+        assert_eq!(encoding.legacy_header, Some(header(3, 6)));
+    }
+
+    #[test]
+    fn reply_to_a_version_three_file_keeps_its_header() {
+        let encoding = FilePolicy::choose(Some(header(3, 6)), &CONTEXT);
+        assert_eq!(encoding.codec, LEGACY_V3_JSON);
+        assert_eq!(encoding.legacy_header, Some(header(3, 6)));
+    }
+
+    #[test]
+    fn reply_forces_version_three_even_when_orig_version_differs() {
+        let received = LegacyHeader {
+            version: 2,
+            orig_version: 3,
+            block_header_version: 7,
+        };
+        let encoding = FilePolicy::choose(Some(received), &CONTEXT);
+        assert_eq!(encoding.legacy_header, Some(header(3, 7)));
     }
 
     #[test]

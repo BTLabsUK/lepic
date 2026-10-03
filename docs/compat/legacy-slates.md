@@ -76,11 +76,27 @@ V2 is V3 without the `ttl_cutoff_height` and `payment_proof` keys.
 
 ## Which shape each method uses
 
+What `epic-wallet` `v4.0.2` writes:
+
 | Method | New slate | Accepts | Reply |
 |---|---|---|---|
-| File | V2 shape with header `2/2/<b>`, unless the slate has a TTL or payment proof, then V3; compact JSON | path 1 | same content rule as a new slate |
+| File | V2 shape with header `2/2/<b>`, unless the slate has a TTL or payment proof, then V3 with the slate's header; compact JSON | path 1 | same content rule as a new slate |
 | Epicbox | V2 shape, header unchanged (`3/3/<b>`) | path 2 | shape of the inbound slate |
 | HTTP (not in LEPIC) | V3 if the peer lists V3, else V2 | path 1 | |
+
+What LEPIC writes (ADR 0015), next to upstream's choice:
+
+| Method | LEPIC new slate | LEPIC reply | Upstream |
+|---|---|---|---|
+| File | V3 shape, header `3/3/<b>` with the chain's `<b>`; compact JSON | V3 shape, header `3/3/<b>` with the received `<b>` | V2 unless TTL or payment proof |
+| Epicbox | V2 shape, header `3/3/<b>` | shape of the inbound slate, header echoed | same as LEPIC |
+
+LEPIC's file output therefore differs in bytes from upstream's for slates without TTL or payment
+proof. `epic-wallet` reads it through path 1, which accepts header version 3 with the V3 shape. A
+reply always carries version 3, so a TTL or payment proof LEPIC adds to a slate received under a
+version 2 header is read by the peer, where upstream's own reply in that case
+(`invoice_file_ttl_i2_file`) loses it. The differential suite and the interop file scenarios show
+`epic-wallet` receives, pays and finalizes every file LEPIC writes.
 
 File naming has no enforced extension. The CLI writes the receiver's reply to `<input>.response`.
 

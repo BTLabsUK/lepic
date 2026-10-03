@@ -266,3 +266,19 @@ pub fn vector_text(vector: &serde_json::Value, pointer: &str) -> String {
         .unwrap_or_else(|| panic!("vector has no text at {pointer}"))
         .to_owned()
 }
+
+/// What LEPIC's file method writes for a slate whose upstream V3 serialization is `v3_json`: the
+/// same bytes with `version` and `orig_version` 3 (ADR 0015). Upstream serializes the header
+/// first, so only those bytes change.
+pub fn as_file_v3(v3_json: &str) -> String {
+    let value: serde_json::Value = serde_json::from_str(v3_json).unwrap();
+    let header = &value["version_info"];
+    let written = format!(
+        r#"{{"version_info":{{"version":{},"orig_version":{},"#,
+        header["version"], header["orig_version"]
+    );
+    let rest = v3_json
+        .strip_prefix(&written)
+        .unwrap_or_else(|| panic!("the header is not serialized first: {v3_json}"));
+    format!(r#"{{"version_info":{{"version":3,"orig_version":3,{rest}"#)
+}

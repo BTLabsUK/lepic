@@ -1,6 +1,6 @@
-//! Replays the G-03 file vectors in `testdata/vectors/slates`: the file transport writes and
-//! reads every file upstream's file method wrote byte for byte, and the file policy picks the
-//! shape and header upstream wrote for each of them.
+//! Replays the G-03 file vectors in `testdata/vectors/slates`: the file transport reads every file
+//! upstream's file method wrote, byte for byte and as upstream reads it, and writes every slate in
+//! the V3 shape with header `3/3/<b>` (ADR 0015).
 
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
 // unwrap, index and use plain arithmetic (docs/rules.md).
@@ -26,8 +26,8 @@ use serde_json::Value;
 
 const UPSTREAM_WALLET: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
 
-/// What `epic-wallet` writes into a slate it creates (`docs/compat/legacy-slates.md`).
-const NEW_SLATE_VERSION: u16 = 3;
+/// `version` and `orig_version` of every file LEPIC writes (ADR 0015).
+const FILE_VERSION: u16 = 3;
 
 fn vector_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/vectors/slates")
@@ -94,37 +94,32 @@ async fn file_transport_round_trips_every_upstream_slate_file_byte_for_byte() {
 }
 
 /// For each file vector, the producer's slate after the stage is its `_v3` sibling, header
-/// unchanged. The file policy, given what that slate carries, must pick the shape and header
-/// upstream's file method wrote.
+/// unchanged. Whatever upstream wrote, the file policy picks V3 with version and orig_version 3
+/// and the producer's block header version.
 #[test]
-fn file_policy_picks_the_shape_and_header_upstream_wrote() {
+fn file_policy_picks_v3_with_header_three_for_every_upstream_case() {
     for (name, vector) in file_vectors() {
         let stem = name.strip_suffix("_file").unwrap();
         let producer: Value =
             serde_json::from_str(slate_json(&read_vector(&format!("{stem}_v3")))).unwrap();
-        let written: Value = serde_json::from_str(slate_json(&vector)).unwrap();
-
-        let needs_v3 =
-            !producer["ttl_cutoff_height"].is_null() || !producer["payment_proof"].is_null();
         let producer_header = header_of(&producer);
         let received = (!starts_slate(&vector)).then_some(producer_header);
         let context = EncodeContext {
             block_header_version: producer_header.block_header_version,
         };
 
-        let encoding = FilePolicy::choose(needs_v3, received, &context);
+        let encoding = FilePolicy::choose(received, &context);
 
+        assert_eq!(encoding.codec, LEGACY_V3_JSON, "{name}: codec");
         assert_eq!(
-            encoding.codec,
-            expected_codec(&name, &vector),
-            "{name}: codec"
+            encoding.legacy_header,
+            Some(LegacyHeader {
+                version: FILE_VERSION,
+                orig_version: FILE_VERSION,
+                block_header_version: producer_header.block_header_version,
+            }),
+            "{name}: header"
         );
-        let header = encoding.legacy_header.unwrap_or(LegacyHeader {
-            version: NEW_SLATE_VERSION,
-            orig_version: NEW_SLATE_VERSION,
-            block_header_version: context.block_header_version,
-        });
-        assert_eq!(header, header_of(&written), "{name}: header");
     }
 }
 
@@ -331,20 +326,38 @@ async fn malformed_files_resolve_as_upstream_file_method_resolves_them() {
     }
 }
 
-/// The producer's slate, encoded by the file policy and exported by the file transport, is the
-/// file upstream wrote, byte for byte. A slate the producer started carries no origin; one it
-/// answered or finalized keeps the header it was received with.
+/// `json` with `version` and `orig_version` set to 3. Upstream serializes the header first, so
+/// this rewrites exactly the bytes the header occupies.
+fn with_file_header(name: &str, json: &str) -> String {
+    let header: Value = serde_json::from_str::<Value>(json).unwrap()["version_info"].clone();
+    let written = format!(
+        r#"{{"version_info":{{"version":{},"orig_version":{},"#,
+        header["version"], header["orig_version"]
+    );
+    let rest = json
+        .strip_prefix(&written)
+        .unwrap_or_else(|| panic!("{name}: header is not serialized first"));
+    format!(r#"{{"version_info":{{"version":{FILE_VERSION},"orig_version":{FILE_VERSION},{rest}"#)
+}
+
+/// The producer's slate, encoded by the file policy and exported by the file transport, is in
+/// every case upstream's own V3 serialization of that slate with header `3/3/<b>`. Where
+/// upstream's file method also wrote V3, the file equals upstream's file except for a version 2
+/// header, which LEPIC raises to 3 so a reader keeps the TTL and payment proof. A slate the
+/// producer started carries no origin; one it answered or finalized keeps the header it was
+/// received with.
 #[tokio::test]
-async fn exported_slate_files_equal_the_upstream_files_byte_for_byte() {
+async fn exported_slate_files_are_upstream_v3_with_header_three() {
     let codecs = legacy_codecs();
     let transport = FileTransport::new();
     let dir = tempfile::tempdir().unwrap();
+    let mut upstream_v3 = 0;
     for (name, vector) in file_vectors() {
         let stem = name.strip_suffix("_file").unwrap();
         let producer_json = slate_json(&read_vector(&format!("{stem}_v3"))).to_owned();
         let producer_header = header_of(&serde_json::from_str(&producer_json).unwrap());
         let producer = codecs
-            .decode(&WireSlate::text(MediaType::JSON, producer_json))
+            .decode(&WireSlate::text(MediaType::JSON, producer_json.clone()))
             .unwrap();
         let context = EncodeContext {
             block_header_version: producer_header.block_header_version,
@@ -353,7 +366,7 @@ async fn exported_slate_files_equal_the_upstream_files_byte_for_byte() {
         let policy = transport.policy();
         let wire = if starts_slate(&vector) {
             policy
-                .encode_new_slate(&codecs, &producer.with_origin(None), &context)
+                .encode_new_slate(&codecs, &producer.clone().with_origin(None), &context)
                 .unwrap()
         } else {
             policy.encode_reply(&codecs, &producer, &context).unwrap()
@@ -363,13 +376,35 @@ async fn exported_slate_files_equal_the_upstream_files_byte_for_byte() {
             .export(&wire, &Location::File(path.clone()))
             .await
             .unwrap();
+        let written = std::fs::read(&path).unwrap();
 
         assert_eq!(
-            std::fs::read(&path).unwrap(),
-            slate_json(&vector).as_bytes(),
+            written,
+            with_file_header(&name, &producer_json).as_bytes(),
             "{name}: file bytes"
         );
+        if expected_codec(&name, &vector) == LEGACY_V3_JSON {
+            assert_eq!(
+                written,
+                with_file_header(&name, slate_json(&vector)).as_bytes(),
+                "{name}: upstream file"
+            );
+            upstream_v3 += 1;
+        }
+
+        let read_back = policy
+            .decode(
+                &codecs,
+                &transport.import(&Location::File(path)).await.unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            read_back.with_origin(None),
+            producer.with_origin(None),
+            "{name}: read back"
+        );
     }
+    assert!(upstream_v3 > 0, "no upstream V3 file vectors");
 }
 
 #[test]
@@ -394,7 +429,7 @@ fn encoding_with_a_codec_that_is_not_registered_fails() {
     assert_eq!(
         error,
         FormatError::CodecNotRegistered {
-            codec: expected_codec(&name, &vector)
+            codec: LEGACY_V3_JSON
         },
         "{name}"
     );

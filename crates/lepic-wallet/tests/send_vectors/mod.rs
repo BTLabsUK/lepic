@@ -22,6 +22,8 @@ use lepic_wallet::selection::{self, SelectionRequest, SelectionStrategy};
 use lepic_wallet::send::{ChangeOutput, S1Plan, S1Randomness, build_s1};
 use serde_json::Value;
 
+use crate::support::as_file_v3;
+
 const UPSTREAM_REPO: &str = "https://github.com/EpicCash/epic-wallet";
 const UPSTREAM_COMMIT: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
 const ACCOUNT: AccountIndex = AccountIndex(0);
@@ -291,13 +293,13 @@ fn built_s1_matches_every_upstream_s1_encoding() {
             }
         }
 
-        if let Some(vector) = load(&format!("{case}_s1_file")) {
+        if load(&format!("{case}_s1_file")).is_some() {
             let file = FilePolicy
                 .encode_new_slate(&legacy_codecs(), &slate, &context)
                 .unwrap();
             assert_eq!(
                 file.as_text().unwrap(),
-                expected_json(&vector),
+                as_file_v3(expected_json(&v3)),
                 "{case}_s1_file"
             );
         }
