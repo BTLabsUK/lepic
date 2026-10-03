@@ -643,14 +643,14 @@ where
     /// private context in one store transaction, then pushes the transaction to the node with
     /// `propagation`.
     ///
-    /// Asks the node for its tip, and refuses with [`FinalizeError::Expired`] once it reaches
-    /// the slate's TTL cutoff. Finalizing an S2 a second time, also once its transaction is
-    /// confirmed, returns the stored result and posts only if the first post did not succeed; another S2 under the same slate id fails
-    /// with [`FinalizeError::AlreadyFinalized`]. Fails with [`FinalizeError::NotPosted`] when
-    /// the slate was finalized and stored but the node refused or could not be reached; the
-    /// transaction then waits in state `finalized` for [`Wallet::post`]. A node whose pool
-    /// already holds the transaction counts as having accepted it. Every other failure stores
-    /// nothing.
+    /// Asks the node for its tip, and refuses with [`FinalizeError::Expired`] once it reaches the
+    /// slate's TTL cutoff. Finalizing an S2 a second time, also once its transaction is confirmed,
+    /// returns the stored result and posts only if the first post did not succeed; another S2 under
+    /// the same slate id fails with [`FinalizeError::AlreadyFinalized`]. Fails with
+    /// [`FinalizeError::NotPosted`] when the slate was finalized and stored but the node refused or
+    /// could not be reached; the transaction then waits in state `finalized` for [`Wallet::post`].
+    /// A node whose pool already holds the transaction counts as having accepted it. Every other
+    /// failure stores nothing.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
         transport = %transport,
