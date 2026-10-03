@@ -112,7 +112,17 @@ fn opening_an_existing_database_restricts_it_to_its_owner() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("wallet.sqlite");
     drop(SqliteStore::open(&path, key()).unwrap());
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    drop(SqliteStore::open(&path, key()).unwrap());
-    assert_eq!(mode(&path), 0o600);
+    let wal = dir.path().join("wallet.sqlite-wal");
+    let shm = dir.path().join("wallet.sqlite-shm");
+    // Non-empty leftovers, as a run that was killed leaves them; SQLite itself re-modes empty ones.
+    for file in [&path, &wal, &shm] {
+        if !file.exists() {
+            std::fs::write(file, [0u8; 32]).unwrap();
+        }
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let _store = SqliteStore::open(&path, key()).unwrap();
+    for file in [&path, &wal, &shm] {
+        assert_eq!(mode(file), 0o600, "{}", file.display());
+    }
 }

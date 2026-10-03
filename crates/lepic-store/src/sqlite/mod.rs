@@ -61,7 +61,22 @@ fn restrict_to_owner(path: &Path) -> Result<(), StoreError> {
         .truncate(false)
         .mode(0o600)
         .open(path)
-        .and_then(|file| file.set_permissions(std::fs::Permissions::from_mode(0o600)));
+        .and_then(|file| file.set_permissions(std::fs::Permissions::from_mode(0o600)))
+        .and_then(|()| {
+            // SQLite copies the database's mode only when it creates these, so a log left by an
+            // earlier run keeps whatever mode it had.
+            for suffix in ["-wal", "-shm"] {
+                let mut side = path.as_os_str().to_owned();
+                side.push(suffix);
+                match std::fs::set_permissions(&side, std::fs::Permissions::from_mode(0o600)) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        });
     // StoreError has no I/O variant, so the failure is reported as SQLite's own "cannot open",
     // with the OS error text kept as its message.
     restricted.map_err(|error| {
