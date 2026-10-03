@@ -348,6 +348,18 @@ fn prune_inbox(repos: &mut dyn Repositories, now: jiff::Timestamp) -> Result<usi
     }
 }
 
+/// Records how a message settled, pruning in the same write so that a listen held open for
+/// longer than the relay retention keeps the inbox bounded too.
+fn record_settled(
+    repos: &mut dyn Repositories,
+    msg_id: &str,
+    status: InboxStatus,
+    now: jiff::Timestamp,
+) -> Result<(), StoreError> {
+    prune_inbox(repos, now)?;
+    put_inbox(repos, msg_id, status, now)
+}
+
 /// The status a message had before this delivery, recording it as received when it is new.
 fn begin_inbox(
     repos: &mut dyn Repositories,
@@ -667,7 +679,7 @@ where
         if let Some(msg_id) = msg_id {
             let status = handled.inbox_status();
             let recorded = self
-                .inbox_write(move |repos, now| put_inbox(repos, &msg_id, status, now))
+                .inbox_write(move |repos, now| record_settled(repos, &msg_id, status, now))
                 .await;
             if let Err(error) = recorded {
                 warn!(error = %ErrorChain(&error), "epicbox message held");
