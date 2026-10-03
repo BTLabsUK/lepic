@@ -34,6 +34,7 @@ use lepic_store::{
 };
 use lepic_transport::transport::Destination;
 use lepic_wallet::chain::ImplausibleNodeData;
+use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::SelectionStrategy;
@@ -762,4 +763,151 @@ fn send_refuses_a_tip_above_the_plausible_height() {
         "{result:?}"
     );
     assert_eq!(status(&sender, &funding), OutputStatus::Unspent);
+}
+
+/// The sender's wallet after a refresh confirmed the tip, as a scripted handle whose node next
+/// answers a tip far above the plausible height.
+fn answering_an_implausible_tip(sender: &Sender) -> ScriptedWallet {
+    refreshed(&sender.harness.block_on(sender.wallet.refresh()));
+    scripted(
+        sender,
+        Script {
+            tips: vec![TIP + 100_000],
+            ..Script::default()
+        },
+    )
+}
+
+/// A golden slate vector's JSON, as it arrives over the loopback transport.
+fn slate_vector(json: &str) -> (WireSlate, Amount) {
+    let vector: serde_json::Value = serde_json::from_str(json).unwrap();
+    let text = vector["expected"]["json"].as_str().unwrap().to_owned();
+    let slate: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let amount = Amount::new(slate["amount"].as_str().unwrap().parse().unwrap());
+    (
+        WireSlate::binary(MediaType::JSON, text.into_bytes()),
+        amount,
+    )
+}
+
+fn assert_implausible_wallet_error(error: &WalletError) {
+    assert!(
+        matches!(
+            error,
+            WalletError::Implausible(ImplausibleNodeData::TipTooHigh { .. })
+        ),
+        "{error:?}"
+    );
+}
+
+/// Nothing a refused stage could have stored is there: no transaction, the funding unspent.
+fn assert_nothing_stored(sender: &Sender, funding: &OutputRecord) {
+    assert!(sender.transactions().is_empty());
+    assert_eq!(status(sender, funding), OutputStatus::Unspent);
+    assert_eq!(sender.outputs().len(), 1);
+}
+
+#[test]
+fn receive_refuses_a_tip_above_the_plausible_height() {
+    let (sender, funding) = funded();
+    let wallet = answering_an_implausible_tip(&sender);
+    let (s1, _) = slate_vector(include_str!(
+        "../../../testdata/vectors/slates/send_file_plain_s1_v3.json"
+    ));
+
+    let result = sender.harness.block_on(wallet.receive(
+        LOOPBACK,
+        &s1,
+        lepic_wallet::ReceiveRequest::default(),
+    ));
+
+    match result {
+        Err(lepic_wallet::ReceiveError::Wallet(error)) => assert_implausible_wallet_error(&error),
+        other => panic!("{other:?}"),
+    }
+    assert_nothing_stored(&sender, &funding);
+}
+
+#[test]
+fn finalize_refuses_a_tip_above_the_plausible_height() {
+    let (sender, funding) = funded();
+    let wallet = answering_an_implausible_tip(&sender);
+    let (s2, _) = slate_vector(include_str!(
+        "../../../testdata/vectors/slates/send_file_plain_s2_v3.json"
+    ));
+
+    let result = sender
+        .harness
+        .block_on(wallet.finalize(LOOPBACK, &s2, Propagation::Stem));
+
+    match result {
+        Err(lepic_wallet::FinalizeError::Wallet(error)) => assert_implausible_wallet_error(&error),
+        other => panic!("{other:?}"),
+    }
+    assert_nothing_stored(&sender, &funding);
+}
+
+#[test]
+fn invoice_issue_refuses_a_tip_above_the_plausible_height() {
+    let (sender, funding) = funded();
+    let wallet = answering_an_implausible_tip(&sender);
+    let request = InvoiceRequest {
+        account: ACCOUNT,
+        amount: Amount::new(AMOUNT),
+        message: None,
+    };
+    let delivery = Delivery::Deliver {
+        transport: LOOPBACK,
+        to: Destination::new(PEER.to_owned()),
+    };
+
+    let result = sender
+        .harness
+        .block_on(wallet.issue_invoice(request, delivery));
+
+    match result {
+        Err(InvoiceError::Wallet(error)) => assert_implausible_wallet_error(&error),
+        other => panic!("{other:?}"),
+    }
+    assert_nothing_stored(&sender, &funding);
+}
+
+#[test]
+fn invoice_pay_refuses_a_tip_above_the_plausible_height() {
+    let (sender, funding) = funded();
+    let wallet = answering_an_implausible_tip(&sender);
+    let (i1, amount) = slate_vector(include_str!(
+        "../../../testdata/vectors/slates/invoice_file_header_7_i1_v3.json"
+    ));
+
+    let result = sender.harness.block_on(wallet.pay_invoice(
+        LOOPBACK,
+        &i1,
+        PayRequest::new(ACCOUNT, amount),
+    ));
+
+    match result {
+        Err(InvoiceError::Wallet(error)) => assert_implausible_wallet_error(&error),
+        other => panic!("{other:?}"),
+    }
+    assert_nothing_stored(&sender, &funding);
+}
+
+#[test]
+fn invoice_finalize_refuses_a_tip_above_the_plausible_height() {
+    let (sender, funding) = funded();
+    let wallet = answering_an_implausible_tip(&sender);
+    let (i2, _) = slate_vector(include_str!(
+        "../../../testdata/vectors/slates/invoice_file_header_7_i2_v3.json"
+    ));
+
+    let result = sender
+        .harness
+        .block_on(wallet.finalize_invoice(LOOPBACK, &i2, Propagation::Stem));
+
+    match result {
+        Err(InvoiceError::Wallet(error)) => assert_implausible_wallet_error(&error),
+        other => panic!("{other:?}"),
+    }
+    assert_nothing_stored(&sender, &funding);
 }
