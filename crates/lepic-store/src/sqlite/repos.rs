@@ -1,3 +1,4 @@
+use jiff::Timestamp;
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputIdentifier;
 use lepic_primitives::ser::{ProtocolVersion, deserialize};
@@ -585,6 +586,13 @@ impl RelayRepository for SqliteRepos<'_> {
             [msg_id],
             decode_inbox,
         )
+    }
+
+    fn prune_inbox(&mut self, received_before: Timestamp) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM relay_inbox WHERE received_at < ?1",
+            [timestamp_to_column(received_before)?],
+        )?)
     }
 
     fn enqueue_outbox(&mut self, entry: &OutboxEntry) -> Result<OutboxId, StoreError> {

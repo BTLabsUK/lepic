@@ -71,6 +71,10 @@ pub trait RelayRepository {
 
     fn inbox(&self, msg_id: &str) -> Result<Option<InboxEntry>, StoreError>;
 
+    /// Removes every inbox entry first received before `received_before`, and returns how many
+    /// were removed.
+    fn prune_inbox(&mut self, received_before: Timestamp) -> Result<usize, StoreError>;
+
     /// Stores a new outbox entry under the next free id.
     fn enqueue_outbox(&mut self, entry: &OutboxEntry) -> Result<OutboxId, StoreError>;
 
@@ -81,4 +85,68 @@ pub trait RelayRepository {
 
     /// Removes the outbox entry if it is stored.
     fn delete_outbox(&mut self, id: OutboxId) -> Result<(), StoreError>;
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap (docs/rules.md).
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::context::ContextKey;
+    use crate::memory::MemoryStore;
+    use crate::store::WalletStore;
+
+    fn at(second: i64) -> Timestamp {
+        Timestamp::from_second(second).unwrap()
+    }
+
+    fn entry(msg_id: &str, received_at: Timestamp) -> InboxEntry {
+        InboxEntry {
+            msg_id: msg_id.to_owned(),
+            status: InboxStatus::Acknowledged,
+            received_at,
+            updated_at: at(1_000),
+        }
+    }
+
+    /// Entries received before the cutoff go, the one received at it and later ones stay.
+    fn prunes_inbox_entries_received_before_the_cutoff(store: &impl WalletStore) {
+        let pruned = store
+            .write(|repos| {
+                for (id, second) in [("old1", 10), ("old2", 99), ("edge", 100), ("new", 500)] {
+                    repos.put_inbox(&entry(id, at(second)))?;
+                }
+                repos.prune_inbox(at(100))
+            })
+            .unwrap();
+        assert_eq!(pruned, 2);
+        let kept = store
+            .read(|repos| {
+                ["old1", "old2", "edge", "new"]
+                    .map(|id| repos.inbox(id).map(|found| found.is_some()))
+                    .into_iter()
+                    .collect::<Result<Vec<_>, StoreError>>()
+            })
+            .unwrap();
+        assert_eq!(kept, [false, false, true, true]);
+    }
+
+    #[test]
+    fn memory_store_prunes_inbox_entries_received_before_the_cutoff() {
+        let store = MemoryStore::new(ContextKey::from_bytes([1; 32]));
+        prunes_inbox_entries_received_before_the_cutoff(&store);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn sqlite_store_prunes_inbox_entries_received_before_the_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::SqliteStore::open(
+            &dir.path().join("wallet.sqlite"),
+            ContextKey::from_bytes([1; 32]),
+        )
+        .unwrap();
+        prunes_inbox_entries_received_before_the_cutoff(&store);
+    }
 }

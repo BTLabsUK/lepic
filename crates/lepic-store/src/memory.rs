@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::account::{AccountIndex, AccountRecord, AccountRepository};
@@ -364,6 +365,14 @@ impl RelayRepository for MemoryRepos<'_> {
 
     fn inbox(&self, msg_id: &str) -> Result<Option<InboxEntry>, StoreError> {
         Ok(self.state.inbox.get(msg_id).cloned())
+    }
+
+    fn prune_inbox(&mut self, received_before: Timestamp) -> Result<usize, StoreError> {
+        let before = self.state.inbox.len();
+        self.state
+            .inbox
+            .retain(|_, entry| entry.received_at >= received_before);
+        Ok(before.saturating_sub(self.state.inbox.len()))
     }
 
     fn enqueue_outbox(&mut self, entry: &OutboxEntry) -> Result<OutboxId, StoreError> {
