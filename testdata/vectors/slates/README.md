@@ -59,3 +59,14 @@ are `null` when the mutation leaves no JSON object or no complete header. It rec
 result, the shape it read, the upstream error text, and the V3 JSON upstream writes back for the
 parsed slate. These are parse outcomes only; LEPIC's decoder is stricter where
 `docs/compat/legacy-slates.md` says so.
+
+## No height-locked slates
+
+The area has no slate with a lock height because `epic-wallet` v4.0.2 cannot create one. The two
+slate constructors, `init_send_tx` and `issue_invoice_tx` (`libwallet/src/api_impl/owner.rs`), both
+call `new_tx_slate` (`libwallet/src/internal/tx.rs`), which sets `lock_height` to 0. No other code
+assigns a slate's lock height, and neither `InitTxArgs` nor `IssueInvoiceTxArgs` has a lock height
+field. Every stage vector here records `lock_height` `"0"` and a `Plain` kernel. A slate built by
+another wallet may carry a lock height; upstream then signs a `HeightLocked` kernel
+(`Slate::kernel_features`, `libwallet/src/slate.rs`). The `aggsig` and `primitives` areas pin the
+signature message and kernel layout of a height-locked kernel.
