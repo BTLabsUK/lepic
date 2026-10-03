@@ -527,6 +527,165 @@ fn single_signer(pins: &Pins, case: &Single) -> Result<Rendered, Error> {
     render_from(MODULE, AGGSIG_AREA, case.name, &pins.node, inputs, expected)
 }
 
+#[derive(Serialize)]
+struct RuleInputs {
+    key: String,
+    nonce: String,
+    msg: String,
+}
+
+/// One signature and the verdicts of the three upstream checks that differ in what they require
+/// of the nonce: `partial` is `verify_partial_sig` against `nonce_sum`, `completed` is
+/// `verify_completed_sig` (X coordinate only), `kernel` is `verify_single_from_commit` against
+/// the key's commitment (X coordinate and a square Y), as the node verifies kernels.
+#[derive(Serialize)]
+struct RuleCase {
+    name: &'static str,
+    sig: String,
+    msg: String,
+    nonce_sum: String,
+    partial: bool,
+    completed: bool,
+    kernel: bool,
+}
+
+#[derive(Serialize)]
+struct RuleExpected {
+    pubkey: String,
+    public_nonce: String,
+    commit: String,
+    cases: Vec<RuleCase>,
+}
+
+struct RuleCheck<'a> {
+    secp: &'a Secp256k1,
+    pubkey: &'a PublicKey,
+    commit: &'a Commitment,
+    cases: Vec<RuleCase>,
+}
+
+impl RuleCheck<'_> {
+    fn case(
+        &mut self,
+        name: &'static str,
+        sig: &Signature,
+        msg: &Message,
+        nonce_sum: &PublicKey,
+        expect: [bool; 3],
+    ) -> Result<(), Error> {
+        let (secp, pubkey) = (self.secp, self.pubkey);
+        let partial =
+            aggsig::verify_partial_sig(secp, sig, nonce_sum, pubkey, Some(pubkey), msg).is_ok();
+        let completed = aggsig::verify_completed_sig(secp, sig, pubkey, Some(pubkey), msg).is_ok();
+        let kernel = aggsig::verify_single_from_commit(secp, sig, msg, self.commit).is_ok();
+        ensure([partial, completed, kernel] == expect, name)?;
+        self.cases.push(RuleCase {
+            name,
+            sig: sig_hex(secp, sig),
+            msg: hex(msg),
+            nonce_sum: public_hex(secp, nonce_sum),
+            partial,
+            completed,
+            kernel,
+        });
+        Ok(())
+    }
+}
+
+/// A one-party share whose nonce sum is the negation of its own public nonce verifies as a
+/// partial, and its nonce point has the signature's X coordinate but not a square Y. Upstream's
+/// `verify_completed_sig` checks X only and accepts it; kernel verification rejects it.
+fn completed_and_kernel_rules(pins: &Pins) -> Result<Rendered, Error> {
+    const KEY: [u8; 32] = [0x66; 32];
+    const NONCE: [u8; 32] = [0x68; 32];
+    const MSG: [u8; 32] = [0x67; 32];
+    let secp = secp();
+    let key = secret(&secp, &KEY)?;
+    let pubkey = public(&secp, &key)?;
+    let nonce = secret(&secp, &NONCE)?;
+    let negated = secp
+        .blind_sum(vec![], vec![nonce.clone()])
+        .map_err(Error::reference("nonce negation"))?;
+    let (public_nonce, public_negated) = (public(&secp, &nonce)?, public(&secp, &negated)?);
+    let msg = Message::from_slice(&MSG).map_err(Error::reference("message"))?;
+    let other_msg = other_fixed_message(&MSG)?;
+    let commit = secp
+        .commit(0, key.clone())
+        .map_err(Error::reference("key commitment"))?;
+    let share = |nonce: &SecretKey, nonce_sum: &PublicKey| {
+        aggsig::calculate_partial_sig(&secp, &key, nonce, nonce_sum, Some(&pubkey), &msg)
+            .map_err(Error::reference("one-party share"))
+    };
+    let complete = aggsig::sign_single(&secp, &msg, &key, Some(&nonce), Some(&pubkey))
+        .map_err(Error::reference("complete signature"))?;
+
+    let mut rules = RuleCheck {
+        secp: &secp,
+        pubkey: &pubkey,
+        commit: &commit,
+        cases: Vec::new(),
+    };
+    let accepted = [true, true, true];
+    let x_only = [true, true, false];
+    let rejected = [false, false, false];
+    rules.case(
+        "share_over_negated_nonce",
+        &share(&nonce, &public_negated)?,
+        &msg,
+        &public_negated,
+        x_only,
+    )?;
+    rules.case(
+        "negated_share_over_nonce",
+        &share(&negated, &public_nonce)?,
+        &msg,
+        &public_nonce,
+        x_only,
+    )?;
+    rules.case(
+        "complete_signature",
+        &complete,
+        &msg,
+        &public_nonce,
+        accepted,
+    )?;
+    rules.case(
+        "complete_signature_other_message",
+        &complete,
+        &other_msg,
+        &public_nonce,
+        rejected,
+    )?;
+
+    let inputs = RuleInputs {
+        key: hex(KEY),
+        nonce: hex(NONCE),
+        msg: hex(MSG),
+    };
+    let expected = RuleExpected {
+        pubkey: public_hex(&secp, &pubkey),
+        public_nonce: public_hex(&secp, &public_nonce),
+        commit: hex(commit),
+        cases: rules.cases,
+    };
+    render_from(
+        MODULE,
+        AGGSIG_AREA,
+        "completed_and_kernel_rules",
+        &pins.node,
+        inputs,
+        expected,
+    )
+}
+
+fn other_fixed_message(msg: &[u8; 32]) -> Result<Message, Error> {
+    let mut other = *msg;
+    if let Some(last) = other.last_mut() {
+        *last ^= 1;
+    }
+    Message::from_slice(&other).map_err(Error::reference("other message"))
+}
+
 pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     let flows = [
         Flow {
@@ -575,5 +734,6 @@ pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     for single in &singles {
         rendered.push(single_signer(pins, single)?);
     }
+    rendered.push(completed_and_kernel_rules(pins)?);
     Ok(rendered)
 }

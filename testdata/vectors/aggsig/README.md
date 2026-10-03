@@ -24,7 +24,10 @@ slate code:
    layout.
 
 `expected.checks` are `aggsig::verify_single` calls with their arguments and result. `kind` is
-`partial` (`is_partial = true`, as `verify_partial_sig`) or `completed`. A null `pub_nonce_sum` or
+`partial` (`is_partial = true`, as `verify_partial_sig`) or `completed` (`is_partial = false`, the
+rule kernel and participant-message verification apply). `completed` is not upstream's
+`verify_completed_sig`, which passes `is_partial = true`; `completed_and_kernel_rules` records
+that function. A null `pub_nonce_sum` or
 `pubkey_sum` means `None`. The rejected cases cover a partial checked against the wrong key, against
 a nonce sum missing the other party's nonce, against another message, and without the true key sum;
 a final signature checked against another message or key; a partial passed off as final; and
@@ -40,3 +43,17 @@ Some(pubkey))`, as participant messages are signed; the nonce is the `[1; 32]` `
 in test-RNG mode. `single_signer_without_pubkey_in_challenge` signs with `None` for the challenge
 key. Each file's `checks` verify the signature as signed, and reject another message, another key,
 and the other challenge-key choice.
+
+## Completed and kernel rules
+
+`completed_and_kernel_rules` separates the two ways upstream checks a finished signature. Each case
+records three verdicts with the public key as both key and challenge key: `partial` from
+`verify_partial_sig` against `nonce_sum`, `completed` from upstream's `verify_completed_sig`, which
+compares the nonce's X coordinate only, and `kernel` from `verify_single_from_commit` against
+`commit(0, key)`, which also requires a square Y, as the node does for kernels.
+
+`share_over_negated_nonce` and `negated_share_over_nonce` are one-party shares from
+`calculate_partial_sig` whose nonce sum is the negation of the nonce used. They verify as partials
+and pass `completed`, but fail `kernel`. `complete_signature` is `sign_single` with the nonce and
+passes all three; `complete_signature_other_message` checks it against another message and fails
+all three.

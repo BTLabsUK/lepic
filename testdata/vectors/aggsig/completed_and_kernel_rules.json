@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "area": "aggsig",
+  "name": "completed_and_kernel_rules",
+  "generator": "conformance/vectors/primitives/aggsig",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "key": "6666666666666666666666666666666666666666666666666666666666666666",
+    "nonce": "6868686868686868686868686868686868686868686868686868686868686868",
+    "msg": "6767676767676767676767676767676767676767676767676767676767676767"
+  },
+  "expected": {
+    "pubkey": "035ab4689e400a4a160cf01cd44730845a54768df8547dcdf073d964f109f18c30",
+    "public_nonce": "03652d1b5efa70cb3b83a53cdf536172d205001f0dd54ca766a6a4ef766a48e6fb",
+    "commit": "095ab4689e400a4a160cf01cd44730845a54768df8547dcdf073d964f109f18c30",
+    "cases": [
+      {
+        "name": "share_over_negated_nonce",
+        "sig": "fbe6486a76efa4a666a74cd50d1f0005d2726153df3ca5833bcb70fa5e1b2d6564afad777b778027450fcff5bf08331b800d6b3ceeea34faf1bdda289c67aa60",
+        "msg": "6767676767676767676767676767676767676767676767676767676767676767",
+        "nonce_sum": "02652d1b5efa70cb3b83a53cdf536172d205001f0dd54ca766a6a4ef766a48e6fb",
+        "partial": true,
+        "completed": true,
+        "kernel": false
+      },
+      {
+        "name": "negated_share_over_nonce",
+        "sig": "fbe6486a76efa4a666a74cd50d1f0005d2726153df3ca5833bcb70fa5e1b2d6564afad777b778027450fcff5bf08331b800d6b3ceeea34faf1bdda289c67aa60",
+        "msg": "6767676767676767676767676767676767676767676767676767676767676767",
+        "nonce_sum": "03652d1b5efa70cb3b83a53cdf536172d205001f0dd54ca766a6a4ef766a48e6fb",
+        "partial": true,
+        "completed": true,
+        "kernel": false
+      },
+      {
+        "name": "complete_signature",
+        "sig": "fbe6486a76efa4a666a74cd50d1f0005d2726153df3ca5833bcb70fa5e1b2d65d51f137737058216b0de46d4d5141105ae3c9a6b1d1a642921ed0958cb96d98f",
+        "msg": "6767676767676767676767676767676767676767676767676767676767676767",
+        "nonce_sum": "03652d1b5efa70cb3b83a53cdf536172d205001f0dd54ca766a6a4ef766a48e6fb",
+        "partial": true,
+        "completed": true,
+        "kernel": true
+      },
+      {
+        "name": "complete_signature_other_message",
+        "sig": "fbe6486a76efa4a666a74cd50d1f0005d2726153df3ca5833bcb70fa5e1b2d65d51f137737058216b0de46d4d5141105ae3c9a6b1d1a642921ed0958cb96d98f",
+        "msg": "6767676767676767676767676767676767676767676767676767676767676766",
+        "nonce_sum": "03652d1b5efa70cb3b83a53cdf536172d205001f0dd54ca766a6a4ef766a48e6fb",
+        "partial": false,
+        "completed": false,
+        "kernel": false
+      }
+    ]
+  }
+}

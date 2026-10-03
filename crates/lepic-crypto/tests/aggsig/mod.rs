@@ -262,3 +262,68 @@ fn single_signer_message_signature_matches_upstream() {
 fn single_signer_signature_without_pubkey_in_challenge_matches_upstream() {
     replay_single_signer("single_signer_without_pubkey_in_challenge", false);
 }
+
+// LEPIC's `verify_completed_sig` follows the node's kernel rule, not upstream's function of that
+// name, so it must agree with `kernel` on every case, including the ones `completed` accepts.
+#[test]
+fn completed_signature_check_follows_the_kernel_rule_upstream_records() {
+    let name = "completed_and_kernel_rules";
+    let vector = vector(name);
+    let inputs = &vector["inputs"];
+    let expected = &vector["expected"];
+    let key = secret(&inputs["key"]);
+    let pubkey = public_of(&key);
+    assert_eq!(pubkey, public(&expected["pubkey"]), "{name}: pubkey");
+    assert_eq!(
+        public_of(&secret(&inputs["nonce"])),
+        public(&expected["public_nonce"]),
+        "{name}: public_nonce"
+    );
+    let commit = Commitment::commit(0, &key).unwrap();
+    assert_eq!(commit.to_hex(), text(&expected["commit"]), "{name}: commit");
+
+    let cases = expected["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 4);
+    let mut separating = 0;
+    for case in cases {
+        let case_name = text(&case["name"]);
+        let context = format!("{name}: {case_name}");
+        let sig = signature(&case["sig"]);
+        let case_msg = message(&case["msg"]);
+        let verdict_of = |result| verdict(result, &context);
+        let kernel = case["kernel"].as_bool().unwrap();
+        assert_eq!(
+            verdict_of(verify_partial_sig(
+                &sig,
+                &public(&case["nonce_sum"]),
+                &pubkey,
+                Some(&pubkey),
+                &case_msg
+            )),
+            case["partial"].as_bool().unwrap(),
+            "{context}: partial"
+        );
+        assert_eq!(
+            verdict_of(verify_completed_sig(
+                &sig,
+                &pubkey,
+                Some(&pubkey),
+                &case_msg
+            )),
+            kernel,
+            "{context}: completed"
+        );
+        assert_eq!(
+            verdict_of(verify_single_from_commit(&sig, &case_msg, &commit)),
+            kernel,
+            "{context}: kernel"
+        );
+        if case["completed"].as_bool().unwrap() != kernel {
+            separating += 1;
+        }
+    }
+    assert_eq!(
+        separating, 2,
+        "{name}: cases upstream's two checks disagree on"
+    );
+}

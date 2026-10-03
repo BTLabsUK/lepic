@@ -116,7 +116,8 @@ with the rule each breaks. Files and conventions are in [primitives/README.md](p
 ### aggsig
 
 The two-party aggregate-signature flow for a plain and a height-locked kernel, and single-signer
-signatures, each with the verification calls upstream accepts and rejects. The generator is
+signatures, each with the verification calls upstream accepts and rejects, and the cases that
+separate upstream's `verify_completed_sig` from kernel verification. The generator is
 `conformance/vectors/src/primitives/aggsig.rs`. Details are in [aggsig/README.md](aggsig/README.md).
 
 ### slates
