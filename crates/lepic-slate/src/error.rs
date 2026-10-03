@@ -31,7 +31,7 @@ pub enum SlateError {
     MissingProofSignature { stage: Stage },
     #[error("payment proof signature is not expected at stage {stage}")]
     UnexpectedProofSignature { stage: Stage },
-    #[error("fee {fee} is set before the sender has joined at stage {stage}")]
+    #[error("fee is set before the sender has joined at stage {stage}")]
     FeeBeforeSender { stage: Stage, fee: Fee },
     #[error("body weight {weight} exceeds the transaction limit {max}")]
     BodyTooHeavy { weight: u64, max: u64 },
@@ -107,7 +107,7 @@ pub enum ValidationError {
     KernelCount { count: usize },
     #[error("kernel is a coinbase kernel")]
     CoinbaseKernel,
-    #[error("kernel fee {kernel} differs from the slate fee {slate}")]
+    #[error("kernel fee differs from the slate fee")]
     KernelFeeMismatch { slate: Fee, kernel: Fee },
     #[error("kernel lock height {kernel} differs from the slate lock height {slate}")]
     KernelLockMismatch { slate: Height, kernel: Height },
@@ -117,7 +117,7 @@ pub enum ValidationError {
     InvalidKernelExcess(#[source] CryptoError),
     #[error("kernel signature is invalid")]
     InvalidKernelSignature(#[source] CryptoError),
-    #[error("fee {fee} is below the minimum {minimum} for the transaction weight")]
+    #[error("fee is below the minimum for the transaction weight")]
     FeeBelowMinimum { fee: Fee, minimum: Fee },
     #[error("minimum fee overflows")]
     MinimumFeeOverflow,
@@ -216,4 +216,38 @@ pub enum EncodeError {
 pub enum RegistryError {
     #[error("codec {codec} is already registered")]
     DuplicateCodec { codec: CodecId },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fee_error_text_carries_no_amounts() {
+        let fee = Fee::new(123_456_789);
+        let other = Fee::new(987_654_321);
+        let texts = [
+            SlateError::FeeBeforeSender {
+                stage: Stage::I1,
+                fee,
+            }
+            .to_string(),
+            ValidationError::KernelFeeMismatch {
+                slate: fee,
+                kernel: other,
+            }
+            .to_string(),
+            ValidationError::FeeBelowMinimum {
+                fee,
+                minimum: other,
+            }
+            .to_string(),
+        ];
+        for text in texts {
+            assert!(
+                !text.contains("123456789") && !text.contains("987654321"),
+                "{text}"
+            );
+        }
+    }
 }
