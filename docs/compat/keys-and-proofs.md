@@ -50,9 +50,10 @@ address, also shown in onion v3 form. Vectors: `testdata/vectors/keys/address_ke
   - `private_hash` = BLAKE2b-256 of the master secret key (unkeyed), `rewind_hash` = BLAKE2b-256 of
     the 33-byte compressed master public key.
   - Nonce for an output = BLAKE2b-256 keyed by the 33-byte commitment over the 32-byte hash (rewind
-    nonce from `rewind_hash`, private nonce from `private_hash`). Confirm the key and data order.
+    nonce from `rewind_hash`, private nonce from `private_hash`); vectors `proofs_builder_seed32`.
   - 20-byte proof message: byte 0 = 0, byte 1 = 0 (wallet type), byte 2 = switch type, bytes 3..20 =
-    the 17-byte identifier.
+    the 17-byte identifier, so byte 3 is its depth. On rewind upstream clamps a depth above 4 to 4
+    rather than rejecting the message.
 - `LegacyProofBuilder`, needed to restore old outputs: one nonce = BLAKE2b-256 keyed by the commitment
   over the switch-blinded master key; message bytes 0..4 zero, bytes 4..20 the 16-byte path without
   depth; depth assumed 3 and switch type regular.
