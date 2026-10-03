@@ -107,11 +107,13 @@ pub fn options(vector: &Value) -> ScanOptions {
 }
 
 /// The mock node's client with answers the recorded session does not cover: `get_outputs`
-/// answers from `held`, and every height a page of unspent outputs reports is raised.
+/// answers from `held`, every height a page of unspent outputs reports is raised, and the last
+/// output index of a height range is raised by `index_lead`.
 pub struct Rechecking {
     pub inner: NodeClient<MockNode>,
     pub held: Vec<OutputLocation>,
     pub raise_heights: u64,
+    pub index_lead: u64,
 }
 
 impl NodeApi for Rechecking {
@@ -167,7 +169,13 @@ impl NodeApi for Rechecking {
         start_height: Height,
         end_height: Option<Height>,
     ) -> impl Future<Output = Result<PmmrIndices, NodeError>> + Send {
-        self.inner.get_pmmr_indices(start_height, end_height)
+        let answer = self.inner.get_pmmr_indices(start_height, end_height);
+        let lead = self.index_lead;
+        async move {
+            let mut indices = answer.await?;
+            indices.last_index += lead;
+            Ok(indices)
+        }
     }
 
     fn push_transaction(
@@ -185,11 +193,23 @@ pub fn rechecking_wallet(
     held: Vec<OutputLocation>,
     raise_heights: u64,
 ) -> AnyWallet<Rechecking> {
+    rechecking_wallet_with(harness, held, raise_heights, 0)
+}
+
+/// [`rechecking_wallet`], with the last output index of every height range raised by
+/// `index_lead`.
+pub fn rechecking_wallet_with(
+    harness: &Harness,
+    held: Vec<OutputLocation>,
+    raise_heights: u64,
+    index_lead: u64,
+) -> AnyWallet<Rechecking> {
     let ports = harness.ports(harness.vault.clone());
     let node = Rechecking {
         inner: ports.node,
         held,
         raise_heights,
+        index_lead,
     };
     let wallet = Wallet::new(
         harness.config(Network::Mainnet),

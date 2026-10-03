@@ -17,7 +17,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
-use lepic_primitives::params::Network;
+use lepic_primitives::params::{BLOCK_OUTPUT_WEIGHT, MAX_BLOCK_WEIGHT, Network};
 use lepic_store::{Repositories, StoreError, WalletStore};
 use thiserror::Error;
 use tracing::{debug, instrument, warn};
@@ -62,6 +62,10 @@ const FLOONET_CHECKPOINT: ChainReference = ChainReference {
     seen_at: GENESIS_SECONDS,
 };
 
+/// Output MMR positions one block can add at most: two per output, for the leaf and at most
+/// one parent, with every block filled with outputs.
+const MAX_MMR_POSITIONS_PER_BLOCK: u64 = 2 * (MAX_BLOCK_WEIGHT / BLOCK_OUTPUT_WEIGHT + 1);
+
 /// The first tip the wallet confirmed, which the relative bound grows from.
 const FIRST_SETTING: &str = "chain.first";
 /// The highest confirmed tip. Databases written before the first tip was kept apart store only
@@ -90,6 +94,9 @@ pub enum ImplausibleNodeData {
     /// changed.
     #[error("node tip moved from {first} to {second} within one refresh")]
     TipChanged { first: Height, second: Height },
+    /// The output MMR cannot have grown this large in the blocks up to the tip.
+    #[error("node reported output index {index} above the highest possible {limit} at its tip")]
+    IndexAboveTip { index: u64, limit: u64 },
 }
 
 /// A tip the wallet confirmed, and when it saw it, for starting a node client from it.
@@ -295,6 +302,19 @@ pub(crate) fn check_kernel_height(
 ) -> Result<(), ImplausibleNodeData> {
     if height < min || height > tip {
         return Err(ImplausibleNodeData::KernelOutOfRange { height, min, tip });
+    }
+    Ok(())
+}
+
+/// An output MMR index is at most the positions every block up to and including the tip can
+/// have added.
+pub(crate) fn check_output_index(index: u64, tip: Height) -> Result<(), ImplausibleNodeData> {
+    let limit = tip
+        .value()
+        .saturating_add(1)
+        .saturating_mul(MAX_MMR_POSITIONS_PER_BLOCK);
+    if index > limit {
+        return Err(ImplausibleNodeData::IndexAboveTip { index, limit });
     }
     Ok(())
 }
@@ -582,6 +602,21 @@ mod tests {
         assert!(check_kernel_height(Height::new(5), Height::new(5), tip).is_ok());
         assert!(check_kernel_height(Height::new(4), Height::new(5), tip).is_err());
         assert!(check_kernel_height(Height::new(11), Height::new(5), tip).is_err());
+    }
+
+    #[test]
+    fn output_indices_stay_within_what_the_blocks_up_to_the_tip_can_hold() {
+        let tip = Height::new(9);
+        let limit = 10 * MAX_MMR_POSITIONS_PER_BLOCK;
+        assert!(check_output_index(limit, tip).is_ok());
+        assert_eq!(
+            check_output_index(limit + 1, tip),
+            Err(ImplausibleNodeData::IndexAboveTip {
+                index: limit + 1,
+                limit
+            })
+        );
+        assert!(check_output_index(u64::MAX, Height::new(u64::MAX)).is_ok());
     }
 
     #[test]

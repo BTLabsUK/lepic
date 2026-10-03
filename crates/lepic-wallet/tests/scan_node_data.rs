@@ -18,8 +18,11 @@ use lepic_primitives::amount::Height;
 use lepic_primitives::hash::Hash;
 use lepic_primitives::params::Network;
 use lepic_store::OutputStatus;
+use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::scan::{ScanCancel, ScanError, ScanOptions, ScanStart, ScannedBlock};
-use scan_support::{full_scan_vector, options, rechecking_wallet, restore, snapshot, write};
+use scan_support::{
+    full_scan_vector, options, rechecking_wallet, rechecking_wallet_with, restore, snapshot, write,
+};
 use support::Harness;
 
 #[test]
@@ -40,6 +43,30 @@ fn refuses_a_tip_beyond_any_plausible_chain_height() {
     );
     assert_eq!(wallet.last_scanned_block().unwrap(), None);
     assert!(wallet.restore_scan_required().unwrap());
+}
+
+#[test]
+fn refuses_an_output_index_range_the_blocks_up_to_the_tip_cannot_hold() {
+    let vector = full_scan_vector();
+    let harness = scan_support::harness(&vector);
+    let wallet = harness.wallet();
+    restore(&harness, &wallet, &vector);
+    wallet.close();
+    let wallet = rechecking_wallet_with(&harness, Vec::new(), 0, 1_000_000_000);
+
+    let result = harness.block_on(wallet.scan(options(&vector), &ScanCancel::new()));
+
+    assert!(
+        matches!(
+            result,
+            Err(ScanError::Implausible(
+                ImplausibleNodeData::IndexAboveTip { .. }
+            ))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(wallet.last_scanned_block().unwrap(), None);
+    assert!(snapshot(&harness).outputs.is_empty());
 }
 
 #[test]

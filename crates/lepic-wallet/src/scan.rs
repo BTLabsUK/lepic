@@ -293,8 +293,8 @@ where
     /// [`Event::Transaction`] for every cancelled transaction.
     ///
     /// An output stored as spent is revived only when the node, asked for it again, still holds
-    /// it. The tip must be plausible as [`Wallet::refresh`] checks it, and no output may be
-    /// above it.
+    /// it. The tip must be plausible as [`Wallet::refresh`] checks it, no output may be above
+    /// it, and the output index range may not be larger than the blocks up to it can hold.
     ///
     /// Every page is stored as it is scanned. When the scan fails or is cancelled, the next scan
     /// from the same start resumes after the last stored page. Fails with
@@ -336,6 +336,7 @@ where
             node.get_pmmr_indices(start_height, Some(tip.height)),
         )
         .await?;
+        chain::check_output_index(indices.last_index, tip.height)?;
         let mut next_index = indices.first_index;
         if let Some(checkpoint) = checkpoint
             && checkpoint.start_height == start_height
