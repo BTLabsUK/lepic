@@ -21,7 +21,7 @@ fn error_kind(outcome: &support::Outcome) -> String {
 fn engine_failures_map_to_exit_codes_and_json_errors() {
     let host = TestHost::new();
     host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
-    let wallet = Instance::new("right");
+    let wallet = Instance::new("right password");
     wallet.restore(&host, SENDER_MNEMONIC);
 
     let mut wrong = wallet.env();
@@ -83,7 +83,7 @@ fn engine_failures_map_to_exit_codes_and_json_errors() {
 #[test]
 fn a_data_directory_without_a_wallet_is_reported_as_such() {
     let host = TestHost::new();
-    let empty = Instance::new("pw");
+    let empty = Instance::new("test password");
     let outcome = empty.run(&host, &["wallet", "info"]);
     assert_eq!(
         (outcome.code, error_kind(&outcome).as_str()),
@@ -94,7 +94,7 @@ fn a_data_directory_without_a_wallet_is_reported_as_such() {
 #[test]
 fn human_errors_go_to_stderr_and_json_errors_to_stdout() {
     let host = TestHost::new();
-    let empty = Instance::new("pw");
+    let empty = Instance::new("test password");
     let mut human = empty.env();
     human.retain(|(key, _)| key != "LEPIC_OUTPUT");
     let outcome = run_in(&host, &["wallet", "info"], human, "");
@@ -110,7 +110,7 @@ fn human_errors_go_to_stderr_and_json_errors_to_stdout() {
 #[test]
 fn a_missing_password_on_standard_input_is_a_usage_error() {
     let host = TestHost::new();
-    let wallet = Instance::new("pw");
+    let wallet = Instance::new("test password");
     let mut env = wallet.env();
     env.retain(|(key, _)| key != "LEPIC_PASSWORD");
     let outcome = wallet.run_with(&host, &["wallet", "init"], env.clone(), "");
@@ -125,7 +125,7 @@ fn a_missing_password_on_standard_input_is_a_usage_error() {
 #[test]
 fn usage_errors_exit_with_code_two_and_help_with_zero() {
     let host = TestHost::new();
-    let wallet = Instance::new("pw");
+    let wallet = Instance::new("test password");
     let outcome = wallet.run(&host, &["tx", "send", "1"]);
     assert_eq!(outcome.code, 2);
     assert!(outcome.stderr.contains("--to"), "{}", outcome.stderr);
@@ -139,7 +139,7 @@ fn usage_errors_exit_with_code_two_and_help_with_zero() {
 #[test]
 fn node_status_reports_the_tip() {
     let host = TestHost::new();
-    let outcome = Instance::new("pw")
+    let outcome = Instance::new("test password")
         .run(&host, &["node", "status"])
         .ok()
         .json();

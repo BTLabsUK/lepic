@@ -188,7 +188,10 @@ pub struct Instance {
 }
 
 impl Instance {
+    /// `password` must contain a space, so no address, id or amount can contain it and the
+    /// leak check in [`Instance::run_with`] means what it says.
     pub fn new(password: &str) -> Self {
+        assert!(password.contains(' '), "{password}");
         Self {
             home: tempfile::tempdir().unwrap(),
             password: password.to_owned(),
