@@ -33,7 +33,10 @@ impl LogSink for CaptureSink {
 
 /// Runs `f` with a subscriber that records every span and event at every
 /// level on the current thread, and returns its result with the records.
-/// Events emitted on other threads are not captured.
+/// Events emitted on other threads are not captured. `tracing` caches whether a
+/// call site is enabled, so a call site that first fired on another thread while
+/// no subscriber was set may stay disabled here too; a test that captures such
+/// call sites belongs in a test binary of its own.
 pub fn capture<T>(f: impl FnOnce() -> T) -> (T, Captured) {
     let sink = Arc::new(CaptureSink::default());
     let subscriber = Registry::default().with(HostLayer::new(sink.clone()));
