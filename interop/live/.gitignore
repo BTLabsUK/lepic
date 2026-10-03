@@ -1,0 +1,4 @@
+# Floonet wallets, node chain and slate exchange files. Kept between runs, never committed.
+/data/
+# Written by run.sh for docker compose.
+/.env

@@ -1,0 +1,171 @@
+# Live floonet stack: the reference node v4.0.4 on floonet, peered with the public floonet seed,
+# a RandomX miner that mines through it, a local Epicbox relay with its database, two
+# epic-wallet v4.0.2 wallets and lepic. Only the node talks to the outside, and only to the seed
+# it is given; every other service shares the node's network namespace and talks over 127.0.0.1.
+# No port is published on the host.
+#
+# Wallets and the node's chain live in bind-mounted directories under data/, which git ignores,
+# so funds persist between runs and later tasks can reuse them. `run.sh` builds the images and
+# drives everything; it sets LIVE_UID, LIVE_GID, LIVE_SEED and LIVE_INTEROP_DIR.
+name: lepic-live
+
+x-runtime: &runtime
+  image: lepic-live-runtime:local
+  pull_policy: never
+  init: true
+  user: "${LIVE_UID:?}:${LIVE_GID:?}"
+
+services:
+  node:
+    <<: *runtime
+    networks: [live]
+    build:
+      context: ../.work/live/bin
+      dockerfile: ${LIVE_INTEROP_DIR:?}/docker/runtime.Dockerfile
+      additional_contexts:
+        scripts: ./docker
+    pull_policy: build
+    command: ["node.sh"]
+    environment:
+      HOME: /data/node
+      LIVE_SEED: "${LIVE_SEED:?}"
+    volumes:
+      - ./data/node:/data/node
+    healthcheck:
+      # Healthy once the node has synced from its peer: epic-wallet refuses to start against a
+      # syncing node. run.sh then also compares the tip with the public node's.
+      test: ["CMD", "sh", "-c", "curl -sf -u epic:$$(cat /data/node/.api_secret) -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get_status\",\"params\":[]}' http://127.0.0.1:13413/v2/owner | grep -q '\"no_sync\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 360
+
+  mongodb:
+    image: mongo:6.0
+    init: true
+    command: ["--wiredTigerCacheSizeGB", "0.25", "--setParameter", "diagnosticDataCollectionEnabled=false"]
+    network_mode: service:node
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpass
+      MONGO_INITDB_DATABASE: epicbox
+    volumes:
+      - mongo-data:/data/db
+      - ../.work/src/epic-epicbox-docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    depends_on:
+      node:
+        condition: service_healthy
+    healthcheck:
+      # Healthy only on the final server: the image first runs the init script on a temporary
+      # server without access control, and a relay that connects then fails to authenticate.
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'try { db.adminCommand({listDatabases: 1}); quit(1) } catch (e) { quit(0) }' && mongosh --quiet -u epicbox -p epicboxpass --authenticationDatabase epicbox epicbox --eval 'db.runCommand({ping: 1}).ok'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  epicbox:
+    image: lepic-live-relay:local
+    build:
+      context: ../.work/src/epic-epicbox-docker
+      dockerfile: ${LIVE_INTEROP_DIR:?}/docker/relay.Dockerfile
+      additional_contexts:
+        bin: ../.work/bin
+    init: true
+    network_mode: service:node
+    environment:
+      MONGO_URL: mongodb://epicbox:epicboxpass@127.0.0.1:27017/epicbox?authSource=epicbox
+      EPICBOX_INSTANCE_ID: "1"
+      EPICBOX_DOMAIN: localhost
+      EPICBOX_PORT: "3423"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      # A bare TCP connect: an HTTP request would make the relay's status page query public relays.
+      test: ["CMD", "node", "-e", "require('net').connect(3423, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  funder:
+    <<: *runtime
+    network_mode: service:node
+    command: ["wallet.sh", "listen-http"]
+    environment:
+      HOME: /data
+      WALLET_PASSWORD: live-funder-password
+    volumes:
+      - ./data/funder:/data
+      - ./data/node:/node:ro
+      - ./data/exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -s -o /dev/null http://127.0.0.1:13415/v2/foreign"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  miner:
+    <<: *runtime
+    network_mode: service:node
+    command: ["miner", "127.0.0.1:13416", "${LIVE_MINER_THREADS:-4}"]
+    # Started and stopped by run.sh only while funds or confirmations are needed.
+    profiles: [mining]
+    depends_on:
+      funder:
+        condition: service_healthy
+
+  peer:
+    <<: *runtime
+    network_mode: service:node
+    command: ["wallet.sh", "idle"]
+    environment:
+      HOME: /data
+      WALLET_PASSWORD: live-peer-password
+    volumes:
+      - ./data/peer:/data
+      - ./data/node:/node:ro
+      - ./data/exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+      epicbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  lepic:
+    <<: *runtime
+    network_mode: service:node
+    command: ["sleep", "infinity"]
+    environment:
+      HOME: /data
+      LEPIC_NETWORK: floonet
+      LEPIC_DATA_DIR: /data/lepic
+      LEPIC_NODE_URL: "${LEPIC_TEST_NODE_URL:-http://127.0.0.1:13413}"
+      LEPIC_NODE_API_SECRET_FILE: /node/.foreign_api_secret
+      LEPIC_EPICBOX_RELAY: "${LEPIC_TEST_RELAY:-ws://localhost:3423}"
+      LEPIC_OUTPUT: json
+      LEPIC_LOG_LEVEL: info
+      LEPIC_PASSWORD: live-lepic-password
+    volumes:
+      - ./data/lepic:/data
+      - ./data/node:/node:ro
+      - ./data/exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+      epicbox:
+        condition: service_healthy
+
+networks:
+  # The node needs a route out to reach the floonet seed. Nothing is published on the host.
+  live: {}
+
+volumes:
+  # The relay's queue is disposable; wallets and chain data are bind mounts under data/.
+  mongo-data: {}
