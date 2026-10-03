@@ -15,9 +15,8 @@ LEPIC_LIVE_TESTS=1 interop/live/run.sh --down     # stop the stack afterwards
 The stack stays up after a run unless `--down` is given, so the node keeps its peer connection
 instead of re-dialling it every run.
 
-Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`), a floonet node on this host
-at `127.0.0.1:13414` that accepts the local node as a peer (or another peer in `LIVE_SEED`), and
-HTTPS to the public floonet API.
+Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`), outbound TCP to the floonet
+seed on port 13414, and HTTPS to the public floonet API.
 
 ## What runs
 
@@ -30,13 +29,17 @@ HTTPS to the public floonet API.
 | `peer` | `epic-wallet`, the counterparty |
 | `lepic` | `lepic --network floonet`, driven with `docker compose exec` and `--output json` |
 
-The node, the miner, the wallets and `lepic` run in the host's network namespace, so the node can peer
-with the floonet node the host already runs at `127.0.0.1:13414` (`LIVE_SEED`, an `IP:port`). That
-node is connected to the public seed `floo-node.btlabs.uk`. `peers_allow` restricts the local node
-to that one peer, so it never dials anyone else. Every listener is bound to 127.0.0.1 on a 334xx
-port, clear of the host node's 134xx ports. The relay listens on all interfaces of its container, so
-it and its database run on their own bridge network and only the relay port is published, on
-127.0.0.1.
+The node, the miner, the wallets and `lepic` run in the host's network namespace, with every listener
+bound to 127.0.0.1 on a 334xx port, clear of the 134xx ports of any floonet node the host runs itself.
+The node's one peer is `LIVE_SEED`, an `IP:port` because the node accepts no host name there. By
+default `run.sh` resolves the public seed `floo-node.btlabs.uk` (`LIVE_SEED_HOST`) to
+`<ip>:13414`. `peers_allow` restricts the node to that peer, so it never dials anyone else. The
+relay listens on all interfaces of its container, so it and its database run on their own bridge
+network and only the relay port is published, on 127.0.0.1.
+
+Keep the node running. A seed records a failed handshake as `BadHandshake` and refuses that address
+for its ban window (3 hours upstream), and stopping the node while it is handshaking is one way to
+cause one.
 
 Public reads go to `https://floo-node.btlabs.uk` (`LIVE_PUBLIC_API`): the tip, to know when the local
 node has synced, and each kernel, to check that it is on the public chain at the height the local

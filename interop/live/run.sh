@@ -41,9 +41,14 @@ source "${LIVE_DIR}/lib.sh"
 LIVE_INTEROP_DIR="$(cd "${LIVE_DIR}/.." && pwd)"
 LIVE_UID="$(id -u)"
 LIVE_GID="$(id -g)"
-# The node's only peer, as IP:port: by default the floonet node this host already runs, which is
-# connected to the public floonet seed. The node accepts no host name here.
-LIVE_SEED="${LIVE_SEED:-127.0.0.1:13414}"
+# The node's only peer, as IP:port, because the node accepts no host name there: by default the
+# public floonet seed, resolved here. Any other floonet node can be given in LIVE_SEED.
+LIVE_SEED_HOST="${LIVE_SEED_HOST:-floo-node.btlabs.uk}"
+if [[ -z "${LIVE_SEED:-}" ]]; then
+    seed_ip="$(getent ahostsv4 "${LIVE_SEED_HOST}" | awk 'NR == 1 {print $1}')"
+    [[ -n "${seed_ip}" ]] || { echo "cannot resolve ${LIVE_SEED_HOST}" >&2; exit 1; }
+    LIVE_SEED="${seed_ip}:13414"
+fi
 export LIVE_INTEROP_DIR LIVE_UID LIVE_GID LIVE_SEED
 # Compose reads .env from this directory, so `docker compose` here works by hand as well.
 printf 'LIVE_INTEROP_DIR=%s\nLIVE_UID=%s\nLIVE_GID=%s\nLIVE_SEED=%s\n' \

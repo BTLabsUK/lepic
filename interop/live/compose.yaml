@@ -1,10 +1,10 @@
 # Live floonet stack: the reference node v4.0.4 on floonet, a RandomX miner that mines through
 # it, a local Epicbox relay with its database, two epic-wallet v4.0.2 wallets and lepic.
 #
-# The node, the miner, the wallets and lepic run in the host's network namespace so the node can
-# peer with the floonet node this host already runs at 127.0.0.1:13414 (LIVE_SEED); peers_allow
-# restricts the node to that one peer. Every listener of theirs is bound to 127.0.0.1 on ports
-# 334xx, clear of the host node's 134xx. The relay listens on all interfaces of its container, so
+# The node, the miner, the wallets and lepic run in the host's network namespace. The node's one
+# peer is LIVE_SEED (the public floonet seed by default); peers_allow restricts it to that peer.
+# Every listener of theirs is bound to 127.0.0.1 on ports 334xx, clear of the 134xx ports of any
+# floonet node the host runs itself. The relay listens on all interfaces of its container, so
 # it and its database stay on their own bridge network and only the relay port is published, on
 # 127.0.0.1:33423.
 #

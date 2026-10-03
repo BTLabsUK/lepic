@@ -36,8 +36,8 @@ if [ ! -f "${config}" ]; then
     set_key host '"127.0.0.1"'
     set_key port 33414
     set_key seeding_type '"List"'
-    add_key server.p2p_config seeds "[\"${LIVE_SEED}\"]"
-    add_key server.p2p_config peers_allow "[\"${LIVE_SEED}\"]"
+    add_key server.p2p_config seeds '[]'
+    add_key server.p2p_config peers_allow '[]'
     # The one outbound peer is the seed. With the default of four the node never starts syncing.
     add_key server.p2p_config peer_min_preferred_outbound_count 1
     set_key enable_stratum_server true
@@ -47,6 +47,10 @@ if [ ! -f "${config}" ]; then
     set_key log_to_file true
     set_key file_log_level '"INFO"'
 fi
+
+# The one peer follows LIVE_SEED on every start, so a changed seed needs no new config.
+set_key seeds "[\"${LIVE_SEED}\"]"
+set_key peers_allow "[\"${LIVE_SEED}\"]"
 
 # The node enables basic auth on an API only when its secret file exists. epic-wallet sends one
 # secret to both the owner API (sync status) and the foreign API, so both files hold the same one.
