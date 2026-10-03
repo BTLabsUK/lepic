@@ -108,7 +108,8 @@ impl LepicRuntime {
     }
 
     /// Logs one line from the app under the target `dart.<tag>`, through the same stream.
-    /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them. Never pass secrets.
+    /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them, and `message` at
+    /// most its first 1024 bytes, cut at a character boundary. Never pass secrets.
     #[frb(sync)]
     pub fn log_message(&self, level: LogLevel, tag: String, message: String) {
         let tag: String = tag
@@ -116,6 +117,7 @@ impl LepicRuntime {
             .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
             .take(32)
             .collect();
+        let message = app_log_message(&message);
         tracing::dispatcher::with_default(&self.inner.boundary.dispatch, || match level {
             LogLevel::Error => error!(target: "dart", tag, "{message}"),
             LogLevel::Warn => warn!(target: "dart", tag, "{message}"),
@@ -124,6 +126,15 @@ impl LepicRuntime {
             LogLevel::Trace => tracing::trace!(target: "dart", tag, "{message}"),
         });
     }
+}
+
+/// The longest app log message kept, in bytes, so one call cannot flood the log stream.
+const MAX_APP_LOG_MESSAGE_LEN: usize = 1024;
+
+fn app_log_message(message: &str) -> &str {
+    message
+        .get(..message.floor_char_boundary(MAX_APP_LOG_MESSAGE_LEN))
+        .unwrap_or_default()
 }
 
 impl RuntimeInner {
@@ -199,5 +210,23 @@ impl Drop for DirClaim {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_log_messages_are_cut_at_a_character_boundary() {
+        assert_eq!(app_log_message("short"), "short");
+        let long = "x".repeat(MAX_APP_LOG_MESSAGE_LEN + 1);
+        assert_eq!(app_log_message(&long).len(), MAX_APP_LOG_MESSAGE_LEN);
+        // A two-byte character across the limit is dropped whole.
+        let straddling = format!("{}é", "x".repeat(MAX_APP_LOG_MESSAGE_LEN - 1));
+        assert_eq!(
+            app_log_message(&straddling),
+            &straddling[..MAX_APP_LOG_MESSAGE_LEN - 1]
+        );
     }
 }
