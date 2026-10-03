@@ -16,6 +16,7 @@ mod secret;
 mod signature;
 
 pub use commitment::Commitment;
+pub use context::randomize_context;
 pub use error::{CryptoError, Item};
 pub use limits::{MAX_PROOF_BATCH, MAX_SUM_TERMS};
 pub use proof::{CommittedProof, ProofMessage, RangeProof, RewoundProof};

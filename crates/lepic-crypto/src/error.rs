@@ -83,6 +83,8 @@ pub enum CryptoError {
     SumIsZero,
     #[error("secp256k1 operation failed")]
     Backend,
+    #[error("secp256k1 context was created before it could be randomized")]
+    ContextAlreadyCreated,
 }
 
 impl From<BackendError> for CryptoError {
