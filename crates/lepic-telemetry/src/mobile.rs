@@ -3,7 +3,8 @@
 //!
 //! Records are redacted before they reach the disk, so neither the ring nor a bundle ever holds
 //! a value the redaction drops. Field values are kept only for the fields in [`KEPT_FIELDS`];
-//! every other field, including amounts and addresses, is written as `[redacted]`. Messages,
+//! every other field, including amounts and addresses, is written as `[redacted]`, and quoted
+//! input inside an `error` value is redacted the same way. Messages,
 //! targets and span names are kept, which is why messages must never interpolate values.
 
 use std::fmt::Write as _;
@@ -321,7 +322,9 @@ fn ring_line(record: &LogRecord, at: Timestamp, max_bytes: usize) -> String {
         line.push(' ');
         push_escaped(&mut line, name);
         line.push('=');
-        if KEPT_FIELDS.contains(name) {
+        if *name == "error" {
+            push_escaped(&mut line, &redact_quoted(value));
+        } else if KEPT_FIELDS.contains(name) {
             push_escaped(&mut line, value);
         } else {
             line.push_str(REDACTED);
@@ -333,6 +336,30 @@ fn ring_line(record: &LogRecord, at: Timestamp, max_bytes: usize) -> String {
     }
     line.push('\n');
     line
+}
+
+/// Replaces every span quoted with `"` or `` ` `` by `[redacted]`. LEPIC's own errors carry no
+/// values, but the decoder errors they keep as sources quote the input they rejected, and that
+/// input may be an address or an amount. An unclosed quote redacts the rest of the text.
+fn redact_quoted(error: &str) -> String {
+    let mut redacted = String::with_capacity(error.len());
+    let mut chars = error.chars();
+    while let Some(c) = chars.next() {
+        redacted.push(c);
+        if c != '"' && c != '`' {
+            continue;
+        }
+        redacted.push_str(REDACTED);
+        let mut escaped = false;
+        for inner in chars.by_ref() {
+            if inner == c && !escaped {
+                redacted.push(c);
+                break;
+            }
+            escaped = c == '"' && inner == '\\' && !escaped;
+        }
+    }
+    redacted
 }
 
 fn push_escaped(line: &mut String, text: &str) {
@@ -553,6 +580,60 @@ mod tests {
         assert!(lines[0].len() <= 4 * 1024, "{} bytes", lines[0].len());
         assert!(lines[0].ends_with('\n'));
         assert!(lines[1].ends_with(": record after\n"));
+    }
+
+    #[derive(Debug, Error)]
+    #[error("relay frame could not be decoded")]
+    struct FrameError(#[source] serde_json::Error);
+
+    #[test]
+    fn quoted_input_in_error_text_is_redacted() {
+        let invalid_type = serde_json::from_str::<u64>(&format!("\"{ADDRESS}\"")).unwrap_err();
+        let out_of_range = serde_json::from_str::<u8>("300431").unwrap_err();
+        let escaped = serde_json::from_str::<u64>(r#""say \"hi\" esWWbPq4""#).unwrap_err();
+        for source in [&invalid_type, &escaped] {
+            assert!(
+                source.to_string().contains("esWWbPq4"),
+                "serde_json must quote its input for this test to show anything: {source}"
+            );
+        }
+
+        assert!(out_of_range.to_string().contains("`300431`"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let ring = Arc::new(open(dir.path(), 64 * 1024));
+        let dispatch = host_dispatch(ring.clone(), LogFilter::parse("trace").unwrap());
+        for source in [invalid_type, out_of_range, escaped] {
+            let error = FrameError(source);
+            dispatcher::with_default(&dispatch, || {
+                tracing::warn!(error = %crate::ErrorChain(&error), "relay frame rejected");
+            });
+        }
+
+        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
+        assert!(bundle.contains(
+            "error=relay frame could not be decoded: invalid type: string \"[redacted]\", expected u64"
+        ));
+        assert!(bundle.contains("invalid value: integer `[redacted]`, expected u8"));
+        assert!(!bundle.contains("esWWbPq4"));
+        assert!(!bundle.contains("300431"));
+        let exported = LogRecord {
+            level: LogLevel::Info,
+            target: String::new(),
+            message: bundle,
+            spans: Vec::new(),
+            fields: Vec::new(),
+        };
+        assert_eq!(
+            assert_no_secrets(&[exported], &[ADDRESS.as_bytes()]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn unclosed_quote_redacts_the_rest() {
+        assert_eq!(redact_quoted("bad `esWW at line 1"), "bad `[redacted]");
+        assert_eq!(redact_quoted("no quotes here"), "no quotes here");
     }
 
     fn hex(bytes: &[u8]) -> String {
