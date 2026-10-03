@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "area": "app_data",
+  "name": "wfeh_seed_b",
+  "generator": "conformance/vectors/app_data",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "mnemonic": "pipe stock song coast pair always emotion member joy sting dash theme yard total plastic uncover drip auto adult spring glow giant hedgehog penalty",
+    "entropy": "a55ac33c9669f00f123456789abcdef00fedcba987654321f00f69963cc35aa5",
+    "salt": "1032547698badcfeefcdab8967452301",
+    "nonce": "5e5e5e5e0000000000000001",
+    "payload": "{\"format\":\"wfe-history\",\"version\":1,\"chain\":\"Mainnet\",\"wallet_fp\":\"00112233445566778899aabbccddeeff\",\"exported_at_unix\":1790000000,\"app_version\":\"1.0.0\",\"last_confirmed_height\":123456,\"txs\":[{\"slate_id\":\"0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0\",\"kind\":\"Sent\",\"status\":\"Confirmed\",\"note\":\"rent\"}],\"contacts\":[]}"
+  },
+  "expected": {
+    "root_secret_blake2b": "dc133a701ed16cbd4109b79ba59c1f4a93baeecc09582265b9667c17fe3a2ca4",
+    "check": "b4a1d76d15805c61d23e1effd5cbcb65",
+    "file": "5746454801011032547698badcfeefcdab8967452301b4a1d76d15805c61d23e1effd5cbcb655e5e5e5e00000000000000019dbae6a6357a70d36b3d5b1038a6991046348d518eeffc32551877942b5b686c8aa1f03b4cb844255323dcbfe7b47632c7723a2b70f9677068d5158e669f25885e4124bceee38b07abcb44de569d4acd4209651bc702dbf656e5c247c0b78a758ffc2b0751d1afc2f66810f397687eb57b71f18402a7d191bc2d35d7b949cd89674ecfa0a1ea9918536aafd26154d6008dd8ed014aeadc9abafe366f6592b37f1ae5586ddb21f5ecca33260a5ca3850951eefd014bfe87155b1a949c4cc7be5dcc5f5abee6c16e6769e940d1ae8c688feaa01938f633343f78c094164539087ce64f53c666995aef069a5765d4577d84b8af30b77830a950c23a7b9998519ed1f042f77abc95ee67a89468c88ae274c7d41d651925bb8d73293881019bae400275c736afe786e191a310d48e05c6c2d2e1af877f520921b33cb5e89dfbf8f333aeb04b"
+  }
+}

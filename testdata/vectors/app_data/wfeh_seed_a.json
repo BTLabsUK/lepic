@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "area": "app_data",
+  "name": "wfeh_seed_a",
+  "generator": "conformance/vectors/app_data",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "mnemonic": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
+    "entropy": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "salt": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "nonce": "c0c1c2c3c4c5c6c7c8c9cacb",
+    "payload": "{\"format\":\"wfe-history\",\"version\":1,\"chain\":\"Mainnet\",\"wallet_fp\":\"00112233445566778899aabbccddeeff\",\"exported_at_unix\":1790000000,\"app_version\":\"1.0.0\",\"last_confirmed_height\":123456,\"txs\":[{\"slate_id\":\"0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0\",\"kind\":\"Sent\",\"status\":\"Confirmed\",\"note\":\"rent\"}],\"contacts\":[]}"
+  },
+  "expected": {
+    "root_secret_blake2b": "8b5d123122c1cb019aea13d29d1b16a60bc4d252a170adde23526daf7ab045da",
+    "check": "5a9a22791bfe2512951c2279ed328e0c",
+    "file": "574645480101a0a1a2a3a4a5a6a7a8a9aaabacadaeaf5a9a22791bfe2512951c2279ed328e0cc0c1c2c3c4c5c6c7c8c9cacb0175100cf39b3895778fee2c58a18f61e5390efd34e30d1327d6c40b559694d9a882a325c0894439180cd4cb24f95cbdaa70417e2d24c013d0da0de3231754a41e707fcb0037d920bc22edf51d8a59023adf94833bd4c88f6e1533a15f6ed44e24df9be300a7d5427716906dd168c83acfc1467fc38f88e11320885a129ab4d8979b3cfdbd522cd91f9e8fa2e7d84f8407c32e6fe35745248d4ce6e89f17ff4ae36f4158853525bd84f609b2d24f05f92f3e4ec34ff6f0b27de70098341a9b5e0175d671986a7f3392c773becad03da3d169a9d7581f0da2c0814b3a9f19fb8842a6cf78c2dcd3d2fb1ae66a41bffab207e439382838a0b7fe91f40949a97503cdf42390596f19e97e79c05657ac6ddc1b13221f2206462bd02cd426425b18b07cbf9c021c5fa2cb88a520692ff5718fca49aadec09e0df913bff8c03f1640e57ed2fd"
+  }
+}

@@ -3,6 +3,7 @@
 //!
 //! Usage: `vectors generate [--area <area>] [--out <dir>]`, `vectors list`.
 
+mod app_data;
 mod engine;
 mod epicbox;
 mod keys;
@@ -46,6 +47,10 @@ const AREAS: &[Area] = &[
     Area {
         name: "engine",
         generate: engine::generate,
+    },
+    Area {
+        name: "app_data",
+        generate: app_data::generate,
     },
 ];
 

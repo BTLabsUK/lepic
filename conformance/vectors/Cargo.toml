@@ -16,6 +16,7 @@ epic_pool.workspace = true
 epic_util.workspace = true
 epic_wallet_impls.workspace = true
 epic_wallet_libwallet.workspace = true
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "area": "app_data",
+  "name": "wfeh_seed_a_empty_payload",
+  "generator": "conformance/vectors/app_data",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+  },
+  "inputs": {
+    "mnemonic": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
+    "entropy": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "salt": "00000000000000000000000000000000",
+    "nonce": "ffffffffffffffffffffffff",
+    "payload": ""
+  },
+  "expected": {
+    "root_secret_blake2b": "8b5d123122c1cb019aea13d29d1b16a60bc4d252a170adde23526daf7ab045da",
+    "check": "58fe0b31cc2bb7e2f31d09dfa5870c9a",
+    "file": "5746454801010000000000000000000000000000000058fe0b31cc2bb7e2f31d09dfa5870c9affffffffffffffffffffffff05ff98f52f24e262bdc9cedcef3c5218"
+  }
+}

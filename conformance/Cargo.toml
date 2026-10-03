@@ -41,6 +41,9 @@ jiff = { version = "0.2.37", default-features = false }
 rand = { version = "0.10.3", default-features = false }
 tokio = { version = "1.53.1", default-features = false }
 serde_json = "1"
+# The AEAD and HKDF the host app seals its app data files with, at the version the reference
+# lockfile resolves, so the app data vectors come from an implementation independent of LEPIC's.
+ring = "=0.17.14"
 # Scratch directories with unpredictable names, at the version the reference lockfile resolves.
 tempfile = "3.20.0"
 thiserror = "2"

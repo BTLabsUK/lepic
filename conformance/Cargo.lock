@@ -4927,6 +4927,7 @@ dependencies = [
  "epic_util",
  "epic_wallet_impls",
  "epic_wallet_libwallet",
+ "ring",
  "serde",
  "serde_json",
  "tempfile",
