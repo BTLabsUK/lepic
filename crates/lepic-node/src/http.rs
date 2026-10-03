@@ -16,6 +16,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use rustls::ClientConfig;
 use secrecy::{ExposeSecret, SecretString};
+use zeroize::Zeroizing;
 
 use crate::client::RpcTransport;
 use crate::error::NodeError;
@@ -238,12 +239,52 @@ fn is_loopback_host(host: &str) -> bool {
         .is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
+const BASIC_SCHEME: &[u8] = b"Basic ";
+
+/// The header the transport sends with every request. The header itself cannot be wiped, so it
+/// is the only copy of the secret left once this returns.
 fn basic_authorization(secret: &SecretString) -> Result<HeaderValue, NodeError> {
-    let credentials = format!("{BASIC_AUTH_USER}:{}", secret.expose_secret());
-    let mut value = HeaderValue::try_from(format!("Basic {}", BASE64.encode(credentials)))
-        .map_err(|_| NodeError::InvalidApiSecret)?;
+    let credentials = basic_credentials(secret)?;
+    let header = basic_header(&credentials)?;
+    let mut value = HeaderValue::from_bytes(&header).map_err(|_| NodeError::InvalidApiSecret)?;
     value.set_sensitive(true);
     Ok(value)
+}
+
+/// `epic:<secret>`, in a buffer sized for it up front: a buffer that grows leaves the bytes it
+/// moved out of in freed memory, where `Zeroizing` cannot wipe them.
+fn basic_credentials(secret: &SecretString) -> Result<Zeroizing<Vec<u8>>, NodeError> {
+    let secret = secret.expose_secret().as_bytes();
+    let len = BASIC_AUTH_USER
+        .len()
+        .checked_add(1)
+        .and_then(|len| len.checked_add(secret.len()))
+        .ok_or(NodeError::InvalidApiSecret)?;
+    let mut credentials = Zeroizing::new(Vec::with_capacity(len));
+    credentials.extend_from_slice(BASIC_AUTH_USER.as_bytes());
+    credentials.push(b':');
+    credentials.extend_from_slice(secret);
+    Ok(credentials)
+}
+
+/// `Basic <base64 of credentials>`, sized up front for the same reason.
+fn basic_header(credentials: &[u8]) -> Result<Zeroizing<Vec<u8>>, NodeError> {
+    let encoded_len =
+        base64::encoded_len(credentials.len(), true).ok_or(NodeError::InvalidApiSecret)?;
+    let len = BASIC_SCHEME
+        .len()
+        .checked_add(encoded_len)
+        .ok_or(NodeError::InvalidApiSecret)?;
+    let mut header = Zeroizing::new(Vec::with_capacity(len));
+    header.extend_from_slice(BASIC_SCHEME);
+    header.resize(len, 0);
+    let encoded = header
+        .get_mut(BASIC_SCHEME.len()..)
+        .ok_or(NodeError::InvalidApiSecret)?;
+    BASE64
+        .encode_slice(credentials, encoded)
+        .map_err(|_| NodeError::InvalidApiSecret)?;
+    Ok(header)
 }
 
 #[cfg(test)]
@@ -279,5 +320,21 @@ mod tests {
         let value = basic_authorization(&SecretString::from("s3cret")).unwrap();
         assert!(value.is_sensitive());
         assert_eq!(value.to_str().unwrap(), "Basic ZXBpYzpzM2NyZXQ=");
+    }
+
+    #[test]
+    fn basic_auth_buffers_are_sized_before_the_secret_is_written() {
+        for len in [0, 1, 2, 3, 63, 64, 1000] {
+            let secret = SecretString::from("k".repeat(len));
+            let credentials = basic_credentials(&secret).unwrap();
+            assert_eq!(credentials.capacity(), credentials.len(), "{len}");
+            let header = basic_header(&credentials).unwrap();
+            assert_eq!(header.capacity(), header.len(), "{len}");
+            let expected = format!(
+                "Basic {}",
+                BASE64.encode(format!("epic:{}", secret.expose_secret()))
+            );
+            assert_eq!(header.as_slice(), expected.as_bytes(), "{len}");
+        }
     }
 }
