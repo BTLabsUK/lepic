@@ -8,18 +8,24 @@
 mod send_support;
 mod support;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::OutputFeatures;
+use lepic_slate::codec::WireSlate;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::error::{EncodeError, Unrepresentable};
 use lepic_slate::model::ProofAddress;
 use lepic_slate::stage::Stage;
-use lepic_store::{OutboxStatus, OutputStatus, SlateStage, TxDirection, TxState};
+use lepic_store::{
+    MemoryStore, OutboxStatus, OutputStatus, SlateStage, TxDirection, TxState, WalletStore,
+};
 use lepic_transport::error::TransportError;
 use lepic_transport::file::{FILE, FileTransport};
-use lepic_transport::transport::{Destination, Location};
+use lepic_transport::policy::FormatPolicy;
+use lepic_transport::transport::{
+    BoxFuture, Destination, Location, Outbound, Transport, TransportId,
+};
 use lepic_wallet::WalletError;
 use lepic_wallet::selection::{SelectionError, SelectionStrategy};
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
@@ -397,5 +403,106 @@ fn send_needs_an_unlocked_wallet() {
     assert!(
         matches!(error, SendError::Wallet(WalletError::Locked)),
         "{error:?}"
+    );
+}
+
+/// What a delivering transport saw in the sender's store while it delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SeenAtDelivery {
+    input: OutputStatus,
+    state: TxState,
+    s1_stored: bool,
+    outbox_pending: usize,
+}
+
+/// A transport that, when asked to deliver, reads the sender's store instead of sending.
+struct Observer {
+    store: Arc<Mutex<Option<MemoryStore>>>,
+    seen: Arc<Mutex<Option<SeenAtDelivery>>>,
+}
+
+const OBSERVER: TransportId = TransportId::new("observer");
+
+impl Transport for Observer {
+    fn id(&self) -> TransportId {
+        OBSERVER
+    }
+
+    fn policy(&self) -> &dyn FormatPolicy {
+        &lepic_transport::file::FilePolicy
+    }
+
+    fn outbound(&self) -> Option<&dyn Outbound> {
+        Some(self)
+    }
+}
+
+impl Outbound for Observer {
+    fn deliver<'a>(
+        &'a self,
+        _: &'a Destination,
+        _: &'a WireSlate,
+    ) -> BoxFuture<'a, Result<(), TransportError>> {
+        Box::pin(async move {
+            let seen = self
+                .store
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .read(|repos| {
+                    let tx = repos.transactions(ACCOUNT)?.remove(0);
+                    let input = repos
+                        .outputs(ACCOUNT, None)?
+                        .into_iter()
+                        .find(|output| output.id.features == OutputFeatures::Coinbase)
+                        .unwrap();
+                    Ok::<_, lepic_store::StoreError>(SeenAtDelivery {
+                        input: input.status,
+                        state: tx.entry.state,
+                        s1_stored: repos
+                            .slate(tx.entry.slate_id.unwrap(), SlateStage::Standard1)?
+                            .is_some(),
+                        outbox_pending: repos.outbox(OutboxStatus::Pending)?.len(),
+                    })
+                })
+                .unwrap();
+            *self.seen.lock().unwrap() = Some(seen);
+            Ok(())
+        })
+    }
+}
+
+#[test]
+fn inputs_are_locked_and_the_s1_stored_before_the_transport_is_called() {
+    let store = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(None));
+    let sender = Sender::with_transports(vec![Box::new(Observer {
+        store: Arc::clone(&store),
+        seen: Arc::clone(&seen),
+    })]);
+    *store.lock().unwrap() = Some(
+        sender
+            .store
+            .reopen(lepic_store::ContextKey::from_bytes([0; 32])),
+    );
+    sender
+        .harness
+        .block_on(sender.wallet.send(
+            request(AMOUNT),
+            Delivery::Deliver {
+                transport: OBSERVER,
+                to: Destination::new(PEER.to_owned()),
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        Some(SeenAtDelivery {
+            input: OutputStatus::Locked,
+            state: TxState::Sent,
+            s1_stored: true,
+            outbox_pending: 1,
+        })
     );
 }
