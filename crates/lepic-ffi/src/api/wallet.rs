@@ -2,9 +2,11 @@
 //! returns a Future in Dart. Each fails only with [`WalletError`]; a panic inside LEPIC arrives
 //! as [`WalletErrorKind::Panic`].
 //!
-//! Secrets: passwords and recovery phrases cross from Dart because the user types them, and
-//! [`EpicWallet::mnemonic`] returns the phrase for the backup screen. Seeds, keys, blinding
-//! factors and nonces never leave Rust; the app's store only ever holds the encrypted vault.
+//! Secrets follow ADR 0014. Into Rust: the password, PIN and recovery phrase the user types.
+//! Out of Rust: the recovery phrase, only from [`EpicWallet::mnemonic`] and
+//! [`EpicWallet::mnemonic_with_pin`] after the credential is checked. Seeds, keys, blinding
+//! factors, nonces and the generated wallet password of PIN unlock never leave Rust; the app's
+//! store and Dart hold only encrypted vaults and sealed text.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,48 +16,18 @@ use lepic_epicbox::EpicboxAddress;
 use lepic_keychain::Seed;
 use zeroize::Zeroizing;
 
-use crate::api::error::{WalletError, WalletErrorKind};
+use crate::pin;
+
+use crate::api::error::WalletError;
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip, RefreshProgress,
     ScanProgress, SentTx, Slate, WalletConfig, WalletEvent, WalletSummary,
 };
-use crate::boundary::{Boundary, guard};
+use crate::boundary::Boundary;
 use crate::frb_generated::StreamSink;
 use crate::session::{self, Session, normalize_phrase, relay_network};
-
-/// A new BIP-39 recovery phrase. `word_count` is 12, 15, 18, 21 or 24.
-#[frb(sync)]
-pub fn generate_mnemonic(word_count: u32) -> Result<String, WalletError> {
-    guard("generate_mnemonic", || {
-        let entropy_len = match word_count {
-            12 => 16,
-            15 => 20,
-            18 => 24,
-            21 => 28,
-            24 => 32,
-            _ => {
-                return Err(WalletError::new(
-                    WalletErrorKind::InvalidArgument,
-                    "word count must be 12, 15, 18, 21 or 24",
-                ));
-            }
-        };
-        let mut entropy = Zeroizing::new([0u8; 32]);
-        let used = entropy.get_mut(..entropy_len).ok_or_else(|| {
-            WalletError::new(WalletErrorKind::Other, "entropy length out of range")
-        })?;
-        getrandom::fill(used)
-            .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
-        let seed = Seed::from_entropy(used)
-            .map_err(|_| WalletError::new(WalletErrorKind::Other, "seed rejected"))?;
-        let phrase = seed
-            .to_mnemonic()
-            .map_err(|_| WalletError::new(WalletErrorKind::Other, "phrase not encoded"))?;
-        Ok(phrase.as_str().to_owned())
-    })
-}
 
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
 /// whitespace are ignored.
@@ -120,6 +92,15 @@ pub async fn node_tip(
         .await
 }
 
+/// A wallet created by [`EpicWallet::create_with_pin`], and its wallet password sealed under the
+/// PIN. Store `sealed_password`; it is not secret without the PIN, and
+/// [`EpicWallet::open_with_pin`] needs it.
+#[frb(non_opaque)]
+pub struct PinWallet {
+    pub wallet: EpicWallet,
+    pub sealed_password: String,
+}
+
 /// An open wallet. Dropping it stops its listener and scan and locks it; the root key is wiped.
 #[frb(opaque)]
 pub struct EpicWallet {
@@ -150,7 +131,8 @@ impl EpicWallet {
 
     /// Creates a wallet in `config.data_dir` with its vault in `store`. With `mnemonic` it
     /// restores that seed (call [`EpicWallet::scan`] next); without it a fresh seed is
-    /// generated, whose phrase [`EpicWallet::mnemonic`] returns. Returns the open wallet.
+    /// generated, whose phrase [`EpicWallet::mnemonic`] returns for the backup screen. Returns
+    /// the open wallet.
     ///
     /// Fails with `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
     /// `ForeignWallet` when the directory holds another wallet's database, `WalletBusy` when a
@@ -200,10 +182,85 @@ impl EpicWallet {
             .await
     }
 
+    /// [`EpicWallet::create`] with a wallet password LEPIC generates, seals under `pin` and
+    /// never hands to Dart. Fails as `create` does.
+    pub async fn create_with_pin(
+        runtime: &LepicRuntime,
+        config: WalletConfig,
+        store: &AppSecretStore,
+        mnemonic: Option<String>,
+        pin: String,
+    ) -> Result<PinWallet, WalletError> {
+        let inner = Arc::clone(&runtime.inner);
+        let store = store.clone();
+        let kdf = inner.kdf;
+        runtime
+            .inner
+            .boundary
+            .run("create_with_pin", async move {
+                let pin = Zeroizing::new(pin);
+                let password = pin::generate_password()?;
+                let sealed_password = {
+                    let password = password.clone();
+                    pin::blocking(move || pin::seal(&pin, &password, kdf)).await?
+                };
+                let session = Session::new(&inner, &config, store)?;
+                session.create(mnemonic, (*password).clone()).await?;
+                Ok(PinWallet {
+                    wallet: EpicWallet {
+                        session: Arc::new(session),
+                    },
+                    sealed_password,
+                })
+            })
+            .await
+    }
+
+    /// [`EpicWallet::open`] with the wallet password sealed in `sealed_password`, opened with
+    /// `pin`. A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`.
+    pub async fn open_with_pin(
+        runtime: &LepicRuntime,
+        config: WalletConfig,
+        store: &AppSecretStore,
+        pin: String,
+        sealed_password: String,
+    ) -> Result<EpicWallet, WalletError> {
+        let inner = Arc::clone(&runtime.inner);
+        let store = store.clone();
+        runtime
+            .inner
+            .boundary
+            .run("open_with_pin", async move {
+                let pin = Zeroizing::new(pin);
+                let password = pin::blocking(move || pin::open(&pin, &sealed_password)).await?;
+                let session = Session::new(&inner, &config, store)?;
+                session.open((*password).clone()).await?;
+                Ok(EpicWallet {
+                    session: Arc::new(session),
+                })
+            })
+            .await
+    }
+
     /// The recovery phrase, after checking `password` against the stored vault.
     pub async fn mnemonic(&self, password: String) -> Result<String, WalletError> {
         self.run("mnemonic", |session| async move {
             session.recovery_phrase(password).await
+        })
+        .await
+    }
+
+    /// [`EpicWallet::mnemonic`] for a wallet from [`EpicWallet::create_with_pin`]: `pin` opens
+    /// `sealed_password`, which is then checked against the stored vault.
+    pub async fn mnemonic_with_pin(
+        &self,
+        pin: String,
+        sealed_password: String,
+    ) -> Result<String, WalletError> {
+        self.run("mnemonic_with_pin", |session| async move {
+            let pin = Zeroizing::new(pin);
+            let password = pin::blocking(move || pin::open(&pin, &sealed_password)).await?;
+            session.recovery_phrase((*password).clone()).await
         })
         .await
     }

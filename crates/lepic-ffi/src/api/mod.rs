@@ -7,5 +7,4 @@ pub mod runtime;
 pub mod secret_store;
 pub mod testing;
 pub mod types;
-pub mod vault;
 pub mod wallet;

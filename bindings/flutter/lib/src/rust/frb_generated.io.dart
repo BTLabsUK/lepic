@@ -9,7 +9,6 @@ import 'api/runtime.dart';
 import 'api/secret_store.dart';
 import 'api/testing.dart';
 import 'api/types.dart';
-import 'api/vault.dart';
 import 'api/wallet.dart';
 
 import 'dart:async';
@@ -252,6 +251,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WalletSummary? dco_decode_opt_box_autoadd_wallet_summary(dynamic raw);
+
+  @protected
+  PinWallet dco_decode_pin_wallet(dynamic raw);
 
   @protected
   RefreshProgress dco_decode_refresh_progress(dynamic raw);
@@ -527,6 +529,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WalletSummary? sse_decode_opt_box_autoadd_wallet_summary(
     SseDeserializer deserializer,
   );
+
+  @protected
+  PinWallet sse_decode_pin_wallet(SseDeserializer deserializer);
 
   @protected
   RefreshProgress sse_decode_refresh_progress(SseDeserializer deserializer);
@@ -852,6 +857,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     WalletSummary? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_pin_wallet(PinWallet self, SseSerializer serializer);
 
   @protected
   void sse_encode_refresh_progress(

@@ -19,5 +19,6 @@ mod log;
 #[cfg(feature = "mock")]
 mod mock;
 mod node;
+mod pin;
 mod session;
 mod vault_port;

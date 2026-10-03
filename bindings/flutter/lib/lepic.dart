@@ -12,7 +12,6 @@ export 'src/rust/api/runtime.dart';
 export 'src/rust/api/secret_store.dart';
 export 'src/rust/api/testing.dart';
 export 'src/rust/api/types.dart';
-export 'src/rust/api/vault.dart';
 export 'src/rust/api/wallet.dart';
 export 'src/rust/frb_generated.dart' show RustLib;
 

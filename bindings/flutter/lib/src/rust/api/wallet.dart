@@ -15,10 +15,6 @@ import 'types.dart';
 // These functions are ignored because they are not marked as `pub`: `boundary`, `run`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`
 
-/// A new BIP-39 recovery phrase. `word_count` is 12, 15, 18, 21 or 24.
-String generateMnemonic({required int wordCount}) =>
-    RustLib.instance.api.crateApiWalletGenerateMnemonic(wordCount: wordCount);
-
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
 /// whitespace are ignored.
 bool validateMnemonic({required String phrase}) =>
@@ -72,7 +68,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
 
   /// Creates a wallet in `config.data_dir` with its vault in `store`. With `mnemonic` it
   /// restores that seed (call [`EpicWallet::scan`] next); without it a fresh seed is
-  /// generated, whose phrase [`EpicWallet::mnemonic`] returns. Returns the open wallet.
+  /// generated, whose phrase [`EpicWallet::mnemonic`] returns for the backup screen. Returns
+  /// the open wallet.
   ///
   /// Fails with `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
   /// `ForeignWallet` when the directory holds another wallet's database, `WalletBusy` when a
@@ -97,6 +94,22 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required BigInt amount,
     required BigInt minimumConfirmations,
   });
+
+  /// [`EpicWallet::create`] with a wallet password LEPIC generates, seals under `pin` and
+  /// never hands to Dart. Fails as `create` does.
+  static Future<PinWallet> createWithPin({
+    required LepicRuntime runtime,
+    required WalletConfig config,
+    required AppSecretStore store,
+    String? mnemonic,
+    required String pin,
+  }) => RustLib.instance.api.crateApiWalletEpicWalletCreateWithPin(
+    runtime: runtime,
+    config: config,
+    store: store,
+    mnemonic: mnemonic,
+    pin: pin,
+  );
 
   /// Connects to the relay once, handles every pending message and disconnects: the call for
   /// background work.
@@ -123,6 +136,13 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// The recovery phrase, after checking `password` against the stored vault.
   Future<String> mnemonic({required String password});
 
+  /// [`EpicWallet::mnemonic`] for a wallet from [`EpicWallet::create_with_pin`]: `pin` opens
+  /// `sealed_password`, which is then checked against the stored vault.
+  Future<String> mnemonicWithPin({
+    required String pin,
+    required String sealedPassword,
+  });
+
   /// Opens the wallet in `config.data_dir`. Fails with `WrongPassword`, `WalletNotFound` when
   /// `store` holds no vault, `ForeignWallet` and `WalletBusy`.
   static Future<EpicWallet> open({
@@ -135,6 +155,22 @@ abstract class EpicWallet implements RustOpaqueInterface {
     config: config,
     store: store,
     password: password,
+  );
+
+  /// [`EpicWallet::open`] with the wallet password sealed in `sealed_password`, opened with
+  /// `pin`. A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`.
+  static Future<EpicWallet> openWithPin({
+    required LepicRuntime runtime,
+    required WalletConfig config,
+    required AppSecretStore store,
+    required String pin,
+    required String sealedPassword,
+  }) => RustLib.instance.api.crateApiWalletEpicWalletOpenWithPin(
+    runtime: runtime,
+    config: config,
+    store: store,
+    pin: pin,
+    sealedPassword: sealedPassword,
   );
 
   /// [`EpicWallet::receive_slate`] for the slate file at `path`. The answer is also written to
@@ -182,4 +218,25 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// The default account's balance. With `refresh`, or before the first refresh of this
   /// handle, it first updates outputs and transactions from the node.
   Future<WalletSummary> summary({required bool refresh});
+}
+
+/// A wallet created by [`EpicWallet::create_with_pin`], and its wallet password sealed under the
+/// PIN. Store `sealed_password`; it is not secret without the PIN, and
+/// [`EpicWallet::open_with_pin`] needs it.
+class PinWallet {
+  final EpicWallet wallet;
+  final String sealedPassword;
+
+  const PinWallet({required this.wallet, required this.sealedPassword});
+
+  @override
+  int get hashCode => wallet.hashCode ^ sealedPassword.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PinWallet &&
+          runtimeType == other.runtimeType &&
+          wallet == other.wallet &&
+          sealedPassword == other.sealedPassword;
 }

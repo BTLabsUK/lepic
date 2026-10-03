@@ -10,6 +10,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lepic/lepic.dart';
 
 const password = 'correct horse battery staple';
+
+/// A valid BIP-39 phrase for the restored wallet. Not a real wallet.
+const bobPhrase =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon '
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon '
+    'abandon abandon abandon abandon abandon art';
 const epic = 100000000;
 
 class MemoryStore implements SecretStore {
@@ -112,8 +118,8 @@ void main() {
     expect(funded.total, BigInt.from(10 * epic));
     expect(funded.spendable, BigInt.from(10 * epic));
 
-    // Bob: restored from a phrase generated here.
-    final bobPhrase = generateMnemonic(wordCount: 24);
+    // Bob: restored from a typed-in phrase.
+    expect(validateMnemonic(phrase: bobPhrase), isTrue);
     final bob = await EpicWallet.create(
       runtime: runtime,
       config: configFor(walletDir('bob')),
@@ -294,26 +300,58 @@ void main() {
     expect(WalletErrorKind.panic.index, isNonNegative);
   });
 
-  test('seals a wallet password under a pin', () async {
-    final walletPassword = generateWalletPassword();
-    expect(walletPassword, hasLength(64));
-    final sealed = await sealPassword(
+  test('pin unlock keeps the wallet password inside rust', () async {
+    final dir = walletDir('pin');
+    final store = MemoryStore();
+    final created = await EpicWallet.createWithPin(
       runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
       pin: '1234',
-      password: walletPassword,
     );
-    expect(sealed, isNot(contains(walletPassword)));
-    expect(
-      await openPassword(runtime: runtime, pin: '1234', sealed: sealed),
-      walletPassword,
+    final sealed = created.sealedPassword;
+    final phrase = await created.wallet.mnemonicWithPin(
+      pin: '1234',
+      sealedPassword: sealed,
     );
+    expect(validateMnemonic(phrase: phrase), isTrue);
+    expect(sealed, isNot(contains('1234')));
     await expectLater(
-      openPassword(runtime: runtime, pin: '0000', sealed: sealed),
+      created.wallet.mnemonicWithPin(pin: '0000', sealedPassword: sealed),
+      throwsWalletError(WalletErrorKind.wrongPassword),
+    );
+    created.wallet.dispose();
+
+    await expectLater(
+      EpicWallet.openWithPin(
+        runtime: runtime,
+        config: configFor(dir),
+        store: lepicSecretStore(store),
+        pin: '0000',
+        sealedPassword: sealed,
+      ),
       throwsWalletError(WalletErrorKind.wrongPassword),
     );
     await expectLater(
-      openPassword(runtime: runtime, pin: '1234', sealed: 'damaged'),
+      EpicWallet.openWithPin(
+        runtime: runtime,
+        config: configFor(dir),
+        store: lepicSecretStore(store),
+        pin: '1234',
+        sealedPassword: 'damaged',
+      ),
       throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+    final reopened = await EpicWallet.openWithPin(
+      runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
+      pin: '1234',
+      sealedPassword: sealed,
+    );
+    expect(
+      await reopened.mnemonicWithPin(pin: '1234', sealedPassword: sealed),
+      phrase,
     );
   });
 }
