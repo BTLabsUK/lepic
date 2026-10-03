@@ -93,10 +93,10 @@ pub enum ScanStart {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanOptions {
     pub start: ScanStart,
-    /// A scan resumes an interrupted one only when this setting matches, so a repair is never
-    /// skipped for pages an earlier plain scan stored.
     /// Also unlock locked outputs found on chain and delete unconfirmed outputs not found,
     /// cancelling their transactions: the repair `epic-wallet scan --delete_unconfirmed` runs.
+    /// A scan resumes an interrupted one only when this setting matches, so a repair is never
+    /// skipped for pages an earlier plain scan stored.
     pub delete_unconfirmed: bool,
     /// Blocks a restored coinbase output stays locked after the block that mined it.
     pub coinbase_maturity: u64,
