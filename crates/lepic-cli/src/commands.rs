@@ -1,7 +1,7 @@
 //! Each command: what it asks the engine and what it reports.
 
 use std::future::Future;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ use lepic_wallet::{
 };
 use rand::SeedableRng as _;
 use rand::rngs::{StdRng, SysRng};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use zeroize::Zeroizing;
 
 use crate::Console;
@@ -52,7 +52,8 @@ use crate::output::{
     InitReport, InvoiceIssueReport, InvoicePayReport, NodeStatusReport, ReceiveReport, Report,
     ResendReport, RestoreReport, ScanReport, SendReport, TxListReport, TxReport, TxStateReport,
 };
-use crate::settings::Settings;
+use crate::progress::Progress;
+use crate::settings::{OutputFormat, Settings};
 use crate::stores::{CliStores, SharedStore};
 use crate::vault::{FileVault, VAULT_FILE};
 
@@ -149,17 +150,46 @@ impl<H: Host> Run<'_, H> {
     }
 
     /// Runs `work` to its end. When the user interrupts first, `stop` asks it to end early and
-    /// its result is still awaited, so what it stored is reported.
-    async fn until_interrupted<T>(&self, work: impl Future<Output = T>, stop: impl FnOnce()) -> T {
+    /// its result is still awaited, so what it stored is reported. With human output, the
+    /// wallet's events while it runs become progress lines on stderr.
+    async fn until_interrupted<T>(
+        &mut self,
+        events: broadcast::Receiver<Event>,
+        work: impl Future<Output = T>,
+        stop: impl FnOnce(),
+    ) -> T {
         self.graceful.store(true, Ordering::SeqCst);
         let mut interrupt = self.interrupt.clone();
+        let mut stop = Some(stop);
+        let mut events = (self.settings.output == OutputFormat::Human).then_some(events);
+        let mut progress = Progress::default();
         tokio::pin!(work);
-        tokio::select! {
-            result = &mut work => result,
-            Ok(_) = interrupt.wait_for(|stopped| *stopped) => {
-                stop();
-                work.await
+        let result = loop {
+            tokio::select! {
+                result = &mut work => break result,
+                Ok(_) = interrupt.wait_for(|stopped| *stopped), if stop.is_some() => {
+                    if let Some(stop) = stop.take() {
+                        stop();
+                    }
+                }
+                event = next_event(&mut events) => match event {
+                    Ok(event) => self.show_progress(&mut progress, &event),
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => events = None,
+                },
             }
+        };
+        while let Some(Ok(event)) = events.as_mut().map(broadcast::Receiver::try_recv) {
+            self.show_progress(&mut progress, &event);
+        }
+        result
+    }
+
+    fn show_progress(&mut self, progress: &mut Progress, event: &Event) {
+        if let Some(line) = progress.line(event) {
+            // Progress is a courtesy; a closed stderr must not end the command.
+            let _ = writeln!(self.console.stderr, "{line}");
+            let _ = self.console.stderr.flush();
         }
     }
 
@@ -230,6 +260,7 @@ impl<H: Host> Run<'_, H> {
             EpicboxCommand::Listen => {
                 let handle = ListenHandle::new();
                 self.until_interrupted(
+                    opened.wallet.subscribe(),
                     opened.wallet.epicbox_listen(&opened.epicbox, &handle),
                     || handle.stop(),
                 )
@@ -307,7 +338,7 @@ impl<H: Host> Run<'_, H> {
     }
 
     async fn restored(
-        &self,
+        &mut self,
         opened: &Opened<HostNode<H>>,
         args: &ScanArgs,
     ) -> Result<Report, CliError> {
@@ -317,6 +348,7 @@ impl<H: Host> Run<'_, H> {
             let cancel = ScanCancel::new();
             let summary: ScanSummary = self
                 .until_interrupted(
+                    opened.wallet.subscribe(),
                     opened
                         .wallet
                         .scan(ScanOptions::restore(self.settings.network), &cancel),
@@ -685,6 +717,16 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
 fn slate_file(path: &Path) -> impl FnOnce(TransportError) -> CliError {
     let path = path.to_owned();
     move |source| CliError::SlateFile { path, source }
+}
+
+/// The next event, or never when there is no subscription.
+async fn next_event(
+    events: &mut Option<broadcast::Receiver<Event>>,
+) -> Result<Event, broadcast::error::RecvError> {
+    match events {
+        Some(events) => events.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// The spending options shared by `tx send` and `invoice pay`.

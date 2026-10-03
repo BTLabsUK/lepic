@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use lepic_epicbox::EpicboxAddress;
 
-use support::{FUNDING, Instance, SENDER_MNEMONIC, TestHost, keys, text};
+use support::{FUNDING, Instance, SENDER_MNEMONIC, TIP, TestHost, keys, text};
 
 /// A funded sender restored from its phrase and a receiver created from new entropy.
 fn two_wallets() -> (TestHost, Instance, Instance) {
@@ -340,4 +340,72 @@ fn resend_delivers_the_first_slate_again_until_it_is_answered() {
         &["tx", "resend", &tx_id, "--to-file", again.to_str().unwrap()],
     );
     assert_eq!(outcome.code, 7, "{outcome:?}");
+}
+
+#[test]
+fn restore_and_listen_report_progress_on_stderr_for_people() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let sender = Instance::new("sender password");
+    let mut human = sender.env();
+    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let restored = sender.run_with(
+        &host,
+        &["wallet", "restore"],
+        human.clone(),
+        &format!("{SENDER_MNEMONIC}\n"),
+    );
+    let restored = restored.ok();
+    let last = restored.stderr.lines().last().unwrap_or_default();
+    assert_eq!(
+        last,
+        format!("scanned to height {TIP} of {TIP}"),
+        "{restored:?}"
+    );
+
+    let receiver = Instance::new("receiver password");
+    receiver.run(&host, &["wallet", "init"]).ok();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to", text(&address, "address")],
+        )
+        .ok()
+        .json();
+    receiver.run(&host, &["epicbox", "drain"]).ok();
+    let reply_sent = host.relay.clone();
+    let inbox = EpicboxAddress::parse(
+        text(
+            &sender.run(&host, &["wallet", "address"]).ok().json(),
+            "address",
+        ),
+        lepic_epicbox::Network::Floonet,
+    )
+    .unwrap();
+    assert_eq!(reply_sent.pending(&inbox), 1);
+    let mut host = host;
+    host.interrupt_when = Some(Arc::new(move || reply_sent.pending(&inbox) == 0));
+    let listened = sender
+        .run_with(&host, &["epicbox", "listen"], human, "")
+        .ok();
+    assert!(
+        listened
+            .stderr
+            .contains("connected to the relay; waiting for slates"),
+        "{listened:?}"
+    );
+    let tx_id = &sent["tx_id"];
+    for state in ["finalized", "posted"] {
+        let line = format!("transaction {tx_id} {state}");
+        assert!(listened.stderr.contains(&line), "{listened:?}");
+    }
+    assert!(
+        listened.stdout.starts_with("Received 0, finalized 1"),
+        "{listened:?}"
+    );
+    // JSON output keeps stderr for logs.
+    host.interrupt_when = None;
+    let quiet = sender.run(&host, &["epicbox", "drain"]).ok();
+    assert!(quiet.stderr.is_empty(), "{quiet:?}");
 }

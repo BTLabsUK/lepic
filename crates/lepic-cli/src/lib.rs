@@ -13,6 +13,7 @@ pub mod exit;
 pub mod hint;
 pub mod host;
 pub mod output;
+pub mod progress;
 pub mod secret;
 pub mod settings;
 pub mod stores;
