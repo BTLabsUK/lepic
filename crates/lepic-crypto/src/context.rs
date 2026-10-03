@@ -16,7 +16,7 @@ const SEED_LEN: usize = 32;
 ///
 /// Created without blinding on first use unless [`randomize_context`] created it first.
 pub(crate) fn secp() -> &'static Secp256k1 {
-    CONTEXT.get_or_init(|| create_context(None))
+    CONTEXT.get_or_init(|| with_generators(Secp256k1::with_caps(ContextFlag::Commit)))
 }
 
 /// Creates the secp256k1 context blinded with 32 bytes from `rng`, as upstream randomizes its
@@ -24,7 +24,8 @@ pub(crate) fn secp() -> &'static Secp256k1 {
 ///
 /// Call it once at start, before any other function of this crate. Fails with
 /// [`CryptoError::ContextAlreadyCreated`] when the context already exists; it then stays
-/// unblinded, which changes no result, and `rng` is not drawn from.
+/// unblinded, which changes no result. `rng` is not drawn from when the context existed before
+/// the call; when another thread creates it during the call, the drawn seed is discarded.
 pub fn randomize_context<R: CryptoRng + ?Sized>(rng: &mut R) -> Result<(), CryptoError> {
     if CONTEXT.get().is_some() {
         return Err(CryptoError::ContextAlreadyCreated);
@@ -32,15 +33,18 @@ pub fn randomize_context<R: CryptoRng + ?Sized>(rng: &mut R) -> Result<(), Crypt
     let mut seed = Zeroizing::new([0u8; SEED_LEN]);
     rng.fill_bytes(seed.as_mut_slice());
     CONTEXT
-        .set(create_context(Some(&seed)))
+        .set(blinded_context(&mut SeedSource(&seed)))
         .map_err(|_| CryptoError::ContextAlreadyCreated)
 }
 
-fn create_context(seed: Option<&Zeroizing<[u8; SEED_LEN]>>) -> Secp256k1 {
+/// A context blinded with the seed the wrapper's `randomize` pulls from `source`.
+fn blinded_context<S: BackendRngCore>(source: &mut S) -> Secp256k1 {
     let mut secp = Secp256k1::with_caps(ContextFlag::Commit);
-    if let Some(seed) = seed {
-        secp.randomize(&mut SeedSource(seed));
-    }
+    secp.randomize(source);
+    with_generators(secp)
+}
+
+fn with_generators(secp: Secp256k1) -> Secp256k1 {
     initialise_bulletproof_generators(&secp);
     secp
 }
@@ -74,5 +78,50 @@ impl BackendRngCore for SeedSource<'_> {
         for (out, byte) in dst.iter_mut().zip(self.0.iter()) {
             *out = *byte;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Passes everything through from `inner` and records what it handed out.
+    struct Recording<S> {
+        inner: S,
+        handed: Vec<u8>,
+    }
+
+    impl<S: BackendRngCore> BackendRngCore for Recording<S> {
+        fn next_u32(&mut self) -> u32 {
+            let value = self.inner.next_u32();
+            self.handed.extend_from_slice(&value.to_le_bytes());
+            value
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let value = self.inner.next_u64();
+            self.handed.extend_from_slice(&value.to_le_bytes());
+            value
+        }
+
+        fn fill_bytes(&mut self, dst: &mut [u8]) {
+            self.inner.fill_bytes(dst);
+            self.handed.extend_from_slice(dst);
+        }
+    }
+
+    #[test]
+    fn blinding_pulls_exactly_the_whole_seed_in_order() {
+        let mut seed = Zeroizing::new([0u8; SEED_LEN]);
+        for (byte, value) in seed.iter_mut().zip(1u8..) {
+            *byte = value;
+        }
+        let mut source = Recording {
+            inner: SeedSource(&seed),
+            handed: Vec::new(),
+        };
+        let secp = blinded_context(&mut source);
+        assert_eq!(source.handed.as_slice(), seed.as_slice());
+        assert!(secp.commit_value(1).is_ok());
     }
 }
