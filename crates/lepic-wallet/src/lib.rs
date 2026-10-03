@@ -13,6 +13,7 @@ mod cancel;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod finalize;
 pub mod lifecycle;
 pub mod ports;
 pub mod receive;
@@ -26,6 +27,7 @@ pub use account::{Account, AccountError, AccountLabel, DEFAULT_ACCOUNT_LABEL};
 pub use config::{ConfigError, NodeEndpoint, WalletConfig, WalletName};
 pub use error::WalletError;
 pub use event::{Event, SessionState};
+pub use finalize::{FinalizeError, Finalized};
 pub use lifecycle::{Password, RecoveryPhrase, WordCount};
 pub use ports::{
     Clock, DATABASE_FILE, Ports, SecretVault, SecretVaultError, SharedRng, SqliteStores,

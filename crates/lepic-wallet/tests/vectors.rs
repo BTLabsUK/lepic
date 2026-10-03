@@ -10,6 +10,8 @@
     clippy::panic
 )]
 
+#[path = "finalize/vectors.rs"]
+mod finalize_vectors;
 #[path = "receive/harness.rs"]
 mod receive_harness;
 #[path = "receive/vectors.rs"]

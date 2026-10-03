@@ -436,8 +436,6 @@ impl SenderContext {
         PrivateContext::new(bytes)
     }
 
-    // TODO(W-05): finalize reads the sender's context back.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by finalize, task W-05"))]
     pub(crate) fn from_private(context: &PrivateContext) -> Result<Self, SendError> {
         let bytes = context.expose();
         let Some((&Self::FORMAT_V1, rest)) = bytes.split_first() else {
@@ -468,7 +466,6 @@ impl SenderContext {
     }
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "read by finalize, task W-05"))]
 fn split_array<const N: usize>(bytes: &[u8]) -> Result<([u8; N], &[u8]), SendError> {
     bytes
         .split_first_chunk::<N>()
