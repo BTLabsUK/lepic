@@ -96,6 +96,61 @@ fn a_data_directory_without_a_wallet_is_reported_as_such() {
 }
 
 #[test]
+fn a_data_directory_another_process_holds_is_refused_until_released() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let holder = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(wallet.data_dir().join(".lepic.lock"))
+        .unwrap();
+    holder.try_lock().unwrap();
+    for args in [
+        &["wallet", "info"][..],
+        &["tx", "list"],
+        &["wallet", "address"],
+    ] {
+        let outcome = wallet.run(&host, args);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            (5, "wallet_state"),
+            "{args:?}"
+        );
+    }
+    drop(holder);
+    wallet.run(&host, &["wallet", "info"]).ok();
+}
+
+#[test]
+fn init_on_a_locked_data_directory_creates_nothing() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let dir = wallet.data_dir();
+    std::fs::create_dir(&dir).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let holder = std::fs::File::create(dir.join(".lepic.lock")).unwrap();
+    holder.try_lock().unwrap();
+    let outcome = wallet.run(&host, &["wallet", "init"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (5, "wallet_state")
+    );
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [".lepic.lock"]);
+}
+
+#[test]
 fn human_errors_go_to_stderr_and_json_errors_to_stdout() {
     let host = TestHost::new();
     let empty = Instance::new("test password");

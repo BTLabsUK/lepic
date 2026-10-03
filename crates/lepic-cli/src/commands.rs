@@ -72,6 +72,8 @@ impl Clock for SystemClock {
 struct Opened<N: NodeApi + 'static> {
     wallet: CliWallet<N>,
     epicbox: EpicboxTransport,
+    /// Held until the command ends; `None` when the data directory does not exist.
+    _lock: Option<std::fs::File>,
 }
 
 impl<N: NodeApi + 'static> Opened<N> {
@@ -572,6 +574,7 @@ impl<H: Host> Run<'_, H> {
             create_private_dir(&self.settings.data_dir)?;
         }
         check_private_dir(&self.settings.data_dir)?;
+        let lock = lock_data_dir(&self.settings.data_dir)?;
         let relay = ClientSettings::new(self.settings.relay.clone());
         let epicbox = EpicboxTransport::new(
             relay,
@@ -608,6 +611,7 @@ impl<H: Host> Run<'_, H> {
         Ok(Opened {
             wallet: Wallet::new(config, ports)?,
             epicbox,
+            _lock: lock,
         })
     }
 
@@ -718,6 +722,34 @@ fn check_private_dir(dir: &Path) -> Result<(), CliError> {
 #[cfg(not(unix))]
 fn check_private_dir(_: &Path) -> Result<(), CliError> {
     Ok(())
+}
+
+/// The file in a data directory that holds the directory lock, the same one the mobile binding
+/// takes, so a CLI command and an app never open one database at once. It stays when the lock
+/// is released: removing it would let two openers lock different files.
+const LOCK_FILE: &str = ".lepic.lock";
+
+/// An exclusive OS lock on [`LOCK_FILE`], released when the file is closed. A missing data
+/// directory holds no wallet to protect and is left to the wallet to report. Any failure other
+/// than another holder fails closed.
+fn lock_data_dir(dir: &Path) -> Result<Option<std::fs::File>, CliError> {
+    let file = match std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK_FILE))
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(CliError::io("open the data directory lock")(error)),
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Err(CliError::DataDirInUse),
+        Err(std::fs::TryLockError::Error(error)) => {
+            Err(CliError::io("lock the data directory")(error))
+        }
+    }
 }
 
 fn inbox_report(summary: InboxSummary) -> InboxReport {

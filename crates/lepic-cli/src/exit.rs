@@ -86,7 +86,7 @@ Exit codes:
    2  usage: invalid arguments or missing input
    3  config: invalid settings or config file
    4  wrong_password: the password did not unlock the wallet
-   5  wallet_state: no wallet, a wallet already exists, or it belongs elsewhere
+   5  wallet_state: no wallet, a wallet already exists, it is in use, or it belongs elsewhere
    6  not_found: no such transaction, slate or account
    7  rejected: the slate or request was refused; nothing was stored
    8  insufficient_funds: not enough spendable funds
@@ -144,6 +144,8 @@ pub enum CliError {
     Interrupted,
     #[error("other users can access the data directory")]
     SharedDataDir,
+    #[error("another lepic process is using the data directory")]
+    DataDirInUse,
 }
 
 impl CliError {
@@ -159,6 +161,7 @@ impl CliError {
                 ErrorKind::Usage
             }
             Self::Wallet(error) => wallet_kind(error),
+            Self::DataDirInUse => ErrorKind::WalletState,
             Self::Send(error) => send_kind(error),
             Self::Receive(error) => receive_kind(error),
             Self::Finalize(error) => finalize_kind(error),
@@ -429,6 +432,7 @@ mod tests {
                 ErrorKind::Rejected,
             ),
             (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
+            (CliError::DataDirInUse, ErrorKind::WalletState),
         ];
         for (error, kind) in cases {
             assert_eq!(error.kind(), kind, "{error:?}");
