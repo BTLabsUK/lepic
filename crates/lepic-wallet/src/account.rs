@@ -104,7 +104,8 @@ pub(crate) fn ensure_default_account(repos: &mut dyn Repositories) -> Result<(),
     Ok(())
 }
 
-/// Adds an account under the index after the highest one in use, as `epic-wallet` does.
+/// Adds an account under the index after the highest one in use, as `epic-wallet` does. A
+/// hardened account that a restore found does not count, so it cannot use up every index.
 pub(crate) fn create_account(
     repos: &mut dyn Repositories,
     label: &AccountLabel,
@@ -116,6 +117,7 @@ pub(crate) fn create_account(
         .accounts()?
         .iter()
         .map(|account| account.index.0)
+        .filter(|index| *index < FIRST_HARDENED)
         .max()
     {
         Some(highest) => highest.checked_add(1).ok_or(AccountError::NoFreeIndex)?,
@@ -272,6 +274,24 @@ mod tests {
             result,
             Err(WalletError::Account(AccountError::NoFreeIndex))
         ));
+    }
+
+    #[test]
+    fn a_restored_hardened_account_leaves_new_accounts_below_the_hardened_range() {
+        let store = store_with_default_account();
+        store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(FIRST_HARDENED),
+                    label: "restored".to_owned(),
+                    next_child: 0,
+                })
+            })
+            .unwrap();
+        let account = store
+            .write(|repos| create_account(repos, &AccountLabel::new("next").unwrap()))
+            .unwrap();
+        assert_eq!(account.index, AccountIndex(1));
     }
 
     #[test]
