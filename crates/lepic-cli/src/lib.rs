@@ -25,6 +25,8 @@ use std::io::Write;
 use clap::Parser as _;
 use clap::error::ErrorKind as ClapErrorKind;
 use lepic_telemetry::{CliConfig, CliTelemetry, LogFilter};
+use rand::SeedableRng as _;
+use rand::rngs::{StdRng, SysRng};
 use zeroize::Zeroizing;
 
 pub use crate::host::{Host, ProcessHost};
@@ -51,6 +53,7 @@ pub fn run<H: Host>(
     args: impl IntoIterator<Item = impl Into<OsString> + Clone>,
     console: &mut Console,
 ) -> u8 {
+    randomize_crypto_context();
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(error) => {
@@ -92,6 +95,16 @@ pub fn run<H: Host>(
             },
             Some(&settings),
         ),
+    }
+}
+
+/// Blinds the secp256k1 context before anything uses it. Nothing in the process does crypto
+/// before the first `run`, so later calls, which only tests make, find it already created.
+/// Without OS randomness it stays unblinded, which changes no result; a command that needs
+/// randomness then fails on its own.
+fn randomize_crypto_context() {
+    if let Ok(mut rng) = StdRng::try_from_rng(&mut SysRng) {
+        lepic_wallet::randomize_crypto_context(&mut rng);
     }
 }
 
