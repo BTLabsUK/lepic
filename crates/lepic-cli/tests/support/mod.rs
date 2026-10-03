@@ -23,13 +23,12 @@ use lepic_cli::{Console, Host, run};
 use lepic_epicbox::Connector;
 use lepic_epicbox::Network as RelayNetwork;
 use lepic_epicbox::mock_relay::MockRelay;
-use lepic_keychain::{
-    ExtKeyVersion, Identifier, KdfParams, Keychain, ProofBuilder, SwitchCommitment,
-};
+use lepic_keychain::{Identifier, KdfParams, Keychain, ProofBuilder, SwitchCommitment};
 use lepic_node::mock::{ChainOutput, ChainState, MockNode};
 use lepic_node::{NodeClient, NodeVersion, Tip};
 use lepic_primitives::amount::Height;
 use lepic_primitives::hash::Hash;
+use lepic_primitives::params::Network;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -75,7 +74,7 @@ impl TestHost {
     /// Puts an unspent output of `amount` for key `m/0/0/<child>` of `mnemonic` on chain at
     /// height 1, built with the proof scheme LEPIC and epic-wallet use for new outputs.
     pub fn fund(&self, mnemonic: &str, child: u32, amount: u64, mmr_index: u64) {
-        let keychain = Keychain::from_mnemonic(mnemonic, ExtKeyVersion::FLOONET).unwrap();
+        let keychain = Keychain::from_mnemonic(mnemonic, Network::Floonet).unwrap();
         let id = Identifier::new(3, [0, 0, child, 0]).unwrap();
         let builder = ProofBuilder::new(&keychain).unwrap();
         let output = lepic_keychain::proof::create_output(

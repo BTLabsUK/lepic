@@ -5,9 +5,10 @@
 use lepic_crypto::{Commitment, ProofMessage, RangeProof};
 use lepic_keychain::proof::{create_output, create_proof, rewind};
 use lepic_keychain::{
-    ExtKeyVersion, Identifier, Keychain, LegacyProofBuilder, OutputRewinder, ProofBuild,
-    ProofBuilder, RewoundOutput, SwitchCommitment,
+    Identifier, Keychain, LegacyProofBuilder, OutputRewinder, ProofBuild, ProofBuilder,
+    RewoundOutput, SwitchCommitment,
 };
+use lepic_primitives::params::Network;
 use lepic_telemetry::{assert_no_secrets, capture};
 use proptest::prelude::*;
 
@@ -16,7 +17,7 @@ const OTHER_PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 fn wallet(phrase: &str) -> Keychain {
-    Keychain::from_mnemonic(phrase, ExtKeyVersion::MAINNET).unwrap()
+    Keychain::from_mnemonic(phrase, Network::Mainnet).unwrap()
 }
 
 fn output_id(index: u32) -> Identifier {

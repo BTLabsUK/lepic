@@ -131,7 +131,7 @@ impl Posting {
             .open(&harness.data_dir, context_key(&seed))
             .unwrap();
         let keychain =
-            lepic_keychain::Keychain::from_seed(&seed, lepic_keychain::ExtKeyVersion::FLOONET)
+            lepic_keychain::Keychain::from_seed(&seed, lepic_primitives::params::Network::Floonet)
                 .unwrap();
         store
             .write(|repos| {

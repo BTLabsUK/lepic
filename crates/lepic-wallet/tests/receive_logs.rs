@@ -8,7 +8,8 @@
 mod receive_harness;
 mod support;
 
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
+use lepic_primitives::params::Network;
 use lepic_telemetry::{assert_no_secrets, capture};
 use receive_harness::*;
 
@@ -28,7 +29,7 @@ fn receive_runs_in_its_span_and_never_logs_keys_or_nonces() {
             .unwrap()
     });
 
-    let keychain = Keychain::from_seed(&receiver.seed, ExtKeyVersion::FLOONET).unwrap();
+    let keychain = Keychain::from_seed(&receiver.seed, Network::Floonet).unwrap();
     let amount = received.slate.amount().value();
     let blinding = keychain
         .derive_key(amount, &key_id, SwitchCommitment::Regular)

@@ -9,7 +9,8 @@ mod support;
 #[path = "inbox/world.rs"]
 mod world;
 
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, Seed};
+use lepic_keychain::{Identifier, Keychain, Seed};
+use lepic_primitives::params::Network;
 use lepic_store::{SlateStage, WalletStore};
 use lepic_telemetry::{assert_no_secrets, capture};
 use world::{RECEIVER_MNEMONIC, World};
@@ -27,7 +28,7 @@ fn a_drain_never_logs_keys_or_slates() {
     assert_eq!(summary.received, 1);
 
     let seed = Seed::from_mnemonic(RECEIVER_MNEMONIC).unwrap();
-    let keychain = Keychain::from_seed(&seed, ExtKeyVersion::FLOONET).unwrap();
+    let keychain = Keychain::from_seed(&seed, Network::Floonet).unwrap();
     let address_key = keychain
         .address_key(&Identifier::new(2, [0, 0, 0, 0]).unwrap(), 0)
         .unwrap();

@@ -18,10 +18,11 @@ use std::path::PathBuf;
 use lepic_crypto::{Commitment, PublicKey, RangeProof, SecretKey};
 use lepic_keychain::proof::{create_output, create_proof, rewind};
 use lepic_keychain::{
-    ExtKeyVersion, Identifier, Keychain, LegacyProofBuilder, MnemonicError, OutputRewinder,
-    ProofBuild, ProofBuilder, RewoundOutput, Seed, SwitchCommitment, WalletSeedError,
-    WalletSeedFile, address_key_id,
+    Identifier, Keychain, LegacyProofBuilder, MnemonicError, OutputRewinder, ProofBuild,
+    ProofBuilder, RewoundOutput, Seed, SwitchCommitment, WalletSeedError, WalletSeedFile,
+    address_key_id,
 };
+use lepic_primitives::params::Network;
 use serde_json::Value;
 
 const NODE_REPO: &str = "https://github.com/EpicCash/epic";
@@ -86,17 +87,17 @@ fn path(value: &Value) -> Identifier {
     Identifier::new(depth, components.try_into().unwrap()).unwrap()
 }
 
-fn version(network: &str) -> ExtKeyVersion {
-    match network {
-        "mainnet" => ExtKeyVersion::MAINNET,
-        "floonet" => ExtKeyVersion::FLOONET,
+fn network(name: &str) -> Network {
+    match name {
+        "mainnet" => Network::Mainnet,
+        "floonet" => Network::Floonet,
         other => panic!("unknown network {other}"),
     }
 }
 
-fn keychain(seed: &Value, network: &str) -> Keychain {
+fn keychain(seed: &Value, name: &str) -> Keychain {
     let seed = Seed::from_entropy(&bytes(seed)).unwrap();
-    Keychain::from_seed(&seed, version(network)).unwrap()
+    Keychain::from_seed(&seed, network(name)).unwrap()
 }
 
 fn switch(name: &str) -> SwitchCommitment {

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, Seed, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_primitives::params::Network;
 use lepic_telemetry::{assert_no_secrets, capture};
 use lepic_wallet::WordCount;
@@ -29,7 +29,7 @@ fn derived_secrets(seed: &Seed) -> Vec<Vec<u8>> {
     let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).unwrap();
     mac.update(b"lepic-wallet private context key v1");
     let context_key: [u8; 32] = mac.finalize_fixed().into();
-    let keychain = Keychain::from_seed(seed, ExtKeyVersion::MAINNET).unwrap();
+    let keychain = Keychain::from_seed(seed, Network::Mainnet).unwrap();
     let output_key = keychain
         .derive_key(
             0,

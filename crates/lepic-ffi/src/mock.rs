@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use lepic_keychain::proof::create_output;
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, ProofBuilder, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, ProofBuilder, SwitchCommitment};
 use lepic_node::mock::{ChainOutput, ChainState, MockNode};
 use lepic_node::{
     CallPolicy, LocatedKernel, NodeClient, NodeError, NodeVersion, RetryPolicy, RpcTransport, Tip,
@@ -99,12 +99,8 @@ impl MockBackend {
         amount: u64,
         child: u32,
     ) -> Result<(), WalletError> {
-        let version = match network {
-            Network::Mainnet => ExtKeyVersion::MAINNET,
-            Network::Floonet => ExtKeyVersion::FLOONET,
-        };
         let keychain =
-            Keychain::from_mnemonic(phrase, version).map_err(|_| invalid("recovery phrase"))?;
+            Keychain::from_mnemonic(phrase, network).map_err(|_| invalid("recovery phrase"))?;
         let id = Identifier::new(3, [0, 0, child, 0]).map_err(|_| invalid("key path"))?;
         let builder = ProofBuilder::new(&keychain).map_err(|_| invalid("proof builder"))?;
         let output = create_output(&keychain, &builder, amount, &id, SwitchCommitment::Regular)

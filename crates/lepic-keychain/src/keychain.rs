@@ -3,6 +3,7 @@
 use std::fmt;
 
 use lepic_crypto::{Commitment, CryptoError, PublicKey, SecretKey};
+use lepic_primitives::params::Network;
 use thiserror::Error;
 
 use crate::bip32::{Bip32Error, ExtKeyVersion, ExtendedPrivKey};
@@ -59,23 +60,27 @@ impl TryFrom<u8> for SwitchCommitment {
 #[derive(Clone)]
 pub struct Keychain {
     master: ExtendedPrivKey,
-    version: ExtKeyVersion,
+    network: Network,
 }
 
 impl Keychain {
-    pub fn from_seed(seed: &Seed, version: ExtKeyVersion) -> Result<Self, KeychainError> {
+    pub fn from_seed(seed: &Seed, network: Network) -> Result<Self, KeychainError> {
         Ok(Self {
             master: ExtendedPrivKey::new_master(seed.expose_bytes())?,
-            version,
+            network,
         })
     }
 
-    pub fn from_mnemonic(phrase: &str, version: ExtKeyVersion) -> Result<Self, KeychainError> {
-        Self::from_seed(&Seed::from_mnemonic(phrase)?, version)
+    pub fn from_mnemonic(phrase: &str, network: Network) -> Result<Self, KeychainError> {
+        Self::from_seed(&Seed::from_mnemonic(phrase)?, network)
+    }
+
+    pub fn network(&self) -> Network {
+        self.network
     }
 
     pub fn version(&self) -> ExtKeyVersion {
-        self.version
+        ExtKeyVersion::of(self.network)
     }
 
     pub fn master(&self) -> &ExtendedPrivKey {

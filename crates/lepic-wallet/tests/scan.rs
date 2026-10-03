@@ -18,9 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lepic_crypto::Commitment;
 use lepic_keychain::proof::create_output;
-use lepic_keychain::{
-    ExtKeyVersion, Identifier, Keychain, LegacyProofBuilder, ProofBuilder, SwitchCommitment,
-};
+use lepic_keychain::{Identifier, Keychain, LegacyProofBuilder, ProofBuilder, SwitchCommitment};
 use lepic_node::mock::{ChainOutput, MockNode};
 use lepic_node::{
     LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation, PmmrIndices,
@@ -754,7 +752,7 @@ fn chain_output(
 fn restore_finds_outputs_on_every_path_the_proofs_rewind_to() {
     let vector = full_scan_vector();
     let phrase = vector["inputs"]["subject"]["mnemonic"].as_str().unwrap();
-    let keychain = Keychain::from_mnemonic(phrase, ExtKeyVersion::MAINNET).unwrap();
+    let keychain = Keychain::from_mnemonic(phrase, Network::Mainnet).unwrap();
     let hardened = 1u32 << 31;
     let key = |depth, components| Identifier::new(depth, components).unwrap();
     // (key, amount, legacy proof, account it is stored under)

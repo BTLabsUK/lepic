@@ -3,9 +3,10 @@
 //! give the final transaction upstream mined and the S3 it wrote, in every encoding.
 
 use lepic_crypto::SecretKey;
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
 use lepic_primitives::amount::{Amount, Fee, Height, MILLI_EPIC};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
+use lepic_primitives::params::Network;
 use lepic_primitives::ser::{ProtocolVersion, ser_vec};
 use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
@@ -80,8 +81,7 @@ fn hex(bytes: &[u8]) -> String {
 fn sender_s1(s1: &Value) -> (Keychain, lepic_wallet::send::BuiltS1) {
     let delivered = decode(s1).with_origin(None);
     let wallet = sender(s1);
-    let keychain =
-        Keychain::from_mnemonic(text(&wallet["mnemonic"]), ExtKeyVersion::FLOONET).unwrap();
+    let keychain = Keychain::from_mnemonic(text(&wallet["mnemonic"]), Network::Floonet).unwrap();
     let features = match text(&s1["inputs"]["options"]["funding"]) {
         "coinbase" => OutputFeatures::Coinbase,
         "change" => OutputFeatures::Plain,

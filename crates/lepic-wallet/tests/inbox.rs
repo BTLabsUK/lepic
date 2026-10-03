@@ -426,7 +426,8 @@ fn the_address_is_the_default_accounts_key_at_index_zero_at_the_relay() {
     let world = World::new();
     let seed = lepic_keychain::Seed::from_mnemonic(RECEIVER_MNEMONIC).unwrap();
     let keychain =
-        lepic_keychain::Keychain::from_seed(&seed, lepic_keychain::ExtKeyVersion::FLOONET).unwrap();
+        lepic_keychain::Keychain::from_seed(&seed, lepic_primitives::params::Network::Floonet)
+            .unwrap();
     let parent = lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap();
     let key = keychain.address_key(&parent, 0).unwrap();
     assert_eq!(

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, Seed, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_node::mock::MockNode;
 use lepic_node::{NodeClient, Propagation};
 use lepic_primitives::amount::{Amount, Height};
@@ -134,7 +134,7 @@ impl Party {
         Self {
             runtime,
             stores,
-            keychain: Keychain::from_seed(&seed, ExtKeyVersion::FLOONET).unwrap(),
+            keychain: Keychain::from_seed(&seed, Network::Floonet).unwrap(),
             seed,
             wallet,
             peer,

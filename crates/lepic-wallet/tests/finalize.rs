@@ -14,10 +14,11 @@ mod support;
 
 use lepic_crypto::aggsig::calculate_partial_sig;
 use lepic_crypto::{PublicKey, SecretKey};
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain};
+use lepic_keychain::{Identifier, Keychain};
 use lepic_node::Propagation;
 use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::params::Network;
 use lepic_primitives::validate::ValidationError;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -53,7 +54,7 @@ fn request() -> SendRequest {
 }
 
 fn receiver_address() -> ProofAddress {
-    let key = Keychain::from_mnemonic(RECEIVER_MNEMONIC, ExtKeyVersion::FLOONET)
+    let key = Keychain::from_mnemonic(RECEIVER_MNEMONIC, Network::Floonet)
         .unwrap()
         .payment_proof_key(&Identifier::new(2, [0, 0, 0, 0]).unwrap(), 0)
         .unwrap();

@@ -1,8 +1,9 @@
 use lepic_crypto::PublicKey;
 use lepic_keychain::{
-    ChildNumber, ExtKeyVersion, Identifier, IdentifierError, Keychain, KeychainError,
-    MnemonicError, Seed, SwitchCommitment,
+    ChildNumber, Identifier, IdentifierError, Keychain, KeychainError, MnemonicError, Seed,
+    SwitchCommitment,
 };
+use lepic_primitives::params::Network;
 use lepic_primitives::ser::{ProtocolVersion, SerError, deserialize, ser_vec};
 use lepic_telemetry::{assert_no_secrets, capture};
 use proptest::prelude::*;
@@ -101,7 +102,7 @@ fn serialized_path_drops_only_the_depth() {
 
 #[test]
 fn rejects_address_key_under_a_depth_four_parent() {
-    let keychain = Keychain::from_mnemonic(PHRASE, ExtKeyVersion::MAINNET).unwrap();
+    let keychain = Keychain::from_mnemonic(PHRASE, Network::Mainnet).unwrap();
     let parent = Identifier::new(4, [0; 4]).unwrap();
     assert_eq!(
         keychain.address_key(&parent, 0).err(),
@@ -111,8 +112,8 @@ fn rejects_address_key_under_a_depth_four_parent() {
 
 #[test]
 fn keys_do_not_depend_on_the_network() {
-    let mainnet = Keychain::from_mnemonic(PHRASE, ExtKeyVersion::MAINNET).unwrap();
-    let floonet = Keychain::from_mnemonic(PHRASE, ExtKeyVersion::FLOONET).unwrap();
+    let mainnet = Keychain::from_mnemonic(PHRASE, Network::Mainnet).unwrap();
+    let floonet = Keychain::from_mnemonic(PHRASE, Network::Floonet).unwrap();
     let id = Identifier::new(3, [0, 0, 7, 0]).unwrap();
     assert_eq!(
         mainnet.commit(5, &id, SwitchCommitment::Regular),
@@ -123,7 +124,7 @@ fn keys_do_not_depend_on_the_network() {
 
 #[test]
 fn switch_commitment_changes_the_blind() {
-    let keychain = Keychain::from_mnemonic(PHRASE, ExtKeyVersion::MAINNET).unwrap();
+    let keychain = Keychain::from_mnemonic(PHRASE, Network::Mainnet).unwrap();
     let id = Identifier::new(3, [0, 0, 1, 0]).unwrap();
     let plain = keychain.derive_key(9, &id, SwitchCommitment::None).unwrap();
     let switched = keychain
@@ -134,7 +135,7 @@ fn switch_commitment_changes_the_blind() {
 
 #[test]
 fn secrets_stay_out_of_logs_debug_and_errors() {
-    let keychain = Keychain::from_mnemonic(PHRASE, ExtKeyVersion::MAINNET).unwrap();
+    let keychain = Keychain::from_mnemonic(PHRASE, Network::Mainnet).unwrap();
     let seed = Seed::from_mnemonic(PHRASE).unwrap();
     let id = Identifier::new(3, [0, 0, 3, 0]).unwrap();
     let ext = keychain.derive_ext_key(&id).unwrap();
@@ -145,7 +146,7 @@ fn secrets_stay_out_of_logs_debug_and_errors() {
     let proof_key = keychain.payment_proof_key(&default_account(), 0).unwrap();
     let bad_phrase = PHRASE.replace("joy", "hunter");
     let mnemonic_error = Seed::from_mnemonic(&bad_phrase).err().unwrap();
-    let keychain_error = Keychain::from_mnemonic(&bad_phrase, ExtKeyVersion::MAINNET)
+    let keychain_error = Keychain::from_mnemonic(&bad_phrase, Network::Mainnet)
         .err()
         .unwrap();
     assert_eq!(mnemonic_error, MnemonicError::UnknownWord { position: 8 });

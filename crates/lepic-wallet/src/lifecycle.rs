@@ -8,7 +8,7 @@ use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
 use lepic_keychain::vault::SecretName;
-use lepic_keychain::{ExtKeyVersion, Keychain, SecretBytes, SecretStore, Seed};
+use lepic_keychain::{Keychain, SecretBytes, SecretStore, Seed};
 use lepic_primitives::params::Network;
 use lepic_store::{CONTEXT_KEY_LEN, ContextKey, Repositories, StoreError, WalletStore};
 use rand_core::CryptoRng;
@@ -147,7 +147,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     if secrets.exists()? {
         return Err(WalletError::WalletExists);
     }
-    let keychain = Keychain::from_seed(seed, ext_key_version(target.network))?;
+    let keychain = Keychain::from_seed(seed, target.network)?;
     let fingerprint = fingerprint(&keychain)?;
     let store = stores.open(target.data_dir, context_key(seed)?)?;
     let identity = store.read(|repos| stored_identity(repos, target.network, &fingerprint))?;
@@ -180,7 +180,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     debug!("secret storage unlocked");
     let stored = vault.get(&seed_name()?)?.ok_or(WalletError::NoWallet)?;
     let seed = Seed::from_entropy(stored.expose_bytes()).map_err(WalletError::StoredSeed)?;
-    let keychain = Keychain::from_seed(&seed, ext_key_version(target.network))?;
+    let keychain = Keychain::from_seed(&seed, target.network)?;
     let fingerprint = fingerprint(&keychain)?;
     let store = stores.open(target.data_dir, context_key(&seed)?)?;
     // A missing database is rebuilt empty: everything in it but history is recovered by a scan,
@@ -263,14 +263,6 @@ fn seed_name() -> Result<SecretName, WalletError> {
     Ok(SecretName::new(SEED_SECRET)?)
 }
 
-/// `epic-wallet` uses the mainnet version bytes on mainnet and the floonet ones elsewhere.
-pub(crate) const fn ext_key_version(network: Network) -> ExtKeyVersion {
-    match network {
-        Network::Mainnet => ExtKeyVersion::MAINNET,
-        Network::Floonet => ExtKeyVersion::FLOONET,
-    }
-}
-
 /// The BIP32 fingerprint of the master key, which tells databases of different seeds apart
 /// without revealing anything that derives keys.
 fn fingerprint(keychain: &Keychain) -> Result<String, WalletError> {
@@ -339,16 +331,10 @@ mod tests {
 
     #[test]
     fn fingerprint_differs_between_seeds_and_matches_bip32() {
-        let first = Keychain::from_seed(
-            &Seed::from_entropy(&[1; 16]).unwrap(),
-            ExtKeyVersion::MAINNET,
-        )
-        .unwrap();
-        let second = Keychain::from_seed(
-            &Seed::from_entropy(&[2; 16]).unwrap(),
-            ExtKeyVersion::MAINNET,
-        )
-        .unwrap();
+        let first =
+            Keychain::from_seed(&Seed::from_entropy(&[1; 16]).unwrap(), Network::Mainnet).unwrap();
+        let second =
+            Keychain::from_seed(&Seed::from_entropy(&[2; 16]).unwrap(), Network::Mainnet).unwrap();
         let expected: String = first
             .master()
             .fingerprint()

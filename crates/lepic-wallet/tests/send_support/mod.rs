@@ -10,7 +10,7 @@ use std::sync::{Arc, PoisonError};
 use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, Seed, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
@@ -132,7 +132,7 @@ impl Sender {
             .stores
             .open(&harness.data_dir, context_key(&seed))
             .unwrap();
-        let keychain = Keychain::from_seed(&seed, ExtKeyVersion::FLOONET).unwrap();
+        let keychain = Keychain::from_seed(&seed, Network::Floonet).unwrap();
         let funding = output(&keychain, 0, FUNDING, OutputFeatures::Coinbase);
         store
             .write(|repos| {

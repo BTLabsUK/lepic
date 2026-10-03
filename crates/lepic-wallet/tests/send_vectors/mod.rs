@@ -6,9 +6,10 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use lepic_crypto::SecretKey;
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
 use lepic_primitives::amount::{Amount, Fee, Height, MILLI_EPIC};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
+use lepic_primitives::params::Network;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext};
@@ -87,7 +88,7 @@ fn wallet<'a>(vector: &'a Value, role: &str) -> &'a Value {
 }
 
 fn keychain(wallet: &Value) -> Keychain {
-    Keychain::from_mnemonic(text(wallet, "/mnemonic"), ExtKeyVersion::FLOONET).unwrap()
+    Keychain::from_mnemonic(text(wallet, "/mnemonic"), Network::Floonet).unwrap()
 }
 
 fn key_id(hex: &str) -> Identifier {

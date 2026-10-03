@@ -5,6 +5,7 @@ use std::fmt;
 
 use hmac::{Hmac, KeyInit, Mac};
 use lepic_crypto::{CryptoError, PublicKey, SecretKey};
+use lepic_primitives::params::Network;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256, Sha512};
 use thiserror::Error;
@@ -93,6 +94,14 @@ impl ExtKeyVersion {
         private: [0x03, 0x27, 0x3A, 0x10],
         public: [0x03, 0x27, 0x3E, 0x4B],
     };
+
+    /// `epic-wallet` uses the mainnet bytes on mainnet and the floonet ones elsewhere.
+    pub const fn of(network: Network) -> Self {
+        match network {
+            Network::Mainnet => Self::MAINNET,
+            Network::Floonet => Self::FLOONET,
+        }
+    }
 }
 
 /// A chain code. Together with a public key it derives every normal child, so it is treated as a

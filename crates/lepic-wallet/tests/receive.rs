@@ -8,8 +8,9 @@
 mod receive_harness;
 mod support;
 
-use lepic_keychain::{ExtKeyVersion, Identifier, Keychain, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
 use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::params::Network;
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -35,7 +36,7 @@ fn received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys() {
     let amount = received.slate.amount();
 
     let key_id = Identifier::new(3, [0, 0, 0, 0]).unwrap();
-    let keychain = Keychain::from_seed(&receiver.seed, ExtKeyVersion::FLOONET).unwrap();
+    let keychain = Keychain::from_seed(&receiver.seed, Network::Floonet).unwrap();
     let commitment = keychain
         .commit(amount.value(), &key_id, SwitchCommitment::Regular)
         .unwrap();
