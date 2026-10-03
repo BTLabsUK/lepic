@@ -15,8 +15,8 @@ export 'src/rust/api/types.dart';
 export 'src/rust/api/wallet.dart';
 export 'src/rust/frb_generated.dart' show RustLib;
 
-/// The key-value storage LEPIC keeps a wallet's encrypted vault in, such as
-/// `flutter_secure_storage`. One store per wallet.
+/// The key-value storage LEPIC keeps a wallet's encrypted vault, PIN key and PIN failure count
+/// in, such as `flutter_secure_storage`. One store per wallet: the keys have fixed names.
 abstract interface class SecretStore {
   Future<String?> read(String key);
 

@@ -2,11 +2,12 @@
 //! returns a Future in Dart. Each fails only with [`WalletError`]; a panic inside LEPIC arrives
 //! as [`WalletErrorKind::Panic`].
 //!
-//! Secrets follow ADR 0014. Into Rust: the password, PIN and recovery phrase the user types.
-//! Out of Rust: the recovery phrase, only from [`EpicWallet::mnemonic`] and
-//! [`EpicWallet::mnemonic_with_pin`] after the credential is checked. Seeds, keys, blinding
-//! factors, nonces and the generated wallet password of PIN unlock never leave Rust; the app's
-//! store and Dart hold only encrypted vaults and sealed text.
+//! Secrets follow ADR 0014. Into Rust: the password, PIN and recovery phrase the user types, and
+//! the node API secret in [`WalletConfig`]. Out of Rust: the recovery phrase, only from
+//! [`EpicWallet::mnemonic`] and [`EpicWallet::mnemonic_with_pin`] after the credential is
+//! checked, and the PIN key, only to the app's store. Seeds, keys, blinding factors, nonces and
+//! the generated wallet password of PIN unlock never leave Rust; Dart holds only encrypted
+//! vaults and sealed text.
 
 use std::path::PathBuf;
 use std::sync::Arc;

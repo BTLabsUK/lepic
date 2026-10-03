@@ -22,12 +22,13 @@ type ReadFn = dyn Fn(String) -> DartFnFuture<SecretReply> + Send + Sync;
 type WriteFn = dyn Fn(String, String) -> DartFnFuture<SecretReply> + Send + Sync;
 type DeleteFn = dyn Fn(String) -> DartFnFuture<SecretReply> + Send + Sync;
 
-/// Key-value storage implemented by the app. LEPIC keeps one entry in it per wallet: the vault
-/// that holds the seed, encrypted under the wallet password with Argon2id and
-/// XChaCha20-Poly1305. The plain seed never reaches the store or Dart.
+/// Key-value storage implemented by the app. LEPIC keeps a wallet's vault in it, which holds the
+/// seed encrypted under the wallet password with Argon2id and XChaCha20-Poly1305, and for a PIN
+/// wallet also the PIN key and the count of PIN failures. The plain seed never reaches the store
+/// or Dart.
 ///
-/// One store holds the secrets of one wallet. Give each wallet its own store, for example by
-/// prefixing keys on the Dart side.
+/// One store holds the secrets of one wallet: the keys have fixed names. Give each wallet its own
+/// store, for example by prefixing keys on the Dart side.
 #[frb(opaque)]
 #[derive(Clone)]
 pub struct AppSecretStore {
