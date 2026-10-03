@@ -15,8 +15,10 @@ use lepic_epicbox::{Domain, RelayEndpoint, Security};
 use lepic_primitives::params::Network;
 use lepic_wallet::NodeEndpoint;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::cli::{GlobalArgs, LogFormatArg, NetworkArg, OutputArg};
+use crate::secret::PASSWORD_ENV;
 
 /// Config files are a few lines; anything larger is not one.
 pub const MAX_CONFIG_LEN: u64 = 64 * 1024;
@@ -48,7 +50,7 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
 pub const CONFIG_ENV: &str = "LEPIC_CONFIG";
 
 /// The process environment as the CLI sees it: captured once, so tests pass their own.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Env(BTreeMap<String, String>);
 
 impl Env {
@@ -73,10 +75,34 @@ impl Env {
             .filter(|value| !value.is_empty())
     }
 
+    /// Removes the variable and returns its value, wiped when dropped. For secrets, so the copy
+    /// the environment holds does not outlive its one use.
+    pub fn take(&mut self, key: &str) -> Option<Zeroizing<String>> {
+        self.0
+            .remove(key)
+            .map(Zeroizing::new)
+            .filter(|value| !value.is_empty())
+    }
+
     fn home(&self) -> Option<PathBuf> {
         self.get("HOME")
             .or_else(|| self.get("USERPROFILE"))
             .map(PathBuf::from)
+    }
+}
+
+impl fmt::Debug for Env {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.0.iter().map(|(key, value)| {
+                let shown = if key == PASSWORD_ENV {
+                    "[redacted]"
+                } else {
+                    value
+                };
+                (key, shown)
+            }))
+            .finish()
     }
 }
 
@@ -441,6 +467,20 @@ fn parse_value(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_output_never_shows_the_password_variable() {
+        let env = Env::new([
+            (PASSWORD_ENV.to_owned(), "hunter2".to_owned()),
+            ("LEPIC_NETWORK".to_owned(), "floonet".to_owned()),
+        ]);
+        let shown = format!("{env:?}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(
+            shown.contains("[redacted]") && shown.contains("floonet"),
+            "{shown}"
+        );
+    }
 
     #[test]
     fn config_values_are_bare_words_or_quoted_strings() {

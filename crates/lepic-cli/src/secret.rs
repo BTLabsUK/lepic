@@ -64,15 +64,15 @@ impl SecretInput {
         }
     }
 
-    /// The wallet password: `LEPIC_PASSWORD`, else the prompt or a line of input. A new
-    /// password is asked for twice at a terminal.
+    /// The wallet password: `LEPIC_PASSWORD`, which is removed from `env` once read, else the
+    /// prompt or a line of input. A new password is asked for twice at a terminal.
     pub async fn wallet_password(
         &mut self,
-        env: &Env,
+        env: &mut Env,
         new: bool,
     ) -> Result<Zeroizing<String>, SecretError> {
-        if let Some(password) = env.get(PASSWORD_ENV) {
-            return Ok(Zeroizing::new(password.to_owned()));
+        if let Some(password) = env.take(PASSWORD_ENV) {
+            return Ok(password);
         }
         let password = self.read("wallet password", "Wallet password: ").await?;
         if new && self.terminal {
@@ -131,7 +131,7 @@ fn read_line(
     let limit = u64::try_from(MAX_SECRET_LEN)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
-    let mut bytes = Zeroizing::new(Vec::new());
+    let mut bytes = line_buffer();
     let read = reader
         .take(limit)
         .read_until(b'\n', &mut bytes)
@@ -148,6 +148,12 @@ fn read_line(
     }
     let text = std::str::from_utf8(content).map_err(|_| SecretError::NotUtf8 { what })?;
     Ok(Zeroizing::new(text.to_owned()))
+}
+
+/// Holds the most a read takes, the longest secret and one byte more, from the start: a growing
+/// `Vec` leaves the bytes it moved out of in freed memory, where `Zeroizing` cannot wipe them.
+fn line_buffer() -> Zeroizing<Vec<u8>> {
+    Zeroizing::new(Vec::with_capacity(MAX_SECRET_LEN.saturating_add(1)))
 }
 
 /// Turns terminal echo off until dropped. `unsafe` is denied, so this asks `stty`, which every
@@ -231,15 +237,42 @@ mod tests {
 
     #[test]
     fn the_password_variable_wins_over_standard_input() {
-        let env = Env::new([(PASSWORD_ENV.to_owned(), "from env".to_owned())]);
+        let mut env = Env::new([(PASSWORD_ENV.to_owned(), "from env".to_owned())]);
         let mut input = input("from stdin\n");
         block_on(async {
             assert_eq!(
-                *input.wallet_password(&env, true).await.unwrap(),
+                *input.wallet_password(&mut env, true).await.unwrap(),
                 "from env"
             );
             assert_eq!(*input.read("next", "").await.unwrap(), "from stdin");
         });
+    }
+
+    #[test]
+    fn the_password_variable_is_removed_once_read() {
+        let mut env = Env::new([(PASSWORD_ENV.to_owned(), "from env".to_owned())]);
+        let mut input = input("from stdin\n");
+        block_on(async {
+            input.wallet_password(&mut env, false).await.unwrap();
+            assert_eq!(env.get(PASSWORD_ENV), None);
+            assert_eq!(
+                *input.wallet_password(&mut env, false).await.unwrap(),
+                "from stdin"
+            );
+        });
+    }
+
+    #[test]
+    fn the_longest_line_is_read_without_moving_the_buffer() {
+        let mut bytes = line_buffer();
+        let start = bytes.as_ptr();
+        let line = format!("{}\n", "x".repeat(MAX_SECRET_LEN));
+        io::Cursor::new(line.as_bytes())
+            .take(u64::try_from(MAX_SECRET_LEN + 1).unwrap())
+            .read_until(b'\n', &mut bytes)
+            .unwrap();
+        assert_eq!(bytes.len(), MAX_SECRET_LEN + 1);
+        assert_eq!(bytes.as_ptr(), start);
     }
 
     #[test]

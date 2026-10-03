@@ -549,7 +549,7 @@ impl<H: Host> Run<'_, H> {
         let password = self
             .console
             .secrets
-            .wallet_password(&self.console.env, true)
+            .wallet_password(&mut self.console.env, true)
             .await?;
         Ok(password_from(password))
     }
@@ -559,7 +559,7 @@ impl<H: Host> Run<'_, H> {
         let password = self
             .console
             .secrets
-            .wallet_password(&self.console.env, false)
+            .wallet_password(&mut self.console.env, false)
             .await?;
         let opened = self.prepare(false)?;
         opened.wallet.open(password_from(password)).await?;
