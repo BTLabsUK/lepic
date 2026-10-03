@@ -420,6 +420,53 @@ step_restore() {
     DETAIL="restored from the phrase with progress; total ${total} matches"
 }
 
+unscanned() { lepic --data-dir "${STATE_DIR}/unscanned" "$@"; }
+
+unscanned_total() { to_units "$(unscanned wallet info | jq -r '.accounts[0].total')"; }
+
+unscanned_tx_confirmed() {
+    unscanned wallet info >/dev/null
+    [[ "$(unscanned tx show "$1" | jq -r .state)" == confirmed ]]
+}
+
+# A wallet restored with --no-scan refuses to receive until `wallet scan` has scanned the chain
+# from genesis; then it holds what lepic holds and receives from epic-wallet.
+step_scan_after_restore_without_scan() {
+    local restored status=0
+    restored="$(printf '%s\n' "${RECOVERY_PHRASE}" | lepic_env "${LEPIC_BIN}" --output json \
+        --data-dir "${STATE_DIR}/unscanned" wallet restore --no-scan 2>>"${RUN_LOG}")" || status=$?
+    ((status == 0)) || fail "wallet restore --no-scan exited ${status}" || return 1
+    jq -e '.scan == null' <<<"${restored}" >/dev/null || fail "restore report: ${restored}" || return 1
+    local slate="${EXCHANGE_DIR}/unscanned.slate"
+    ew funder send -m file -d /exchange/unscanned.slate -c 1 -s smallest 1.25 >>"${RUN_LOG}" ||
+        fail "epic-wallet send to the unscanned wallet failed" || return 1
+    status="$(unscanned_status tx receive "${slate}")"
+    ((status == 5)) || fail "a receive before the scan exited ${status}, not 5" || return 1
+    [[ ! -e "${slate}.response" ]] || fail "a refused receive wrote a reply" || return 1
+    local scanned
+    scanned="$(unscanned wallet scan)" || fail "wallet scan failed" || return 1
+    jq -e '.start_height == 0 and .found > 0 and .restored == .found and .resumed == false' \
+        <<<"${scanned}" >/dev/null || fail "scan report: ${scanned}" || return 1
+    (($(unscanned_total) == EXPECTED_TOTAL)) ||
+        fail "scanned total $(unscanned_total), expected ${EXPECTED_TOTAL} units" || return 1
+    local received tx_id
+    received="$(unscanned tx receive "${slate}")" || fail "the receive after the scan failed" || return 1
+    ew funder finalize -i /exchange/unscanned.slate.response >>"${RUN_LOG}" ||
+        fail "epic-wallet could not finalize the reply" || return 1
+    tx_id="$(jq -r .tx_id <<<"${received}")"
+    wait_until "unscanned tx ${tx_id} confirmed" 180 unscanned_tx_confirmed "${tx_id}" ||
+        fail "the receive after the scan did not confirm" || return 1
+    (($(unscanned_total) == EXPECTED_TOTAL + $(to_units 1.25))) ||
+        fail "total after the receive $(unscanned_total) units" || return 1
+    DETAIL="--no-scan restore refused tx receive with 5; wallet scan found $(jq -r .found <<<"${scanned}") outputs, total matched, then received 1.25"
+}
+
+unscanned_status() {
+    local status=0
+    unscanned "$@" >/dev/null || status=$?
+    echo "${status}"
+}
+
 step_import_seed() {
     peer_listen_stop
     dc exec -T peer cat /data/.epic/user/wallet_data/wallet.seed >"${STATE_DIR}/peer.seed" ||
@@ -451,5 +498,6 @@ STEPS=(
     "tx list, tx show, tx post:step_list_show_post"
     "errors and exit codes:step_errors"
     "wallet restore:step_restore"
+    "restore --no-scan, then wallet scan:step_scan_after_restore_without_scan"
     "wallet import-seed:step_import_seed"
 )
