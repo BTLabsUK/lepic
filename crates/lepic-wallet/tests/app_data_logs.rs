@@ -24,11 +24,19 @@ fn sealing_and_opening_app_data_log_and_return_no_root_secret() {
         let phrase = harness
             .block_on(wallet.create(password(PASSWORD), WordCount::default()))
             .unwrap();
-        let file = wallet.seal_app_data(b"payload").unwrap();
-        let opened = wallet.open_app_data(&file).unwrap().to_vec();
+        let file = harness
+            .block_on(wallet.seal_app_data(b"payload".to_vec()))
+            .unwrap();
+        let opened = harness
+            .block_on(wallet.open_app_data(file.clone()))
+            .unwrap()
+            .to_vec();
         let mut other = file.clone();
         other[30] ^= 1;
-        let foreign = wallet.open_app_data(&other).unwrap_err().to_string();
+        let foreign = harness
+            .block_on(wallet.open_app_data(other))
+            .unwrap_err()
+            .to_string();
         (phrase, file, opened, foreign)
     });
 

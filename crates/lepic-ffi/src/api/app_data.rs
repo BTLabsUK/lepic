@@ -13,7 +13,7 @@ impl EpicWallet {
     /// Fails with `Locked`, and with `InvalidArgument` for a payload above 32 MiB.
     pub async fn seal_app_data(&self, payload: Vec<u8>) -> Result<Vec<u8>, WalletError> {
         self.run("seal_app_data", |session| async move {
-            session.seal_app_data(&payload)
+            session.seal_app_data(payload).await
         })
         .await
     }
@@ -27,7 +27,10 @@ impl EpicWallet {
     /// 32 MiB, and `Locked`.
     pub async fn open_app_data(&self, file: Vec<u8>) -> Result<Vec<u8>, WalletError> {
         self.run("open_app_data", |session| async move {
-            session.open_app_data(&file).map(|payload| payload.to_vec())
+            session
+                .open_app_data(file)
+                .await
+                .map(|payload| payload.to_vec())
         })
         .await
     }

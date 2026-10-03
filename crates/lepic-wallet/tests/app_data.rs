@@ -13,6 +13,27 @@ use lepic_keychain::AppDataError;
 use lepic_keychain::app_data::{HEADER_LEN, MAX_PAYLOAD_LEN};
 use lepic_wallet::{WalletError, WordCount};
 use support::{Harness, TestWallet, password, vector_text};
+use zeroize::Zeroizing;
+
+/// The async calls, driven to completion on the wallet's own runtime.
+trait AppData {
+    fn seal_now(&self, payload: &[u8]) -> Result<Vec<u8>, WalletError>;
+    fn open_now(&self, file: &[u8]) -> Result<Zeroizing<Vec<u8>>, WalletError>;
+}
+
+impl AppData for TestWallet {
+    fn seal_now(&self, payload: &[u8]) -> Result<Vec<u8>, WalletError> {
+        self.ports()
+            .runtime
+            .block_on(self.seal_app_data(payload.to_vec()))
+    }
+
+    fn open_now(&self, file: &[u8]) -> Result<Zeroizing<Vec<u8>>, WalletError> {
+        self.ports()
+            .runtime
+            .block_on(self.open_app_data(file.to_vec()))
+    }
+}
 
 const PASSWORD: &str = "correct horse battery staple";
 const PAYLOAD: &[u8] = br#"{"format":"wfe-history","version":1,"txs":[]}"#;
@@ -54,13 +75,13 @@ fn a_sealed_file_opens_to_its_payload_and_differs_on_every_seal() {
     let harness = Harness::new();
     let (wallet, _) = created(&harness);
 
-    let first = wallet.seal_app_data(PAYLOAD).unwrap();
-    let second = wallet.seal_app_data(PAYLOAD).unwrap();
+    let first = wallet.seal_now(PAYLOAD).unwrap();
+    let second = wallet.seal_now(PAYLOAD).unwrap();
 
     assert_eq!(&first[..6], b"WFEH\x01\x01");
     assert_eq!(first.len(), HEADER_LEN + PAYLOAD.len() + 16);
-    assert_eq!(&wallet.open_app_data(&first).unwrap()[..], PAYLOAD);
-    assert_eq!(&wallet.open_app_data(&second).unwrap()[..], PAYLOAD);
+    assert_eq!(&wallet.open_now(&first).unwrap()[..], PAYLOAD);
+    assert_eq!(&wallet.open_now(&second).unwrap()[..], PAYLOAD);
     // Salt at 6..22, nonce at 38..50: both fresh for each file.
     assert_ne!(first[6..22], second[6..22]);
     assert_ne!(first[38..50], second[38..50]);
@@ -71,11 +92,11 @@ fn a_sealed_file_opens_to_its_payload_and_differs_on_every_seal() {
 fn a_wallet_restored_from_the_phrase_opens_the_file() {
     let original = Harness::new();
     let (wallet, phrase) = created(&original);
-    let file = wallet.seal_app_data(PAYLOAD).unwrap();
+    let file = wallet.seal_now(PAYLOAD).unwrap();
 
     let elsewhere = Harness::new();
     let restored = restored(&elsewhere, &phrase);
-    assert_eq!(&restored.open_app_data(&file).unwrap()[..], PAYLOAD);
+    assert_eq!(&restored.open_now(&file).unwrap()[..], PAYLOAD);
 }
 
 #[test]
@@ -85,10 +106,7 @@ fn the_golden_file_opens_to_its_payload_in_the_wallet_of_its_phrase() {
     let wallet = restored(&harness, &vector_text(&vector, "/inputs/mnemonic"));
     let file = unhex(&vector_text(&vector, "/expected/file"));
     let payload = vector_text(&vector, "/inputs/payload");
-    assert_eq!(
-        &wallet.open_app_data(&file).unwrap()[..],
-        payload.as_bytes()
-    );
+    assert_eq!(&wallet.open_now(&file).unwrap()[..], payload.as_bytes());
 }
 
 #[test]
@@ -101,25 +119,25 @@ fn another_wallets_file_is_told_apart_from_a_damaged_one() {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
          abandon about",
     );
-    let file = other_wallet.seal_app_data(PAYLOAD).unwrap();
+    let file = other_wallet.seal_now(PAYLOAD).unwrap();
 
     assert_eq!(
-        app_data_error(wallet.open_app_data(&file)),
+        app_data_error(wallet.open_now(&file)),
         AppDataError::ForeignWallet
     );
 
-    let own = wallet.seal_app_data(PAYLOAD).unwrap();
+    let own = wallet.seal_now(PAYLOAD).unwrap();
     for index in [HEADER_LEN - 1, HEADER_LEN, own.len() - 1] {
         let mut flipped = own.clone();
         flipped[index] ^= 0x01;
         assert_eq!(
-            app_data_error(wallet.open_app_data(&flipped)),
+            app_data_error(wallet.open_now(&flipped)),
             AppDataError::Damaged,
             "byte {index}"
         );
     }
     assert_eq!(
-        app_data_error(wallet.open_app_data(&own[..own.len() - 1])),
+        app_data_error(wallet.open_now(&own[..own.len() - 1])),
         AppDataError::Damaged
     );
 }
@@ -128,26 +146,26 @@ fn another_wallets_file_is_told_apart_from_a_damaged_one() {
 fn unknown_formats_and_versions_have_their_own_errors() {
     let harness = Harness::new();
     let (wallet, _) = created(&harness);
-    let file = wallet.seal_app_data(PAYLOAD).unwrap();
+    let file = wallet.seal_now(PAYLOAD).unwrap();
 
     assert_eq!(
-        app_data_error(wallet.open_app_data(b"not a file")),
+        app_data_error(wallet.open_now(b"not a file")),
         AppDataError::NotAppData
     );
     assert_eq!(
-        app_data_error(wallet.open_app_data(&file[..HEADER_LEN - 1])),
+        app_data_error(wallet.open_now(&file[..HEADER_LEN - 1])),
         AppDataError::NotAppData
     );
     let mut newer = file.clone();
     newer[4] = 2;
     assert_eq!(
-        app_data_error(wallet.open_app_data(&newer)),
+        app_data_error(wallet.open_now(&newer)),
         AppDataError::UnsupportedVersion { version: 2, kdf: 1 }
     );
     let mut other_kdf = file;
     other_kdf[5] = 9;
     assert_eq!(
-        app_data_error(wallet.open_app_data(&other_kdf)),
+        app_data_error(wallet.open_now(&other_kdf)),
         AppDataError::UnsupportedVersion { version: 1, kdf: 9 }
     );
 }
@@ -158,12 +176,12 @@ fn oversized_payloads_and_files_are_refused() {
     let (wallet, _) = created(&harness);
     let too_big = vec![0u8; MAX_PAYLOAD_LEN + 1];
     assert!(matches!(
-        app_data_error(wallet.seal_app_data(&too_big)),
+        app_data_error(wallet.seal_now(&too_big)),
         AppDataError::TooLong { .. }
     ));
     let too_big = vec![0u8; MAX_PAYLOAD_LEN + HEADER_LEN + 17];
     assert!(matches!(
-        app_data_error(wallet.open_app_data(&too_big)),
+        app_data_error(wallet.open_now(&too_big)),
         AppDataError::TooLong { .. }
     ));
 }
@@ -172,14 +190,8 @@ fn oversized_payloads_and_files_are_refused() {
 fn a_locked_wallet_neither_seals_nor_opens() {
     let harness = Harness::new();
     let (wallet, _) = created(&harness);
-    let file = wallet.seal_app_data(PAYLOAD).unwrap();
+    let file = wallet.seal_now(PAYLOAD).unwrap();
     wallet.lock();
-    assert!(matches!(
-        wallet.seal_app_data(PAYLOAD),
-        Err(WalletError::Locked)
-    ));
-    assert!(matches!(
-        wallet.open_app_data(&file),
-        Err(WalletError::Locked)
-    ));
+    assert!(matches!(wallet.seal_now(PAYLOAD), Err(WalletError::Locked)));
+    assert!(matches!(wallet.open_now(&file), Err(WalletError::Locked)));
 }
