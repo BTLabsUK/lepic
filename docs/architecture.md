@@ -62,9 +62,9 @@ The engine depends on traits, not implementations:
 | Port | Implemented by |
 |---|---|
 | `NodeApi` | `lepic-node`, and a mock node in tests |
-| `WalletStore` | `lepic-store`, and an in-memory store in tests |
+| `StoreOpener` (opens the `WalletStore` after unlock, keyed from the seed) | `lepic_wallet::SqliteStores` over `lepic-store`, the CLI's `CliStores`, in-memory stores in tests |
 | `Transport` (outbound and inbound) | `lepic-transport::file`, `lepic-epicbox`, and a loopback in tests |
-| `SecretStore` | `lepic-keychain` vault on desktop, the platform keystore through the host app on mobile |
+| `SecretVault` (`exists`, `create`, `unlock` with a password, yielding a `lepic_keychain::SecretStore`) | the CLI's `FileVault` over a `lepic-keychain` vault file on desktop, `lepic-ffi`'s `AppVault` over the platform keystore on mobile, a fast vault in tests |
 | `Clock`, `Rng` | real implementations in `lepic-cli` and `lepic-ffi`, fixed ones in tests |
 
 The engine owns no runtime and no globals. `lepic-cli` and `lepic-ffi` create the Tokio runtime and
