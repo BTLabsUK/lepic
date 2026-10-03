@@ -20,11 +20,12 @@ use lepic_transport::error::TransportError;
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
+use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::event::Balance;
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
-use lepic_wallet::refresh::RefreshOutcome;
+use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
@@ -372,7 +373,16 @@ impl<H: Host> Run<'_, H> {
     async fn info(&mut self) -> Result<Report, CliError> {
         let opened = self.open().await?;
         let mut events = opened.wallet.subscribe();
-        let outcome = opened.wallet.refresh().await?;
+        let mut attempt = 1;
+        let outcome = loop {
+            match opened.wallet.refresh().await {
+                Err(error) if attempt < REFRESH_ATTEMPTS && chain_moved_during(&error) => {
+                    attempt = attempt.saturating_add(1);
+                    tracing::debug!(attempt, error = %error, "refresh repeated");
+                }
+                outcome => break outcome?,
+            }
+        };
         let mut balances: Vec<Balance> = Vec::new();
         while let Ok(event) = events.try_recv() {
             if let Event::Balance(balance) = event {
@@ -729,6 +739,25 @@ async fn next_event(
     }
 }
 
+/// How often `wallet info` asks for a refresh the chain outgrew while it ran.
+const REFRESH_ATTEMPTS: u32 = 3;
+
+/// True when a refresh was refused because a block arrived between two of its node requests:
+/// an answer from above the tip it read first, or a second tip that differs. Nothing was stored,
+/// so asking again is safe, and on a chain with short blocks the race is common. Answers that
+/// could not be true at any tip are not retried.
+fn chain_moved_during(error: &RefreshError) -> bool {
+    match error {
+        RefreshError::Implausible(
+            ImplausibleNodeData::OutputAboveTip { .. } | ImplausibleNodeData::TipChanged { .. },
+        ) => true,
+        RefreshError::Implausible(ImplausibleNodeData::KernelOutOfRange {
+            height, tip, ..
+        }) => height > tip,
+        _ => false,
+    }
+}
+
 /// The spending options shared by `tx send` and `invoice pay`.
 struct Spend {
     minimum_confirmations: u64,
@@ -1013,6 +1042,51 @@ mod tests {
         }
         check_private_dir(with_mode(0o700).path()).unwrap();
         check_private_dir(&with_mode(0o700).path().join("missing")).unwrap();
+    }
+
+    #[test]
+    fn only_a_refresh_the_chain_outgrew_is_asked_again() {
+        let height = lepic_primitives::amount::Height::new;
+        for moved in [
+            ImplausibleNodeData::OutputAboveTip {
+                height: height(43),
+                tip: height(42),
+            },
+            ImplausibleNodeData::TipChanged {
+                first: height(42),
+                second: height(43),
+            },
+            ImplausibleNodeData::KernelOutOfRange {
+                height: height(43),
+                min: height(1),
+                tip: height(42),
+            },
+        ] {
+            assert!(
+                chain_moved_during(&RefreshError::Implausible(moved)),
+                "{moved:?}"
+            );
+        }
+        for impossible in [
+            ImplausibleNodeData::TipTooHigh {
+                tip: height(9_000),
+                limit: height(100),
+            },
+            ImplausibleNodeData::KernelOutOfRange {
+                height: height(0),
+                min: height(1),
+                tip: height(42),
+            },
+            ImplausibleNodeData::IndexAboveTip { index: 9, limit: 1 },
+        ] {
+            assert!(
+                !chain_moved_during(&RefreshError::Implausible(impossible)),
+                "{impossible:?}"
+            );
+        }
+        assert!(!chain_moved_during(&RefreshError::Node(
+            lepic_node::NodeError::Timeout
+        )));
     }
 
     #[test]
