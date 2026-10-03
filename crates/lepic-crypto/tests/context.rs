@@ -11,7 +11,7 @@ use std::convert::Infallible;
 
 use lepic_crypto::{
     Commitment, CryptoError, EcdsaSignature, Message, ProofMessage, PublicKey, RangeProof,
-    SecretKey, randomize_context,
+    SecretKey, context_is_randomized, randomize_context,
 };
 use rand_core::{TryCryptoRng, TryRng};
 use secp256k1zkp::key::SecretKey as BackendSecretKey;
@@ -62,8 +62,10 @@ fn randomized_context_draws_one_seed_and_changes_no_result() {
         byte: 0x5c,
         drawn: 0,
     };
+    assert!(!context_is_randomized());
     assert_eq!(randomize_context(&mut rng), Ok(()));
     assert_eq!(rng.drawn, 32);
+    assert!(context_is_randomized());
 
     let mut again = CountingRng {
         byte: 0x5d,

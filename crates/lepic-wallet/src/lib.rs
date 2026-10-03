@@ -19,6 +19,7 @@ pub mod inbox;
 pub mod invoice;
 pub mod lifecycle;
 pub mod ports;
+mod process;
 pub mod receive;
 pub mod refresh;
 pub mod scan;
@@ -36,5 +37,6 @@ pub use lifecycle::{Password, RecoveryPhrase, WordCount};
 pub use ports::{Clock, Ports, SecretVault, SecretVaultError, SharedRng, StoreOpener};
 #[cfg(feature = "sqlite")]
 pub use ports::{DATABASE_FILE, SqliteStores};
+pub use process::{crypto_context_is_randomized, randomize_crypto_context};
 pub use receive::{ReceiveError, ReceiveRequest, Received};
 pub use wallet::Wallet;

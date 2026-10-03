@@ -8,15 +8,30 @@ use zeroize::Zeroizing;
 
 use crate::error::CryptoError;
 
-static CONTEXT: OnceLock<Secp256k1> = OnceLock::new();
+static CONTEXT: OnceLock<Context> = OnceLock::new();
 
 const SEED_LEN: usize = 32;
+
+struct Context {
+    secp: Secp256k1,
+    blinded: bool,
+}
 
 /// The one secp256k1 context, able to sign, verify and commit.
 ///
 /// Created without blinding on first use unless [`randomize_context`] created it first.
 pub(crate) fn secp() -> &'static Secp256k1 {
-    CONTEXT.get_or_init(|| with_generators(Secp256k1::with_caps(ContextFlag::Commit)))
+    &CONTEXT
+        .get_or_init(|| Context {
+            secp: with_generators(Secp256k1::with_caps(ContextFlag::Commit)),
+            blinded: false,
+        })
+        .secp
+}
+
+/// Whether [`randomize_context`] created the context. False before the context exists.
+pub fn context_is_randomized() -> bool {
+    CONTEXT.get().is_some_and(|context| context.blinded)
 }
 
 /// Creates the secp256k1 context blinded with 32 bytes from `rng`, as upstream randomizes its
@@ -33,7 +48,10 @@ pub fn randomize_context<R: CryptoRng + ?Sized>(rng: &mut R) -> Result<(), Crypt
     let mut seed = Zeroizing::new([0u8; SEED_LEN]);
     rng.fill_bytes(seed.as_mut_slice());
     CONTEXT
-        .set(blinded_context(&mut SeedSource(&seed)))
+        .set(Context {
+            secp: blinded_context(&mut SeedSource(&seed)),
+            blinded: true,
+        })
         .map_err(|_| CryptoError::ContextAlreadyCreated)
 }
 

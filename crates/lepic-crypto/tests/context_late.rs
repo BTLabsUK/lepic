@@ -4,7 +4,7 @@
 
 use std::convert::Infallible;
 
-use lepic_crypto::{CryptoError, PublicKey, SecretKey, randomize_context};
+use lepic_crypto::{CryptoError, PublicKey, SecretKey, context_is_randomized, randomize_context};
 use rand_core::{TryCryptoRng, TryRng};
 
 /// Records whether anything drew from it.
@@ -45,5 +45,6 @@ fn rejects_randomizing_a_context_already_in_use() {
         Err(CryptoError::ContextAlreadyCreated)
     );
     assert!(!rng.drawn);
+    assert!(!context_is_randomized());
     assert_eq!(PublicKey::from_secret_key(&key), Ok(before));
 }
