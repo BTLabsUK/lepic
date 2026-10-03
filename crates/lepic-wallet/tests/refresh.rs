@@ -330,9 +330,9 @@ fn confirms_a_send_once_its_change_is_on_chain_and_reports_the_balance() {
     assert_eq!(balance.locked, Amount::ZERO);
 }
 
-/// A posted send with no change output and its final slate stored, as a sender that finalized
-/// `send_file_plain` keeps it.
-fn posted_without_change(sender: &Sender) -> (TxId, LocatedKernel) {
+/// A posted send with its final slate stored, as a sender that finalized `send_file_plain` keeps
+/// it, crediting `change` back to the sender.
+fn posted_with_final_slate(sender: &Sender, change: Amount) -> (TxId, LocatedKernel) {
     let vector: serde_json::Value = serde_json::from_str(SEND_FILE_PLAIN_S3).unwrap();
     let json = vector["expected"]["json"].as_str().unwrap().to_owned();
     let slate = legacy_codecs()
@@ -351,7 +351,7 @@ fn posted_without_change(sender: &Sender) -> (TxId, LocatedKernel) {
                 state: TxState::Posted,
                 slate_id: Some(slate_id),
                 transport: None,
-                amount_credited: Amount::ZERO,
+                amount_credited: change,
                 amount_debited: Amount::new(AMOUNT),
                 fee: Some(Fee::new(800_000)),
                 created_at: fixed_time(),
@@ -377,7 +377,7 @@ fn posted_without_change(sender: &Sender) -> (TxId, LocatedKernel) {
 #[test]
 fn confirms_a_send_without_change_once_its_kernel_is_on_chain() {
     let (sender, _) = funded();
-    let (tx_id, kernel) = posted_without_change(&sender);
+    let (tx_id, kernel) = posted_with_final_slate(&sender, Amount::ZERO);
     set_tip(&sender, kernel.height.value());
 
     let summary = refresh(&sender);
@@ -400,6 +400,143 @@ fn confirms_a_send_without_change_once_its_kernel_is_on_chain() {
     assert_eq!(summary.confirmed_transactions, 1);
     assert_eq!(state(&sender, tx_id), TxState::Confirmed);
     assert_eq!(sender.harness.node.violations(), []);
+}
+
+#[test]
+fn leaves_a_send_with_change_to_its_change_output_instead_of_its_kernel() {
+    let (sender, _) = funded();
+    let (tx_id, kernel) = posted_with_final_slate(&sender, Amount::new(1));
+    sender.harness.node.update_chain(|chain| {
+        chain.kernels.push(kernel);
+        chain.tip.height = kernel.height;
+    });
+
+    let summary = refresh(&sender);
+
+    assert_eq!(summary.confirmed_transactions, 0);
+    assert_eq!(state(&sender, tx_id), TxState::Posted);
+    assert!(
+        !sender
+            .harness
+            .node
+            .calls()
+            .contains(&"get_kernel".to_owned())
+    );
+}
+
+#[test]
+fn keeps_a_cancelled_send_cancelled_when_its_change_appears_on_chain() {
+    let (sender, funding) = funded();
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(request(None), to_peer()))
+        .unwrap();
+    let change = change(&sender, &funding);
+    // Cancel deletes the change, so the state is set directly: an ended transaction whose
+    // output is still stored, which the peer completed anyway.
+    sender
+        .store
+        .write(|repos| {
+            let mut entry = repos.transaction(sent.tx_id)?.unwrap();
+            entry.state = TxState::Cancelled;
+            repos.update_transaction(sent.tx_id, &entry)
+        })
+        .unwrap();
+    sender.harness.node.update_chain(|chain| {
+        chain.outputs[0].spent = true;
+        chain.outputs.push(on_chain(&change, TIP + 1, 3));
+        chain.tip.height = Height::new(TIP + 1);
+    });
+
+    let summary = refresh(&sender);
+
+    assert_eq!(summary.confirmed_outputs, 1);
+    assert_eq!(summary.confirmed_transactions, 0);
+    assert_eq!(state(&sender, sent.tx_id), TxState::Cancelled);
+    assert_eq!(
+        output(&sender, &change).unwrap().status,
+        OutputStatus::Unspent
+    );
+}
+
+#[test]
+fn reports_the_balance_in_every_category() {
+    const TIP_HEIGHT: u64 = 30;
+    let (sender, funding) = funded();
+    let stored = |child, value, features, status, lock_height| OutputRecord {
+        status,
+        lock_height: Height::new(lock_height),
+        ..send_support::output(&sender.keychain, child, value, features)
+    };
+    let immature = stored(
+        1,
+        2,
+        OutputFeatures::Coinbase,
+        OutputStatus::Unspent,
+        TIP_HEIGHT + 1,
+    );
+    let young = stored(2, 30, OutputFeatures::Plain, OutputStatus::Unspent, 0);
+    let locked = stored(3, 400, OutputFeatures::Plain, OutputStatus::Locked, 0);
+    let unconfirmed = stored(
+        4,
+        5_000,
+        OutputFeatures::Plain,
+        OutputStatus::Unconfirmed,
+        0,
+    );
+    let unconfirmed_coinbase = stored(
+        5,
+        60_000,
+        OutputFeatures::Coinbase,
+        OutputStatus::Unconfirmed,
+        0,
+    );
+    sender
+        .store
+        .write(|repos| {
+            for output in [
+                &immature,
+                &young,
+                &locked,
+                &unconfirmed,
+                &unconfirmed_coinbase,
+            ] {
+                repos.put_output(output)?;
+            }
+            Ok::<_, lepic_store::StoreError>(())
+        })
+        .unwrap();
+    sender.harness.node.update_chain(|chain| {
+        chain.outputs.push(on_chain(&immature, TIP_HEIGHT - 2, 2));
+        // Nine confirmations, one short of spendable.
+        chain.outputs.push(on_chain(&young, TIP_HEIGHT - 8, 3));
+        chain.outputs.push(on_chain(&locked, 2, 4));
+        chain.tip.height = Height::new(TIP_HEIGHT);
+    });
+    let mut receiver = sender.wallet.subscribe();
+
+    refresh(&sender);
+
+    let events = events(&mut receiver);
+    let Some(Event::Balance(balance)) = events
+        .iter()
+        .find(|event| matches!(event, Event::Balance(_)))
+    else {
+        panic!("no balance event in {events:?}");
+    };
+    assert_eq!(balance.height, Height::new(TIP_HEIGHT));
+    assert_eq!(balance.spendable, funding.amount);
+    assert_eq!(balance.immature, immature.amount);
+    assert_eq!(balance.awaiting_confirmation, young.amount);
+    assert_eq!(balance.locked, locked.amount);
+    assert_eq!(balance.awaiting_finalization, unconfirmed.amount);
+    assert_eq!(
+        balance.total.value(),
+        funding.amount.value()
+            + immature.amount.value()
+            + young.amount.value()
+            + locked.amount.value()
+    );
 }
 
 #[test]
