@@ -127,6 +127,112 @@ impl From<TxState> for TxStatus {
     }
 }
 
+/// Which way a transaction moves funds, seen from this wallet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxDirection {
+    /// A send of ours, or a payment of an invoice.
+    Outgoing,
+    /// A payment to us, or an output a scan restored.
+    Incoming,
+}
+
+impl From<lepic_store::TxDirection> for TxDirection {
+    fn from(direction: lepic_store::TxDirection) -> Self {
+        match direction {
+            lepic_store::TxDirection::Outgoing => Self::Outgoing,
+            lepic_store::TxDirection::Incoming => Self::Incoming,
+        }
+    }
+}
+
+/// One stored transaction of the default account. Times are milliseconds since the Unix epoch,
+/// by the device clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionDetails {
+    pub tx_id: u32,
+    pub direction: TxDirection,
+    pub status: TxStatus,
+    /// `None` for an output a scan restored.
+    pub slate_id: Option<String>,
+    /// The transport that carried the slate, such as `epicbox` or `file`, when known.
+    pub transport: Option<String>,
+    pub amount_credited: u64,
+    pub amount_debited: u64,
+    /// `None` when this wallet did not learn the fee, as for a restored output.
+    pub fee: Option<u64>,
+    pub created_at_ms: i64,
+    /// When this wallet saw the transaction confirmed. `None` unless it is confirmed.
+    pub confirmed_at_ms: Option<i64>,
+    /// The height of the block that confirmed it. `None` while unconfirmed.
+    pub confirmed_height: Option<u64>,
+    /// Hex of the final kernel's excess, once this wallet has seen the final transaction. `None`
+    /// before that, for a payment taken by receive, and for a restored output.
+    pub kernel_excess: Option<String>,
+    /// The other party's Epicbox address: where a send went or where a slate came from. `None`
+    /// for files, slates passed in as text and restored outputs.
+    pub counterparty: Option<String>,
+    /// The height from which the slate may no longer be completed. `None` when it sets none.
+    pub ttl_cutoff_height: Option<u64>,
+}
+
+/// What a send would take and pay, from `EpicWallet::estimate_fee` and
+/// `EpicWallet::estimate_max`. Nothing is locked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeeEstimate {
+    /// What the receiver gets; `fee` comes on top.
+    pub amount: u64,
+    pub fee: u64,
+    /// How many of the wallet's outputs the send spends.
+    pub input_count: u32,
+    /// What comes back to the wallet as change.
+    pub change: u64,
+}
+
+/// How far a slate has progressed: `S` stages are a send, `I` stages an invoice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlateStage {
+    /// A send to the recipient: sign it with `receive_slate`.
+    S1,
+    /// The recipient's answer to a send: finalize it with `finalize_and_post`.
+    S2,
+    /// A finalized send.
+    S3,
+    /// An invoice, asking the payer to pay.
+    I1,
+    /// A paid invoice, for the issuer to finalize.
+    I2,
+    /// A finalized invoice.
+    I3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlateRole {
+    Sender,
+    Receiver,
+}
+
+/// A participant's free-text message as the slate carries it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlateMessage {
+    pub role: SlateRole,
+    pub text: String,
+}
+
+/// What a slate says, from `inspect_slate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlateInfo {
+    pub slate_id: String,
+    /// The `version_info.version` the slate declares, 2 or 3, which decides how it is read.
+    pub version: u16,
+    pub stage: SlateStage,
+    pub amount: u64,
+    pub fee: u64,
+    /// The height from which the slate may no longer be completed. `None` when it sets none.
+    pub ttl_cutoff_height: Option<u64>,
+    /// In the order the participants joined.
+    pub messages: Vec<SlateMessage>,
+}
+
 /// Progress of `EpicWallet::scan`.
 #[derive(Debug, Clone)]
 pub struct ScanProgress {

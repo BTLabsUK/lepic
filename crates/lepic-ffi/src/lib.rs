@@ -15,6 +15,7 @@ mod boundary;
     clippy::restriction
 )]
 mod frb_generated;
+mod inspect;
 mod log;
 #[cfg(feature = "mock")]
 mod mock;

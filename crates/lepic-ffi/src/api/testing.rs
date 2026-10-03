@@ -154,6 +154,17 @@ impl MockChain {
         });
     }
 
+    /// The next transaction a wallet posts reaches this chain's pool, but the wallet gets a
+    /// connection error instead of the node's answer, as when a connection drops after the
+    /// node took the transaction.
+    #[frb(sync)]
+    pub fn lose_next_post_reply(&self) {
+        guard_or("mock_chain_lose_next_post_reply", (), || {
+            #[cfg(feature = "mock")]
+            self.backend.lose_next_post_reply();
+        });
+    }
+
     /// While `unreachable`, every node request fails as if the node refused the connection.
     #[frb(sync)]
     pub fn set_node_unreachable(&self, unreachable: bool) {

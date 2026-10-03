@@ -28,6 +28,12 @@ bool validateEpicboxAddress({required String address, required Chain chain}) =>
       chain: chain,
     );
 
+/// What the V2 or V3 slate text `json` says, read as [`EpicWallet::receive_slate`] and
+/// [`EpicWallet::finalize_and_post`] read it, without a wallet and without checking signatures.
+/// `chain` sets the minimum fee a slate must pay. Fails with `InvalidSlate`.
+Future<SlateInfo> inspectSlate({required String json, required Chain chain}) =>
+    RustLib.instance.api.crateApiWalletInspectSlate(json: json, chain: chain);
+
 /// True when `store` holds a wallet vault.
 Future<bool> walletExists({
   required LepicRuntime runtime,
@@ -150,6 +156,22 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// The wallet's Epicbox address, `<key>@<domain>[:port]`. Fails with `Unsupported` when
   /// the configuration names no relay.
   Future<String> epicboxAddress();
+
+  /// The fee and inputs a send of `amount` with `minimum_confirmations` would take, chosen
+  /// as [`EpicWallet::create_send_slate`], [`EpicWallet::send_file`] and
+  /// [`EpicWallet::send_epicbox`] choose them, with nothing locked. Such a send at the same
+  /// chain tip, with no outputs changed in between, charges this fee. Asks the node for its
+  /// tip. Fails as those sends do, for example with `NotEnoughFunds` or `NodeUnreachable`.
+  Future<FeeEstimate> estimateFee({
+    required BigInt amount,
+    required BigInt minimumConfirmations,
+  });
+
+  /// The largest amount a send with `minimum_confirmations` can pay now, with its fee and
+  /// inputs. A send of that amount at the same chain tip, with no outputs changed in between,
+  /// charges this fee. Fails with `NotEnoughFunds` when no amount can be paid, and otherwise
+  /// as [`EpicWallet::estimate_fee`].
+  Future<FeeEstimate> estimateMax({required BigInt minimumConfirmations});
 
   /// Everything the wallet reports from now on: session, balance, transaction, sync and
   /// transport changes. The stream ends when the wallet is dropped. A failure to subscribe,
@@ -311,9 +333,18 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Stops the listener. Its stream ends with `Stopped` shortly after.
   void stopListener();
 
-  /// The default account's balance. With `refresh`, or before the first refresh of this
-  /// handle, it first updates outputs and transactions from the node.
+  /// The default account's balance. With `refresh` it first updates outputs and
+  /// transactions from the node. Without, it answers from what the wallet stored at its last
+  /// refresh or scan, without the node, also before the first refresh of this handle, with
+  /// `validated_with_node` false.
   Future<WalletSummary> summary({required bool refresh});
+
+  /// The transaction `tx_id`, from the store alone. Fails with `InvalidArgument` when the
+  /// wallet holds no such transaction.
+  Future<TransactionDetails> transaction({required int txId});
+
+  /// Every transaction of the default account, newest first, from the store alone.
+  Future<List<TransactionDetails>> transactions();
 }
 
 /// A wallet created by [`EpicWallet::create_with_pin`], and its wallet password sealed under the

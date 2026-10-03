@@ -163,6 +163,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
   SessionState dco_decode_box_autoadd_session_state(dynamic raw);
 
   @protected
@@ -190,10 +193,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Chain dco_decode_chain(dynamic raw);
 
   @protected
+  FeeEstimate dco_decode_fee_estimate(dynamic raw);
+
+  @protected
   FinalizedTx dco_decode_finalized_tx(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
   InboxReport dco_decode_inbox_report(dynamic raw);
@@ -209,6 +218,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<SlateMessage> dco_decode_list_slate_message(dynamic raw);
+
+  @protected
+  List<TransactionDetails> dco_decode_list_transaction_details(dynamic raw);
 
   @protected
   ListenerEvent dco_decode_listener_event(dynamic raw);
@@ -230,6 +245,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
   SessionState? dco_decode_opt_box_autoadd_session_state(dynamic raw);
@@ -274,7 +292,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Slate dco_decode_slate(dynamic raw);
 
   @protected
+  SlateInfo dco_decode_slate_info(dynamic raw);
+
+  @protected
+  SlateMessage dco_decode_slate_message(dynamic raw);
+
+  @protected
+  SlateRole dco_decode_slate_role(dynamic raw);
+
+  @protected
+  SlateStage dco_decode_slate_stage(dynamic raw);
+
+  @protected
+  TransactionDetails dco_decode_transaction_details(dynamic raw);
+
+  @protected
   TransportState dco_decode_transport_state(dynamic raw);
+
+  @protected
+  TxDirection dco_decode_tx_direction(dynamic raw);
 
   @protected
   TxStatus dco_decode_tx_status(dynamic raw);
@@ -425,6 +461,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
   SessionState sse_decode_box_autoadd_session_state(
     SseDeserializer deserializer,
   );
@@ -460,10 +499,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Chain sse_decode_chain(SseDeserializer deserializer);
 
   @protected
+  FeeEstimate sse_decode_fee_estimate(SseDeserializer deserializer);
+
+  @protected
   FinalizedTx sse_decode_finalized_tx(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
   InboxReport sse_decode_inbox_report(SseDeserializer deserializer);
@@ -479,6 +524,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<SlateMessage> sse_decode_list_slate_message(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<TransactionDetails> sse_decode_list_transaction_details(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ListenerEvent sse_decode_listener_event(SseDeserializer deserializer);
@@ -502,6 +557,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
   SessionState? sse_decode_opt_box_autoadd_session_state(
@@ -552,7 +610,27 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Slate sse_decode_slate(SseDeserializer deserializer);
 
   @protected
+  SlateInfo sse_decode_slate_info(SseDeserializer deserializer);
+
+  @protected
+  SlateMessage sse_decode_slate_message(SseDeserializer deserializer);
+
+  @protected
+  SlateRole sse_decode_slate_role(SseDeserializer deserializer);
+
+  @protected
+  SlateStage sse_decode_slate_stage(SseDeserializer deserializer);
+
+  @protected
+  TransactionDetails sse_decode_transaction_details(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   TransportState sse_decode_transport_state(SseDeserializer deserializer);
+
+  @protected
+  TxDirection sse_decode_tx_direction(SseDeserializer deserializer);
 
   @protected
   TxStatus sse_decode_tx_status(SseDeserializer deserializer);
@@ -736,6 +814,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_i_64(
+    PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_session_state(
     SessionState self,
     SseSerializer serializer,
@@ -778,10 +862,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_chain(Chain self, SseSerializer serializer);
 
   @protected
+  void sse_encode_fee_estimate(FeeEstimate self, SseSerializer serializer);
+
+  @protected
   void sse_encode_finalized_tx(FinalizedTx self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
   void sse_encode_inbox_report(InboxReport self, SseSerializer serializer);
@@ -798,6 +888,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_slate_message(
+    List<SlateMessage> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_transaction_details(
+    List<TransactionDetails> self,
     SseSerializer serializer,
   );
 
@@ -824,6 +926,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_i_64(
+    PlatformInt64? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_box_autoadd_session_state(
@@ -883,10 +991,31 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_slate(Slate self, SseSerializer serializer);
 
   @protected
+  void sse_encode_slate_info(SlateInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_slate_message(SlateMessage self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_slate_role(SlateRole self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_slate_stage(SlateStage self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_transaction_details(
+    TransactionDetails self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_transport_state(
     TransportState self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_tx_direction(TxDirection self, SseSerializer serializer);
 
   @protected
   void sse_encode_tx_status(TxStatus self, SseSerializer serializer);

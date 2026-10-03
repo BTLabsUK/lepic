@@ -13,16 +13,18 @@ use lepic_epicbox::{
 use lepic_keychain::vault::SecretName;
 use lepic_keychain::{SecretStore as _, Seed, Vault};
 use lepic_node::{NodeApi as _, Propagation, webpki_tls_config};
-use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, TxId, TxState};
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
+use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
 use lepic_wallet::event::{Balance, TransportState as EngineTransportState};
 use lepic_wallet::inbox::ListenHandle;
 use lepic_wallet::refresh::{BALANCE_MINIMUM_CONFIRMATIONS, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
+use lepic_wallet::selection::Selection;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{
     Clock, DATABASE_FILE, Event, NodeEndpoint, Password, Ports, ReceiveRequest, SessionState,
@@ -39,8 +41,9 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::{DirClaim, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip, ScanProgress, SentTx,
-    Slate, TransportState, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
+    FeeEstimate, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip, ScanProgress,
+    SentTx, Slate, TransactionDetails, TransportState, TxStatus, WalletConfig, WalletEvent,
+    WalletEventKind, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -449,6 +452,49 @@ impl Session {
             .map(|balance| summary(balance, false))
     }
 
+    /// The default account's balance from the store, at the tip the wallet confirmed last,
+    /// without asking the node.
+    pub(crate) fn stored_summary(&self) -> Result<WalletSummary, WalletError> {
+        Ok(summary(&self.engine.balance(DEFAULT_ACCOUNT)?, false))
+    }
+
+    pub(crate) async fn transactions(&self) -> Result<Vec<TransactionDetails>, WalletError> {
+        let stored = self.engine.transactions(DEFAULT_ACCOUNT).await?;
+        Ok(stored.iter().map(transaction_details).collect())
+    }
+
+    pub(crate) async fn transaction(&self, tx_id: u32) -> Result<TransactionDetails, WalletError> {
+        let stored = self.engine.transaction_details(TxId(tx_id)).await?;
+        if stored.transaction.entry.account != DEFAULT_ACCOUNT {
+            return Err(WalletError::from(
+                lepic_wallet::WalletError::UnknownTransaction(TxId(tx_id)),
+            ));
+        }
+        Ok(transaction_details(&stored))
+    }
+
+    pub(crate) async fn estimate_fee(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+    ) -> Result<FeeEstimate, WalletError> {
+        let options = Self::send_request(amount, minimum_confirmations).selection_options();
+        let selection = self
+            .engine
+            .estimate_fee(Amount::new(amount), options)
+            .await?;
+        fee_estimate(&selection)
+    }
+
+    pub(crate) async fn estimate_max(
+        &self,
+        minimum_confirmations: u64,
+    ) -> Result<FeeEstimate, WalletError> {
+        let options = Self::send_request(0, minimum_confirmations).selection_options();
+        let selection = self.engine.estimate_max(options).await?;
+        fee_estimate(&selection)
+    }
+
     pub(crate) async fn scan(
         &self,
         start_height: Option<u64>,
@@ -777,6 +823,45 @@ fn sent_tx(sent: &SentSlate) -> SentTx {
         amount: sent.amount.value(),
         fee: sent.fee.value(),
     }
+}
+
+fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails {
+    let stored = &details.transaction;
+    let entry = &stored.entry;
+    TransactionDetails {
+        tx_id: stored.id.0,
+        direction: entry.direction.into(),
+        status: entry.state.into(),
+        slate_id: entry.slate_id.map(|id| id.to_string()),
+        transport: entry.transport.clone(),
+        amount_credited: entry.amount_credited.value(),
+        amount_debited: entry.amount_debited.value(),
+        fee: entry.fee.map(Fee::value),
+        created_at_ms: entry.created_at.as_millisecond(),
+        confirmed_at_ms: details.confirmed_at.map(Timestamp::as_millisecond),
+        confirmed_height: details.confirmed_height.map(Height::value),
+        kernel_excess: details.kernel_excess.map(|excess| excess.to_hex()),
+        counterparty: details
+            .counterparty
+            .as_ref()
+            .map(|address| address.as_str().to_owned()),
+        ttl_cutoff_height: details.ttl_cutoff_height.map(Height::value),
+    }
+}
+
+fn fee_estimate(selection: &Selection) -> Result<FeeEstimate, WalletError> {
+    let out_of_range = || WalletError::new(WalletErrorKind::Other, "fee estimate out of range");
+    let change = selection
+        .change
+        .iter()
+        .try_fold(0u64, |sum, change| sum.checked_add(change.value()))
+        .ok_or_else(out_of_range)?;
+    Ok(FeeEstimate {
+        amount: selection.amount.value(),
+        fee: selection.fee.value(),
+        input_count: u32::try_from(selection.inputs.len()).map_err(|_| out_of_range())?,
+        change,
+    })
 }
 
 fn transport_error(error: &lepic_transport::error::TransportError) -> WalletError {

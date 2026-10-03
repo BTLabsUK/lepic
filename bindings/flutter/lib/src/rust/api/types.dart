@@ -8,10 +8,45 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `network`, `of`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// Which Epic chain the wallet talks to.
 enum Chain { mainnet, floonet }
+
+/// What a send would take and pay, from `EpicWallet::estimate_fee` and
+/// `EpicWallet::estimate_max`. Nothing is locked.
+class FeeEstimate {
+  /// What the receiver gets; `fee` comes on top.
+  final BigInt amount;
+  final BigInt fee;
+
+  /// How many of the wallet's outputs the send spends.
+  final int inputCount;
+
+  /// What comes back to the wallet as change.
+  final BigInt change;
+
+  const FeeEstimate({
+    required this.amount,
+    required this.fee,
+    required this.inputCount,
+    required this.change,
+  });
+
+  @override
+  int get hashCode =>
+      amount.hashCode ^ fee.hashCode ^ inputCount.hashCode ^ change.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FeeEstimate &&
+          runtimeType == other.runtimeType &&
+          amount == other.amount &&
+          fee == other.fee &&
+          inputCount == other.inputCount &&
+          change == other.change;
+}
 
 /// A send that was finalized and accepted by the node.
 class FinalizedTx {
@@ -258,7 +293,199 @@ class Slate {
           json == other.json;
 }
 
+/// What a slate says, from `inspect_slate`.
+class SlateInfo {
+  final String slateId;
+
+  /// The `version_info.version` the slate declares, 2 or 3, which decides how it is read.
+  final int version;
+  final SlateStage stage;
+  final BigInt amount;
+  final BigInt fee;
+
+  /// The height from which the slate may no longer be completed. `None` when it sets none.
+  final BigInt? ttlCutoffHeight;
+
+  /// In the order the participants joined.
+  final List<SlateMessage> messages;
+
+  const SlateInfo({
+    required this.slateId,
+    required this.version,
+    required this.stage,
+    required this.amount,
+    required this.fee,
+    this.ttlCutoffHeight,
+    required this.messages,
+  });
+
+  @override
+  int get hashCode =>
+      slateId.hashCode ^
+      version.hashCode ^
+      stage.hashCode ^
+      amount.hashCode ^
+      fee.hashCode ^
+      ttlCutoffHeight.hashCode ^
+      messages.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SlateInfo &&
+          runtimeType == other.runtimeType &&
+          slateId == other.slateId &&
+          version == other.version &&
+          stage == other.stage &&
+          amount == other.amount &&
+          fee == other.fee &&
+          ttlCutoffHeight == other.ttlCutoffHeight &&
+          messages == other.messages;
+}
+
+/// A participant's free-text message as the slate carries it.
+class SlateMessage {
+  final SlateRole role;
+  final String text;
+
+  const SlateMessage({required this.role, required this.text});
+
+  @override
+  int get hashCode => role.hashCode ^ text.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SlateMessage &&
+          runtimeType == other.runtimeType &&
+          role == other.role &&
+          text == other.text;
+}
+
+enum SlateRole { sender, receiver }
+
+/// How far a slate has progressed: `S` stages are a send, `I` stages an invoice.
+enum SlateStage {
+  /// A send to the recipient: sign it with `receive_slate`.
+  s1,
+
+  /// The recipient's answer to a send: finalize it with `finalize_and_post`.
+  s2,
+
+  /// A finalized send.
+  s3,
+
+  /// An invoice, asking the payer to pay.
+  i1,
+
+  /// A paid invoice, for the issuer to finalize.
+  i2,
+
+  /// A finalized invoice.
+  i3,
+}
+
+/// One stored transaction of the default account. Times are milliseconds since the Unix epoch,
+/// by the device clock.
+class TransactionDetails {
+  final int txId;
+  final TxDirection direction;
+  final TxStatus status;
+
+  /// `None` for an output a scan restored.
+  final String? slateId;
+
+  /// The transport that carried the slate, such as `epicbox` or `file`, when known.
+  final String? transport;
+  final BigInt amountCredited;
+  final BigInt amountDebited;
+
+  /// `None` when this wallet did not learn the fee, as for a restored output.
+  final BigInt? fee;
+  final PlatformInt64 createdAtMs;
+
+  /// When this wallet saw the transaction confirmed. `None` unless it is confirmed.
+  final PlatformInt64? confirmedAtMs;
+
+  /// The height of the block that confirmed it. `None` while unconfirmed.
+  final BigInt? confirmedHeight;
+
+  /// Hex of the final kernel's excess, once this wallet has seen the final transaction. `None`
+  /// before that, for a payment taken by receive, and for a restored output.
+  final String? kernelExcess;
+
+  /// The other party's Epicbox address: where a send went or where a slate came from. `None`
+  /// for files, slates passed in as text and restored outputs.
+  final String? counterparty;
+
+  /// The height from which the slate may no longer be completed. `None` when it sets none.
+  final BigInt? ttlCutoffHeight;
+
+  const TransactionDetails({
+    required this.txId,
+    required this.direction,
+    required this.status,
+    this.slateId,
+    this.transport,
+    required this.amountCredited,
+    required this.amountDebited,
+    this.fee,
+    required this.createdAtMs,
+    this.confirmedAtMs,
+    this.confirmedHeight,
+    this.kernelExcess,
+    this.counterparty,
+    this.ttlCutoffHeight,
+  });
+
+  @override
+  int get hashCode =>
+      txId.hashCode ^
+      direction.hashCode ^
+      status.hashCode ^
+      slateId.hashCode ^
+      transport.hashCode ^
+      amountCredited.hashCode ^
+      amountDebited.hashCode ^
+      fee.hashCode ^
+      createdAtMs.hashCode ^
+      confirmedAtMs.hashCode ^
+      confirmedHeight.hashCode ^
+      kernelExcess.hashCode ^
+      counterparty.hashCode ^
+      ttlCutoffHeight.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TransactionDetails &&
+          runtimeType == other.runtimeType &&
+          txId == other.txId &&
+          direction == other.direction &&
+          status == other.status &&
+          slateId == other.slateId &&
+          transport == other.transport &&
+          amountCredited == other.amountCredited &&
+          amountDebited == other.amountDebited &&
+          fee == other.fee &&
+          createdAtMs == other.createdAtMs &&
+          confirmedAtMs == other.confirmedAtMs &&
+          confirmedHeight == other.confirmedHeight &&
+          kernelExcess == other.kernelExcess &&
+          counterparty == other.counterparty &&
+          ttlCutoffHeight == other.ttlCutoffHeight;
+}
+
 enum TransportState { connecting, connected, disconnected, stopped }
+
+/// Which way a transaction moves funds, seen from this wallet.
+enum TxDirection {
+  /// A send of ours, or a payment of an invoice.
+  outgoing,
+
+  /// A payment to us, or an output a scan restored.
+  incoming,
+}
 
 /// Where a transaction stands, as stored by the wallet.
 enum TxStatus {

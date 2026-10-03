@@ -27,6 +27,11 @@ abstract class MockChain implements RustOpaqueInterface {
 
   BigInt height();
 
+  /// The next transaction a wallet posts reaches this chain's pool, but the wallet gets a
+  /// connection error instead of the node's answer, as when a connection drops after the
+  /// node took the transaction.
+  void loseNextPostReply();
+
   /// Mines every posted transaction into the tip block.
   void minePushed();
 

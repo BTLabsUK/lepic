@@ -383,6 +383,50 @@ async fn a_second_runtime_cannot_open_a_directory_in_use() {
     assert!(opened.await.is_ok());
 }
 
+/// The vault and the database answer it; the node is never asked.
+#[tokio::test]
+async fn summary_without_refresh_needs_no_node() {
+    let fixture = Fixture::new();
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &AppSecretStore::in_memory(),
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    fixture.chain.set_node_unreachable(true);
+    let summary = wallet.summary(false).await.unwrap();
+    assert_eq!(summary.total, 0);
+    assert!(!summary.validated_with_node);
+    assert_eq!(
+        kind(wallet.summary(true).await),
+        WalletErrorKind::NodeUnreachable
+    );
+    assert_eq!(
+        kind(wallet.estimate_fee(1, 1).await),
+        WalletErrorKind::NodeUnreachable
+    );
+    assert!(wallet.transactions().await.unwrap().is_empty());
+    assert_eq!(
+        kind(wallet.transaction(1).await),
+        WalletErrorKind::InvalidArgument
+    );
+}
+
+#[test]
+fn inspect_slate_refuses_text_that_is_no_slate() {
+    use crate::api::wallet::inspect_slate;
+    for text in ["", "not a slate", "{}", r#"{"version_info":{"version":4}}"#] {
+        assert_eq!(
+            kind(inspect_slate(text.to_owned(), Chain::Floonet)),
+            WalletErrorKind::InvalidSlate,
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn normalized_phrase_is_built_in_one_buffer() {
     let typed = "  Abandon\tABANDON\n  art ";

@@ -209,23 +209,23 @@ the secret store, which the earlier binding kept in process-wide state.
 | `generate_mnemonic(word_count)` | not provided (ADR 0014) | `EpicWallet::create` without `mnemonic` generates the seed; show it with `mnemonic(password)`. |
 | `validate_mnemonic(phrase)` | `validate_mnemonic(phrase)` | Same. |
 | `wallet_exists(config)` | `wallet_exists(runtime, store)` | Asks the secret store, not the directory. |
-| `inspect_slate(json)` | not provided | Needs a slate decoding API in the engine (claim `## Needs`). |
+| `inspect_slate(json)` | `inspect_slate(json, chain)` | Free function, no wallet. Reads the text as `receive_slate` does and returns `SlateInfo`: version, stage, amount, fee, TTL, slate id and messages. Signatures are not checked. |
 | `validate_epicbox_address(address)` | `validate_epicbox_address(address, chain)` | Chain is explicit, and the `@<relay>` part is required: a bare key is refused. |
 | `delete_wallet(config)` | `delete_wallet(runtime, config, store)` | Fails with `walletBusy` at once instead of waiting 20 s. Also deletes the vault. |
 | `node_tip(config)` | `node_tip(runtime, config)` | Same result. |
 | `EpicWallet::create(config, mnemonic, password)` | `EpicWallet::create(runtime, config, store, mnemonic, password)`, or `EpicWallet::create_with_pin(runtime, config, store, mnemonic, pin) -> PinWallet` | Same semantics. The PIN form returns the wallet and `sealed_password`. |
 | `EpicWallet::open(config, password)` | `EpicWallet::open(runtime, config, store, password)`, or `EpicWallet::open_with_pin(runtime, config, store, pin, sealed_password)` | Same. |
 | `mnemonic(password)` | `mnemonic(password)`, or `mnemonic_with_pin(pin, sealed_password)` | Same check against the stored vault. |
-| `summary(refresh, minimum_confirmations)` | `summary(refresh)` | Balances use the engine's 10 confirmations, as `epic-wallet info`. |
+| `summary(refresh, minimum_confirmations)` | `summary(refresh)` | Balances use the engine's 10 confirmations, as `epic-wallet info`. `refresh: false` answers from the store without the node, also on a handle that never refreshed. |
 | `refresh(minimum_confirmations, progress)` | `refresh()` stream | First event 0 %, last 100 % with `summary`. |
 | `scan(start_height, progress)` | `scan(start_height)` stream | `ScanProgress` adds `height` and `target_height`. New: `cancel_scan()`. |
-| `transactions(refresh)` | not provided | Needs a transaction list in the engine (claim `## Needs`). |
+| `transactions(refresh)` | `transactions()`, `transaction(tx_id)` | From the store alone, newest first; refresh first with `summary(refresh: true)`. `TransactionDetails` carries the slate id, kernel excess, confirmed height and time, counterparty, amounts, fee, status, creation time and TTL cutoff. |
 | `enrich_history()` | not provided | App history archive; not an engine feature. |
 | `set_tx_note(key, note)` | not provided | App history archive; not an engine feature. |
 | `contacts()`, `save_contact`, `delete_contact` | not provided | App address book; keep it in Dart. |
 | `export_history()`, `export_history_csv()`, `import_history(data)` | not provided | App history archive; not an engine feature. |
-| `estimate_max(minimum_confirmations)` | not provided | Needs a fee estimate in the engine (claim `## Needs`). |
-| `estimate_fee(amount, minimum_confirmations)` | not provided | Same. |
+| `estimate_max(minimum_confirmations)` | `estimate_max(minimum_confirmations)` | Returns `FeeEstimate`. A send of that amount at the same tip charges that fee. |
+| `estimate_fee(amount, minimum_confirmations)` | `estimate_fee(amount, minimum_confirmations)` | Returns `FeeEstimate` with the inputs and change too. The sends choose inputs the same way, so the fee matches. |
 | `epicbox_address()` | `epicbox_address()` | `unsupported` when no relay is configured. |
 | `create_send_slate(amount, minimum_confirmations)` | `create_send_slate(amount, minimum_confirmations)` | `Slate` adds `tx_id`. New file form: `send_file(amount, minimum_confirmations, path)`. |
 | `receive_slate(slate_json)` | `receive_slate(slate_json)` | Same. New file form: `receive_file(path)`, writes `<path>.response`. |
@@ -248,8 +248,10 @@ the secret store, which the earlier binding kept in process-wide state.
 | `open_password(pin, sealed)` | not provided (ADR 0014) | `open_with_pin(.., pin, sealed_password)` opens the wallet; wrong PIN gives `wrongPassword`, damaged text `invalidArgument`. |
 
 Types: `WalletConfig` keeps its fields; `Chain` has no `usernet`. `WalletError` and
-`WalletErrorKind` keep their names and earlier kinds, plus the new ones above. `TxEntry`,
-`Contact`, `ImportReport`, `FeeEstimate` and `SlateInfo` have no counterpart yet.
+`WalletErrorKind` keep their names and earlier kinds, plus the new ones above. `TxEntry`
+becomes `TransactionDetails`. `FeeEstimate` and `SlateInfo` keep their names and gain fields;
+`SlateInfo.stage` is a `SlateStage` from `s1` to `i3`. `Contact` and `ImportReport` have no
+counterpart.
 
 ## Develop
 

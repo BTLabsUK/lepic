@@ -18,16 +18,18 @@ use lepic_epicbox::EpicboxAddress;
 use lepic_keychain::Seed;
 use zeroize::Zeroizing;
 
+use crate::inspect;
 use crate::pin;
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    Chain, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip, RefreshProgress,
-    ScanProgress, SentTx, Slate, WalletConfig, WalletEvent, WalletSummary,
+    Chain, FeeEstimate, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip,
+    RefreshProgress, ScanProgress, SentTx, Slate, SlateInfo, TransactionDetails, WalletConfig,
+    WalletEvent, WalletSummary,
 };
-use crate::boundary::{Boundary, end_stream, guard_or};
+use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
 use crate::node::NodeSecret;
 use crate::session::{self, SeedOrigin, Session, normalize_phrase, relay_network};
@@ -50,6 +52,13 @@ pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
         address.contains('@')
             && EpicboxAddress::parse(&address, relay_network(chain.network())).is_ok()
     })
+}
+
+/// What the V2 or V3 slate text `json` says, read as [`EpicWallet::receive_slate`] and
+/// [`EpicWallet::finalize_and_post`] read it, without a wallet and without checking signatures.
+/// `chain` sets the minimum fee a slate must pay. Fails with `InvalidSlate`.
+pub fn inspect_slate(json: String, chain: Chain) -> Result<SlateInfo, WalletError> {
+    guard("inspect_slate", || inspect::inspect(json, chain.network()))
 }
 
 /// True when `store` holds a wallet vault.
@@ -438,14 +447,64 @@ impl EpicWallet {
         .await
     }
 
-    /// The default account's balance. With `refresh`, or before the first refresh of this
-    /// handle, it first updates outputs and transactions from the node.
+    /// The default account's balance. With `refresh` it first updates outputs and
+    /// transactions from the node. Without, it answers from what the wallet stored at its last
+    /// refresh or scan, without the node, also before the first refresh of this handle, with
+    /// `validated_with_node` false.
     pub async fn summary(&self, refresh: bool) -> Result<WalletSummary, WalletError> {
         self.run("summary", |session| async move {
-            match session.cached() {
-                Some(cached) if !refresh => Ok(cached),
-                _ => session.refresh().await,
+            if refresh {
+                session.refresh().await
+            } else {
+                session.stored_summary()
             }
+        })
+        .await
+    }
+
+    /// Every transaction of the default account, newest first, from the store alone.
+    pub async fn transactions(&self) -> Result<Vec<TransactionDetails>, WalletError> {
+        self.run("transactions", |session| async move {
+            session.transactions().await
+        })
+        .await
+    }
+
+    /// The transaction `tx_id`, from the store alone. Fails with `InvalidArgument` when the
+    /// wallet holds no such transaction.
+    pub async fn transaction(&self, tx_id: u32) -> Result<TransactionDetails, WalletError> {
+        self.run("transaction", |session| async move {
+            session.transaction(tx_id).await
+        })
+        .await
+    }
+
+    /// The fee and inputs a send of `amount` with `minimum_confirmations` would take, chosen
+    /// as [`EpicWallet::create_send_slate`], [`EpicWallet::send_file`] and
+    /// [`EpicWallet::send_epicbox`] choose them, with nothing locked. Such a send at the same
+    /// chain tip, with no outputs changed in between, charges this fee. Asks the node for its
+    /// tip. Fails as those sends do, for example with `NotEnoughFunds` or `NodeUnreachable`.
+    pub async fn estimate_fee(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+    ) -> Result<FeeEstimate, WalletError> {
+        self.run("estimate_fee", |session| async move {
+            session.estimate_fee(amount, minimum_confirmations).await
+        })
+        .await
+    }
+
+    /// The largest amount a send with `minimum_confirmations` can pay now, with its fee and
+    /// inputs. A send of that amount at the same chain tip, with no outputs changed in between,
+    /// charges this fee. Fails with `NotEnoughFunds` when no amount can be paid, and otherwise
+    /// as [`EpicWallet::estimate_fee`].
+    pub async fn estimate_max(
+        &self,
+        minimum_confirmations: u64,
+    ) -> Result<FeeEstimate, WalletError> {
+        self.run("estimate_max", |session| async move {
+            session.estimate_max(minimum_confirmations).await
         })
         .await
     }

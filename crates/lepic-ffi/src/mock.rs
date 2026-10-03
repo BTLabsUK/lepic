@@ -22,6 +22,7 @@ pub(crate) struct MockBackend {
     node: MockNode,
     panic_next: Arc<AtomicBool>,
     unreachable: Arc<AtomicBool>,
+    lose_post_reply: Arc<AtomicBool>,
 }
 
 impl MockBackend {
@@ -41,6 +42,7 @@ impl MockBackend {
             node: MockNode::from_chain(chain),
             panic_next: Arc::default(),
             unreachable: Arc::default(),
+            lose_post_reply: Arc::default(),
         })
     }
 
@@ -70,7 +72,14 @@ impl MockBackend {
                 std::io::ErrorKind::ConnectionRefused,
             ))));
         }
-        self.node.post(endpoint, body).await
+        let is_post = contains(&body, b"push_transaction");
+        let reply = self.node.post(endpoint, body).await;
+        if is_post && self.lose_post_reply.swap(false, Ordering::SeqCst) {
+            return Err(NodeError::Connect(Box::new(std::io::Error::from(
+                std::io::ErrorKind::ConnectionReset,
+            ))));
+        }
+        reply
     }
 
     pub(crate) fn node_label(&self) -> &str {
@@ -83,6 +92,10 @@ impl MockBackend {
 
     pub(crate) fn set_unreachable(&self, unreachable: bool) {
         self.unreachable.store(unreachable, Ordering::SeqCst);
+    }
+
+    pub(crate) fn lose_next_post_reply(&self) {
+        self.lose_post_reply.store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn height(&self) -> u64 {
@@ -178,6 +191,12 @@ impl MockBackend {
             }
         });
     }
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn next_mmr_index(chain: &ChainState) -> u64 {

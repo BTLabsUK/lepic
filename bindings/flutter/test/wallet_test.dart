@@ -471,6 +471,345 @@ void main() {
     );
   });
 
+  Future<(EpicWallet, EpicWallet, String)> fundedPair(String name) async {
+    final aliceStore = MemoryStore();
+    final alice = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(walletDir('$name-alice')),
+      store: lepicSecretStore(aliceStore),
+      password: password,
+    );
+    final phrase = await alice.mnemonic(password: password);
+    chain.fund(
+      mnemonic: phrase,
+      chain: Chain.floonet,
+      amount: BigInt.from(10 * epic),
+      child: 0,
+    );
+    chain.setHeight(height: BigInt.from(20));
+    await scanToEnd(alice);
+    final bob = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(walletDir('$name-bob')),
+      store: lepicSecretStore(MemoryStore()),
+      mnemonic: bobPhrase,
+      password: password,
+    );
+    await scanToEnd(bob);
+    return (alice, bob, phrase);
+  }
+
+  test('history, fees and offline balance follow a send', () async {
+    final (alice, bob, _) = await fundedPair('history');
+
+    final max = await alice.estimateMax(minimumConfirmations: BigInt.one);
+    expect(max.amount + max.fee, BigInt.from(10 * epic));
+    expect(max.change, BigInt.zero);
+    expect(max.inputCount, 1);
+    final estimate = await alice.estimateFee(
+      amount: BigInt.from(3 * epic),
+      minimumConfirmations: BigInt.one,
+    );
+    expect(estimate.amount, BigInt.from(3 * epic));
+    expect(estimate.inputCount, 1);
+    expect(
+      estimate.change,
+      BigInt.from(10 * epic) - estimate.amount - estimate.fee,
+    );
+    await expectLater(
+      alice.estimateFee(
+        amount: BigInt.from(10 * epic),
+        minimumConfirmations: BigInt.one,
+      ),
+      throwsWalletError(WalletErrorKind.notEnoughFunds),
+    );
+    // An estimate locks nothing.
+    expect((await alice.summary(refresh: false)).locked, BigInt.zero);
+
+    final s1 = await alice.createSendSlate(
+      amount: BigInt.from(3 * epic),
+      minimumConfirmations: BigInt.one,
+    );
+    final sent = await alice.transaction(txId: s1.txId);
+    expect(sent.status, TxStatus.sent);
+    expect(sent.direction, TxDirection.outgoing);
+    expect(sent.slateId, s1.slateId);
+    expect(sent.fee, estimate.fee);
+    expect(
+      sent.amountDebited - sent.amountCredited,
+      estimate.amount + estimate.fee,
+    );
+    expect(sent.kernelExcess, isNull);
+    expect(sent.confirmedHeight, isNull);
+    expect(sent.confirmedAtMs, isNull);
+    expect(sent.counterparty, isNull);
+    expect(
+      DateTime.fromMillisecondsSinceEpoch(sent.createdAtMs)
+          .difference(DateTime.now())
+          .abs(),
+      lessThan(const Duration(minutes: 5)),
+    );
+
+    final s2 = await bob.receiveSlate(slateJson: s1.json);
+    await alice.finalizeAndPost(slateJson: s2.json);
+    final posted = await alice.transaction(txId: s1.txId);
+    expect(posted.status, TxStatus.posted);
+    expect(posted.kernelExcess, matches(RegExp(r'^[0-9a-f]{66}$')));
+
+    chain.minePushed();
+    chain.setHeight(height: BigInt.from(40));
+    final refreshed = await alice.summary(refresh: true);
+    expect(refreshed.validatedWithNode, isTrue);
+    final history = await alice.transactions();
+    expect(history.first.txId, s1.txId, reason: 'newest first');
+    expect(history.map((tx) => tx.txId).toSet().length, history.length);
+    final confirmed = history.first;
+    expect(confirmed.status, TxStatus.confirmed);
+    expect(confirmed.confirmedHeight, BigInt.from(20));
+    expect(confirmed.confirmedAtMs, isNotNull);
+    expect(confirmed.kernelExcess, posted.kernelExcess);
+    expect(history.last.direction, TxDirection.incoming);
+
+    final bobHistory = await bob.transactions();
+    expect(bobHistory.first.direction, TxDirection.incoming);
+    expect(bobHistory.first.slateId, s1.slateId);
+    expect(bobHistory.first.amountCredited, BigInt.from(3 * epic));
+    await expectLater(
+      alice.transaction(txId: 999),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+
+    // Offline: the stored balance, also on a handle that never refreshed.
+    chain.setNodeUnreachable(unreachable: true);
+    final offline = await alice.summary(refresh: false);
+    expect(offline.total, refreshed.total);
+    expect(offline.spendable, refreshed.spendable);
+    expect(offline.lastConfirmedHeight, refreshed.lastConfirmedHeight);
+    expect(offline.validatedWithNode, isFalse);
+    await expectLater(
+      alice.estimateFee(amount: BigInt.one, minimumConfirmations: BigInt.one),
+      throwsWalletError(WalletErrorKind.nodeUnreachable),
+    );
+  });
+
+  test(
+    'a wallet that never refreshed answers summary without the node',
+    () async {
+      final store = MemoryStore();
+      final dir = walletDir('offline');
+      final wallet = await EpicWallet.create(
+        runtime: runtime,
+        config: configFor(dir),
+        store: lepicSecretStore(store),
+        password: password,
+      );
+      chain.setNodeUnreachable(unreachable: true);
+      final summary = await wallet.summary(refresh: false);
+      expect(summary.total, BigInt.zero);
+      expect(summary.validatedWithNode, isFalse);
+      await expectLater(
+        wallet.summary(refresh: true),
+        throwsWalletError(WalletErrorKind.nodeUnreachable),
+      );
+      expect(await wallet.transactions(), isEmpty);
+    },
+  );
+
+  test(
+    'a reopened wallet shows its stored balance with the node down',
+    () async {
+      final store = MemoryStore();
+      final dir = walletDir('reopen-offline');
+      final wallet = await EpicWallet.create(
+        runtime: runtime,
+        config: configFor(dir),
+        store: lepicSecretStore(store),
+        password: password,
+      );
+      chain.fund(
+        mnemonic: await wallet.mnemonic(password: password),
+        chain: Chain.floonet,
+        amount: BigInt.from(5 * epic),
+        child: 0,
+      );
+      chain.setHeight(height: BigInt.from(20));
+      await scanToEnd(wallet);
+      final online = await wallet.summary(refresh: true);
+      expect(online.total, BigInt.from(5 * epic));
+      wallet.dispose();
+
+      chain.setNodeUnreachable(unreachable: true);
+      final reopened = await EpicWallet.open(
+        runtime: runtime,
+        config: configFor(dir),
+        store: lepicSecretStore(store),
+        password: password,
+      );
+      final offline = await reopened.summary(refresh: false);
+      expect(offline.total, online.total);
+      expect(offline.spendable, online.spendable);
+      expect(offline.validatedWithNode, isFalse);
+    },
+  );
+
+  test('inspect_slate reads every stage of V2 and V3 slates', () async {
+    final vectors = Directory('../../testdata/vectors/slates')
+        .listSync()
+        .whereType<File>()
+        .where((file) => file.path.endsWith('.json'))
+        .map(
+          (file) => jsonDecode(file.readAsStringSync()) as Map<String, dynamic>,
+        )
+        .where((vector) => vector['expected']?['header'] != null);
+    final seen = <String>{};
+    for (final vector in vectors) {
+      final expected = vector['expected'] as Map<String, dynamic>;
+      final header = expected['header']['version'] as int;
+      final shape = expected['shape'] as String;
+      // The file method reads by the header's version; a V2 shape under header 3 is not a
+      // slate any wallet writes to a file.
+      if (shape == 'V2' && header == 3) continue;
+      final name = vector['name'] as String;
+      final text = expected['json'] as String;
+      final json = jsonDecode(text) as Map<String, dynamic>;
+      final info = await inspectSlate(json: text, chain: Chain.floonet);
+      final stage = vector['inputs']['stage'] as String;
+      expect(info.stage.name, stage.toLowerCase(), reason: name);
+      expect(info.version, header, reason: name);
+      expect(info.slateId, expected['slate_id'], reason: name);
+      expect(info.amount, BigInt.parse('${json['amount']}'), reason: name);
+      expect(info.fee, BigInt.parse('${json['fee']}'), reason: name);
+      final ttl = header == 3 ? json['ttl_cutoff_height'] : null;
+      expect(
+        info.ttlCutoffHeight,
+        ttl == null ? isNull : BigInt.parse('$ttl'),
+        reason: name,
+      );
+      final messages = [
+        for (final participant in json['participant_data'] as List)
+          if (participant['message'] != null) participant['message'] as String,
+      ];
+      expect(
+        info.messages.map((message) => message.text),
+        unorderedEquals(messages),
+        reason: name,
+      );
+      seen.add('${shape.toLowerCase()}-$stage');
+    }
+    expect(seen, {
+      for (final stage in ['S1', 'S2', 'S3', 'I1', 'I2', 'I3']) ...[
+        'v2-$stage',
+        'v3-$stage',
+      ],
+    });
+  });
+
+  test('inspect_slate names the sender and receiver messages', () async {
+    final vector = jsonDecode(
+      File('../../testdata/vectors/slates/send_file_messages_s2_file.json')
+          .readAsStringSync(),
+    ) as Map<String, dynamic>;
+    final options = vector['inputs']['options'] as Map<String, dynamic>;
+    final info = await inspectSlate(
+      json: vector['expected']['json'] as String,
+      chain: Chain.mainnet,
+    );
+    expect(info.stage, SlateStage.s2);
+    expect(
+      {for (final message in info.messages) message.role: message.text},
+      {
+        SlateRole.sender: options['initiator_message'],
+        SlateRole.receiver: options['responder_message'],
+      },
+    );
+  });
+
+  test('inspect_slate accepts what the file method accepts', () async {
+    final vectors = Directory('../../testdata/vectors/slates')
+        .listSync()
+        .whereType<File>()
+        .where((file) => file.path.contains('/malformed_'))
+        .map(
+          (file) => jsonDecode(file.readAsStringSync()) as Map<String, dynamic>,
+        );
+    // Refused although upstream's parser takes them, as `crates/lepic-transport/tests/vectors.rs`
+    // lists: LEPIC's decode checks more than upstream's parse step.
+    const stricter = {
+      'malformed_duplicate_participant_id',
+      'malformed_num_participants_zero',
+      'malformed_offset_too_short',
+    };
+    var refused = 0;
+    for (final vector in vectors) {
+      final name = vector['name'] as String;
+      final text = vector['inputs']['json'] as String;
+      final accepted =
+          vector['expected']['file_method']['accepted'] as bool &&
+          !stricter.contains(name);
+      final inspected = inspectSlate(json: text, chain: Chain.floonet);
+      if (accepted) {
+        await expectLater(inspected, completes, reason: name);
+      } else {
+        refused++;
+        await expectLater(
+          inspected,
+          throwsWalletError(WalletErrorKind.invalidSlate),
+          reason: name,
+        );
+      }
+    }
+    expect(refused, greaterThan(10));
+    await expectLater(
+      inspectSlate(json: ' ' * (8 * 1024 * 1024 + 1), chain: Chain.floonet),
+      throwsWalletError(WalletErrorKind.invalidSlate),
+    );
+  });
+
+  test('a restored wallet must finish its scan before it receives', () async {
+    final (alice, _, _) = await fundedPair('restore-scan');
+    final restored = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(walletDir('restore-scan-carol')),
+      store: lepicSecretStore(MemoryStore()),
+      mnemonic:
+          'legal winner thank year wave sausage worth useful legal winner thank year '
+          'wave sausage worth useful legal winner thank year wave sausage worth title',
+      password: password,
+    );
+    final s1 = await alice.createSendSlate(
+      amount: BigInt.from(epic),
+      minimumConfirmations: BigInt.one,
+    );
+    await expectLater(
+      restored.receiveSlate(slateJson: s1.json),
+      throwsWalletError(WalletErrorKind.restoreScanRequired),
+    );
+    await scanToEnd(restored);
+    final s2 = await restored.receiveSlate(slateJson: s1.json);
+    expect(s2.slateId, s1.slateId);
+  });
+
+  test('a send the node took cannot be cancelled', () async {
+    final (alice, bob, _) = await fundedPair('on-chain');
+    final s1 = await alice.createSendSlate(
+      amount: BigInt.from(epic),
+      minimumConfirmations: BigInt.one,
+    );
+    final s2 = await bob.receiveSlate(slateJson: s1.json);
+    chain.loseNextPostReply();
+    await expectLater(
+      alice.finalizeAndPost(slateJson: s2.json),
+      throwsWalletError(WalletErrorKind.notPosted),
+    );
+    expect((await alice.transaction(txId: s1.txId)).status, TxStatus.finalized);
+    chain.minePushed();
+    await expectLater(
+      alice.cancelTransaction(txId: s1.txId),
+      throwsWalletError(WalletErrorKind.onChain),
+    );
+    expect((await alice.transaction(txId: s1.txId)).status, TxStatus.finalized);
+  });
+
   test('every error kind has its documented code', () async {
     expect(WalletErrorKind.values.toSet(), errorCodes.keys.toSet());
     for (final MapEntry(key: kind, value: code) in errorCodes.entries) {
