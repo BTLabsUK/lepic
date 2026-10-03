@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{CodecId, EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::DecodeError;
 use lepic_slate::origin::LegacyHeader;
 use lepic_slate::registry::CodecRegistry;
 use lepic_transport::error::FormatError;
@@ -219,6 +220,47 @@ async fn importing_every_upstream_slate_file_yields_the_expected_codec_and_slate
             "{name}: slate"
         );
     }
+}
+
+/// A version 2 file is read as V2 whether or not it carries the V3-only keys, and V2 refuses a
+/// repeated top-level key, as upstream's direct parse into its V2 slate does.
+#[test]
+fn a_version_two_file_with_a_repeated_key_is_refused_with_or_without_v3_only_keys() {
+    let codecs = legacy_codecs();
+    let transport = FileTransport::new();
+    let decode = |json: String| {
+        transport
+            .policy()
+            .decode(&codecs, &WireSlate::text(MediaType::JSON, json))
+    };
+    let mut checked = 0;
+    for (name, vector) in file_vectors() {
+        let json = slate_json(&vector);
+        let slate: Value = serde_json::from_str(json).unwrap();
+        if header_of(&slate).version != 2 {
+            continue;
+        }
+        let body = json.trim_start().strip_prefix('{').unwrap();
+        let with_ttl = format!(r#"{{"ttl_cutoff_height":null,{body}"#);
+        let repeated_id = format!(r#"{{"id":{},{body}"#, slate["id"]);
+        let both = format!(r#"{{"ttl_cutoff_height":null,"id":{},{body}"#, slate["id"]);
+
+        assert!(decode(with_ttl).is_ok(), "{name}: v3-only key alone");
+        for (case, json) in [("repeated key", repeated_id), ("both", both)] {
+            assert!(
+                matches!(
+                    decode(json),
+                    Err(DecodeError::Syntax {
+                        codec: LEGACY_V2_JSON,
+                        ..
+                    })
+                ),
+                "{name}: {case}"
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked > 0, "no version 2 file vectors");
 }
 
 /// Cases where LEPIC refuses a file upstream's parser accepts, because LEPIC's decode checks
