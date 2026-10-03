@@ -184,7 +184,8 @@ continues where it stopped, and says `Continued an interrupted scan.`
 - `--reset-chain` forgets the chain heights the wallet stored and scans from genesis. Use it when
   `wallet info` says the node is behind the wallet although the node is synced: the wallet
   stored a height that this chain does not have, after a node reported a false tip or a test
-  network was restarted. It cannot be combined with `--start-height`.
+  network was restarted. It cannot be combined with `--start-height`; with
+  `--delete-unconfirmed` it runs the repair too.
 
 The JSON document has `start_height`, `end_height`, `resumed`, `found`, `restored`, `revived`,
 `unlocked` and `deleted`.

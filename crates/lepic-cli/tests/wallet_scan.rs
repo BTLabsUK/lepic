@@ -56,23 +56,7 @@ fn funded_sender(host: &TestHost) -> Instance {
 fn a_wallet_restored_without_a_scan_receives_after_wallet_scan() {
     let host = TestHost::new();
     let sender = funded_sender(&host);
-    let phrase = {
-        let created = Instance::new("throwaway password");
-        let report = created.run(&host, &["wallet", "init"]).ok().json();
-        text(&report, "recovery_phrase").to_owned()
-    };
-    host.fund(&phrase, 0, FUNDING / 2, 2);
-    let receiver = Instance::new("receiver password");
-    let restored = receiver
-        .run_with(
-            &host,
-            &["wallet", "restore", "--no-scan"],
-            receiver.env(),
-            &format!("{phrase}\n"),
-        )
-        .ok()
-        .json();
-    assert!(restored["scan"].is_null(), "{restored}");
+    let receiver = restored_without_scan(&host, FUNDING / 2);
 
     let slate = sender.path("payment.slate");
     sender
@@ -104,6 +88,61 @@ fn a_wallet_restored_without_a_scan_receives_after_wallet_scan() {
     let received = receiver.run(&host, &receive).ok().json();
     assert_eq!(received["amount"], "1.00000000");
     assert_eq!(received["repeated"], false);
+}
+
+/// A scan from above genesis completes without ending the wait after a `--no-scan` restore, so
+/// the next plain scan starts at genesis instead of before that scan's end.
+#[test]
+fn a_pending_restore_scan_starts_at_genesis_after_a_partial_scan() {
+    let host = TestHost::new();
+    let sender = funded_sender(&host);
+    let receiver = restored_without_scan(&host, FUNDING / 2);
+    let slate = sender.path("payment.slate");
+    sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok();
+    host.node
+        .update_chain(|chain| chain.tip.height = Height::new(300));
+
+    let partial = scan(&receiver, &host, &["--start-height", "250"]);
+    assert_eq!(partial["start_height"], 250, "{partial}");
+    assert_eq!(partial["end_height"], 300, "{partial}");
+    assert_eq!(partial["found"], 0, "{partial}");
+    let receive = ["tx", "receive", slate.to_str().unwrap()];
+    let refused = receiver.run(&host, &receive);
+    assert_eq!(refused.code, 5, "{refused:?}");
+
+    let full = scan(&receiver, &host, &[]);
+    assert_eq!(full["start_height"], 0, "{full}");
+    assert_eq!(full["restored"], 1, "{full}");
+    let received = receiver.run(&host, &receive).ok().json();
+    assert_eq!(received["amount"], "1.00000000");
+}
+
+/// A wallet restored with `--no-scan` from a new phrase that owns one output of `amount` on
+/// chain.
+fn restored_without_scan(host: &TestHost, amount: u64) -> Instance {
+    let phrase = {
+        let created = Instance::new("throwaway password");
+        let report = created.run(host, &["wallet", "init"]).ok().json();
+        text(&report, "recovery_phrase").to_owned()
+    };
+    host.fund(&phrase, 0, amount, 2);
+    let receiver = Instance::new("receiver password");
+    let restored = receiver
+        .run_with(
+            host,
+            &["wallet", "restore", "--no-scan"],
+            receiver.env(),
+            &format!("{phrase}\n"),
+        )
+        .ok()
+        .json();
+    assert!(restored["scan"].is_null(), "{restored}");
+    receiver
 }
 
 /// Without options a scan reaches back 100 blocks from the last completed one; a start height
@@ -202,11 +241,20 @@ fn delete_unconfirmed_releases_what_an_unfinished_send_held() {
 }
 
 /// A wallet that stored a height its node's chain does not have stays behind it: an ordinary
-/// scan keeps the stored height, and `--reset-chain` forgets it and scans from genesis.
+/// scan keeps the stored height, and `--reset-chain` forgets it and scans from genesis. With
+/// `--delete-unconfirmed` the reset also releases what an unfinished send held.
 #[test]
 fn reset_chain_recovers_a_wallet_ahead_of_its_node() {
     let host = TestHost::new();
     let sender = funded_sender(&host);
+    let slate = sender.path("abandoned.slate");
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
     sender.run(&host, &["wallet", "info"]).ok();
     host.node
         .update_chain(|chain| chain.tip.height = Height::new(TIP - 10));
@@ -227,14 +275,22 @@ fn reset_chain_recovers_a_wallet_ahead_of_its_node() {
     let still = sender.run(&host, &["wallet", "info"]).ok().json();
     assert_eq!(still["node_behind"], true, "{still}");
 
-    let reset = scan(&sender, &host, &["--reset-chain"]);
+    let reset = scan(&sender, &host, &["--reset-chain", "--delete-unconfirmed"]);
     assert_eq!(reset["start_height"], 0, "{reset}");
     assert_eq!(reset["end_height"], TIP - 10, "{reset}");
     assert_eq!(reset["found"], 1, "{reset}");
+    assert_eq!(reset["unlocked"], 1, "{reset}");
+    assert_eq!(reset["deleted"], 1, "{reset}");
     let info = sender.run(&host, &["wallet", "info"]).ok().json();
     assert_eq!(info["node_behind"], false, "{info}");
     assert_eq!(info["height"], TIP - 10, "{info}");
     assert_eq!(info["accounts"][0]["total"], "10.00000000");
+    assert_eq!(info["accounts"][0]["locked"], "0.00000000");
+    let shown = sender
+        .run(&host, &["tx", "show", &sent["tx_id"].to_string()])
+        .ok()
+        .json();
+    assert_eq!(shown["state"], "cancelled", "{shown}");
 
     let conflict = sender.run(
         &host,
