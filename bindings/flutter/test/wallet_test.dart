@@ -615,6 +615,51 @@ void main() {
     );
   });
 
+  test(
+    'an imported wallet.seed signs nothing before its restore scan',
+    () async {
+      final alice = await EpicWallet.create(
+        runtime: runtime,
+        config: configFor(walletDir('import-scan-sender')),
+        store: lepicSecretStore(MemoryStore()),
+        password: password,
+      );
+      chain.fund(
+        mnemonic: await alice.mnemonic(password: password),
+        chain: Chain.floonet,
+        amount: BigInt.from(5 * epic),
+        child: 0,
+      );
+      chain.setHeight(height: BigInt.from(20));
+      await scanToEnd(alice);
+      final s1 = await alice.createSendSlate(
+        amount: BigInt.from(epic),
+        minimumConfirmations: BigInt.one,
+      );
+
+      final vector = walletSeedVector();
+      final imported = await EpicWallet.importWalletSeed(
+        runtime: runtime,
+        config: configFor(walletDir('import-scan')),
+        store: lepicSecretStore(MemoryStore()),
+        seedFile: vector.file,
+        seedPassword: vector.password,
+        password: password,
+      );
+      // TODO(U-11): expect restoreScanRequired once the binding has that kind.
+      await expectLater(
+        imported.receiveSlate(slateJson: s1.json),
+        throwsWalletError(WalletErrorKind.other),
+      );
+      await scanToEnd(imported);
+      // The refused attempt stored nothing, so the same slate is still new to the wallet.
+      final s2 = await imported.receiveSlate(slateJson: s1.json);
+      expect(s2.slateId, s1.slateId);
+      final posted = await alice.finalizeAndPost(slateJson: s2.json);
+      expect(posted.txId, s1.txId);
+    },
+  );
+
   test('after a pin change only the new pin opens the wallet', () async {
     final dir = walletDir('change-pin');
     final store = MemoryStore();
@@ -696,6 +741,19 @@ void main() {
       expect(DateTime.now().difference(started).inSeconds, lessThan(5));
       expect(store.values['lepic.pin-failures'], '$failures');
     }
+    // A new pin that is too short is refused before the old pin is tried: no attempt is
+    // counted and nothing waits, although a counted attempt would now wait 30 s.
+    final refused = DateTime.now();
+    await expectLater(
+      created.wallet.changePin(
+        sealedPassword: sealed,
+        oldPin: '0000',
+        newPin: '987',
+      ),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+    expect(DateTime.now().difference(refused).inSeconds, lessThan(5));
+    expect(store.values['lepic.pin-failures'], '3');
     // After three failures the next attempt, even with the right pin, first waits 30 s.
     var finished = false;
     unawaited(

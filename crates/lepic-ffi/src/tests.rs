@@ -646,3 +646,25 @@ fn the_log_ring_keeps_redacted_records_for_the_support_bundle() {
     );
     assert!(!bundle.contains("123456789"));
 }
+
+/// A new PIN that is too short is refused before the old PIN is tried, so it costs no attempt
+/// and no wait, even after enough failures that the next attempt would wait.
+#[tokio::test]
+async fn a_short_new_pin_is_refused_before_the_old_pin_is_counted() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    store.write(FAILURES_KEY, "3".to_owned()).await.unwrap();
+
+    let started = std::time::Instant::now();
+    let changed = created
+        .wallet
+        .change_pin(created.sealed_password, "0000".to_owned(), "123".to_owned())
+        .await;
+    assert_eq!(kind(changed), WalletErrorKind::InvalidArgument);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(
+        store.read(FAILURES_KEY).await.unwrap().as_deref(),
+        Some("3")
+    );
+}
