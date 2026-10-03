@@ -894,6 +894,12 @@ fn a_payment_without_change_is_confirmed_by_its_kernel() {
     assert_eq!(payment.entry.amount_credited, Amount::ZERO);
 
     let kernel = *finalized.transaction.kernels().first().unwrap();
+    let before = payer
+        .block_on(payer.wallet.transaction_details(payment.id))
+        .unwrap();
+    // The payer never receives the I3; its kernel comes from the stored I2.
+    assert_eq!(before.kernel_excess, Some(kernel.excess));
+    assert_eq!(before.confirmed_height, None);
     node.update_chain(|chain| {
         chain.tip.height = Height::new(TIP + 1);
         chain.kernels.push(LocatedKernel {
@@ -910,6 +916,11 @@ fn a_payment_without_change_is_confirmed_by_its_kernel() {
             .state,
         TxState::Confirmed
     );
+    let after = payer
+        .block_on(payer.wallet.transaction_details(payment.id))
+        .unwrap();
+    assert_eq!(after.kernel_excess, Some(kernel.excess));
+    assert_eq!(after.confirmed_height, Some(Height::new(TIP + 1)));
 }
 
 #[test]
