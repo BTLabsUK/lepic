@@ -306,3 +306,16 @@ task = "W-07"
 upstream.repo = "https://github.com/EpicCash/epic-wallet"
 upstream.paths = ["libwallet/src/api_impl/owner.rs", "libwallet/src/internal/updater.rs"]
 upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+[[module]]
+path = "crates/lepic-wallet/src/invoice"
+task = "W-08"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = [
+  "libwallet/src/api_impl/owner.rs",
+  "libwallet/src/api_impl/foreign.rs",
+  "libwallet/src/internal/tx.rs",
+  "libwallet/src/internal/selection.rs",
+  "libwallet/src/slate.rs",
+]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"

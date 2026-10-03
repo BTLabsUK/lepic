@@ -1,0 +1,951 @@
+//! Invoice flow: the receiver asks to be paid. The issuer creates I1, the payer adds its
+//! inputs and signs (I2), and the issuer finalizes (I3) and posts, as `epic-wallet` `v4.0.2`
+//! does over the file method (`docs/compat/legacy-slates.md`, "Lifecycle"). Upstream has no
+//! invoice flow over Epicbox.
+//!
+//! The issuer is the receiver and the payer the sender, so the legacy participant ids keep
+//! their meaning (sender 0, receiver 1) while the initiator is participant 1; the legacy
+//! codecs handle that order.
+//!
+//! [`build_i1`], [`build_i2`] and [`build_i3`] are the constructions on their own.
+//! [`crate::Wallet::issue_invoice`], [`crate::Wallet::pay_invoice`] and
+//! [`crate::Wallet::finalize_invoice`] run them against the store, each in one store
+//! transaction.
+
+mod build;
+
+use jiff::Timestamp;
+use lepic_crypto::CryptoError;
+use lepic_keychain::{IdentifierError, Keychain, KeychainError, ProofError, SwitchCommitment};
+use lepic_node::{NodeApi, NodeError, NodeRejection, Propagation, RejectionKind};
+use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
+use lepic_primitives::committed::KernelSumError;
+use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
+use lepic_primitives::params::Network;
+use lepic_primitives::tx::Transaction;
+use lepic_primitives::validate::ValidationError;
+use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::{DecodeError, EncodeError, RegistryError, SlateError};
+use lepic_slate::model::{Slate, SlateId};
+use lepic_slate::origin::WireOrigin;
+use lepic_slate::registry::CodecRegistry;
+use lepic_slate::role::Role;
+use lepic_slate::stage::Stage;
+use lepic_store::{
+    AccountIndex, KeyId, OutputRecord, OutputStatus, ParticipantId, Repositories, SlateStage,
+    StoreError, StoredSlate, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
+};
+use lepic_transport::error::{FormatError, TransportError};
+use lepic_transport::policy::{FormatPolicy, encode_with};
+use lepic_transport::registry::TransportRegistry;
+use lepic_transport::transport::{Transport, TransportId};
+use thiserror::Error;
+use tracing::field::Empty;
+use tracing::{Span, debug, info, instrument};
+use uuid::Uuid;
+
+pub use build::{
+    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, build_i1, build_i2, build_i3,
+};
+
+use crate::account::{AccountError, next_output_key};
+use crate::error::WalletError;
+use crate::finalize::{Finalized, FinalizedSlate};
+use crate::ports::{SecretVault, StoreOpener};
+use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
+use crate::send::{ChangeOutput, Delivery, SendRequest, block_header_version};
+use crate::state::{StateChange, apply_transition, state_name};
+use crate::wallet::Wallet;
+use build::{IssuerContext, final_transaction, verify_message};
+
+/// The issuer's private context is stored under the participant id legacy slates give the
+/// receiver, which the issuer is.
+pub(crate) const ISSUER_CONTEXT: ParticipantId = ParticipantId(1);
+
+/// A slate field the payer may not change between I1 and I2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InvoiceField {
+    Amount,
+    Lock,
+    Offset,
+    Outputs,
+    Issuer,
+}
+
+impl std::fmt::Display for InvoiceField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Amount => "amount",
+            Self::Lock => "lock height",
+            Self::Offset => "offset",
+            Self::Outputs => "issuer outputs",
+            Self::Issuer => "issuer data",
+        })
+    }
+}
+
+/// Why an invoice was not issued, paid or finalized.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum InvoiceError {
+    #[error("wallet operation failed")]
+    Wallet(#[from] WalletError),
+    #[error("node request failed")]
+    Node(#[source] NodeError),
+    #[error("transport {transport} is not registered")]
+    UnknownTransport { transport: TransportId },
+    #[error("transport {transport} cannot deliver slates")]
+    CannotDeliver { transport: TransportId },
+    #[error("transport {transport} cannot export slates")]
+    CannotExport { transport: TransportId },
+    #[error("slate could not be decoded")]
+    Decode(#[source] DecodeError),
+    #[error("slate at stage {stage} does not fit this step of the invoice flow")]
+    WrongStage { stage: Stage },
+    #[error("output selection failed")]
+    Selection(#[from] SelectionError),
+    /// The invoice asks for another amount than the one the payer approved.
+    #[error("invoice asks for {invoiced}, the payer approved {approved}")]
+    AmountMismatch { invoiced: Amount, approved: Amount },
+    #[error("invoice {slate_id} was already paid as transaction {tx_id}")]
+    AlreadyPaid { slate_id: SlateId, tx_id: TxId },
+    #[error("slate expired at height {cutoff}, the chain tip is at {tip}")]
+    Expired { cutoff: Height, tip: Height },
+    #[error("{role} message signature does not verify")]
+    MessageSignature {
+        role: Role,
+        #[source]
+        source: CryptoError,
+    },
+    /// The I2 differs from the I1 this wallet issued in a field only the issuer sets.
+    #[error("payment changed the {field} of the invoice")]
+    Mismatch { field: InvoiceField },
+    #[error("stored output is not the commitment its key derives")]
+    InputKeyMismatch,
+    #[error("stored key identifier rejected")]
+    KeyIdentifier(#[from] IdentifierError),
+    #[error("output could not be built")]
+    Output(#[source] ProofError),
+    #[error("signature could not be created")]
+    Signing(#[source] CryptoError),
+    #[error("payer partial signature does not verify")]
+    PayerSignature(#[source] CryptoError),
+    #[error("fee {fee} is below the minimum {minimum} for the transaction")]
+    FeeBelowMinimum { fee: Fee, minimum: Fee },
+    #[error("minimum fee could not be computed")]
+    FeeOverflow,
+    #[error("kernel excess could not be computed")]
+    Excess(#[source] KernelSumError),
+    #[error("final transaction is invalid")]
+    InvalidTransaction(#[source] ValidationError),
+    #[error("slate rejected")]
+    Slate(#[source] SlateError),
+    #[error("transaction height arithmetic failed")]
+    Arithmetic(#[from] ArithmeticError),
+    #[error("codec registration failed")]
+    Codecs(#[source] RegistryError),
+    /// The format the transport uses for this slate cannot carry all of it. Nothing was stored.
+    #[error("transport cannot carry this slate")]
+    Encode(#[source] FormatError),
+    #[error("slate could not be stored")]
+    Unrepresentable(#[source] EncodeError),
+    #[error("stored slate is unreadable")]
+    StoredSlate(#[source] DecodeError),
+    #[error("slate {slate_id} answers no invoice this wallet issued")]
+    UnknownSlate { slate_id: SlateId },
+    /// The invoice was finalized with another I2 under the same slate id.
+    #[error("invoice {slate_id} was already finalized as transaction {tx_id}")]
+    AlreadyFinalized { slate_id: SlateId, tx_id: TxId },
+    #[error("transaction {tx_id} is {} and cannot be finalized", state_name(*state))]
+    NotFinalizable { tx_id: TxId, state: TxState },
+    #[error("private context of slate {slate_id} is missing")]
+    MissingContext { slate_id: SlateId },
+    #[error("stored private context is malformed")]
+    MalformedContext,
+    /// The invoice and its I1 are stored; cancelling the transaction withdraws it.
+    #[error("invoice {slate_id} of transaction {tx_id} is stored but was not delivered")]
+    Undelivered {
+        tx_id: TxId,
+        slate_id: SlateId,
+        #[source]
+        source: TransportError,
+    },
+    /// The invoice is finalized and stored; finalizing the same I2 again posts it again.
+    #[error("transaction {tx_id} is finalized but the node did not accept it")]
+    NotPosted {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
+}
+
+impl From<StoreError> for InvoiceError {
+    fn from(error: StoreError) -> Self {
+        Self::Wallet(WalletError::Store(error))
+    }
+}
+
+impl From<KeychainError> for InvoiceError {
+    fn from(error: KeychainError) -> Self {
+        Self::Wallet(WalletError::Keychain(error))
+    }
+}
+
+/// What to ask for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvoiceRequest {
+    /// The account the payment goes to.
+    pub account: AccountIndex,
+    /// What the issuer receives; the payer adds the fee on top.
+    pub amount: Amount,
+    /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
+    /// it is signed.
+    pub message: Option<String>,
+}
+
+/// How to pay an invoice. [`PayRequest::new`] fills in the defaults of `epic-wallet`'s
+/// `InitTxArgs`, as [`SendRequest::new`] does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayRequest {
+    pub account: AccountIndex,
+    /// The amount the payer approved. An invoice for any other amount is refused, as
+    /// `epic-wallet pay` refuses unless the user types the invoiced amount.
+    pub amount: Amount,
+    pub minimum_confirmations: u64,
+    pub max_outputs: std::num::NonZeroUsize,
+    pub change_outputs: std::num::NonZeroUsize,
+    pub strategy: SelectionStrategy,
+    /// Blocks past the chain tip after which the issuer must refuse the payment.
+    pub ttl_blocks: Option<u64>,
+    /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
+    /// it is signed.
+    pub message: Option<String>,
+}
+
+impl PayRequest {
+    pub fn new(account: AccountIndex, amount: Amount) -> Self {
+        let defaults = SendRequest::new(account, amount);
+        Self {
+            account,
+            amount,
+            minimum_confirmations: defaults.minimum_confirmations,
+            max_outputs: defaults.max_outputs,
+            change_outputs: defaults.change_outputs,
+            strategy: defaults.strategy,
+            ttl_blocks: None,
+            message: None,
+        }
+    }
+}
+
+/// An invoice that was stored and delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IssuedInvoice {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    pub amount: Amount,
+}
+
+/// A paid invoice: the stored transaction and the I2 reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaidInvoice {
+    pub tx_id: TxId,
+    pub slate: Slate,
+    /// I2 encoded by the transport's reply rule, the bytes that were stored.
+    pub reply: WireSlate,
+}
+
+/// The codecs a legacy transport policy decodes and encodes with, at the network's base fee.
+fn legacy_codecs(base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
+    let mut codecs = CodecRegistry::new();
+    codecs
+        .register(Box::new(V3JsonCodec::new(base_fee)))
+        .map_err(InvoiceError::Codecs)?;
+    codecs
+        .register(Box::new(V2JsonCodec::new(base_fee)))
+        .map_err(InvoiceError::Codecs)?;
+    Ok(codecs)
+}
+
+fn uuid(slate_id: SlateId) -> Uuid {
+    Uuid::from_bytes(*slate_id.as_bytes())
+}
+
+fn registered(
+    transports: &TransportRegistry,
+    transport: TransportId,
+) -> Result<&dyn Transport, InvoiceError> {
+    transports
+        .get(transport)
+        .ok_or(InvoiceError::UnknownTransport { transport })
+}
+
+/// The transport of `delivery`, if it can carry the slate the way `delivery` says.
+fn delivering<'a>(
+    transports: &'a TransportRegistry,
+    delivery: &Delivery,
+) -> Result<&'a dyn Transport, InvoiceError> {
+    let id = delivery.transport();
+    let transport = registered(transports, id)?;
+    match delivery {
+        Delivery::Deliver { .. } if transport.outbound().is_none() => {
+            Err(InvoiceError::CannotDeliver { transport: id })
+        }
+        Delivery::Export { .. } if transport.exchange().is_none() => {
+            Err(InvoiceError::CannotExport { transport: id })
+        }
+        Delivery::Deliver { .. } | Delivery::Export { .. } => Ok(transport),
+    }
+}
+
+/// An I1 or I2 whose sender and receiver messages, if any, are signed by their authors.
+fn check_messages(slate: &Slate) -> Result<(), InvoiceError> {
+    for (role, participant) in slate.participants() {
+        if let Some(message) = &participant.message {
+            verify_message(message, &participant.public_blind_excess)
+                .map_err(|source| InvoiceError::MessageSignature { role, source })?;
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a slate once the node's current tip reaches its cutoff.
+fn check_ttl(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
+    match slate.ttl_cutoff_height() {
+        Some(cutoff) if tip >= cutoff => Err(InvoiceError::Expired { cutoff, tip }),
+        _ => Ok(()),
+    }
+}
+
+/// The header block version of a slate this wallet answers or stores: the one it arrived
+/// with, or the one of a slate created at its height.
+fn encode_context(network: Network, slate: &Slate) -> EncodeContext {
+    let block_header_version = slate
+        .origin()
+        .and_then(WireOrigin::legacy_header)
+        .map_or_else(
+            || block_header_version(network, slate.height()),
+            |header| header.block_header_version,
+        );
+    EncodeContext {
+        block_header_version,
+    }
+}
+
+/// What the store transactions of the invoice flow run with, so they need no `Ports`.
+struct InvoiceEnvironment<'a> {
+    keychain: &'a Keychain,
+    network: Network,
+    tip: Height,
+    now: Timestamp,
+}
+
+impl InvoiceEnvironment<'_> {
+    fn base_fee(&self) -> Fee {
+        self.network.params().default_base_fee()
+    }
+
+    /// The slate as V3, which carries every field, for the store.
+    fn stored(&self, slate: &Slate) -> Result<WireSlate, InvoiceError> {
+        V3JsonCodec::new(self.base_fee())
+            .encode(slate, &encode_context(self.network, slate))
+            .map_err(InvoiceError::Unrepresentable)
+    }
+
+    /// A slate this wallet stored as V3; the stages it stores in another codec are not read.
+    fn decode_stored(&self, stored: StoredSlate) -> Result<Slate, InvoiceError> {
+        V3JsonCodec::new(self.base_fee())
+            .decode(&WireSlate::binary(MediaType::JSON, stored.bytes))
+            .map_err(InvoiceError::StoredSlate)
+    }
+}
+
+/// Reserves the issuer's output key, builds, encodes and stores an I1 in the caller's store
+/// transaction. Returns the transaction and the I1 as the transport sends a new slate.
+fn issue_stored(
+    repos: &mut dyn Repositories,
+    env: &InvoiceEnvironment<'_>,
+    transport: &dyn Transport,
+    request: &InvoiceRequest,
+    randomness: I1Randomness,
+) -> Result<(TxId, Slate, WireSlate), InvoiceError> {
+    if repos.account(request.account)?.is_none() {
+        return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
+    }
+    let key_id = next_output_key(repos, request.account)?;
+    let built = build_i1(
+        env.keychain,
+        &I1Plan {
+            account: request.account,
+            amount: request.amount,
+            height: env.tip,
+            key_id,
+            message: request.message.clone(),
+        },
+        randomness,
+    )?;
+    let slate = built.slate;
+    let wire = transport
+        .policy()
+        .encode_new_slate(
+            &legacy_codecs(env.base_fee())?,
+            &slate,
+            &encode_context(env.network, &slate),
+        )
+        .map_err(InvoiceError::Encode)?;
+    let stored = env.stored(&slate)?;
+
+    let slate_id = uuid(slate.id());
+    let tx_id = repos.insert_transaction(&TransactionEntry {
+        account: request.account,
+        direction: TxDirection::Incoming,
+        state: TxState::Received,
+        slate_id: Some(slate_id),
+        transport: Some(transport.id().as_str().to_owned()),
+        amount_credited: request.amount,
+        amount_debited: Amount::ZERO,
+        fee: None,
+        created_at: env.now,
+        updated_at: env.now,
+    })?;
+    let commitment =
+        env.keychain
+            .commit(request.amount.value(), &key_id, SwitchCommitment::Regular)?;
+    repos.put_output(&OutputRecord {
+        id: OutputIdentifier::new(OutputFeatures::Plain, commitment),
+        key_id: KeyId(key_id.to_bytes()),
+        account: request.account,
+        amount: request.amount,
+        status: OutputStatus::Unconfirmed,
+        height: env.tip,
+        lock_height: Height::ZERO,
+        mmr_index: None,
+        tx: Some(tx_id),
+    })?;
+    repos.put_context(slate_id, ISSUER_CONTEXT, &built.context.to_private())?;
+    repos.insert_slate(&StoredSlate {
+        slate_id,
+        stage: SlateStage::Invoice1,
+        codec: LEGACY_V3_JSON.as_str().to_owned(),
+        bytes: stored.as_bytes().to_vec(),
+    })?;
+    Ok((tx_id, slate, wire))
+}
+
+/// Selects the payer's inputs, builds I2, encodes it by the transport's reply rule and stores
+/// the locked inputs, the change, the transaction and the I2 in the caller's store transaction.
+fn pay_stored(
+    repos: &mut dyn Repositories,
+    env: &InvoiceEnvironment<'_>,
+    transport: TransportId,
+    policy: &dyn FormatPolicy,
+    i1: &Slate,
+    request: &PayRequest,
+    randomness: &I2Randomness,
+) -> Result<PaidInvoice, InvoiceError> {
+    let slate_id = i1.id();
+    if let Some(paid) = repos.transaction_by_slate(uuid(slate_id), TxDirection::Outgoing)? {
+        return Err(InvoiceError::AlreadyPaid {
+            slate_id,
+            tx_id: paid.id,
+        });
+    }
+    if repos.account(request.account)?.is_none() {
+        return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
+    }
+    let selection = selection::select(
+        &repos.outputs(request.account, None)?,
+        &SelectionRequest {
+            account: request.account,
+            amount: i1.amount(),
+            tip: env.tip,
+            minimum_confirmations: request.minimum_confirmations,
+            max_outputs: request.max_outputs,
+            change_outputs: request.change_outputs,
+            strategy: request.strategy,
+            base_fee: env.base_fee(),
+        },
+    )?;
+    let change = selection
+        .change
+        .iter()
+        .map(|&amount| {
+            Ok(ChangeOutput {
+                key_id: next_output_key(repos, request.account)?,
+                amount,
+            })
+        })
+        .collect::<Result<Vec<_>, InvoiceError>>()?;
+    let ttl_cutoff_height = request
+        .ttl_blocks
+        .map(|blocks| env.tip.checked_add_blocks(blocks))
+        .transpose()?;
+    let plan = I2Plan {
+        fee: selection.fee,
+        height: env.tip,
+        ttl_cutoff_height,
+        inputs: selection.inputs,
+        change,
+        message: request.message.clone(),
+    };
+    let slate = build_i2(env.keychain, i1, &plan, randomness)?;
+    let context = encode_context(env.network, &slate);
+    let encoding = policy.for_reply(&slate, &context);
+    let reply = encode_with(&legacy_codecs(env.base_fee())?, encoding, &slate, &context)
+        .map_err(InvoiceError::Encode)?;
+
+    let slate_uuid = uuid(slate_id);
+    let total_change = plan.change.iter().try_fold(Amount::ZERO, |total, change| {
+        total.checked_add(change.amount)
+    })?;
+    let tx_id = repos.insert_transaction(&TransactionEntry {
+        account: request.account,
+        direction: TxDirection::Outgoing,
+        state: TxState::Sent,
+        slate_id: Some(slate_uuid),
+        transport: Some(transport.as_str().to_owned()),
+        amount_credited: total_change,
+        amount_debited: selection.total,
+        fee: Some(plan.fee),
+        created_at: env.now,
+        updated_at: env.now,
+    })?;
+    for input in &plan.inputs {
+        repos.put_output(&OutputRecord {
+            status: OutputStatus::Locked,
+            tx: Some(tx_id),
+            ..input.clone()
+        })?;
+    }
+    for change in &plan.change {
+        let commitment = env.keychain.commit(
+            change.amount.value(),
+            &change.key_id,
+            SwitchCommitment::Regular,
+        )?;
+        repos.put_output(&OutputRecord {
+            id: OutputIdentifier::new(OutputFeatures::Plain, commitment),
+            key_id: KeyId(change.key_id.to_bytes()),
+            account: request.account,
+            amount: change.amount,
+            status: OutputStatus::Unconfirmed,
+            height: env.tip,
+            lock_height: Height::ZERO,
+            mmr_index: None,
+            tx: Some(tx_id),
+        })?;
+    }
+    repos.insert_slate(&StoredSlate {
+        slate_id: slate_uuid,
+        stage: SlateStage::Invoice2,
+        codec: encoding.codec.as_str().to_owned(),
+        bytes: reply.as_bytes().to_vec(),
+    })?;
+    Ok(PaidInvoice {
+        tx_id,
+        slate,
+        reply,
+    })
+}
+
+/// What a finalize stored, or found stored by an earlier one.
+struct StoredI3 {
+    tx_id: TxId,
+    finalized: FinalizedSlate,
+    change: Option<StateChange>,
+    state: TxState,
+}
+
+/// Whether `i3` was finalized from `i2`: the two agree on everything but what finalizing adds.
+fn finalized_from(i3: &Slate, i2: &Slate) -> bool {
+    let mut finalized = i3.clone().with_origin(None).into_parts();
+    finalized.stage = Stage::I2;
+    finalized.kernel = None;
+    if let Some(issuer) = &mut finalized.receiver {
+        issuer.partial_signature = None;
+    }
+    finalized == i2.clone().with_origin(None).into_parts()
+}
+
+/// Finalizes `i2` against the stored I1 and issuer context in the caller's store transaction:
+/// stores I3, drops the context and moves the transaction to `finalized`. A transaction
+/// already finalized from the same I2 is returned as stored.
+fn finalize_stored(
+    repos: &mut dyn Repositories,
+    env: &InvoiceEnvironment<'_>,
+    i2: &Slate,
+) -> Result<StoredI3, InvoiceError> {
+    let slate_id = i2.id();
+    let slate_uuid = uuid(slate_id);
+    let entry = repos
+        .transaction_by_slate(slate_uuid, TxDirection::Incoming)?
+        .ok_or(InvoiceError::UnknownSlate { slate_id })?;
+    let tx_id = entry.id;
+    let issued = repos
+        .slate(slate_uuid, SlateStage::Invoice1)?
+        .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
+        .ok_or(InvoiceError::UnknownSlate { slate_id })?;
+    match entry.entry.state {
+        TxState::Received => {}
+        state @ (TxState::Finalized | TxState::Posted) => {
+            let stored = repos
+                .slate(slate_uuid, SlateStage::Invoice3)?
+                .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
+                .map(|stored| env.decode_stored(stored))
+                .transpose()?;
+            return match stored {
+                // Returned as the first finalize returned it: with the wire origin of the I2.
+                Some(i3) if finalized_from(&i3, i2) => Ok(StoredI3 {
+                    tx_id,
+                    finalized: FinalizedSlate {
+                        transaction: final_transaction(&i3)?,
+                        slate: i3.with_origin(i2.origin().copied()),
+                    },
+                    change: None,
+                    state,
+                }),
+                _ => Err(InvoiceError::AlreadyFinalized { slate_id, tx_id }),
+            };
+        }
+        state @ (TxState::Sent | TxState::Confirmed | TxState::Cancelled | TxState::Expired) => {
+            return Err(InvoiceError::NotFinalizable { tx_id, state });
+        }
+    }
+    check_ttl(i2, env.tip)?;
+    let context = repos
+        .context(slate_uuid, ISSUER_CONTEXT)?
+        .ok_or(InvoiceError::MissingContext { slate_id })?;
+    let i1 = BuiltI1 {
+        slate: env.decode_stored(issued)?.with_origin(None),
+        context: IssuerContext::from_private(&context)?,
+    };
+    let finalized = build_i3(env.base_fee(), &i1, i2)?;
+
+    let stored = env.stored(&finalized.slate)?;
+    repos.insert_slate(&StoredSlate {
+        slate_id: slate_uuid,
+        stage: SlateStage::Invoice3,
+        codec: LEGACY_V3_JSON.as_str().to_owned(),
+        bytes: stored.as_bytes().to_vec(),
+    })?;
+    // Upstream drops the context once the slate is final; nothing signs with it again.
+    repos.delete_context(slate_uuid, ISSUER_CONTEXT)?;
+    let change = apply_transition(repos, tx_id, TxState::Finalized, env.now)?;
+    Ok(StoredI3 {
+        tx_id,
+        finalized,
+        change,
+        state: TxState::Finalized,
+    })
+}
+
+/// What the node's pool API answers when its pool already holds the transaction, as
+/// `crate::finalize` recognises it for the standard flow.
+const POOL_HOLDS_TRANSACTION: &str = "Failed to update pool: Duplicate tx";
+
+fn pool_holds_transaction(error: &NodeError) -> bool {
+    matches!(
+        error,
+        NodeError::Rejected {
+            rejection: NodeRejection {
+                kind: RejectionKind::Internal,
+                message: Some(message),
+            },
+            ..
+        } if message == POOL_HOLDS_TRANSACTION
+    )
+}
+
+impl<N, S, V> Wallet<N, S, V>
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    /// Issues an invoice for `request.amount` to `request.account`: builds the I1 with this
+    /// wallet's output, stores the output, the private context, the transaction (incoming,
+    /// `received`) and the I1, then delivers it as `delivery` says, encoded with that
+    /// transport's rule for a new slate.
+    ///
+    /// Asks the node for its tip. Fails, with nothing stored, with [`InvoiceError::Wallet`]
+    /// carrying [`WalletError::Locked`] or an unknown account, [`InvoiceError::Node`],
+    /// [`InvoiceError::UnknownTransport`], [`InvoiceError::CannotDeliver`] or
+    /// [`InvoiceError::CannotExport`]. Fails with [`InvoiceError::Undelivered`] when the
+    /// invoice was stored but the transport failed; [`Wallet::cancel`] withdraws it.
+    #[instrument(skip_all, fields(
+        wallet = %self.config().name,
+        transport = %delivery.transport(),
+        stage = %Stage::I1,
+        tx_id = Empty,
+        slate_id = Empty,
+    ))]
+    pub async fn issue_invoice(
+        &self,
+        request: InvoiceRequest,
+        delivery: Delivery,
+    ) -> Result<IssuedInvoice, InvoiceError> {
+        let session = self.session()?;
+        delivering(&self.ports().transports, &delivery)?;
+        let tip = self
+            .ports()
+            .node
+            .get_tip()
+            .await
+            .map_err(InvoiceError::Node)?
+            .height;
+        let target = delivery.clone();
+        let (tx_id, slate, wire) = self
+            .blocking(move |ports, config| {
+                let env = InvoiceEnvironment {
+                    keychain: &session.keychain,
+                    network: config.network,
+                    tip,
+                    now: ports.clock.now(),
+                };
+                let issued = delivering(&ports.transports, &target).and_then(|transport| {
+                    let randomness = I1Randomness::draw(&mut **ports.rng.lock())
+                        .map_err(InvoiceError::Signing)?;
+                    session
+                        .store
+                        .write(|repos| issue_stored(repos, &env, transport, &request, randomness))
+                });
+                Ok(issued)
+            })
+            .await??;
+        let span = Span::current();
+        span.record("tx_id", tx_id.0);
+        span.record("slate_id", tracing::field::display(slate.id()));
+        info!("invoice issued");
+
+        let transport = delivering(&self.ports().transports, &delivery)?;
+        let outcome = match (&delivery, transport.outbound(), transport.exchange()) {
+            (Delivery::Deliver { to, .. }, Some(outbound), _) => outbound.deliver(to, &wire).await,
+            (Delivery::Export { to, .. }, _, Some(exchange)) => exchange.export(&wire, to).await,
+            (Delivery::Deliver { .. }, None, _) => {
+                return Err(InvoiceError::CannotDeliver {
+                    transport: delivery.transport(),
+                });
+            }
+            (Delivery::Export { .. }, _, None) => {
+                return Err(InvoiceError::CannotExport {
+                    transport: delivery.transport(),
+                });
+            }
+        };
+        outcome.map_err(|source| InvoiceError::Undelivered {
+            tx_id,
+            slate_id: slate.id(),
+            source,
+        })?;
+        info!("slate sent");
+        Ok(IssuedInvoice {
+            tx_id,
+            slate_id: slate.id(),
+            amount: slate.amount(),
+        })
+    }
+
+    /// Pays the issuer's I1, which arrived over `transport`: checks it, selects inputs from
+    /// `request.account`, adds them with the change, the fee, this wallet's public data,
+    /// message and partial signature, and stores the locked inputs, the change, the transaction
+    /// (outgoing, `sent`) and the I2 reply in one store transaction. The caller sends the reply
+    /// over the same transport.
+    ///
+    /// Asks the node for its tip, which becomes the slate height and the base of
+    /// `request.ttl_blocks`. Fails with [`InvoiceError::AmountMismatch`] when the invoice asks
+    /// for another amount than `request.amount`, [`InvoiceError::AlreadyPaid`] for an invoice
+    /// this wallet paid before, [`InvoiceError::Expired`] when the tip has reached the
+    /// invoice's TTL cutoff, a [`InvoiceError::Selection`] error, and a typed rejection for
+    /// any slate that is malformed, not an I1, or whose message does not verify. Nothing is
+    /// stored on failure.
+    #[instrument(skip_all, fields(
+        wallet = %self.config().name,
+        transport = %transport,
+        slate_id = Empty,
+        stage = Empty,
+        tx_id = Empty,
+    ))]
+    pub async fn pay_invoice(
+        &self,
+        transport: TransportId,
+        wire: &WireSlate,
+        request: PayRequest,
+    ) -> Result<PaidInvoice, InvoiceError> {
+        let session = self.session()?;
+        let network = self.config().network;
+        let i1 = registered(&self.ports().transports, transport)?
+            .policy()
+            .decode(&legacy_codecs(network.params().default_base_fee())?, wire)
+            .map_err(InvoiceError::Decode)?;
+        let span = Span::current();
+        span.record("slate_id", tracing::field::display(i1.id()));
+        span.record("stage", i1.stage().as_str());
+        if i1.stage() != Stage::I1 {
+            return Err(InvoiceError::WrongStage { stage: i1.stage() });
+        }
+        if i1.amount() != request.amount {
+            return Err(InvoiceError::AmountMismatch {
+                invoiced: i1.amount(),
+                approved: request.amount,
+            });
+        }
+        check_messages(&i1)?;
+        let tip = self
+            .ports()
+            .node
+            .get_tip()
+            .await
+            .map_err(InvoiceError::Node)?
+            .height;
+        check_ttl(&i1, tip)?;
+        debug!(height = tip.value(), "slate checked");
+
+        let paid = self
+            .blocking(move |ports, _| {
+                let env = InvoiceEnvironment {
+                    keychain: &session.keychain,
+                    network,
+                    tip,
+                    now: ports.clock.now(),
+                };
+                let paid = registered(&ports.transports, transport).and_then(|carrier| {
+                    let randomness = I2Randomness::draw(&mut **ports.rng.lock())
+                        .map_err(InvoiceError::Signing)?;
+                    session.store.write(|repos| {
+                        pay_stored(
+                            repos,
+                            &env,
+                            transport,
+                            carrier.policy(),
+                            &i1,
+                            &request,
+                            &randomness,
+                        )
+                    })
+                });
+                Ok(paid)
+            })
+            .await??;
+        span.record("tx_id", paid.tx_id.0);
+        info!("invoice paid");
+        Ok(paid)
+    }
+
+    /// Finalizes the payer's I2, which arrived over `transport`, and posts the transaction:
+    /// checks the payment against the I1 this wallet issued, verifies the payer's message and
+    /// partial signature, builds and validates the final transaction, stores I3 and drops the
+    /// private context in one store transaction, then pushes the transaction to the node with
+    /// `propagation`.
+    ///
+    /// Asks the node for its tip, and refuses with [`InvoiceError::Expired`] once it reaches
+    /// the TTL cutoff the I2 carries. Finalizing an I2 a second time returns the stored result
+    /// and posts only if the first post did not succeed, which is how a failed post is retried;
+    /// another I2 under the same slate id fails with [`InvoiceError::AlreadyFinalized`]. Fails
+    /// with [`InvoiceError::NotPosted`] when the invoice was finalized and stored but the node
+    /// refused or could not be reached. A node whose pool already holds the transaction counts
+    /// as having accepted it. Every other failure stores nothing.
+    #[instrument(skip_all, fields(
+        wallet = %self.config().name,
+        transport = %transport,
+        slate_id = Empty,
+        stage = Empty,
+        tx_id = Empty,
+    ))]
+    pub async fn finalize_invoice(
+        &self,
+        transport: TransportId,
+        wire: &WireSlate,
+        propagation: Propagation,
+    ) -> Result<Finalized, InvoiceError> {
+        let session = self.session()?;
+        let network = self.config().network;
+        let i2 = registered(&self.ports().transports, transport)?
+            .policy()
+            .decode(&legacy_codecs(network.params().default_base_fee())?, wire)
+            .map_err(InvoiceError::Decode)?;
+        let span = Span::current();
+        span.record("slate_id", tracing::field::display(i2.id()));
+        span.record("stage", i2.stage().as_str());
+        if i2.stage() != Stage::I2 {
+            return Err(InvoiceError::WrongStage { stage: i2.stage() });
+        }
+        let tip = self
+            .ports()
+            .node
+            .get_tip()
+            .await
+            .map_err(InvoiceError::Node)?
+            .height;
+        let stored = self
+            .blocking(move |ports, _| {
+                let env = InvoiceEnvironment {
+                    keychain: &session.keychain,
+                    network,
+                    tip,
+                    now: ports.clock.now(),
+                };
+                Ok(session
+                    .store
+                    .write(|repos| finalize_stored(repos, &env, &i2)))
+            })
+            .await??;
+        span.record("tx_id", stored.tx_id.0);
+        match stored.change {
+            Some(change) => {
+                info!("slate finalized");
+                self.emit(change.into());
+            }
+            None => debug!("slate already finalized"),
+        }
+        if stored.state != TxState::Posted {
+            self.push_invoice(stored.tx_id, &stored.finalized.transaction, propagation)
+                .await?;
+        }
+        Ok(Finalized {
+            tx_id: stored.tx_id,
+            slate: stored.finalized.slate,
+            transaction: stored.finalized.transaction,
+        })
+    }
+
+    /// Hands the transaction to the node, then records the transaction as posted.
+    async fn push_invoice(
+        &self,
+        tx_id: TxId,
+        transaction: &Transaction,
+        propagation: Propagation,
+    ) -> Result<(), InvoiceError> {
+        match self
+            .ports()
+            .node
+            .push_transaction(transaction, propagation)
+            .await
+        {
+            Ok(()) => {}
+            Err(error) if pool_holds_transaction(&error) => {
+                debug!("transaction already in the node pool");
+            }
+            Err(source) => return Err(InvoiceError::NotPosted { tx_id, source }),
+        }
+        let session = self.session()?;
+        let change = self
+            .blocking(move |ports, _| {
+                let now = ports.clock.now();
+                session
+                    .store
+                    .write(|repos| apply_transition(repos, tx_id, TxState::Posted, now))
+            })
+            .await?;
+        match change {
+            Some(change) => {
+                info!("transaction posted");
+                self.emit(change.into());
+            }
+            None => debug!("transaction posted again"),
+        }
+        Ok(())
+    }
+}

@@ -15,6 +15,7 @@ pub mod error;
 pub mod event;
 pub mod finalize;
 pub mod inbox;
+pub mod invoice;
 pub mod lifecycle;
 pub mod ports;
 pub mod receive;
