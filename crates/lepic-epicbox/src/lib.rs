@@ -8,6 +8,7 @@ mod frame;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
 mod session;
+pub mod transport;
 
 pub use address::{
     AddressError, DEFAULT_DOMAIN, DEFAULT_PORT, Domain, EpicboxAddress, MAX_ADDRESS_LEN,
