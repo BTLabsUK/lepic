@@ -137,11 +137,10 @@ fn a_crash_between_storing_s2_and_acknowledging_gives_exactly_one_s2() {
     assert_eq!(world.sender.harness.node.pushed_transactions().len(), 1);
 }
 
-/// The receiver replied and recorded the message as processed, then stopped before the relay
-/// heard `Made`. The redelivery is acknowledged without another reply.
-#[test]
-fn a_crash_after_replying_and_before_acknowledging_sends_no_second_s2() {
-    let world = World::new();
+/// Receives the pending S1 outside the inbox and delivers the S2 reply, then drops the
+/// subscription without acknowledging, as a crash right after replying does. With
+/// `record_processed` the crash comes after the inbox recorded the message as processed.
+fn reply_then_crash(world: &World, record_processed: bool) {
     world.block_on(async {
         world.send().await;
         let client = world.receiver_epicbox.client().unwrap();
@@ -159,22 +158,32 @@ fn a_crash_after_replying_and_before_acknowledging_sends_no_second_s2() {
             .deliver(envelope.reply_to().unwrap(), &received.reply)
             .await
             .unwrap();
-        let at = support::fixed_time();
-        world
-            .receiver
-            .store()
-            .write(|repos| {
-                repos.put_inbox(&InboxEntry {
-                    msg_id: envelope.ack_token().as_str().to_owned(),
-                    status: InboxStatus::Processed,
-                    received_at: at,
-                    updated_at: at,
+        if record_processed {
+            let at = support::fixed_time();
+            world
+                .receiver
+                .store()
+                .write(|repos| {
+                    repos.put_inbox(&InboxEntry {
+                        msg_id: envelope.ack_token().as_str().to_owned(),
+                        status: InboxStatus::Processed,
+                        received_at: at,
+                        updated_at: at,
+                    })
                 })
-            })
-            .unwrap();
+                .unwrap();
+        }
         drop(subscription);
     });
     assert_eq!(world.relay.pending(&world.sender_address), 1);
+}
+
+/// The crash comes after the inbox recorded the message as processed and before the relay
+/// heard `Made`. The redelivery is acknowledged without another reply.
+#[test]
+fn a_crash_after_recording_processed_and_before_acknowledging_sends_no_second_s2() {
+    let world = World::new();
+    reply_then_crash(&world, true);
 
     let (restarted, epicbox) = world.restart_receiver();
     let summary = world.block_on(restarted.epicbox_drain(&epicbox)).unwrap();

@@ -3,7 +3,8 @@
 //! A message is decoded with the Epicbox policy and routed by stage: an S1 is received and
 //! answered with S2 through the same transport, an S2 is finalized and posted. Its relay message
 //! id is tracked in the store's relay inbox. A message is acknowledged once its effect is stored,
-//! or once it was rejected for good and the rejection is recorded; a transient failure leaves it
+//! or once it was rejected for good and the rejection is recorded, under its relay message id
+//! when the relay gave it one; a transient failure leaves it
 //! unacknowledged, so the relay delivers it again.
 //!
 //! Every message is idempotent on its relay id and on `(slate_id, stage)`: a redelivered S1 is
