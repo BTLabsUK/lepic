@@ -119,7 +119,7 @@ impl From<&MessageError> for RejectionReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejection {
     ack_token: AckToken,
-    msg_id: Option<RelayMessageId>,
+    delivery: Delivery,
     sender: Option<String>,
     reason: RejectionReason,
 }
@@ -130,8 +130,8 @@ impl Rejection {
     }
 
     /// The relay message id, when the relay sent one.
-    pub fn msg_id(&self) -> Option<&str> {
-        self.msg_id.as_ref().map(RelayMessageId::as_str)
+    pub fn msg_id(&self) -> Option<&RelayMessageId> {
+        self.delivery.relay_id()
     }
 
     /// The sender's address text, when `from` parsed. A sender that did not sign the message is
@@ -235,8 +235,20 @@ impl Subscription {
         let rejection = inbox.rejected.pop_front()?;
         inbox
             .handed_out
-            .insert(rejection.ack_token.clone(), rejection.msg_id.clone());
+            .insert(rejection.ack_token.clone(), rejection.delivery.clone());
         Some(rejection)
+    }
+
+    /// The relay message id of a handed-out envelope or rejection that is not yet
+    /// acknowledged, or `None` when the relay sent the message without one or `token` is not
+    /// handed out.
+    pub fn relay_message_id(&self, token: &AckToken) -> Option<RelayMessageId> {
+        self.shared
+            .lock()
+            .handed_out
+            .get(token)
+            .and_then(Delivery::relay_id)
+            .cloned()
     }
 
     /// Stops the subscription and waits for its task, which returns promptly from any state.
@@ -273,11 +285,11 @@ impl Subscription {
                         transport: TRANSPORT_ID,
                     });
                 }
-                Some(None) => {
+                Some(Delivery::Local(_)) => {
                     inbox.handed_out.remove(token);
                     return Ok(());
                 }
-                Some(Some(msg_id)) => msg_id.clone(),
+                Some(Delivery::Relay(msg_id)) => msg_id.clone(),
             }
         };
         let (reply, answer) = oneshot::channel();
@@ -365,6 +377,32 @@ impl Shared {
     }
 }
 
+/// What a handed-out token stands for. A message the relay stored is acknowledged by its relay id;
+/// one it sent without an id has only a local number and nothing to acknowledge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Delivery {
+    Relay(RelayMessageId),
+    Local(u64),
+}
+
+impl Delivery {
+    fn relay_id(&self) -> Option<&RelayMessageId> {
+        match self {
+            Self::Relay(msg_id) => Some(msg_id),
+            Self::Local(_) => None,
+        }
+    }
+
+    /// A relay message's token is its id. A local token contains `:`, which no
+    /// [`RelayMessageId`] contains, so the two never collide.
+    fn ack_token(&self) -> AckToken {
+        match self {
+            Self::Relay(msg_id) => AckToken::new(msg_id.to_string()),
+            Self::Local(number) => AckToken::new(format!("local:{number}")),
+        }
+    }
+}
+
 /// How a received message id relates to what this subscription has seen.
 enum Seen {
     New,
@@ -377,10 +415,10 @@ struct InboxState {
     /// Whether the relay may still deliver without the caller doing anything.
     expecting: bool,
     relay_version: Option<ProtocolVersion>,
-    ready: VecDeque<(Option<RelayMessageId>, Envelope)>,
+    ready: VecDeque<(Delivery, Envelope)>,
     rejected: VecDeque<Rejection>,
-    /// Handed-out envelopes and rejections by token, with the relay message id to acknowledge, if any.
-    handed_out: HashMap<AckToken, Option<RelayMessageId>>,
+    /// Handed-out envelopes and rejections by token, with what acknowledging them means.
+    handed_out: HashMap<AckToken, Delivery>,
     acknowledged: HashSet<RelayMessageId>,
     acknowledged_order: VecDeque<RelayMessageId>,
     local_tokens: u64,
@@ -402,8 +440,9 @@ impl InboxState {
     }
 
     fn take_envelope(&mut self, mode: Mode) -> Option<Result<Option<Envelope>, ClientError>> {
-        if let Some((msg_id, envelope)) = self.ready.pop_front() {
-            self.handed_out.insert(envelope.ack_token().clone(), msg_id);
+        if let Some((delivery, envelope)) = self.ready.pop_front() {
+            self.handed_out
+                .insert(envelope.ack_token().clone(), delivery);
             return Some(Ok(Some(envelope)));
         }
         match self.state {
@@ -418,12 +457,12 @@ impl InboxState {
     fn seen(&self, msg_id: &RelayMessageId) -> Seen {
         if self.acknowledged.contains(msg_id) {
             Seen::Acknowledged
-        } else if self.handed_out.values().flatten().any(|id| id == msg_id)
-            || self.ready.iter().any(|(id, _)| id.as_ref() == Some(msg_id))
-            || self
-                .rejected
-                .iter()
-                .any(|rejection| rejection.msg_id.as_ref() == Some(msg_id))
+        } else if self
+            .handed_out
+            .values()
+            .chain(self.ready.iter().map(|(delivery, _)| delivery))
+            .chain(self.rejected.iter().map(|rejection| &rejection.delivery))
+            .any(|delivery| delivery.relay_id() == Some(msg_id))
         {
             Seen::Held
         } else {
@@ -431,23 +470,20 @@ impl InboxState {
         }
     }
 
-    /// A relay message is acknowledged by its id, so the id is its token. A message without one
-    /// gets a local token containing `:`, which no [`RelayMessageId`] contains, so the two never
-    /// collide and [`crate::transport::relay_message_id`] tells them apart.
-    fn token_for(&mut self, msg_id: Option<&RelayMessageId>) -> AckToken {
+    fn delivery_for(&mut self, msg_id: Option<RelayMessageId>) -> Delivery {
         match msg_id {
-            Some(msg_id) => AckToken::new(msg_id.to_string()),
+            Some(msg_id) => Delivery::Relay(msg_id),
             None => {
                 self.local_tokens = self.local_tokens.wrapping_add(1);
-                AckToken::new(format!("local:{}", self.local_tokens))
+                Delivery::Local(self.local_tokens)
             }
         }
     }
 
     fn push(&mut self, msg_id: Option<RelayMessageId>, reply_to: Destination, wire: WireSlate) {
-        let token = self.token_for(msg_id.as_ref());
-        self.ready
-            .push_back((msg_id, Envelope::new(token, Some(reply_to), wire)));
+        let delivery = self.delivery_for(msg_id);
+        let envelope = Envelope::new(delivery.ack_token(), Some(reply_to), wire);
+        self.ready.push_back((delivery, envelope));
     }
 
     fn push_rejection(
@@ -456,10 +492,10 @@ impl InboxState {
         sender: Option<String>,
         reason: RejectionReason,
     ) {
-        let ack_token = self.token_for(msg_id.as_ref());
+        let delivery = self.delivery_for(msg_id);
         self.rejected.push_back(Rejection {
-            ack_token,
-            msg_id,
+            ack_token: delivery.ack_token(),
+            delivery,
             sender,
             reason,
         });
@@ -470,7 +506,8 @@ impl InboxState {
     }
 
     fn record_acknowledged(&mut self, msg_id: &RelayMessageId) {
-        self.handed_out.retain(|_, id| id.as_ref() != Some(msg_id));
+        self.handed_out
+            .retain(|_, delivery| delivery.relay_id() != Some(msg_id));
         if self.acknowledged.insert(msg_id.clone()) {
             self.acknowledged_order.push_back(msg_id.clone());
         }

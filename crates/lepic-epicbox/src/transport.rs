@@ -16,22 +16,11 @@ use lepic_slate::registry::CodecRegistry;
 use lepic_slate::validate::check_size;
 use lepic_transport::error::TransportError;
 use lepic_transport::policy::{Encoding, FormatPolicy};
-use lepic_transport::transport::{
-    AckToken, BoxFuture, Destination, Outbound, Transport, TransportId,
-};
+use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, TransportId};
 
 use crate::address::Network;
 use crate::client::{ClientSettings, EpicboxClient, Identity, TRANSPORT_ID};
-use crate::frame::RelayMessageId;
 use crate::session::Connector;
-
-/// The relay message id an acknowledgement token stands for, or `None` when the relay sent the
-/// message without one. Such a message cannot be acknowledged and has nothing to be remembered
-/// by; its local token is never a valid [`RelayMessageId`].
-pub fn relay_message_id(token: &AckToken) -> Option<&str> {
-    let token = token.as_str();
-    RelayMessageId::is_valid(token).then_some(token)
-}
 
 /// The Epicbox policy of ADR 0003, as `epic-wallet` `v4.0.2` speaks it: the V3 and V2 shapes are
 /// accepted, detected by shape with V3 tried first and the header ignored; a new slate goes out
@@ -239,23 +228,6 @@ mod tests {
             None,
         );
         Identity::new(secret, address).unwrap()
-    }
-
-    #[test]
-    fn local_tokens_name_no_relay_message() {
-        assert_eq!(
-            relay_message_id(&AckToken::new("mockmsg3".to_owned())),
-            Some("mockmsg3")
-        );
-        assert_eq!(relay_message_id(&AckToken::new("local:1".to_owned())), None);
-    }
-
-    #[test]
-    fn relay_ids_that_look_local_still_name_a_relay_message() {
-        assert_eq!(
-            relay_message_id(&AckToken::new("local-1".to_owned())),
-            Some("local-1")
-        );
     }
 
     #[tokio::test]

@@ -17,10 +17,11 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::sync::Arc;
 
-use lepic_epicbox::transport::{EpicboxTransport, relay_message_id};
+use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
     Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
-    Network as RelayNetwork, RELAY_RETENTION, Rejection, Subscription, TRANSPORT_ID,
+    Network as RelayNetwork, RELAY_RETENTION, Rejection, RelayMessageId, Subscription,
+    TRANSPORT_ID,
 };
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::params::Network;
@@ -162,23 +163,30 @@ enum Disposition {
 }
 
 enum Item {
-    Envelope(Envelope),
+    /// An envelope with the relay message id the subscription handed it out under, if any.
+    Envelope(Envelope, Option<RelayMessageId>),
     Rejection(Rejection),
 }
 
 impl Item {
+    fn envelope(subscription: &Subscription, envelope: Envelope) -> Self {
+        let msg_id = subscription.relay_message_id(envelope.ack_token());
+        Self::Envelope(envelope, msg_id)
+    }
+
     fn ack_token(&self) -> &lepic_transport::transport::AckToken {
         match self {
-            Self::Envelope(envelope) => envelope.ack_token(),
+            Self::Envelope(envelope, _) => envelope.ack_token(),
             Self::Rejection(rejection) => rejection.ack_token(),
         }
     }
 
     fn msg_id(&self) -> Option<&str> {
         match self {
-            Self::Envelope(envelope) => relay_message_id(envelope.ack_token()),
+            Self::Envelope(_, msg_id) => msg_id.as_ref(),
             Self::Rejection(rejection) => rejection.msg_id(),
         }
+        .map(RelayMessageId::as_str)
     }
 }
 
@@ -513,7 +521,7 @@ where
                         },
                     };
                     match next.map_err(InboxError::Transport)? {
-                        Some(envelope) => Item::Envelope(envelope),
+                        Some(envelope) => Item::envelope(subscription, envelope),
                         // A rejection may have arrived while no envelope did.
                         None if listen.is_none() => match subscription.next_rejection() {
                             Some(rejection) => Item::Rejection(rejection),
@@ -637,13 +645,13 @@ where
         let outcome = match item {
             Item::Rejection(rejection) => {
                 debug!(
-                    msg_id = rejection.msg_id().unwrap_or(""),
+                    msg_id = msg_id.as_deref().unwrap_or(""),
                     error = ?rejection.reason(),
                     "epicbox rejection recorded"
                 );
                 Ok(Handled::Rejected)
             }
-            Item::Envelope(envelope) => self.handle_envelope(msg_id.as_deref(), envelope).await,
+            Item::Envelope(envelope, _) => self.handle_envelope(msg_id.as_deref(), envelope).await,
         };
         let handled = match outcome {
             Ok(handled) => handled,

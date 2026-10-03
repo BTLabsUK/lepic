@@ -11,7 +11,7 @@ use client_support::{
     ALICE, BOB, CAROL, address, client, client_with, reach, sealed, settings, until, within,
 };
 use lepic_epicbox::mock_relay::MockRelay;
-use lepic_epicbox::{ClientError, ConnectionState, Network, RejectionReason};
+use lepic_epicbox::{ClientError, ConnectionState, Network, RejectionReason, RelayMessageId};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{AckToken, Destination, Envelope, Inbound, Outbound};
@@ -255,7 +255,10 @@ async fn undecryptable_message_is_handed_out_as_a_rejection_and_acknowledged_on_
     assert!(next(&bob).await.is_none());
     let rejection = bob.next_rejection().unwrap();
     assert_eq!(rejection.reason(), RejectionReason::NotAddressedToUs);
-    assert_eq!(rejection.msg_id(), Some(rejected.as_str()));
+    assert_eq!(
+        rejection.msg_id().map(RelayMessageId::as_str),
+        Some(rejected.as_str())
+    );
     assert_eq!(
         rejection.sender(),
         Some(address(ALICE).to_string().as_str())
@@ -327,8 +330,8 @@ async fn relay_id_shaped_like_a_local_token_is_still_acknowledged_to_the_relay()
     within(LONG, bob.delivery_available()).await;
     let envelope = next(&bob).await.unwrap();
     assert_eq!(
-        lepic_epicbox::transport::relay_message_id(envelope.ack_token()),
-        Some("local-1")
+        bob.relay_message_id(envelope.ack_token()),
+        Some(RelayMessageId::parse("local-1").unwrap())
     );
     within(LONG, bob.acknowledge(envelope.ack_token()))
         .await
@@ -358,9 +361,10 @@ async fn a_message_without_an_id_and_a_relay_id_never_share_a_token() {
     let with_id = next(&bob).await.unwrap();
     assert_eq!(text(&with_id), "with id");
     assert_ne!(without_id.ack_token(), with_id.ack_token());
+    assert_eq!(bob.relay_message_id(without_id.ack_token()), None);
     assert_eq!(
-        lepic_epicbox::transport::relay_message_id(without_id.ack_token()),
-        None
+        bob.relay_message_id(with_id.ack_token()),
+        Some(RelayMessageId::parse("local-1").unwrap())
     );
 
     within(LONG, bob.acknowledge(without_id.ack_token()))
