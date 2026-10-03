@@ -107,6 +107,11 @@ pub enum LogRingError {
         #[source]
         source: io::Error,
     },
+    #[error("support bundle could not be read from the log ring")]
+    Read {
+        #[source]
+        source: io::Error,
+    },
 }
 
 /// A [`LogSink`] that appends each record, redacted, to a ring of files in one directory and
@@ -176,15 +181,36 @@ impl LogRing {
     /// [`LogRingError::Export`] when the bundle cannot be written or a segment cannot be read.
     pub fn export_support_bundle(&self, path: &Path) -> Result<(), LogRingError> {
         let _paused = self.active.lock().unwrap_or_else(PoisonError::into_inner);
-        self.write_bundle(path)
-            .map_err(|source| LogRingError::Export {
-                path: path.to_owned(),
-                source,
-            })
+        let write = || {
+            let mut out = BufWriter::new(File::create(path)?);
+            self.write_bundle(&mut out)?;
+            out.into_inner()
+                .map_err(io::IntoInnerError::into_error)?
+                .sync_all()
+        };
+        write().map_err(|source| LogRingError::Export {
+            path: path.to_owned(),
+            source,
+        })
     }
 
-    fn write_bundle(&self, path: &Path) -> io::Result<()> {
-        let mut out = BufWriter::new(File::create(path)?);
+    /// The support bundle of [`LogRing::export_support_bundle`] as text, for a host that sends
+    /// it on itself. It is at most the ring's limit plus a short header.
+    ///
+    /// # Errors
+    ///
+    /// [`LogRingError::Read`] when a segment cannot be read.
+    pub fn support_bundle(&self) -> Result<String, LogRingError> {
+        let _paused = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut out = Vec::new();
+        self.write_bundle(&mut out)
+            .map_err(|source| LogRingError::Read { source })?;
+        // Segments hold whole UTF-8 lines; only a file changed behind the ring's back is not.
+        Ok(String::from_utf8(out)
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()))
+    }
+
+    fn write_bundle(&self, out: &mut impl io::Write) -> io::Result<()> {
         writeln!(out, "lepic support bundle")?;
         writeln!(out, "format: {BUNDLE_FORMAT}")?;
         writeln!(out, "version: {}", env!("CARGO_PKG_VERSION"))?;
@@ -199,15 +225,13 @@ impl LogRing {
         for index in (0..SEGMENTS).rev() {
             match File::open(segment_path(&self.dir, index)) {
                 Ok(segment) => {
-                    io::copy(&mut segment.take(self.limit.segment_bytes), &mut out)?;
+                    io::copy(&mut segment.take(self.limit.segment_bytes), out)?;
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
             }
         }
-        out.into_inner()
-            .map_err(io::IntoInnerError::into_error)?
-            .sync_all()
+        Ok(())
     }
 
     fn append(&self, active: &mut Active, line: &[u8]) -> io::Result<()> {
@@ -456,6 +480,23 @@ mod tests {
         assert!(segment_sizes(dir.path()).iter().sum::<u64>() <= 4 * 1024);
         small.record(record("record after reopen", vec![]));
         assert!(segment_sizes(dir.path()).iter().sum::<u64>() <= 4 * 1024);
+    }
+
+    #[test]
+    fn bundle_text_matches_the_exported_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let ring = open(dir.path(), 4 * 1024);
+        for index in 0..60 {
+            ring.record(record(
+                &format!("record {index:02}"),
+                vec![("amount", "1000000".to_owned())],
+            ));
+        }
+
+        let text = ring.support_bundle().unwrap();
+        assert_eq!(text, export(&ring, tempfile::tempdir().unwrap().path()));
+        assert!(text.ends_with(": record 59 amount=[redacted]\n"));
+        assert!(!text.contains("1000000"));
     }
 
     #[test]
