@@ -454,6 +454,50 @@ mod tests {
         }
     }
 
+    /// A store that lost its PIN key is no reason for a free attempt.
+    #[tokio::test]
+    async fn an_attempt_without_the_pin_key_is_counted() {
+        let store = AppSecretStore::in_memory();
+        let guard = PinGuard::new(PinPolicy::DEFAULT);
+        let sealed = seal_new(
+            &store,
+            NewPin::new(pin("1234")).unwrap(),
+            generate_password().unwrap(),
+            cheap(),
+        )
+        .await
+        .unwrap();
+        store.delete(KEY_KEY).await.unwrap();
+        let opened = unlock(&guard, &store, pin("1234"), sealed).await;
+        assert_eq!(opened.unwrap_err().kind, WalletErrorKind::SecretStore);
+        assert_eq!(read_failures(&store).await.unwrap(), 1);
+    }
+
+    /// Stopping the app during the wait must not undo the attempt.
+    #[tokio::test(start_paused = true)]
+    async fn the_attempt_is_counted_before_the_wait() {
+        let store = AppSecretStore::in_memory();
+        let guard = PinGuard::new(PinPolicy::DEFAULT);
+        let sealed = seal_new(
+            &store,
+            NewPin::new(pin("1234")).unwrap(),
+            generate_password().unwrap(),
+            cheap(),
+        )
+        .await
+        .unwrap();
+        store.write(FAILURES_KEY, "3".to_owned()).await.unwrap();
+        let during_wait = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            read_failures(&store).await.unwrap()
+        };
+        let (opened, counted) =
+            tokio::join!(unlock(&guard, &store, pin("0000"), sealed), during_wait);
+        assert_eq!(counted, 4);
+        assert_eq!(opened.unwrap_err().kind, WalletErrorKind::WrongPassword);
+        assert_eq!(read_failures(&store).await.unwrap(), 4);
+    }
+
     #[tokio::test]
     async fn a_count_that_does_not_parse_costs_the_longest_wait() {
         let store = AppSecretStore::in_memory();

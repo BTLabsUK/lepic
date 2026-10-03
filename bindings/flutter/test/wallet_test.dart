@@ -55,10 +55,35 @@ WalletConfig configFor(Directory dir) => WalletConfig(
   epicboxPort: 443,
 );
 
+/// The stable codes of `bindings/flutter/README.md`, which apps may store.
+const errorCodes = {
+  WalletErrorKind.invalidMnemonic: 1,
+  WalletErrorKind.wrongPassword: 2,
+  WalletErrorKind.walletAlreadyExists: 3,
+  WalletErrorKind.walletNotFound: 4,
+  WalletErrorKind.nodeUnreachable: 5,
+  WalletErrorKind.notEnoughFunds: 6,
+  WalletErrorKind.invalidSlate: 7,
+  WalletErrorKind.invalidArgument: 8,
+  WalletErrorKind.transportFailed: 9,
+  WalletErrorKind.chainBusy: 10,
+  WalletErrorKind.walletBusy: 11,
+  WalletErrorKind.paymentExpired: 12,
+  WalletErrorKind.io: 13,
+  WalletErrorKind.other: 14,
+  WalletErrorKind.locked: 15,
+  WalletErrorKind.foreignWallet: 16,
+  WalletErrorKind.secretStore: 17,
+  WalletErrorKind.notPosted: 18,
+  WalletErrorKind.cancelled: 19,
+  WalletErrorKind.unsupported: 20,
+  WalletErrorKind.panic: 21,
+};
+
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(
   isA<WalletError>()
       .having((e) => e.kind, 'kind', kind)
-      .having((e) => e.code, 'code', isPositive),
+      .having((e) => e.code, 'code', errorCodes[kind]),
 );
 
 Future<void> scanToEnd(EpicWallet wallet) async {
@@ -298,7 +323,30 @@ void main() {
       store: lepicSecretStore(store),
     );
     expect(store.values, isEmpty);
-    expect(WalletErrorKind.panic.index, isNonNegative);
+  });
+
+  test('every error kind has its documented code', () async {
+    expect(WalletErrorKind.values.toSet(), errorCodes.keys.toSet());
+    for (final MapEntry(key: kind, value: code) in errorCodes.entries) {
+      expect(await kind.code(), code, reason: kind.name);
+    }
+  });
+
+  test('a pin shorter than four characters is refused', () async {
+    for (final pin in ['', '1', '123']) {
+      final store = MemoryStore();
+      await expectLater(
+        EpicWallet.createWithPin(
+          runtime: runtime,
+          config: configFor(walletDir('short-pin-${pin.length}')),
+          store: lepicSecretStore(store),
+          pin: pin,
+        ),
+        throwsWalletError(WalletErrorKind.invalidArgument),
+        reason: pin,
+      );
+      expect(store.values, isEmpty, reason: pin);
+    }
   });
 
   test('pin unlock keeps the wallet password inside rust', () async {
@@ -311,6 +359,8 @@ void main() {
       pin: '1234',
     );
     final sealed = created.sealedPassword;
+    expect(store.values.keys.toSet(), {'lepic.vault', 'lepic.pin-key'});
+    expect(store.values.values, isNot(contains(sealed)));
     final phrase = await created.wallet.mnemonicWithPin(
       pin: '1234',
       sealedPassword: sealed,
@@ -321,6 +371,7 @@ void main() {
       created.wallet.mnemonicWithPin(pin: '0000', sealedPassword: sealed),
       throwsWalletError(WalletErrorKind.wrongPassword),
     );
+    expect(store.values['lepic.pin-failures'], '1');
     created.wallet.dispose();
 
     await expectLater(
@@ -333,6 +384,7 @@ void main() {
       ),
       throwsWalletError(WalletErrorKind.wrongPassword),
     );
+    expect(store.values['lepic.pin-failures'], '2');
     await expectLater(
       EpicWallet.openWithPin(
         runtime: runtime,
@@ -350,6 +402,7 @@ void main() {
       pin: '1234',
       sealedPassword: sealed,
     );
+    expect(store.values.keys.toSet(), {'lepic.vault', 'lepic.pin-key'});
     expect(
       await reopened.mnemonicWithPin(pin: '1234', sealedPassword: sealed),
       phrase,
