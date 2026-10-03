@@ -22,6 +22,7 @@ commands:
   ci-lint     every `uses:` under .github is pinned to a commit sha
   deps-check  crate edges and banned crates against docs/architecture.md
   mobile      --target <triple> [--release]: build the library crates for a mobile target
+              --package [--target <triple>]...: copy release lepic-ffi into bindings/flutter
   upstream-drift
               upstream commits since the ones recorded in upstream.toml
   vectors     generate [--area <area>] golden vectors, or verify them";
