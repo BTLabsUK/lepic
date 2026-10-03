@@ -7,6 +7,8 @@ use lepic_node::{
     CallPolicy, HttpSettings, HttpTransport, NodeClient, NodeError, RpcTransport, webpki_tls_config,
 };
 
+use zeroize::Zeroizing;
+
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::WalletConfig;
 
@@ -45,11 +47,14 @@ pub(crate) enum NodeFactory {
 }
 
 impl NodeFactory {
-    pub(crate) fn client(&self, config: &WalletConfig) -> Result<Node, WalletError> {
+    /// A client for the node `config` names. Takes the API secret out of `config`, so the
+    /// only copy left is the one the client wipes.
+    pub(crate) fn client(&self, config: &mut WalletConfig) -> Result<Node, WalletError> {
+        let api_secret = Zeroizing::new(config.node_api_secret.take());
         match self {
             Self::Http => {
                 let settings = HttpSettings {
-                    api_secret: config.node_api_secret.clone().map(Into::into),
+                    api_secret: api_secret.as_deref().map(Into::into),
                     connect_timeout: Duration::from_secs(15),
                     ..HttpSettings::default()
                 };

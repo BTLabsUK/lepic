@@ -33,7 +33,7 @@ use crate::session::{self, Session, normalize_phrase, relay_network};
 /// whitespace are ignored.
 #[frb(sync)]
 pub fn validate_mnemonic(phrase: String) -> bool {
-    let phrase = Zeroizing::new(normalize_phrase(&phrase));
+    let phrase = normalize_phrase(&Zeroizing::new(phrase));
     Seed::from_mnemonic(&phrase).is_ok()
 }
 
@@ -87,7 +87,8 @@ pub async fn node_tip(
         .inner
         .boundary
         .run("node_tip", async move {
-            session::node_tip(&inner, &config).await
+            let mut config = config;
+            session::node_tip(&inner, &mut config).await
         })
         .await
 }
@@ -145,13 +146,16 @@ impl EpicWallet {
         mnemonic: Option<String>,
         password: String,
     ) -> Result<EpicWallet, WalletError> {
+        let mnemonic = mnemonic.map(Zeroizing::new);
+        let password = Zeroizing::new(password);
         let inner = Arc::clone(&runtime.inner);
         let store = store.clone();
         runtime
             .inner
             .boundary
             .run("create", async move {
-                let session = Session::new(&inner, &config, store)?;
+                let mut config = config;
+                let session = Session::new(&inner, &mut config, store)?;
                 session.create(mnemonic, password).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
@@ -168,13 +172,15 @@ impl EpicWallet {
         store: &AppSecretStore,
         password: String,
     ) -> Result<EpicWallet, WalletError> {
+        let password = Zeroizing::new(password);
         let inner = Arc::clone(&runtime.inner);
         let store = store.clone();
         runtime
             .inner
             .boundary
             .run("open", async move {
-                let session = Session::new(&inner, &config, store)?;
+                let mut config = config;
+                let session = Session::new(&inner, &mut config, store)?;
                 session.open(password).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
@@ -200,6 +206,7 @@ impl EpicWallet {
         mnemonic: Option<String>,
         pin: String,
     ) -> Result<PinWallet, WalletError> {
+        let mnemonic = mnemonic.map(Zeroizing::new);
         let pin = Zeroizing::new(pin);
         let inner = Arc::clone(&runtime.inner);
         let store = store.clone();
@@ -208,8 +215,9 @@ impl EpicWallet {
             .inner
             .boundary
             .run("create_with_pin", async move {
+                let mut config = config;
                 let pin = pin::NewPin::new(pin)?;
-                let session = Session::new(&inner, &config, store.clone())?;
+                let session = Session::new(&inner, &mut config, store.clone())?;
                 // Checked before the PIN key is written, so it never replaces another
                 // wallet's key.
                 if session::wallet_exists(&store).await? {
@@ -220,7 +228,7 @@ impl EpicWallet {
                 }
                 let password = pin::generate_password()?;
                 let sealed_password = pin::seal_new(&store, pin, password.clone(), kdf).await?;
-                session.create(mnemonic, (*password).clone()).await?;
+                session.create(mnemonic, password).await?;
                 Ok(PinWallet {
                     wallet: EpicWallet {
                         session: Arc::new(session),
@@ -253,9 +261,10 @@ impl EpicWallet {
             .inner
             .boundary
             .run("open_with_pin", async move {
-                let session = Session::new(&inner, &config, store.clone())?;
+                let mut config = config;
+                let session = Session::new(&inner, &mut config, store.clone())?;
                 let password = pin::unlock(&inner.pin, &store, pin, sealed_password).await?;
-                session.open((*password).clone()).await?;
+                session.open(password).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
                 })
@@ -265,6 +274,7 @@ impl EpicWallet {
 
     /// The recovery phrase, after checking `password` against the stored vault.
     pub async fn mnemonic(&self, password: String) -> Result<String, WalletError> {
+        let password = Zeroizing::new(password);
         self.run("mnemonic", |session| async move {
             session.recovery_phrase(password).await
         })
@@ -288,7 +298,7 @@ impl EpicWallet {
                 sealed_password,
             )
             .await?;
-            session.recovery_phrase((*password).clone()).await
+            session.recovery_phrase(password).await
         })
         .await
     }

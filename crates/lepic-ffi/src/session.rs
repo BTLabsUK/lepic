@@ -33,6 +33,7 @@ use rand::rngs::StdRng;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tracing::{debug, info, warn};
+use zeroize::Zeroizing;
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::{DirClaim, RuntimeInner};
@@ -119,13 +120,23 @@ pub(crate) const fn relay_network(network: Network) -> RelayNetwork {
     }
 }
 
-/// Words separated by single spaces, lowercase, as the engine expects.
-pub(crate) fn normalize_phrase(phrase: &str) -> String {
-    phrase
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .collect::<Vec<_>>()
-        .join(" ")
+/// Words separated by single spaces, lowercase, as the engine expects. Built in one buffer
+/// large enough that it never moves, so no copy of the phrase is left unwiped.
+pub(crate) fn normalize_phrase(phrase: &str) -> Zeroizing<String> {
+    // Lowercasing at most doubles the length of any character.
+    let mut normalized = Zeroizing::new(String::with_capacity(phrase.len().saturating_mul(2)));
+    for word in phrase.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.extend(word.chars().flat_map(char::to_lowercase));
+    }
+    normalized
+}
+
+/// The engine's password type, taking over the buffer of `text` without a copy.
+fn password(mut text: Zeroizing<String>) -> Password {
+    Password::new(std::mem::take(&mut *text))
 }
 
 fn epicbox_transport(
@@ -150,7 +161,7 @@ impl Session {
     /// A locked wallet on `config.data_dir`, which must exist and not be open anywhere.
     pub(crate) fn new(
         runtime: &Arc<RuntimeInner>,
-        config: &WalletConfig,
+        config: &mut WalletConfig,
         store: AppSecretStore,
     ) -> Result<Self, WalletError> {
         let network = config.chain.network();
@@ -213,14 +224,14 @@ impl Session {
     /// Creates the wallet: from `phrase` when given, from new entropy otherwise.
     pub(crate) async fn create(
         &self,
-        phrase: Option<String>,
-        password: String,
+        phrase: Option<Zeroizing<String>>,
+        password: Zeroizing<String>,
     ) -> Result<(), WalletError> {
         self.vault.load(&self.store).await?;
-        let password = Password::new(password);
+        let password = self::password(password);
         match phrase {
             Some(phrase) => {
-                let phrase = zeroize::Zeroizing::new(normalize_phrase(&phrase));
+                let phrase = normalize_phrase(&phrase);
                 self.engine.restore(password, &phrase).await?;
             }
             // The phrase is shown later through `recovery_phrase`, after the user set up a PIN.
@@ -233,17 +244,20 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn open(&self, password: String) -> Result<(), WalletError> {
+    pub(crate) async fn open(&self, password: Zeroizing<String>) -> Result<(), WalletError> {
         self.vault.load(&self.store).await?;
-        self.engine.open(Password::new(password)).await?;
+        self.engine.open(self::password(password)).await?;
         Ok(())
     }
 
     /// The recovery phrase, after checking `password` against the stored vault.
-    pub(crate) async fn recovery_phrase(&self, password: String) -> Result<String, WalletError> {
+    pub(crate) async fn recovery_phrase(
+        &self,
+        password: Zeroizing<String>,
+    ) -> Result<String, WalletError> {
         let bytes = VaultBytes::default();
         bytes.load(&self.store).await?;
-        let password = Password::new(password);
+        let password = self::password(password);
         let phrase = tokio::task::spawn_blocking(move || {
             let vault = Vault::open(
                 SharedStorage::new(bytes),
@@ -773,7 +787,7 @@ impl Drop for ScratchFile {
 /// The tip and version of the node `config` names, without opening a wallet.
 pub(crate) async fn node_tip(
     runtime: &Arc<RuntimeInner>,
-    config: &WalletConfig,
+    config: &mut WalletConfig,
 ) -> Result<NodeTip, WalletError> {
     let node = runtime.nodes.client(config)?;
     let tip = node.get_tip().await.map_err(|error| node_error(&error))?;

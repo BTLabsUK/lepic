@@ -206,3 +206,23 @@ async fn a_second_runtime_cannot_open_a_directory_in_use() {
         EpicWallet::open_with_pin(&other, fixture.config(), &store, PIN.to_owned(), sealed);
     assert!(opened.await.is_ok());
 }
+
+#[test]
+fn normalized_phrase_is_built_in_one_buffer() {
+    let typed = "  Abandon\tABANDON\n  art ";
+    let normalized = crate::session::normalize_phrase(typed);
+    assert_eq!(normalized.as_str(), "abandon abandon art");
+    // The buffer was never reallocated, which would leave an unwiped copy behind.
+    assert_eq!(normalized.capacity(), typed.len() * 2);
+}
+
+#[test]
+fn the_node_client_takes_the_api_secret_out_of_the_config() {
+    let fixture = Fixture::new();
+    let mut config = WalletConfig {
+        node_api_secret: Some("node-secret".to_owned()),
+        ..fixture.config()
+    };
+    crate::node::NodeFactory::Http.client(&mut config).unwrap();
+    assert_eq!(config.node_api_secret, None);
+}
