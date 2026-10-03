@@ -70,6 +70,16 @@ deny = [
   { crate = "aws-lc-sys", reason = "the rustls provider is ring (ADR 0006)" },
   { crate = "cmake", reason = "builds need only Rust and a C compiler" },
   { crate = "bindgen", reason = "builds need only Rust and a C compiler" },
+  { crate = "cxx", reason = "C++ bridge, builds need only Rust and a C compiler" },
+  { crate = "cxx-build", reason = "C++ bridge, builds need only Rust and a C compiler" },
+  { crate = "cxx-gen", reason = "C++ bridge, builds need only Rust and a C compiler" },
+  { crate = "cxxbridge-cmd", reason = "C++ bridge, builds need only Rust and a C compiler" },
+  { crate = "cxxbridge-flags", reason = "C++ bridge, builds need only Rust and a C compiler" },
+  { crate = "cxxbridge-macro", reason = "C++ bridge, builds need only Rust and a C compiler" },
+  { crate = "link-cplusplus", reason = "links the C++ runtime, builds need only Rust and a C compiler" },
+  { crate = "autocxx", reason = "C++ bridge, builds need only Rust and a C compiler" },
+  { crate = "autocxx-build", reason = "C++ bridge, builds need only Rust and a C compiler" },
+  { crate = "cpp_build", reason = "C++ bridge, builds need only Rust and a C compiler" },
 ]
 
 [sources]

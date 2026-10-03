@@ -37,6 +37,16 @@ const BANNED: &[&str] = &[
     "aws-lc-sys",
     "cmake",
     "bindgen",
+    "cxx",
+    "cxx-build",
+    "cxx-gen",
+    "cxxbridge-cmd",
+    "cxxbridge-flags",
+    "cxxbridge-macro",
+    "link-cplusplus",
+    "autocxx",
+    "autocxx-build",
+    "cpp_build",
 ];
 
 // ADR 0010 allows these deeper in the graph but not as direct dependencies of
@@ -441,6 +451,30 @@ lepic-telemetry   -> (external only)
                 version: "0.1.0".to_owned(),
             }]
         );
+    }
+
+    #[test]
+    fn rejects_cxx_bridge_crates_anywhere_in_the_graph() {
+        let fixture = Fixture::new();
+        fixture.external("link-cplusplus");
+        fixture.external("cxx");
+        fixture.write(
+            "external/cxx/Cargo.toml",
+            "[package]\nname = \"cxx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nlink-cplusplus = { path = \"../link-cplusplus\" }\n",
+        );
+        fixture.member(
+            "lepic-crypto",
+            "[build-dependencies]\ncxx = { path = \"../../../external/cxx\" }\n",
+        );
+        let banned: Vec<String> = fixture
+            .violations()
+            .into_iter()
+            .filter_map(|violation| match violation {
+                Violation::BannedCrate { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(banned, ["cxx", "link-cplusplus"]);
     }
 
     #[test]
