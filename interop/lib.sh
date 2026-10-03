@@ -160,9 +160,15 @@ drain_until() {
     done
 }
 
+relay_healthy() {
+    [[ "$(docker inspect --format '{{.State.Health.Status}}' "$(dc ps -q epicbox)")" == healthy ]]
+}
+
+# Restarts only the relay container. `up` would also recreate the node, whose network namespace
+# every other service shares.
 restart_relay() {
-    dc restart epicbox >/dev/null 2>&1
-    dc up -d --wait epicbox >/dev/null 2>&1
+    dc restart epicbox >/dev/null 2>&1 || return 1
+    wait_until "the relay" 60 relay_healthy
 }
 
 mongo_eval() {

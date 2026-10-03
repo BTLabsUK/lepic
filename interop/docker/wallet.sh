@@ -19,10 +19,10 @@ if [ ! -f "${config}" ]; then
     # The recovery phrase of a throwaway test wallet is not kept or shown.
     ew init >/dev/null
     set_key api_listen_interface '"0.0.0.0"'
-    set_key check_node_api_http_addr '"http://node:23413"'
+    set_key check_node_api_http_addr '"http://127.0.0.1:23413"'
     set_key node_api_secret_path '"/node/.foreign_api_secret"'
     set_key use_tor_listener false
-    set_key epicbox_domain '"epicbox"'
+    set_key epicbox_domain '"localhost"'
     set_key epicbox_port 3423
     set_key epicbox_protocol_unsecure true
     set_key stdout_log_level '"Warning"'

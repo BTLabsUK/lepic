@@ -23,12 +23,17 @@ minutes. Builds use `CARGO_BUILD_JOBS` (default 4).
 | Service | What it is |
 |---|---|
 | `mongodb` | MongoDB 6.0 with the relay's own `mongo-init.js` |
-| `epicbox` | The relay from `EpicCash/epic-epicbox-docker`, domain `epicbox`, port 3423, plain `ws://` |
+| `epicbox` | The relay from `EpicCash/epic-epicbox-docker`, domain `localhost`, port 3423, plain `ws://` |
 | `node` | `epic` `v4.0.4` on usernet: no peers, no seeds, RandomX blocks only, stratum on 23416 |
 | `miner` | `miner/`, a stratum client that mines with the reference node's RandomX code |
 | `funder` | `epic-wallet` serving its foreign API; the node pays every coinbase to it |
 | `peer` | `epic-wallet`, the counterparty; the scenarios start and stop its Epicbox listener |
 | `lepic` | `lepic`, driven with `docker compose exec` and `--output json` |
+
+Only the node joins the internal compose network; every other service runs in the node's network
+namespace and reaches the others on 127.0.0.1. lepic speaks plain HTTP and WebSocket only to a
+loopback host, so the node is `http://127.0.0.1:23413` and the relay `ws://localhost:3423`, and every
+Epicbox address in the stack ends in `@localhost:3423`.
 
 Pins live in `pins.env`. Sources, the Cargo home, build directories, binaries and run logs live in
 `.work/`, which git ignores. `build.sh` compiles in a container from `docker/builder.Dockerfile` with

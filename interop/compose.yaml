@@ -1,7 +1,9 @@
 # Local interop stack: the public Epicbox relay with its database, the reference node on a
 # test-mode chain, a stratum miner, two epic-wallet v4.0.2 wallets and lepic. Nothing here
-# reaches a public relay or node: the network is internal, and the relay's domain is the
-# container name `epicbox`, so every address the wallets use resolves inside it.
+# reaches a public relay or node: the node's network is internal, and every other service shares
+# the node's network namespace, so all of them talk over 127.0.0.1. lepic sends the node secret
+# and Epicbox frames over plain HTTP and WebSocket only to loopback, which is why the relay's
+# domain is `localhost` and every address the wallets use names it.
 #
 # Run `./build.sh` first; it compiles the binaries the images copy. `./run.sh` does both and
 # then runs the scenarios.
@@ -12,7 +14,6 @@ x-runtime: &runtime
   image: lepic-interop-runtime:local
   pull_policy: never
   init: true
-  networks: [interop]
 
 services:
   mongodb:
@@ -20,7 +21,7 @@ services:
     init: true
     # A test relay holds a handful of messages; keep the cache small and skip diagnostics files.
     command: ["--wiredTigerCacheSizeGB", "0.25", "--setParameter", "diagnosticDataCollectionEnabled=false"]
-    networks: [interop]
+    network_mode: service:node
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: rootpass
@@ -42,11 +43,11 @@ services:
       additional_contexts:
         bin: ./.work/bin
     init: true
-    networks: [interop]
+    network_mode: service:node
     environment:
-      MONGO_URL: mongodb://epicbox:epicboxpass@mongodb:27017/epicbox?authSource=epicbox
+      MONGO_URL: mongodb://epicbox:epicboxpass@127.0.0.1:27017/epicbox?authSource=epicbox
       EPICBOX_INSTANCE_ID: "1"
-      EPICBOX_DOMAIN: epicbox
+      EPICBOX_DOMAIN: localhost
       EPICBOX_PORT: "3423"
       DEBUG: "true"
     depends_on:
@@ -61,6 +62,7 @@ services:
 
   node:
     <<: *runtime
+    networks: [interop]
     build:
       context: ./.work/bin
       dockerfile: ../../docker/runtime.Dockerfile
@@ -69,7 +71,7 @@ services:
     pull_policy: build
     command: ["node.sh"]
     environment:
-      FUNDER_URL: http://funder:23415
+      FUNDER_URL: http://127.0.0.1:23415
     volumes:
       - node-data:/data/node
     healthcheck:
@@ -81,6 +83,7 @@ services:
 
   funder:
     <<: *runtime
+    network_mode: service:node
     command: ["wallet.sh", "listen-http"]
     environment:
       WALLET_PASSWORD: funder-password
@@ -99,13 +102,15 @@ services:
 
   miner:
     <<: *runtime
-    command: ["miner", "node:23416", "2"]
+    network_mode: service:node
+    command: ["miner", "127.0.0.1:23416", "2"]
     depends_on:
       funder:
         condition: service_healthy
 
   peer:
     <<: *runtime
+    network_mode: service:node
     command: ["wallet.sh", "idle"]
     environment:
       WALLET_PASSWORD: peer-password
@@ -126,13 +131,14 @@ services:
 
   lepic:
     <<: *runtime
+    network_mode: service:node
     command: ["sleep", "infinity"]
     environment:
       LEPIC_NETWORK: mainnet
       LEPIC_DATA_DIR: /data/lepic
-      LEPIC_NODE_URL: http://node:23413
+      LEPIC_NODE_URL: http://127.0.0.1:23413
       LEPIC_NODE_API_SECRET_FILE: /node/.foreign_api_secret
-      LEPIC_EPICBOX_RELAY: ws://epicbox:3423
+      LEPIC_EPICBOX_RELAY: ws://localhost:3423
       LEPIC_OUTPUT: json
       LEPIC_LOG_LEVEL: info
       LEPIC_PASSWORD: lepic-password
@@ -148,6 +154,7 @@ services:
 
 networks:
   # No route out: nothing in the stack can reach a public relay, node or any other host.
+  # Only the node joins it; the other services use the node's namespace.
   interop:
     internal: true
 
