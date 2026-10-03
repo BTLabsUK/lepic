@@ -46,8 +46,8 @@ lepic-transport   -> lepic-slate
 lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto
 lepic-wallet      -> all crates above
 lepic-telemetry   -> (external only)
-lepic-cli         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-transport, lepic-node, lepic-store, lepic-keychain
-lepic-ffi         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-transport, lepic-node, lepic-store, lepic-keychain
+lepic-cli         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-ffi         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
 ```
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a
