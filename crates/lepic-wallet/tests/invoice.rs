@@ -14,19 +14,34 @@ mod receive_harness;
 mod support;
 
 use invoice_harness::{ACCOUNT, FUNDING, ISSUER_MNEMONIC, PAYER_MNEMONIC, Party};
+use lepic_crypto::SecretKey;
+use lepic_keychain::Identifier;
 use lepic_node::mock::{ChainState, MockFailure, MockNode};
 use lepic_node::{NodeVersion, Tip};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::hash::Hash;
-use lepic_slate::codec::{MediaType, WireSlate};
+use lepic_primitives::params::Network;
+use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_slate::codec::{EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::{DecodeError, ValidationError};
+use lepic_slate::model::SlateId;
+use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    OutputStatus, ParticipantId, SlateStage, StoredTransaction, TxDirection, TxId, TxState,
+    OutputRecord, OutputStatus, ParticipantId, SlateStage, StoredTransaction, TxDirection, TxId,
+    TxState,
 };
+use lepic_transport::file::FilePolicy;
+use lepic_transport::policy::FormatPolicy;
 use lepic_wallet::event::TransactionState;
-use lepic_wallet::invoice::{InvoiceError, InvoiceField, PayRequest};
+use lepic_wallet::invoice::{
+    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, InvoiceError, InvoiceField, PayRequest,
+    build_i1, build_i2, build_i3,
+};
 use lepic_wallet::selection::SelectionStrategy;
+use lepic_wallet::send::ChangeOutput;
 use lepic_wallet::{Event, WalletError};
 use serde_json::Value;
 use uuid::Uuid;
@@ -127,6 +142,10 @@ impl Flow {
 }
 
 type Change = Box<dyn FnOnce(&mut Value)>;
+
+fn slate_value(wire: &WireSlate) -> Value {
+    serde_json::from_str(wire.as_text().unwrap()).unwrap()
+}
 
 /// `wire` with its JSON changed by `change`.
 fn tampered(wire: &WireSlate, change: impl FnOnce(&mut Value)) -> WireSlate {
@@ -443,7 +462,46 @@ fn finalizing_refuses_a_payment_that_changed_the_invoice() {
         let mut i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
         participant(&mut i2, "0")["public_blind_excess"].clone()
     };
-    let cases: [(InvoiceField, Change); 3] = [
+    let issuer_commit = slate_value(&flow.i1)["tx"]["body"]["outputs"][0]["commit"].clone();
+    let is_issuers = move |output: &Value| output["commit"] == issuer_commit;
+    // A second payer of the same seed answers the same invoice from another output.
+    let other_change = {
+        let other = payer(&flow.node, FUNDING + 1);
+        let other_i2 = slate_value(&other.pay(&flow.i1, request()).unwrap().reply);
+        let outputs = other_i2["tx"]["body"]["outputs"].as_array().unwrap();
+        outputs
+            .iter()
+            .find(|output| !is_issuers(output))
+            .unwrap()
+            .clone()
+    };
+    let dropped = is_issuers.clone();
+    let replaced = is_issuers;
+    let cases: [(InvoiceField, Change); 6] = [
+        (
+            InvoiceField::Lock,
+            Box::new(|slate| {
+                slate["lock_height"] = Value::from("5");
+                let kernel = &mut slate["tx"]["body"]["kernels"][0];
+                kernel["features"] = Value::from("HeightLocked");
+                kernel["lock_height"] = Value::from("5");
+            }),
+        ),
+        (
+            InvoiceField::Outputs,
+            Box::new(move |slate| {
+                let outputs = slate["tx"]["body"]["outputs"].as_array_mut().unwrap();
+                outputs.retain(|output| !dropped(output));
+            }),
+        ),
+        (
+            InvoiceField::Outputs,
+            Box::new(move |slate| {
+                let outputs = slate["tx"]["body"]["outputs"].as_array_mut().unwrap();
+                let issuers = outputs.iter().position(replaced).unwrap();
+                outputs[issuers] = other_change;
+            }),
+        ),
         (
             InvoiceField::Amount,
             Box::new(|slate| slate["amount"] = Value::from((AMOUNT + 1).to_string())),
@@ -552,6 +610,175 @@ fn a_locked_wallet_issues_nothing() {
         "{error:?}"
     );
     assert!(issuer.delivered().is_none());
+}
+
+#[test]
+fn finalizing_refuses_a_payer_message_whose_signature_does_not_verify() {
+    let flow = flow(
+        None,
+        PayRequest {
+            message: Some("paid in full".to_owned()),
+            ..request()
+        },
+    );
+    let forged = tampered(&flow.i2, |slate| {
+        participant(slate, "0")["message"] = Value::from("paid in part");
+    });
+
+    let error = flow.issuer.finalize(&forged).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::MessageSignature {
+                role: Role::Sender,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_refuses_an_i2_past_the_ttl_its_header_lets_the_issuer_read() {
+    let flow = flow(
+        None,
+        PayRequest {
+            ttl_blocks: Some(2),
+            ..request()
+        },
+    );
+    // A payer that writes header 3 under the V3 shape, which the file method reads with its TTL.
+    let i2 = tampered(&flow.i2, |slate| {
+        slate["version_info"]["version"] = Value::from(3);
+        slate["version_info"]["orig_version"] = Value::from(3);
+    });
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
+
+    let error = flow.issuer.finalize(&i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff, tip }
+            if cutoff == Height::new(TIP + 2) && tip == Height::new(TIP + 2)),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+/// The I1 the issuer's wallet built: its RNG repeats the byte 1, so every value it drew is
+/// all 01.
+fn rebuilt_i1(flow: &Flow) -> BuiltI1 {
+    let ones = || SecretKey::from_array([1; 32]).unwrap();
+    let built = build_i1(
+        &flow.issuer.keychain,
+        &I1Plan {
+            account: ACCOUNT,
+            amount: Amount::new(AMOUNT),
+            height: Height::new(TIP),
+            key_id: Identifier::new(3, [0, 0, 0, 0]).unwrap(),
+            message: None,
+        },
+        I1Randomness {
+            slate_id: SlateId::from_random_bytes([1; 16]),
+            offset: ones(),
+            nonce: ones(),
+            message_nonce: ones(),
+        },
+    )
+    .unwrap();
+    let delivered = FilePolicy.decode(&codecs(), &flow.i1).unwrap();
+    assert_eq!(delivered.with_origin(None), built.slate);
+    built
+}
+
+fn codecs() -> CodecRegistry {
+    let base_fee = Network::Floonet.params().default_base_fee();
+    let mut codecs = CodecRegistry::new();
+    codecs
+        .register(Box::new(V3JsonCodec::new(base_fee)))
+        .unwrap();
+    codecs
+        .register(Box::new(V2JsonCodec::new(base_fee)))
+        .unwrap();
+    codecs
+}
+
+#[test]
+fn a_fee_below_the_minimum_is_refused_even_when_the_payer_signed_it() {
+    let flow = flow(None, request());
+    let issued = rebuilt_i1(&flow);
+    let base_fee = Network::Floonet.params().default_base_fee();
+    let minimum = finalized_fee(&flow);
+    let fee = Fee::new(minimum.value() - 100_000);
+    let funding = flow
+        .payer
+        .read(|repos| repos.outputs(ACCOUNT, None))
+        .into_iter()
+        .find(|output| output.amount == Amount::new(FUNDING))
+        .unwrap();
+    let low = build_i2(
+        &flow.payer.keychain,
+        &issued.slate,
+        &I2Plan {
+            fee,
+            height: Height::new(TIP),
+            ttl_cutoff_height: None,
+            inputs: vec![OutputRecord {
+                status: OutputStatus::Unspent,
+                tx: None,
+                ..funding
+            }],
+            change: vec![ChangeOutput {
+                key_id: Identifier::new(3, [0, 0, 9, 0]).unwrap(),
+                amount: Amount::new(FUNDING - AMOUNT - fee.value()),
+            }],
+            message: None,
+        },
+        &I2Randomness {
+            nonce: SecretKey::from_array([2; 32]).unwrap(),
+            message_nonce: SecretKey::from_array([2; 32]).unwrap(),
+        },
+    )
+    .unwrap();
+
+    let built = build_i3(base_fee, &issued, &low).unwrap_err();
+    assert!(
+        matches!(built, InvoiceError::FeeBelowMinimum { fee: got, minimum: needed }
+            if got == fee && needed == minimum),
+        "{built:?}"
+    );
+
+    // Over the wire the legacy decoder refuses the fee before the issuer's own check.
+    let wire = FilePolicy
+        .encode_reply(
+            &codecs(),
+            &low,
+            &EncodeContext {
+                block_header_version: 6,
+            },
+        )
+        .unwrap();
+    let error = flow.issuer.finalize(&wire).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            InvoiceError::Decode(DecodeError::Validation(
+                ValidationError::FeeBelowMinimum { .. }
+            ))
+        ),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+/// The fee the payer chose, which selection sets to the minimum for the body.
+fn finalized_fee(flow: &Flow) -> Fee {
+    transaction(&flow.payer, flow.slate_id, TxDirection::Outgoing)
+        .entry
+        .fee
+        .unwrap()
 }
 
 #[test]
