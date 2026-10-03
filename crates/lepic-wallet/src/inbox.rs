@@ -15,7 +15,8 @@
 
 use std::error::Error as StdError;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
@@ -58,6 +59,9 @@ const ADDRESS_ACCOUNT: AccountIndex = AccountIndex(0);
 const POST_PROPAGATION: Propagation = Propagation::Stem;
 
 const MAX_ERROR_SOURCES: usize = 8;
+
+/// Settling messages prunes the relay inbox at most this often, on the wallet clock.
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -348,16 +352,45 @@ fn prune_inbox(repos: &mut dyn Repositories, now: jiff::Timestamp) -> Result<usi
     }
 }
 
-/// Records how a message settled, pruning in the same write so that a listen held open for
-/// longer than the relay retention keeps the inbox bounded too.
+/// When one drain or listen last pruned the relay inbox as a message settled.
+#[derive(Default)]
+struct PruneSchedule(Mutex<Option<jiff::Timestamp>>);
+
+impl PruneSchedule {
+    fn last(&self) -> Option<jiff::Timestamp> {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn record(&self, at: jiff::Timestamp) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(at);
+    }
+}
+
+fn prune_due(last: Option<jiff::Timestamp>, now: jiff::Timestamp) -> bool {
+    last.is_none_or(|last| {
+        now.checked_sub(PRUNE_INTERVAL)
+            .is_ok_and(|due_from| last <= due_from)
+    })
+}
+
+/// Records how a message settled. When a prune is due after `last_pruned`, it runs in the same
+/// write, so a listen held open for longer than the relay retention keeps the inbox bounded
+/// too; returns when it ran.
 fn record_settled(
     repos: &mut dyn Repositories,
     msg_id: &str,
     status: InboxStatus,
     now: jiff::Timestamp,
-) -> Result<(), StoreError> {
-    prune_inbox(repos, now)?;
-    put_inbox(repos, msg_id, status, now)
+    last_pruned: Option<jiff::Timestamp>,
+) -> Result<Option<jiff::Timestamp>, StoreError> {
+    let pruned = if prune_due(last_pruned, now) {
+        prune_inbox(repos, now)?;
+        Some(now)
+    } else {
+        None
+    };
+    put_inbox(repos, msg_id, status, now)?;
+    Ok(pruned)
 }
 
 /// The status a message had before this delivery, recording it as received when it is new.
@@ -482,7 +515,9 @@ where
         backoff: Backoff,
     ) -> Result<InboxSummary, InboxError> {
         let consume = async {
-            let consumed = self.consume(subscription, listen, backoff).await;
+            let consumed = self
+                .consume(subscription, listen, backoff, &PruneSchedule::default())
+                .await;
             // A failed connection explains a failed consume better than the consume does.
             subscription
                 .stop()
@@ -518,6 +553,7 @@ where
         subscription: &Subscription,
         listen: Option<&ListenHandle>,
         backoff: Backoff,
+        pruning: &PruneSchedule,
     ) -> Result<InboxSummary, InboxError> {
         let mut summary = InboxSummary::default();
         loop {
@@ -556,7 +592,10 @@ where
                     }
                 }
             };
-            match self.settle(subscription, &item, listen, backoff).await {
+            match self
+                .settle(subscription, &item, listen, backoff, pruning)
+                .await
+            {
                 Some(handled) => summary.count(handled),
                 None => {
                     summary.held = summary.held.saturating_add(1);
@@ -574,15 +613,16 @@ where
         item: &Item,
         listen: Option<&ListenHandle>,
         backoff: Backoff,
+        pruning: &PruneSchedule,
     ) -> Option<Handled> {
         let mut attempt: u32 = 0;
         let handled = loop {
             let disposition = match listen {
-                None => self.handle(item).await,
+                None => self.handle(item, pruning).await,
                 Some(handle) => tokio::select! {
                     biased;
                     () = handle.stopped() => return None,
-                    disposition = self.handle(item) => disposition,
+                    disposition = self.handle(item, pruning) => disposition,
                 },
             };
             match (disposition, listen) {
@@ -652,7 +692,7 @@ where
         }
     }
 
-    async fn handle(&self, item: &Item) -> Disposition {
+    async fn handle(&self, item: &Item, pruning: &PruneSchedule) -> Disposition {
         let msg_id = item.msg_id().map(str::to_owned);
         let outcome = match item {
             Item::Rejection(rejection) => {
@@ -678,12 +718,19 @@ where
         };
         if let Some(msg_id) = msg_id {
             let status = handled.inbox_status();
+            let last_pruned = pruning.last();
             let recorded = self
-                .inbox_write(move |repos, now| record_settled(repos, &msg_id, status, now))
+                .inbox_write(move |repos, now| {
+                    record_settled(repos, &msg_id, status, now, last_pruned)
+                })
                 .await;
-            if let Err(error) = recorded {
-                warn!(error = %ErrorChain(&error), "epicbox message held");
-                return Disposition::Held;
+            match recorded {
+                Ok(Some(pruned_at)) => pruning.record(pruned_at),
+                Ok(None) => {}
+                Err(error) => {
+                    warn!(error = %ErrorChain(&error), "epicbox message held");
+                    return Disposition::Held;
+                }
             }
         }
         Disposition::Settled(handled)
@@ -905,5 +952,27 @@ impl From<Refusal> for Settlement {
 impl From<Hold> for Settlement {
     fn from(hold: Hold) -> Self {
         Self::Hold(hold)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap (docs/rules.md).
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn at(second: i64) -> jiff::Timestamp {
+        jiff::Timestamp::from_second(second).unwrap()
+    }
+
+    #[test]
+    fn settling_prunes_at_most_once_per_interval() {
+        let interval = i64::try_from(PRUNE_INTERVAL.as_secs()).unwrap();
+        let last = at(1_000_000);
+        assert!(prune_due(None, last));
+        assert!(!prune_due(Some(last), last));
+        assert!(!prune_due(Some(last), at(1_000_000 + interval - 1)));
+        assert!(prune_due(Some(last), at(1_000_000 + interval)));
     }
 }
