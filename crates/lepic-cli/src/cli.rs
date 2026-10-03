@@ -22,7 +22,9 @@ Reads the password of the wallet.seed file, then the new wallet password unless 
 set, from hidden prompts or one line each of standard input. LEPIC_PASSWORD stays in the process
 environment while the command runs, where the same user's processes can read it.";
 
-const PASSWORD_HELP: &str = "\
+const LONG_ABOUT: &str = "\
+A light Epic Cash wallet
+
 Commands that open the wallet read its password from LEPIC_PASSWORD, else from a hidden prompt,
 else from one line of standard input. Secrets are never taken from arguments. LEPIC_PASSWORD stays
 in the process environment while the command runs, where the same user's processes can read it;
@@ -34,7 +36,7 @@ the prompt and standard input do not leave it there.";
     version,
     about = "A light Epic Cash wallet",
     after_help = EXIT_CODES_HELP,
-    before_long_help = PASSWORD_HELP,
+    long_about = LONG_ABOUT,
     propagate_version = true,
     disable_help_subcommand = true
 )]

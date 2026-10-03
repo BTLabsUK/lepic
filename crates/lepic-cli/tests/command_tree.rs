@@ -161,6 +161,26 @@ fn help_renders_for_every_command() {
 }
 
 #[test]
+fn help_starts_with_what_the_command_does() {
+    for (path, command) in all_commands() {
+        let Some(about) = command.get_about().map(|about| about.to_string()) else {
+            continue;
+        };
+        for flag in ["-h", "--help"] {
+            let mut args = vec!["lepic".to_owned()];
+            args.extend(path.iter().cloned());
+            args.push(flag.to_owned());
+            let text = Cli::try_parse_from(&args)
+                .map(|_| ())
+                .unwrap_err()
+                .render()
+                .to_string();
+            assert!(text.starts_with(&about), "{args:?}: {text}");
+        }
+    }
+}
+
+#[test]
 fn no_option_or_argument_takes_a_secret() {
     for (path, command) in all_commands() {
         for arg in command.get_arguments() {
