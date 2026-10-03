@@ -4,7 +4,8 @@
 
 use std::any::Any;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::io::Write as _;
+use std::panic::{AssertUnwindSafe, Location, catch_unwind};
 
 use tokio::runtime::Handle;
 use tracing::instrument::WithSubscriber as _;
@@ -85,6 +86,28 @@ pub(crate) fn guard<T>(
 /// [`guard`] for a call with no error to return: after a panic it returns `fallback`.
 pub(crate) fn guard_or<T>(operation: &'static str, fallback: T, work: impl FnOnce() -> T) -> T {
     guard(operation, || Ok(work())).unwrap_or(fallback)
+}
+
+/// Replaces the process's panic hook with one that reports where a panic happened but not its
+/// payload, for the reason [`guard`] drops it. The default hook would print the payload to
+/// stderr, which the platform may keep in its logs. Installing it again changes nothing.
+pub(crate) fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        // Nothing is left to tell when stderr is closed.
+        let _ = writeln!(std::io::stderr(), "{}", panic_report(info.location()));
+    }));
+}
+
+fn panic_report(location: Option<&Location<'_>>) -> String {
+    match location {
+        Some(location) => format!(
+            "lepic panicked at {}:{}:{}",
+            location.file(),
+            location.line(),
+            location.column()
+        ),
+        None => "lepic panicked".to_owned(),
+    }
 }
 
 fn panicked(operation: &'static str) -> WalletError {

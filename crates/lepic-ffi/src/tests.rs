@@ -330,7 +330,6 @@ fn every_synchronous_api_function_runs_under_the_panic_guard() {
 
 #[test]
 fn a_panic_in_a_call_without_an_error_gives_its_fallback() {
-    #[allow(clippy::panic)]
     let answered = crate::boundary::guard_or("test", false, || panic!("inside lepic"));
     assert!(!answered);
 }

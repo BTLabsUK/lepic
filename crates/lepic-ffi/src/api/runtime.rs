@@ -13,11 +13,19 @@ use tracing::{error, info, warn};
 
 use crate::api::diagnostics::{LogEntry, LogLevel};
 use crate::api::error::{WalletError, WalletErrorKind};
-use crate::boundary::{Boundary, guard};
+use crate::boundary::{Boundary, guard, guard_or, install_panic_hook};
 use crate::frb_generated::StreamSink;
 use crate::log::LogForwarder;
 use crate::node::NodeFactory;
 use crate::pin::{PinGuard, PinPolicy};
+
+/// Sets up the library once per process: installs a panic hook that reports where a panic
+/// happened but not its message. `RustLib.init()` calls it; the app never does. The hook
+/// covers every panic in the process.
+#[frb(init)]
+pub fn init_app() {
+    guard_or("init_app", (), install_panic_hook);
+}
 
 /// Owns the threads every wallet runs on. Create one when the app starts and keep it; dropping
 /// it stops work still running. Wallets keep the runtime alive while they are open.

@@ -57,6 +57,8 @@ final wallet = await EpicWallet.create(
   lock on `.lepic.lock` in it while a wallet is open.
 - `EpicWallet.events()` streams session, balance, transaction, sync and transport changes.
 - A panic inside LEPIC arrives as `WalletError` with kind `panic`; the runtime stays usable.
+  `RustLib.init()` installs a process-wide panic hook that prints only where a panic happened,
+  never its message, so no text from inside LEPIC reaches the platform log.
 
 ## Native libraries
 
