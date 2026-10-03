@@ -257,7 +257,8 @@ struct FoundOutput {
     id: OutputIdentifier,
     key_id: Identifier,
     account: AccountIndex,
-    child: u32,
+    /// The key's child number when it advances the account's key counter.
+    child: Option<u32>,
     amount: Amount,
     height: Height,
     lock_height: Height,
@@ -516,10 +517,7 @@ fn identify(
         let Some(rewound) = rewinder.rewind(&output.commitment, &output.proof)? else {
             continue;
         };
-        let Some((account, child)) = account_path(&rewound.identifier) else {
-            debug!(height = %output.height, "output skipped");
-            continue;
-        };
+        let (account, child) = placement(&rewound.identifier);
         if rewound.switch != SwitchCommitment::Regular {
             warn!(height = %output.height, "unexpected switch commitment found");
         }
@@ -542,14 +540,24 @@ fn identify(
     Ok(found)
 }
 
-/// Account and child number of an output key `m/<account>/0/<child>`. Keys elsewhere in the
-/// tree are not outputs of an account this wallet can spend from.
-fn account_path(key_id: &Identifier) -> Option<(AccountIndex, u32)> {
+/// The account a restored output is stored under, and the child number that advances that
+/// account's key counter.
+///
+/// Every output whose proof rewinds is restored, as `epic-wallet` restores it, so no funds are
+/// missed on unusual paths. A key `m/<a>/0/<c>` belongs to account `a`, the account of its parent
+/// path. The store keeps accounts as `m/<a>/0` only, so a key under any other parent is stored
+/// under the default account; its exact key id is kept, so it is spent with the right key. A
+/// hardened child never advances the counter, which hands out unhardened keys only.
+fn placement(key_id: &Identifier) -> (AccountIndex, Option<u32>) {
     match (key_id.depth(), key_id.components()) {
-        (3, [account, 0, child, 0]) if account < FIRST_HARDENED && child < FIRST_HARDENED => {
-            Some((AccountIndex(account), child))
+        (3, [account, 0, child, _]) => (
+            AccountIndex(account),
+            (child < FIRST_HARDENED).then_some(child),
+        ),
+        _ => {
+            debug!("output key outside the account paths found");
+            (AccountIndex(0), None)
         }
-        _ => None,
     }
 }
 
@@ -570,8 +578,10 @@ fn store_found(
                 restore_missing(repos, output, now)?;
                 outcome.restored = outcome.restored.saturating_add(1);
                 debug!(height = %output.height, "output restored");
-                let highest = highest_child.entry(output.account).or_insert(output.child);
-                *highest = (*highest).max(output.child);
+                if let Some(child) = output.child {
+                    let highest = highest_child.entry(output.account).or_insert(child);
+                    *highest = (*highest).max(child);
+                }
             }
         }
     }
@@ -802,20 +812,22 @@ mod tests {
     }
 
     #[test]
-    fn only_account_output_keys_are_restored() {
+    fn outputs_go_to_the_account_of_their_parent_path_or_the_default() {
         let key = |depth, components| Identifier::new(depth, components).unwrap();
+        let default = (AccountIndex(0), None);
+        assert_eq!(placement(&key(3, [0, 0, 5, 0])), (AccountIndex(0), Some(5)));
+        assert_eq!(placement(&key(3, [2, 0, 0, 0])), (AccountIndex(2), Some(0)));
         assert_eq!(
-            account_path(&key(3, [0, 0, 5, 0])),
-            Some((AccountIndex(0), 5))
+            placement(&key(3, [FIRST_HARDENED, 0, 5, 0])),
+            (AccountIndex(FIRST_HARDENED), Some(5))
         );
         assert_eq!(
-            account_path(&key(3, [2, 0, 0, 0])),
-            Some((AccountIndex(2), 0))
+            placement(&key(3, [0, 0, FIRST_HARDENED, 0])),
+            (AccountIndex(0), None)
         );
-        assert_eq!(account_path(&key(2, [0, 0, 0, 0])), None);
-        assert_eq!(account_path(&key(3, [0, 1, 5, 0])), None);
-        assert_eq!(account_path(&key(4, [0, 0, 5, 1])), None);
-        assert_eq!(account_path(&key(3, [FIRST_HARDENED, 0, 5, 0])), None);
-        assert_eq!(account_path(&key(3, [0, 0, FIRST_HARDENED, 0])), None);
+        assert_eq!(placement(&key(2, [0, 0, 0, 0])), default);
+        assert_eq!(placement(&key(3, [0, 1, 5, 0])), default);
+        assert_eq!(placement(&key(4, [0, 0, 5, 1])), default);
+        assert_eq!(placement(&key(1, [7, 0, 0, 0])), default);
     }
 }

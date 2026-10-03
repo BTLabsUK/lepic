@@ -17,7 +17,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lepic_crypto::Commitment;
-use lepic_node::mock::MockNode;
+use lepic_keychain::proof::create_output;
+use lepic_keychain::{
+    ExtKeyVersion, Identifier, Keychain, LegacyProofBuilder, ProofBuilder, SwitchCommitment,
+};
+use lepic_node::mock::{ChainOutput, MockNode};
 use lepic_node::{
     LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation, PmmrIndices,
     Propagation, Tip, UnspentOutputs,
@@ -702,4 +706,121 @@ fn repair_scan_does_not_resume_an_interrupted_plain_scan() {
         assert_eq!(transaction_state(&harness, sending), TxState::Cancelled);
         assert_eq!(snapshot(&harness), expected, "page {failing_page}");
     }
+}
+
+/// One output of the subject on a chain the mock node scripts.
+fn chain_output(
+    keychain: &Keychain,
+    key_id: Identifier,
+    amount: u64,
+    legacy: bool,
+    mmr_index: u64,
+) -> ChainOutput {
+    let output = if legacy {
+        create_output(
+            keychain,
+            &LegacyProofBuilder::new(keychain).unwrap(),
+            amount,
+            &key_id,
+            SwitchCommitment::Regular,
+        )
+    } else {
+        create_output(
+            keychain,
+            &ProofBuilder::new(keychain).unwrap(),
+            amount,
+            &key_id,
+            SwitchCommitment::Regular,
+        )
+    }
+    .unwrap();
+    ChainOutput {
+        commitment: output.commitment,
+        features: output.features,
+        proof: output.proof,
+        height: Height::new(mmr_index),
+        mmr_index,
+        spent: false,
+    }
+}
+
+#[test]
+fn restore_finds_outputs_on_every_path_the_proofs_rewind_to() {
+    let vector = full_scan_vector();
+    let phrase = vector["inputs"]["subject"]["mnemonic"].as_str().unwrap();
+    let keychain = Keychain::from_mnemonic(phrase, ExtKeyVersion::MAINNET).unwrap();
+    let hardened = 1u32 << 31;
+    let key = |depth, components| Identifier::new(depth, components).unwrap();
+    // (key, amount, legacy proof, account it is stored under)
+    let cases = [
+        (key(3, [2, 0, 3, 0]), 11, false, AccountIndex(2)),
+        (key(3, [0, 1, 4, 0]), 12, true, AccountIndex(0)),
+        (key(4, [0, 0, 1, 2]), 13, false, AccountIndex(0)),
+        (key(3, [0, 0, hardened + 1, 0]), 14, false, AccountIndex(0)),
+        (
+            key(3, [hardened, 0, 1, 0]),
+            15,
+            false,
+            AccountIndex(hardened),
+        ),
+        (key(2, [6, 0, 0, 0]), 16, false, AccountIndex(0)),
+    ];
+    let chain = support::mock_node();
+    chain.update_chain(|state| {
+        state.outputs = cases
+            .iter()
+            .zip(1..)
+            .map(|((key_id, amount, legacy, _), index)| {
+                chain_output(&keychain, *key_id, *amount, *legacy, index)
+            })
+            .collect();
+    });
+    let mut harness = Harness::new();
+    harness.node = chain;
+    let wallet = harness.wallet();
+    harness
+        .block_on(wallet.restore(password(PASSWORD), phrase))
+        .unwrap();
+
+    let summary = harness
+        .block_on(wallet.scan(ScanOptions::restore(Network::Mainnet), &ScanCancel::new()))
+        .unwrap();
+
+    assert_eq!(summary.restored, cases.len() as u64);
+    let state = snapshot(&harness);
+    assert_eq!(state.outputs.len(), cases.len());
+    for (key_id, amount, _, account) in &cases {
+        let stored = state
+            .outputs
+            .iter()
+            .find(|output| output.key_id == KeyId(key_id.to_bytes()))
+            .unwrap_or_else(|| panic!("output at {key_id:?} not restored"));
+        assert_eq!(stored.account, *account, "{key_id:?}");
+        assert_eq!(stored.amount, Amount::new(*amount), "{key_id:?}");
+        assert_eq!(stored.status, OutputStatus::Unspent, "{key_id:?}");
+        let tx = state
+            .transactions
+            .iter()
+            .find(|tx| Some(tx.id) == stored.tx)
+            .unwrap();
+        assert_eq!(
+            (tx.entry.direction, tx.entry.state, tx.entry.account),
+            (TxDirection::Incoming, TxState::Confirmed, *account)
+        );
+    }
+    let accounts: Vec<(u32, &str, u32)> = state
+        .accounts
+        .iter()
+        .map(|account| (account.index.0, account.label.as_str(), account.next_child))
+        .collect();
+    assert_eq!(
+        accounts,
+        [
+            (0, "default", 0),
+            (2, "account_1", 4),
+            (hardened, "account_2", 2),
+        ],
+        "accounts of the parent paths, counters past their restored children"
+    );
+    assert_eq!(harness.node.violations(), []);
 }
