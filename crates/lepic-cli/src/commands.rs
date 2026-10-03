@@ -406,6 +406,14 @@ impl<H: Host> Run<'_, H> {
         let summary = self
             .until_interrupted(opened.wallet.subscribe(), work, || cancel.cancel())
             .await?;
+        // The engine skips a start above the tip without storing anything; saying so beats a
+        // report of a scan that never ran.
+        if summary.start_height > summary.end_height {
+            return Err(CliError::StartAboveTip {
+                start: summary.start_height.value(),
+                tip: summary.end_height.value(),
+            });
+        }
         Ok(Report::Scan(WalletScanReport {
             start_height: summary.start_height.value(),
             end_height: summary.end_height.value(),

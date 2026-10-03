@@ -138,6 +138,8 @@ pub enum CliError {
     Store(#[from] StoreError),
     #[error("give --to or --to-file")]
     NoDestination,
+    #[error("start height {start} is above the node's tip {tip}")]
+    StartAboveTip { start: u64, tip: u64 },
     #[error("epicbox address rejected")]
     Address(#[source] lepic_epicbox::AddressError),
     #[error("transport registration failed")]
@@ -169,6 +171,7 @@ impl CliError {
             | Self::Amount(_)
             | Self::Zero { .. }
             | Self::NoDestination
+            | Self::StartAboveTip { .. }
             | Self::Address(_) => ErrorKind::Usage,
             Self::Wallet(error) => wallet_kind(error),
             Self::DataDirInUse => ErrorKind::WalletState,
@@ -443,6 +446,10 @@ mod tests {
             ),
             (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
             (CliError::DataDirInUse, ErrorKind::WalletState),
+            (
+                CliError::StartAboveTip { start: 9, tip: 8 },
+                ErrorKind::Usage,
+            ),
         ];
         for (error, kind) in cases {
             assert_eq!(error.kind(), kind, "{error:?}");

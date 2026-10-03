@@ -175,8 +175,9 @@ wallet was restored with `--no-scan` and has not scanned from genesis since. Pro
 stderr. Ctrl-C stops it and keeps what it found (exit 12); the next scan with the same options
 continues where it stopped, and says `Continued an interrupted scan.`
 
-- `--start-height <HEIGHT>` starts there instead; `0` scans the whole chain. Only a scan from 0
-  ends the wait after a `--no-scan` restore.
+- `--start-height <HEIGHT>` starts there instead; `0` scans the whole chain. A height above the
+  node's tip is refused with exit 2. Only a scan from 0 ends the wait after a `--no-scan`
+  restore.
 - `--delete-unconfirmed` also repairs what unfinished transactions hold, as `epic-wallet scan
   --delete_unconfirmed` does: locked outputs found on chain are unlocked and unconfirmed outputs
   not found are deleted, and their transactions are cancelled. The report adds the outputs

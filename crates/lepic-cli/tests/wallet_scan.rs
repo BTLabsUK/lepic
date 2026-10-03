@@ -159,6 +159,15 @@ fn a_scan_starts_before_the_last_scan_or_at_the_height_given() {
     assert_eq!(given["end_height"], 200, "{given}");
     assert_eq!(given["found"], 0, "{given}");
 
+    let above = sender.run(&host, &["wallet", "scan", "--start-height", "201"]);
+    assert_eq!(above.code, 2, "{above:?}");
+    let error = &above.json()["error"];
+    assert_eq!(error["kind"], "usage", "{error}");
+    assert_eq!(
+        error["message"], "start height 201 is above the node's tip 200",
+        "{error}"
+    );
+
     host.node
         .update_chain(|chain| chain.tip.height = Height::new(260));
     let update = scan(&sender, &host, &[]);
