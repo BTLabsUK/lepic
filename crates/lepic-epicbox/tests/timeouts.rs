@@ -165,6 +165,20 @@ async fn session_ends_when_a_ping_cannot_be_written() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn session_ends_when_a_request_cannot_be_written() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let (bob, _envelope) = drain_holding_a_message(&relay).await;
+    relay.stop_reading_subscribed();
+    relay.ping_subscribed(1024);
+    // A new challenge makes the client write a `Subscribe` into the full connection.
+    relay.send_challenges();
+    let started = Instant::now();
+    assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Answer);
+    // Writing a request and receiving its answer share one response timeout.
+    assert_ended_within(started, RESPONSE);
+}
+
+#[tokio::test(start_paused = true)]
 async fn acknowledgement_ends_when_the_subscription_cannot_reconnect_in_time() {
     let relay = MockRelay::new(Network::Mainnet);
     relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "slate"));

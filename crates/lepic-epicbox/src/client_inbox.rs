@@ -17,7 +17,9 @@ use lepic_transport::transport::{AckToken, BoxFuture, Destination, Envelope, Inb
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, MissedTickBehavior, interval_at, sleep, sleep_until, timeout};
+use tokio::time::{
+    Instant, MissedTickBehavior, interval_at, sleep, sleep_until, timeout, timeout_at,
+};
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::address::EpicboxAddress;
@@ -817,15 +819,17 @@ impl<'a> Session<'a> {
                 return Ok(());
             }
         };
+        let deadline = deadline_after(context.settings.response_timeout);
         let connection = self.connection.as_mut().ok_or(ClientError::NotConnected)?;
-        connection.send(&frame).await?;
+        timeout_at(deadline, connection.send(&frame))
+            .await
+            .map_err(|_| ClientError::Timeout {
+                awaiting: Awaiting::Answer,
+            })??;
         if let Sent::Made { msg_id, .. } = &sent {
             debug!(msg_id = %msg_id, "epicbox acknowledgement sent");
         }
-        self.outstanding = Some(Outstanding {
-            sent,
-            deadline: deadline_after(context.settings.response_timeout),
-        });
+        self.outstanding = Some(Outstanding { sent, deadline });
         Ok(())
     }
 
