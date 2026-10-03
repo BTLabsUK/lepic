@@ -17,7 +17,7 @@ use invoice_harness::{ACCOUNT, FUNDING, ISSUER_MNEMONIC, PAYER_MNEMONIC, Party};
 use lepic_crypto::SecretKey;
 use lepic_keychain::Identifier;
 use lepic_node::mock::{ChainState, MockFailure, MockNode};
-use lepic_node::{NodeVersion, Tip};
+use lepic_node::{LocatedKernel, NodeVersion, Tip};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::params::Network;
@@ -853,4 +853,37 @@ fn invoice_error_text_carries_no_amounts() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn a_payment_without_change_is_confirmed_by_its_kernel() {
+    // One input and the issuer's output: weight 4, at the floonet base fee of 100,000.
+    const NO_CHANGE_FEE: u64 = 400_000;
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    let issued = issuer.issue(AMOUNT, None).unwrap();
+    let slate_id = Uuid::from_bytes(*issued.slate_id.as_bytes());
+    let payer = payer(&node, AMOUNT + NO_CHANGE_FEE);
+    let paid = payer.pay(&issuer.delivered().unwrap(), request()).unwrap();
+    let finalized = issuer.finalize(&paid.reply).unwrap();
+    let payment = transaction(&payer, slate_id, TxDirection::Outgoing);
+    assert_eq!(payment.entry.amount_credited, Amount::ZERO);
+
+    let kernel = *finalized.transaction.kernels().first().unwrap();
+    node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 1);
+        chain.kernels.push(LocatedKernel {
+            kernel,
+            height: Height::new(TIP + 1),
+            mmr_index: 1,
+        });
+    });
+    payer.block_on(payer.wallet.refresh()).unwrap();
+
+    assert_eq!(
+        transaction(&payer, slate_id, TxDirection::Outgoing)
+            .entry
+            .state,
+        TxState::Confirmed
+    );
 }

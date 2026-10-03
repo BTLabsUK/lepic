@@ -35,6 +35,7 @@ use uuid::Uuid;
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Balance, Event};
+use crate::finalize::kernel_excess;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::send::SENDER_CONTEXT;
 use crate::state::{StateChange, apply_transition, is_final};
@@ -497,7 +498,9 @@ fn kernel_lookups(
 }
 
 /// The kernel excess of the final slate stored for a transaction, and the height the slate was
-/// created at, below which the kernel cannot be.
+/// created at, below which the kernel cannot be. An invoice payer never receives the I3, so its
+/// excess is computed from the stored I2, which already holds every input, output and the final
+/// offset, as `epic-wallet` does when it locks the payer's outputs.
 pub(crate) fn final_kernel(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -508,7 +511,15 @@ pub(crate) fn final_kernel(
         .into_iter()
         .find_map(|stage| stored_slate(repos, codecs, tx_id, slate_id, stage).transpose())
         .transpose()?;
-    Ok(final_slate.and_then(|slate| slate.kernel().map(|kernel| (kernel.excess, slate.height()))))
+    if let Some(slate) = final_slate {
+        return Ok(slate.kernel().map(|kernel| (kernel.excess, slate.height())));
+    }
+    let payment = stored_slate(repos, codecs, tx_id, slate_id, SlateStage::Invoice2)?;
+    Ok(payment.and_then(|slate| {
+        kernel_excess(&slate)
+            .ok()
+            .map(|excess| (excess, slate.height()))
+    }))
 }
 
 /// Open transactions at or past their TTL cutoff at `tip`. A finalized or posted transaction

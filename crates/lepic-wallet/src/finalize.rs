@@ -336,7 +336,7 @@ fn check_fee(slate: &Slate, base_fee: Fee) -> Result<(), FinalizeError> {
 }
 
 /// `calc_excess`: the outputs plus the fee, less the inputs and the offset.
-fn kernel_excess(slate: &Slate) -> Result<Commitment, FinalizeError> {
+pub(crate) fn kernel_excess(slate: &Slate) -> Result<Commitment, FinalizeError> {
     let body = TransactionBody::from_parts(
         slate.inputs().to_vec(),
         slate.outputs().to_vec(),
