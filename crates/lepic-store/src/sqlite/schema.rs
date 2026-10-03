@@ -98,10 +98,15 @@ const V2: &str = "
 ALTER TABLE transactions ADD COLUMN confirmed_height INTEGER;
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2];
+/// The address of the other party, when the transport has one; NULL otherwise.
+const V3: &str = "
+ALTER TABLE transactions ADD COLUMN counterparty TEXT;
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

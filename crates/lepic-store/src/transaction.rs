@@ -84,4 +84,12 @@ pub trait TransactionRepository {
 
     /// `None` when no height was recorded, as for an entry confirmed before heights were stored.
     fn confirmed_height(&self, id: TxId) -> Result<Option<Height>, StoreError>;
+
+    /// Records the address of the other party, replacing any recorded before. Updating the
+    /// entry keeps it. Fails with [`StoreError::UnknownTransaction`] when no entry has the id.
+    fn set_counterparty(&mut self, id: TxId, address: &str) -> Result<(), StoreError>;
+
+    /// `None` when no address was recorded, as for a file exchange or an entry stored before
+    /// addresses were.
+    fn counterparty(&self, id: TxId) -> Result<Option<String>, StoreError>;
 }

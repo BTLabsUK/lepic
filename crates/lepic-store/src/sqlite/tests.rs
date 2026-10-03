@@ -58,6 +58,18 @@ fn check_v1_seed(store: &SqliteStore) {
 fn check_v2_seed(store: &SqliteStore) {
     let height = store.read(|repos| repos.confirmed_height(TxId(1))).unwrap();
     assert_eq!(height, Some(Height::new(654)));
+    let counterparty = store.read(|repos| repos.counterparty(TxId(1))).unwrap();
+    assert_eq!(counterparty, None);
+    store
+        .write(|repos| repos.set_counterparty(TxId(1), "peer@relay"))
+        .unwrap();
+    let counterparty = store.read(|repos| repos.counterparty(TxId(1))).unwrap();
+    assert_eq!(counterparty.as_deref(), Some("peer@relay"));
+}
+
+fn check_v3_seed(store: &SqliteStore) {
+    let counterparty = store.read(|repos| repos.counterparty(TxId(1))).unwrap();
+    assert_eq!(counterparty.as_deref(), Some("peer@relay"));
 }
 
 const V1_SEED: &str = "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 4);
@@ -84,6 +96,14 @@ const UPGRADES: &[UpgradeCase] = &[
                    amount_debited, created_at, updated_at, confirmed_height)
                VALUES (1, 0, 'incoming', 'confirmed', 5, 0, 1, 1, 654);",
         check: check_v2_seed,
+    },
+    UpgradeCase {
+        from: 3,
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, amount_credited,
+                   amount_debited, created_at, updated_at, counterparty)
+               VALUES (1, 0, 'incoming', 'received', 5, 0, 1, 1, 'peer@relay');",
+        check: check_v3_seed,
     },
 ];
 

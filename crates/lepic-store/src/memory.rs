@@ -30,6 +30,7 @@ struct State {
     outputs: BTreeMap<CommitmentBytes, OutputRecord>,
     transactions: BTreeMap<TxId, TransactionEntry>,
     confirmed_heights: BTreeMap<TxId, Height>,
+    counterparties: BTreeMap<TxId, String>,
     slates: BTreeMap<SlateKey, StoredSlate>,
     contexts: BTreeMap<([u8; 16], ParticipantId), Vec<u8>>,
     inbox: BTreeMap<String, InboxEntry>,
@@ -290,6 +291,18 @@ impl TransactionRepository for MemoryRepos<'_> {
 
     fn confirmed_height(&self, id: TxId) -> Result<Option<Height>, StoreError> {
         Ok(self.state.confirmed_heights.get(&id).copied())
+    }
+
+    fn set_counterparty(&mut self, id: TxId, address: &str) -> Result<(), StoreError> {
+        if !self.state.transactions.contains_key(&id) {
+            return Err(StoreError::UnknownTransaction(id));
+        }
+        self.state.counterparties.insert(id, address.to_owned());
+        Ok(())
+    }
+
+    fn counterparty(&self, id: TxId) -> Result<Option<String>, StoreError> {
+        Ok(self.state.counterparties.get(&id).cloned())
     }
 }
 

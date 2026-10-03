@@ -634,6 +634,35 @@ fn confirmed_height_is_recorded_and_survives_updates<B: Backend>() {
     );
 }
 
+fn counterparty_is_recorded_and_survives_updates<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let mut entry = transaction(DEFAULT, Some(SLATE_A));
+    let id = write(store, |repos| repos.insert_transaction(&entry)).unwrap();
+    assert_eq!(read(store, |repos| repos.counterparty(id)).unwrap(), None);
+    write(store, |repos| {
+        repos.set_counterparty(id, "first@relay")?;
+        repos.set_counterparty(id, "second@relay")
+    })
+    .unwrap();
+    entry.state = TxState::Confirmed;
+    write(store, |repos| repos.update_transaction(id, &entry)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.counterparty(id))
+            .unwrap()
+            .as_deref(),
+        Some("second@relay")
+    );
+    assert!(matches!(
+        write(store, |repos| repos.set_counterparty(TxId(9), "x@relay")),
+        Err(StoreError::UnknownTransaction(TxId(9)))
+    ));
+    assert_eq!(
+        read(store, |repos| repos.counterparty(TxId(9))).unwrap(),
+        None
+    );
+}
+
 macro_rules! shared_suite {
     ($backend:ty: $($test:ident),+ $(,)?) => {
         $(
@@ -680,6 +709,7 @@ for_each_backend!(
     write_sees_its_own_changes_and_commits_them_together,
     fee_and_amount_extremes_round_trip,
     confirmed_height_is_recorded_and_survives_updates,
+    counterparty_is_recorded_and_survives_updates,
 );
 
 #[test]

@@ -451,6 +451,29 @@ impl TransactionRepository for SqliteRepos<'_> {
             .flatten()
             .map(|height| Height::new(u64_from_column(height))))
     }
+
+    fn set_counterparty(&mut self, id: TxId, address: &str) -> Result<(), StoreError> {
+        let updated = self.conn.execute(
+            "UPDATE transactions SET counterparty = ?2 WHERE id = ?1",
+            params![i64::from(id.0), address],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::UnknownTransaction(id));
+        }
+        Ok(())
+    }
+
+    fn counterparty(&self, id: TxId) -> Result<Option<String>, StoreError> {
+        let address: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT counterparty FROM transactions WHERE id = ?1",
+                [i64::from(id.0)],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(address.flatten())
+    }
 }
 
 const SLATE_COLUMNS: &str = "slate_id, stage, codec, bytes";
