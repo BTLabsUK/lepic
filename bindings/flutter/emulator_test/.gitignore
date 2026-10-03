@@ -3,3 +3,5 @@
 /build/
 # Written by `cargo xtask mobile --emulator-test`.
 /native/
+# An app: keep its resolved Dart packages, unlike the library package above.
+!pubspec.lock

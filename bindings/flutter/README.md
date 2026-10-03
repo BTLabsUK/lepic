@@ -254,10 +254,10 @@ It builds `lepic-ffi` in release with the `mock` feature for the device's ABI, w
 `emulator_test/native/`, which the app's `pubspec.yaml` names as `native_dir`, and runs
 `flutter test integration_test` there. `adb` and `flutter` come from `$ANDROID_HOME` and
 `$FLUTTER_ROOT` when set, otherwise from `PATH`. A headless emulator for it, from an installed
-system image:
+system image; `-read-only` leaves the AVD unchanged, so several runs can share it:
 
 ```sh
 avdmanager create avd -n lepic_test -k "system-images;android-36;google_apis;x86_64" -d pixel_6
-emulator -avd lepic_test -no-window -no-audio -no-boot-anim -no-snapshot &
+emulator -avd lepic_test -read-only -no-window -no-audio -no-boot-anim -no-snapshot &
 adb wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done'
 ```
