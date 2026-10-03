@@ -9,19 +9,24 @@ use crate::exit::EXIT_CODES_HELP;
 
 const NEW_PASSWORD_HELP: &str = "\
 The new wallet password comes from LEPIC_PASSWORD, else from a hidden prompt, else from one line
-of standard input.";
+of standard input. LEPIC_PASSWORD stays in the process environment while the command runs, where
+the same user's processes can read it; the prompt and standard input do not leave it there.";
 
 const RESTORE_HELP: &str = "\
 Reads the recovery phrase, then the new wallet password unless LEPIC_PASSWORD is set, from hidden
-prompts or one line each of standard input.";
+prompts or one line each of standard input. LEPIC_PASSWORD stays in the process environment while
+the command runs, where the same user's processes can read it.";
 
 const IMPORT_SEED_HELP: &str = "\
 Reads the password of the wallet.seed file, then the new wallet password unless LEPIC_PASSWORD is
-set, from hidden prompts or one line each of standard input.";
+set, from hidden prompts or one line each of standard input. LEPIC_PASSWORD stays in the process
+environment while the command runs, where the same user's processes can read it.";
 
 const PASSWORD_HELP: &str = "\
 Commands that open the wallet read its password from LEPIC_PASSWORD, else from a hidden prompt,
-else from one line of standard input. Secrets are never taken from arguments.";
+else from one line of standard input. Secrets are never taken from arguments. LEPIC_PASSWORD stays
+in the process environment while the command runs, where the same user's processes can read it;
+the prompt and standard input do not leave it there.";
 
 #[derive(Debug, Parser)]
 #[command(

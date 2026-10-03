@@ -170,3 +170,29 @@ fn no_option_or_argument_takes_a_secret() {
         }
     }
 }
+
+#[test]
+fn help_that_names_the_password_variable_says_it_stays_in_the_environment() {
+    let mut pages = 0;
+    for (path, _) in all_commands() {
+        for flag in ["-h", "--help"] {
+            let mut args = vec!["lepic".to_owned()];
+            args.extend(path.iter().cloned());
+            args.push(flag.to_owned());
+            let text = Cli::try_parse_from(&args)
+                .map(|_| ())
+                .unwrap_err()
+                .render()
+                .to_string();
+            let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if words.contains("LEPIC_PASSWORD") {
+                pages += 1;
+                assert!(
+                    words.contains("LEPIC_PASSWORD stays in the process environment"),
+                    "{args:?}: {text}"
+                );
+            }
+        }
+    }
+    assert!(pages >= 4, "only {pages} help pages name LEPIC_PASSWORD");
+}
