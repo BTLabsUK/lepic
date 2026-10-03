@@ -41,6 +41,8 @@ pub struct PartyView {
     pub balance: BalanceView,
     /// Commitments match between runs because both wallets derive the same keys.
     pub outputs: Vec<OutputView>,
+    /// Transaction log entries of every kind and state, so a step that ran twice shows.
+    pub entries: usize,
     pub tx: Option<TxView>,
 }
 
@@ -89,16 +91,31 @@ pub fn upstream_output_status(status: OutputStatus) -> &'static str {
 /// reference run.
 pub fn differences(observed: &PartyView, reference: &PartyView) -> Vec<String> {
     let mut found = Vec::new();
-    if observed.balance != reference.balance {
-        found.push(format!(
-            "balance {:?}, reference {:?}",
-            observed.balance, reference.balance
-        ));
-    }
     if observed.outputs != reference.outputs {
         found.push(format!(
             "outputs {:?}, reference {:?}",
             observed.outputs, reference.outputs
+        ));
+    }
+    if observed.entries != reference.entries {
+        found.push(format!(
+            "{} log entries, reference {}",
+            observed.entries, reference.entries
+        ));
+    }
+    found.extend(restarted_differences(observed, reference));
+    found
+}
+
+/// The differences that matter once a run cancelled a slate and started over on a new one:
+/// the balance and the new transaction. The cancelled slate used up output keys and left a
+/// log entry the reference run does not have, so outputs and entries are not compared.
+pub fn restarted_differences(observed: &PartyView, reference: &PartyView) -> Vec<String> {
+    let mut found = Vec::new();
+    if observed.balance != reference.balance {
+        found.push(format!(
+            "balance {:?}, reference {:?}",
+            observed.balance, reference.balance
         ));
     }
     match (&observed.tx, &reference.tx) {

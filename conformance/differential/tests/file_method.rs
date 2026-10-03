@@ -21,7 +21,7 @@
 mod support;
 
 use support::view::differences;
-use support::{AMOUNT, Offer, Pay, SlateShape, SubjectKind, TTL_BLOCKS, Who, World};
+use support::{AMOUNT, Offer, Pay, SlateShape, Spend, SubjectKind, TTL_BLOCKS, Who, World};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Flow {
@@ -132,6 +132,7 @@ fn run(case: &Case, kind: SubjectKind) -> World {
                 ttl_blocks,
                 message: message(case, initiator),
                 proof_to: case.payment_proof.then(|| world.proof_address(responder)),
+                spend: Spend::default(),
             };
             world.party(initiator).send(&first, &offer)
         }
@@ -156,6 +157,7 @@ fn run(case: &Case, kind: SubjectKind) -> World {
                 amount: AMOUNT,
                 ttl_blocks,
                 message: message(case, responder),
+                spend: Spend::default(),
             };
             world.party(responder).pay_invoice(&first, &second, &pay)
         }
@@ -345,6 +347,7 @@ mod comparison {
                 locked: 0,
             },
             outputs: Vec::new(),
+            entries: 1,
             tx: Some(TxView {
                 upstream_states: states,
                 amount_credited: 0,

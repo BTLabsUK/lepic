@@ -3,8 +3,15 @@
 //! all on one in-process test chain. A run records what every wallet reports at each
 //! checkpoint and the transaction the chain mined.
 
+// Each test target compiles this module and uses only part of it.
+#![allow(dead_code)]
+
+pub mod compare;
+pub mod faults;
 pub mod lepic;
 pub mod node;
+pub mod scenario;
+pub mod soak;
 pub mod upstream;
 pub mod view;
 
@@ -25,6 +32,8 @@ const FUNDING: u64 = 20 * EPIC;
 pub const AMOUNT: u64 = 3 * EPIC;
 /// Blocks of confirmation after which `epic-wallet info` counts an output as spendable.
 const SPENDABLE_AFTER: usize = 10;
+/// Blocks mined before the first funding, so the miner holds mature rewards.
+const MATURE_REWARDS: usize = 6;
 pub const TTL_BLOCKS: u64 = 40;
 
 const MINER_ENTROPY: [u8; 32] = [0x11; 32];
@@ -44,6 +53,26 @@ pub enum SlateShape {
     V3Header3,
 }
 
+/// How a paying wallet chooses its inputs and change, as `epic-wallet`'s `InitTxArgs` says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Spend {
+    pub minimum_confirmations: u64,
+    /// Spend every eligible output instead of as few of the smallest as cover the amount.
+    pub use_all: bool,
+    pub change_outputs: u32,
+}
+
+impl Default for Spend {
+    /// What the CLI passes as `-c 1` with its other defaults.
+    fn default() -> Spend {
+        Spend {
+            minimum_confirmations: 1,
+            use_all: false,
+            change_outputs: 1,
+        }
+    }
+}
+
 /// What an initiating sender asks for.
 #[derive(Debug, Clone)]
 pub struct Offer {
@@ -51,6 +80,7 @@ pub struct Offer {
     pub ttl_blocks: Option<u64>,
     pub message: Option<String>,
     pub proof_to: Option<[u8; 32]>,
+    pub spend: Spend,
 }
 
 /// How a payer pays an invoice.
@@ -59,6 +89,53 @@ pub struct Pay {
     pub amount: u64,
     pub ttl_blocks: Option<u64>,
     pub message: Option<String>,
+    pub spend: Spend,
+}
+
+/// One output the miner pays a party before a case starts, mined in its own block and followed
+/// by `gap_blocks` empty ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Funding {
+    pub to: Who,
+    pub amount: u64,
+    pub gap_blocks: usize,
+}
+
+/// The chain a case starts on: the fundings in order, then `settle_blocks` empty blocks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Setup {
+    pub fundings: Vec<Funding>,
+    pub settle_blocks: usize,
+}
+
+impl Setup {
+    /// One output for each party, spendable by `epic-wallet info`'s count when the case starts.
+    pub fn standard() -> Setup {
+        let funding = |to| Funding {
+            to,
+            amount: FUNDING,
+            gap_blocks: 0,
+        };
+        Setup {
+            fundings: vec![funding(Who::Peer), funding(Who::Subject)],
+            settle_blocks: SPENDABLE_AFTER,
+        }
+    }
+
+    /// The tip once the miner's rewards matured: the height the first funding builds on.
+    pub const MINED_FIRST: u64 = MATURE_REWARDS as u64;
+
+    /// The height of each funding output, in order, and the tip when the case starts.
+    pub fn heights(&self) -> (Vec<u64>, u64) {
+        let mut tip = Self::MINED_FIRST;
+        let mut heights = Vec::with_capacity(self.fundings.len());
+        for funding in &self.fundings {
+            tip += 1;
+            heights.push(tip);
+            tip += funding.gap_blocks as u64;
+        }
+        (heights, tip + self.settle_blocks as u64)
+    }
 }
 
 /// A wallet that takes part in a file exchange. Each step reads and writes slate files as the
@@ -77,6 +154,8 @@ pub trait Party {
     fn pay_invoice(&mut self, input: &Path, out: &Path, pay: &Pay) -> String;
     /// Reads I2, finalizes and posts the transaction.
     fn finalize_invoice_and_post(&mut self, input: &Path);
+    /// Cancels the transaction of `slate_id`, as `epic-wallet cancel` does.
+    fn cancel(&mut self, slate_id: &str);
     fn refresh(&mut self);
     /// Balance, outputs and, when a slate id is given, its transaction log entry.
     fn view(&mut self, slate_id: Option<&str>) -> PartyView;
@@ -129,11 +208,17 @@ impl MinedShape {
     }
 }
 
+/// The wallet under test: LEPIC, or in the reference run an upstream wallet in its place.
+enum Subject {
+    Lepic(LepicParty),
+    Reference(UpstreamParty),
+}
+
 pub struct World {
     // Wallets go before the node and the directory, so they close first.
     miner: UpstreamParty,
     peer: UpstreamParty,
-    subject: Box<dyn Party>,
+    subject: Subject,
     node: TestNode,
     files: PathBuf,
     pub checkpoints: Vec<Checkpoint>,
@@ -143,8 +228,19 @@ pub struct World {
 
 impl World {
     /// A fresh chain with mature miner rewards, and a peer and subject funded by the miner over
-    /// the file method.
+    /// the file method with one output each.
     pub fn start(label: &str, kind: SubjectKind, peer_writes: SlateShape) -> World {
+        World::start_with(label, kind, peer_writes, &Setup::standard())
+    }
+
+    /// A fresh chain with mature miner rewards, on which the miner pays the peer and the
+    /// subject the outputs `setup` lists, over the file method.
+    pub fn start_with(
+        label: &str,
+        kind: SubjectKind,
+        peer_writes: SlateShape,
+        setup: &Setup,
+    ) -> World {
         let scratch = ScratchDir::new(label);
         let dir = scratch.path();
         node::use_test_chain_settings(dir);
@@ -163,8 +259,8 @@ impl World {
             node.url(),
             peer_writes,
         );
-        let subject: Box<dyn Party> = match kind {
-            SubjectKind::Lepic => Box::new(LepicParty::restore(
+        let subject = match kind {
+            SubjectKind::Lepic => Subject::Lepic(LepicParty::restore(
                 "subject",
                 &phrase(&SUBJECT_ENTROPY),
                 node.url(),
@@ -172,7 +268,7 @@ impl World {
             )),
             // The reference writes files as LEPIC's file method does, so the runs differ only in
             // the wallet, not in what the peer reads.
-            SubjectKind::Reference => Box::new(UpstreamParty::restore(
+            SubjectKind::Reference => Subject::Reference(UpstreamParty::restore(
                 "subject",
                 &dir.join("subject"),
                 &phrase(&SUBJECT_ENTROPY),
@@ -192,30 +288,33 @@ impl World {
             mined: Vec::new(),
             _scratch: scratch,
         };
-        world.mine(6);
+        world.mine(MATURE_REWARDS);
         world.miner.refresh();
-        world.fund(Who::Peer);
-        world.fund(Who::Subject);
-        world.mine(SPENDABLE_AFTER);
+        for (index, funding) in setup.fundings.iter().enumerate() {
+            world.fund(index, funding);
+        }
+        world.mine(setup.settle_blocks);
         world.refresh_all();
         world.mined.clear();
         world
     }
 
-    fn fund(&mut self, who: Who) {
-        let s1 = self.file(&format!("fund-{who:?}.tx"));
-        let s2 = self.file(&format!("fund-{who:?}.tx.response"));
+    fn fund(&mut self, index: usize, funding: &Funding) {
+        let s1 = self.file(&format!("fund-{index}.tx"));
+        let s2 = self.file(&format!("fund-{index}.tx.response"));
         let offer = Offer {
-            amount: FUNDING,
+            amount: funding.amount,
             ttl_blocks: None,
             message: None,
             proof_to: None,
+            spend: Spend::default(),
         };
         self.miner.send(&s1, &offer);
-        self.party(who).receive(&s1, &s2, None);
+        self.party(funding.to).receive(&s1, &s2, None);
         self.miner.finalize_and_post(&s2);
         self.mine(1);
         self.miner.refresh();
+        self.mine(funding.gap_blocks);
     }
 
     pub fn file(&self, name: &str) -> PathBuf {
@@ -225,14 +324,28 @@ impl World {
     pub fn party(&mut self, who: Who) -> &mut dyn Party {
         match who {
             Who::Peer => &mut self.peer,
-            Who::Subject => &mut *self.subject,
+            Who::Subject => match &mut self.subject {
+                Subject::Lepic(lepic) => lepic,
+                Subject::Reference(upstream) => upstream,
+            },
+        }
+    }
+
+    /// The LEPIC subject, in the LEPIC run.
+    pub fn lepic(&mut self) -> Option<&mut LepicParty> {
+        match &mut self.subject {
+            Subject::Lepic(lepic) => Some(lepic),
+            Subject::Reference(_) => None,
         }
     }
 
     pub fn mnemonic(&self, who: Who) -> String {
         match who {
             Who::Peer => self.peer.mnemonic().to_owned(),
-            Who::Subject => self.subject.mnemonic().to_owned(),
+            Who::Subject => match &self.subject {
+                Subject::Lepic(lepic) => lepic.mnemonic().to_owned(),
+                Subject::Reference(upstream) => upstream.mnemonic().to_owned(),
+            },
         }
     }
 
@@ -274,15 +387,15 @@ impl World {
     pub fn refresh_all(&mut self) {
         self.miner.refresh();
         self.peer.refresh();
-        self.subject.refresh();
+        self.party(Who::Subject).refresh();
     }
 
     /// Refreshes both parties, then records what they report about `slate_id`.
     pub fn checkpoint(&mut self, label: &'static str, slate_id: &str) {
         self.peer.refresh();
-        self.subject.refresh();
+        self.party(Who::Subject).refresh();
         let peer = self.peer.view(Some(slate_id));
-        let subject = self.subject.view(Some(slate_id));
+        let subject = self.party(Who::Subject).view(Some(slate_id));
         self.checkpoints.push(Checkpoint {
             label,
             peer,

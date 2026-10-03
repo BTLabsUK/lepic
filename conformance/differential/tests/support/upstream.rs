@@ -17,7 +17,7 @@ use epic_wallet_libwallet::{
 };
 
 use super::view::{BalanceView, OutputView, PartyView, TxView};
-use super::{Offer, Party, Pay, SlateShape, hex};
+use super::{Offer, Party, Pay, SlateShape, Spend, hex};
 
 /// Upstream wallets use an empty password, as upstream's own tests do.
 const PASSWORD: &str = "";
@@ -156,14 +156,19 @@ impl UpstreamParty {
     }
 }
 
-fn send_args(amount: u64, ttl_blocks: Option<u64>, message: Option<&str>) -> InitTxArgs {
+fn send_args(
+    amount: u64,
+    ttl_blocks: Option<u64>,
+    message: Option<&str>,
+    spend: &Spend,
+) -> InitTxArgs {
     InitTxArgs {
         src_acct_name: None,
         amount,
-        minimum_confirmations: 1,
+        minimum_confirmations: spend.minimum_confirmations,
         max_outputs: MAX_OUTPUTS,
-        num_change_outputs: 1,
-        selection_strategy_is_use_all: false,
+        num_change_outputs: spend.change_outputs,
+        selection_strategy_is_use_all: spend.use_all,
         message: message.map(str::to_owned),
         ttl_blocks,
         ..Default::default()
@@ -176,7 +181,12 @@ impl Party for UpstreamParty {
     }
 
     fn send(&mut self, out: &Path, offer: &Offer) -> String {
-        let mut args = send_args(offer.amount, offer.ttl_blocks, offer.message.as_deref());
+        let mut args = send_args(
+            offer.amount,
+            offer.ttl_blocks,
+            offer.message.as_deref(),
+            &offer.spend,
+        );
         args.payment_proof_recipient_address = offer
             .proof_to
             .map(|bytes| ed25519_dalek::VerifyingKey::from_bytes(&bytes).unwrap());
@@ -231,7 +241,7 @@ impl Party for UpstreamParty {
     fn pay_invoice(&mut self, input: &Path, out: &Path, pay: &Pay) -> String {
         let i1 = self.read(input);
         // Upstream pays the amount the invoice asks for.
-        let args = send_args(0, pay.ttl_blocks, pay.message.as_deref());
+        let args = send_args(0, pay.ttl_blocks, pay.message.as_deref(), &pay.spend);
         let i2 = self.with("process_invoice_tx", |w| {
             owner::process_invoice_tx(&mut *w, None, &i1, args, false)
         });
@@ -249,6 +259,17 @@ impl Party for UpstreamParty {
             foreign::finalize_invoice_tx(&mut *w, None, &i2)
         });
         self.post(&i3);
+    }
+
+    fn cancel(&mut self, slate_id: &str) {
+        let tx_id = self.with("find the transaction", |w| {
+            Ok(w.tx_log_iter()
+                .find(|t| t.tx_slate_id.is_some_and(|s| s.to_string() == slate_id))
+                .map(|t| t.id))
+        });
+        let tx_id = tx_id.unwrap_or_else(|| panic!("{}: no transaction for {slate_id}", self.name));
+        owner::cancel_tx(self.instance.clone(), None, &None, Some(tx_id), None)
+            .unwrap_or_else(|e| panic!("{}: upstream cancel failed: {e}", self.name));
     }
 
     fn refresh(&mut self) {
@@ -278,7 +299,7 @@ impl Party for UpstreamParty {
             immature: info.amount_immature,
             locked: info.amount_locked,
         };
-        let (outputs, tx) = self.with("view", |w| {
+        let (outputs, entries, tx) = self.with("view", |w| {
             let keychain = w.keychain(None)?;
             let mut outputs = Vec::new();
             for o in w.iter() {
@@ -306,11 +327,12 @@ impl Party for UpstreamParty {
                 }
                 None => None,
             };
-            Ok((outputs, tx))
+            Ok((outputs, w.tx_log_iter().count(), tx))
         });
         PartyView {
             balance,
             outputs,
+            entries,
             tx,
         }
     }
