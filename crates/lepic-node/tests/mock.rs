@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use lepic_crypto::Commitment;
 use lepic_node::mock::{ChainOutput, ChainState, MockFailure, MockNode};
 use lepic_node::{
-    CallPolicy, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, Propagation,
-    RejectionKind, RetryPolicy, Tip,
+    CallPolicy, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, PoolTransaction,
+    Propagation, RejectionKind, RetryPolicy, Tip,
 };
 use lepic_primitives::amount::Height;
 use lepic_primitives::hash::Hash;
@@ -118,6 +118,28 @@ fn serves_the_scripted_chain() {
     let missing = block_on(client.get_kernel(&excess, Some(Height::new(11)), None)).unwrap();
     assert_eq!(missing, None);
 
+    assert!(node.violations().is_empty(), "{:?}", node.violations());
+}
+
+#[test]
+fn lists_the_pool_with_the_kernels_of_each_transaction() {
+    let (chain, transaction) = chain();
+    let node = MockNode::from_chain(chain);
+    let client = node.client();
+    assert_eq!(
+        block_on(client.get_unconfirmed_transactions()).unwrap(),
+        vec![]
+    );
+
+    assert!(node.update_chain(|chain| chain.pool.push(transaction.clone())));
+    let pool = block_on(client.get_unconfirmed_transactions()).unwrap();
+
+    assert_eq!(
+        pool,
+        vec![PoolTransaction {
+            kernels: transaction.kernels().to_vec()
+        }]
+    );
     assert!(node.violations().is_empty(), "{:?}", node.violations());
 }
 

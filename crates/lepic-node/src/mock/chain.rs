@@ -5,12 +5,13 @@ use std::collections::BTreeMap;
 use lepic_crypto::{Commitment, RangeProof};
 use lepic_primitives::amount::Height;
 use lepic_primitives::output::OutputFeatures;
+use lepic_primitives::tx::Transaction;
 use serde_json::{Value, json};
 
 use super::Answer;
 use super::recording::window;
 use crate::api::{LocatedKernel, NodeVersion, Tip};
-use crate::wire::WireKernel;
+use crate::wire::{WireKernel, WireTransaction};
 
 const ZERO_HASH_HEX: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -36,6 +37,8 @@ pub struct ChainState {
     pub tip: Tip,
     pub outputs: Vec<ChainOutput>,
     pub kernels: Vec<LocatedKernel>,
+    /// The transaction pool `get_unconfirmed_transactions` lists. A push does not add to it.
+    pub pool: Vec<Transaction>,
 }
 
 impl ChainState {
@@ -45,6 +48,7 @@ impl ChainState {
             tip,
             outputs: Vec::new(),
             kernels: Vec::new(),
+            pool: Vec::new(),
         }
     }
 
@@ -64,6 +68,18 @@ impl ChainState {
             "get_outputs" => self.answer_outputs(params),
             "get_unspent_outputs" => self.answer_unspent(params),
             "get_pmmr_indices" => self.answer_pmmr_indices(params),
+            "get_unconfirmed_transactions" => Answer::Ok(Value::Array(
+                self.pool
+                    .iter()
+                    .map(|transaction| {
+                        json!({
+                            "src": "PushApi",
+                            "tx_at": "2026-01-01T00:00:00Z",
+                            "tx": WireTransaction::from(transaction),
+                        })
+                    })
+                    .collect(),
+            )),
             _ => Answer::Violation("method not served by the scripted chain"),
         }
     }

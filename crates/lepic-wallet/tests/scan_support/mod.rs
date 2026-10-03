@@ -20,7 +20,7 @@ use lepic_crypto::Commitment;
 use lepic_node::mock::MockNode;
 use lepic_node::{
     LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation, PmmrIndices,
-    Propagation, Tip, UnspentOutputs,
+    PoolTransaction, Propagation, Tip, UnspentOutputs,
 };
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
@@ -184,6 +184,12 @@ impl NodeApi for Rechecking {
         propagation: Propagation,
     ) -> impl Future<Output = Result<(), NodeError>> + Send {
         self.inner.push_transaction(transaction, propagation)
+    }
+
+    fn get_unconfirmed_transactions(
+        &self,
+    ) -> impl Future<Output = Result<Vec<PoolTransaction>, NodeError>> + Send {
+        self.inner.get_unconfirmed_transactions()
     }
 }
 

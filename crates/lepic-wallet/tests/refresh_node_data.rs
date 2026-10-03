@@ -22,7 +22,7 @@ use lepic_crypto::{Commitment, RangeProof};
 use lepic_node::mock::{ChainOutput, MockNode};
 use lepic_node::{
     CallPolicy, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation,
-    PmmrIndices, Propagation, RetryPolicy, RpcTransport, Tip, UnspentOutputs,
+    PmmrIndices, PoolTransaction, Propagation, RetryPolicy, RpcTransport, Tip, UnspentOutputs,
 };
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::tx::Transaction;
@@ -150,6 +150,12 @@ impl NodeApi for Scripted {
         propagation: Propagation,
     ) -> impl Future<Output = Result<(), NodeError>> + Send {
         self.inner.push_transaction(transaction, propagation)
+    }
+
+    fn get_unconfirmed_transactions(
+        &self,
+    ) -> impl Future<Output = Result<Vec<PoolTransaction>, NodeError>> + Send {
+        self.inner.get_unconfirmed_transactions()
     }
 }
 

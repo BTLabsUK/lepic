@@ -14,7 +14,8 @@ use lepic_primitives::tx::Transaction;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    LocatedKernel, NodeVersion, OutputLocation, PmmrIndices, Tip, UnspentOutput, UnspentOutputs,
+    LocatedKernel, MAX_POOL_KERNELS, NodeVersion, OutputLocation, PmmrIndices, PoolTransaction,
+    Tip, UnspentOutput, UnspentOutputs,
 };
 use crate::error::{FieldProblem, NodeError};
 
@@ -414,6 +415,52 @@ impl WireLocatedKernel {
             mmr_index: self.mmr_index,
         })
     }
+}
+
+/// `pool::PoolEntry`, read for the kernels of its transaction only; the inputs, outputs and
+/// range proofs are skipped unparsed.
+#[derive(Debug, Deserialize)]
+pub(crate) struct WirePoolEntry {
+    tx: WirePoolTransaction,
+}
+
+#[derive(Debug, Deserialize)]
+struct WirePoolTransaction {
+    body: WirePoolBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct WirePoolBody {
+    kernels: Vec<WireKernel>,
+}
+
+/// Counts the kernels before any is validated, so a long listing costs no curve checks.
+pub(crate) fn validate_pool(
+    method: &'static str,
+    entries: Vec<WirePoolEntry>,
+) -> Result<Vec<PoolTransaction>, NodeError> {
+    let kernels = entries
+        .iter()
+        .try_fold(0usize, |total, entry| {
+            total.checked_add(entry.tx.body.kernels.len())
+        })
+        .unwrap_or(usize::MAX);
+    if kernels > MAX_POOL_KERNELS {
+        return Err(NodeError::invalid(method, "kernels", FieldProblem::TooMany));
+    }
+    entries
+        .into_iter()
+        .map(|entry| {
+            let kernels = entry
+                .tx
+                .body
+                .kernels
+                .into_iter()
+                .map(|kernel| kernel.validate(method))
+                .collect::<Result<_, _>>()?;
+            Ok(PoolTransaction { kernels })
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]

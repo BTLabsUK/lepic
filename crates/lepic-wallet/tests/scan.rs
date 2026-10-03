@@ -22,7 +22,7 @@ use lepic_keychain::{Identifier, Keychain, LegacyProofBuilder, ProofBuilder, Swi
 use lepic_node::mock::{ChainOutput, MockNode};
 use lepic_node::{
     LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation, PmmrIndices,
-    Propagation, Tip, UnspentOutputs,
+    PoolTransaction, Propagation, Tip, UnspentOutputs,
 };
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
@@ -125,6 +125,12 @@ impl NodeApi for DisturbedNode {
         propagation: Propagation,
     ) -> impl Future<Output = Result<(), NodeError>> + Send {
         self.inner.push_transaction(transaction, propagation)
+    }
+
+    fn get_unconfirmed_transactions(
+        &self,
+    ) -> impl Future<Output = Result<Vec<PoolTransaction>, NodeError>> + Send {
+        self.inner.get_unconfirmed_transactions()
     }
 }
 

@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::api::{
-    LocatedKernel, NodeApi, NodeVersion, OutputLocation, PmmrIndices, Propagation, Tip,
-    UnspentOutputs,
+    LocatedKernel, NodeApi, NodeVersion, OutputLocation, PmmrIndices, PoolTransaction, Propagation,
+    Tip, UnspentOutputs,
 };
 use crate::decode;
 use crate::error::{ErrorChain, FieldProblem, NodeError};
@@ -281,6 +281,7 @@ fn call_span(method: &str, node: &str) -> Span {
         "get_unspent_outputs" => info_span!("get_unspent_outputs", node),
         "get_pmmr_indices" => info_span!("get_pmmr_indices", node),
         "push_transaction" => info_span!("push_transaction", node),
+        "get_unconfirmed_transactions" => info_span!("get_unconfirmed_transactions", node),
         _ => info_span!("node_call", node),
     }
 }
@@ -388,6 +389,17 @@ impl<T: RpcTransport> NodeApi for NodeClient<T> {
         let params = Value::Array(vec![transaction, Value::Bool(fluff)]);
         let body = self.call(METHOD, &params, Idempotency::Write).await?;
         decode::push_transaction(&body)
+    }
+
+    async fn get_unconfirmed_transactions(&self) -> Result<Vec<PoolTransaction>, NodeError> {
+        let body = self
+            .call(
+                "get_unconfirmed_transactions",
+                &Value::Array(Vec::new()),
+                Idempotency::Read,
+            )
+            .await?;
+        decode::unconfirmed_transactions(&body)
     }
 }
 

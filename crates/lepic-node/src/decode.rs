@@ -6,12 +6,14 @@ use std::collections::BTreeSet;
 use lepic_crypto::Commitment;
 use lepic_primitives::amount::Height;
 
-use crate::api::{LocatedKernel, NodeVersion, OutputLocation, PmmrIndices, Tip, UnspentOutputs};
+use crate::api::{
+    LocatedKernel, NodeVersion, OutputLocation, PmmrIndices, PoolTransaction, Tip, UnspentOutputs,
+};
 use crate::error::{NodeError, RejectionKind};
 use crate::rpc::decode_response;
 use crate::wire::{
-    WireLocatedKernel, WireOutput, WireOutputListing, WireTip, WireVersion,
-    validate_output_locations,
+    WireLocatedKernel, WireOutput, WireOutputListing, WirePoolEntry, WireTip, WireVersion,
+    validate_output_locations, validate_pool,
 };
 
 pub fn version(body: &[u8]) -> Result<NodeVersion, NodeError> {
@@ -74,4 +76,9 @@ pub fn pmmr_indices(body: &[u8]) -> Result<PmmrIndices, NodeError> {
 
 pub fn push_transaction(body: &[u8]) -> Result<(), NodeError> {
     decode_response::<()>("push_transaction", body)
+}
+
+pub fn unconfirmed_transactions(body: &[u8]) -> Result<Vec<PoolTransaction>, NodeError> {
+    const METHOD: &str = "get_unconfirmed_transactions";
+    validate_pool(METHOD, decode_response::<Vec<WirePoolEntry>>(METHOD, body)?)
 }

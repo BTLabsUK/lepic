@@ -43,6 +43,7 @@ fn decode_all(body: &[u8]) {
     let _ = decode::unspent_outputs(body, 1, Some(100), 10);
     let _ = decode::pmmr_indices(body);
     let _ = decode::push_transaction(body);
+    let _ = decode::unconfirmed_transactions(body);
 }
 
 proptest! {
@@ -96,4 +97,91 @@ proptest! {
             prop_assert_eq!(location.features.is_coinbase(), coinbase);
         }
     }
+}
+
+/// A pool listing in the shape of the node's `get_unconfirmed_transactions` example in
+/// `api/src/foreign_rpc.rs` (Epic `v4.0.4`), with the kernel from that example. Inputs and
+/// outputs are not read, so the output carries a short stand-in for its range proof.
+#[cfg(test)]
+fn pool_listing(kernels: &[Value]) -> Vec<u8> {
+    let body = json!({"id": 1, "jsonrpc": "2.0", "result": {"Ok": [{
+        "src": "Broadcast",
+        "tx": {
+            "body": {
+                "inputs": [{
+                    "commit": "0992ce1827ec349e9f339ce183ffd01db39bf43999799d8191bfc267a58f0a715c",
+                    "features": "Coinbase"
+                }],
+                "kernels": kernels,
+                "outputs": [{
+                    "commit": "0873fafd4a0e4f365939e24c68eeb18aafc6674ca244a364dcdbfa8fa525e7bae1",
+                    "features": "Plain",
+                    "proof": "4b67"
+                }]
+            },
+            "offset": "0eb2c2669ce918675c72697891e5527bd13da5a499396381409219b8bbbd8129"
+        },
+        "tx_at": "2019-10-07T16:20:08.709114Z"
+    }]}});
+    serde_json::to_vec(&body).unwrap()
+}
+
+#[cfg(test)]
+const POOL_EXCESS: &str = "083c49eaaf6380d44596f52cce4cf278cfac6dd34fbef73981002d8f1e8ee8abe4";
+
+#[cfg(test)]
+fn pool_kernel() -> Value {
+    json!({
+        "excess": POOL_EXCESS,
+        "excess_sig": "3f011e7e288231d67f42cb4f6416c4720e6170d5e3c805a52d33aa4521328f9be0303be654bc8ddcd3111aadc27c848b9cf07e0a70885ef79be70b7bb70f8c75",
+        "features": {"Plain": {"fee": 7_000_000}}
+    })
+}
+
+#[test]
+fn decodes_the_kernels_of_a_pool_listing() {
+    let pool = decode::unconfirmed_transactions(&pool_listing(&[pool_kernel()])).unwrap();
+
+    assert_eq!(pool.len(), 1);
+    assert_eq!(pool[0].kernels.len(), 1);
+    assert_eq!(pool[0].kernels[0].excess.to_hex(), POOL_EXCESS);
+}
+
+#[test]
+fn refuses_a_pool_listing_above_the_kernel_bound_before_validating_kernels() {
+    let unchecked = json!({"excess": "", "excess_sig": "", "features": "Coinbase"});
+    let kernels = vec![unchecked; lepic_node::MAX_POOL_KERNELS + 1];
+
+    let error = decode::unconfirmed_transactions(&pool_listing(&kernels)).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            lepic_node::NodeError::InvalidField {
+                field: "kernels",
+                problem: lepic_node::FieldProblem::TooMany,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn refuses_a_pool_kernel_whose_excess_is_not_a_curve_value() {
+    let mut kernel = pool_kernel();
+    kernel["excess"] = json!(format!("02{}", "ff".repeat(32)));
+
+    let error = decode::unconfirmed_transactions(&pool_listing(&[kernel])).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            lepic_node::NodeError::InvalidField {
+                field: "excess",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 }

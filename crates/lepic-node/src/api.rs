@@ -59,6 +59,24 @@ pub trait NodeApi: Send + Sync {
         transaction: &Transaction,
         propagation: Propagation,
     ) -> impl Future<Output = Result<(), NodeError>> + Send;
+
+    /// The transactions in the node's transaction pool, waiting to be mined. A transaction
+    /// still in the Dandelion stem phase is not listed. Fails with
+    /// [`FieldProblem::TooMany`](crate::FieldProblem::TooMany) when the pool lists more than
+    /// [`MAX_POOL_KERNELS`] kernels.
+    fn get_unconfirmed_transactions(
+        &self,
+    ) -> impl Future<Output = Result<Vec<PoolTransaction>, NodeError>> + Send;
+}
+
+/// The most kernels a pool listing may carry: one per transaction in a node pool of the
+/// default maximum size. A larger listing is refused rather than validated.
+pub const MAX_POOL_KERNELS: usize = 50_000;
+
+/// A transaction in the node's pool. Only its kernels are read: they identify it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolTransaction {
+    pub kernels: Vec<TxKernel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
