@@ -1,0 +1,455 @@
+# The steps run.sh runs, in order, against the host's lepic. Sourced by run.sh after ../lib.sh,
+# whose `lepic` helper drives a container; the one here replaces it with the binary under test.
+#
+# Each step sets DETAIL to one line and returns 0 when every check held. They share one chain
+# and one set of wallets, and EXPECTED_TOTAL tracks what lepic's balance must be after each, so
+# a lost or doubled effect anywhere shows up as a wrong balance.
+# shellcheck shell=bash disable=SC2034 # DETAIL and STEPS are read by run.sh
+
+# The gateway publishes the node API and the relay on these loopback ports.
+NODE_PORT=43413
+RELAY_PORT=3423
+
+LEPIC_PASSWORD_VALUE="acceptance password"
+DETAIL=""
+EXPECTED_TOTAL=0
+RECOVERY_PHRASE=""
+LEPIC_ADDRESS=""
+PEER_ADDRESS=""
+PEER_KEY=""
+EPICBOX_SEND_TX=""
+
+fail() {
+    DETAIL="$*"
+    return 1
+}
+
+# Runs a command with only what a fresh login shell would give lepic: PATH, a home of its own
+# and the acceptance config file. Nothing from the invoking shell's LEPIC_* variables leaks in.
+lepic_env() {
+    env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
+        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" "$@"
+}
+
+# The lepic under test, with JSON output. Its stderr goes to the run log, and so do a failure's
+# exit status and its JSON error document, which a caller's pipe would otherwise swallow.
+lepic() {
+    local status=0 output
+    output="$(lepic_env "${LEPIC_BIN}" --output json "$@" </dev/null 2>>"${RUN_LOG}")" || status=$?
+    if ((status != 0)); then
+        printf 'lepic %s exited %d: %s\n' "$*" "${status}" "${output}" >>"${RUN_LOG}"
+    fi
+    [[ -z "${output}" ]] || printf '%s\n' "${output}"
+    return "${status}"
+}
+
+# The exit code of a lepic command, its output discarded.
+lepic_status() {
+    local status=0
+    lepic "$@" >/dev/null || status=$?
+    echo "${status}"
+}
+
+lepic_total_is() { (($(lepic_balance total) == $1)); }
+
+lepic_locked() { to_units "$(lepic wallet info | jq -r '.accounts[0].locked')"; }
+
+check_lepic_total() {
+    wait_until "lepic total ${EXPECTED_TOTAL}" 60 lepic_total_is "${EXPECTED_TOTAL}" ||
+        fail "lepic total is $(lepic_balance total), expected ${EXPECTED_TOTAL}"
+}
+
+lepic_last_tx_id() { lepic tx list | jq '[.transactions[].tx_id] | max // 0'; }
+
+lepic_incoming_after() {
+    lepic tx list | jq -c --argjson after "$1" \
+        '.transactions[] | select(.tx_id > $after and .direction == "incoming")'
+}
+
+# Waits until a lepic transaction and the epic-wallet record of the same slate are confirmed.
+confirm_both() {
+    local tx_id="$1" slate_id="$2" wallet="${3:-peer}"
+    wait_until "lepic tx ${tx_id} confirmed" 180 lepic_tx_confirmed "${tx_id}" ||
+        fail "lepic tx ${tx_id} is $(lepic_tx_state "${tx_id}"), not confirmed" || return 1
+    wait_until "${wallet} tx ${slate_id} confirmed" 120 ew_tx_confirmed "${wallet}" "${slate_id}" ||
+        fail "epic-wallet (${wallet}) did not confirm ${slate_id}"
+}
+
+# The slate file lepic wrote is in the V3 shape with header 3/3 (ADR 0015), with a TTL when
+# `ttl` is "ttl".
+lepic_file_is_v3() {
+    local path="$1" ttl="${2:-}"
+    jq -e --arg ttl "${ttl}" '
+        .version_info.version == 3 and .version_info.orig_version == 3
+        and has("ttl_cutoff_height") and has("payment_proof")
+        and (($ttl != "ttl") or (.ttl_cutoff_height != null))' "${path}" >/dev/null
+}
+
+block_header_version() { jq -r .version_info.block_header_version "$1"; }
+
+relay_messages_for() { mongo_eval "print(db.slates.countDocuments({queue: '$1'}))"; }
+
+relay_messages_above() { (($(relay_messages_for "$1") > $2)); }
+
+# epic-wallet sends to lepic through a slate file and finalizes lepic's V3 reply. Prints the
+# lepic receive report.
+ew_sends_file_to_lepic() {
+    local wallet="$1" amount="$2" name="$3"
+    local slate="${EXCHANGE_DIR}/${name}.slate"
+    ew "${wallet}" send -m file -d "/exchange/${name}.slate" -c 1 -s smallest "${amount}" >>"${RUN_LOG}" ||
+        fail "epic-wallet send to ${name} failed" || return 1
+    local received
+    received="$(lepic tx receive "${slate}")" || fail "lepic could not receive ${name}" || return 1
+    local reply
+    reply="$(jq -r .reply_file <<<"${received}")"
+    [[ "${reply}" == "${slate}.response" ]] || fail "reply went to ${reply}" || return 1
+    lepic_file_is_v3 "${reply}" || fail "lepic's S2 is not V3 at 3/3" || return 1
+    [[ "$(block_header_version "${reply}")" == "$(block_header_version "${slate}")" ]] ||
+        fail "lepic's S2 changed the block header version" || return 1
+    ew "${wallet}" finalize -i "/exchange/${name}.slate.response" >>"${RUN_LOG}" ||
+        fail "epic-wallet could not finalize lepic's V3 S2" || return 1
+    echo "${received}"
+}
+
+step_setup() {
+    dc exec -T node cat /data/node/.foreign_api_secret >"${STATE_DIR}/foreign_api_secret" ||
+        fail "could not read the node api secret" || return 1
+    chmod 600 "${STATE_DIR}/foreign_api_secret"
+    cat >"${STATE_DIR}/config.toml" <<EOF
+# The local chain is usernet, where epic-wallet derives mainnet Epicbox addresses.
+network = mainnet
+data_dir = "lepic"
+node_url = "http://127.0.0.1:${NODE_PORT}"
+node_api_secret_file = "foreign_api_secret"
+epicbox_relay = "ws://localhost:${RELAY_PORT}"
+EOF
+    mkdir -p "${STATE_DIR}/home"
+
+    local peer
+    peer="$(ew_address peer)"
+    [[ -n "${peer}" ]] || fail "no epic-wallet address" || return 1
+    # epic-wallet leaves the relay port out of the address it prints.
+    PEER_ADDRESS="${peer%%:*}:${RELAY_PORT}"
+    PEER_KEY="${PEER_ADDRESS%%@*}"
+
+    log "waiting for mature coinbase in the funder wallet"
+    wait_until "funder funds" 300 ew_spendable_at_least funder $((150 * UNIT)) ||
+        fail "the funder wallet was not funded by mining" || return 1
+    log "funding epic-wallet's peer wallet"
+    local n slate_id
+    for n in 1 2 3; do
+        ew funder send -m file -d "/exchange/peer-${n}.slate" -c 1 -s smallest 20 >>"${RUN_LOG}" ||
+            fail "funding the peer failed" || return 1
+        slate_id="$(jq -r .id "${EXCHANGE_DIR}/peer-${n}.slate")"
+        ew peer receive -i "/exchange/peer-${n}.slate" >>"${RUN_LOG}" || fail "peer receive failed" || return 1
+        ew funder finalize -i "/exchange/peer-${n}.slate.response" >>"${RUN_LOG}" ||
+            fail "funder finalize failed" || return 1
+        wait_until "peer funding ${n} mined" 120 ew_tx_confirmed funder "${slate_id}" ||
+            fail "peer funding ${n} was not mined" || return 1
+    done
+    wait_until "peer funded" 180 ew_spendable_at_least peer $((60 * UNIT)) ||
+        fail "epic-wallet funds did not confirm" || return 1
+    DETAIL="stack up, peer funded at height $(lepic node status | jq -r .height)"
+}
+
+step_node_status() {
+    local status
+    status="$(lepic node status)" || fail "node status failed" || return 1
+    jq -e '.node_version == "4.0.4" and .height > 0' <<<"${status}" >/dev/null ||
+        fail "unexpected node status: ${status}" || return 1
+    local human
+    human="$(lepic_env "${LEPIC_BIN}" node status 2>>"${RUN_LOG}")" || fail "human node status failed" || return 1
+    grep -q '^Height ' <<<"${human}" || fail "human node status has no height: ${human}" || return 1
+    DETAIL="node 4.0.4 at height $(jq -r .height <<<"${status}") through 127.0.0.1:${NODE_PORT}"
+}
+
+step_wallet_init() {
+    local created
+    created="$(lepic wallet init --words 12)" || fail "wallet init failed" || return 1
+    RECOVERY_PHRASE="$(jq -r .recovery_phrase <<<"${created}")"
+    [[ "$(wc -w <<<"${RECOVERY_PHRASE}")" -eq 12 ]] || fail "recovery phrase is not 12 words" || return 1
+    [[ "$(jq -r .data_dir <<<"${created}")" == "${STATE_DIR}/lepic" ]] ||
+        fail "wallet created in $(jq -r .data_dir <<<"${created}")" || return 1
+    [[ "$(stat -c %a "${STATE_DIR}/lepic")" == 700 ]] || fail "data directory is not private" || return 1
+    [[ "$(lepic_status wallet init)" -eq 5 ]] || fail "a second init was not refused with 5" || return 1
+    DETAIL="12-word wallet in .work/state/lepic, mode 700; second init refused"
+}
+
+step_address_and_status() {
+    LEPIC_ADDRESS="$(lepic wallet address | jq -r .address)" || fail "wallet address failed" || return 1
+    [[ "${LEPIC_ADDRESS}" == *"@localhost:${RELAY_PORT}" ]] || fail "address ${LEPIC_ADDRESS}" || return 1
+    local status
+    status="$(lepic epicbox status)" || fail "epicbox status failed" || return 1
+    jq -e --arg address "${LEPIC_ADDRESS}" --arg relay "ws://localhost:${RELAY_PORT}" \
+        '.address == $address and .relay == $relay and .pending_deliveries == 0' <<<"${status}" >/dev/null ||
+        fail "unexpected epicbox status: ${status}" || return 1
+    [[ "$(lepic_balance total)" -eq 0 ]] || fail "a new wallet has funds" || return 1
+    DETAIL="${LEPIC_ADDRESS}"
+}
+
+step_receive_by_file() {
+    local received tx_id slate_id n
+    for n in 1 2; do
+        received="$(ew_sends_file_to_lepic funder 25 "lepic-${n}")" || return 1
+        tx_id="$(jq -r .tx_id <<<"${received}")"
+        slate_id="$(jq -r .slate_id <<<"${received}")"
+        confirm_both "${tx_id}" "${slate_id}" funder || return 1
+    done
+    EXPECTED_TOTAL=$((50 * UNIT))
+    check_lepic_total || return 1
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "${EXPECTED_TOTAL}" ||
+        fail "lepic funds did not become spendable" || return 1
+    DETAIL="two V2 S1 files from epic-wallet answered in V3; 50 EPIC spendable"
+}
+
+step_send_over_epicbox() {
+    peer_listen_start || fail "epic-wallet listener did not start" || return 1
+    local sent tx_id slate_id fee summary
+    sent="$(lepic tx send 1.5 --to "${PEER_ADDRESS}" -m "acceptance")" || fail "lepic send failed" || return 1
+    tx_id="$(jq -r .tx_id <<<"${sent}")"
+    slate_id="$(jq -r .slate_id <<<"${sent}")"
+    fee="$(to_units "$(jq -r .fee <<<"${sent}")")"
+    EPICBOX_SEND_TX="${tx_id}"
+    summary="$(drain_until finalized 1 120)" || fail "lepic finalized nothing: ${summary}" || return 1
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 1.5) - fee))
+    check_lepic_total || return 1
+    DETAIL="S1 by relay, S2 drained and finalized; ${slate_id} confirmed"
+}
+
+step_listen_receives_over_epicbox() {
+    peer_listen_start || fail "epic-wallet listener did not start" || return 1
+    local last before
+    last="$(lepic_last_tx_id)"
+    before="$(relay_messages_for "${PEER_KEY}")"
+    # Started without the lepic_env function, so $! is lepic itself (env execs it) and the
+    # Ctrl-C below reaches lepic rather than a subshell, which ignores it.
+    env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
+        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" "${LEPIC_BIN}" epicbox listen \
+        >"${STATE_DIR}/listen.out" 2>"${STATE_DIR}/listen.err" </dev/null &
+    local listen_pid=$!
+    wait_until "lepic listening" 30 grep -q "connected to the relay" "${STATE_DIR}/listen.err" ||
+        { kill -INT "${listen_pid}" 2>/dev/null; fail "listen did not report the connection"; } || return 1
+    wait_until "peer spendable" 180 ew_spendable_at_least peer $((3 * UNIT)) ||
+        { kill -INT "${listen_pid}"; fail "epic-wallet has no spendable funds"; } || return 1
+    ew peer send -m epicbox -d "${LEPIC_ADDRESS}" -c 1 -s smallest 2.25 >>"${RUN_LOG}" ||
+        { kill -INT "${listen_pid}"; fail "epic-wallet send failed"; } || return 1
+    wait_until "lepic's S2 on the relay" 60 relay_messages_above "${PEER_KEY}" "${before}"
+    local answered=$?
+    kill -INT "${listen_pid}"
+    local status=0
+    wait "${listen_pid}" || status=$?
+    cat "${STATE_DIR}/listen.err" >>"${RUN_LOG}"
+    ((answered == 0)) || fail "listen did not answer the S1" || return 1
+    ((status == 0)) || fail "listen exited ${status} on Ctrl-C" || return 1
+    grep -q '^Received 1, ' "${STATE_DIR}/listen.out" ||
+        fail "listen summary: $(cat "${STATE_DIR}/listen.out")" || return 1
+    local tx
+    tx="$(lepic_incoming_after "${last}")"
+    [[ -n "${tx}" && "$(wc -l <<<"${tx}")" -eq 1 ]] || fail "expected one new incoming tx: ${tx}" || return 1
+    [[ "$(jq -r .amount_credited <<<"${tx}")" == 2.25000000 ]] || fail "credited amount wrong: ${tx}" || return 1
+    confirm_both "$(jq -r .tx_id <<<"${tx}")" "$(jq -r .slate_id <<<"${tx}")" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 2.25)))
+    check_lepic_total || return 1
+    DETAIL="listen answered epic-wallet's S1 and stopped on Ctrl-C with exit 0"
+}
+
+step_send_by_file() {
+    peer_listen_stop
+    local slate="${EXCHANGE_DIR}/lepic-sends.slate"
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(to_units 2.2)" ||
+        fail "lepic has no spendable funds" || return 1
+    local sent
+    sent="$(lepic tx send 1.1 --to-file "${slate}" --ttl-blocks 60)" || fail "lepic send failed" || return 1
+    lepic_file_is_v3 "${slate}" ttl || fail "lepic's S1 is not V3 at 3/3 with a TTL" || return 1
+    ew peer receive -i /exchange/lepic-sends.slate >>"${RUN_LOG}" || fail "epic-wallet refused lepic's V3 S1" || return 1
+    local finalized
+    finalized="$(lepic tx finalize "${slate}.response")" || fail "lepic could not finalize the S2" || return 1
+    local tx_id slate_id fee
+    tx_id="$(jq -r .tx_id <<<"${sent}")"
+    slate_id="$(jq -r .slate_id <<<"${sent}")"
+    fee="$(to_units "$(jq -r .fee <<<"${sent}")")"
+    jq -e --arg id "${slate_id}" '.slate_id == $id and .state == "posted"' <<<"${finalized}" >/dev/null ||
+        fail "finalize report: ${finalized}" || return 1
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 1.1) - fee))
+    check_lepic_total || return 1
+    DETAIL="V3 S1 with TTL read by epic-wallet; ${slate_id} confirmed"
+}
+
+step_invoice_epic_wallet() {
+    peer_listen_stop
+    local slate="${EXCHANGE_DIR}/lepic-invoices.slate"
+    wait_until "peer spendable" 180 ew_spendable_at_least peer "$(to_units 1.8)" ||
+        fail "epic-wallet has no spendable funds" || return 1
+    local issued
+    issued="$(lepic invoice issue 0.8 --to-file "${slate}")" || fail "lepic invoice issue failed" || return 1
+    lepic_file_is_v3 "${slate}" || fail "lepic's I1 is not V3 at 3/3" || return 1
+    ew_pay peer 0.8 -i /exchange/lepic-invoices.slate -d /exchange/lepic-invoices.slate.response -c 1 -s smallest ||
+        fail "epic-wallet could not pay lepic's V3 I1" || return 1
+    local finalized tx_id slate_id
+    finalized="$(lepic tx finalize "${slate}.response")" || fail "lepic could not finalize the I2" || return 1
+    tx_id="$(jq -r .tx_id <<<"${issued}")"
+    slate_id="$(jq -r .slate_id <<<"${issued}")"
+    [[ "$(jq -r .slate_id <<<"${finalized}")" == "${slate_id}" ]] || fail "finalized another slate" || return 1
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 0.8)))
+    check_lepic_total || return 1
+    DETAIL="V3 I1 paid by epic-wallet, finalized by lepic; ${slate_id} confirmed"
+}
+
+step_pay_epic_wallet_invoice() {
+    peer_listen_stop
+    local slate="${EXCHANGE_DIR}/peer-invoices.slate"
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(to_units 1.7)" ||
+        fail "lepic has no spendable funds" || return 1
+    ew peer invoice -d /exchange/peer-invoices.slate 0.7 >>"${RUN_LOG}" || fail "epic-wallet invoice failed" || return 1
+    [[ "$(lepic_status invoice pay "${slate}" 0.6)" -eq 7 ]] || fail "a wrong amount was not refused with 7" || return 1
+    [[ ! -e "${slate}.response" ]] || fail "a refused payment wrote a reply" || return 1
+    local paid
+    paid="$(lepic invoice pay "${slate}" 0.7 --ttl-blocks 60)" || fail "lepic could not pay the I1" || return 1
+    lepic_file_is_v3 "${slate}.response" ttl || fail "lepic's I2 is not V3 at 3/3 with a TTL" || return 1
+    ew peer finalize -i /exchange/peer-invoices.slate.response >>"${RUN_LOG}" ||
+        fail "epic-wallet could not finalize lepic's V3 I2" || return 1
+    local tx_id slate_id fee
+    tx_id="$(jq -r .tx_id <<<"${paid}")"
+    slate_id="$(jq -r .slate_id <<<"${paid}")"
+    fee="$(to_units "$(jq -r .fee <<<"${paid}")")"
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 0.7) - fee))
+    check_lepic_total || return 1
+    DETAIL="wrong amount refused; I2 with TTL finalized by epic-wallet; ${slate_id} confirmed"
+}
+
+step_resend_after_failed_delivery() {
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(to_units 1.4)" ||
+        fail "lepic has no spendable funds" || return 1
+    local status=0
+    lepic tx send 0.4 --to-file "${STATE_DIR}/missing/undelivered.slate" >/dev/null || status=$?
+    ((status == 11)) || fail "a send to an unwritable file exited ${status}, not 11" || return 1
+    local tx_id
+    tx_id="$(lepic tx list | jq -r '[.transactions[] | select(.state == "sent")][0].tx_id')"
+    [[ "${tx_id}" =~ ^[0-9]+$ ]] || fail "no stored send after the failed delivery" || return 1
+    (($(lepic_locked) > 0)) || fail "the undelivered send locked nothing" || return 1
+    peer_listen_start || fail "epic-wallet listener did not start" || return 1
+    local resent
+    resent="$(lepic tx resend "${tx_id}" --to "${PEER_ADDRESS}")" || fail "tx resend failed" || return 1
+    jq -e --arg tx "${tx_id}" '(.tx_id | tostring) == $tx and .transport == "epicbox"' <<<"${resent}" >/dev/null ||
+        fail "resend report: ${resent}" || return 1
+    local summary slate_id fee
+    summary="$(drain_until finalized 1 120)" || fail "lepic finalized nothing: ${summary}" || return 1
+    slate_id="$(lepic tx show "${tx_id}" | jq -r .slate_id)"
+    fee="$(to_units "$(lepic tx show "${tx_id}" | jq -r .fee)")"
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 0.4) - fee))
+    check_lepic_total || return 1
+    [[ "$(lepic_status tx resend "${tx_id}" --to "${PEER_ADDRESS}")" -eq 7 ]] ||
+        fail "resending a confirmed transaction was not refused with 7" || return 1
+    DETAIL="send exited 11 with inputs locked; tx resend over the relay confirmed it"
+}
+
+step_cancel() {
+    peer_listen_stop
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(to_units 1.2)" ||
+        fail "lepic has no spendable funds" || return 1
+    local sent tx_id
+    sent="$(lepic tx send 0.2 --to-file "${EXCHANGE_DIR}/cancelled.slate")" || fail "lepic send failed" || return 1
+    tx_id="$(jq -r .tx_id <<<"${sent}")"
+    (($(lepic_locked) > 0)) || fail "the send locked nothing" || return 1
+    [[ "$(lepic tx cancel "${tx_id}" | jq -r .state)" == cancelled ]] || fail "tx cancel failed" || return 1
+    [[ "$(lepic_tx_state "${tx_id}")" == cancelled ]] || fail "tx ${tx_id} is not cancelled" || return 1
+    (($(lepic_locked) == 0)) || fail "cancel left funds locked" || return 1
+    check_lepic_total || return 1
+    DETAIL="tx ${tx_id} cancelled, nothing locked"
+}
+
+step_list_show_post() {
+    local list
+    list="$(lepic tx list)" || fail "tx list failed" || return 1
+    local count
+    count="$(jq '.transactions | length' <<<"${list}")"
+    ((count == 9)) || fail "tx list has ${count} transactions, expected 9" || return 1
+    local shown
+    shown="$(lepic tx show "${EPICBOX_SEND_TX}")" || fail "tx show failed" || return 1
+    jq -e '.state == "confirmed" and .transport == "epicbox" and (.stages | index("S1")) and (.stages | index("S3"))' \
+        <<<"${shown}" >/dev/null || fail "tx show: ${shown}" || return 1
+    [[ "$(lepic_status tx post "${EPICBOX_SEND_TX}")" -eq 7 ]] ||
+        fail "posting a confirmed transaction was not refused with 7" || return 1
+    [[ "$(lepic_status tx show 999)" -eq 6 ]] || fail "an unknown tx was not 6" || return 1
+    local human
+    human="$(lepic_env "${LEPIC_BIN}" tx list 2>>"${RUN_LOG}")" || fail "human tx list failed" || return 1
+    grep -q '^ *ID  DIR .*AMOUNT .*FEE .*TRANSPORT' <<<"${human}" || fail "human tx list header: ${human}" || return 1
+    DETAIL="9 transactions listed; S1 and S3 stored; confirmed post refused"
+}
+
+step_errors() {
+    local status=0
+    env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
+        LEPIC_PASSWORD="wrong password" "${LEPIC_BIN}" wallet info >/dev/null 2>>"${RUN_LOG}" || status=$?
+    ((status == 4)) || fail "a wrong password exited ${status}, not 4" || return 1
+    local before
+    before="$(lepic_last_tx_id)"
+    [[ "$(lepic_status tx send 1 --to "${PEER_KEY:1}@localhost:${RELAY_PORT}")" -eq 2 ]] ||
+        fail "a mistyped address was not refused with 2" || return 1
+    [[ "$(lepic_last_tx_id)" == "${before}" ]] || fail "a mistyped address stored a transaction" || return 1
+    [[ "$(lepic_status tx send 1000 --to "${PEER_ADDRESS}")" -eq 8 ]] || fail "overspending was not 8" || return 1
+    local human
+    human="$(lepic_env "${LEPIC_BIN}" --data-dir "${STATE_DIR}/none" wallet info 2>&1 </dev/null)" && status=0 || status=$?
+    ((status == 5)) || fail "a missing wallet exited ${status}, not 5" || return 1
+    grep -q '^hint: no mainnet wallet in ' <<<"${human}" || fail "no hint for a missing wallet: ${human}" || return 1
+    status=0
+    env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
+        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" LEPIC_NODE_URL=http://127.0.0.1:9 \
+        "${LEPIC_BIN}" wallet info >/dev/null 2>>"${RUN_LOG}" || status=$?
+    ((status == 9)) || fail "an unreachable node exited ${status}, not 9" || return 1
+    DETAIL="wrong password 4, bad address 2 and nothing stored, overspend 8, no wallet 5 with hint, no node 9"
+}
+
+step_restore() {
+    local restored status=0
+    restored="$(printf '%s\n' "${RECOVERY_PHRASE}" | lepic_env "${LEPIC_BIN}" \
+        --data-dir "${STATE_DIR}/restored" wallet restore 2>"${STATE_DIR}/restore.err")" || status=$?
+    cat "${STATE_DIR}/restore.err" >>"${RUN_LOG}"
+    ((status == 0)) || fail "wallet restore exited ${status}" || return 1
+    grep -q '^Scanned heights 0 to ' <<<"${restored}" || fail "restore report: ${restored}" || return 1
+    grep -q '^scanned to height ' "${STATE_DIR}/restore.err" || fail "restore printed no progress" || return 1
+    local total
+    total="$(lepic --data-dir "${STATE_DIR}/restored" wallet info | jq -r '.accounts[0].total')"
+    (($(to_units "${total}") == EXPECTED_TOTAL)) ||
+        fail "restored total ${total}, expected ${EXPECTED_TOTAL} units" || return 1
+    DETAIL="restored from the phrase with progress; total ${total} matches"
+}
+
+step_import_seed() {
+    peer_listen_stop
+    dc exec -T peer cat /data/.epic/user/wallet_data/wallet.seed >"${STATE_DIR}/peer.seed" ||
+        fail "could not copy the peer's wallet.seed" || return 1
+    local status=0
+    printf 'peer-password\n' | lepic_env "${LEPIC_BIN}" --output json --data-dir "${STATE_DIR}/imported" \
+        wallet import-seed "${STATE_DIR}/peer.seed" >>"${RUN_LOG}" 2>&1 || status=$?
+    ((status == 0)) || fail "wallet import-seed exited ${status}" || return 1
+    local imported peer_total
+    imported="$(to_units "$(lepic --data-dir "${STATE_DIR}/imported" wallet info | jq -r '.accounts[0].total')")"
+    peer_total="$(ew peer info | awk -F'|' '/Confirmed Total/ {gsub(/ /, "", $2); print $2}')"
+    ((imported == $(to_units "${peer_total}"))) ||
+        fail "imported total ${imported}, epic-wallet says ${peer_total}" || return 1
+    DETAIL="epic-wallet's wallet.seed imported; total ${peer_total} matches epic-wallet"
+}
+
+STEPS=(
+    "node status:step_node_status"
+    "wallet init:step_wallet_init"
+    "wallet address, epicbox status:step_address_and_status"
+    "epic-wallet sends to lepic by file:step_receive_by_file"
+    "lepic sends to epic-wallet by epicbox:step_send_over_epicbox"
+    "epic-wallet sends to lepic by epicbox:step_listen_receives_over_epicbox"
+    "lepic sends to epic-wallet by file:step_send_by_file"
+    "lepic invoices epic-wallet by file:step_invoice_epic_wallet"
+    "epic-wallet invoices lepic by file:step_pay_epic_wallet_invoice"
+    "failed delivery, then tx resend:step_resend_after_failed_delivery"
+    "tx cancel:step_cancel"
+    "tx list, tx show, tx post:step_list_show_post"
+    "errors and exit codes:step_errors"
+    "wallet restore:step_restore"
+    "wallet import-seed:step_import_seed"
+)

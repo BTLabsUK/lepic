@@ -1,0 +1,169 @@
+# CLI acceptance stack: the V-02 interop stack (relay, reference node on a test-mode chain,
+# stratum miner, two epic-wallet v4.0.2 wallets) without a lepic container. The lepic under test
+# is the binary installed on the host, which reaches the node API and the relay through
+# `gateway` on 127.0.0.1 only.
+#
+# Every service but `gateway` sits on the internal network or in the node's network namespace,
+# with no route out, as in ../compose.yaml. `gateway` joins the internal network and a host
+# bridge, because Docker publishes ports only from a container with a non-internal network; it
+# runs nothing but a TCP relay to the node's two ports.
+#
+# `./run.sh` builds the binaries with ../build.sh, writes .work/env and starts this file.
+name: lepic-acceptance
+
+x-runtime: &runtime
+  image: lepic-acceptance-runtime:local
+  pull_policy: never
+  init: true
+
+services:
+  mongodb:
+    image: mongo:6.0
+    init: true
+    command: ["--wiredTigerCacheSizeGB", "0.25", "--setParameter", "diagnosticDataCollectionEnabled=false"]
+    network_mode: service:node
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpass
+      MONGO_INITDB_DATABASE: epicbox
+    volumes:
+      - mongo-data:/data/db
+      - ../.work/src/epic-epicbox-docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  epicbox:
+    image: lepic-acceptance-relay:local
+    build:
+      context: ../.work/src/epic-epicbox-docker
+      dockerfile: ../../../docker/relay.Dockerfile
+      additional_contexts:
+        bin: ../.work/bin
+    init: true
+    network_mode: service:node
+    environment:
+      MONGO_URL: mongodb://epicbox:epicboxpass@127.0.0.1:27017/epicbox?authSource=epicbox
+      EPICBOX_INSTANCE_ID: "1"
+      EPICBOX_DOMAIN: localhost
+      EPICBOX_PORT: "3423"
+      DEBUG: "true"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(3423, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  node:
+    <<: *runtime
+    networks: [internal]
+    build:
+      context: ../.work/bin
+      dockerfile: ../../docker/runtime.Dockerfile
+      additional_contexts:
+        scripts: ../docker
+    pull_policy: build
+    command: ["node.sh"]
+    environment:
+      FUNDER_URL: http://127.0.0.1:23415
+    volumes:
+      - node-data:/data/node
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf -u epic:$$(cat /data/node/.api_secret) -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get_status\",\"params\":[]}' http://127.0.0.1:23413/v2/owner | grep -q '\"no_sync\"'"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  funder:
+    <<: *runtime
+    network_mode: service:node
+    command: ["wallet.sh", "listen-http"]
+    environment:
+      WALLET_PASSWORD: funder-password
+    volumes:
+      - funder-data:/data
+      - node-data:/node:ro
+      - ./.work/exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -s -o /dev/null http://127.0.0.1:23415/v2/foreign"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  miner:
+    <<: *runtime
+    network_mode: service:node
+    command: ["miner", "127.0.0.1:23416", "2"]
+    depends_on:
+      funder:
+        condition: service_healthy
+
+  peer:
+    <<: *runtime
+    network_mode: service:node
+    command: ["wallet.sh", "idle"]
+    environment:
+      WALLET_PASSWORD: peer-password
+    volumes:
+      - peer-data:/data
+      - node-data:/node:ro
+      - ./.work/exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+      epicbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  gateway:
+    image: lepic-acceptance-relay:local
+    pull_policy: never
+    init: true
+    networks: [internal, host-bridge]
+    # Forwards each published port to the same service on the node: 43413 to the node API,
+    # 3423 to the relay. The relay port stays 3423 on the host because Epicbox addresses name it.
+    command:
+      - node
+      - -e
+      - |
+        const net = require('net');
+        for (const [listen, port] of [[43413, 23413], [3423, 3423]]) {
+          net.createServer((client) => {
+            const upstream = net.connect(port, 'node');
+            client.pipe(upstream).pipe(client);
+            const close = () => { client.destroy(); upstream.destroy(); };
+            client.on('error', close);
+            upstream.on('error', close);
+          }).listen(listen, '0.0.0.0');
+        }
+    ports:
+      - "127.0.0.1:43413:43413"
+      - "127.0.0.1:3423:3423"
+    depends_on:
+      node:
+        condition: service_healthy
+      epicbox:
+        condition: service_healthy
+
+networks:
+  internal:
+    internal: true
+  host-bridge: {}
+
+volumes:
+  mongo-data: {}
+  node-data: {}
+  funder-data: {}
+  peer-data: {}
