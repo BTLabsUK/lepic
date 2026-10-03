@@ -187,7 +187,11 @@ impl EpicWallet {
         self.session.runtime().boundary.clone()
     }
 
-    async fn run<T, F, Fut>(&self, operation: &'static str, work: F) -> Result<T, WalletError>
+    pub(super) async fn run<T, F, Fut>(
+        &self,
+        operation: &'static str,
+        work: F,
+    ) -> Result<T, WalletError>
     where
         T: Send + 'static,
         F: FnOnce(Arc<Session>) -> Fut,

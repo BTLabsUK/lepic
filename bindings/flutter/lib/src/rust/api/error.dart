@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `chained`, `engine_kind`, `from_inner`, `new`
+// These functions are ignored because they are not marked as `pub`: `app_data_kind`, `chained`, `engine_kind`, `from_inner`, `new`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// The error of every fallible call. `message` is English for logs and bug reports; it never
@@ -98,7 +98,13 @@ enum WalletErrorKind {
 
   /// The node already holds the transaction's kernel, so it can no longer be cancelled. The
   /// next refresh confirms it.
-  onChain;
+  onChain,
+
+  /// The app data file is intact but belongs to a wallet with another seed.
+  foreignAppData,
+
+  /// The app data file belongs to this wallet but was changed or cut short.
+  damagedAppData;
 
   /// The stable number of this kind.
   Future<int> code() =>

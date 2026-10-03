@@ -49,6 +49,8 @@ use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
 use crate::vault_port::{AppVault, SharedStorage, VAULT_KEY, VaultBytes, vault_error};
 
+mod app_data;
+
 type EngineWallet = Wallet<Node, SqliteStores, AppVault>;
 
 /// Matches the name `lepic-wallet` stores the seed under in the wallet's vault.

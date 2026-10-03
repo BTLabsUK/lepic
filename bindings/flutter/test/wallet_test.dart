@@ -100,6 +100,8 @@ const errorCodes = {
   WalletErrorKind.restoreScanRequired: 22,
   WalletErrorKind.changedDuringCancel: 23,
   WalletErrorKind.onChain: 24,
+  WalletErrorKind.foreignAppData: 25,
+  WalletErrorKind.damagedAppData: 26,
 };
 
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(

@@ -1,6 +1,7 @@
 //! The one error every call returns. Dart receives it as a thrown [`WalletError`] and branches on
 //! [`WalletError::kind`] or the stable [`WalletError::code`], never on the message.
 
+use lepic_keychain::AppDataError;
 use lepic_telemetry::ErrorChain;
 use lepic_wallet::inbox::InboxError;
 use lepic_wallet::refresh::RefreshError;
@@ -58,6 +59,10 @@ pub enum WalletErrorKind {
     /// The node already holds the transaction's kernel, so it can no longer be cancelled. The
     /// next refresh confirms it.
     OnChain,
+    /// The app data file is intact but belongs to a wallet with another seed.
+    ForeignAppData,
+    /// The app data file belongs to this wallet but was changed or cut short.
+    DamagedAppData,
 }
 
 impl WalletErrorKind {
@@ -88,6 +93,8 @@ impl WalletErrorKind {
             Self::RestoreScanRequired => 22,
             Self::ChangedDuringCancel => 23,
             Self::OnChain => 24,
+            Self::ForeignAppData => 25,
+            Self::DamagedAppData => 26,
         }
     }
 }
@@ -152,6 +159,17 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         E::RestoreScanRequired => WalletErrorKind::RestoreScanRequired,
         E::ChangedDuringCancel(_) => WalletErrorKind::ChangedDuringCancel,
         E::OnChain(_) => WalletErrorKind::OnChain,
+        E::AppData(error) => app_data_kind(error),
+        _ => WalletErrorKind::Other,
+    }
+}
+
+fn app_data_kind(error: &AppDataError) -> WalletErrorKind {
+    match error {
+        AppDataError::ForeignWallet => WalletErrorKind::ForeignAppData,
+        AppDataError::Damaged => WalletErrorKind::DamagedAppData,
+        AppDataError::UnsupportedVersion { .. } => WalletErrorKind::Unsupported,
+        AppDataError::NotAppData | AppDataError::TooLong { .. } => WalletErrorKind::InvalidArgument,
         _ => WalletErrorKind::Other,
     }
 }
@@ -309,6 +327,8 @@ mod tests {
             (K::RestoreScanRequired, 22),
             (K::ChangedDuringCancel, 23),
             (K::OnChain, 24),
+            (K::ForeignAppData, 25),
+            (K::DamagedAppData, 26),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -345,5 +365,27 @@ mod tests {
         }
         let receive = WalletError::from(ReceiveError::Wallet(E::RestoreScanRequired));
         assert_eq!(receive.kind, WalletErrorKind::RestoreScanRequired);
+    }
+
+    #[test]
+    fn app_data_errors_map_to_their_kinds() {
+        let kind = |error| WalletError::from(lepic_wallet::WalletError::AppData(error)).kind;
+        assert_eq!(
+            kind(AppDataError::ForeignWallet),
+            WalletErrorKind::ForeignAppData
+        );
+        assert_eq!(kind(AppDataError::Damaged), WalletErrorKind::DamagedAppData);
+        assert_eq!(
+            kind(AppDataError::UnsupportedVersion { version: 2, kdf: 1 }),
+            WalletErrorKind::Unsupported
+        );
+        assert_eq!(
+            kind(AppDataError::NotAppData),
+            WalletErrorKind::InvalidArgument
+        );
+        assert_eq!(
+            kind(AppDataError::TooLong { actual: 2, max: 1 }),
+            WalletErrorKind::InvalidArgument
+        );
     }
 }

@@ -153,10 +153,11 @@ this list.
 | Dart to Rust | Recovery phrase of a test wallet, in `mock` builds only | `MockChain.fund` |
 | Rust to the `SecretStore`, and back | PIN key (`lepic.pin-key`), random, one per PIN wallet | written by `EpicWallet.createWithPin` and `importWalletSeedWithPin`, replaced by `changePin`; read by `openWithPin`, `mnemonicWithPin` and `changePin`; deleted by `deleteWallet` |
 | Rust to Dart | Recovery phrase, after the password or PIN is verified, for the backup screen | `EpicWallet.mnemonic`, `EpicWallet.mnemonicWithPin` |
-| Never | Seed bytes, private keys, blinding factors, nonces, vault keys, the generated wallet password of PIN unlock | none |
+| Never | Seed bytes, private keys, blinding factors, nonces, vault keys, the generated wallet password of PIN unlock, the root secret and the app data key derived from it | none |
 
-Not secret, and crossing both ways: the sealed password text and the encrypted vault the
-`SecretStore` holds. Neither is enough alone. The vault needs the password. The sealed text needs
+Not secret, and crossing both ways: the sealed password text, the encrypted vault the
+`SecretStore` holds, and the app's own data and the `.wfeh` files `sealAppData` and
+`openAppData` make of it. Neither is enough alone. The vault needs the password. The sealed text needs
 the PIN and the PIN key in the store, so whoever holds both the sealed text and the store's
 contents can guess the PIN offline, slowed only by Argon2id. Keep the store on the device: back it
 with the Android Keystore or the iOS Keychain (`ThisDeviceOnly`) and exclude it and the sealed text
@@ -193,9 +194,11 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 22 | `restoreScanRequired` | The wallet was restored from its phrase and no full scan has completed since, so it cannot receive or make change yet. Run `scan` to the end first. |
 | 23 | `changedDuringCancel` | Another operation, such as the listener finalizing it, changed the transaction while it was being cancelled. Nothing was cancelled; cancel again to decide from the new state. |
 | 24 | `onChain` | The node already holds the transaction's kernel, so it cannot be cancelled. The next refresh confirms it. |
+| 25 | `foreignAppData` | The app data file is intact but belongs to a wallet with another seed. |
+| 26 | `damagedAppData` | The app data file belongs to this wallet but was changed or cut short. |
 
-Kinds 22 to 24 used to arrive as `other`. An exhaustive `switch` over `WalletErrorKind` must
-handle them.
+Kinds 22 to 24 used to arrive as `other`. Kinds 25 and 26 are new with `sealAppData` and
+`openAppData`. An exhaustive `switch` over `WalletErrorKind` must handle them.
 
 ## Switching the app from its earlier binding
 
@@ -223,7 +226,8 @@ the secret store, which the earlier binding kept in process-wide state.
 | `enrich_history()` | not provided | App history archive; not an engine feature. |
 | `set_tx_note(key, note)` | not provided | App history archive; not an engine feature. |
 | `contacts()`, `save_contact`, `delete_contact` | not provided | App address book; keep it in Dart. |
-| `export_history()`, `export_history_csv()`, `import_history(data)` | not provided | App history archive; not an engine feature. |
+| `export_history()`, `import_history(data)` | `seal_app_data(payload)`, `open_app_data(file)` | The `.wfeh` envelope only: Dart builds and parses the payload JSON. Files of the earlier binding open, since the key comes from the same root secret (`docs/compat/wfeh.md`). Another wallet's file gives `foreignAppData`, a changed one `damagedAppData`, a later version `unsupported`. |
+| `export_history_csv()` | not provided | App history archive; not an engine feature. |
 | `estimate_max(minimum_confirmations)` | `estimate_max(minimum_confirmations)` | Returns `FeeEstimate`. A send of that amount at the same tip charges that fee. |
 | `estimate_fee(amount, minimum_confirmations)` | `estimate_fee(amount, minimum_confirmations)` | Returns `FeeEstimate` with the inputs and change too. The sends choose inputs the same way, so the fee matches. |
 | `epicbox_address()` | `epicbox_address()` | `unsupported` when no relay is configured. |
