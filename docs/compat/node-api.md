@@ -23,6 +23,9 @@ recordings skip the owner exchange.
 
 Requests are JSON-RPC 2.0. The reference client sends `get_outputs` in chunks of 500 commitments in
 parallel. A node may require HTTP Basic auth on the foreign API; LEPIC supports an optional secret.
+LEPIC reaches a remote node only over https; plain http is accepted only for a loopback host. On a
+phone another app may serve a loopback port, so mobile builds should default to https or send no
+secret.
 
 ## Restore and scan
 
