@@ -196,7 +196,14 @@ The inputs stay locked from the send until the transaction confirms or is cancel
 `--min-confirmations` (10), `--selection all|smallest` (`all`, as `epic-wallet`, spends every
 eligible output and so locks all of them until it confirms; `smallest` spends as few as cover the
 amount), `--change-outputs`, `--ttl-blocks` (the receiver must refuse the slate after that many
-blocks), `-a <account>`, `--fluff` on finalize to skip the stem phase.
+blocks), `-m, --message <TEXT>` (a message to the other party, signed with the slate; `tx
+receive`, `invoice issue` and `invoice pay` take it too), `--fluff` on finalize to skip the stem
+phase.
+
+`-a, --account <LABEL>` on `tx send`, `tx receive`, `tx list`, `invoice issue` and `invoice pay`
+picks the account, `default` unless given. No command creates accounts yet: a new wallet has
+only `default`, and a restore adds `account_<n>` for each other account it finds outputs in, as
+`wallet info` lists them.
 
 ## Epicbox
 
