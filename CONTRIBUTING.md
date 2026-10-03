@@ -13,7 +13,8 @@ LEPIC takes contributions under the rules below.
 - One task per branch: `<type>/<task-id>-<slug>`, for example `feat/s-02-legacy-v3-codec`.
 - Commits follow Conventional Commits with a `Refs: <task-id>` footer and a DCO sign-off
   (`git commit -s`). The full rules are in `CONTRIBUTING.md`.
-- Every commit builds and passes `cargo xtask check`.
+- Every commit builds and passes `cargo xtask check`. Run it from a git checkout: its repository
+  gates and their tests list files through `git`, so they fail in an unpacked source archive.
 - Changes to wire formats, keys, proofs or storage need golden vectors (`docs/rules.md`).
 
 ## Enabling the local commit-message check
