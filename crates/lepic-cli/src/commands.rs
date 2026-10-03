@@ -41,15 +41,15 @@ use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs,
-    InvoiceCommand, NodeCommand, PostArgs, ReceiveArgs, RestoreArgs, ScanArgs, SelectionArg,
-    SendArgs, SpendArgs, TxCommand, WalletCommand, WordsArg,
+    InvoiceCommand, NodeCommand, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
+    SelectionArg, SendArgs, SpendArgs, TxCommand, WalletCommand, WordsArg,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, FinalizeReport, InboxReport, InfoReport,
     InitReport, InvoiceIssueReport, InvoicePayReport, NodeStatusReport, ReceiveReport, Report,
-    RestoreReport, ScanReport, SendReport, TxListReport, TxReport, TxStateReport,
+    ResendReport, RestoreReport, ScanReport, SendReport, TxListReport, TxReport, TxStateReport,
 };
 use crate::settings::Settings;
 use crate::stores::{CliStores, SharedStore};
@@ -183,6 +183,7 @@ impl<H: Host> Run<'_, H> {
             TxCommand::Send(args) => self.send(args).await,
             TxCommand::Receive(args) => self.receive(args).await,
             TxCommand::Finalize(args) => self.finalize(&args).await,
+            TxCommand::Resend(args) => self.resend(args).await,
             TxCommand::Post(PostArgs { tx, fluff }) => {
                 let opened = self.open().await?;
                 let tx_id = TxId(tx.tx_id);
@@ -401,6 +402,22 @@ impl<H: Host> Run<'_, H> {
             amount: format_amount(sent.amount),
             fee: format_fee(sent.fee),
             transport: transport.to_string(),
+            destination,
+        }))
+    }
+
+    async fn resend(&mut self, args: ResendArgs) -> Result<Report, CliError> {
+        let (delivery, destination) = self.delivery(args.destination)?;
+        let opened = self.open().await?;
+        if delivery.transport() == TRANSPORT_ID {
+            opened.wallet.epicbox_attach(&opened.epicbox)?;
+        }
+        let transport = delivery.transport().to_string();
+        let tx_id = TxId(args.tx.tx_id);
+        opened.wallet.resend(tx_id, delivery).await?;
+        Ok(Report::Resend(ResendReport {
+            tx_id: tx_id.0,
+            transport,
             destination,
         }))
     }

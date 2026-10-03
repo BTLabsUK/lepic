@@ -19,6 +19,7 @@ pub enum Report {
     Info(InfoReport),
     Address(AddressReport),
     Send(SendReport),
+    Resend(ResendReport),
     Receive(ReceiveReport),
     Finalize(FinalizeReport),
     Post(TxStateReport),
@@ -100,6 +101,14 @@ pub struct SendReport {
     pub slate_id: String,
     pub amount: String,
     pub fee: String,
+    pub transport: String,
+    /// The Epicbox address or the file path the slate went to.
+    pub destination: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResendReport {
+    pub tx_id: u32,
     pub transport: String,
     /// The Epicbox address or the file path the slate went to.
     pub destination: String,
@@ -337,6 +346,11 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             "Transaction {} sent {} EPIC (fee {}) by {} to {}.\nSlate {}.",
             r.tx_id, r.amount, r.fee, r.transport, r.destination, r.slate_id
         ),
+        Report::Resend(r) => writeln!(
+            out,
+            "Transaction {} sent again by {} to {}.",
+            r.tx_id, r.transport, r.destination
+        ),
         Report::Receive(r) => writeln!(
             out,
             "Transaction {} receives {} EPIC. Return {} to the sender.\nSlate {}.",
@@ -542,6 +556,14 @@ mod tests {
                     "transport",
                     "tx_id",
                 ],
+            ),
+            (
+                Report::Resend(ResendReport {
+                    tx_id: 1,
+                    transport: text("epicbox"),
+                    destination: text("a"),
+                }),
+                vec!["destination", "transport", "tx_id"],
             ),
             (
                 Report::Receive(ReceiveReport {

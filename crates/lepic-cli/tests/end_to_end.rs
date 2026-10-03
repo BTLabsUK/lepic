@@ -297,3 +297,47 @@ fn a_send_to_an_invalid_address_stores_nothing() {
     let info = sender.run(&host, &["wallet", "info"]).ok().json();
     assert_eq!(info["accounts"][0]["locked"], "0.00000000");
 }
+
+#[test]
+fn resend_delivers_the_first_slate_again_until_it_is_answered() {
+    let (host, sender, receiver) = two_wallets();
+    let first = sender.path("first.slate");
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to-file", first.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let tx_id = sent["tx_id"].to_string();
+
+    let again = sender.path("again.slate");
+    let resent = sender
+        .run(
+            &host,
+            &["tx", "resend", &tx_id, "--to-file", again.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    assert_eq!(keys(&resent), ["destination", "transport", "tx_id"]);
+    assert_eq!(resent["tx_id"], sent["tx_id"]);
+    assert_eq!(resent["transport"], "file");
+
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    sender
+        .run(
+            &host,
+            &["tx", "resend", &tx_id, "--to", text(&address, "address")],
+        )
+        .ok();
+    let drained = receiver.run(&host, &["epicbox", "drain"]).ok().json();
+    assert_eq!(drained["received"], 1, "{drained}");
+    let finalized = sender.run(&host, &["epicbox", "drain"]).ok().json();
+    assert_eq!(finalized["finalized"], 1, "{finalized}");
+
+    let outcome = sender.run(
+        &host,
+        &["tx", "resend", &tx_id, "--to-file", again.to_str().unwrap()],
+    );
+    assert_eq!(outcome.code, 7, "{outcome:?}");
+}

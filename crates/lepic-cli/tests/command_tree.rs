@@ -58,6 +58,7 @@ fn the_tree_has_every_planned_command() {
         "tx send",
         "tx receive",
         "tx finalize",
+        "tx resend",
         "tx post",
         "tx cancel",
         "tx list",

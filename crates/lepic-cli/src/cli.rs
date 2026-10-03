@@ -176,6 +176,11 @@ pub enum TxCommand {
     Receive(ReceiveArgs),
     /// Finalize a reply slate file, to a send or to an invoice, and post the transaction
     Finalize(FinalizeArgs),
+    /// Deliver the first slate of a send again, after a failed delivery
+    #[command(after_help = "\
+Use it when `tx send` exited with code 11. The transaction keeps its inputs locked until it is
+delivered and finalized, or cancelled with `lepic tx cancel`.")]
+    Resend(ResendArgs),
     /// Post a finalized transaction again
     Post(PostArgs),
     /// Cancel a transaction that is not posted
@@ -216,6 +221,14 @@ pub struct SpendArgs {
     /// Blocks after which the other party must refuse the slate
     #[arg(long, value_name = "BLOCKS")]
     pub ttl_blocks: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+pub struct ResendArgs {
+    #[command(flatten)]
+    pub tx: TxIdArgs,
+    #[command(flatten)]
+    pub destination: DestinationArgs,
 }
 
 #[derive(Debug, Args)]
