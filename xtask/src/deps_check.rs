@@ -525,6 +525,8 @@ lepic-telemetry   -> (external only)
             fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../deny.toml")).unwrap();
         let in_deny_toml: BTreeSet<&str> = deny_toml
             .lines()
+            .skip_while(|line| !line.starts_with("deny = ["))
+            .take_while(|line| *line != "]")
             .filter_map(|line| line.trim().strip_prefix("{ crate = \""))
             .filter_map(|rest| rest.split('"').next())
             .collect();

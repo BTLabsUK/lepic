@@ -29,7 +29,22 @@ unused-allowed-license = "allow"
 ignore = true
 
 [bans]
-multiple-versions = "warn"
+# A second version of a crate fails the check unless it is listed in `skip` with the dependency
+# that holds it back. Drop an entry when that dependency moves on; cargo-deny reports entries that
+# no longer match.
+multiple-versions = "deny"
+skip = [
+  { crate = "rand@0.9.5", reason = "pinned secp256k1-zkp wrapper uses rand 0.9" },
+  { crate = "rand_core@0.9.5", reason = "pinned secp256k1-zkp wrapper uses rand 0.9" },
+  { crate = "getrandom@0.3.4", reason = "rand_core 0.9 of the secp256k1-zkp wrapper" },
+  { crate = "r-efi@5.3.0", reason = "getrandom 0.3 of the secp256k1-zkp wrapper" },
+  { crate = "getrandom@0.2.17", reason = "ring 0.17 uses getrandom 0.2" },
+  { crate = "windows-sys@0.52.0", reason = "ring 0.17 uses windows-sys 0.52" },
+  { crate = "digest@0.10.7", reason = "md-5 0.10 in flutter_rust_bridge_macros" },
+  { crate = "block-buffer@0.10.4", reason = "digest 0.10 of flutter_rust_bridge_macros" },
+  { crate = "crypto-common@0.1.7", reason = "digest 0.10 of flutter_rust_bridge_macros" },
+  { crate = "syn@2.0.119", reason = "proc-macro crates not yet on syn 3" },
+]
 wildcards = "deny"
 allow-wildcard-paths = true
 deny = [
