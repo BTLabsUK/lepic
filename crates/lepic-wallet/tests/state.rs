@@ -20,7 +20,7 @@ const ALL: [TxState; 7] = [
 ];
 
 /// The transitions `docs/compat/states.md` documents, besides staying in the same state.
-const ALLOWED: [(TxState, TxState); 14] = [
+const ALLOWED: [(TxState, TxState); 13] = [
     (Sent, Finalized),
     (Sent, Confirmed),
     (Sent, Cancelled),
@@ -32,7 +32,6 @@ const ALLOWED: [(TxState, TxState); 14] = [
     (Finalized, Posted),
     (Finalized, Confirmed),
     (Finalized, Cancelled),
-    (Finalized, Expired),
     (Posted, Confirmed),
     (Posted, Cancelled),
 ];

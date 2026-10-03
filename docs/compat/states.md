@@ -45,7 +45,7 @@ changes nothing. Any other transition not listed is rejected with a typed error.
 | From | To |
 |---|---|
 | `sent`, `received` | `finalized`, `confirmed`, `cancelled`, `expired` |
-| `finalized` | `posted`, `confirmed`, `cancelled`, `expired` |
+| `finalized` | `posted`, `confirmed`, `cancelled` |
 | `posted` | `confirmed`, `cancelled` |
 | `confirmed`, `cancelled`, `expired` | none |
 
@@ -53,10 +53,10 @@ changes nothing. Any other transition not listed is rejected with a typed error.
 the transaction before this wallet records finalizing or posting it.
 
 Upstream cancels and expires any entry whose `tx_type` is still `TxSentCreated` or `TxReceived`,
-which includes a transaction it posted but has not yet seen in the mempool. LEPIC does not expire a
-posted transaction, because it may still be mined after the TTL cutoff; only the owner's explicit
-cancel ends it before confirmation. Upstream refuses to cancel an entry with `confirmed = true`, and
-so does LEPIC: `confirmed` is final.
+which includes a transaction it finalized or posted but has not yet seen in the mempool. LEPIC
+expires neither a finalized nor a posted transaction, because either may still be mined after the
+TTL cutoff; only the owner's explicit cancel ends it before confirmation. Upstream refuses to cancel
+an entry with `confirmed = true`, and so does LEPIC: `confirmed` is final.
 
 Upstream also refuses to cancel an entry whose type is neither `TxSentCreated` nor `TxReceived`, so
 a transaction the mempool has seen (`TxSentMempool`, `TxReceivedMempool`) cannot be cancelled there.
