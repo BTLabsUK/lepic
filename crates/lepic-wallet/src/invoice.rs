@@ -54,7 +54,7 @@ use crate::error::WalletError;
 use crate::finalize::{Finalized, FinalizedSlate, PushFailure};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
-use crate::send::{ChangeOutput, Delivery, SendRequest, block_header_version};
+use crate::send::{ChangeOutput, Delivery, SendRequest, block_header_version, record_counterparty};
 use crate::state::{StateChange, apply_transition, state_name};
 use crate::wallet::Wallet;
 use build::{IssuerContext, final_transaction, verify_message};
@@ -370,6 +370,7 @@ fn issue_stored(
     repos: &mut dyn Repositories,
     env: &InvoiceEnvironment<'_>,
     transport: &dyn Transport,
+    delivery: &Delivery,
     request: &InvoiceRequest,
     randomness: I1Randomness,
 ) -> Result<(TxId, Slate, WireSlate), InvoiceError> {
@@ -412,6 +413,7 @@ fn issue_stored(
         created_at: env.now,
         updated_at: env.now,
     })?;
+    record_counterparty(repos, tx_id, delivery)?;
     let commitment =
         env.keychain
             .commit(request.amount.value(), &key_id, SwitchCommitment::Regular)?;
@@ -694,9 +696,9 @@ where
                 let issued = delivering(&ports.transports, &target).and_then(|transport| {
                     let randomness = I1Randomness::draw(&mut **ports.rng.lock())
                         .map_err(InvoiceError::Signing)?;
-                    session
-                        .store
-                        .write(|repos| issue_stored(repos, &env, transport, &request, randomness))
+                    session.store.write(|repos| {
+                        issue_stored(repos, &env, transport, &target, &request, randomness)
+                    })
                 });
                 Ok(issued)
             })

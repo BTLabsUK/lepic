@@ -58,7 +58,7 @@ use uuid::Uuid;
 use crate::account::{self, AccountError, next_output_key};
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
+use crate::selection::{self, SelectionError, SelectionOptions, SelectionStrategy};
 use crate::wallet::Wallet;
 
 /// The private context of the party that adds inputs, under the participant id `epic-wallet`
@@ -169,24 +169,30 @@ pub struct SendRequest {
 }
 
 impl SendRequest {
-    const DEFAULT_MINIMUM_CONFIRMATIONS: u64 = 10;
-    const DEFAULT_MAX_OUTPUTS: NonZeroUsize = match NonZeroUsize::new(500) {
-        Some(max) => max,
-        None => NonZeroUsize::MIN,
-    };
-
     pub const fn new(account: AccountIndex, amount: Amount) -> Self {
+        let options = SelectionOptions::new(account);
         Self {
             account,
             amount,
-            minimum_confirmations: Self::DEFAULT_MINIMUM_CONFIRMATIONS,
-            max_outputs: Self::DEFAULT_MAX_OUTPUTS,
-            change_outputs: NonZeroUsize::MIN,
-            strategy: SelectionStrategy::All,
+            minimum_confirmations: options.minimum_confirmations,
+            max_outputs: options.max_outputs,
+            change_outputs: options.change_outputs,
+            strategy: options.strategy,
             lock: KernelLock::NONE,
             ttl_blocks: None,
             message: None,
             payment_proof_recipient: None,
+        }
+    }
+
+    /// The options [`crate::Wallet::estimate_fee`] takes to estimate this send.
+    pub const fn selection_options(&self) -> SelectionOptions {
+        SelectionOptions {
+            account: self.account,
+            minimum_confirmations: self.minimum_confirmations,
+            max_outputs: self.max_outputs,
+            change_outputs: self.change_outputs,
+            strategy: self.strategy,
         }
     }
 }
@@ -569,16 +575,9 @@ fn create_s1(
     let outputs = repos.outputs(request.account, None)?;
     let selection = selection::select(
         &outputs,
-        &SelectionRequest {
-            account: request.account,
-            amount: request.amount,
-            tip,
-            minimum_confirmations: request.minimum_confirmations,
-            max_outputs: request.max_outputs,
-            change_outputs: request.change_outputs,
-            strategy: request.strategy,
-            base_fee,
-        },
+        &request
+            .selection_options()
+            .request(request.amount, tip, base_fee),
     )?;
     let change = selection
         .change
@@ -640,6 +639,7 @@ fn create_s1(
         created_at: env.now,
         updated_at: env.now,
     })?;
+    record_counterparty(repos, tx_id, delivery)?;
     for input in &plan.inputs {
         repos.put_output(&OutputRecord {
             status: OutputStatus::Locked,
@@ -681,6 +681,19 @@ fn create_s1(
         wire,
         outbox,
     })
+}
+
+/// Records where a delivered slate goes as the transaction's counterparty. An export has no
+/// address to record.
+pub(crate) fn record_counterparty(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    delivery: &Delivery,
+) -> Result<(), StoreError> {
+    match delivery {
+        Delivery::Deliver { to, .. } => repos.set_counterparty(tx_id, to.as_str()),
+        Delivery::Export { .. } => Ok(()),
+    }
 }
 
 /// Records a delivery to a destination in the outbox, reusing a pending entry for the same
@@ -791,6 +804,7 @@ fn stored_s1_for_delivery(
         },
     )?;
     let outbox = enqueue_delivery(repos, delivery, slate_uuid, env.now)?;
+    record_counterparty(repos, tx_id, delivery)?;
     Ok(StoredS1 {
         tx_id,
         slate_id: slate.id(),

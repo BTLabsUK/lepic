@@ -14,6 +14,7 @@ pub mod chain;
 pub mod config;
 pub mod details;
 pub mod error;
+mod estimate;
 pub mod event;
 pub mod finalize;
 pub mod inbox;

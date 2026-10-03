@@ -22,7 +22,7 @@ use lepic_crypto::PublicKey;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::mock::MockFailure;
-use lepic_store::{InboxEntry, InboxStatus, TxState, WalletStore};
+use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxState, WalletStore};
 use lepic_transport::transport::{Inbound, Transport};
 use lepic_wallet::event::TransportState;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
@@ -94,6 +94,38 @@ fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
     assert!(
         states[dropped..].contains(&TransportState::Connected),
         "{states:?}"
+    );
+}
+
+#[test]
+fn each_side_records_the_others_epicbox_address() {
+    let world = World::new();
+    world.block_on(async {
+        world.send().await;
+        world
+            .receiver_wallet
+            .epicbox_drain(&world.receiver_epicbox)
+            .await
+            .unwrap();
+    });
+
+    let counterparty = |wallet: &support::TestWallet| {
+        let transactions = world
+            .block_on(wallet.transactions(AccountIndex(0)))
+            .unwrap();
+        assert_eq!(transactions.len(), 1);
+        transactions[0]
+            .counterparty
+            .as_ref()
+            .map(|address| address.as_str().to_owned())
+    };
+    assert_eq!(
+        counterparty(&world.receiver_wallet),
+        Some(world.sender_address.to_string())
+    );
+    assert_eq!(
+        counterparty(&world.sender.wallet),
+        Some(world.receiver_address.to_string())
     );
 }
 

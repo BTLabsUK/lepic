@@ -799,7 +799,12 @@ where
         reply_to: &Destination,
     ) -> Result<Handled, Settlement> {
         match self
-            .receive(TRANSPORT_ID, envelope.wire(), ReceiveRequest::default())
+            .receive_from(
+                TRANSPORT_ID,
+                envelope.wire(),
+                ReceiveRequest::default(),
+                Some(reply_to.clone()),
+            )
             .await
         {
             Ok(received) => {

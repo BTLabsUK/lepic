@@ -308,6 +308,30 @@ where
         session.store.read(|repos| Ok(last_confirmed(repos)?))
     }
 
+    /// The balance of `account` from the stored outputs, at the highest tip a refresh or scan
+    /// confirmed, without asking the node, so it is available offline. Before any tip is
+    /// confirmed it is computed at height zero, where no output has a confirmation yet.
+    ///
+    /// Fails with [`WalletError::Locked`], or an [`crate::AccountError::UnknownAccount`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn balance(&self, account: AccountIndex) -> Result<Balance, WalletError> {
+        let session = self.session()?;
+        session.store.read(|repos| {
+            if repos.account(account)?.is_none() {
+                return Err(crate::AccountError::UnknownAccount(account).into());
+            }
+            let height = [
+                last_confirmed(repos)?,
+                chain::position(repos)?.confirmed_height(),
+            ]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or(Height::ZERO);
+            balance(account, &repos.outputs(account, None)?, height).map_err(WalletError::Balance)
+        })
+    }
+
     fn record_changes(&self, summary: &mut RefreshSummary, changes: Vec<StateChange>) {
         for change in changes {
             match change.to {
@@ -597,12 +621,12 @@ fn expire_all(
 }
 
 /// The TTL cutoff every stage of a slate carries, read from the first stage stored.
-fn ttl_cutoff(
+pub(crate) fn ttl_cutoff(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
     tx_id: TxId,
     slate_id: Uuid,
-) -> Result<Option<Height>, RefreshError> {
+) -> Result<Option<Height>, StoreError> {
     for stored in repos.slates(slate_id)? {
         if let Some(slate) = decode_stored(codecs, tx_id, &stored.bytes) {
             return Ok(slate.ttl_cutoff_height());

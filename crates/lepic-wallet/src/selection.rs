@@ -23,6 +23,51 @@ pub enum SelectionStrategy {
     All,
 }
 
+/// How a send chooses its inputs and change, apart from the amount. [`SelectionOptions::new`]
+/// fills in the defaults of `epic-wallet`'s `InitTxArgs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionOptions {
+    pub account: AccountIndex,
+    /// As [`SelectionRequest::minimum_confirmations`].
+    pub minimum_confirmations: u64,
+    /// As [`SelectionRequest::max_outputs`].
+    pub max_outputs: NonZeroUsize,
+    pub change_outputs: NonZeroUsize,
+    pub strategy: SelectionStrategy,
+}
+
+impl SelectionOptions {
+    const DEFAULT_MINIMUM_CONFIRMATIONS: u64 = 10;
+    const DEFAULT_MAX_OUTPUTS: NonZeroUsize = match NonZeroUsize::new(500) {
+        Some(max) => max,
+        None => NonZeroUsize::MIN,
+    };
+
+    pub const fn new(account: AccountIndex) -> Self {
+        Self {
+            account,
+            minimum_confirmations: Self::DEFAULT_MINIMUM_CONFIRMATIONS,
+            max_outputs: Self::DEFAULT_MAX_OUTPUTS,
+            change_outputs: NonZeroUsize::MIN,
+            strategy: SelectionStrategy::All,
+        }
+    }
+
+    /// The request for a send of `amount` built at `tip`.
+    pub const fn request(self, amount: Amount, tip: Height, base_fee: Fee) -> SelectionRequest {
+        SelectionRequest {
+            account: self.account,
+            amount,
+            tip,
+            minimum_confirmations: self.minimum_confirmations,
+            max_outputs: self.max_outputs,
+            change_outputs: self.change_outputs,
+            strategy: self.strategy,
+            base_fee,
+        }
+    }
+}
+
 /// What a send asks selection for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectionRequest {
@@ -124,6 +169,58 @@ pub fn estimate(
     })
 }
 
+/// [`select`] for the largest amount it accepts from `outputs` under the options of `request`,
+/// whose `amount` is ignored.
+///
+/// Each input lowers the fee, so no send pays more than every eligible output less the fee of
+/// spending them all into one output, and that amount is tried first. Only the weight limit
+/// refuses it; the amounts below it are then searched by bisection and the largest one found
+/// to be accepted is returned.
+///
+/// # Errors
+///
+/// What [`select`] returns for an amount of one base unit, when no amount is accepted.
+pub fn select_max(
+    outputs: &[OutputRecord],
+    request: &SelectionRequest,
+) -> Result<Selection, SelectionError> {
+    let at = |amount| {
+        select(
+            outputs,
+            &SelectionRequest {
+                amount: Amount::new(amount),
+                ..*request
+            },
+        )
+    };
+    let eligible = eligible(outputs, request);
+    let fee = tx_fee(eligible.len(), 1, request.base_fee)?;
+    let Some(bound) = sum(&eligible)?
+        .value()
+        .checked_sub(fee.value())
+        .filter(|bound| *bound > 0)
+    else {
+        return at(1);
+    };
+    if let Ok(selection) = at(bound) {
+        return Ok(selection);
+    }
+    let (mut low, mut high) = (1, bound);
+    let mut best = None;
+    // `high` is always a refused amount and `best` the largest accepted one below `low`.
+    while low < high {
+        let middle = low.saturating_add(high.saturating_sub(low) / 2);
+        match at(middle) {
+            Ok(selection) => {
+                best = Some(selection);
+                low = middle.saturating_add(1);
+            }
+            Err(_) => high = middle,
+        }
+    }
+    best.map_or_else(|| at(1), Ok)
+}
+
 /// Whether `output` may be spent at `tip`, by `epic-wallet`'s `OutputData::eligible_to_spend`.
 pub fn eligible_to_spend(output: &OutputRecord, tip: Height, minimum_confirmations: u64) -> bool {
     let is_coinbase = output.id.features == OutputFeatures::Coinbase;
@@ -152,19 +249,24 @@ struct Chosen<'a> {
     fee: Fee,
 }
 
+/// The outputs of the request's account that may be spent at its tip, in the order given.
+fn eligible<'a>(outputs: &'a [OutputRecord], request: &SelectionRequest) -> Vec<&'a OutputRecord> {
+    outputs
+        .iter()
+        .filter(|output| {
+            output.account == request.account
+                && eligible_to_spend(output, request.tip, request.minimum_confirmations)
+        })
+        .collect()
+}
+
 /// `select_coins_and_fee`: try without change first, then with change, widening the selection
 /// until the inputs cover the amount and the fee those inputs imply.
 fn select_coins_and_fee<'a>(
     outputs: &'a [OutputRecord],
     request: &SelectionRequest,
 ) -> Result<Chosen<'a>, SelectionError> {
-    let mut eligible: Vec<&OutputRecord> = outputs
-        .iter()
-        .filter(|output| {
-            output.account == request.account
-                && eligible_to_spend(output, request.tip, request.minimum_confirmations)
-        })
-        .collect();
+    let mut eligible = eligible(outputs, request);
     // Stable, so equal values keep the order they were given in.
     eligible.sort_by_key(|output| output.amount);
     let max_outputs = request.max_outputs.get();

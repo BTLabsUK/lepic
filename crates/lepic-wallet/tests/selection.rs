@@ -18,6 +18,7 @@ use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_store::{AccountIndex, KEY_ID_LEN, KeyId, OutputRecord, OutputStatus};
 use lepic_wallet::selection::{
     SelectionError, SelectionRequest, SelectionStrategy, eligible_to_spend, estimate, select,
+    select_max,
 };
 
 const TIP: Height = Height::new(100);
@@ -283,4 +284,64 @@ fn equal_values_are_taken_in_the_order_given() {
     let outputs = unspent(&[200_000_000, 200_000_000, 200_000_000]);
     let selected = select(&outputs, &request(300_000_000)).unwrap();
     assert_eq!(selected.inputs, outputs[..2]);
+}
+
+#[test]
+fn the_largest_amount_spends_every_output_into_one() {
+    let outputs = unspent(&[100_000_000, 200_000_000, 300_000_000]);
+    for strategy in [SelectionStrategy::Smallest, SelectionStrategy::All] {
+        let request = SelectionRequest {
+            strategy,
+            ..request(0)
+        };
+        let max = select_max(&outputs, &request).unwrap();
+        // Three inputs and one output weigh 4 + 1 - 3 = 2.
+        assert_eq!(max.amount, Amount::new(600_000_000 - 2 * MILLI_EPIC));
+        assert_eq!(max.fee, Fee::new(2 * MILLI_EPIC));
+        assert_eq!(max.inputs.len(), 3);
+        assert!(max.change.is_empty());
+        assert_eq!(
+            select(
+                &outputs,
+                &SelectionRequest {
+                    amount: max.amount,
+                    ..request
+                }
+            ),
+            Ok(max.clone())
+        );
+        assert!(
+            select(
+                &outputs,
+                &SelectionRequest {
+                    amount: Amount::new(max.amount.value() + 1),
+                    ..request
+                }
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn the_largest_amount_spends_even_an_output_smaller_than_the_fee() {
+    // Each input lowers the fee by one weight unit, so a small output still adds its value.
+    let outputs = unspent(&[1_000 * MILLI_EPIC, 2 * MILLI_EPIC]);
+    let max = select_max(&outputs, &request(0)).unwrap();
+    assert_eq!(max.amount, Amount::new(999 * MILLI_EPIC));
+    assert_eq!(values(&max.inputs), [2 * MILLI_EPIC, 1_000 * MILLI_EPIC]);
+    assert!(max.change.is_empty());
+    assert!(select(&outputs, &request(999 * MILLI_EPIC + 1)).is_err());
+}
+
+#[test]
+fn the_largest_amount_of_nothing_spendable_is_a_shortfall() {
+    let outputs = vec![output(0, 100_000_000, OutputStatus::Locked)];
+    assert_eq!(
+        select_max(&outputs, &request(0)),
+        Err(SelectionError::NotEnoughFunds {
+            available: Amount::ZERO,
+            needed: Amount::new(1 + 5 * MILLI_EPIC),
+        })
+    );
 }

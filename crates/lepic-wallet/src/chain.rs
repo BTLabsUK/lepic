@@ -158,6 +158,11 @@ impl ChainPosition {
     fn first(&self) -> Option<ChainReference> {
         self.first.or(self.confirmed)
     }
+
+    /// The height of the highest confirmed tip.
+    pub(crate) fn confirmed_height(&self) -> Option<Height> {
+        self.confirmed.map(|reference| reference.height)
+    }
 }
 
 /// A stored reference that does not parse is ignored; the checkpoint bound still applies.

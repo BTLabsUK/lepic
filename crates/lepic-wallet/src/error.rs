@@ -3,6 +3,7 @@ use lepic_keychain::{
     IdentifierError, KeychainError, MnemonicError, SecretStoreError, WalletSeedError,
 };
 use lepic_node::NodeError;
+use lepic_primitives::amount::ArithmeticError;
 use lepic_primitives::params::Network;
 use lepic_store::{StoreError, TxId};
 use thiserror::Error;
@@ -78,6 +79,8 @@ pub enum WalletError {
     Implausible(#[from] ImplausibleNodeData),
     #[error("blocking wallet task did not complete")]
     Task(#[source] tokio::task::JoinError),
+    #[error("balance out of range")]
+    Balance(#[source] ArithmeticError),
 }
 
 impl From<SecretVaultError> for WalletError {

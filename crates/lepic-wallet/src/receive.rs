@@ -37,7 +37,7 @@ use lepic_store::{
 };
 use lepic_transport::error::FormatError;
 use lepic_transport::policy::encode_with;
-use lepic_transport::transport::TransportId;
+use lepic_transport::transport::{Destination, TransportId};
 use rand_core::CryptoRng;
 use thiserror::Error;
 use tracing::{Span, debug, info, instrument};
@@ -162,15 +162,28 @@ where
     /// malformed, not an S1, pays nothing, or whose fee or messages do not check. Fails with
     /// [`WalletError::RestoreScanRequired`] inside [`ReceiveError::Wallet`] on a database rebuilt
     /// from the seed before a scan from genesis completed. Nothing is stored on failure.
-    #[instrument(
-        skip_all,
-        fields(wallet = %self.config().name, transport = %transport, slate_id, stage)
-    )]
     pub async fn receive(
         &self,
         transport: TransportId,
         wire: &WireSlate,
         request: ReceiveRequest,
+    ) -> Result<Received, ReceiveError> {
+        self.receive_from(transport, wire, request, None).await
+    }
+
+    /// [`Wallet::receive`] of a slate that came from `counterparty`, which is stored with the
+    /// new transaction.
+    #[instrument(
+        name = "receive",
+        skip_all,
+        fields(wallet = %self.config().name, transport = %transport, slate_id, stage)
+    )]
+    pub(crate) async fn receive_from(
+        &self,
+        transport: TransportId,
+        wire: &WireSlate,
+        request: ReceiveRequest,
+        counterparty: Option<Destination>,
     ) -> Result<Received, ReceiveError> {
         let session = self.session()?;
         let network = self.config().network;
@@ -213,6 +226,7 @@ where
                         transport,
                         network,
                         context,
+                        counterparty,
                     },
                     &request,
                 ))
@@ -276,6 +290,7 @@ struct Proposal {
     transport: TransportId,
     network: Network,
     context: EncodeContext,
+    counterparty: Option<Destination>,
 }
 
 /// What storing a reply ended with: a new transaction and the account the funds go to, or the
@@ -324,6 +339,9 @@ fn store_reply<N, S: StoreOpener, V>(
             transport,
             now,
         )?;
+        if let Some(counterparty) = &proposal.counterparty {
+            repos.set_counterparty(tx_id, counterparty.as_str())?;
+        }
         Ok(Answer::Stored {
             received: Received {
                 tx_id,
