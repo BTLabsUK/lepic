@@ -188,6 +188,20 @@ async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
     assert!(reopened.summary(true).await.is_ok());
 }
 
+#[test]
+fn an_implausible_node_answer_reaches_the_app_as_a_node_error() {
+    let error = lepic_wallet::WalletError::Implausible(
+        lepic_wallet::chain::ImplausibleNodeData::TipChanged {
+            first: lepic_primitives::amount::Height::new(1),
+            second: lepic_primitives::amount::Height::new(9),
+        },
+    );
+    assert_eq!(
+        WalletError::from(error).kind,
+        WalletErrorKind::NodeUnreachable
+    );
+}
+
 #[tokio::test]
 async fn slate_text_above_the_wire_limit_is_refused_before_it_is_written() {
     let fixture = Fixture::new();

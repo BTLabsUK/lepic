@@ -134,6 +134,8 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         E::Mnemonic(_) => WalletErrorKind::InvalidMnemonic,
         E::Store(_) => WalletErrorKind::Io,
         E::SecretVault(_) | E::SecretStore(_) => WalletErrorKind::SecretStore,
+        // The node reported a chain position the wallet does not believe.
+        E::Implausible(_) => WalletErrorKind::NodeUnreachable,
         _ => WalletErrorKind::Other,
     }
 }
