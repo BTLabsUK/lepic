@@ -2,7 +2,8 @@
 //! and `TransactionBody`, with the checks the node runs when it reads one.
 //!
 //! Range proofs, kernel signatures and kernel sums are not checked here; decoding a
-//! transaction proves only that it is well formed.
+//! transaction proves only that it is well formed. `Transaction::validate` in `validate.rs`
+//! checks them.
 
 use std::cmp::Ordering;
 
