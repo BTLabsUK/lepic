@@ -372,6 +372,17 @@ fn past_the_weight_limit_the_largest_amount_is_found_below_the_bound() {
     assert!(max.amount < Amount::new(bound));
     assert!(max.amount > Amount::ZERO);
     assert!(max.inputs.len() < count);
+    // The search ends between an accepted amount and a refused one next to it.
+    assert!(
+        select(
+            &outputs,
+            &SelectionRequest {
+                amount: Amount::new(max.amount.value() + 1),
+                ..request
+            }
+        )
+        .is_err()
+    );
     assert_eq!(
         select(
             &outputs,
