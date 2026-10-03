@@ -102,6 +102,35 @@ fn a_received_slate_announces_the_transaction_it_created() {
 }
 
 #[test]
+fn a_slate_missing_a_field_states_the_cause_once() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let receiver = Receiver::new(
+        &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+        slate_height(&s1),
+    );
+    let mut slate: Value = serde_json::from_str(&json(&s1)).unwrap();
+    slate.as_object_mut().unwrap().remove("amount");
+
+    let error = receiver
+        .receive(transport, &slate.to_string(), None)
+        .unwrap_err();
+
+    assert!(matches!(error, ReceiveError::Decode(_)), "{error:?}");
+    let chain = lepic_telemetry::ErrorChain(&error).to_string();
+    assert_eq!(chain.matches("is missing").count(), 1, "{chain}");
+    let mut layer: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    while let Some(parent) = layer {
+        if let Some(cause) = parent.source() {
+            assert!(
+                !parent.to_string().contains(&cause.to_string()),
+                "{parent} repeats {cause}"
+            );
+        }
+        layer = parent.source();
+    }
+}
+
+#[test]
 fn rejects_a_slate_id_already_received() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(

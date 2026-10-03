@@ -174,7 +174,6 @@ pub enum DecodeError {
     #[error("field {field} {problem}")]
     Field {
         field: &'static str,
-        #[source]
         problem: FieldProblem,
     },
     #[error("wire slate is inconsistent")]
