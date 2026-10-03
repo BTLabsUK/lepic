@@ -57,7 +57,13 @@ fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
                 .epicbox_drain(&world.receiver_epicbox)
                 .await
                 .unwrap();
-            until(|| world.sender_state() == TxState::Posted).await;
+            // The relay drops S2 only once the listen has recorded it, which happens after
+            // the transaction is posted; stopping earlier would leave S2 held.
+            until(|| {
+                world.sender_state() == TxState::Posted
+                    && world.relay.pending(&world.sender_address) == 0
+            })
+            .await;
             handle.stop();
             received
         };
