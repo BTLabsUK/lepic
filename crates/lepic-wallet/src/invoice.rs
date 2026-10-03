@@ -17,12 +17,11 @@ mod build;
 use jiff::Timestamp;
 use lepic_crypto::CryptoError;
 use lepic_keychain::{IdentifierError, Keychain, KeychainError, ProofError, SwitchCommitment};
-use lepic_node::{NodeApi, NodeError, NodeRejection, Propagation, RejectionKind};
+use lepic_node::{NodeApi, NodeError, Propagation};
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
 use lepic_primitives::committed::KernelSumError;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
-use lepic_primitives::tx::Transaction;
 use lepic_primitives::validate::ValidationError;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
@@ -52,7 +51,7 @@ pub use build::{
 
 use crate::account::{AccountError, next_output_key};
 use crate::error::WalletError;
-use crate::finalize::{Finalized, FinalizedSlate};
+use crate::finalize::{Finalized, FinalizedSlate, PushFailure};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
 use crate::send::{ChangeOutput, Delivery, SendRequest, block_header_version};
@@ -644,23 +643,6 @@ fn finalize_stored(
     })
 }
 
-/// What the node's pool API answers when its pool already holds the transaction, as
-/// `crate::finalize` recognises it for the standard flow.
-const POOL_HOLDS_TRANSACTION: &str = "Failed to update pool: Duplicate tx";
-
-fn pool_holds_transaction(error: &NodeError) -> bool {
-    matches!(
-        error,
-        NodeError::Rejected {
-            rejection: NodeRejection {
-                kind: RejectionKind::Internal,
-                message: Some(message),
-            },
-            ..
-        } if message == POOL_HOLDS_TRANSACTION
-    )
-}
-
 impl<N, S, V> Wallet<N, S, V>
 where
     N: NodeApi + 'static,
@@ -851,8 +833,9 @@ where
     /// and posts only if the first post did not succeed, which is how a failed post is retried;
     /// another I2 under the same slate id fails with [`InvoiceError::AlreadyFinalized`]. Fails
     /// with [`InvoiceError::NotPosted`] when the invoice was finalized and stored but the node
-    /// refused or could not be reached. A node whose pool already holds the transaction counts
-    /// as having accepted it. Every other failure stores nothing.
+    /// refused or could not be reached and does not hold its kernel. A node whose pool already
+    /// holds the transaction, or whose chain holds its kernel, counts as having accepted it.
+    /// Every other failure stores nothing.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
         transport = %transport,
@@ -908,7 +891,7 @@ where
             None => debug!("slate already finalized"),
         }
         if stored.state != TxState::Posted {
-            self.push_invoice(stored.tx_id, &stored.finalized.transaction, propagation)
+            self.push_invoice(stored.tx_id, &stored.finalized, propagation)
                 .await?;
         }
         Ok(Finalized {
@@ -918,41 +901,17 @@ where
         })
     }
 
-    /// Hands the transaction to the node, then records the transaction as posted.
+    /// [`Wallet::push_final`], with its failures as [`InvoiceError`].
     async fn push_invoice(
         &self,
         tx_id: TxId,
-        transaction: &Transaction,
+        finalized: &FinalizedSlate,
         propagation: Propagation,
     ) -> Result<(), InvoiceError> {
-        match self
-            .ports()
-            .node
-            .push_transaction(transaction, propagation)
-            .await
-        {
-            Ok(()) => {}
-            Err(error) if pool_holds_transaction(&error) => {
-                debug!("transaction already in the node pool");
-            }
-            Err(source) => return Err(InvoiceError::NotPosted { tx_id, source }),
+        match self.push_final(finalized, tx_id, propagation).await {
+            Ok(_) => Ok(()),
+            Err(PushFailure::NotPosted(source)) => Err(InvoiceError::NotPosted { tx_id, source }),
+            Err(PushFailure::Wallet(error)) => Err(InvoiceError::Wallet(error)),
         }
-        let session = self.session()?;
-        let change = self
-            .blocking(move |ports, _| {
-                let now = ports.clock.now();
-                session
-                    .store
-                    .write(|repos| apply_transition(repos, tx_id, TxState::Posted, now))
-            })
-            .await?;
-        match change {
-            Some(change) => {
-                info!("transaction posted");
-                self.emit(change.into());
-            }
-            None => debug!("transaction posted again"),
-        }
-        Ok(())
     }
 }

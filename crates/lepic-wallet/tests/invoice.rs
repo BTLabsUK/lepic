@@ -931,3 +931,37 @@ fn a_finalized_invoice_the_node_refused_is_posted_by_post() {
     assert_eq!(flow.state(), TxState::Posted);
     assert_eq!(flow.node.pushed_transactions().len(), 1);
 }
+
+#[test]
+fn a_refused_push_of_an_invoice_whose_kernel_is_on_chain_is_posted() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    flow.issuer.finalize(&flow.i2).unwrap_err();
+    let stored = flow
+        .issuer
+        .read(|repos| repos.slate(flow.slate_id, SlateStage::Invoice3))
+        .unwrap();
+    let i3 = lepic_slate::codec::Codec::decode(
+        &V3JsonCodec::new(Network::Floonet.params().default_base_fee()),
+        &WireSlate::binary(MediaType::JSON, stored.bytes),
+    )
+    .unwrap();
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 1);
+        chain.kernels.push(LocatedKernel {
+            kernel: i3.kernel().unwrap(),
+            height: Height::new(TIP + 1),
+            mmr_index: 1,
+        });
+    });
+    flow.node.fail_next(
+        "push_transaction",
+        MockFailure::Rejected(lepic_node::RejectionKind::Internal),
+    );
+
+    flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+    assert!(flow.node.pushed_transactions().is_empty());
+}

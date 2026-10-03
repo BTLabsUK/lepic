@@ -593,6 +593,13 @@ fn finalize_stored(
     })
 }
 
+/// Why a push did not record the transaction as posted.
+pub(crate) enum PushFailure {
+    /// The node refused or could not be reached, and does not hold the kernel.
+    NotPosted(NodeError),
+    Wallet(WalletError),
+}
+
 /// What the node's pool API answers, as `Error::Internal("Failed to update pool: {PoolError}")`,
 /// when its pool already holds the transaction: a repeated push of a transaction it accepted
 /// before, for example after the first answer was lost.
@@ -755,13 +762,30 @@ where
         self.push(tx_id, &finalized, propagation).await
     }
 
-    /// Hands the transaction to the node, then records the transaction as posted.
+    /// [`Self::push_final`], with its failures as [`FinalizeError`].
     async fn push(
         &self,
         tx_id: TxId,
         finalized: &FinalizedSlate,
         propagation: Propagation,
     ) -> Result<Posted, FinalizeError> {
+        self.push_final(finalized, tx_id, propagation)
+            .await
+            .map_err(|failure| match failure {
+                PushFailure::NotPosted(source) => FinalizeError::NotPosted { tx_id, source },
+                PushFailure::Wallet(error) => FinalizeError::Wallet(error),
+            })
+    }
+
+    /// Hands the transaction to the node, then records the transaction as posted. A node whose
+    /// pool already holds it counts as having accepted it; when the node refuses the push, the
+    /// kernel is looked up, and one already on chain counts as posted too.
+    pub(crate) async fn push_final(
+        &self,
+        finalized: &FinalizedSlate,
+        tx_id: TxId,
+        propagation: Propagation,
+    ) -> Result<Posted, PushFailure> {
         let posted = match self
             .ports()
             .node
@@ -778,10 +802,10 @@ where
                     debug!(height = %height, "kernel found on chain");
                     Posted::AlreadyOnChain { height }
                 }
-                None => return Err(FinalizeError::NotPosted { tx_id, source }),
+                None => return Err(PushFailure::NotPosted(source)),
             },
         };
-        let session = self.session()?;
+        let session = self.session().map_err(PushFailure::Wallet)?;
         let change = self
             .blocking(move |ports, _| {
                 let now = ports.clock.now();
@@ -789,7 +813,8 @@ where
                     .store
                     .write(|repos| apply_transition(repos, tx_id, TxState::Posted, now))
             })
-            .await?;
+            .await
+            .map_err(PushFailure::Wallet)?;
         match change {
             Some(change) => {
                 info!("transaction posted");
