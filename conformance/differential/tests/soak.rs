@@ -230,13 +230,12 @@ fn a_finalize_stopped_at_any_persistence_point_completes_once() {
 }
 
 /// A receive stopped before its write receives again. One stopped after storing its reply
-/// cannot write the reply file again, because the engine refuses a slate it received before,
-/// as `epic-wallet` does; the receiver cancels and the sender starts over, and that payment
-/// completes once.
+/// receives the same file again and gets the stored reply back, where `epic-wallet` refuses a
+/// slate it received before, so the payment completes once either way.
 #[test]
 fn a_receive_stopped_at_any_persistence_point_completes_once() {
     let recoveries = every_persistence_point(Who::Peer, Step::Receive);
-    assert_eq!(recoveries, [Recovery::Completed, Recovery::Refused]);
+    assert_eq!(recoveries, [Recovery::Completed, Recovery::Completed]);
 }
 
 #[test]

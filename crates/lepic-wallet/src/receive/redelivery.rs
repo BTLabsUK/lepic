@@ -1,6 +1,7 @@
-//! A redelivered S1: the relay hands a message out again when the app was suspended after storing
-//! S2 and before acknowledging. The receiver answers it with the S2 it stored, never a new one,
-//! so each inbound message stays idempotent on `(slate_id, stage)`.
+//! A repeated S1: the relay hands a message out again when the app was suspended after storing
+//! S2 and before acknowledging, and a user receives the same file again when the reply file was
+//! lost. The receiver answers it with the S2 it stored, never a new one, so each inbound slate
+//! stays idempotent on `(slate_id, stage)`.
 
 use lepic_primitives::params::Network;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -8,15 +9,16 @@ use lepic_slate::error::DecodeError;
 use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
-use lepic_store::{Repositories, SlateStage, StoreError, TxDirection, TxId};
+use lepic_store::{Repositories, SlateStage, StoreError, TxDirection, TxId, TxState};
 use uuid::Uuid;
 
-use super::{ReceiveError, legacy_codecs};
+use super::{ReceiveError, Received, legacy_codecs};
 
-/// The S2 this wallet stored when it received a slate.
+/// The S2 this wallet stored when it received a slate, and the state its transaction is in now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredReply {
     pub(crate) tx_id: TxId,
+    pub(crate) state: TxState,
     pub(crate) codec: String,
     pub(crate) bytes: Vec<u8>,
 }
@@ -35,6 +37,7 @@ pub(crate) fn stored_reply(
         .slate(uuid, SlateStage::Standard2)?
         .map(|slate| StoredReply {
             tx_id: transaction.id,
+            state: transaction.entry.state,
             codec: slate.codec,
             bytes: slate.bytes,
         }))
@@ -51,6 +54,45 @@ pub(crate) fn decode_reply(network: Network, reply: &StoredReply) -> Result<Slat
     codec
         .decode(&WireSlate::binary(MediaType::JSON, reply.bytes.clone()))
         .map_err(ReceiveError::Decode)
+}
+
+/// The stored S2 again, when this wallet received `proposal` before, or `None` when it has not
+/// received its slate id. A different S1 under that id is refused, and so is one whose
+/// transaction was cancelled or expired: cancelling released the output the reply pays to.
+pub(crate) fn answer_again(
+    repos: &dyn Repositories,
+    network: Network,
+    proposal: &Slate,
+) -> Result<Option<Received>, ReceiveError> {
+    let slate_id = proposal.id();
+    let uuid = Uuid::from_bytes(*slate_id.as_bytes());
+    let Some(transaction) = repos.transaction_by_slate(uuid, TxDirection::Incoming)? else {
+        return Ok(None);
+    };
+    let refused = ReceiveError::AlreadyReceived {
+        slate_id,
+        tx_id: transaction.id,
+    };
+    let Some(stored) = stored_reply(repos, slate_id)? else {
+        return Err(refused);
+    };
+    if matches!(stored.state, TxState::Cancelled | TxState::Expired) {
+        return Err(refused);
+    }
+    let slate = decode_reply(network, &stored)?;
+    if !answers(&slate, proposal) {
+        return Err(refused);
+    }
+    let reply = match String::from_utf8(stored.bytes) {
+        Ok(text) => WireSlate::text(MediaType::JSON, text),
+        Err(error) => WireSlate::binary(MediaType::JSON, error.into_bytes()),
+    };
+    Ok(Some(Received {
+        tx_id: stored.tx_id,
+        slate,
+        reply,
+        repeated: true,
+    }))
 }
 
 /// Whether `reply` is the S2 this wallet built from `proposal`: everything the sender proposed is
@@ -208,6 +250,7 @@ mod tests {
     fn a_reply_under_an_unknown_codec_is_a_typed_error() {
         let reply = StoredReply {
             tx_id: TxId(1),
+            state: TxState::Received,
             codec: "unknown".to_owned(),
             bytes: Vec::new(),
         };

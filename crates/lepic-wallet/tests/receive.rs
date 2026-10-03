@@ -86,9 +86,9 @@ fn a_received_slate_announces_the_transaction_it_created() {
     let mut events = receiver.wallet.subscribe();
 
     let received = receiver.receive(transport, &json(&s1), None).unwrap();
-    let again = receiver.receive(transport, &json(&s1), None);
+    let again = receiver.receive(transport, &json(&s1), None).unwrap();
 
-    assert!(again.is_err());
+    assert!(again.repeated);
     let announced: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok()).collect();
     assert_eq!(
         announced,
@@ -131,15 +131,53 @@ fn a_slate_missing_a_field_states_the_cause_once() {
 }
 
 #[test]
-fn rejects_a_slate_id_already_received() {
+fn a_repeated_slate_is_answered_with_the_stored_reply_and_stores_nothing() {
+    // Over either method: the slate id, not the transport, identifies the payment.
+    for case in ["send_file_plain", "send_epicbox_plain"] {
+        let (s1, transport) = delivered_s1(case);
+        let receiver = Receiver::new(
+            &receiver_mnemonic(&vector(&format!("{case}_s2_v3"))),
+            slate_height(&s1),
+        );
+        let first = receiver.receive(transport, &json(&s1), None).unwrap();
+        let next_child = receiver.next_child();
+        let node_calls = receiver.node.calls();
+
+        let again = receiver
+            .receive(transport, &json(&s1), Some("a different message"))
+            .unwrap();
+
+        assert!(!first.repeated, "{case}");
+        assert!(again.repeated, "{case}");
+        assert_eq!(again.tx_id, first.tx_id, "{case}");
+        assert_eq!(again.slate.id(), first.slate.id(), "{case}");
+        assert_eq!(again.reply.as_bytes(), first.reply.as_bytes(), "{case}");
+        assert_eq!(receiver.transaction_count(), 1, "{case}");
+        assert_eq!(receiver.next_child(), next_child, "{case}");
+        assert_eq!(receiver.node.calls(), node_calls, "{case}");
+    }
+}
+
+#[test]
+fn a_different_slate_under_a_received_id_is_refused() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
         &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
         slate_height(&s1),
     );
     let first = receiver.receive(transport, &json(&s1), None).unwrap();
+    assert!(
+        receiver
+            .receive(transport, &json(&s1), None)
+            .unwrap()
+            .repeated
+    );
+    let mut changed: Value = serde_json::from_str(&json(&s1)).unwrap();
+    changed["amount"] = Value::String("1".to_owned());
 
-    let error = receiver.receive(transport, &json(&s1), None).unwrap_err();
+    let error = receiver
+        .receive(transport, &changed.to_string(), None)
+        .unwrap_err();
 
     assert!(
         matches!(
@@ -150,20 +188,31 @@ fn rejects_a_slate_id_already_received() {
         "{error:?}"
     );
     assert_eq!(receiver.transaction_count(), 1);
-    // Also over another method: the slate id, not the transport, identifies the payment.
-    let epicbox_s1 = vector("send_epicbox_plain_s1_epicbox");
-    let epicbox_receiver = Receiver::new(
-        &receiver_mnemonic(&vector("send_epicbox_plain_s2_v3")),
-        slate_height(&epicbox_s1),
+}
+
+#[test]
+fn a_cancelled_receive_is_not_answered_again() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let receiver = Receiver::new(
+        &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+        slate_height(&s1),
     );
-    epicbox_receiver
-        .receive(EPICBOX, &json(&epicbox_s1), None)
-        .unwrap();
-    let error = epicbox_receiver
-        .receive(EPICBOX, &json(&epicbox_s1), None)
-        .unwrap_err();
+    let first = receiver.receive(transport, &json(&s1), None).unwrap();
     assert!(
-        matches!(error, ReceiveError::AlreadyReceived { .. }),
+        receiver
+            .receive(transport, &json(&s1), None)
+            .unwrap()
+            .repeated
+    );
+    receiver.cancel(first.tx_id);
+
+    let error = receiver.receive(transport, &json(&s1), None).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            ReceiveError::AlreadyReceived { tx_id, .. } if tx_id == first.tx_id
+        ),
         "{error:?}"
     );
 }

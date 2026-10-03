@@ -26,7 +26,7 @@ use lepic_epicbox::{
 };
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::params::Network;
-use lepic_slate::codec::{MediaType, WireSlate};
+use lepic_slate::codec::WireSlate;
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -44,7 +44,6 @@ use crate::error::WalletError;
 use crate::event::{Event, TransportState, TransportStatus};
 use crate::finalize::FinalizeError;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::receive::redelivery::{answers, decode_reply, stored_reply};
 use crate::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
 use crate::refresh::last_confirmed;
 use crate::wallet::Wallet;
@@ -786,34 +785,32 @@ where
             .decode(&codecs, envelope.wire())
             .map_err(Refusal::Decode)?;
         match slate.stage() {
-            Stage::S1 => self.answer(envelope, &slate, reply_to).await,
+            Stage::S1 => self.answer(envelope, reply_to).await,
             Stage::S2 => self.complete(envelope, &slate).await,
             stage => Err(Refusal::UnsupportedStage { stage }.into()),
         }
     }
 
-    /// Receives an S1 and replies with S2, or replies again with the S2 stored for it.
+    /// Receives an S1 and replies with S2, or replies again with the S2 stored for it. A
+    /// different S1 under a slate id received before is refused.
     async fn answer(
         &self,
         envelope: &Envelope,
-        proposal: &Slate,
         reply_to: &Destination,
     ) -> Result<Handled, Settlement> {
-        if let Some(handled) = self.answer_again(proposal, reply_to).await? {
-            return Ok(handled);
-        }
         match self
             .receive(TRANSPORT_ID, envelope.wire(), ReceiveRequest::default())
             .await
         {
             Ok(received) => {
                 self.reply(reply_to, &received.reply).await?;
-                Ok(Handled::Received)
+                Ok(if received.repeated {
+                    Handled::Repeated
+                } else {
+                    Handled::Received
+                })
             }
-            Err(ReceiveError::AlreadyReceived { .. }) => self
-                .answer_again(proposal, reply_to)
-                .await?
-                .ok_or_else(|| Refusal::SlateIdReused.into()),
+            Err(ReceiveError::AlreadyReceived { .. }) => Err(Refusal::SlateIdReused.into()),
             Err(error @ ReceiveError::Expired { cutoff, .. }) => {
                 if self.confirmed_at(cutoff).await? {
                     Err(Refusal::Receive(error).into())
@@ -824,32 +821,6 @@ where
             Err(error) if receive_is_permanent(&error) => Err(Refusal::Receive(error).into()),
             Err(error) => Err(Hold::Receive(error).into()),
         }
-    }
-
-    /// Sends the S2 stored for `proposal` again, when this wallet received it before. A
-    /// different S1 under a slate id received before is refused.
-    async fn answer_again(
-        &self,
-        proposal: &Slate,
-        reply_to: &Destination,
-    ) -> Result<Option<Handled>, Settlement> {
-        let session = self.session().map_err(Hold::from)?;
-        let slate_id = proposal.id();
-        let stored = self
-            .blocking(move |_, _| Ok(session.store.read(|repos| stored_reply(repos, slate_id))?))
-            .await
-            .map_err(Hold::from)?;
-        let Some(stored) = stored else {
-            return Ok(None);
-        };
-        let reply = decode_reply(self.config().network, &stored).map_err(Hold::Receive)?;
-        if !answers(&reply, proposal) {
-            return Err(Refusal::SlateIdReused.into());
-        }
-        debug!(tx_id = %stored.tx_id, "slate answered again");
-        self.reply(reply_to, &WireSlate::binary(MediaType::JSON, stored.bytes))
-            .await?;
-        Ok(Some(Handled::Repeated))
     }
 
     async fn reply(&self, to: &Destination, wire: &WireSlate) -> Result<(), Hold> {

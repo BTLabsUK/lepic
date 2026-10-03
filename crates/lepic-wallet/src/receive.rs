@@ -71,6 +71,9 @@ pub struct Received {
     pub slate: Slate,
     /// S2 encoded by the transport's reply rule, the bytes that were stored.
     pub reply: WireSlate,
+    /// The slate was received before and `reply` is the S2 stored then. Nothing was stored,
+    /// no key was reserved and no event was emitted for it.
+    pub repeated: bool,
 }
 
 /// Why a slate was not received. Nothing is stored for any of them.
@@ -87,8 +90,8 @@ pub enum ReceiveError {
     WrongStage { stage: Stage },
     #[error("slate pays an amount of zero")]
     ZeroAmount,
-    /// The S2 stored for `tx_id` answers a redelivery of the same S1. A different slate that
-    /// reuses the id is refused the same way.
+    /// A different S1 reuses the id of a slate received as `tx_id`, or that transaction was
+    /// cancelled or expired. The same S1 again is answered with the stored S2 instead.
     #[error("slate {slate_id} was already received as transaction {tx_id}")]
     AlreadyReceived { slate_id: SlateId, tx_id: TxId },
     #[error("slate expired at height {cutoff}, the chain tip is at {tip}")]
@@ -145,11 +148,16 @@ where
     /// context is kept: the receiver's signing keys are dropped once S2 is signed. The caller
     /// sends the reply over the same transport.
     ///
+    /// The same S1 received again, on any transport, returns the S2 stored the first time with
+    /// [`Received::repeated`] set, without asking the node, storing anything or emitting an
+    /// event, so a reply lost before it reached the sender can be sent again.
+    ///
     /// Emits [`Event::Received`] once the transaction is stored.
     ///
     /// Asks the node for its tip. Fails with [`ReceiveError::Wallet`] carrying
     /// [`WalletError::Locked`] when the wallet is locked, with [`ReceiveError::AlreadyReceived`]
-    /// for a slate id this wallet has received before, with [`ReceiveError::Expired`] when the
+    /// for another S1 under a slate id this wallet has received before or for a slate whose
+    /// transaction was cancelled or expired, with [`ReceiveError::Expired`] when the
     /// tip has reached the slate's TTL cutoff, and with a typed rejection for any slate that is
     /// malformed, not an S1, pays nothing, or whose fee or messages do not check. Fails with
     /// [`WalletError::RestoreScanRequired`] inside [`ReceiveError::Wallet`] on a database rebuilt
@@ -179,6 +187,10 @@ where
         span.record("slate_id", tracing::field::display(slate.id()));
         span.record("stage", slate.stage().as_str());
         check_proposal(&slate)?;
+        if let Some(received) = self.received_before(&slate).await? {
+            info!(tx_id = %received.tx_id, "slate answered again");
+            return Ok(received);
+        }
         let tip = self
             .ports()
             .node
@@ -191,7 +203,7 @@ where
         let context = self.encode_context(&slate).await?;
         debug!(height = tip.value(), "slate checked");
 
-        let (received, account) = self
+        let answer = self
             .blocking(move |ports, _| {
                 Ok(store_reply(
                     ports,
@@ -206,6 +218,13 @@ where
                 ))
             })
             .await??;
+        let (received, account) = match answer {
+            Answer::Stored { received, account } => (received, account),
+            Answer::Repeated(received) => {
+                info!(tx_id = %received.tx_id, "slate answered again");
+                return Ok(received);
+            }
+        };
         info!(tx_id = %received.tx_id, "slate received");
         self.emit(Event::Received(ReceivedTransaction {
             tx_id: received.tx_id,
@@ -214,6 +233,21 @@ where
             transport,
         }));
         Ok(received)
+    }
+
+    /// The S2 stored for `proposal` when this wallet received it before, read before the node
+    /// is asked anything, so a repeat is answered while the node is unreachable or past the
+    /// slate's TTL.
+    async fn received_before(&self, proposal: &Slate) -> Result<Option<Received>, ReceiveError> {
+        let session = self.session()?;
+        let network = self.config().network;
+        let proposal = proposal.clone();
+        self.blocking(move |_, _| {
+            Ok(session
+                .store
+                .read(|repos| redelivery::answer_again(repos, network, &proposal)))
+        })
+        .await?
     }
 
     /// The header facts for a reply: those the slate arrived with, or the node's when it
@@ -244,15 +278,25 @@ struct Proposal {
     context: EncodeContext,
 }
 
+/// What storing a reply ended with: a new transaction and the account the funds go to, or the
+/// S2 stored for the same S1 by a receive that finished first.
+enum Answer {
+    Stored {
+        received: Received,
+        account: AccountIndex,
+    },
+    Repeated(Received),
+}
+
 /// Builds S2, encodes it by the transport's reply rule and stores everything in one store
-/// transaction, so the output key it reserves is used exactly once. Returns the account the
-/// funds went to alongside.
+/// transaction, so the output key it reserves is used exactly once. The check for a slate id
+/// received before runs inside that transaction, so two receives of one S1 store it once.
 fn store_reply<N, S: StoreOpener, V>(
     ports: &Ports<N, S, V>,
     session: &Session<S::Store>,
     proposal: &Proposal,
     request: &ReceiveRequest,
-) -> Result<(Received, AccountIndex), ReceiveError> {
+) -> Result<Answer, ReceiveError> {
     let transport = proposal.transport;
     let policy = ports
         .transports
@@ -263,6 +307,11 @@ fn store_reply<N, S: StoreOpener, V>(
     let now = ports.clock.now();
     let mut rng = ports.rng.lock();
     session.store.write(|repos| {
+        if let Some(received) =
+            redelivery::answer_again(&*repos, proposal.network, &proposal.slate)?
+        {
+            return Ok(Answer::Repeated(received));
+        }
         let response = respond(repos, session, proposal, request, &mut **rng)?;
         let encoding = policy.for_reply(&response.slate, &proposal.context);
         let reply = encode_with(&codecs, encoding, &response.slate, &proposal.context)
@@ -275,14 +324,15 @@ fn store_reply<N, S: StoreOpener, V>(
             transport,
             now,
         )?;
-        Ok((
-            Received {
+        Ok(Answer::Stored {
+            received: Received {
                 tx_id,
                 slate: response.slate,
                 reply,
+                repeated: false,
             },
-            response.account,
-        ))
+            account: response.account,
+        })
     })
 }
 
@@ -352,7 +402,7 @@ struct Response {
     output: Output,
 }
 
-/// Refuses a slate id received before, reserves the account's next output key and builds S2.
+/// Reserves the account's next output key and builds S2 for a slate id not received before.
 fn respond<D>(
     repos: &mut dyn Repositories,
     session: &Session<D>,
@@ -361,16 +411,6 @@ fn respond<D>(
     rng: &mut (impl CryptoRng + ?Sized),
 ) -> Result<Response, ReceiveError> {
     let slate = &proposal.slate;
-    let slate_id = slate.id();
-    if let Some(stored) = repos.transaction_by_slate(
-        Uuid::from_bytes(*slate_id.as_bytes()),
-        TxDirection::Incoming,
-    )? {
-        return Err(ReceiveError::AlreadyReceived {
-            slate_id,
-            tx_id: stored.id,
-        });
-    }
     let label = request.account.as_deref().unwrap_or(DEFAULT_ACCOUNT_LABEL);
     let account = account::account_by_label(repos, label)?;
     let key_id = account::next_output_key(repos, account.index)?;

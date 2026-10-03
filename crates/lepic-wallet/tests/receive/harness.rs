@@ -188,6 +188,7 @@ pub type ReceiverWallet = Wallet<NodeClient<MockNode>, MemoryStores, TestVault>;
 pub struct Receiver {
     runtime: Runtime,
     stores: MemoryStores,
+    pub node: MockNode,
     pub seed: Seed,
     pub wallet: ReceiverWallet,
 }
@@ -206,6 +207,7 @@ impl Receiver {
             .build()
             .unwrap();
         let stores = MemoryStores::default();
+        let node = node_at(tip);
         let mut transports = TransportRegistry::new();
         for (id, policy) in [
             (FILE, Arc::new(FilePolicy) as Arc<dyn FormatPolicy>),
@@ -220,7 +222,7 @@ impl Receiver {
             transports.register(Box::new(own)).unwrap();
         }
         let ports = Ports {
-            node: node_at(tip).client(),
+            node: node.client(),
             stores: stores.clone(),
             secrets: TestVault::default(),
             transports,
@@ -242,6 +244,7 @@ impl Receiver {
         Self {
             runtime,
             stores,
+            node,
             seed: Seed::from_mnemonic(mnemonic).unwrap(),
             wallet,
         }
@@ -288,6 +291,17 @@ impl Receiver {
                 repos.put_account(&account)
             })
             .unwrap();
+    }
+
+    pub fn cancel(&self, tx_id: lepic_store::TxId) {
+        self.runtime.block_on(self.wallet.cancel(tx_id)).unwrap();
+    }
+
+    /// The default account's key counter: the child index the next output key takes.
+    pub fn next_child(&self) -> u32 {
+        self.store()
+            .read(|repos| Ok::<_, StoreError>(repos.account(AccountIndex(0))?.unwrap().next_child))
+            .unwrap()
     }
 
     pub fn transaction_count(&self) -> usize {
