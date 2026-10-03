@@ -293,6 +293,35 @@ impl Receiver {
             .unwrap();
     }
 
+    /// Receives the same slate twice with both receives in flight at once.
+    pub fn receive_twice_at_once(
+        &self,
+        transport: TransportId,
+        json: &str,
+    ) -> (
+        Result<lepic_wallet::Received, ReceiveError>,
+        Result<lepic_wallet::Received, ReceiveError>,
+    ) {
+        let (a, b) = (wire(json), wire(json));
+        self.runtime.block_on(async {
+            tokio::join!(
+                self.wallet
+                    .receive(transport, &a, ReceiveRequest::default()),
+                self.wallet
+                    .receive(transport, &b, ReceiveRequest::default())
+            )
+        })
+    }
+
+    /// Moves the node's tip to `height` and refreshes, which expires what the tip has passed.
+    pub fn refresh_at(&self, height: u64) {
+        assert!(
+            self.node
+                .update_chain(|chain| chain.tip.height = Height::new(height))
+        );
+        self.runtime.block_on(self.wallet.refresh()).unwrap();
+    }
+
     pub fn cancel(&self, tx_id: lepic_store::TxId) {
         self.runtime.block_on(self.wallet.cancel(tx_id)).unwrap();
     }

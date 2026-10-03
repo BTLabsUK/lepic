@@ -191,6 +191,54 @@ fn a_different_slate_under_a_received_id_is_refused() {
 }
 
 #[test]
+fn two_receives_of_one_slate_at_once_store_it_once() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let receiver = Receiver::new(
+        &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+        slate_height(&s1),
+    );
+
+    let (a, b) = receiver.receive_twice_at_once(transport, &json(&s1));
+
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_eq!(a.tx_id, b.tx_id);
+    assert_ne!(a.repeated, b.repeated);
+    assert_eq!(a.reply.as_bytes(), b.reply.as_bytes());
+    assert_eq!(receiver.transaction_count(), 1);
+}
+
+#[test]
+fn an_expired_receive_is_not_answered_again() {
+    let case = "send_file_ttl";
+    let (s1, transport) = delivered_s1(case);
+    let slate: Value = serde_json::from_str(&json(&s1)).unwrap();
+    let cutoff: u64 = text(&slate["ttl_cutoff_height"]).parse().unwrap();
+    let receiver = Receiver::new(
+        &receiver_mnemonic(&vector(&format!("{case}_s2_v3"))),
+        cutoff - 1,
+    );
+    let first = receiver.receive(transport, &json(&s1), None).unwrap();
+    receiver.refresh_at(cutoff);
+    let state = receiver
+        .store()
+        .read(|repos| Ok::<_, StoreError>(repos.transaction(first.tx_id)?.unwrap().state))
+        .unwrap();
+    assert_eq!(state, TxState::Expired);
+    let next_child = receiver.next_child();
+
+    let error = receiver.receive(transport, &json(&s1), None).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            ReceiveError::AlreadyReceived { tx_id, .. } if tx_id == first.tx_id
+        ),
+        "{error:?}"
+    );
+    assert_eq!(receiver.next_child(), next_child);
+}
+
+#[test]
 fn a_cancelled_receive_is_not_answered_again() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(

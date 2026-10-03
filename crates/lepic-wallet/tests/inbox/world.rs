@@ -237,15 +237,21 @@ impl World {
         (wallet, epicbox)
     }
 
-    /// Stores a message for the receiver as if `from` had posted it, signed by `signer`.
-    pub fn post_to_receiver(&self, from: u8, signer: u8, plaintext: &str) -> String {
-        let key = |byte: u8| SecretKey::from_array([byte; 32]).unwrap();
-        let from = EpicboxAddress::new(
-            PublicKey::from_secret_key(&key(from)).unwrap(),
+    /// The address of the key whose bytes all equal `byte`, as [`Self::post_to_receiver`] posts
+    /// from it.
+    pub fn address_of(byte: u8) -> EpicboxAddress {
+        EpicboxAddress::new(
+            PublicKey::from_secret_key(&SecretKey::from_array([byte; 32]).unwrap()).unwrap(),
             RelayNetwork::Floonet,
             Domain::parse("relay.test").unwrap(),
             Some(80),
-        );
+        )
+    }
+
+    /// Stores a message for the receiver as if `from` had posted it, signed by `signer`.
+    pub fn post_to_receiver(&self, from: u8, signer: u8, plaintext: &str) -> String {
+        let key = |byte: u8| SecretKey::from_array([byte; 32]).unwrap();
+        let from = Self::address_of(from);
         let message = SignedMessage::seal(
             plaintext,
             &self.receiver_address,

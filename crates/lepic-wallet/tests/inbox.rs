@@ -257,6 +257,92 @@ fn messages_that_cannot_be_used_are_recorded_and_acknowledged_and_the_next_one_i
     assert_eq!(world.relay.pending(&world.sender_address), 1);
 }
 
+/// The S1 the sender posted, read without acknowledging it, so the relay delivers it again.
+fn peek_s1(world: &World) -> String {
+    world.block_on(async {
+        let client = world.receiver_epicbox.client().unwrap();
+        let subscription = client.drain().unwrap();
+        let envelope = within(subscription.next_envelope()).await.unwrap().unwrap();
+        envelope.wire().as_text().unwrap().to_owned()
+    })
+}
+
+/// Another S1 under the slate id of one the receiver answered is rejected for good: no S2 goes
+/// to anyone and nothing is stored.
+#[test]
+fn a_changed_s1_under_a_received_slate_id_is_rejected() {
+    let world = World::new();
+    world.block_on(world.send());
+    let mut changed: serde_json::Value = serde_json::from_str(&peek_s1(&world)).unwrap();
+    changed["amount"] = match &changed["amount"] {
+        serde_json::Value::String(_) => serde_json::Value::String("1".to_owned()),
+        _ => serde_json::Value::from(1),
+    };
+    let first = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+    assert_eq!(first.received, 1, "{first:?}");
+    let msg_id = world.post_to_receiver(7, 7, &changed.to_string());
+
+    let summary = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(
+        world.receiver.inbox(&msg_id).unwrap().status,
+        InboxStatus::Rejected
+    );
+    assert_eq!(world.relay.pending(&World::address_of(7)), 0);
+    assert_eq!(world.relay.pending(&world.sender_address), 1);
+    assert_eq!(world.receiver.transactions(), 1);
+}
+
+/// The receiver stored S2 and cancelled before replying; the redelivered S1 is rejected, not
+/// answered with the S2 whose output the cancel released.
+#[test]
+fn an_s1_redelivered_after_its_receive_was_cancelled_is_rejected() {
+    let world = World::new();
+    let (tx_id, msg_id) = world.block_on(async {
+        world.send().await;
+        let client = world.receiver_epicbox.client().unwrap();
+        let subscription = client.drain().unwrap();
+        let envelope = within(subscription.next_envelope()).await.unwrap().unwrap();
+        let received = world
+            .receiver_wallet
+            .receive(TRANSPORT_ID, envelope.wire(), ReceiveRequest::default())
+            .await
+            .unwrap();
+        (received.tx_id, envelope.ack_token().as_str().to_owned())
+    });
+    world.block_on(world.receiver_wallet.cancel(tx_id)).unwrap();
+
+    let summary = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(
+        world.receiver.inbox(&msg_id).unwrap().status,
+        InboxStatus::Rejected
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(world.relay.pending(&world.sender_address), 0);
+    assert_eq!(world.receiver.transactions(), 1);
+}
+
 #[test]
 fn an_s1_expired_by_the_tip_alone_stays_on_the_relay_until_a_refresh_confirms_the_height() {
     let world = World::new();
