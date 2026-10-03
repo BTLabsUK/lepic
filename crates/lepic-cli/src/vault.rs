@@ -47,6 +47,13 @@ impl VaultStorage for FileVaultStorage {
         let mut temporary = self.path.clone().into_os_string();
         temporary.push(TEMPORARY_SUFFIX);
         let temporary = PathBuf::from(temporary);
+        // A leftover from an interrupted write, or a link planted there, is removed rather than
+        // reused, so the new file is always this process's own, owner-only file.
+        if let Err(error) = fs::remove_file(&temporary)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            return Err(Box::new(error));
+        }
         let mut file = owner_only().open(&temporary)?;
         file.write_all(contents)?;
         file.sync_all()?;
@@ -61,14 +68,14 @@ impl VaultStorage for FileVaultStorage {
 fn owner_only() -> OpenOptions {
     use std::os::unix::fs::OpenOptionsExt as _;
     let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true).mode(0o600);
+    options.write(true).create_new(true).mode(0o600);
     options
 }
 
 #[cfg(not(unix))]
 fn owner_only() -> OpenOptions {
     let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     options
 }
 
@@ -191,6 +198,40 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_temporary_file_does_not_pass_its_mode_to_the_vault() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("wallet.vault.tmp");
+        fs::write(&stale, b"stale").unwrap();
+        fs::set_permissions(&stale, fs::Permissions::from_mode(0o644)).unwrap();
+        FileVault::new(dir.path(), cheap())
+            .create(&Password::new("pw".to_owned()))
+            .unwrap();
+        let mode = fs::metadata(dir.path().join(VAULT_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_temporary_path_is_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"untouched").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.path().join("wallet.vault.tmp")).unwrap();
+        let vault = FileVault::new(dir.path(), cheap());
+        let password = Password::new("pw".to_owned());
+        vault.create(&password).unwrap();
+        assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+        let stored = fs::symlink_metadata(dir.path().join(VAULT_FILE)).unwrap();
+        assert!(stored.file_type().is_file());
+        vault.unlock(&password).unwrap();
     }
 
     #[test]

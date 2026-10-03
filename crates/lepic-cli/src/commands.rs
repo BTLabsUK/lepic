@@ -571,6 +571,7 @@ impl<H: Host> Run<'_, H> {
         if create_dir {
             create_private_dir(&self.settings.data_dir)?;
         }
+        check_private_dir(&self.settings.data_dir)?;
         let relay = ClientSettings::new(self.settings.relay.clone());
         let epicbox = EpicboxTransport::new(
             relay,
@@ -697,6 +698,31 @@ fn create_private_dir(dir: &Path) -> Result<(), CliError> {
     std::fs::create_dir_all(dir).map_err(CliError::io("create the data directory"))
 }
 
+/// Refuses a data directory that other users can enter or list, since the mode set at creation
+/// does not apply to a directory that already existed. A missing directory is left to the wallet
+/// to report.
+#[cfg(unix)]
+fn check_private_dir(dir: &Path) -> Result<(), CliError> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = match std::fs::metadata(dir) {
+        Ok(metadata) => metadata.permissions().mode(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(CliError::io("inspect the data directory")(error)),
+    };
+    if mode & 0o077 != 0 {
+        return Err(CliError::io("use the data directory")(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "other users can access the data directory",
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_private_dir(_: &Path) -> Result<(), CliError> {
+    Ok(())
+}
+
 fn inbox_report(summary: InboxSummary) -> InboxReport {
     InboxReport {
         received: summary.received,
@@ -754,5 +780,44 @@ const fn stage_name(stage: SlateStage) -> &'static str {
         SlateStage::Invoice1 => "I1",
         SlateStage::Invoice2 => "I2",
         SlateStage::Invoice3 => "I3",
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::*;
+
+    fn with_mode(mode: u32) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        dir
+    }
+
+    #[test]
+    fn refuses_an_existing_data_directory_other_users_can_access() {
+        for mode in [0o755, 0o750, 0o701] {
+            let dir = with_mode(mode);
+            assert!(
+                matches!(
+                    check_private_dir(dir.path()),
+                    Err(CliError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+                "{mode:o}"
+            );
+        }
+        check_private_dir(with_mode(0o700).path()).unwrap();
+        check_private_dir(&with_mode(0o700).path().join("missing")).unwrap();
+    }
+
+    #[test]
+    fn creating_the_data_directory_leaves_it_owner_only() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("a/b");
+        create_private_dir(&dir).unwrap();
+        check_private_dir(&dir).unwrap();
     }
 }
