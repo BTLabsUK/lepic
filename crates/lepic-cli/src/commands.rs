@@ -50,8 +50,9 @@ use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, FinalizeReport, InboxReport, InfoReport,
-    InitReport, InvoiceIssueReport, InvoicePayReport, NodeStatusReport, ReceiveReport, Report,
-    ResendReport, RestoreReport, ScanReport, SendReport, TxListReport, TxReport, TxStateReport,
+    InitReport, InvoiceIssueReport, InvoicePayReport, NodeStatusReport, PostReport, ReceiveReport,
+    Report, ResendReport, RestoreReport, ScanReport, SendReport, TxListReport, TxReport,
+    TxStateReport,
 };
 use crate::progress::Progress;
 use crate::settings::{OutputFormat, Settings};
@@ -225,14 +226,8 @@ impl<H: Host> Run<'_, H> {
             TxCommand::Post(PostArgs { tx, fluff }) => {
                 let opened = self.open().await?;
                 let tx_id = TxId(tx.tx_id);
-                let state = match opened.wallet.post(tx_id, propagation(fluff.fluff)).await? {
-                    Posted::Accepted => "posted",
-                    Posted::AlreadyOnChain { .. } => "already on chain",
-                };
-                Ok(Report::Post(TxStateReport {
-                    tx_id: tx_id.0,
-                    state: state.to_owned(),
-                }))
+                let posted = opened.wallet.post(tx_id, propagation(fluff.fluff)).await?;
+                Ok(Report::Post(post_report(tx_id, posted)))
             }
             TxCommand::Cancel(args) => {
                 let opened = self.open().await?;
@@ -738,6 +733,21 @@ fn slate_file(path: &Path) -> impl FnOnce(TransportError) -> CliError {
     move |source| CliError::SlateFile { path, source }
 }
 
+/// A post leaves the transaction `posted` either way; a kernel already on chain is told apart
+/// by its own fields, so scripts keep reading `state`.
+fn post_report(tx_id: TxId, posted: Posted) -> PostReport {
+    let height = match posted {
+        Posted::AlreadyOnChain { height } => Some(height.value()),
+        Posted::Accepted => None,
+    };
+    PostReport {
+        tx_id: tx_id.0,
+        state: "posted".to_owned(),
+        already_on_chain: height.is_some(),
+        height,
+    }
+}
+
 /// The line for a transaction a received slate created.
 fn receipt_line(event: &Event) -> Option<String> {
     match event {
@@ -1063,6 +1073,41 @@ mod tests {
         }
         check_private_dir(with_mode(0o700).path()).unwrap();
         check_private_dir(&with_mode(0o700).path().join("missing")).unwrap();
+    }
+
+    #[test]
+    fn tx_post_json_keeps_the_posted_state_and_flags_a_kernel_on_chain() {
+        let json = |posted| {
+            let report = Report::Post(post_report(TxId(3), posted));
+            let rendered = crate::output::render(&report, OutputFormat::Json);
+            serde_json::from_str::<serde_json::Value>(&rendered).unwrap()
+        };
+        assert_eq!(
+            json(Posted::Accepted),
+            serde_json::json!({"tx_id": 3, "state": "posted", "already_on_chain": false})
+        );
+        assert_eq!(
+            json(Posted::AlreadyOnChain {
+                height: lepic_primitives::amount::Height::new(1124)
+            }),
+            serde_json::json!({
+                "tx_id": 3,
+                "state": "posted",
+                "already_on_chain": true,
+                "height": 1124
+            })
+        );
+        let human = |posted| {
+            let report = Report::Post(post_report(TxId(3), posted));
+            crate::output::render(&report, OutputFormat::Human).to_string()
+        };
+        assert_eq!(human(Posted::Accepted), "Transaction 3 is posted.\n");
+        assert_eq!(
+            human(Posted::AlreadyOnChain {
+                height: lepic_primitives::amount::Height::new(1124)
+            }),
+            "Transaction 3 is posted; its kernel is already on chain at height 1124.\n"
+        );
     }
 
     #[test]

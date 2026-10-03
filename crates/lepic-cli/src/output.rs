@@ -23,7 +23,7 @@ pub enum Report {
     Resend(ResendReport),
     Receive(ReceiveReport),
     Finalize(FinalizeReport),
-    Post(TxStateReport),
+    Post(PostReport),
     Cancel(TxStateReport),
     List(TxListReport),
     Show(TxReport),
@@ -128,6 +128,17 @@ pub struct FinalizeReport {
     pub tx_id: u32,
     pub slate_id: String,
     pub state: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PostReport {
+    pub tx_id: u32,
+    pub state: String,
+    /// The node refused the push because its chain already holds the kernel.
+    pub already_on_chain: bool,
+    /// The block holding the kernel, when `already_on_chain`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -401,9 +412,15 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             "Transaction {} finalized and {}.\nSlate {}.",
             r.tx_id, r.state, r.slate_id
         ),
-        Report::Post(r) | Report::Cancel(r) => {
-            writeln!(out, "Transaction {} is {}.", r.tx_id, r.state)
-        }
+        Report::Post(r) => match r.height {
+            Some(height) if r.already_on_chain => writeln!(
+                out,
+                "Transaction {} is {}; its kernel is already on chain at height {height}.",
+                r.tx_id, r.state
+            ),
+            _ => writeln!(out, "Transaction {} is {}.", r.tx_id, r.state),
+        },
+        Report::Cancel(r) => writeln!(out, "Transaction {} is {}.", r.tx_id, r.state),
         Report::List(r) => {
             if r.transactions.is_empty() {
                 return writeln!(out, "No transactions in account {}.", r.account);
@@ -624,11 +641,22 @@ mod tests {
                 vec!["slate_id", "state", "tx_id"],
             ),
             (
-                Report::Post(TxStateReport {
+                Report::Post(PostReport {
                     tx_id: 1,
                     state: text("posted"),
+                    already_on_chain: false,
+                    height: None,
                 }),
-                vec!["state", "tx_id"],
+                vec!["already_on_chain", "state", "tx_id"],
+            ),
+            (
+                Report::Post(PostReport {
+                    tx_id: 1,
+                    state: text("posted"),
+                    already_on_chain: true,
+                    height: Some(7),
+                }),
+                vec!["already_on_chain", "height", "state", "tx_id"],
             ),
             (
                 Report::Cancel(TxStateReport {
