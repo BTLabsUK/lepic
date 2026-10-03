@@ -122,5 +122,5 @@ fn execute<H: Host>(
     let report = tracing::dispatcher::with_default(telemetry.dispatch(), || {
         runtime.block_on(commands::execute(host, cli.command, settings, console))
     })?;
-    Ok(Zeroizing::new(render(&report, settings.output)))
+    Ok(render(&report, settings.output))
 }

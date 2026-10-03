@@ -3,6 +3,7 @@
 //! survive parsers that read numbers as doubles. Logs go to stderr either way.
 
 use std::fmt::Write as _;
+use std::io::Write as _;
 
 use serde::{Serialize, Serializer};
 use zeroize::Zeroizing;
@@ -209,11 +210,46 @@ struct ErrorBody<'a> {
     causes: &'a [String],
 }
 
-/// The text a successful command prints.
-pub fn render(report: &Report, format: OutputFormat) -> String {
+/// The text a successful command prints. A report that carries the recovery phrase is rendered
+/// into a buffer sized for it up front, so no reallocation leaves an unwiped copy behind.
+pub fn render(report: &Report, format: OutputFormat) -> Zeroizing<String> {
+    let mut out = Zeroizing::new(Vec::with_capacity(rendered_len_bound(report)));
     match format {
-        OutputFormat::Json => json_line(report),
-        OutputFormat::Human => human(report),
+        OutputFormat::Json => {
+            // Serializing these plain structs cannot fail; an empty object keeps the
+            // one-document rule.
+            if serde_json::to_writer(&mut *out, report).is_err() {
+                out.clear();
+                out.extend_from_slice(b"{}");
+            }
+            out.push(b'\n');
+        }
+        OutputFormat::Human => {
+            // Writing to a Vec cannot fail.
+            let _ = write_human(&mut out, report);
+        }
+    }
+    let bytes = std::mem::take(&mut *out);
+    // Both renderers write only UTF-8; the fallback wipes the bytes it drops.
+    Zeroizing::new(String::from_utf8(bytes).unwrap_or_else(|error| {
+        drop(Zeroizing::new(error.into_bytes()));
+        String::new()
+    }))
+}
+
+/// At least as long as anything `render` writes for an init report in either format: JSON may
+/// escape a byte as `\u00XX`, and the fixed text of both formats is shorter than the margin.
+/// Other reports carry no secret and start empty.
+fn rendered_len_bound(report: &Report) -> usize {
+    const FIXED_TEXT: usize = 256;
+    const ESCAPED_BYTE: usize = 6;
+    match report {
+        Report::Init(r) => [r.network.len(), r.data_dir.len(), r.recovery_phrase.len()]
+            .iter()
+            .fold(FIXED_TEXT, |total, len| {
+                total.saturating_add(len.saturating_mul(ESCAPED_BYTE))
+            }),
+        _ => 0,
     }
 }
 
@@ -250,14 +286,7 @@ fn json_line(value: &impl Serialize) -> String {
     text
 }
 
-fn human(report: &Report) -> String {
-    let mut out = String::new();
-    // Writing to a String cannot fail.
-    let _ = write_human(&mut out, report);
-    out
-}
-
-fn write_human(out: &mut String, report: &Report) -> std::fmt::Result {
+fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
         Report::Init(r) => {
             writeln!(out, "Wallet created on {} in {}.", r.network, r.data_dir)?;
@@ -657,6 +686,30 @@ mod tests {
             keys(&scan),
             ["end_height", "found", "restored", "start_height"]
         );
+    }
+
+    /// A buffer that grew would have left a copy of the phrase in freed memory.
+    #[test]
+    fn the_recovery_phrase_is_rendered_without_growing_the_buffer() {
+        let phrase = ["abandon"; 24].join(" ");
+        for data_dir in [text("/d"), "\u{1}\"\\".repeat(300)] {
+            let report = Report::Init(InitReport {
+                network: text("floonet"),
+                data_dir,
+                recovery_phrase: Zeroizing::new(phrase.clone()),
+            });
+            let bound = rendered_len_bound(&report);
+            for format in [OutputFormat::Json, OutputFormat::Human] {
+                let rendered = render(&report, format);
+                assert!(rendered.contains(&phrase));
+                assert_eq!(rendered.capacity(), bound, "{format:?}");
+            }
+            assert_eq!(
+                *render(&report, OutputFormat::Json),
+                json_line(&report),
+                "json output changed"
+            );
+        }
     }
 
     #[test]
