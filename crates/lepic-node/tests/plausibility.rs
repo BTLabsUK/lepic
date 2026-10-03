@@ -17,6 +17,8 @@ use lepic_primitives::tx::Transaction;
 use serde_json::Value;
 
 const TIP: u64 = 20;
+/// Blocks the client allows above its reference tip at zero elapsed time.
+const ALLOWANCE: u64 = 1_440;
 
 #[cfg(test)]
 fn transaction() -> Transaction {
@@ -146,6 +148,22 @@ fn accepts_ordinary_tip_movement() {
     assert_eq!(
         block_on(client.get_tip()).unwrap().height,
         Height::new(TIP + 62)
+    );
+}
+
+#[test]
+fn a_lower_tip_does_not_lower_the_reference() {
+    let (node, _) = node_with_transaction_at(10);
+    let client = node.client();
+    block_on(client.get_tip()).unwrap();
+
+    set_tip(&node, TIP - 10);
+    block_on(client.get_tip()).unwrap();
+    // Allowed from TIP, but 10 blocks too many if the lower tip had become the reference.
+    set_tip(&node, TIP + ALLOWANCE);
+    assert_eq!(
+        block_on(client.get_tip()).unwrap().height,
+        Height::new(TIP + ALLOWANCE)
     );
 }
 
