@@ -1,8 +1,8 @@
 //! Replays the G-01 golden vectors in `testdata/vectors/keys` that cover mnemonics, BIP32
 //! derivation, identifiers, keychain commitments, Epicbox address keys and payment-proof keys.
-//! It also replays the proof builder vectors and the `wallet.seed` vectors of the read-only seed
-//! file import. Commitments over raw blinding factors and bulletproofs are checked by
-//! `lepic-crypto`. The onion v3 form of the payment-proof key is Tor-only and not ported.
+//! It also replays the proof builder vectors, the `wallet.seed` vectors of the read-only seed
+//! file import and the app data vectors. Commitments over raw blinding factors and bulletproofs
+//! are checked by `lepic-crypto`. The onion v3 form of the payment-proof key is Tor-only and not ported.
 
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
 // unwrap, index and use plain arithmetic (docs/rules.md).
@@ -12,6 +12,9 @@
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects
 )]
+
+#[path = "vectors/app_data.rs"]
+mod app_data;
 
 use std::path::PathBuf;
 
