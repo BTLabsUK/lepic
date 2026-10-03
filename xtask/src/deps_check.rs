@@ -11,7 +11,44 @@ use crate::cargo;
 const ARCHITECTURE_DOC: &str = "docs/architecture.md";
 const EDGES_HEADING: &str = "## Allowed dependency edges";
 const DEV_DEPENDENCY_ANYWHERE: &str = "lepic-telemetry";
-const PRODUCT_CRATE_PREFIX: &str = "lepic-";
+/// Members that are repository tooling rather than product crates. They may depend on no member.
+const TOOLING_MEMBERS: &[&str] = &["xtask"];
+
+/// Crates that do no I/O, read no clock and create no randomness (`docs/architecture.md`).
+pub(crate) const PURE_CRATES: &[&str] = &[
+    "lepic-crypto",
+    "lepic-primitives",
+    "lepic-keychain",
+    "lepic-slate",
+];
+
+/// Runtime, network, storage, logging-output and OS-randomness crates a pure crate may not take
+/// as a normal or build dependency.
+const IMPURE_FOR_PURE_CRATES: &[&str] = &[
+    "tokio",
+    "tokio-tungstenite",
+    "tokio-rustls",
+    "futures-util",
+    "hyper",
+    "hyper-util",
+    "hyper-rustls",
+    "http-body-util",
+    "rustls",
+    "webpki-roots",
+    "rusqlite",
+    "tempfile",
+    "getrandom",
+    "tracing-appender",
+    "tracing-subscriber",
+    "clap",
+    "flutter_rust_bridge",
+];
+
+/// Features through which a pure crate would draw OS randomness or read the clock itself.
+const IMPURE_FEATURES: &[(&str, &[&str])] = &[
+    ("rand", &["default", "sys_rng", "thread_rng"]),
+    ("jiff", &["default", "std"]),
+];
 
 // Mirrors `[bans].deny` in deny.toml; `banned_list_matches_deny_toml` keeps them equal.
 const BANNED: &[&str] = &[
@@ -116,6 +153,15 @@ enum Violation {
     UndocumentedCrate {
         name: String,
     },
+    ImpureDependency {
+        from: String,
+        to: String,
+    },
+    ImpureFeature {
+        from: String,
+        to: String,
+        feature: String,
+    },
     MissingCrate {
         name: String,
     },
@@ -143,6 +189,13 @@ impl fmt::Display for Violation {
             Self::UndocumentedCrate { name } => write!(
                 f,
                 "{name} is a workspace crate missing from the allowed edges in {ARCHITECTURE_DOC}"
+            ),
+            Self::ImpureDependency { from, to } => {
+                write!(f, "{from} is a pure crate and may not depend on {to}")
+            }
+            Self::ImpureFeature { from, to, feature } => write!(
+                f,
+                "{from} is a pure crate and may not enable feature `{feature}` of {to}"
             ),
             Self::MissingCrate { name } => write!(
                 f,
@@ -229,6 +282,8 @@ struct Package {
 struct Dependency {
     name: String,
     kind: Option<RawKind>,
+    features: Vec<String>,
+    uses_default_features: bool,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -288,7 +343,7 @@ fn find_violations(policy: &EdgePolicy, metadata: &Metadata) -> Vec<Violation> {
     }
 
     for (&from, package) in &members {
-        if from.starts_with(PRODUCT_CRATE_PREFIX) && !policy.allowed.contains_key(from) {
+        if !TOOLING_MEMBERS.contains(&from) && !policy.allowed.contains_key(from) {
             violations.push(Violation::UndocumentedCrate {
                 name: from.to_owned(),
             });
@@ -312,6 +367,9 @@ fn find_violations(policy: &EdgePolicy, metadata: &Metadata) -> Vec<Violation> {
                     to: to.to_owned(),
                 });
             }
+            if PURE_CRATES.contains(&from) && kind != EdgeKind::Dev {
+                violations.extend(impurities(from, dependency));
+            }
         }
     }
 
@@ -324,6 +382,32 @@ fn find_violations(policy: &EdgePolicy, metadata: &Metadata) -> Vec<Violation> {
         }
     }
     violations
+}
+
+fn impurities(from: &str, dependency: &Dependency) -> Vec<Violation> {
+    let to = dependency.name.as_str();
+    if IMPURE_FOR_PURE_CRATES.contains(&to) {
+        return vec![Violation::ImpureDependency {
+            from: from.to_owned(),
+            to: to.to_owned(),
+        }];
+    }
+    let Some((_, forbidden)) = IMPURE_FEATURES.iter().find(|(name, _)| *name == to) else {
+        return Vec::new();
+    };
+    let default = dependency
+        .uses_default_features
+        .then_some("default".to_owned());
+    default
+        .into_iter()
+        .chain(dependency.features.iter().cloned())
+        .filter(|feature| forbidden.contains(&feature.as_str()))
+        .map(|feature| Violation::ImpureFeature {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            feature,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -535,6 +619,95 @@ lepic-telemetry   -> (external only)
                 name: "lepic-extra".to_owned(),
             }]
         );
+    }
+
+    #[test]
+    fn rejects_any_member_missing_from_the_doc_except_tooling() {
+        let fixture = Fixture::new();
+        fixture.member("tools", "");
+        fixture.member("xtask", "");
+        assert_eq!(
+            fixture.violations(),
+            [Violation::UndocumentedCrate {
+                name: "tools".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_io_crates_in_pure_crates_outside_dev_dependencies() {
+        let fixture = Fixture::new();
+        fixture.external("tokio");
+        fixture.external("getrandom");
+        fixture.member(
+            "lepic-crypto",
+            "[dependencies]\ntokio = { path = \"../../../external/tokio\" }\n\n[dev-dependencies]\ngetrandom = { path = \"../../../external/getrandom\" }\n",
+        );
+        fixture.member(
+            "lepic-telemetry",
+            "[dependencies]\ntokio = { path = \"../../../external/tokio\" }\n",
+        );
+        assert_eq!(
+            fixture.violations(),
+            [Violation::ImpureDependency {
+                from: "lepic-crypto".to_owned(),
+                to: "tokio".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_os_randomness_and_clock_features_in_pure_crates() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "external/rand/Cargo.toml",
+            "[package]\nname = \"rand\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = []\nstd_rng = []\nsys_rng = []\n",
+        );
+        fixture.write("external/rand/src/lib.rs", "");
+        let rand = "rand = { path = \"../../../external/rand\", default-features = false, features = [\"std_rng\", \"sys_rng\"] }\n";
+        fixture.member(
+            "lepic-primitives",
+            &format!("[dependencies]\nlepic-crypto = {{ path = \"../lepic-crypto\" }}\n{rand}"),
+        );
+        fixture.member(
+            "lepic-crypto",
+            "[build-dependencies]\nrand = { path = \"../../../external/rand\" }\n",
+        );
+        assert_eq!(
+            fixture.violations(),
+            [
+                Violation::ImpureFeature {
+                    from: "lepic-crypto".to_owned(),
+                    to: "rand".to_owned(),
+                    feature: "default".to_owned(),
+                },
+                Violation::ImpureFeature {
+                    from: "lepic-primitives".to_owned(),
+                    to: "rand".to_owned(),
+                    feature: "sys_rng".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn pure_crates_match_the_architecture_doc() {
+        let doc = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/architecture.md"),
+        )
+        .unwrap();
+        let sentence = doc
+            .lines()
+            .find(|line| line.starts_with("Pure crates ("))
+            .unwrap();
+        let listed: BTreeSet<String> = sentence
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .map(|name| format!("lepic-{name}"))
+            .collect();
+        let pure: BTreeSet<String> = PURE_CRATES.iter().map(|name| (*name).to_owned()).collect();
+        assert_eq!(listed, pure);
     }
 
     #[test]

@@ -68,8 +68,8 @@ proptest = { version = "1.11.0", default-features = false }
 insta = { version = "1.48.0", default-features = false }
 tempfile = { version = "3.27.0", default-features = false }
 
-# crates/lepic-ffi/Cargo.toml carries a copy of this table without `unsafe_code`;
-# xtask/src/lint_tables.rs fails when the two differ.
+# Every member inherits these; `cargo xtask repo-lint` fails otherwise. The only
+# relaxation is the attribute on lepic-ffi's generated flutter_rust_bridge module.
 [workspace.lints.rust]
 unsafe_code = "deny"
 

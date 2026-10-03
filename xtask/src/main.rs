@@ -5,9 +5,9 @@ mod check;
 mod ci_lint;
 mod deps_check;
 mod fuzz;
-#[cfg(test)]
-mod lint_tables;
 mod mobile;
+mod repo_lint;
+mod sources;
 mod upstream;
 mod vectors;
 
@@ -21,12 +21,13 @@ const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
   budget      [--measurements <file.json>]: size, restore and drain against docs/budgets.md
-  check       fmt, clippy, tests, cargo deny, deps-check and ci-lint
+  check       fmt, clippy, tests, cargo deny, deps-check, ci-lint, repo-lint and vectors verify
   ci-lint     every `uses:` under .github is pinned to a commit sha
   deps-check  crate edges and banned crates against docs/architecture.md
   fuzz        (--smoke | --full) [--target <name>]... [--jobs <n>]: seed and run the fuzz targets
   mobile      --target <triple> [--release]: build the library crates for a mobile target
               --package [--target <triple>]...: copy release lepic-ffi into bindings/flutter
+  repo-lint   workspace lints and unsafe code, pure crates, the secp256k1-zkp pin, interop images
   upstream-drift
               upstream commits since the ones recorded in upstream.toml
   vectors     generate [--area <area>] golden vectors, or verify them";
@@ -58,6 +59,7 @@ fn run() -> Result<()> {
         "deps-check" => deps_check::run(&root),
         "fuzz" => fuzz::run(&root, rest),
         "mobile" => mobile::run(&root, rest),
+        "repo-lint" => repo_lint::run(&root),
         "upstream-drift" => upstream::run(&root),
         "vectors" => vectors::run(&root, rest),
         other => bail!("unknown command `{other}`\n\n{USAGE}"),

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{cargo, ci_lint, deps_check};
+use crate::{cargo, ci_lint, deps_check, repo_lint, vectors};
 
 const STEPS: &[(&str, &[&str])] = &[
     ("fmt", &["fmt", "--all", "--check"]),
@@ -22,6 +22,8 @@ const STEPS: &[(&str, &[&str])] = &[
     ("deny", &["deny", "check"]),
 ];
 
+type Gate = fn(&Path) -> Result<()>;
+
 pub(crate) fn run(root: &Path) -> Result<()> {
     for (name, args) in STEPS {
         eprintln!("xtask check: {name}");
@@ -34,10 +36,16 @@ pub(crate) fn run(root: &Path) -> Result<()> {
             bail!("step `{name}` failed: `cargo {}`", args.join(" "));
         }
     }
-    eprintln!("xtask check: deps-check");
-    deps_check::run(root)?;
-    eprintln!("xtask check: ci-lint");
-    ci_lint::run(root)?;
+    let gates: &[(&str, Gate)] = &[
+        ("deps-check", deps_check::run),
+        ("ci-lint", ci_lint::run),
+        ("repo-lint", repo_lint::run),
+        ("vectors verify", vectors::verify),
+    ];
+    for (name, gate) in gates {
+        eprintln!("xtask check: {name}");
+        gate(root).with_context(|| format!("step `{name}` failed"))?;
+    }
     eprintln!("xtask check: all steps passed");
     Ok(())
 }

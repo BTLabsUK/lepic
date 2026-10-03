@@ -57,13 +57,9 @@ fn generator_command(root: &Path, args: &[String]) -> Command {
     command
 }
 
-fn verify(root: &Path) -> Result<()> {
+pub(crate) fn verify(root: &Path) -> Result<()> {
     let metadata = workspace_metadata(root)?;
-    let packages = packages_with_vector_tests(&metadata);
-    if packages.is_empty() {
-        eprintln!("xtask vectors: no workspace crate has a `{VECTOR_TEST}` test yet");
-        return Ok(());
-    }
+    let packages = packages_to_verify(&metadata)?;
     eprintln!(
         "xtask vectors: replaying vectors of {}",
         packages.join(", ")
@@ -80,15 +76,24 @@ fn verify(root: &Path) -> Result<()> {
 }
 
 #[derive(Deserialize)]
-struct Metadata {
+pub(crate) struct Metadata {
     packages: Vec<Package>,
     workspace_members: Vec<String>,
 }
 
+impl Metadata {
+    pub(crate) fn members(&self) -> impl Iterator<Item = &Package> {
+        self.packages
+            .iter()
+            .filter(|package| self.workspace_members.contains(&package.id))
+    }
+}
+
 #[derive(Deserialize)]
-struct Package {
+pub(crate) struct Package {
     id: String,
-    name: String,
+    pub(crate) name: String,
+    pub(crate) manifest_path: String,
     targets: Vec<Target>,
 }
 
@@ -98,7 +103,7 @@ struct Target {
     kind: Vec<String>,
 }
 
-fn workspace_metadata(root: &Path) -> Result<Metadata> {
+pub(crate) fn workspace_metadata(root: &Path) -> Result<Metadata> {
     let output = cargo()
         .args(["metadata", "--format-version", "1", "--no-deps", "--locked"])
         .current_dir(root)
@@ -113,13 +118,20 @@ fn workspace_metadata(root: &Path) -> Result<Metadata> {
     serde_json::from_slice(&output.stdout).context("could not parse `cargo metadata` output")
 }
 
-// `cargo test --test vectors` fails when no package defines that target, which is the state until
-// the first ported crate adds its vector tests.
+/// A run that replays nothing would pass while proving nothing, so finding no target is an error.
+fn packages_to_verify(metadata: &Metadata) -> Result<Vec<&str>> {
+    let packages = packages_with_vector_tests(metadata);
+    if packages.is_empty() {
+        bail!(
+            "no workspace crate has a `{VECTOR_TEST}` test target, so no vector would be replayed"
+        );
+    }
+    Ok(packages)
+}
+
 fn packages_with_vector_tests(metadata: &Metadata) -> Vec<&str> {
     metadata
-        .packages
-        .iter()
-        .filter(|package| metadata.workspace_members.contains(&package.id))
+        .members()
         .filter(|package| {
             package.targets.iter().any(|target| {
                 target.name == VECTOR_TEST && target.kind.iter().any(|kind| kind == "test")
@@ -145,23 +157,41 @@ mod tests {
             r#"{
                 "workspace_members": ["a", "b", "c"],
                 "packages": [
-                    {"id": "a", "name": "lepic-crypto", "targets": [
+                    {"id": "a", "name": "lepic-crypto", "manifest_path": "/a", "targets": [
                         {"name": "lepic_crypto", "kind": ["lib"]},
                         {"name": "vectors", "kind": ["test"]}
                     ]},
-                    {"id": "b", "name": "lepic-node", "targets": [
+                    {"id": "b", "name": "lepic-node", "manifest_path": "/b", "targets": [
                         {"name": "vectors", "kind": ["bin"]}
                     ]},
-                    {"id": "c", "name": "lepic-store", "targets": [
+                    {"id": "c", "name": "lepic-store", "manifest_path": "/c", "targets": [
                         {"name": "store", "kind": ["test"]}
                     ]},
-                    {"id": "x", "name": "outside", "targets": [
+                    {"id": "x", "name": "outside", "manifest_path": "/x", "targets": [
                         {"name": "vectors", "kind": ["test"]}
                     ]}
                 ]
             }"#,
         );
         assert_eq!(packages_with_vector_tests(&metadata), ["lepic-crypto"]);
+    }
+
+    #[test]
+    fn fails_when_no_workspace_member_has_a_vectors_test() {
+        let metadata = metadata(
+            r#"{
+                "workspace_members": ["a"],
+                "packages": [
+                    {"id": "a", "name": "lepic-crypto", "manifest_path": "/a", "targets": [
+                        {"name": "lepic_crypto", "kind": ["lib"]}
+                    ]},
+                    {"id": "x", "name": "outside", "manifest_path": "/x", "targets": [
+                        {"name": "vectors", "kind": ["test"]}
+                    ]}
+                ]
+            }"#,
+        );
+        assert!(packages_to_verify(&metadata).is_err());
     }
 
     #[test]
