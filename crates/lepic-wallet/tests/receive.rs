@@ -25,7 +25,7 @@ use support::fixed_time;
 use uuid::Uuid;
 
 #[test]
-fn received_slate_is_stored_with_its_output_context_and_reply() {
+fn received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys() {
     let case = "send_file_payment_proof";
     let (s1, transport) = delivered_s1(case);
     let s2 = vector(&format!("{case}_s2_v3"));
@@ -38,9 +38,6 @@ fn received_slate_is_stored_with_its_output_context_and_reply() {
     let keychain = Keychain::from_seed(&receiver.seed, ExtKeyVersion::FLOONET).unwrap();
     let commitment = keychain
         .commit(amount.value(), &key_id, SwitchCommitment::Regular)
-        .unwrap();
-    let blinding = keychain
-        .derive_key(amount.value(), &key_id, SwitchCommitment::Regular)
         .unwrap();
 
     receiver
@@ -65,11 +62,8 @@ fn received_slate_is_stored_with_its_output_context_and_reply() {
             assert_eq!(output.amount, amount);
             assert_eq!(output.height, received.slate.height());
 
-            let context = repos.context(slate_id, ParticipantId(1))?.unwrap();
-            let mut expected = vec![1];
-            expected.extend_from_slice(blinding.expose_bytes());
-            expected.extend_from_slice(&[1; 32]);
-            assert_eq!(context.expose(), expected.as_slice());
+            // The receiver never signs this kernel again, so its signing keys are not kept.
+            assert!(repos.context(slate_id, ParticipantId(1))?.is_none());
 
             let reply = repos.slate(slate_id, SlateStage::Standard2)?.unwrap();
             assert_eq!(reply.bytes, received.reply.as_bytes());

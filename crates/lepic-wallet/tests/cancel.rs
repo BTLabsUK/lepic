@@ -227,7 +227,17 @@ fn cancel_of_a_received_transaction_drops_its_output_and_context() {
     let (state, outputs, has_context) = store.read(read).unwrap();
     assert_eq!(state, TxState::Received);
     assert_eq!(outputs.len(), 1);
-    assert!(has_context);
+    assert!(!has_context);
+    // A database written by an earlier version may still hold the receiver's context.
+    store
+        .write(|repos| {
+            repos.put_context(
+                uuid(sent.slate_id),
+                lepic_store::ParticipantId(1),
+                &lepic_store::PrivateContext::new(vec![1; 65]),
+            )
+        })
+        .unwrap();
 
     harness.block_on(receiver.cancel(received.tx_id)).unwrap();
     let (state, outputs, has_context) = store.read(read).unwrap();

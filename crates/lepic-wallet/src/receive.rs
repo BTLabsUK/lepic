@@ -32,8 +32,8 @@ use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    AccountIndex, KeyId, OutputRecord, OutputStatus, ParticipantId, PrivateContext, Repositories,
-    SlateStage, StoreError, StoredSlate, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, KeyId, OutputRecord, OutputStatus, Repositories, SlateStage, StoreError,
+    StoredSlate, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::FormatError;
 use lepic_transport::policy::encode_with;
@@ -42,7 +42,6 @@ use rand_core::CryptoRng;
 use thiserror::Error;
 use tracing::{Span, debug, info, instrument};
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 use crate::account::{self, DEFAULT_ACCOUNT_LABEL};
 use crate::error::WalletError;
@@ -54,13 +53,6 @@ pub(crate) mod redelivery;
 
 /// `epic-wallet` signs payment proofs with the address key at index 0 of the account.
 const PAYMENT_PROOF_KEY_INDEX: u32 = 0;
-
-/// Legacy slates number the receiver 1 in the standard flow; its private context is stored
-/// under that participant id.
-const RECEIVER_PARTICIPANT: ParticipantId = ParticipantId(1);
-
-/// Version byte of the receiver's private context encoding.
-const CONTEXT_FORMAT_V1: u8 = 1;
 
 /// What the receiver chooses when it accepts a slate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -148,8 +140,9 @@ where
 {
     /// Receives the sender's S1, which arrived over `transport`: checks it, adds this wallet's
     /// output, public data, partial signature and, when asked for, payment proof signature, and
-    /// stores the output, the private context, the transaction and the S2 reply in one store
-    /// transaction. The caller sends the reply over the same transport.
+    /// stores the output, the transaction and the S2 reply in one store transaction. No private
+    /// context is kept: the receiver's signing keys are dropped once S2 is signed. The caller
+    /// sends the reply over the same transport.
     ///
     /// Asks the node for its tip. Fails with [`ReceiveError::Wallet`] carrying
     /// [`WalletError::Locked`] when the wallet is locked, with [`ReceiveError::AlreadyReceived`]
@@ -337,14 +330,13 @@ fn verify_message(message: &ParticipantMessage, signer: &PublicKey) -> Result<()
     )
 }
 
-/// The receiver's S2 and what it stores alongside.
+/// The receiver's S2 and what it stores alongside. The excess key and nonce of its partial
+/// signature are dropped once S2 is signed: a receiver never signs this kernel again.
 struct Response {
     slate: Slate,
     account: AccountIndex,
     key_id: Identifier,
     output: Output,
-    blinding: SecretKey,
-    nonce: SecretKey,
 }
 
 /// Refuses a slate id received before, reserves the account's next output key and builds S2.
@@ -382,13 +374,11 @@ fn respond<D>(
         },
         rng,
     )
-    .map(|(slate, output, blinding, nonce)| Response {
+    .map(|(slate, output)| Response {
         slate,
         account: account.index,
         key_id,
         output,
-        blinding,
-        nonce,
     })
 }
 
@@ -408,7 +398,7 @@ fn build_response(
     slate: &Slate,
     contribution: &Contribution<'_>,
     rng: &mut (impl CryptoRng + ?Sized),
-) -> Result<(Slate, Output, SecretKey, SecretKey), ReceiveError> {
+) -> Result<(Slate, Output), ReceiveError> {
     let amount = slate.amount().value();
     let switch = SwitchCommitment::Regular;
     let builder = ProofBuilder::new(keychain).map_err(ReceiveError::Output)?;
@@ -474,7 +464,7 @@ fn build_response(
             proof_signature,
         })
         .map_err(ReceiveError::Slate)?;
-    Ok((sorted_outputs(received)?, output, blinding, nonce))
+    Ok((sorted_outputs(received)?, output))
 }
 
 /// The slate with an offset, and the receiver's excess key. Upstream lets whoever adds data
@@ -590,11 +580,6 @@ fn store_response(
         mmr_index: None,
         tx: Some(tx_id),
     })?;
-    repos.put_context(
-        slate_id,
-        RECEIVER_PARTICIPANT,
-        &encode_context(&response.blinding, &response.nonce),
-    )?;
     repos.insert_slate(&StoredSlate {
         slate_id,
         stage: SlateStage::Standard2,
@@ -602,15 +587,6 @@ fn store_response(
         bytes: reply.as_bytes().to_vec(),
     })?;
     Ok(tx_id)
-}
-
-/// Format byte, then the excess key and the nonce of the partial signature.
-fn encode_context(blinding: &SecretKey, nonce: &SecretKey) -> PrivateContext {
-    let mut bytes = Zeroizing::new(Vec::with_capacity(1 + 2 * SecretKey::LEN));
-    bytes.push(CONTEXT_FORMAT_V1);
-    bytes.extend_from_slice(blinding.expose_bytes());
-    bytes.extend_from_slice(nonce.expose_bytes());
-    PrivateContext::new(std::mem::take(&mut *bytes))
 }
 
 /// Lengths of in-memory collections always fit `u64`.
