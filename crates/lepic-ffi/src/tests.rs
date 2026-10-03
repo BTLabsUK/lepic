@@ -182,6 +182,27 @@ async fn slate_text_above_the_wire_limit_is_refused_before_it_is_written() {
     );
 }
 
+#[tokio::test]
+async fn create_with_pin_keeps_the_key_of_a_wallet_in_the_store() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let sealed = created.sealed_password.clone();
+    drop(created);
+    let key = store.read(PIN_KEY).await.unwrap();
+
+    let other_dir = tempfile::tempdir().unwrap();
+    let config = WalletConfig {
+        data_dir: other_dir.path().to_string_lossy().into_owned(),
+        ..fixture.config()
+    };
+    let again =
+        EpicWallet::create_with_pin(&fixture.runtime, config, &store, None, "9876".to_owned());
+    assert_eq!(kind(again.await), WalletErrorKind::WalletAlreadyExists);
+    assert_eq!(store.read(PIN_KEY).await.unwrap(), key);
+    assert!(fixture.open_with_pin(&store, PIN, &sealed).await.is_ok());
+}
+
 /// A second runtime in the same process stands in for a second process.
 #[tokio::test]
 async fn a_second_runtime_cannot_open_a_directory_in_use() {
@@ -199,6 +220,17 @@ async fn a_second_runtime_cannot_open_a_directory_in_use() {
     )
     .await;
     assert_eq!(kind(opened), WalletErrorKind::WalletBusy);
+    // A busy directory is refused before the PIN is tried, so it costs no attempt.
+    let opened = EpicWallet::open_with_pin(
+        &other,
+        fixture.config(),
+        &store,
+        "0000".to_owned(),
+        created.sealed_password.clone(),
+    )
+    .await;
+    assert_eq!(kind(opened), WalletErrorKind::WalletBusy);
+    assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
 
     let sealed = created.sealed_password.clone();
     drop(created);
@@ -225,4 +257,31 @@ fn the_node_client_takes_the_api_secret_out_of_the_config() {
     };
     crate::node::NodeFactory::Http.client(&mut config).unwrap();
     assert_eq!(config.node_api_secret, None);
+}
+
+struct CapturedLogs(std::sync::Mutex<Vec<lepic_telemetry::LogRecord>>);
+
+impl lepic_telemetry::LogSink for CapturedLogs {
+    fn record(&self, record: lepic_telemetry::LogRecord) {
+        self.0.lock().unwrap().push(record);
+    }
+}
+
+#[test]
+fn app_log_messages_reach_the_stream_cut_to_1024_bytes() {
+    let mut runtime = Fixture::new().runtime;
+    let logs = std::sync::Arc::new(CapturedLogs(std::sync::Mutex::default()));
+    let filter = lepic_telemetry::LogFilter::parse("trace").unwrap();
+    std::sync::Arc::get_mut(&mut runtime.inner)
+        .unwrap()
+        .boundary
+        .dispatch = lepic_telemetry::host_dispatch(logs.clone(), filter);
+
+    runtime.log_message(LogLevel::Info, "app".to_owned(), "x".repeat(4096));
+    let records = logs.0.lock().unwrap();
+    let record = records
+        .iter()
+        .find(|record| record.target == "dart")
+        .unwrap();
+    assert_eq!(record.message.len(), 1024);
 }

@@ -395,6 +395,27 @@ mod tests {
         assert_eq!(started.elapsed(), Duration::ZERO);
     }
 
+    /// Concurrent attempts queue: each counts on top of the last and waits its own delay.
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_attempts_run_one_at_a_time() {
+        let store = AppSecretStore::in_memory();
+        let guard = PinGuard::new(PinPolicy::DEFAULT);
+        let password = generate_password().unwrap();
+        let sealed = seal_new(&store, NewPin::new(pin("1234")).unwrap(), password, cheap())
+            .await
+            .unwrap();
+        store.write(FAILURES_KEY, "3".to_owned()).await.unwrap();
+
+        let started = tokio::time::Instant::now();
+        let attempt = || unlock(&guard, &store, pin("0000"), sealed.clone());
+        let (first, second, third) = tokio::join!(attempt(), attempt(), attempt());
+        for result in [first, second, third] {
+            assert_eq!(result.unwrap_err().kind, WalletErrorKind::WrongPassword);
+        }
+        assert_eq!(started.elapsed(), Duration::from_secs(30 + 60 + 120));
+        assert_eq!(read_failures(&store).await.unwrap(), 6);
+    }
+
     #[tokio::test]
     async fn a_count_that_does_not_parse_costs_the_longest_wait() {
         let store = AppSecretStore::in_memory();
