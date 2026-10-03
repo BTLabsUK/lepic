@@ -444,8 +444,8 @@ impl SenderContext {
         let (account, rest) = split_array::<4>(rest)?;
         let (secret_key, rest) = split_array::<{ SecretKey::LEN }>(rest)?;
         let (secret_nonce, rest) = split_array::<{ SecretKey::LEN }>(rest)?;
-        let (flag, rest) = split_array::<1>(rest)?;
-        let (index, rest) = split_array::<4>(rest)?;
+        let (&flag, rest) = split_array::<1>(rest)?;
+        let (&index, rest) = split_array::<4>(rest)?;
         if !rest.is_empty() {
             return Err(SendError::MalformedContext);
         }
@@ -454,11 +454,12 @@ impl SenderContext {
             [1] => Some(u32::from_be_bytes(index)),
             _ => return Err(SendError::MalformedContext),
         };
-        let key = |bytes: [u8; SecretKey::LEN]| {
-            SecretKey::from_array(bytes).map_err(|_| SendError::MalformedContext)
+        // Read from the borrowed context, so no copy of a key is left behind unwiped.
+        let key = |bytes: &[u8; SecretKey::LEN]| {
+            SecretKey::from_bytes(bytes).map_err(|_| SendError::MalformedContext)
         };
         Ok(Self {
-            account: AccountIndex(u32::from_be_bytes(account)),
+            account: AccountIndex(u32::from_be_bytes(*account)),
             secret_key: key(secret_key)?,
             secret_nonce: key(secret_nonce)?,
             payment_proof_index,
@@ -466,10 +467,9 @@ impl SenderContext {
     }
 }
 
-fn split_array<const N: usize>(bytes: &[u8]) -> Result<([u8; N], &[u8]), SendError> {
+fn split_array<const N: usize>(bytes: &[u8]) -> Result<(&[u8; N], &[u8]), SendError> {
     bytes
         .split_first_chunk::<N>()
-        .map(|(head, rest)| (*head, rest))
         .ok_or(SendError::MalformedContext)
 }
 

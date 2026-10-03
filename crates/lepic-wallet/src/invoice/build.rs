@@ -110,8 +110,9 @@ impl IssuerContext {
         if !rest.is_empty() {
             return Err(InvoiceError::MalformedContext);
         }
+        // Read from the borrowed context, so no copy of a key is left behind unwiped.
         let key = |bytes: &[u8; SecretKey::LEN]| {
-            SecretKey::from_array(*bytes).map_err(|_| InvoiceError::MalformedContext)
+            SecretKey::from_bytes(bytes).map_err(|_| InvoiceError::MalformedContext)
         };
         Ok(Self {
             secret_key: key(secret_key)?,
