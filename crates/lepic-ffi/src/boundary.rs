@@ -102,7 +102,7 @@ fn panic_report(location: Option<&Location<'_>>) -> String {
     match location {
         Some(location) => format!(
             "lepic panicked at {}:{}:{}",
-            location.file(),
+            source_path(location.file()),
             location.line(),
             location.column()
         ),
@@ -110,9 +110,70 @@ fn panic_report(location: Option<&Location<'_>>) -> String {
     }
 }
 
+/// `file` without the build machine's directories, which would put a home directory or CI
+/// workspace into the platform log. Workspace files are already relative; a dependency keeps its
+/// path from the package directory on, for example `tokio-1.0.0/src/runtime.rs`.
+fn source_path(file: &str) -> &str {
+    let is_absolute = file.starts_with(['/', '\\']) || file.get(1..3) == Some(":\\");
+    if !is_absolute {
+        return file;
+    }
+    let normalized = file.replace('\\', "/");
+    for marker in ["/registry/src/", "/git/checkouts/"] {
+        if let Some(start) = normalized.rfind(marker) {
+            // Skip the registry or checkout directory that follows the marker.
+            let after_marker = start.saturating_add(marker.len());
+            if let Some(package) = normalized
+                .get(after_marker..)
+                .and_then(|rest| rest.find('/'))
+                .map(|slash| after_marker.saturating_add(slash).saturating_add(1))
+            {
+                return file.get(package..).unwrap_or_default();
+            }
+        }
+    }
+    file.rsplit(['/', '\\']).next().unwrap_or_default()
+}
+
 fn panicked(operation: &'static str) -> WalletError {
     WalletError::new(
         WalletErrorKind::Panic,
         format!("{operation} failed inside lepic"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_path;
+
+    #[test]
+    fn panic_locations_leave_out_the_build_machine_directories() {
+        assert_eq!(
+            source_path("crates/lepic-ffi/src/mock.rs"),
+            "crates/lepic-ffi/src/mock.rs"
+        );
+        assert_eq!(
+            source_path(
+                "/home/dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.0.0/src/lib.rs"
+            ),
+            "tokio-1.0.0/src/lib.rs"
+        );
+        assert_eq!(
+            source_path(
+                "/home/dev/.cargo/git/checkouts/rust-secp256k1-zkp-0123/42fcb29/src/key.rs"
+            ),
+            "42fcb29/src/key.rs"
+        );
+        assert_eq!(
+            source_path(
+                r"C:\Users\dev\.cargo\registry\src\index.crates.io-1949\ring-0.17.0\src\a.rs"
+            ),
+            r"ring-0.17.0\src\a.rs"
+        );
+        assert_eq!(source_path("/home/dev/work/lepic/build.rs"), "build.rs");
+        assert_eq!(
+            source_path("/rustc/0123abcd/library/core/src/option.rs"),
+            "option.rs"
+        );
+    }
 }
