@@ -55,6 +55,10 @@ const WALLET_NAME: &str = "default";
 
 const DEFAULT_ACCOUNT: AccountIndex = AccountIndex(0);
 
+/// The longest slate text the file method imports (`lepic_slate::codec::MAX_WIRE_SLATE_LEN`),
+/// checked before the text is written to a scratch file.
+const MAX_SLATE_TEXT_LEN: usize = 8 * 1024 * 1024;
+
 struct SystemClock;
 
 impl Clock for SystemClock {
@@ -736,6 +740,12 @@ impl ScratchFile {
     }
 
     async fn with_contents(data_dir: &Path, contents: String) -> Result<Self, WalletError> {
+        if contents.len() > MAX_SLATE_TEXT_LEN {
+            return Err(WalletError::new(
+                WalletErrorKind::InvalidSlate,
+                "slate text is longer than any slate",
+            ));
+        }
         let file = Self::new(data_dir)?;
         tokio::fs::write(&file.path, contents)
             .await

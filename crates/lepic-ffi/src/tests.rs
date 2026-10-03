@@ -156,3 +156,26 @@ async fn delete_wallet_removes_the_pin_entries() {
         assert_eq!(store.read(key).await.unwrap(), None, "{key}");
     }
 }
+
+#[tokio::test]
+async fn slate_text_above_the_wire_limit_is_refused_before_it_is_written() {
+    let fixture = Fixture::new();
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &AppSecretStore::in_memory(),
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    let text = " ".repeat(8 * 1024 * 1024 + 1);
+    assert_eq!(
+        kind(wallet.receive_slate(text.clone()).await),
+        WalletErrorKind::InvalidSlate
+    );
+    assert_eq!(
+        kind(wallet.finalize_and_post(text).await),
+        WalletErrorKind::InvalidSlate
+    );
+}
