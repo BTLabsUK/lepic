@@ -173,7 +173,7 @@ fn send_receive_and_finalize_through_the_relay() {
 
     let status = sender.run(&host, &["epicbox", "status"]).ok().json();
     assert_eq!(status["pending_deliveries"], 0);
-    assert_eq!(status["relay"], "ws://relay.test:80");
+    assert_eq!(status["relay"], "ws://127.0.0.1:80");
 }
 
 #[test]

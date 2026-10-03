@@ -71,6 +71,14 @@ impl RelayEndpoint {
         self.security
     }
 
+    /// Refuses a plain websocket to a host that is not loopback; TLS may reach any host.
+    pub fn check_security(&self) -> Result<(), EndpointError> {
+        if self.security == Security::Plain && !is_loopback(&self.domain) {
+            return Err(EndpointError::PlainToRemoteHost);
+        }
+        Ok(())
+    }
+
     /// `wss://domain:port` or `ws://domain:port`.
     pub fn url(&self) -> String {
         let scheme = match self.security {
@@ -144,12 +152,9 @@ impl Connector for TcpConnector {
         endpoint: &'a RelayEndpoint,
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
         Box::pin(async move {
-            if endpoint.security() == Security::Plain && !is_loopback(endpoint.domain()) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    EndpointError::PlainToRemoteHost,
-                ));
-            }
+            endpoint
+                .check_security()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
             let tcp = TcpStream::connect((endpoint.domain().as_str(), endpoint.port())).await?;
             tcp.set_nodelay(true)?;
             match endpoint.security() {

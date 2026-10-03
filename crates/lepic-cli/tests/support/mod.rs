@@ -216,7 +216,7 @@ impl Instance {
             ("LEPIC_OUTPUT".to_owned(), "json".to_owned()),
             (
                 "LEPIC_EPICBOX_RELAY".to_owned(),
-                "ws://relay.test:80".to_owned(),
+                "ws://127.0.0.1:80".to_owned(),
             ),
             ("LEPIC_PASSWORD".to_owned(), self.password.clone()),
         ]

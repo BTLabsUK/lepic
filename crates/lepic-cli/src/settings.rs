@@ -42,7 +42,7 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
     (
         "epicbox_relay",
         "LEPIC_EPICBOX_RELAY",
-        "relay as wss://host[:port] or ws://host[:port]",
+        "relay as wss://host[:port], or ws://host[:port] for a loopback host",
     ),
 ];
 
@@ -285,7 +285,7 @@ fn default_node_url(network: Network) -> &'static str {
     }
 }
 
-/// `wss://host[:port]`, `ws://host[:port]`, or `host[:port]` for TLS.
+/// `wss://host[:port]`, `ws://host[:port]` to a loopback host, or `host[:port]` for TLS.
 fn parse_relay(text: &str) -> Option<RelayEndpoint> {
     let (security, rest) = if let Some(rest) = text.strip_prefix("wss://") {
         (Security::Tls, rest)
@@ -300,7 +300,9 @@ fn parse_relay(text: &str) -> Option<RelayEndpoint> {
         None => (rest, None),
     };
     let domain = Domain::parse(host).ok()?;
-    Some(RelayEndpoint::new(domain, port, security))
+    let endpoint = RelayEndpoint::new(domain, port, security);
+    endpoint.check_security().ok()?;
+    Some(endpoint)
 }
 
 struct Lookup<'a> {
@@ -501,6 +503,8 @@ mod tests {
         assert_eq!((plain.port(), plain.security()), (3423, Security::Plain));
         assert_eq!(parse_relay("relay.example.org:8443").unwrap().port(), 8443);
         assert!(parse_relay("ws://host:notaport").is_none());
+        assert!(parse_relay("ws://localhost:3423").is_some());
+        assert!(parse_relay("ws://relay.example.org").is_none());
         assert!(parse_relay("").is_none());
     }
 }
