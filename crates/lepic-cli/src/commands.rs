@@ -5,6 +5,7 @@ use std::io::Read as _;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
@@ -19,7 +20,9 @@ use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
 use lepic_wallet::event::Balance;
+use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
+use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::refresh::RefreshOutcome;
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
@@ -31,20 +34,22 @@ use lepic_wallet::{
 };
 use rand::SeedableRng as _;
 use rand::rngs::{StdRng, SysRng};
+use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
-    Command, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs, NodeCommand, PostArgs,
-    ReceiveArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, TxCommand, WalletCommand, WordsArg,
+    Command, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs, InvoiceCommand, NodeCommand,
+    PostArgs, ReceiveArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs, TxCommand,
+    WalletCommand, WordsArg,
 };
 use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, FinalizeReport, InboxReport, InfoReport,
-    InitReport, NodeStatusReport, ReceiveReport, Report, RestoreReport, ScanReport, SendReport,
-    TxListReport, TxReport, TxStateReport,
+    InitReport, InvoiceIssueReport, InvoicePayReport, NodeStatusReport, ReceiveReport, Report,
+    RestoreReport, ScanReport, SendReport, TxListReport, TxReport, TxStateReport,
 };
 use crate::settings::Settings;
 use crate::stores::{CliStores, SharedStore};
@@ -84,28 +89,77 @@ struct Run<'a, H: Host> {
     host: &'a H,
     settings: &'a Settings,
     console: &'a mut Console,
+    /// Turns true once the user interrupts.
+    interrupt: watch::Receiver<bool>,
+    /// Set by a command that stops on its own when interrupted and reports what it did.
+    graceful: Arc<AtomicBool>,
 }
 
+/// Runs `command` until it ends or the user interrupts it. An interrupt ends any command at
+/// once, at a prompt too, which drops the prompt's echo guard; the engine keeps its stored state
+/// consistent at every await point, as it must when an app is killed. Listen and scan instead
+/// stop themselves and report what they stored.
 pub(crate) async fn execute<H: Host>(
     host: &H,
     command: Command,
     settings: &Settings,
     console: &mut Console,
 ) -> Result<Report, CliError> {
+    let (signal, interrupt) = watch::channel(false);
+    let interrupted = host.interrupted();
+    let watcher = tokio::spawn(async move {
+        interrupted.await;
+        signal.send_replace(true);
+    });
+    let graceful = Arc::new(AtomicBool::new(false));
     let mut run = Run {
         host,
         settings,
         console,
+        interrupt: interrupt.clone(),
+        graceful: Arc::clone(&graceful),
     };
-    match command {
-        Command::Wallet(command) => run.wallet(command).await,
-        Command::Tx(command) => run.tx(command).await,
-        Command::Epicbox(command) => run.epicbox(command).await,
-        Command::Node(NodeCommand::Status) => run.node_status().await,
+    let result = tokio::select! {
+        result = run.dispatch(command) => result,
+        () = abort_on(interrupt, &graceful) => Err(CliError::Interrupted),
+    };
+    watcher.abort();
+    result
+}
+
+async fn abort_on(mut interrupt: watch::Receiver<bool>, graceful: &AtomicBool) {
+    let stopped = interrupt.wait_for(|stopped| *stopped).await.is_ok();
+    if !stopped || graceful.load(Ordering::SeqCst) {
+        std::future::pending::<()>().await;
     }
 }
 
 impl<H: Host> Run<'_, H> {
+    async fn dispatch(&mut self, command: Command) -> Result<Report, CliError> {
+        match command {
+            Command::Wallet(command) => self.wallet(command).await,
+            Command::Tx(command) => self.tx(command).await,
+            Command::Invoice(command) => self.invoice(command).await,
+            Command::Epicbox(command) => self.epicbox(command).await,
+            Command::Node(NodeCommand::Status) => self.node_status().await,
+        }
+    }
+
+    /// Runs `work` to its end. When the user interrupts first, `stop` asks it to end early and
+    /// its result is still awaited, so what it stored is reported.
+    async fn until_interrupted<T>(&self, work: impl Future<Output = T>, stop: impl FnOnce()) -> T {
+        self.graceful.store(true, Ordering::SeqCst);
+        let mut interrupt = self.interrupt.clone();
+        tokio::pin!(work);
+        tokio::select! {
+            result = &mut work => result,
+            Ok(_) = interrupt.wait_for(|stopped| *stopped) => {
+                stop();
+                work.await
+            }
+        }
+    }
+
     async fn wallet(&mut self, command: WalletCommand) -> Result<Report, CliError> {
         match command {
             WalletCommand::Init(args) => self.init(&args).await,
@@ -171,9 +225,8 @@ impl<H: Host> Run<'_, H> {
             EpicboxCommand::Drain => opened.wallet.epicbox_drain(&opened.epicbox).await?,
             EpicboxCommand::Listen => {
                 let handle = ListenHandle::new();
-                until_interrupted(
+                self.until_interrupted(
                     opened.wallet.epicbox_listen(&opened.epicbox, &handle),
-                    self.host.interrupted(),
                     || handle.stop(),
                 )
                 .await?
@@ -208,7 +261,7 @@ impl<H: Host> Run<'_, H> {
     }
 
     async fn init(&mut self, args: &InitArgs) -> Result<Report, CliError> {
-        let password = self.new_password()?;
+        let password = self.new_password().await?;
         let wallet = self.prepare(true)?;
         let phrase = wallet
             .wallet
@@ -225,8 +278,9 @@ impl<H: Host> Run<'_, H> {
         let phrase = self
             .console
             .secrets
-            .read("recovery phrase", "Recovery phrase: ")?;
-        let password = self.new_password()?;
+            .read("recovery phrase", "Recovery phrase: ")
+            .await?;
+        let password = self.new_password().await?;
         let opened = self.prepare(true)?;
         opened.wallet.restore(password, phrase.trim()).await?;
         self.restored(&opened, &args.scan).await
@@ -237,8 +291,9 @@ impl<H: Host> Run<'_, H> {
         let file_password = self
             .console
             .secrets
-            .read("wallet.seed password", "Password of the wallet.seed file: ")?;
-        let password = self.new_password()?;
+            .read("wallet.seed password", "Password of the wallet.seed file: ")
+            .await?;
+        let password = self.new_password().await?;
         let opened = self.prepare(true)?;
         opened
             .wallet
@@ -256,14 +311,14 @@ impl<H: Host> Run<'_, H> {
             None
         } else {
             let cancel = ScanCancel::new();
-            let summary: ScanSummary = until_interrupted(
-                opened
-                    .wallet
-                    .scan(ScanOptions::restore(self.settings.network), &cancel),
-                self.host.interrupted(),
-                || cancel.cancel(),
-            )
-            .await?;
+            let summary: ScanSummary = self
+                .until_interrupted(
+                    opened
+                        .wallet
+                        .scan(ScanOptions::restore(self.settings.network), &cancel),
+                    || cancel.cancel(),
+                )
+                .await?;
             Some(ScanReport {
                 start_height: summary.start_height.value(),
                 end_height: summary.end_height.value(),
@@ -321,9 +376,7 @@ impl<H: Host> Run<'_, H> {
 
     async fn send(&mut self, args: SendArgs) -> Result<Report, CliError> {
         let amount = parse_amount(&args.amount)?;
-        let change_outputs = NonZeroUsize::new(args.change_outputs).ok_or(CliError::Zero {
-            what: "--change-outputs",
-        })?;
+        let spend = Spend::from_args(&args.spend)?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
         let (delivery, destination) = match (args.destination.to, args.destination.to_file) {
@@ -351,13 +404,10 @@ impl<H: Host> Run<'_, H> {
         };
         let transport = delivery.transport();
         let request = SendRequest {
-            minimum_confirmations: args.min_confirmations,
-            change_outputs,
-            strategy: match args.selection {
-                SelectionArg::All => SelectionStrategy::All,
-                SelectionArg::Smallest => SelectionStrategy::Smallest,
-            },
-            ttl_blocks: args.ttl_blocks,
+            minimum_confirmations: spend.minimum_confirmations,
+            change_outputs: spend.change_outputs,
+            strategy: spend.strategy,
+            ttl_blocks: spend.ttl_blocks,
             message: args.message.message,
             ..SendRequest::new(account.index, amount)
         };
@@ -390,6 +440,7 @@ impl<H: Host> Run<'_, H> {
             )
             .await?;
         let reply = args
+            .reply
             .reply_file
             .unwrap_or_else(|| response_path(&args.slate.file));
         files
@@ -408,10 +459,21 @@ impl<H: Host> Run<'_, H> {
         let wire = FileTransport::new()
             .import(&Location::File(args.slate.file.clone()))
             .await?;
-        let finalized = opened
-            .wallet
-            .finalize(FILE, &wire, propagation(args.fluff.fluff))
-            .await?;
+        let propagation = propagation(args.fluff.fluff);
+        // Which flow the file answers is known only once it is decoded, which the engine does.
+        let finalized = match opened.wallet.finalize(FILE, &wire, propagation).await {
+            Err(error @ FinalizeError::WrongStage { .. }) => {
+                match opened
+                    .wallet
+                    .finalize_invoice(FILE, &wire, propagation)
+                    .await
+                {
+                    Err(InvoiceError::WrongStage { .. }) => return Err(error.into()),
+                    other => other?,
+                }
+            }
+            other => other?,
+        };
         Ok(Report::Finalize(FinalizeReport {
             tx_id: finalized.tx_id.0,
             slate_id: finalized.slate.id().to_string(),
@@ -419,11 +481,76 @@ impl<H: Host> Run<'_, H> {
         }))
     }
 
-    fn new_password(&mut self) -> Result<Password, CliError> {
+    async fn invoice(&mut self, command: InvoiceCommand) -> Result<Report, CliError> {
+        match command {
+            InvoiceCommand::Issue(args) => {
+                let amount = parse_amount(&args.amount)?;
+                let opened = self.open().await?;
+                let account = opened.wallet.account(&args.account.account)?;
+                let file = args.to_file.display().to_string();
+                let issued = opened
+                    .wallet
+                    .issue_invoice(
+                        InvoiceRequest {
+                            account: account.index,
+                            amount,
+                            message: args.message.message,
+                        },
+                        Delivery::Export {
+                            transport: FILE,
+                            to: Location::File(args.to_file),
+                        },
+                    )
+                    .await?;
+                Ok(Report::InvoiceIssue(InvoiceIssueReport {
+                    tx_id: issued.tx_id.0,
+                    slate_id: issued.slate_id.to_string(),
+                    amount: format_amount(issued.amount),
+                    file,
+                }))
+            }
+            InvoiceCommand::Pay(args) => {
+                let amount = parse_amount(&args.amount)?;
+                let spend = Spend::from_args(&args.spend)?;
+                let opened = self.open().await?;
+                let account = opened.wallet.account(&args.account.account)?;
+                let files = FileTransport::new();
+                let wire = files
+                    .import(&Location::File(args.slate.file.clone()))
+                    .await?;
+                let request = PayRequest {
+                    minimum_confirmations: spend.minimum_confirmations,
+                    change_outputs: spend.change_outputs,
+                    strategy: spend.strategy,
+                    ttl_blocks: spend.ttl_blocks,
+                    message: args.message.message,
+                    ..PayRequest::new(account.index, amount)
+                };
+                let paid = opened.wallet.pay_invoice(FILE, &wire, request).await?;
+                let reply = args
+                    .reply
+                    .reply_file
+                    .unwrap_or_else(|| response_path(&args.slate.file));
+                files
+                    .export(&paid.reply, &Location::File(reply.clone()))
+                    .await?;
+                Ok(Report::InvoicePay(InvoicePayReport {
+                    tx_id: paid.tx_id.0,
+                    slate_id: paid.slate.id().to_string(),
+                    amount: format_amount(paid.slate.amount()),
+                    fee: format_fee(paid.slate.fee()),
+                    reply_file: reply.display().to_string(),
+                }))
+            }
+        }
+    }
+
+    async fn new_password(&mut self) -> Result<Password, CliError> {
         let password = self
             .console
             .secrets
-            .wallet_password(&self.console.env, true)?;
+            .wallet_password(&self.console.env, true)
+            .await?;
         Ok(password_from(password))
     }
 
@@ -432,7 +559,8 @@ impl<H: Host> Run<'_, H> {
         let password = self
             .console
             .secrets
-            .wallet_password(&self.console.env, false)?;
+            .wallet_password(&self.console.env, false)
+            .await?;
         let opened = self.prepare(false)?;
         opened.wallet.open(password_from(password)).await?;
         Ok(opened)
@@ -487,20 +615,27 @@ impl<H: Host> Run<'_, H> {
     }
 }
 
-/// Runs `work` to its end; when the user interrupts first, `stop` asks it to end early and its
-/// result is still awaited, so what it stored is reported.
-async fn until_interrupted<T>(
-    work: impl Future<Output = T>,
-    interrupt: crate::host::Interrupt,
-    stop: impl FnOnce(),
-) -> T {
-    tokio::pin!(work);
-    tokio::select! {
-        result = &mut work => result,
-        () = interrupt => {
-            stop();
-            work.await
-        }
+/// The spending options shared by `tx send` and `invoice pay`.
+struct Spend {
+    minimum_confirmations: u64,
+    change_outputs: NonZeroUsize,
+    strategy: SelectionStrategy,
+    ttl_blocks: Option<u64>,
+}
+
+impl Spend {
+    fn from_args(args: &SpendArgs) -> Result<Self, CliError> {
+        Ok(Self {
+            minimum_confirmations: args.min_confirmations,
+            change_outputs: NonZeroUsize::new(args.change_outputs).ok_or(CliError::Zero {
+                what: "--change-outputs",
+            })?,
+            strategy: match args.selection {
+                SelectionArg::All => SelectionStrategy::All,
+                SelectionArg::Smallest => SelectionStrategy::Smallest,
+            },
+            ttl_blocks: args.ttl_blocks,
+        })
     }
 }
 

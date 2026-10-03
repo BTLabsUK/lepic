@@ -9,6 +9,7 @@ use lepic_telemetry::TelemetryError;
 use lepic_transport::error::TransportError;
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::InboxError;
+use lepic_wallet::invoice::InvoiceError;
 use lepic_wallet::refresh::RefreshError;
 use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
@@ -115,6 +116,8 @@ pub enum CliError {
     Receive(#[from] ReceiveError),
     #[error("finalize failed")]
     Finalize(#[from] FinalizeError),
+    #[error("invoice failed")]
+    Invoice(#[from] InvoiceError),
     #[error("epicbox failed")]
     Inbox(#[from] InboxError),
     #[error("refresh failed")]
@@ -157,6 +160,7 @@ impl CliError {
             Self::Send(error) => send_kind(error),
             Self::Receive(error) => receive_kind(error),
             Self::Finalize(error) => finalize_kind(error),
+            Self::Invoice(error) => invoice_kind(error),
             Self::Inbox(error) => inbox_kind(error),
             Self::Refresh(RefreshError::Wallet(error)) | Self::Scan(ScanError::Wallet(error)) => {
                 wallet_kind(error)
@@ -272,6 +276,37 @@ fn finalize_kind(error: &FinalizeError) -> ErrorKind {
     }
 }
 
+fn invoice_kind(error: &InvoiceError) -> ErrorKind {
+    match error {
+        InvoiceError::Wallet(error) => wallet_kind(error),
+        InvoiceError::Node(_) => ErrorKind::Node,
+        InvoiceError::Selection(SelectionError::NotEnoughFunds { .. }) => {
+            ErrorKind::InsufficientFunds
+        }
+        InvoiceError::UnknownTransport { .. }
+        | InvoiceError::CannotDeliver { .. }
+        | InvoiceError::CannotExport { .. } => ErrorKind::Transport,
+        InvoiceError::Undelivered { .. } | InvoiceError::NotPosted { .. } => ErrorKind::Incomplete,
+        InvoiceError::UnknownSlate { .. } => ErrorKind::NotFound,
+        InvoiceError::Decode(_)
+        | InvoiceError::WrongStage { .. }
+        | InvoiceError::Selection(_)
+        | InvoiceError::AmountMismatch { .. }
+        | InvoiceError::AlreadyPaid { .. }
+        | InvoiceError::Expired { .. }
+        | InvoiceError::MessageSignature { .. }
+        | InvoiceError::Mismatch { .. }
+        | InvoiceError::PayerSignature(_)
+        | InvoiceError::FeeBelowMinimum { .. }
+        | InvoiceError::FeeOverflow
+        | InvoiceError::InvalidTransaction(_)
+        | InvoiceError::Unrepresentable(_)
+        | InvoiceError::AlreadyFinalized { .. }
+        | InvoiceError::NotFinalizable { .. } => ErrorKind::Rejected,
+        _ => ErrorKind::Internal,
+    }
+}
+
 fn inbox_kind(error: &InboxError) -> ErrorKind {
     match error {
         InboxError::Wallet(error) => wallet_kind(error),
@@ -333,6 +368,14 @@ mod tests {
                 ErrorKind::Incomplete,
             ),
             (ReceiveError::FeeOverflow.into(), ErrorKind::Rejected),
+            (
+                InvoiceError::AmountMismatch {
+                    invoiced: lepic_primitives::amount::Amount::new(2),
+                    approved: lepic_primitives::amount::Amount::new(1),
+                }
+                .into(),
+                ErrorKind::Rejected,
+            ),
             (AmountError::Syntax.into(), ErrorKind::Usage),
             (CliError::Interrupted, ErrorKind::Interrupted),
         ];

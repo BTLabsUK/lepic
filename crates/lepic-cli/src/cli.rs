@@ -92,6 +92,9 @@ pub enum Command {
     /// Send, receive and manage transactions
     #[command(subcommand)]
     Tx(TxCommand),
+    /// Ask for a payment, or pay one asked for, through slate files
+    #[command(subcommand)]
+    Invoice(InvoiceCommand),
     /// Exchange slates through an Epicbox relay
     #[command(subcommand)]
     Epicbox(EpicboxCommand),
@@ -166,7 +169,7 @@ pub enum TxCommand {
     Send(SendArgs),
     /// Accept a slate file and write the reply next to it
     Receive(ReceiveArgs),
-    /// Finalize a reply slate file and post the transaction
+    /// Finalize a reply slate file, to a send or to an invoice, and post the transaction
     Finalize(FinalizeArgs),
     /// Post a finalized transaction again
     Post(PostArgs),
@@ -189,6 +192,13 @@ pub struct SendArgs {
     pub account: AccountArg,
     #[command(flatten)]
     pub message: MessageArg,
+    #[command(flatten)]
+    pub spend: SpendArgs,
+}
+
+/// How a payment chooses and spends its inputs.
+#[derive(Debug, Args)]
+pub struct SpendArgs {
     /// Confirmations an output needs before it is spent
     #[arg(long, value_name = "COUNT", default_value_t = 10)]
     pub min_confirmations: u64,
@@ -198,7 +208,7 @@ pub struct SendArgs {
     /// How inputs are chosen
     #[arg(long, value_name = "STRATEGY", default_value = "all")]
     pub selection: SelectionArg,
-    /// Blocks after which the receiver must refuse the slate
+    /// Blocks after which the other party must refuse the slate
     #[arg(long, value_name = "BLOCKS")]
     pub ttl_blocks: Option<u64>,
 }
@@ -209,7 +219,7 @@ pub struct DestinationArgs {
     /// Epicbox address of the receiver
     #[arg(long, value_name = "ADDRESS")]
     pub to: Option<String>,
-    /// Write the slate to this file instead of delivering it
+    /// Write the slate to this file
     #[arg(long, value_name = "FILE")]
     pub to_file: Option<PathBuf>,
 }
@@ -247,13 +257,19 @@ pub struct SlateFileArg {
 pub struct ReceiveArgs {
     #[command(flatten)]
     pub slate: SlateFileArg,
-    /// Where the reply goes [default: <FILE>.response]
-    #[arg(long, value_name = "FILE")]
-    pub reply_file: Option<PathBuf>,
+    #[command(flatten)]
+    pub reply: ReplyFileArg,
     #[command(flatten)]
     pub account: AccountArg,
     #[command(flatten)]
     pub message: MessageArg,
+}
+
+#[derive(Debug, Args)]
+pub struct ReplyFileArg {
+    /// Where the reply goes [default: <FILE>.response]
+    #[arg(long, value_name = "FILE")]
+    pub reply_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -290,6 +306,48 @@ pub struct PostArgs {
 pub struct ListArgs {
     #[command(flatten)]
     pub account: AccountArg,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InvoiceCommand {
+    /// Write an invoice slate file asking the payer for an amount
+    Issue(IssueArgs),
+    /// Pay an invoice slate file and write the reply next to it
+    #[command(after_help = "\
+The payer types the amount again; an invoice for any other amount is refused. The issuer then
+runs `lepic tx finalize` on the reply.")]
+    Pay(PayArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct IssueArgs {
+    /// Amount to ask for, in EPIC; the payer adds the fee
+    #[arg(value_name = "AMOUNT")]
+    pub amount: String,
+    /// Write the slate to this file
+    #[arg(long, value_name = "FILE")]
+    pub to_file: PathBuf,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+}
+
+#[derive(Debug, Args)]
+pub struct PayArgs {
+    #[command(flatten)]
+    pub slate: SlateFileArg,
+    /// The amount the invoice asks for, in EPIC
+    #[arg(value_name = "AMOUNT")]
+    pub amount: String,
+    #[command(flatten)]
+    pub reply: ReplyFileArg,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+    #[command(flatten)]
+    pub spend: SpendArgs,
 }
 
 #[derive(Debug, Subcommand)]

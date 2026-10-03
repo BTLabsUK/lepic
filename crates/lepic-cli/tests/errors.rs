@@ -1,11 +1,15 @@
 //! Failures reach the user as typed exit codes and, with `--output json`, as one JSON document.
 
 // Tests may unwrap and index (docs/rules.md).
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
 mod support;
 
-use support::{FUNDING, Instance, SENDER_MNEMONIC, TestHost, run_in, text};
+use std::sync::Arc;
+
+use support::{
+    FUNDING, Instance, SENDER_MNEMONIC, SilentInput, TestHost, run_in, run_reading, text,
+};
 
 fn error_kind(outcome: &support::Outcome) -> String {
     let document = outcome.json();
@@ -146,4 +150,62 @@ fn node_status_reports_the_tip() {
     assert_eq!(outcome["height"], support::TIP);
     assert_eq!(outcome["node_version"], "4.0.4");
     assert_eq!(outcome["node"], "127.0.0.1");
+}
+
+#[test]
+fn an_interrupt_at_a_password_prompt_ends_the_command() {
+    let mut host = TestHost::new();
+    host.interrupt_when = Some(Arc::new(|| true));
+    let wallet = Instance::new("test password");
+    let mut env = wallet.env();
+    env.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    let (done, finished) = std::sync::mpsc::channel();
+    // On its own thread, so a prompt the interrupt cannot end fails the test instead of
+    // hanging it.
+    std::thread::spawn(move || {
+        let (_keep_open, never) = std::sync::mpsc::channel();
+        let outcome = run_reading(
+            &host,
+            &["wallet", "info"],
+            env,
+            Box::new(std::io::BufReader::new(SilentInput(never))),
+        );
+        let _ = done.send(outcome);
+    });
+    let outcome = finished
+        .recv_timeout(support::PATIENCE)
+        .expect("the interrupt did not end the prompt");
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (12, "interrupted")
+    );
+}
+
+#[test]
+fn an_invoice_for_another_amount_is_refused_and_writes_no_reply() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let payer = Instance::new("payer password");
+    payer.restore(&host, SENDER_MNEMONIC);
+    let issuer = Instance::new("issuer password");
+    issuer.run(&host, &["wallet", "init"]).ok();
+    let invoice = issuer.path("invoice.slate");
+    issuer
+        .run(
+            &host,
+            &[
+                "invoice",
+                "issue",
+                "3",
+                "--to-file",
+                invoice.to_str().unwrap(),
+            ],
+        )
+        .ok();
+    let outcome = payer.run(&host, &["invoice", "pay", invoice.to_str().unwrap(), "2.5"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (7, "rejected")
+    );
+    assert!(!issuer.path("invoice.slate.response").exists());
 }

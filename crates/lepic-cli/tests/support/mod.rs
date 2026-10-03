@@ -257,15 +257,36 @@ impl Instance {
 }
 
 pub fn run_in(host: &TestHost, args: &[&str], env: Vec<(String, String)>, stdin: &str) -> Outcome {
+    run_reading(
+        host,
+        args,
+        env,
+        Box::new(io::Cursor::new(stdin.as_bytes().to_vec())),
+    )
+}
+
+/// Standard input that never delivers a line while the sender is alive, as from a user who
+/// has not pressed Enter.
+pub struct SilentInput(pub std::sync::mpsc::Receiver<()>);
+
+impl io::Read for SilentInput {
+    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+        let _ = self.0.recv();
+        Ok(0)
+    }
+}
+
+pub fn run_reading(
+    host: &TestHost,
+    args: &[&str],
+    env: Vec<(String, String)>,
+    stdin: Box<dyn io::BufRead + Send>,
+) -> Outcome {
     let stdout = Buffer::default();
     let stderr = Buffer::default();
     let mut console = Console {
         env: Env::new(env),
-        secrets: SecretInput::new(
-            Box::new(io::Cursor::new(stdin.as_bytes().to_vec())),
-            false,
-            Box::new(io::sink()),
-        ),
+        secrets: SecretInput::new(stdin, false, Box::new(io::sink())),
         stdout: Box::new(stdout.clone()),
         stderr: Box::new(stderr.clone()),
         ansi: false,

@@ -31,8 +31,8 @@ pub trait Host {
     /// The Argon2 setting of a new vault. Opening a vault reads the setting from the file.
     fn vault_kdf(&self) -> KdfParams;
 
-    /// Resolves when the user asks a long-running command to stop. Called inside the
-    /// command's runtime.
+    /// Resolves when the user asks the command to stop. Called once per command, inside its
+    /// runtime, before anything is read, so that an interrupt at a prompt reaches the CLI.
     fn interrupted(&self) -> Interrupt;
 }
 
@@ -70,9 +70,25 @@ impl Host for ProcessHost {
         KdfParams::DEFAULT
     }
 
+    /// The handler is installed here, not on first poll, so no Ctrl-C between this call and
+    /// the first prompt can end the process with echo off. Without a handler the command runs
+    /// until it ends on its own.
+    #[cfg(unix)]
+    fn interrupted(&self) -> Interrupt {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::interrupt()) {
+            Ok(mut interrupt) => Box::pin(async move {
+                if interrupt.recv().await.is_none() {
+                    std::future::pending::<()>().await;
+                }
+            }),
+            Err(_) => Box::pin(std::future::pending()),
+        }
+    }
+
+    #[cfg(not(unix))]
     fn interrupted(&self) -> Interrupt {
         Box::pin(async {
-            // Without a signal handler the command runs until it ends on its own.
             if tokio::signal::ctrl_c().await.is_err() {
                 std::future::pending::<()>().await;
             }

@@ -217,3 +217,61 @@ fn listen_handles_a_waiting_slate_and_stops_when_interrupted() {
     );
     assert_eq!(listened["received"], 1, "{listened}");
 }
+
+#[test]
+fn issue_pay_and_finalize_an_invoice_through_files() {
+    let (host, payer, issuer) = two_wallets();
+    let invoice = issuer.path("invoice.slate");
+    let issued = issuer
+        .run(
+            &host,
+            &[
+                "invoice",
+                "issue",
+                "3",
+                "--to-file",
+                invoice.to_str().unwrap(),
+                "-m",
+                "for the bike",
+            ],
+        )
+        .ok()
+        .json();
+    assert_eq!(keys(&issued), ["amount", "file", "slate_id", "tx_id"]);
+    assert_eq!(issued["amount"], "3.00000000");
+    assert!(invoice.is_file());
+
+    let paid = payer
+        .run(&host, &["invoice", "pay", invoice.to_str().unwrap(), "3"])
+        .ok()
+        .json();
+    assert_eq!(
+        keys(&paid),
+        ["amount", "fee", "reply_file", "slate_id", "tx_id"]
+    );
+    assert_eq!(paid["slate_id"], issued["slate_id"]);
+    let reply = text(&paid, "reply_file").to_owned();
+    assert_eq!(reply, format!("{}.response", invoice.display()));
+
+    let finalized = issuer.run(&host, &["tx", "finalize", &reply]).ok().json();
+    assert_eq!(finalized["tx_id"], issued["tx_id"]);
+    assert_eq!(finalized["state"], "posted");
+    assert_eq!(host.node.pushed_transactions().len(), 1);
+
+    let incoming = transaction(&issuer, &host, &issued["slate_id"]);
+    assert_eq!(incoming["direction"], "incoming");
+    assert_eq!(incoming["state"], "posted");
+    assert_eq!(incoming["amount_credited"], "3.00000000");
+    let outgoing = transaction(&payer, &host, &issued["slate_id"]);
+    assert_eq!(outgoing["direction"], "outgoing");
+    assert_eq!(outgoing["fee"], paid["fee"]);
+
+    // A standard reply finalized as an invoice, or the reverse, is not mistaken for the other.
+    let again = issuer.run(&host, &["tx", "finalize", invoice.to_str().unwrap()]);
+    assert_eq!(again.code, 7, "{again:?}");
+    assert!(
+        host.node.violations().is_empty(),
+        "{:?}",
+        host.node.violations()
+    );
+}

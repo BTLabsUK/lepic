@@ -24,6 +24,8 @@ pub enum Report {
     Cancel(TxStateReport),
     List(TxListReport),
     Show(TxReport),
+    InvoiceIssue(InvoiceIssueReport),
+    InvoicePay(InvoicePayReport),
     Inbox(InboxReport),
     EpicboxStatus(EpicboxStatusReport),
     NodeStatus(NodeStatusReport),
@@ -144,6 +146,25 @@ pub struct TxReport {
     /// Slate stages stored for the transaction; listed by `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stages: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvoiceIssueReport {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: String,
+    /// The invoice slate file to give the payer.
+    pub file: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvoicePayReport {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: String,
+    pub fee: String,
+    /// The reply to give the issuer, who finalizes it.
+    pub reply_file: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -353,6 +374,16 @@ fn write_human(out: &mut String, report: &Report) -> std::fmt::Result {
             }
             Ok(())
         }
+        Report::InvoiceIssue(r) => writeln!(
+            out,
+            "Transaction {} asks for {} EPIC. Give {} to the payer.\nSlate {}.",
+            r.tx_id, r.amount, r.file, r.slate_id
+        ),
+        Report::InvoicePay(r) => writeln!(
+            out,
+            "Transaction {} pays {} EPIC (fee {}). Return {} to the issuer.\nSlate {}.",
+            r.tx_id, r.amount, r.fee, r.reply_file, r.slate_id
+        ),
         Report::Inbox(r) => writeln!(
             out,
             "Received {}, finalized {}, repeated {}, rejected {}, held for retry {}.",
@@ -369,5 +400,279 @@ fn write_human(out: &mut String, report: &Report) -> std::fmt::Result {
             writeln!(out, "Block    {}", r.last_block)?;
             writeln!(out, "Header   version {}", r.block_header_version)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap and index (docs/rules.md).
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use serde_json::Value;
+
+    use super::*;
+    use crate::exit::CliError;
+
+    fn keys(text: &str) -> Vec<String> {
+        assert_eq!(text.lines().count(), 1, "{text}");
+        let value: Value = serde_json::from_str(text).unwrap();
+        let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    fn text(value: &str) -> String {
+        value.to_owned()
+    }
+
+    fn tx(stages: Option<Vec<String>>) -> TxReport {
+        TxReport {
+            tx_id: 1,
+            direction: text("outgoing"),
+            state: text("sent"),
+            amount_credited: text("0.00000000"),
+            amount_debited: text("1.00000000"),
+            fee: None,
+            slate_id: None,
+            transport: None,
+            created_at: text("t"),
+            updated_at: text("t"),
+            stages,
+        }
+    }
+
+    /// The field names are the CLI's JSON interface; a change here is a breaking change.
+    #[test]
+    fn every_json_document_keeps_its_field_names() {
+        const TX: &[&str] = &[
+            "amount_credited",
+            "amount_debited",
+            "created_at",
+            "direction",
+            "fee",
+            "slate_id",
+            "state",
+            "transport",
+            "tx_id",
+            "updated_at",
+        ];
+        let account = AccountReport {
+            index: 0,
+            label: text("default"),
+            total: None,
+            spendable: None,
+            awaiting_confirmation: None,
+            awaiting_finalization: None,
+            immature: None,
+            locked: None,
+        };
+        let cases: Vec<(Report, Vec<&str>)> = vec![
+            (
+                Report::Init(InitReport {
+                    network: text("floonet"),
+                    data_dir: text("/d"),
+                    recovery_phrase: Zeroizing::new(text("words")),
+                }),
+                vec!["data_dir", "network", "recovery_phrase"],
+            ),
+            (
+                Report::Restore(RestoreReport {
+                    network: text("floonet"),
+                    data_dir: text("/d"),
+                    scan: None,
+                }),
+                vec!["data_dir", "network", "scan"],
+            ),
+            (
+                Report::Info(InfoReport {
+                    network: text("floonet"),
+                    height: 1,
+                    node_behind: false,
+                    accounts: vec![],
+                }),
+                vec!["accounts", "height", "network", "node_behind"],
+            ),
+            (
+                Report::Address(AddressReport { address: text("a") }),
+                vec!["address"],
+            ),
+            (
+                Report::Send(SendReport {
+                    tx_id: 1,
+                    slate_id: text("s"),
+                    amount: text("1"),
+                    fee: text("1"),
+                    transport: text("file"),
+                    destination: text("f"),
+                }),
+                vec![
+                    "amount",
+                    "destination",
+                    "fee",
+                    "slate_id",
+                    "transport",
+                    "tx_id",
+                ],
+            ),
+            (
+                Report::Receive(ReceiveReport {
+                    tx_id: 1,
+                    slate_id: text("s"),
+                    amount: text("1"),
+                    reply_file: text("f"),
+                }),
+                vec!["amount", "reply_file", "slate_id", "tx_id"],
+            ),
+            (
+                Report::Finalize(FinalizeReport {
+                    tx_id: 1,
+                    slate_id: text("s"),
+                    state: text("posted"),
+                }),
+                vec!["slate_id", "state", "tx_id"],
+            ),
+            (
+                Report::Post(TxStateReport {
+                    tx_id: 1,
+                    state: text("posted"),
+                }),
+                vec!["state", "tx_id"],
+            ),
+            (
+                Report::Cancel(TxStateReport {
+                    tx_id: 1,
+                    state: text("cancelled"),
+                }),
+                vec!["state", "tx_id"],
+            ),
+            (
+                Report::List(TxListReport {
+                    account: text("default"),
+                    transactions: vec![],
+                }),
+                vec!["account", "transactions"],
+            ),
+            (Report::Show(tx(None)), TX.to_vec()),
+            (
+                Report::Show(tx(Some(vec![text("S1")]))),
+                [TX, &["stages"]].concat(),
+            ),
+            (
+                Report::InvoiceIssue(InvoiceIssueReport {
+                    tx_id: 1,
+                    slate_id: text("s"),
+                    amount: text("1"),
+                    file: text("f"),
+                }),
+                vec!["amount", "file", "slate_id", "tx_id"],
+            ),
+            (
+                Report::InvoicePay(InvoicePayReport {
+                    tx_id: 1,
+                    slate_id: text("s"),
+                    amount: text("1"),
+                    fee: text("1"),
+                    reply_file: text("f"),
+                }),
+                vec!["amount", "fee", "reply_file", "slate_id", "tx_id"],
+            ),
+            (
+                Report::Inbox(InboxReport {
+                    received: 0,
+                    finalized: 0,
+                    repeated: 0,
+                    rejected: 0,
+                    held: 0,
+                }),
+                vec!["finalized", "held", "received", "rejected", "repeated"],
+            ),
+            (
+                Report::EpicboxStatus(EpicboxStatusReport {
+                    relay: text("r"),
+                    address: text("a"),
+                    pending_deliveries: 0,
+                }),
+                vec!["address", "pending_deliveries", "relay"],
+            ),
+            (
+                Report::NodeStatus(NodeStatusReport {
+                    node: text("n"),
+                    node_version: text("v"),
+                    block_header_version: 6,
+                    height: 1,
+                    last_block: text("h"),
+                }),
+                vec![
+                    "block_header_version",
+                    "height",
+                    "last_block",
+                    "node",
+                    "node_version",
+                ],
+            ),
+        ];
+        for (report, expected) in cases {
+            let mut expected = expected;
+            expected.sort_unstable();
+            assert_eq!(
+                keys(&render(&report, OutputFormat::Json)),
+                expected,
+                "{report:?}"
+            );
+        }
+        let info = json_line(&InfoReport {
+            network: text("floonet"),
+            height: 1,
+            node_behind: false,
+            accounts: vec![account],
+        });
+        let value: Value = serde_json::from_str(&info).unwrap();
+        let mut account_keys: Vec<&str> = value["accounts"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        account_keys.sort_unstable();
+        assert_eq!(
+            account_keys,
+            [
+                "awaiting_confirmation",
+                "awaiting_finalization",
+                "immature",
+                "index",
+                "label",
+                "locked",
+                "spendable",
+                "total"
+            ]
+        );
+        let scan = json_line(&ScanReport {
+            start_height: 0,
+            end_height: 1,
+            found: 0,
+            restored: 0,
+        });
+        assert_eq!(
+            keys(&scan),
+            ["end_height", "found", "restored", "start_height"]
+        );
+    }
+
+    #[test]
+    fn the_error_document_keeps_its_field_names() {
+        let rendered = render_error(&CliError::Interrupted, OutputFormat::Json);
+        assert_eq!(keys(&rendered), ["error"]);
+        let value: Value = serde_json::from_str(&rendered).unwrap();
+        let mut inner: Vec<&str> = value["error"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        inner.sort_unstable();
+        assert_eq!(inner, ["causes", "exit_code", "kind", "message"]);
+        assert_eq!(value["error"]["kind"], "interrupted");
+        assert_eq!(value["error"]["exit_code"], 12);
     }
 }

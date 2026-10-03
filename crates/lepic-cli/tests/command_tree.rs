@@ -62,6 +62,8 @@ fn the_tree_has_every_planned_command() {
         "tx cancel",
         "tx list",
         "tx show",
+        "invoice issue",
+        "invoice pay",
         "epicbox listen",
         "epicbox drain",
         "epicbox status",
