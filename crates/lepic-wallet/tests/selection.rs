@@ -15,6 +15,7 @@ use std::num::NonZeroUsize;
 use lepic_crypto::{Commitment, SecretKey};
 use lepic_primitives::amount::{Amount, Fee, Height, MILLI_EPIC};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
+use lepic_primitives::params::MAX_TX_WEIGHT;
 use lepic_store::{AccountIndex, KEY_ID_LEN, KeyId, OutputRecord, OutputStatus};
 use lepic_wallet::selection::{
     SelectionError, SelectionRequest, SelectionStrategy, eligible_to_spend, estimate, select,
@@ -343,5 +344,42 @@ fn the_largest_amount_of_nothing_spendable_is_a_shortfall() {
             available: Amount::ZERO,
             needed: Amount::new(1 + 5 * MILLI_EPIC),
         })
+    );
+}
+
+#[test]
+fn past_the_weight_limit_the_largest_amount_is_found_below_the_bound() {
+    // More inputs than one transaction may weigh, so spending every output is refused.
+    let count = usize::try_from(MAX_TX_WEIGHT).unwrap();
+    let outputs = vec![output(0, 10 * MILLI_EPIC, OutputStatus::Unspent); count];
+    let request = SelectionRequest {
+        max_outputs: NonZeroUsize::new(2).unwrap(),
+        ..request(0)
+    };
+    let bound = 10 * MILLI_EPIC * MAX_TX_WEIGHT - MILLI_EPIC;
+    assert!(matches!(
+        select(
+            &outputs,
+            &SelectionRequest {
+                amount: Amount::new(bound),
+                ..request
+            }
+        ),
+        Err(SelectionError::TooHeavy { .. })
+    ));
+
+    let max = select_max(&outputs, &request).unwrap();
+    assert!(max.amount < Amount::new(bound));
+    assert!(max.amount > Amount::ZERO);
+    assert!(max.inputs.len() < count);
+    assert_eq!(
+        select(
+            &outputs,
+            &SelectionRequest {
+                amount: max.amount,
+                ..request
+            }
+        ),
+        Ok(max)
     );
 }

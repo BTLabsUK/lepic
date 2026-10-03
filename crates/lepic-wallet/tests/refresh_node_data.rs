@@ -37,7 +37,7 @@ use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
-use lepic_wallet::selection::SelectionStrategy;
+use lepic_wallet::selection::{SelectionOptions, SelectionStrategy};
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{Ports, SharedRng, Wallet, WalletError};
 use rand::SeedableRng;
@@ -910,4 +910,38 @@ fn invoice_finalize_refuses_a_tip_above_the_plausible_height() {
         other => panic!("{other:?}"),
     }
     assert_nothing_stored(&sender, &funding);
+}
+
+#[test]
+fn fee_estimates_refuse_a_tip_above_the_plausible_height() {
+    let (sender, _) = funded();
+    refreshed(&sender.harness.block_on(sender.wallet.refresh()));
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![TIP + 100_000, TIP + 100_000],
+            ..Script::default()
+        },
+    );
+    let options = SelectionOptions {
+        minimum_confirmations: 1,
+        ..SelectionOptions::new(ACCOUNT)
+    };
+
+    let fee = sender
+        .harness
+        .block_on(wallet.estimate_fee(Amount::new(AMOUNT), options));
+    let max = sender.harness.block_on(wallet.estimate_max(options));
+
+    for result in [fee, max] {
+        assert!(
+            matches!(
+                result,
+                Err(SendError::Wallet(WalletError::Implausible(
+                    ImplausibleNodeData::TipTooHigh { .. }
+                )))
+            ),
+            "{result:?}"
+        );
+    }
 }
