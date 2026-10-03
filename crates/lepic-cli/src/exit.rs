@@ -207,7 +207,7 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         | WalletError::NetworkMismatch { .. }
         | WalletError::ForeignDatabase
         | WalletError::RestoreScanRequired => ErrorKind::WalletState,
-        WalletError::Node(_) => ErrorKind::Node,
+        WalletError::Node(_) | WalletError::Implausible(_) => ErrorKind::Node,
         WalletError::UnknownTransaction(_)
         | WalletError::Account(AccountError::UnknownLabel | AccountError::UnknownAccount(_)) => {
             ErrorKind::NotFound
@@ -216,7 +216,8 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         | WalletError::WalletSeedFile(_)
         | WalletError::Account(_)
         | WalletError::Transition(_)
-        | WalletError::OnChain(_) => ErrorKind::Rejected,
+        | WalletError::OnChain(_)
+        | WalletError::ChangedDuringCancel(_) => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }
@@ -414,6 +415,18 @@ mod tests {
             (
                 WalletError::Node(NodeError::Timeout).into(),
                 ErrorKind::Node,
+            ),
+            (
+                WalletError::Implausible(ImplausibleNodeData::TipTooHigh {
+                    tip: Height::new(2),
+                    limit: Height::new(1),
+                })
+                .into(),
+                ErrorKind::Node,
+            ),
+            (
+                WalletError::ChangedDuringCancel(lepic_store::TxId(6)).into(),
+                ErrorKind::Rejected,
             ),
             (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
         ];
