@@ -23,6 +23,11 @@ use crate::transport::{BoxFuture, Exchange, Location, Transport, TransportId};
 
 pub const FILE: TransportId = TransportId::new("file");
 
+/// This platform's `O_NOFOLLOW`, for hosts that also open files they must not reach through a
+/// symbolic link.
+#[cfg(unix)]
+pub const O_NOFOLLOW: i32 = open_flags::O_NOFOLLOW;
+
 /// `version` and `orig_version` of every file LEPIC writes. A reader dispatches on `version`
 /// (`Slate::deserialize_upgrade` upstream), so a V3-shaped file must say 3 or its TTL and payment
 /// proof are dropped on read.

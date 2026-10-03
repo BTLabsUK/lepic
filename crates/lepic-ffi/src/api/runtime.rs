@@ -201,19 +201,22 @@ fn busy() -> WalletError {
 }
 
 /// An exclusive OS lock on `LOCK_FILE` in `dir`, so other runtimes and processes cannot open
-/// the directory's database at the same time. Released when the file is closed.
+/// the directory's database at the same time. Released when the file is closed. A symbolic link
+/// in place of the lock file is refused rather than followed, as the CLI refuses it.
 fn lock_dir(dir: &Path) -> Result<std::fs::File, WalletError> {
-    let file = std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join(LOCK_FILE))
-        .map_err(|error| {
-            WalletError::new(
-                WalletErrorKind::Io,
-                format!("wallet directory lock is not usable: {error}"),
-            )
-        })?;
+    let mut options = std::fs::File::options();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(lepic_transport::file::O_NOFOLLOW);
+    }
+    let file = options.open(dir.join(LOCK_FILE)).map_err(|error| {
+        WalletError::new(
+            WalletErrorKind::Io,
+            format!("wallet directory lock is not usable: {error}"),
+        )
+    })?;
     match file.try_lock() {
         Ok(()) => Ok(file),
         Err(std::fs::TryLockError::WouldBlock) => Err(busy()),
@@ -260,5 +263,30 @@ mod tests {
             app_log_message(&straddling),
             &straddling[..MAX_APP_LOG_MESSAGE_LEN - 1]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_in_place_of_the_lock_file_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = elsewhere.path().join("created-through-the-link");
+        std::os::unix::fs::symlink(&target, dir.path().join(LOCK_FILE)).unwrap();
+
+        let error = lock_dir(dir.path()).unwrap_err();
+        assert_eq!(error.kind, WalletErrorKind::Io);
+        assert!(!target.exists(), "the lock followed the link");
+    }
+
+    #[test]
+    fn a_locked_directory_is_busy_until_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = lock_dir(dir.path()).unwrap();
+        assert_eq!(
+            lock_dir(dir.path()).unwrap_err().kind,
+            WalletErrorKind::WalletBusy
+        );
+        drop(held);
+        assert!(lock_dir(dir.path()).is_ok());
     }
 }
