@@ -18,6 +18,7 @@ epic_wallet_impls.workspace = true
 epic_wallet_libwallet.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 
 [lints]

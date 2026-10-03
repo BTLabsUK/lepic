@@ -309,29 +309,19 @@ fn phrase(entropy: &[u8; 32]) -> String {
 }
 
 /// A directory under the system temporary directory, removed on drop.
-struct ScratchDir(PathBuf);
+struct ScratchDir(tempfile::TempDir);
 
 impl ScratchDir {
     fn new(label: &str) -> ScratchDir {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "lepic-differential-{label}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _absent = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        ScratchDir(path)
+        ScratchDir(
+            tempfile::Builder::new()
+                .prefix(&format!("lepic-differential-{label}-"))
+                .tempdir()
+                .unwrap(),
+        )
     }
 
     fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        let _ignored = std::fs::remove_dir_all(&self.0);
+        self.0.path()
     }
 }

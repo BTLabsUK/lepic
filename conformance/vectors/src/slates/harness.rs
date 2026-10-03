@@ -2,7 +2,7 @@
 //! controller tests wire them: a `WalletProxy` thread owns the chain and answers each wallet's
 //! `LocalWalletClient`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -178,34 +178,26 @@ pub(super) fn with_backend<T>(
     f(&mut **backend).map_err(Error::reference(step))
 }
 
-/// A per-process scratch directory for the chain and wallet databases, removed on drop.
-struct ScratchDir(PathBuf);
+/// A scratch directory for the chain and wallet databases, removed on drop.
+struct ScratchDir(tempfile::TempDir);
 
 impl ScratchDir {
     fn create(label: &str) -> Result<ScratchDir, Error> {
-        let path = std::env::temp_dir().join(format!(
-            "lepic-vectors-slates-{}-{label}",
-            std::process::id()
-        ));
-        let _absent = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).map_err(Error::io(&path))?;
-        Ok(ScratchDir(path))
+        tempfile::Builder::new()
+            .prefix(&format!("lepic-vectors-slates-{label}-"))
+            .tempdir()
+            .map(ScratchDir)
+            .map_err(Error::io(&std::env::temp_dir()))
     }
 
     fn path_str(&self) -> Result<&str, Error> {
-        self.0.to_str().ok_or_else(|| Error::Io {
-            path: self.0.clone(),
+        self.path().to_str().ok_or_else(|| Error::Io {
+            path: self.path().to_path_buf(),
             source: std::io::Error::other("scratch path is not utf-8"),
         })
     }
 
     fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        let _ignored = std::fs::remove_dir_all(&self.0);
+        self.0.path()
     }
 }

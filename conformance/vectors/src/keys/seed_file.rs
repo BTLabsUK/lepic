@@ -4,7 +4,6 @@
 //! upstream still decrypts it, and is written afresh by upstream otherwise.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use epic_keychain::{ExtKeychain, mnemonic};
 use epic_util::ZeroingString;
@@ -26,9 +25,6 @@ const CASES: [(&str, &[u8], &str); 2] = [
 ];
 
 const WRONG_PASSWORD: &str = "not the password";
-
-/// Gives concurrent generator runs in one process (the tests) separate scratch directories.
-static SCRATCH_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Serialize, PartialEq)]
 struct Inputs {
@@ -121,22 +117,23 @@ fn recorded_file(pins: &KeysPins<'_>, name: &str, inputs: &Inputs) -> Option<Str
 }
 
 /// A scratch top-level wallet directory, removed on drop.
-struct Scratch(PathBuf);
+struct Scratch(tempfile::TempDir);
 
 impl Scratch {
     fn new() -> Result<Scratch, Error> {
-        let n = SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("lepic-vectors-keys-{}-{n}", std::process::id()));
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).map_err(Error::io(&dir))?;
-        }
-        std::fs::create_dir_all(&dir).map_err(Error::io(&dir))?;
-        Ok(Scratch(dir))
+        tempfile::Builder::new()
+            .prefix("lepic-vectors-keys-")
+            .tempdir()
+            .map(Scratch)
+            .map_err(Error::io(&std::env::temp_dir()))
+    }
+
+    fn path(&self) -> &Path {
+        self.0.path()
     }
 
     fn seed_path(&self) -> PathBuf {
-        self.0.join(DATA_DIR).join(SEED_FILE)
+        self.path().join(DATA_DIR).join(SEED_FILE)
     }
 
     fn provider(&self) -> Result<DefaultLCProvider<'static, HTTPNodeClient, ExtKeychain>, Error> {
@@ -145,7 +142,7 @@ impl Scratch {
             .map_err(Error::reference("node client"))?;
         let mut provider = DefaultLCProvider::new(client);
         let dir = self
-            .0
+            .path()
             .to_str()
             .ok_or(Error::reference("scratch directory")(Inconsistent(
                 "non-utf8 path",
@@ -154,12 +151,6 @@ impl Scratch {
             .set_top_level_directory(dir)
             .map_err(Error::reference("wallet directory"))?;
         Ok(provider)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _best_effort = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -184,7 +175,7 @@ fn create_seed_file(phrase: &str, password: &str) -> Result<String, Error> {
 fn check_with_upstream(file: &str, phrase: &str, password: &str) -> Result<(), Error> {
     let scratch = Scratch::new()?;
     let path = scratch.seed_path();
-    let data_dir = scratch.0.join(DATA_DIR);
+    let data_dir = scratch.path().join(DATA_DIR);
     std::fs::create_dir_all(&data_dir).map_err(Error::io(&data_dir))?;
     std::fs::write(&path, file).map_err(Error::io(&path))?;
     let provider = scratch.provider()?;

@@ -1,7 +1,7 @@
 //! The upstream in-process test chain: an `AutomatedTesting` chain in a scratch directory, grown
 //! with upstream's own block helper, plus a fork builder for reorganisation scenarios.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use epic_chain::store::DifficultyIter;
@@ -19,35 +19,20 @@ use epic_wallet_impls::test_framework;
 use super::Failure;
 
 /// A directory under the system temporary directory, removed on drop.
-pub(crate) struct ScratchDir(PathBuf);
+pub(crate) struct ScratchDir(tempfile::TempDir);
 
 impl ScratchDir {
     pub(crate) fn new(label: &str) -> Result<ScratchDir, Failure> {
-        let path = std::env::temp_dir().join(format!(
-            "lepic-vectors-{label}-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        let _absent = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).map_err(Failure::Io)?;
-        Ok(ScratchDir(path))
+        tempfile::Builder::new()
+            .prefix(&format!("lepic-vectors-{label}-"))
+            .tempdir()
+            .map(ScratchDir)
+            .map_err(Failure::Io)
     }
 
     pub(crate) fn path(&self) -> &Path {
-        &self.0
+        self.0.path()
     }
-}
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        let _ignored = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn unique_suffix() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    NEXT.fetch_add(1, Ordering::SeqCst)
 }
 
 /// Upstream reads chain parameters from process-wide settings. Every engine case runs under these,
