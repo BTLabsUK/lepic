@@ -35,6 +35,8 @@ const REFERENCE_SETTING: &str = "chain.reference";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum ImplausibleNodeData {
+    /// The limit grows with the device clock, so a clock set far behind the real time (for
+    /// example after a battery reset) also gives this error until the clock is right.
     #[error("node tip {tip} is above the highest plausible height {limit}")]
     TipTooHigh { tip: Height, limit: Height },
     #[error("node reported an output at height {height} above its tip {tip}")]

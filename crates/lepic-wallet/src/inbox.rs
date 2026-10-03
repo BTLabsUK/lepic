@@ -401,6 +401,9 @@ where
     ///
     /// Stops at the first message that fails for a transient reason, such as the node being
     /// unreachable, and leaves it and everything behind it on the relay for the next drain.
+    /// A slate the node's tip says has expired is such a message until [`Wallet::refresh`]
+    /// stores a confirmed height at or past its cutoff, so hosts refresh before they drain;
+    /// otherwise a slate expired since the last refresh holds back every message behind it.
     /// Fails with [`InboxError::Subscription`] when the relay connection fails; whatever was
     /// handled until then stays handled. Fails as [`Wallet::epicbox_attach`] does, and with
     /// [`InboxError::UnknownTransport`] when Epicbox is not registered.
@@ -420,7 +423,9 @@ where
     /// identity first, as [`Wallet::epicbox_attach`] does.
     ///
     /// A message that fails for a transient reason is tried again with backoff, and nothing
-    /// behind it is delivered until it settles. Fails as [`Wallet::epicbox_drain`] does before
+    /// behind it is delivered until it settles. A slate the node's tip says has expired settles
+    /// only after [`Wallet::refresh`] stores a confirmed height at or past its cutoff, so hosts
+    /// keep refreshing while they listen. Fails as [`Wallet::epicbox_drain`] does before
     /// it connects.
     #[instrument(skip_all, fields(wallet = %self.config().name, transport = TRANSPORT_ID.as_str()))]
     pub async fn epicbox_listen(
@@ -824,6 +829,9 @@ where
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
                 Ok(handled)
             }
+            // Not reachable over Epicbox today: new Epicbox slates go out in the V2 shape,
+            // which carries no TTL, so no S2 with a cutoff comes back. It becomes reachable
+            // once an Epicbox codec that carries the TTL is used for new slates.
             Err(error @ FinalizeError::Expired { cutoff, .. }) => {
                 if self.confirmed_at(cutoff).await? {
                     Err(Refusal::Finalize(error).into())
