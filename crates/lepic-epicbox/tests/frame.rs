@@ -216,6 +216,25 @@ fn bounds_the_names_of_unknown_frame_types() {
 }
 
 #[test]
+fn bounds_relay_error_kinds_it_does_not_know() {
+    let long = "K".repeat(MAX_FRAME_TYPE_LEN + 1);
+    let frame = relay(&format!(
+        r#"{{"type":"Error","kind":"{long}","description":"d"}}"#
+    ));
+    assert_eq!(
+        frame,
+        RelayFrame::Error {
+            kind: RelayErrorKind::Other(format!("{}...", &long[..MAX_FRAME_TYPE_LEN])),
+            description: "d".to_owned()
+        }
+    );
+    assert_eq!(
+        RelayErrorKind::from("bad\nkind".to_owned()),
+        RelayErrorKind::Other("bad?kind".to_owned())
+    );
+}
+
+#[test]
 fn a_known_type_name_with_escapes_is_still_known() {
     assert_eq!(relay(r#"{"type":"\u004fk"}"#), RelayFrame::Ok);
 }

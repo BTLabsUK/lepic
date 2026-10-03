@@ -11,7 +11,8 @@ use crate::crypto::{MAX_MESSAGE_LEN, SignedMessage, sign_text};
 pub const PROTOCOL_VERSION: &str = "3.0.0";
 /// Longer frames are rejected before they are parsed. A frame carries at most one message.
 pub const MAX_FRAME_LEN: usize = MAX_MESSAGE_LEN.saturating_add(64 * 1024);
-/// Frame type names longer than this are cut before they reach an error or a log.
+/// Frame type names and relay error kinds longer than this are cut before they reach an error
+/// or a log.
 pub const MAX_FRAME_TYPE_LEN: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
@@ -147,7 +148,8 @@ fn signed(text: &str, key: &SecretKey) -> Result<String, FrameError> {
         .map_err(FrameError::Signature)
 }
 
-/// The `kind` of a relay `Error` frame. Kinds this version does not know are kept as text.
+/// The `kind` of a relay `Error` frame. Kinds this version does not know are kept as text,
+/// bounded as frame type names are, because they reach errors and logs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum RelayErrorKind {
@@ -167,7 +169,7 @@ impl From<String> for RelayErrorKind {
             "InvalidSignature" => Self::InvalidSignature,
             "InvalidChallenge" => Self::InvalidChallenge,
             "TooManySubscriptions" => Self::TooManySubscriptions,
-            _ => Self::Other(kind),
+            _ => Self::Other(bounded_type_name(&kind)),
         }
     }
 }
