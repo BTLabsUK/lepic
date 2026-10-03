@@ -9,6 +9,7 @@
 //! `docs/logging.md`. Secrets never appear in spans, events or errors.
 
 pub mod account;
+mod cancel;
 pub mod config;
 pub mod error;
 pub mod event;
@@ -16,6 +17,7 @@ pub mod lifecycle;
 pub mod ports;
 pub mod receive;
 pub mod selection;
+pub mod send;
 pub mod state;
 mod wallet;
 

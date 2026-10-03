@@ -15,4 +15,5 @@ mod receive_harness;
 #[path = "receive/vectors.rs"]
 mod receive_vectors;
 mod selection_vectors;
+mod send_vectors;
 mod support;
