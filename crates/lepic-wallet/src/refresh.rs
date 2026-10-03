@@ -1,0 +1,596 @@
+//! Refresh: bring stored outputs and transactions in line with the node's UTXO set and kernels,
+//! as `epic-wallet`'s `update_wallet_state` does before its scan. The algorithm is in
+//! `docs/compat/node-api.md` (refresh), the state mapping in `docs/compat/states.md`.
+//!
+//! A refresh runs in steps, each stored in its own store transaction: outputs, then kernel
+//! confirmations, then TTL expiry. Every step re-reads what it changes inside its transaction,
+//! so dropping the future between steps, or a send running at the same time, leaves a
+//! consistent store that the next refresh completes.
+//!
+//! Upstream's update also rescans the last blocks for outputs it does not know; in LEPIC that is
+//! a separate [`Wallet::scan`] with [`crate::scan::ScanOptions::update`], run after a refresh.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use jiff::Timestamp;
+use lepic_crypto::Commitment;
+use lepic_node::{NodeApi, NodeError, OutputLocation};
+use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
+use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_slate::codec::{MediaType, WireSlate};
+use lepic_slate::model::Slate;
+use lepic_slate::registry::CodecRegistry;
+use lepic_store::{
+    AccountIndex, OutboxStatus, OutputRecord, OutputStatus, ParticipantId, Repositories,
+    SlateStage, StoreError, StoredTransaction, TxDirection, TxId, TxState, WalletStore,
+};
+use thiserror::Error;
+use tracing::{debug, info, instrument, warn};
+use uuid::Uuid;
+
+use crate::error::WalletError;
+use crate::event::{Balance, Event};
+use crate::ports::{SecretVault, StoreOpener};
+use crate::send::SENDER_CONTEXT;
+use crate::state::{StateChange, apply_transition, is_final};
+use crate::wallet::Wallet;
+
+/// Confirmations an unspent output needs to count as spendable in the balance events, as
+/// `epic-wallet info` counts by default.
+pub const BALANCE_MINIMUM_CONFIRMATIONS: u64 = 10;
+
+const LAST_CONFIRMED_SETTING: &str = "refresh.last_confirmed_height";
+
+/// The private context of the party that adds only an output, under the participant id
+/// `epic-wallet` gives the receiver.
+const RECEIVER_CONTEXT: ParticipantId = ParticipantId(1);
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum RefreshError {
+    /// The wallet is locked, or the database failed.
+    #[error("wallet operation failed")]
+    Wallet(#[from] WalletError),
+    /// The node could not be reached or gave an answer that failed validation. Steps already
+    /// stored are kept.
+    #[error("node request failed")]
+    Node(#[from] NodeError),
+    #[error("balance out of range")]
+    Balance(#[from] ArithmeticError),
+}
+
+impl From<StoreError> for RefreshError {
+    fn from(error: StoreError) -> Self {
+        Self::Wallet(WalletError::Store(error))
+    }
+}
+
+/// What a refresh did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    Refreshed(RefreshSummary),
+    /// The node's tip is below the height of the last refresh, so it is syncing or on another
+    /// fork. Nothing was changed; refresh again once the node has caught up.
+    NodeBehind {
+        tip: Height,
+        last_confirmed: Height,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RefreshSummary {
+    /// The node's tip, now the last confirmed height.
+    pub height: Height,
+    /// Unconfirmed outputs found on chain, now unspent.
+    pub confirmed_outputs: u64,
+    /// Unspent and locked outputs missing from the UTXO set, now spent.
+    pub spent_outputs: u64,
+    /// Transactions confirmed by one of their outputs or by their kernel.
+    pub confirmed_transactions: u64,
+    /// Transactions at or past their TTL cutoff, now expired.
+    pub expired_transactions: u64,
+}
+
+#[derive(Debug, Default)]
+struct StepOutcome {
+    confirmed_outputs: u64,
+    spent_outputs: u64,
+    changes: Vec<StateChange>,
+}
+
+/// An open transaction whose kernel can confirm it: one with no change output.
+#[derive(Debug, Clone, Copy)]
+struct KernelLookup {
+    tx_id: TxId,
+    excess: Commitment,
+    min_height: Height,
+}
+
+impl<N, S, V> Wallet<N, S, V>
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    /// Refreshes every account against the node: asks it for every output not stored as spent,
+    /// marks the ones it holds unspent and confirms their transactions, marks unspent and
+    /// locked ones it does not hold spent, confirms open transactions with no change output by
+    /// their kernel, and expires transactions at or past their TTL cutoff, releasing their
+    /// inputs. A posted transaction is never expired, since it may still be mined.
+    ///
+    /// Emits [`Event::Transaction`] for every state change and one [`Event::Balance`] per
+    /// account. Returns [`RefreshOutcome::NodeBehind`], changing nothing, when the node's tip
+    /// is below the last refresh's height.
+    ///
+    /// Fails with [`RefreshError::Node`], or [`WalletError::Locked`] inside
+    /// [`RefreshError::Wallet`]. Steps stored before a failure are kept.
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub async fn refresh(&self) -> Result<RefreshOutcome, RefreshError> {
+        let session = self.session()?;
+        let node = &self.ports().node;
+        let tip = node.get_tip().await?;
+        let (last_confirmed, tracked) = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| Ok(session.store.read(tracked_outputs)))
+                .await??
+        };
+        if let Some(last_confirmed) = last_confirmed
+            && tip.height < last_confirmed
+        {
+            warn!(height = %tip.height, "refresh skipped behind the last confirmed height");
+            return Ok(RefreshOutcome::NodeBehind {
+                tip: tip.height,
+                last_confirmed,
+            });
+        }
+        let found = if tracked.is_empty() {
+            BTreeMap::new()
+        } else {
+            node.get_outputs(&tracked)
+                .await?
+                .into_iter()
+                .map(|location| (location.commitment, location))
+                .collect()
+        };
+        let mut summary = RefreshSummary {
+            height: tip.height,
+            ..RefreshSummary::default()
+        };
+
+        let now = self.ports().clock.now();
+        let outcome = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .write(|repos| apply_outputs(repos, &tracked, &found, tip.height, now)))
+            })
+            .await??
+        };
+        summary.confirmed_outputs = outcome.confirmed_outputs;
+        summary.spent_outputs = outcome.spent_outputs;
+        self.record_changes(&mut summary, outcome.changes);
+
+        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let lookups = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(session.store.read(|repos| kernel_lookups(repos, &codecs)))
+            })
+            .await??
+        };
+        let mut kernel_confirmed = Vec::new();
+        for lookup in lookups {
+            let kernel = node
+                .get_kernel(&lookup.excess, Some(lookup.min_height), Some(tip.height))
+                .await?;
+            if kernel.is_some() {
+                kernel_confirmed.push(lookup.tx_id);
+            }
+        }
+        if !kernel_confirmed.is_empty() {
+            let session = Arc::clone(&session);
+            let changes = self
+                .blocking(move |_, _| {
+                    Ok(session
+                        .store
+                        .write(|repos| confirm_all(repos, &kernel_confirmed, now)))
+                })
+                .await??;
+            self.record_changes(&mut summary, changes);
+        }
+
+        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let changes = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .write(|repos| expire_all(repos, &codecs, tip.height, now)))
+            })
+            .await??
+        };
+        self.record_changes(&mut summary, changes);
+
+        let balances = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| Ok(session.store.read(|repos| balances(repos, tip.height))))
+                .await??
+        };
+        for balance in balances {
+            self.emit(Event::Balance(balance));
+        }
+        info!(height = %tip.height, "refresh completed");
+        Ok(RefreshOutcome::Refreshed(summary))
+    }
+
+    /// The node's tip at the last refresh that applied, or `None` before the first one. Fails
+    /// with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn last_confirmed_height(&self) -> Result<Option<Height>, WalletError> {
+        let session = self.session()?;
+        session.store.read(|repos| Ok(last_confirmed(repos)?))
+    }
+
+    fn record_changes(&self, summary: &mut RefreshSummary, changes: Vec<StateChange>) {
+        for change in changes {
+            match change.to {
+                TxState::Confirmed => {
+                    summary.confirmed_transactions =
+                        summary.confirmed_transactions.saturating_add(1);
+                    info!(tx_id = %change.tx_id, "transaction confirmed");
+                }
+                TxState::Expired => {
+                    summary.expired_transactions = summary.expired_transactions.saturating_add(1);
+                    info!(tx_id = %change.tx_id, "transaction expired");
+                }
+                // A refresh moves transactions only to these two states.
+                _ => {}
+            }
+            self.emit(change.into());
+        }
+    }
+}
+
+/// A stored height that does not parse is ignored: the next refresh applies whatever the node
+/// says, as on a new wallet.
+fn last_confirmed(repos: &dyn Repositories) -> Result<Option<Height>, StoreError> {
+    Ok(match repos.setting(LAST_CONFIRMED_SETTING)? {
+        Some(text) => {
+            let height = text.parse().ok().map(Height::new);
+            if height.is_none() {
+                warn!("last confirmed height unreadable");
+            }
+            height
+        }
+        None => None,
+    })
+}
+
+/// The last confirmed height and every commitment the node is asked about: all outputs not
+/// stored as spent, in every account.
+fn tracked_outputs(
+    repos: &dyn Repositories,
+) -> Result<(Option<Height>, Vec<Commitment>), RefreshError> {
+    let mut tracked = Vec::new();
+    for account in repos.accounts()? {
+        tracked.extend(
+            repos
+                .outputs(account.index, None)?
+                .into_iter()
+                .filter(|output| output.status != OutputStatus::Spent)
+                .map(|output| output.id.commitment),
+        );
+    }
+    Ok((last_confirmed(repos)?, tracked))
+}
+
+/// Upstream's `apply_api_outputs`: what the node holds becomes unspent and confirms its
+/// transaction, what it does not hold is spent unless it was never confirmed.
+fn apply_outputs(
+    repos: &mut dyn Repositories,
+    tracked: &[Commitment],
+    found: &BTreeMap<Commitment, OutputLocation>,
+    tip: Height,
+    now: Timestamp,
+) -> Result<StepOutcome, RefreshError> {
+    let mut outcome = StepOutcome::default();
+    for commitment in tracked {
+        // A concurrent cancel may have deleted it since it was read.
+        let Some(stored) = repos.output(commitment.as_bytes())? else {
+            continue;
+        };
+        let updated = match found.get(commitment) {
+            Some(location) => on_chain(repos, stored.clone(), location, now, &mut outcome)?,
+            None => missing(stored.clone(), &mut outcome),
+        };
+        if updated != stored {
+            repos.put_output(&updated)?;
+        }
+    }
+    repos.put_setting(LAST_CONFIRMED_SETTING, &tip.value().to_string())?;
+    Ok(outcome)
+}
+
+fn on_chain(
+    repos: &mut dyn Repositories,
+    mut output: OutputRecord,
+    location: &OutputLocation,
+    now: Timestamp,
+    outcome: &mut StepOutcome,
+) -> Result<OutputRecord, RefreshError> {
+    if output.status == OutputStatus::Unconfirmed {
+        output.status = OutputStatus::Unspent;
+        outcome.confirmed_outputs = outcome.confirmed_outputs.saturating_add(1);
+        debug!(height = %location.height, "output confirmed");
+        // One output on chain is enough to confirm the transaction that created it.
+        if let Some(tx_id) = output.tx {
+            outcome.changes.extend(confirm(repos, tx_id, now)?);
+        }
+    }
+    output.height = location.height;
+    output.mmr_index = Some(location.mmr_index);
+    Ok(output)
+}
+
+fn missing(mut output: OutputRecord, outcome: &mut StepOutcome) -> OutputRecord {
+    if matches!(output.status, OutputStatus::Unspent | OutputStatus::Locked) {
+        output.status = OutputStatus::Spent;
+        outcome.spent_outputs = outcome.spent_outputs.saturating_add(1);
+        debug!(height = %output.height, "output spent");
+    }
+    output
+}
+
+/// Confirms an open transaction. A cancelled or expired one stays as it is: the user ended it
+/// here, even though the peer completed it; its outputs still count once found.
+fn confirm(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    now: Timestamp,
+) -> Result<Option<StateChange>, RefreshError> {
+    let Some(entry) = repos.transaction(tx_id)? else {
+        return Ok(None);
+    };
+    if is_final(entry.state) {
+        if entry.state != TxState::Confirmed {
+            debug!(tx_id = %tx_id, "ended transaction found on chain");
+        }
+        return Ok(None);
+    }
+    Ok(apply_transition(repos, tx_id, TxState::Confirmed, now)?)
+}
+
+fn confirm_all(
+    repos: &mut dyn Repositories,
+    tx_ids: &[TxId],
+    now: Timestamp,
+) -> Result<Vec<StateChange>, RefreshError> {
+    let mut changes = Vec::new();
+    for &tx_id in tx_ids {
+        changes.extend(confirm(repos, tx_id, now)?);
+    }
+    Ok(changes)
+}
+
+/// Open transactions with no change output, which no output of this wallet can confirm, and
+/// whose final kernel is known from the final slate stored with them. Upstream skips exactly
+/// the entries that both credit and debit.
+fn kernel_lookups(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+) -> Result<Vec<KernelLookup>, RefreshError> {
+    let mut lookups = Vec::new();
+    for stored in open_transactions(repos)? {
+        let entry = &stored.entry;
+        if entry.amount_credited != Amount::ZERO && entry.amount_debited != Amount::ZERO {
+            continue;
+        }
+        let Some(slate_id) = entry.slate_id else {
+            continue;
+        };
+        let final_slate = [SlateStage::Standard3, SlateStage::Invoice3]
+            .into_iter()
+            .find_map(|stage| stored_slate(repos, codecs, stored.id, slate_id, stage).transpose())
+            .transpose()?;
+        if let Some(slate) = final_slate
+            && let Some(kernel) = slate.kernel()
+        {
+            lookups.push(KernelLookup {
+                tx_id: stored.id,
+                excess: kernel.excess,
+                min_height: slate.height(),
+            });
+        }
+    }
+    Ok(lookups)
+}
+
+/// Expires every transaction past its TTL that is not yet posted, as upstream cancels it.
+fn expire_all(
+    repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
+    tip: Height,
+    now: Timestamp,
+) -> Result<Vec<StateChange>, RefreshError> {
+    let mut changes = Vec::new();
+    for stored in open_transactions(repos)? {
+        if stored.entry.state == TxState::Posted {
+            continue;
+        }
+        let Some(slate_id) = stored.entry.slate_id else {
+            continue;
+        };
+        let Some(cutoff) = ttl_cutoff(repos, codecs, stored.id, slate_id)? else {
+            continue;
+        };
+        if tip >= cutoff {
+            changes.extend(expire(repos, &stored, now)?);
+        }
+    }
+    Ok(changes)
+}
+
+/// The TTL cutoff every stage of a slate carries, read from the first stage stored.
+fn ttl_cutoff(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+    slate_id: Uuid,
+) -> Result<Option<Height>, RefreshError> {
+    for stored in repos.slates(slate_id)? {
+        if let Some(slate) = decode_stored(codecs, tx_id, &stored.bytes) {
+            return Ok(slate.ttl_cutoff_height());
+        }
+    }
+    Ok(None)
+}
+
+/// Releases what the transaction holds, as the owner's cancel does, and marks it expired.
+fn expire(
+    repos: &mut dyn Repositories,
+    stored: &StoredTransaction,
+    now: Timestamp,
+) -> Result<Option<StateChange>, RefreshError> {
+    for output in repos.outputs_of_transaction(stored.id)? {
+        match output.status {
+            OutputStatus::Unconfirmed => repos.delete_output(output.commitment())?,
+            OutputStatus::Locked => repos.put_output(&OutputRecord {
+                status: OutputStatus::Unspent,
+                ..output
+            })?,
+            OutputStatus::Unspent | OutputStatus::Spent => {}
+        }
+    }
+    if let Some(slate_id) = stored.entry.slate_id {
+        let participant = match stored.entry.direction {
+            TxDirection::Outgoing => SENDER_CONTEXT,
+            TxDirection::Incoming => RECEIVER_CONTEXT,
+        };
+        repos.delete_context(slate_id, participant)?;
+        for pending in repos.outbox(OutboxStatus::Pending)? {
+            if pending.entry.slate_id == slate_id {
+                repos.delete_outbox(pending.id)?;
+            }
+        }
+    }
+    Ok(apply_transition(repos, stored.id, TxState::Expired, now)?)
+}
+
+fn open_transactions(repos: &dyn Repositories) -> Result<Vec<StoredTransaction>, RefreshError> {
+    let mut open = Vec::new();
+    for account in repos.accounts()? {
+        open.extend(
+            repos
+                .transactions(account.index)?
+                .into_iter()
+                .filter(|stored| !is_final(stored.entry.state)),
+        );
+    }
+    Ok(open)
+}
+
+fn stored_slate(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+    slate_id: Uuid,
+    stage: SlateStage,
+) -> Result<Option<Slate>, RefreshError> {
+    Ok(repos
+        .slate(slate_id, stage)?
+        .and_then(|stored| decode_stored(codecs, tx_id, &stored.bytes)))
+}
+
+/// A stored slate was validated when it was stored, so one that no longer decodes is skipped
+/// with a warning rather than blocking every later refresh.
+fn decode_stored(codecs: &CodecRegistry, tx_id: TxId, bytes: &[u8]) -> Option<Slate> {
+    match codecs.decode(&WireSlate::binary(MediaType::JSON, bytes.to_vec())) {
+        Ok(slate) => Some(slate),
+        Err(error) => {
+            warn!(tx_id = %tx_id, error = %error, "stored slate unreadable");
+            None
+        }
+    }
+}
+
+/// The codecs stored slates are written in, in the detection order `receive` uses.
+fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
+    let mut codecs = CodecRegistry::new();
+    // Registration fails only for a duplicate id, and these ids differ.
+    let _ = codecs.register(Box::new(V3JsonCodec::new(base_fee)));
+    let _ = codecs.register(Box::new(V2JsonCodec::new(base_fee)));
+    codecs
+}
+
+/// The balance of every account at `height`, in the categories of upstream's `retrieve_info`.
+fn balances(repos: &dyn Repositories, height: Height) -> Result<Vec<Balance>, RefreshError> {
+    let mut balances = Vec::new();
+    for account in repos.accounts()? {
+        balances.push(balance(
+            account.index,
+            &repos.outputs(account.index, None)?,
+            height,
+        )?);
+    }
+    Ok(balances)
+}
+
+fn balance(
+    account: AccountIndex,
+    outputs: &[OutputRecord],
+    height: Height,
+) -> Result<Balance, ArithmeticError> {
+    let mut balance = Balance {
+        account,
+        height,
+        total: Amount::ZERO,
+        spendable: Amount::ZERO,
+        awaiting_confirmation: Amount::ZERO,
+        awaiting_finalization: Amount::ZERO,
+        immature: Amount::ZERO,
+        locked: Amount::ZERO,
+    };
+    for output in outputs {
+        let coinbase = output.id.features.is_coinbase();
+        match output.status {
+            OutputStatus::Unspent if coinbase && output.lock_height > height => {
+                balance.immature = balance.immature.checked_add(output.amount)?;
+                balance.total = balance.total.checked_add(output.amount)?;
+            }
+            OutputStatus::Unspent
+                if confirmations(output, height) < BALANCE_MINIMUM_CONFIRMATIONS =>
+            {
+                balance.awaiting_confirmation =
+                    balance.awaiting_confirmation.checked_add(output.amount)?;
+                balance.total = balance.total.checked_add(output.amount)?;
+            }
+            OutputStatus::Unspent => {
+                balance.spendable = balance.spendable.checked_add(output.amount)?;
+                balance.total = balance.total.checked_add(output.amount)?;
+            }
+            // Upstream ignores unconfirmed coinbase outputs, which a wallet that does not mine
+            // never has.
+            OutputStatus::Unconfirmed if !coinbase => {
+                balance.awaiting_finalization =
+                    balance.awaiting_finalization.checked_add(output.amount)?;
+            }
+            OutputStatus::Locked => {
+                balance.locked = balance.locked.checked_add(output.amount)?;
+                balance.total = balance.total.checked_add(output.amount)?;
+            }
+            OutputStatus::Unconfirmed | OutputStatus::Spent => {}
+        }
+    }
+    Ok(balance)
+}
+
+/// An output at height `n` has one confirmation at height `n`, none above the tip.
+fn confirmations(output: &OutputRecord, height: Height) -> u64 {
+    height
+        .value()
+        .checked_sub(output.height.value())
+        .map_or(0, |blocks| blocks.saturating_add(1))
+}
