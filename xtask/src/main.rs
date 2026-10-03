@@ -21,7 +21,7 @@ const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
   budget      [--measurements <file.json>]: size, restore and drain against docs/budgets.md
-  check       fmt, clippy, tests, cargo deny and deps-check
+  check       fmt, clippy, tests, cargo deny, deps-check and ci-lint
   ci-lint     every `uses:` under .github is pinned to a commit sha
   deps-check  crate edges and banned crates against docs/architecture.md
   fuzz        (--smoke | --full) [--target <name>]... [--jobs <n>]: seed and run the fuzz targets
