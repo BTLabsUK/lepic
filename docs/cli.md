@@ -278,7 +278,12 @@ $ lepic tx list
 
 States: `sent` (S1 or I2 handed over), `received` (S2 or I1 answered, waiting for the other side),
 `finalized`, `posted` (with the node), `confirmed` (in a block), `cancelled`, `expired`.
-`lepic tx show <ID>` adds the slate id, timestamps and the slate stages stored.
+`lepic tx show <ID>` adds the slate id, timestamps, the slate stages stored, the final kernel's
+excess (`Kernel`, JSON `kernel_excess`, in hex) and the block height the transaction was confirmed at
+(`Confirmed at`, JSON `confirmed_height`). The kernel is known once this wallet has finalized the transaction or paid the invoice, so not for a
+payment taken by `tx receive` or one restored from the chain. The height is known
+once a refresh or scan confirms the transaction. Human output prints `-` for what is unknown; the JSON
+document leaves the key out.
 
 `lepic tx cancel <ID>` gives up a transaction that is not posted and unlocks its inputs.
 `lepic tx post <ID>` sends a finalized transaction to the node again, for one the node dropped. A

@@ -168,6 +168,12 @@ pub struct TxReport {
     /// Slate stages stored for the transaction; listed by `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stages: Option<Vec<String>>,
+    /// Hex excess of the final kernel; shown by `tx show` only, when a final slate is stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernel_excess: Option<String>,
+    /// Block height the transaction was confirmed at; shown by `tx show` only, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_height: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -469,6 +475,15 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                         .as_ref()
                         .map_or_else(String::new, |stages| stages.join(" ")),
                 ),
+                (
+                    "Kernel",
+                    tx.kernel_excess.clone().unwrap_or_else(|| "-".to_owned()),
+                ),
+                (
+                    "Confirmed at",
+                    tx.confirmed_height
+                        .map_or_else(|| "-".to_owned(), |height| height.to_string()),
+                ),
             ];
             for (name, value) in rows {
                 writeln!(out, "{name:<12} {value}")?;
@@ -539,6 +554,8 @@ mod tests {
             created_at: text("t"),
             updated_at: text("t"),
             stages,
+            kernel_excess: None,
+            confirmed_height: None,
         }
     }
 
@@ -676,6 +693,14 @@ mod tests {
             (
                 Report::Show(tx(Some(vec![text("S1")]))),
                 [TX, &["stages"]].concat(),
+            ),
+            (
+                Report::Show(TxReport {
+                    kernel_excess: Some(text("08ab")),
+                    confirmed_height: Some(7),
+                    ..tx(Some(vec![text("S3")]))
+                }),
+                [TX, &["stages", "kernel_excess", "confirmed_height"]].concat(),
             ),
             (
                 Report::InvoiceIssue(InvoiceIssueReport {
@@ -837,6 +862,22 @@ mod tests {
             lines[2].contains(" 2.25000000") && !lines[2].contains("-2"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn the_transaction_view_shows_its_kernel_and_confirmation_height() {
+        let known = Report::Show(TxReport {
+            kernel_excess: Some(text("08ab")),
+            confirmed_height: Some(1234),
+            ..tx(Some(vec![text("S1"), text("S2"), text("S3")]))
+        });
+        let rendered = render(&known, OutputFormat::Human).to_string();
+        assert!(rendered.contains("\nKernel       08ab\n"), "{rendered}");
+        assert!(rendered.contains("\nConfirmed at 1234\n"), "{rendered}");
+
+        let unknown = render(&Report::Show(tx(Some(vec![]))), OutputFormat::Human).to_string();
+        assert!(unknown.contains("\nKernel       -\n"), "{unknown}");
+        assert!(unknown.contains("\nConfirmed at -\n"), "{unknown}");
     }
 
     #[test]

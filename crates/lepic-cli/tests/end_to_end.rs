@@ -1,14 +1,21 @@
 //! Send, receive and finalize between two CLI instances, through slate files and through the
 //! mock relay, against one mock node.
 
-// Tests may unwrap and index (docs/rules.md).
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+// Tests may unwrap, index and use plain arithmetic (docs/rules.md).
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
 
 mod support;
 
 use std::sync::Arc;
 
 use lepic_epicbox::EpicboxAddress;
+use lepic_node::LocatedKernel;
+use lepic_node::mock::ChainOutput;
+use lepic_primitives::amount::Height;
 
 use support::{FUNDING, Instance, SENDER_MNEMONIC, TIP, TestHost, keys, text};
 
@@ -136,6 +143,10 @@ fn send_receive_and_finalize_through_files() {
         stages.contains(&"S1") && stages.contains(&"S3"),
         "{stages:?}"
     );
+    let kernel = text(&shown, "kernel_excess");
+    assert_eq!(kernel.len(), 66, "{shown}");
+    assert!(kernel.bytes().all(|b| b.is_ascii_hexdigit()), "{shown}");
+    assert!(shown.get("confirmed_height").is_none(), "{shown}");
 
     // Posting again sends the stored transaction again.
     sender.run(&host, &["tx", "post", &tx_id]).ok();
@@ -174,6 +185,102 @@ fn send_receive_and_finalize_through_the_relay() {
     let status = sender.run(&host, &["epicbox", "status"]).ok().json();
     assert_eq!(status["pending_deliveries"], 0);
     assert_eq!(status["relay"], "ws://127.0.0.1:80");
+}
+
+/// Puts every transaction pushed so far into a block at `height`, the new tip: its inputs spent,
+/// its outputs and kernels added.
+fn mine_pushed(host: &TestHost, height: u64) {
+    let pushed = host.node.pushed_transactions();
+    host.node.update_chain(|chain| {
+        let height = Height::new(height);
+        for transaction in &pushed {
+            for input in transaction.inputs() {
+                for output in &mut chain.outputs {
+                    if output.commitment == input.commitment {
+                        output.spent = true;
+                    }
+                }
+            }
+            for output in transaction.outputs() {
+                let mmr_index = u64::try_from(chain.outputs.len()).unwrap() + 1;
+                chain.outputs.push(ChainOutput {
+                    commitment: output.commitment,
+                    features: output.features,
+                    proof: output.proof.clone(),
+                    height,
+                    mmr_index,
+                    spent: false,
+                });
+            }
+            for kernel in transaction.kernels() {
+                let mmr_index = u64::try_from(chain.kernels.len()).unwrap() + 1;
+                chain.kernels.push(LocatedKernel {
+                    kernel: *kernel,
+                    height,
+                    mmr_index,
+                });
+            }
+        }
+        chain.tip.height = height;
+    });
+}
+
+#[test]
+fn tx_show_gives_the_kernel_and_the_confirmation_height() {
+    let (host, sender, receiver) = two_wallets();
+    let funding = sender.run(&host, &["tx", "list"]).ok().json()["transactions"][0].clone();
+    let restored = sender
+        .run(&host, &["tx", "show", &funding["tx_id"].to_string()])
+        .ok()
+        .json();
+    assert_eq!(restored["state"], "confirmed");
+    assert_eq!(restored["confirmed_height"], 1, "{restored}");
+    assert!(restored.get("kernel_excess").is_none(), "{restored}");
+
+    let slate = sender.path("confirmed.slate");
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let tx_id = sent["tx_id"].to_string();
+    let unsent = sender.run(&host, &["tx", "show", &tx_id]).ok().json();
+    assert!(unsent.get("kernel_excess").is_none(), "{unsent}");
+    assert!(unsent.get("confirmed_height").is_none(), "{unsent}");
+
+    let received = receiver
+        .run(&host, &["tx", "receive", slate.to_str().unwrap()])
+        .ok()
+        .json();
+    sender
+        .run(&host, &["tx", "finalize", text(&received, "reply_file")])
+        .ok();
+    mine_pushed(&host, TIP + 1);
+    sender.run(&host, &["wallet", "info"]).ok();
+
+    let confirmed = sender.run(&host, &["tx", "show", &tx_id]).ok().json();
+    assert_eq!(confirmed["state"], "confirmed", "{confirmed}");
+    assert_eq!(confirmed["confirmed_height"], TIP + 1, "{confirmed}");
+    let kernel = host.node.pushed_transactions()[0].kernels()[0].excess;
+    assert_eq!(text(&confirmed, "kernel_excess"), kernel.to_hex());
+
+    let mut env = sender.env();
+    env.retain(|(name, _)| name != "LEPIC_OUTPUT");
+    env.push(("LEPIC_OUTPUT".to_owned(), "human".to_owned()));
+    let human = sender
+        .run_with(&host, &["tx", "show", &tx_id], env, "")
+        .ok()
+        .stdout;
+    assert!(
+        human.contains(&format!("Kernel       {}\n", kernel.to_hex())),
+        "{human}"
+    );
+    assert!(
+        human.contains(&format!("Confirmed at {}\n", TIP + 1)),
+        "{human}"
+    );
 }
 
 #[test]

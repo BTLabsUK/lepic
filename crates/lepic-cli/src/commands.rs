@@ -12,6 +12,7 @@ use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
+use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_store::{
     OutboxStatus, Repositories, SlateStage, StoredTransaction, TxDirection, TxId, WalletStore,
@@ -21,6 +22,7 @@ use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
 use lepic_wallet::chain::ImplausibleNodeData;
+use lepic_wallet::details::TransactionDetails;
 use lepic_wallet::event::Balance;
 use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
@@ -252,7 +254,8 @@ impl<H: Host> Run<'_, H> {
             TxCommand::Show(args) => {
                 let opened = self.open().await?;
                 let tx_id = TxId(args.tx_id);
-                let report = opened.store()?.read(|repos| show(repos, tx_id))?;
+                let details = opened.wallet.transaction_details(tx_id).await?;
+                let report = opened.store()?.read(|repos| show(repos, &details))?;
                 Ok(Report::Show(report))
             }
         }
@@ -934,11 +937,9 @@ fn inbox_report(summary: InboxSummary) -> InboxReport {
     }
 }
 
-fn show(repos: &dyn Repositories, tx_id: TxId) -> Result<TxReport, CliError> {
-    let entry = repos
-        .transaction(tx_id)?
-        .ok_or(CliError::Wallet(WalletError::UnknownTransaction(tx_id)))?;
-    let stages = match entry.slate_id {
+fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxReport, CliError> {
+    let tx = &details.transaction;
+    let stages = match tx.entry.slate_id {
         Some(slate_id) => repos
             .slates(slate_id)?
             .iter()
@@ -946,10 +947,11 @@ fn show(repos: &dyn Repositories, tx_id: TxId) -> Result<TxReport, CliError> {
             .collect(),
         None => Vec::new(),
     };
-    Ok(tx_report(
-        &StoredTransaction { id: tx_id, entry },
-        Some(stages),
-    ))
+    Ok(TxReport {
+        kernel_excess: details.kernel_excess.map(|excess| excess.to_hex()),
+        confirmed_height: details.confirmed_height.map(Height::value),
+        ..tx_report(tx, Some(stages))
+    })
 }
 
 fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
@@ -970,6 +972,8 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         created_at: entry.created_at.to_string(),
         updated_at: entry.updated_at.to_string(),
         stages,
+        kernel_excess: None,
+        confirmed_height: None,
     }
 }
 
