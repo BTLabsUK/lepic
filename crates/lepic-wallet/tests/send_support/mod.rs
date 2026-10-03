@@ -122,10 +122,10 @@ impl Sender {
         harness
             .block_on(wallet.restore(password("sender"), SENDER_MNEMONIC))
             .unwrap();
-        complete_restore_scan(&harness.runtime, &wallet);
         harness
             .node
             .update_chain(|chain| chain.tip.height = Height::new(TIP));
+        complete_restore_scan(&harness.runtime, &wallet);
 
         let seed = Seed::from_mnemonic(SENDER_MNEMONIC).unwrap();
         let store = harness

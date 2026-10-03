@@ -32,7 +32,7 @@ use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::chain::{self, ChainReference, ImplausibleNodeData};
+use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Balance, Event};
 use crate::ports::{SecretVault, StoreOpener};
@@ -88,7 +88,7 @@ pub enum RefreshOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RefreshSummary {
-    /// The node's tip. It becomes the last confirmed height unless it expired transactions.
+    /// The node's tip. It raises the last confirmed height as [`Wallet::refresh`] describes.
     pub height: Height,
     /// Unconfirmed outputs found on chain, now unspent.
     pub confirmed_outputs: u64,
@@ -128,11 +128,11 @@ where
     /// their TTL cutoff, releasing their inputs. A posted or finalized transaction is never
     /// expired, since it may still be mined.
     ///
-    /// The tip must be plausible: at most a bounded number of blocks above the highest tip the
-    /// wallet stored, for the time since it stored it (see [`crate::chain`]). Output and kernel
-    /// heights must not be above the tip. Before expiring anything the tip is asked for again,
-    /// and the two must agree. The tip becomes the last confirmed height only when it expired
-    /// nothing; otherwise the next refresh stores it.
+    /// The tip must be plausible: below the bounds [`crate::chain`] describes. Output and
+    /// kernel heights must not be above the tip. Before expiring anything the tip is asked for
+    /// again, and the two must agree. When the tip expired nothing, it raises the last confirmed
+    /// height if it is at most [`crate::chain::TIP_STEP_BLOCKS`] above it; a tip further ahead
+    /// is held until a later refresh or scan sees the chain at or above it.
     ///
     /// Emits [`Event::Transaction`] for every state change and one [`Event::Balance`] per
     /// account. Returns [`RefreshOutcome::NodeBehind`], changing nothing, when the node's tip
@@ -152,7 +152,7 @@ where
             self.blocking(move |_, _| Ok(session.store.read(known_state)))
                 .await??
         };
-        chain::check_tip(known.reference, tip.height, now)?;
+        chain::check_tip(self.config().network, &known.position, tip.height, now)?;
         if let Some(last_confirmed) = known.last_confirmed
             && tip.height < last_confirmed
         {
@@ -242,9 +242,7 @@ where
                     // A tip that expired transactions is not trusted as a reference until a
                     // later refresh sees the chain there without expiring anything.
                     if changes.is_empty() {
-                        repos
-                            .put_setting(LAST_CONFIRMED_SETTING, &tip.height.value().to_string())?;
-                        chain::record_tip(repos, tip.height, now)?;
+                        record_confirmed(repos, tip.height, now)?;
                     }
                     Ok::<_, RefreshError>(changes)
                 }))
@@ -344,10 +342,25 @@ pub(crate) fn last_confirmed(repos: &dyn Repositories) -> Result<Option<Height>,
     })
 }
 
+/// Raises the last confirmed height to what `tip` confirms, as [`chain::observe_tip`] decides.
+fn record_confirmed(
+    repos: &mut dyn Repositories,
+    tip: Height,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let stored = last_confirmed(repos)?;
+    if let Some(height) = chain::observe_tip(repos, stored, tip, now)?
+        && stored.is_none_or(|stored| height > stored)
+    {
+        repos.put_setting(LAST_CONFIRMED_SETTING, &height.value().to_string())?;
+    }
+    Ok(())
+}
+
 /// What a refresh starts from.
 struct KnownState {
     last_confirmed: Option<Height>,
-    reference: Option<ChainReference>,
+    position: ChainPosition,
     /// Every output the node is asked about, all those not stored as spent, in every account.
     tracked: Vec<(Commitment, OutputStatus)>,
 }
@@ -365,7 +378,7 @@ fn known_state(repos: &dyn Repositories) -> Result<KnownState, RefreshError> {
     }
     Ok(KnownState {
         last_confirmed: last_confirmed(repos)?,
-        reference: chain::reference(repos)?,
+        position: chain::position(repos)?,
         tracked,
     })
 }

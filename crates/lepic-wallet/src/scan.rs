@@ -29,7 +29,7 @@ use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
 
 use crate::account::FIRST_HARDENED;
-use crate::chain::{self, ChainReference, ImplausibleNodeData};
+use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Event, SyncProgress};
 use crate::lifecycle::{self, Session};
@@ -314,7 +314,12 @@ where
             self.blocking(move |_, _| Ok(session.store.read(|repos| scan_state(repos))))
                 .await??
         };
-        chain::check_tip(state.reference, tip.height, self.ports().clock.now())?;
+        chain::check_tip(
+            self.config().network,
+            &state.position,
+            tip.height,
+            self.ports().clock.now(),
+        )?;
         let checkpoint = state.checkpoint;
         let start_height = resolve_start(options.start, state.last_scanned.as_ref(), tip.height);
         let mut summary = ScanSummary {
@@ -563,7 +568,7 @@ fn resolve_start(start: ScanStart, last_scanned: Option<&ScannedBlock>, tip: Hei
 struct ScanState {
     last_scanned: Option<ScannedBlock>,
     checkpoint: Option<Checkpoint>,
-    reference: Option<ChainReference>,
+    position: ChainPosition,
 }
 
 fn scan_state(repos: &dyn Repositories) -> Result<ScanState, ScanError> {
@@ -580,7 +585,7 @@ fn scan_state(repos: &dyn Repositories) -> Result<ScanState, ScanError> {
     Ok(ScanState {
         last_scanned: last_scanned(repos)?,
         checkpoint,
-        reference: chain::reference(repos)?,
+        position: chain::position(repos)?,
     })
 }
 
@@ -865,7 +870,8 @@ fn finish(
     }
     repos.put_setting(LAST_SCANNED_SETTING, &block.encode())?;
     repos.delete_setting(CHECKPOINT_SETTING)?;
-    chain::record_tip(repos, block.height, now)?;
+    let last_confirmed = crate::refresh::last_confirmed(repos)?;
+    chain::observe_tip(repos, last_confirmed, block.height, now)?;
     if start_height == Height::ZERO {
         lifecycle::restore_scan_completed(repos)?;
     }

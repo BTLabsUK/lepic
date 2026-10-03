@@ -33,6 +33,7 @@ use lepic_store::{
     TxState, WalletStore,
 };
 use lepic_transport::transport::Destination;
+use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::SelectionStrategy;
@@ -61,6 +62,8 @@ struct Script {
     raise_outputs: u64,
     /// Blocks added to every kernel height `get_kernel` reports.
     raise_kernels: u64,
+    /// Seconds the scripted wallet's clock runs ahead of the sender's.
+    clock_ahead: i64,
 }
 
 /// The mock node's client with scripted answers applied after the client's own checks, so the
@@ -167,7 +170,10 @@ fn scripted(sender: &Sender, script: Script) -> ScriptedWallet {
             stores: ports.stores.clone(),
             secrets: ports.secrets.clone(),
             transports: sender.harness.transports(),
-            clock: Arc::new(FixedClock(fixed_time())),
+            clock: Arc::new(FixedClock(
+                jiff::Timestamp::from_second(fixed_time().as_second() + script.clock_ahead)
+                    .unwrap(),
+            )),
             rng: SharedRng::new(StdRng::seed_from_u64(43)),
             runtime: sender.harness.runtime.handle().clone(),
         },
@@ -614,9 +620,10 @@ fn reset_recovers_a_wallet_whose_stored_height_is_ahead_of_the_chain() {
         .unwrap();
 
     assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
-    // The stale reference is gone; the rescan recorded the tip it reached instead.
+    // The stale reference is gone; the rescan holds the tip it reached until a refresh agrees.
+    assert_eq!(sender.read(|repos| repos.setting("chain.reference")), None);
     assert_eq!(
-        sender.read(|repos| repos.setting("chain.reference")),
+        sender.read(|repos| repos.setting("chain.pending")),
         Some(format!("{TIP} {}", fixed_time().as_second()))
     );
     refreshed(&sender.harness.block_on(sender.wallet.refresh()));
@@ -624,4 +631,100 @@ fn reset_recovers_a_wallet_whose_stored_height_is_ahead_of_the_chain() {
         sender.wallet.last_confirmed_height().unwrap(),
         Some(Height::new(TIP))
     );
+    assert_eq!(
+        sender.read(|repos| repos.setting("chain.reference")),
+        Some(format!("{TIP} {}", fixed_time().as_second()))
+    );
+}
+
+const DAY_SECONDS: i64 = 86_400;
+
+#[test]
+fn one_answer_far_ahead_does_not_leave_the_honest_node_behind() {
+    let (sender, _) = funded();
+    refreshed(&sender.harness.block_on(sender.wallet.refresh()));
+    assert_eq!(
+        sender.wallet.last_confirmed_height().unwrap(),
+        Some(Height::new(TIP))
+    );
+    // A day later a node answers once with a tip well ahead of the chain, but below every
+    // bound.
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![TIP + 2_000],
+            clock_ahead: DAY_SECONDS,
+            ..Script::default()
+        },
+    );
+
+    refreshed(&sender.harness.block_on(wallet.refresh()));
+
+    assert_eq!(
+        sender.wallet.last_confirmed_height().unwrap(),
+        Some(Height::new(TIP))
+    );
+    set_tip(&sender, TIP + 1);
+    refreshed(&sender.harness.block_on(sender.wallet.refresh()));
+    assert_eq!(
+        sender.wallet.last_confirmed_height().unwrap(),
+        Some(Height::new(TIP + 1))
+    );
+}
+
+#[test]
+fn a_tip_ahead_is_confirmed_by_a_later_agreeing_refresh() {
+    let (sender, _) = funded();
+    refreshed(&sender.harness.block_on(sender.wallet.refresh()));
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![TIP + 2_000, TIP + 2_001],
+            clock_ahead: DAY_SECONDS,
+            ..Script::default()
+        },
+    );
+
+    refreshed(&sender.harness.block_on(wallet.refresh()));
+    refreshed(&sender.harness.block_on(wallet.refresh()));
+
+    assert_eq!(
+        sender.wallet.last_confirmed_height().unwrap(),
+        Some(Height::new(TIP + 2_001))
+    );
+}
+
+#[test]
+fn a_wallet_with_no_confirmed_tip_is_bounded_by_the_network_checkpoint() {
+    let (sender, _) = funded();
+    sender
+        .store
+        .write(|repos| {
+            for name in ["chain.first", "chain.reference", "chain.pending"] {
+                repos.delete_setting(name)?;
+            }
+            Ok::<_, lepic_store::StoreError>(())
+        })
+        .unwrap();
+    // Far above the floonet chain, though below twice the blocks since genesis.
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![5_000_000, 5_000_000],
+            ..Script::default()
+        },
+    );
+
+    let result = sender.harness.block_on(wallet.refresh());
+
+    assert!(
+        matches!(
+            result,
+            Err(RefreshError::Implausible(
+                ImplausibleNodeData::TipTooHigh { .. }
+            ))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
 }
