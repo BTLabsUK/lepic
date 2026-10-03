@@ -131,7 +131,9 @@ impl ClientFrame {
     }
 
     /// Decodes a frame as a relay receives it. Unknown types are errors here; only the client
-    /// side must tolerate them.
+    /// side must tolerate them. For relay-side use: a known type's fields are read through
+    /// serde's internally tagged decoding, which buffers that frame's other values, unlike
+    /// [`RelayFrame::from_json`], which the wallet uses.
     pub fn from_json(text: &str) -> Result<Self, FrameError> {
         check_len(text)?;
         let type_name = probe_type(text)?;
