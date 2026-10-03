@@ -18,7 +18,7 @@ use std::sync::Arc;
 use lepic_epicbox::transport::{EpicboxTransport, relay_message_id};
 use lepic_epicbox::{
     Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
-    Network as RelayNetwork, Rejection, Subscription, TRANSPORT_ID,
+    Network as RelayNetwork, RELAY_RETENTION, Rejection, Subscription, TRANSPORT_ID,
 };
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::params::Network;
@@ -327,6 +327,15 @@ fn put_inbox(
     })
 }
 
+/// Forgets relay message ids received longer ago than the relay keeps messages, since the relay
+/// can no longer deliver them; `(slate_id, stage)` still makes a late copy harmless.
+fn prune_inbox(repos: &mut dyn Repositories, now: jiff::Timestamp) -> Result<usize, StoreError> {
+    match now.checked_sub(RELAY_RETENTION) {
+        Ok(cutoff) => repos.prune_inbox(cutoff),
+        Err(_) => Ok(0),
+    }
+}
+
 /// The status a message had before this delivery, recording it as received when it is new.
 fn begin_inbox(
     repos: &mut dyn Repositories,
@@ -397,6 +406,7 @@ where
         epicbox: &EpicboxTransport,
     ) -> Result<InboxSummary, InboxError> {
         let client = self.inbox_client(epicbox)?;
+        self.prune_relay_inbox().await;
         let subscription = client.drain().map_err(InboxError::Subscription)?;
         self.run_inbox(&subscription, None, backoff(epicbox)).await
     }
@@ -416,6 +426,7 @@ where
         handle: &ListenHandle,
     ) -> Result<InboxSummary, InboxError> {
         let client = self.inbox_client(epicbox)?;
+        self.prune_relay_inbox().await;
         let subscription = client.listen().map_err(InboxError::Subscription)?;
         self.run_inbox(&subscription, Some(handle), backoff(epicbox))
             .await
@@ -428,6 +439,13 @@ where
             });
         }
         self.attached_client(epicbox)
+    }
+
+    /// Runs before the subscription starts, so the host sees every connection state.
+    async fn prune_relay_inbox(&self) {
+        if let Err(error) = self.inbox_write(prune_inbox).await {
+            warn!(error = %ErrorChain(&error), "epicbox inbox not pruned");
+        }
     }
 
     /// Consumes the subscription and stops it, while its connection state goes out as events.

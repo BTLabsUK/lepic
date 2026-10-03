@@ -26,6 +26,10 @@ use crate::crypto::{MessageError, ReceivedMessage};
 use crate::frame::{ClientFrame, RelayFrame, RelayMessageId, SlateFrame, WalletMode};
 use crate::session::{Connection, Greeting, ProtocolVersion, deadline_after};
 
+/// The longest a relay keeps a stored message: the public relay expires them after seven days.
+/// A relay message id received longer ago than this cannot be delivered again.
+pub const RELAY_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 /// Acknowledged message ids remembered per subscription, so a redelivery after a lost `Made`
 /// is acknowledged again instead of handed out twice.
 const REMEMBERED_ACKNOWLEDGEMENTS: usize = 4096;
