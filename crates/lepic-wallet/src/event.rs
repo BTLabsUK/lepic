@@ -16,6 +16,9 @@ pub enum Event {
     Session(SessionState),
     Balance(Balance),
     Transaction(TransactionState),
+    /// A received slate created a transaction. Its later state changes arrive as
+    /// [`Event::Transaction`].
+    Received(ReceivedTransaction),
     Sync(SyncProgress),
     Transport(TransportStatus),
 }
@@ -48,6 +51,15 @@ pub struct TransactionState {
     pub tx_id: TxId,
     pub from: TxState,
     pub to: TxState,
+}
+
+/// The transaction a received slate created, stored in state `received`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReceivedTransaction {
+    pub tx_id: TxId,
+    pub account: AccountIndex,
+    pub amount: Amount,
+    pub transport: TransportId,
 }
 
 impl From<StateChange> for Event {

@@ -40,7 +40,7 @@ use crate::api::runtime::{DirClaim, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip, ScanProgress, SentTx,
-    Slate, TransportState, WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
+    Slate, TransportState, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -756,6 +756,11 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             to: Some(change.to.into()),
             ..WalletEvent::of(WalletEventKind::Transaction)
         },
+        Event::Received(received) => WalletEvent {
+            tx_id: Some(received.tx_id.0),
+            to: Some(TxStatus::Received),
+            ..WalletEvent::of(WalletEventKind::Transaction)
+        },
         Event::Sync(sync) => WalletEvent {
             height: Some(sync.height.value()),
             target_height: Some(sync.target.value()),
@@ -779,11 +784,10 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
                 TransportState::Connecting | TransportState::Stopped => return None,
             }
         }
-        Event::Transaction(change) => match change.to {
-            TxState::Received => (ListenerEventKind::Received, Some(change.tx_id.0)),
-            TxState::Finalized => (ListenerEventKind::Finalized, Some(change.tx_id.0)),
-            _ => return None,
-        },
+        Event::Received(received) => (ListenerEventKind::Received, Some(received.tx_id.0)),
+        Event::Transaction(change) if change.to == TxState::Finalized => {
+            (ListenerEventKind::Finalized, Some(change.tx_id.0))
+        }
         _ => return None,
     };
     Some(ListenerEvent {
@@ -883,4 +887,51 @@ pub(crate) async fn delete_wallet(
     crate::pin::forget(store).await?;
     info!("wallet deleted");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_wallet::event::{ReceivedTransaction, TransactionState};
+
+    use super::*;
+
+    fn received() -> Event {
+        Event::Received(ReceivedTransaction {
+            tx_id: TxId(3),
+            account: DEFAULT_ACCOUNT,
+            amount: Amount::new(100_000_000),
+            transport: TRANSPORT_ID,
+        })
+    }
+
+    #[test]
+    fn a_received_slate_reaches_the_listener_as_received() {
+        let event = listener_event(&received()).unwrap();
+        assert_eq!(event.kind, ListenerEventKind::Received);
+        assert_eq!(event.tx_id, Some(3));
+    }
+
+    #[test]
+    fn a_received_slate_reaches_the_event_stream_as_a_new_transaction() {
+        let event = wallet_event(&received()).unwrap();
+        assert_eq!(event.kind, WalletEventKind::Transaction);
+        assert_eq!(event.tx_id, Some(3));
+        assert_eq!(event.from, None);
+        assert_eq!(event.to, Some(TxStatus::Received));
+    }
+
+    #[test]
+    fn only_finalized_state_changes_reach_the_listener() {
+        let change = |to| {
+            Event::Transaction(TransactionState {
+                tx_id: TxId(5),
+                from: TxState::Sent,
+                to,
+            })
+        };
+        let finalized = listener_event(&change(TxState::Finalized)).unwrap();
+        assert_eq!(finalized.kind, ListenerEventKind::Finalized);
+        assert_eq!(finalized.tx_id, Some(5));
+        assert!(listener_event(&change(TxState::Cancelled)).is_none());
+    }
 }

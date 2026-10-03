@@ -19,7 +19,8 @@ use lepic_store::{
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::TransportId;
-use lepic_wallet::{ReceiveError, WalletError};
+use lepic_wallet::event::ReceivedTransaction;
+use lepic_wallet::{Event, ReceiveError, WalletError};
 use receive_harness::*;
 use serde_json::Value;
 use support::fixed_time;
@@ -73,6 +74,31 @@ fn received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys() {
             Ok::<_, StoreError>(())
         })
         .unwrap();
+}
+
+#[test]
+fn a_received_slate_announces_the_transaction_it_created() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let receiver = Receiver::new(
+        &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+        slate_height(&s1),
+    );
+    let mut events = receiver.wallet.subscribe();
+
+    let received = receiver.receive(transport, &json(&s1), None).unwrap();
+    let again = receiver.receive(transport, &json(&s1), None);
+
+    assert!(again.is_err());
+    let announced: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert_eq!(
+        announced,
+        [Event::Received(ReceivedTransaction {
+            tx_id: received.tx_id,
+            account: AccountIndex(0),
+            amount: received.slate.amount(),
+            transport,
+        })]
+    );
 }
 
 #[test]

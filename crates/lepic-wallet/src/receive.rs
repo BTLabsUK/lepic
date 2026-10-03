@@ -45,6 +45,7 @@ use uuid::Uuid;
 
 use crate::account::{self, DEFAULT_ACCOUNT_LABEL};
 use crate::error::WalletError;
+use crate::event::{Event, ReceivedTransaction};
 use crate::lifecycle::Session;
 use crate::ports::{Ports, SecretVault, StoreOpener};
 use crate::wallet::Wallet;
@@ -144,6 +145,8 @@ where
     /// context is kept: the receiver's signing keys are dropped once S2 is signed. The caller
     /// sends the reply over the same transport.
     ///
+    /// Emits [`Event::Received`] once the transaction is stored.
+    ///
     /// Asks the node for its tip. Fails with [`ReceiveError::Wallet`] carrying
     /// [`WalletError::Locked`] when the wallet is locked, with [`ReceiveError::AlreadyReceived`]
     /// for a slate id this wallet has received before, with [`ReceiveError::Expired`] when the
@@ -188,7 +191,7 @@ where
         let context = self.encode_context(&slate).await?;
         debug!(height = tip.value(), "slate checked");
 
-        let received = self
+        let (received, account) = self
             .blocking(move |ports, _| {
                 Ok(store_reply(
                     ports,
@@ -204,6 +207,12 @@ where
             })
             .await??;
         info!(tx_id = %received.tx_id, "slate received");
+        self.emit(Event::Received(ReceivedTransaction {
+            tx_id: received.tx_id,
+            account,
+            amount: received.slate.amount(),
+            transport,
+        }));
         Ok(received)
     }
 
@@ -236,13 +245,14 @@ struct Proposal {
 }
 
 /// Builds S2, encodes it by the transport's reply rule and stores everything in one store
-/// transaction, so the output key it reserves is used exactly once.
+/// transaction, so the output key it reserves is used exactly once. Returns the account the
+/// funds went to alongside.
 fn store_reply<N, S: StoreOpener, V>(
     ports: &Ports<N, S, V>,
     session: &Session<S::Store>,
     proposal: &Proposal,
     request: &ReceiveRequest,
-) -> Result<Received, ReceiveError> {
+) -> Result<(Received, AccountIndex), ReceiveError> {
     let transport = proposal.transport;
     let policy = ports
         .transports
@@ -265,11 +275,14 @@ fn store_reply<N, S: StoreOpener, V>(
             transport,
             now,
         )?;
-        Ok(Received {
-            tx_id,
-            slate: response.slate,
-            reply,
-        })
+        Ok((
+            Received {
+                tx_id,
+                slate: response.slate,
+                reply,
+            },
+            response.account,
+        ))
     })
 }
 
