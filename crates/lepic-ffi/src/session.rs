@@ -202,6 +202,10 @@ impl Session {
         &self.claim.runtime
     }
 
+    pub(crate) fn store(&self) -> &AppSecretStore {
+        &self.store
+    }
+
     /// Creates the wallet: from `phrase` when given, from new entropy otherwise.
     pub(crate) async fn create(
         &self,
@@ -794,6 +798,7 @@ pub(crate) async fn delete_wallet(
         }
     }
     store.delete(VAULT_KEY).await?;
+    crate::pin::forget(store).await?;
     info!("wallet deleted");
     Ok(())
 }

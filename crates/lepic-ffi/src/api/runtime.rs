@@ -17,6 +17,7 @@ use crate::boundary::{Boundary, guard};
 use crate::frb_generated::StreamSink;
 use crate::log::LogForwarder;
 use crate::node::NodeFactory;
+use crate::pin::{PinGuard, PinPolicy};
 
 /// Owns the threads every wallet runs on. Create one when the app starts and keep it; dropping
 /// it stops work still running. Wallets keep the runtime alive while they are open.
@@ -31,6 +32,7 @@ pub(crate) struct RuntimeInner {
     logs: Arc<LogForwarder>,
     pub(crate) nodes: NodeFactory,
     pub(crate) kdf: KdfParams,
+    pub(crate) pin: PinGuard,
     open: Mutex<BTreeSet<PathBuf>>,
 }
 
@@ -50,7 +52,12 @@ impl LepicRuntime {
     #[frb(sync)]
     pub fn new(log_level: LogLevel) -> Result<LepicRuntime, WalletError> {
         guard("runtime", || {
-            Self::start(log_level, NodeFactory::Http, KdfParams::DEFAULT)
+            Self::start(
+                log_level,
+                NodeFactory::Http,
+                KdfParams::DEFAULT,
+                PinPolicy::DEFAULT,
+            )
         })
     }
 
@@ -58,6 +65,7 @@ impl LepicRuntime {
         log_level: LogLevel,
         nodes: NodeFactory,
         kdf: KdfParams,
+        pin: PinPolicy,
     ) -> Result<Self, WalletError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -81,6 +89,7 @@ impl LepicRuntime {
                 logs,
                 nodes,
                 kdf,
+                pin: PinGuard::new(pin),
                 open: Mutex::default(),
             }),
         })

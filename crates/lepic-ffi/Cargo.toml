@@ -36,7 +36,7 @@ zeroize.workspace = true
 [dev-dependencies]
 lepic-ffi = { path = ".", features = ["mock"] }
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 
 # Copy of [workspace.lints] in the root Cargo.toml without `unsafe_code`, because
 # flutter_rust_bridge generates unsafe glue here. xtask/src/lint_tables.rs fails

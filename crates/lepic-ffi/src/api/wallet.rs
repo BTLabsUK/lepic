@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 
 use crate::pin;
 
-use crate::api::error::WalletError;
+use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
@@ -93,8 +93,9 @@ pub async fn node_tip(
 }
 
 /// A wallet created by [`EpicWallet::create_with_pin`], and its wallet password sealed under the
-/// PIN. Store `sealed_password`; it is not secret without the PIN, and
-/// [`EpicWallet::open_with_pin`] needs it.
+/// PIN and the PIN key in the app's store. Store `sealed_password`;
+/// [`EpicWallet::open_with_pin`] needs it. With the store's contents it allows guessing the
+/// PIN offline, so keep it where the store is, not in backups.
 #[frb(non_opaque)]
 pub struct PinWallet {
     pub wallet: EpicWallet,
@@ -183,7 +184,15 @@ impl EpicWallet {
     }
 
     /// [`EpicWallet::create`] with a wallet password LEPIC generates, seals under `pin` and
-    /// never hands to Dart. Fails as `create` does.
+    /// never hands to Dart. The sealed text is bound to a random key LEPIC writes into `store`
+    /// as `lepic.pin-key`, so it opens only together with that store.
+    ///
+    /// Store `sealed_password` before showing the recovery phrase or receiving funds. If the
+    /// app stops before storing it, the wallet cannot be opened by PIN; delete it with
+    /// [`delete_wallet`] and create it again (a restored wallet from its phrase).
+    ///
+    /// Fails with `InvalidArgument` when `pin` has fewer than four characters, and otherwise
+    /// as `create` does.
     pub async fn create_with_pin(
         runtime: &LepicRuntime,
         config: WalletConfig,
@@ -191,6 +200,7 @@ impl EpicWallet {
         mnemonic: Option<String>,
         pin: String,
     ) -> Result<PinWallet, WalletError> {
+        let pin = Zeroizing::new(pin);
         let inner = Arc::clone(&runtime.inner);
         let store = store.clone();
         let kdf = inner.kdf;
@@ -198,13 +208,18 @@ impl EpicWallet {
             .inner
             .boundary
             .run("create_with_pin", async move {
-                let pin = Zeroizing::new(pin);
+                let pin = pin::NewPin::new(pin)?;
+                let session = Session::new(&inner, &config, store.clone())?;
+                // Checked before the PIN key is written, so it never replaces another
+                // wallet's key.
+                if session::wallet_exists(&store).await? {
+                    return Err(WalletError::new(
+                        WalletErrorKind::WalletAlreadyExists,
+                        "the app's store holds a wallet",
+                    ));
+                }
                 let password = pin::generate_password()?;
-                let sealed_password = {
-                    let password = password.clone();
-                    pin::blocking(move || pin::seal(&pin, &password, kdf)).await?
-                };
-                let session = Session::new(&inner, &config, store)?;
+                let sealed_password = pin::seal_new(&store, pin, password.clone(), kdf).await?;
                 session.create(mnemonic, (*password).clone()).await?;
                 Ok(PinWallet {
                     wallet: EpicWallet {
@@ -217,7 +232,13 @@ impl EpicWallet {
     }
 
     /// [`EpicWallet::open`] with the wallet password sealed in `sealed_password`, opened with
-    /// `pin`. A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`.
+    /// `pin` and the PIN key in `store`. Every attempt is counted in `store` as
+    /// `lepic.pin-failures` until a right PIN clears it. After three failures each attempt
+    /// first waits, 30 seconds after the fourth and twice as long after each further one, up
+    /// to an hour; attempts of one runtime run one at a time.
+    ///
+    /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a store without the
+    /// PIN key `SecretStore`.
     pub async fn open_with_pin(
         runtime: &LepicRuntime,
         config: WalletConfig,
@@ -225,15 +246,15 @@ impl EpicWallet {
         pin: String,
         sealed_password: String,
     ) -> Result<EpicWallet, WalletError> {
+        let pin = Zeroizing::new(pin);
         let inner = Arc::clone(&runtime.inner);
         let store = store.clone();
         runtime
             .inner
             .boundary
             .run("open_with_pin", async move {
-                let pin = Zeroizing::new(pin);
-                let password = pin::blocking(move || pin::open(&pin, &sealed_password)).await?;
-                let session = Session::new(&inner, &config, store)?;
+                let session = Session::new(&inner, &config, store.clone())?;
+                let password = pin::unlock(&inner.pin, &store, pin, sealed_password).await?;
                 session.open((*password).clone()).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
@@ -251,15 +272,22 @@ impl EpicWallet {
     }
 
     /// [`EpicWallet::mnemonic`] for a wallet from [`EpicWallet::create_with_pin`]: `pin` opens
-    /// `sealed_password`, which is then checked against the stored vault.
+    /// `sealed_password`, which is then checked against the stored vault. PIN attempts are
+    /// counted and delayed as in [`EpicWallet::open_with_pin`].
     pub async fn mnemonic_with_pin(
         &self,
         pin: String,
         sealed_password: String,
     ) -> Result<String, WalletError> {
+        let pin = Zeroizing::new(pin);
         self.run("mnemonic_with_pin", |session| async move {
-            let pin = Zeroizing::new(pin);
-            let password = pin::blocking(move || pin::open(&pin, &sealed_password)).await?;
+            let password = pin::unlock(
+                &session.runtime().pin,
+                session.store(),
+                pin,
+                sealed_password,
+            )
+            .await?;
             session.recovery_phrase((*password).clone()).await
         })
         .await

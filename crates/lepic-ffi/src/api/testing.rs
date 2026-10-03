@@ -53,6 +53,7 @@ impl MockChain {
                 log_level,
                 crate::node::NodeFactory::Mock(self.backend.clone()),
                 kdf,
+                crate::pin::PinPolicy::DEFAULT,
             )
         }
         #[cfg(not(feature = "mock"))]

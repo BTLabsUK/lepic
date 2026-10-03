@@ -21,4 +21,6 @@ mod mock;
 mod node;
 mod pin;
 mod session;
+#[cfg(test)]
+mod tests;
 mod vault_port;
