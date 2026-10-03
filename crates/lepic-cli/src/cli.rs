@@ -224,7 +224,7 @@ pub struct DestinationArgs {
     /// Epicbox address of the receiver
     #[arg(long, value_name = "ADDRESS")]
     pub to: Option<String>,
-    /// Write the slate to this file
+    /// Write the slate to this file, as V3 slate JSON
     #[arg(long, value_name = "FILE")]
     pub to_file: Option<PathBuf>,
 }
@@ -253,7 +253,7 @@ pub struct MessageArg {
 
 #[derive(Debug, Args)]
 pub struct SlateFileArg {
-    /// The slate file to read
+    /// The slate file to read, V2 or V3 slate JSON
     #[arg(value_name = "FILE")]
     pub file: PathBuf,
 }
@@ -272,7 +272,7 @@ pub struct ReceiveArgs {
 
 #[derive(Debug, Args)]
 pub struct ReplyFileArg {
-    /// Where the reply goes [default: <FILE>.response]
+    /// Where the reply goes, as V3 slate JSON [default: <FILE>.response]
     #[arg(long, value_name = "FILE")]
     pub reply_file: Option<PathBuf>,
 }
@@ -329,7 +329,7 @@ pub struct IssueArgs {
     /// Amount to ask for, in EPIC; the payer adds the fee
     #[arg(value_name = "AMOUNT")]
     pub amount: String,
-    /// Write the slate to this file
+    /// Write the slate to this file, as V3 slate JSON
     #[arg(long, value_name = "FILE")]
     pub to_file: PathBuf,
     #[command(flatten)]
