@@ -163,7 +163,7 @@ fn help_renders_for_every_command() {
 #[test]
 fn help_starts_with_what_the_command_does() {
     for (path, command) in all_commands() {
-        let Some(about) = command.get_about().map(|about| about.to_string()) else {
+        let Some(about) = command.get_about().map(ToString::to_string) else {
             continue;
         };
         for flag in ["-h", "--help"] {
