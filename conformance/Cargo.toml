@@ -22,6 +22,15 @@ epic_pool = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_util = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
 epic_wallet_libwallet = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }
 epic_wallet_impls = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }
+# The LEPIC crates the differential tests run. The reference wallet bundles its own SQLite, which
+# cannot share a build with rusqlite's, so LEPIC's SQLite backend stays off here.
+lepic-keychain = { path = "../crates/lepic-keychain" }
+lepic-node = { path = "../crates/lepic-node" }
+lepic-primitives = { path = "../crates/lepic-primitives" }
+lepic-slate = { path = "../crates/lepic-slate" }
+lepic-store = { path = "../crates/lepic-store", default-features = false }
+lepic-transport = { path = "../crates/lepic-transport" }
+lepic-wallet = { path = "../crates/lepic-wallet", default-features = false }
 # The BLAKE2b implementation the node and wallet hash with, at the version their lockfile resolves.
 blake2-rfc = "=0.2.18"
 serde = { version = "1", features = ["derive"] }
