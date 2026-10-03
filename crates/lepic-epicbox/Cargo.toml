@@ -37,4 +37,4 @@ zeroize.workspace = true
 insta.workspace = true
 lepic-epicbox = { path = ".", features = ["mock-relay"] }
 proptest = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "test-util", "time"] }

@@ -8,10 +8,11 @@
 //! live listener per address, passes each newly posted message through to an idle listener,
 //! answers the JSON `ping` with bare `pong` text, and closes sockets that send text that is not
 //! JSON. Unlike the public relay it stores every message itself instead of forwarding to other
-//! domains, and its messages do not expire. Tests wait on its state with
+//! domains, and its messages do not expire. Switches make it refuse or stall connections, leave
+//! chosen frames unanswered, or stop reading subscribed sockets. Tests wait on its state with
 //! [`MockRelay::wait_until`] instead of polling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -42,6 +43,21 @@ const CLOSE_NOT_JSON: u16 = 3000;
 /// Subscribes while a message is unacknowledged after which the relay sends it again on the same
 /// socket, and redelivery rounds after which it discards the address's unacknowledged messages.
 const RESEND_AFTER: u32 = 3;
+
+/// The largest payload a websocket control frame carries.
+const MAX_CONTROL_PAYLOAD: usize = 125;
+
+/// A frame the relay can be told to leave unanswered with [`MockRelay::set_unanswered`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Unanswered {
+    /// The challenge sent on connect and after each accepted `Made`.
+    Challenge,
+    ClientDetails,
+    Subscribe,
+    PostSlate,
+    Made,
+}
 
 /// A relay shared by every connection made through its [`MockRelay::connector`].
 #[derive(Clone)]
@@ -82,6 +98,8 @@ struct Socket {
 
 enum Outgoing {
     Text(String),
+    Ping,
+    StopReading,
     Close(u16),
 }
 
@@ -95,6 +113,7 @@ struct RelayState {
     refusing: bool,
     stalling: bool,
     stalled: Vec<DuplexStream>,
+    unanswered: HashSet<Unanswered>,
     version: Option<String>,
     received: HashMap<String, usize>,
     deliveries: HashMap<String, usize>,
@@ -117,6 +136,7 @@ impl MockRelay {
                     refusing: false,
                     stalling: false,
                     stalled: Vec::new(),
+                    unanswered: HashSet::new(),
                     version: Some(PROTOCOL_VERSION.to_owned()),
                     received: HashMap::new(),
                     deliveries: HashMap::new(),
@@ -153,6 +173,40 @@ impl MockRelay {
     /// Accepts new connections but never answers on them, as a relay stuck mid-handshake does.
     pub fn set_stalling(&self, stalling: bool) {
         self.update(|state| state.stalling = stalling);
+    }
+
+    /// Leaves `frame` unanswered from now on, or answers it again. A withheld challenge is
+    /// never sent; a withheld request is counted by [`Self::received`] and otherwise ignored.
+    pub fn set_unanswered(&self, frame: Unanswered, unanswered: bool) {
+        self.update(|state| {
+            if unanswered {
+                state.unanswered.insert(frame);
+            } else {
+                state.unanswered.remove(&frame);
+            }
+        });
+    }
+
+    /// Stops reading every subscribed connection, as a relay whose process hangs does. Frames
+    /// queued for it still go out, and the client's writes wait once the buffer is full.
+    pub fn stop_reading_subscribed(&self) {
+        self.send_to_subscribed(|| Outgoing::StopReading);
+    }
+
+    /// Sends `count` websocket pings with the largest payload to every subscribed connection.
+    /// The client answers each with a pong, so this fills a connection that is not read.
+    pub fn ping_subscribed(&self, count: usize) {
+        for _ in 0..count {
+            self.send_to_subscribed(|| Outgoing::Ping);
+        }
+    }
+
+    fn send_to_subscribed(&self, outgoing: impl Fn() -> Outgoing) {
+        for socket in self.lock().sockets.values() {
+            if socket.address.is_some() {
+                let _ = socket.outgoing.send(outgoing());
+            }
+        }
     }
 
     /// The version `GetVersion` reports; `None` leaves `GetVersion` unanswered.
@@ -318,6 +372,7 @@ impl MockRelay {
             state.challenge(id);
             id
         });
+        let mut reading = true;
         loop {
             tokio::select! {
                 next = queued.recv() => match next {
@@ -326,6 +381,13 @@ impl MockRelay {
                             break;
                         }
                     }
+                    Some(Outgoing::Ping) => {
+                        let payload = vec![0_u8; MAX_CONTROL_PAYLOAD];
+                        if ws.send(Message::Ping(payload.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Outgoing::StopReading) => reading = false,
                     Some(Outgoing::Close(code)) => {
                         let frame = CloseFrame { code: CloseCode::from(code), reason: "".into() };
                         let _ = ws.send(Message::Close(Some(frame))).await;
@@ -333,7 +395,7 @@ impl MockRelay {
                     }
                     None => break,
                 },
-                incoming = ws.next() => match incoming {
+                incoming = ws.next(), if reading => match incoming {
                     Some(Ok(Message::Text(text))) => {
                         self.update(|state| state.handle(id, self.inner.network, text.as_str()));
                     }
@@ -409,6 +471,9 @@ impl RelayState {
         if let Some(socket) = self.sockets.get_mut(&id) {
             socket.challenge.clone_from(&challenge);
         }
+        if self.unanswered.contains(&Unanswered::Challenge) {
+            return;
+        }
         self.send(
             id,
             json!({"type": "Challenge", "str": challenge}).to_string(),
@@ -440,6 +505,16 @@ impl RelayState {
         let type_name = type_name.to_ascii_lowercase();
         let count = self.received.entry(type_name.clone()).or_default();
         *count = count.saturating_add(1);
+        let withheld = match type_name.as_str() {
+            "clientdetails" => Some(Unanswered::ClientDetails),
+            "subscribe" => Some(Unanswered::Subscribe),
+            "postslate" => Some(Unanswered::PostSlate),
+            "made" => Some(Unanswered::Made),
+            _ => None,
+        };
+        if withheld.is_some_and(|frame| self.unanswered.contains(&frame)) {
+            return;
+        }
         match type_name.as_str() {
             "ping" => self.send(id, "pong".to_owned()),
             "clientdetails" => {
