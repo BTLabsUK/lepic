@@ -50,11 +50,6 @@ use crate::lifecycle::Session;
 use crate::ports::{Ports, SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
-// TODO(E-03): the Epicbox inbox resends the stored S2 for a redelivered S1 through these.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the inbox pipeline of E-03 is the first caller")
-)]
 pub(crate) mod redelivery;
 
 /// `epic-wallet` signs payment proofs with the address key at index 0 of the account.
