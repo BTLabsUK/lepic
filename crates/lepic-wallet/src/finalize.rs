@@ -500,7 +500,7 @@ fn finalize_stored(
     let tx_id = entry.id;
     match entry.entry.state {
         TxState::Sent => {}
-        state @ (TxState::Finalized | TxState::Posted) => {
+        state @ (TxState::Finalized | TxState::Posted | TxState::Confirmed) => {
             return match stored_s3(repos, base_fee, slate_uuid)? {
                 // Returned as the first finalize returned it: with the wire origin of the S2,
                 // which a reply policy echoes, not that of the stored copy.
@@ -516,8 +516,7 @@ fn finalize_stored(
                 _ => Err(FinalizeError::AlreadyFinalized { slate_id, tx_id }),
             };
         }
-        state
-        @ (TxState::Received | TxState::Confirmed | TxState::Cancelled | TxState::Expired) => {
+        state @ (TxState::Received | TxState::Cancelled | TxState::Expired) => {
             return Err(FinalizeError::NotFinalizable { tx_id, state });
         }
     }
@@ -629,8 +628,8 @@ where
     /// `propagation`.
     ///
     /// Asks the node for its tip, and refuses with [`FinalizeError::Expired`] once it reaches
-    /// the slate's TTL cutoff. Finalizing an S2 a second time returns the stored result and
-    /// posts only if the first post did not succeed; another S2 under the same slate id fails
+    /// the slate's TTL cutoff. Finalizing an S2 a second time, also once its transaction is
+    /// confirmed, returns the stored result and posts only if the first post did not succeed; another S2 under the same slate id fails
     /// with [`FinalizeError::AlreadyFinalized`]. Fails with [`FinalizeError::NotPosted`] when
     /// the slate was finalized and stored but the node refused or could not be reached; the
     /// transaction then waits in state `finalized` for [`Wallet::post`]. A node whose pool
@@ -695,7 +694,7 @@ where
             }
             None => debug!("slate already finalized"),
         }
-        if stored.state != TxState::Posted {
+        if stored.state == TxState::Finalized {
             self.push(stored.tx_id, &stored.finalized.transaction, propagation)
                 .await?;
         }

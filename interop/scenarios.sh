@@ -274,20 +274,17 @@ scenario_duplicate_settled() {
     local summary
     summary="$(drain_until handled "${copies}" 60 '.repeated + .rejected')" ||
         fail "redeliveries not all settled: ${summary}" || return 1
-    # A copy of an S2 whose transaction is confirmed is counted rejected, not repeated: a known
-    # lepic-wallet defect recorded in the V-02 claim's Found section, to be fixed in its own task.
-    # Require `repeated` for all copies once it is.
-    [[ "$(jq -r .repeated <<<"${summary}")" -eq "${s1}" && "$(jq -r .rejected <<<"${summary}")" -eq "${s2}" ]] ||
-        fail "expected ${s1} repeated S1 and ${s2} rejected S2 copies: ${summary}" || return 1
+    [[ "$(jq -r .repeated <<<"${summary}")" -eq "${copies}" ]] ||
+        fail "expected all ${copies} copies repeated: ${summary}" || return 1
     local field
-    for field in received finalized held; do
+    for field in received finalized rejected held; do
         [[ "$(jq -r ".${field}" <<<"${summary}")" -eq 0 ]] ||
             fail "a redelivery counted as ${field}: ${summary}" || return 1
     done
     [[ "$(relay_pending_for_lepic)" -eq 0 ]] || fail "redeliveries left unacknowledged on the relay" || return 1
     [[ "$(lepic_tx_count)" -eq "${count_before}" ]] || fail "redeliveries created transactions" || return 1
     check_lepic_total || return 1
-    DETAIL="${s1} S1 copies repeated, ${s2} S2 copies of confirmed txs rejected, no effect"
+    DETAIL="${s1} S1 and ${s2} S2 copies of confirmed txs repeated, no effect"
 }
 
 SCENARIOS=(

@@ -26,7 +26,7 @@ use lepic_slate::error::{DecodeError, SlateError};
 use lepic_slate::model::{ProofAddress, SlateId};
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
-use lepic_store::{SlateStage, TxId, TxState};
+use lepic_store::{SlateStage, TxId, TxState, WalletStore};
 use lepic_transport::file::FILE;
 use lepic_transport::transport::Destination;
 use lepic_wallet::event::TransactionState;
@@ -233,6 +233,34 @@ fn finalizing_the_same_s2_again_changes_nothing() {
     assert_eq!(exchange.pushed(), 1);
     assert_eq!(exchange.state(), TxState::Posted);
     assert!(transaction_events(&mut events).is_empty());
+}
+
+#[test]
+fn finalizing_the_same_s2_after_confirmation_changes_nothing() {
+    let exchange = exchange(request(), None);
+    let first = exchange.finalize(&exchange.s2).unwrap();
+    exchange
+        .sender
+        .store
+        .write(|repos| {
+            let mut entry = repos.transaction(exchange.tx_id)?.unwrap();
+            entry.state = TxState::Confirmed;
+            repos.update_transaction(exchange.tx_id, &entry)
+        })
+        .unwrap();
+    let mut events = exchange.sender.wallet.subscribe();
+
+    let second = exchange.finalize(&exchange.s2).unwrap();
+
+    assert_eq!(second, first);
+    assert_eq!(exchange.pushed(), 1);
+    assert_eq!(exchange.state(), TxState::Confirmed);
+    assert!(transaction_events(&mut events).is_empty());
+    let other = reply(&exchange.s1, Some("a different reply"));
+    assert!(matches!(
+        exchange.finalize(&other).unwrap_err(),
+        FinalizeError::AlreadyFinalized { .. }
+    ));
 }
 
 #[test]
