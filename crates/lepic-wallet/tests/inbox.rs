@@ -227,6 +227,24 @@ fn a_crash_after_recording_processed_and_before_acknowledging_sends_no_second_s2
     assert_eq!(world.receiver.transactions(), 1);
 }
 
+/// A copy under a relay id the inbox recorded as settled is acknowledged without an answer, so
+/// it announces nothing: neither a payment nor an answer given again.
+#[test]
+fn a_settled_copy_of_an_s1_emits_no_receipt_event() {
+    let world = World::new();
+    reply_then_crash(&world, true);
+
+    let (restarted, epicbox) = world.restart_receiver();
+    let mut events = restarted.subscribe();
+    let summary = world.block_on(restarted.epicbox_drain(&epicbox)).unwrap();
+
+    assert_eq!(summary.repeated, 1);
+    let receipts: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|event| matches!(event, Event::Received(_) | Event::AnsweredAgain(_)))
+        .collect();
+    assert_eq!(receipts, []);
+}
+
 /// The crash comes between delivering S2 and recording the message, so the redelivered S1 is
 /// answered again with the same stored S2. The sender finalizes once, posts once, and counts
 /// the copy as repeated.
