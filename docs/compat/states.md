@@ -72,10 +72,14 @@ releasable. The release then asks the node once more and refuses while its chain
 transaction pool holds the kernel. It moves the send to `cancelled` as the owner's cancel does,
 which upstream records as `TxSentCancelled`. If another node still holds the transaction and it is
 mined later, its inputs are spent after all: a refresh marks them spent, and a newer send that
-spent them fails. The app releases only a send whose post the node refused with a JSON-RPC error.
-LEPIC also releases a posted send the node dropped and a finalized one whose post got no answer:
-a kernel still missing a day of blocks later, and in neither the node's chain nor its pool at the
-release, means the same in each case.
+spent them fails. The transaction stays `cancelled`, since a refresh never moves an ended
+transaction, and its change output, deleted by the release, comes back only with a scan, which
+stores it `unspent` again.
+
+The app releases only a send whose post the node refused with a JSON-RPC error. LEPIC also
+releases a posted send the node dropped and a finalized one whose post got no answer: a kernel
+still missing a day of blocks later, and in neither the node's chain nor its pool at the release,
+means the same in each case.
 
 The state machine does not know the direction of a transaction. Which side may take a step, for
 example that only an invoice issuer finalizes an incoming transaction, is enforced by the stages

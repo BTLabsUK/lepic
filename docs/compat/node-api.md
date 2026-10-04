@@ -20,6 +20,7 @@ recordings skip the owner exchange.
 | `get_unspent_outputs` | `[start_index, end_index or null, max, true]` | `highest_index`, `last_retrieved_index`, `outputs[]` with `commit`, `proof`, `output_type` (`Coinbase` or `Transaction`), `spent`, `block_height`, `mmr_index` |
 | `get_pmmr_indices` | `[start_height, end_height or null]` | `last_retrieved_index` (the first index of the range), `highest_index` (the last) |
 | `push_transaction` | `[tx, fluff]` | none |
+| `get_unconfirmed_transactions` | `[]` | `tx.body.kernels[]` with `excess`, `excess_sig`, `features`; the transaction pool only, not the Dandelion stem pool |
 
 Requests are JSON-RPC 2.0. The reference client sends `get_outputs` in chunks of 500 commitments in
 parallel. A node may require HTTP Basic auth on the foreign API; LEPIC supports an optional secret.
@@ -53,6 +54,9 @@ secret.
    confirmed height and reports the node as behind. Upstream applies no output state then, asks
    `get_kernel` with a `min_height` above the node's tip, gets an error and reports the node as
    unreachable (`refresh_node_behind_pending_receive`). Neither changes stored state.
+7. LEPIC only: look up the kernel of each finalized or posted send at or above 1,440 blocks after
+   the height it was finalized at, counting the highest confirmed tip. A kernel found confirms the
+   send; a missing one makes it releasable (`docs/compat/states.md`). Upstream has no release.
 
 ## Hardening LEPIC adds
 

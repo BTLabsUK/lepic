@@ -338,6 +338,8 @@ blocks, about a day, or more after it was finalized still finds its kernel nowhe
 node once more and is refused (exit 7, `rejected`) while the node's chain or its transaction pool
 holds the transaction. What it can cost: if another node still holds the transaction and mines it
 later, the inputs are spent by it after all, and a new send that spends the same inputs fails.
+The next refresh then marks the inputs spent, but the transaction keeps showing `cancelled` and
+its change is missing from the balance until `lepic wallet scan` finds it on chain again.
 `lepic tx post <ID>` sends a finalized transaction to the node again, for one the node dropped. A
 node whose pool already holds it counts as having taken it. When the node refuses it and its chain
 already holds the transaction's kernel, lepic records the transaction as posted and the next `lepic wallet info`
