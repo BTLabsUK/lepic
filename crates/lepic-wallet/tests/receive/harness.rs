@@ -250,6 +250,10 @@ impl Receiver {
         }
     }
 
+    pub fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
+        self.runtime.block_on(future)
+    }
+
     pub fn complete_restore_scan(&self) {
         complete_restore_scan(&self.runtime, &self.wallet);
     }

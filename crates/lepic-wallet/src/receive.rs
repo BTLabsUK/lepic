@@ -411,7 +411,10 @@ fn message_digest(text: &str) -> Message {
     Message::from(*blake2b_256(text.as_bytes()).as_bytes())
 }
 
-fn verify_message(message: &ParticipantMessage, signer: &PublicKey) -> Result<(), CryptoError> {
+pub(crate) fn verify_message(
+    message: &ParticipantMessage,
+    signer: &PublicKey,
+) -> Result<(), CryptoError> {
     verify_completed_sig(
         message.signature(),
         signer,

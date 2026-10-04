@@ -817,7 +817,7 @@ fn open_transactions(repos: &dyn Repositories) -> Result<Vec<StoredTransaction>,
     Ok(open)
 }
 
-fn stored_slate(
+pub(crate) fn stored_slate(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
     tx_id: TxId,

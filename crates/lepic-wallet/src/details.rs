@@ -4,15 +4,22 @@ use jiff::Timestamp;
 use lepic_crypto::Commitment;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
+use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
-use lepic_store::{AccountIndex, Repositories, StoredTransaction, TxId, TxState, WalletStore};
+use lepic_slate::role::Role;
+use lepic_store::{
+    AccountIndex, Repositories, SlateStage, StoreError, StoredTransaction, TxId, TxState,
+    WalletStore,
+};
 use lepic_transport::transport::Destination;
 use tracing::instrument;
+use uuid::Uuid;
 
 use crate::account::AccountError;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::refresh::{final_kernel, legacy_codecs, ttl_cutoff};
+use crate::receive::verify_message;
+use crate::refresh::{final_kernel, legacy_codecs, stored_slate, ttl_cutoff};
 use crate::release::release_check;
 use crate::wallet::Wallet;
 
@@ -46,7 +53,28 @@ pub struct TransactionDetails {
     /// Whether [`Wallet::release`] may release the send now: a refresh looked its kernel up at
     /// or above `releasable_from` and did not find it. The release asks the node once more.
     pub releasable: bool,
+    /// The participants' messages whose signatures verify, in the order the parties joined,
+    /// read from the latest stored stage of the slate. Empty for a restored output.
+    pub messages: Vec<SlateMessage>,
 }
+
+/// A participant's message as the slate carries it, with the signature checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlateMessage {
+    /// The party that wrote it: the sender or the receiver of the money, whoever started.
+    pub role: Role,
+    pub text: String,
+}
+
+/// The stages of one slate, latest first. A transaction stores stages of one flow only.
+const LATEST_FIRST: [SlateStage; 6] = [
+    SlateStage::Standard3,
+    SlateStage::Standard2,
+    SlateStage::Standard1,
+    SlateStage::Invoice3,
+    SlateStage::Invoice2,
+    SlateStage::Invoice1,
+];
 
 impl<N, S, V> Wallet<N, S, V>
 where
@@ -107,12 +135,13 @@ fn details(
     transaction: StoredTransaction,
 ) -> Result<TransactionDetails, WalletError> {
     let tx_id = transaction.id;
-    let (kernel_excess, ttl_cutoff_height) = match transaction.entry.slate_id {
+    let (kernel_excess, ttl_cutoff_height, messages) = match transaction.entry.slate_id {
         Some(slate_id) => (
             final_kernel(repos, codecs, tx_id, slate_id)?.map(|(excess, _)| excess),
             ttl_cutoff(repos, codecs, tx_id, slate_id)?,
+            messages(repos, codecs, tx_id, slate_id)?,
         ),
-        None => (None, None),
+        None => (None, None, Vec::new()),
     };
     // A confirmed transaction is final, and only a state change updates an entry, so its last
     // update is the moment it was confirmed.
@@ -127,6 +156,38 @@ fn details(
         counterparty: repos.counterparty(tx_id)?.map(Destination::new),
         ttl_cutoff_height,
         confirmed_at,
+        messages,
         transaction,
     })
+}
+
+/// A later stage carries every message of an earlier one, since a party adds its own and keeps
+/// the other's. A message whose signature does not verify under its party's excess is left out.
+fn messages(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+    slate_id: Uuid,
+) -> Result<Vec<SlateMessage>, StoreError> {
+    for stage in LATEST_FIRST {
+        if let Some(slate) = stored_slate(repos, codecs, tx_id, slate_id, stage)? {
+            return Ok(verified_messages(&slate));
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn verified_messages(slate: &Slate) -> Vec<SlateMessage> {
+    slate
+        .participants()
+        .filter_map(|(role, participant)| {
+            let message = participant.message.as_ref()?;
+            verify_message(message, &participant.public_blind_excess)
+                .ok()
+                .map(|()| SlateMessage {
+                    role,
+                    text: message.text().to_owned(),
+                })
+        })
+        .collect()
 }

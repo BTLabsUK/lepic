@@ -23,9 +23,12 @@ use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::mock::MockFailure;
 use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxState, WalletStore};
-use lepic_transport::transport::{Inbound, Transport};
+use lepic_transport::transport::{Destination, Inbound, Transport};
+use lepic_wallet::details::SlateMessage;
 use lepic_wallet::event::TransportState;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
+use lepic_wallet::send::{Delivery, SendRequest};
+use lepic_wallet::slate::Role;
 use lepic_wallet::{Event, ReceiveRequest, WalletError};
 use world::{RECEIVER_MNEMONIC, World, settings, transport_reaches, transport_states, within};
 
@@ -530,6 +533,49 @@ fn a_listener_retries_a_held_message_until_it_settles() {
     assert_eq!(summary.unwrap().received, 1);
     assert_eq!(world.receiver.transactions(), 1);
     assert_eq!(world.relay.pending(&world.sender_address), 1);
+}
+
+#[test]
+fn the_receiver_sees_the_senders_message_after_a_listener_receive() {
+    let world = World::new();
+    world
+        .block_on(world.sender.wallet.send(
+            SendRequest {
+                message: Some("for the pizza".to_owned()),
+                ..world::request()
+            },
+            Delivery::Deliver {
+                transport: TRANSPORT_ID,
+                to: Destination::new(world.receiver_address.to_string()),
+            },
+        ))
+        .unwrap();
+    let handle = ListenHandle::new();
+
+    world.block_on(async {
+        let listen = world
+            .receiver_wallet
+            .epicbox_listen(&world.receiver_epicbox, &handle);
+        let script = async {
+            world.until_acknowledged(&world.receiver_address).await;
+            handle.stop();
+        };
+        tokio::join!(listen, script).0.unwrap();
+    });
+
+    let transactions = world
+        .block_on(world.receiver_wallet.transactions(AccountIndex(0)))
+        .unwrap();
+    let [received] = transactions.as_slice() else {
+        panic!("{transactions:?}");
+    };
+    assert_eq!(
+        received.messages,
+        [SlateMessage {
+            role: Role::Sender,
+            text: "for the pizza".to_owned(),
+        }]
+    );
 }
 
 #[test]

@@ -1136,6 +1136,7 @@ mod tests {
             confirmed_at: Some(confirmed),
             releasable_from: Some(Height::new(1_444)),
             releasable: true,
+            messages: Vec::new(),
         };
 
         assert_eq!(
