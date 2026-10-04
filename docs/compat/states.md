@@ -78,7 +78,9 @@ key and amount of each change output it deletes. Each refresh up to 10,080 block
 after the height the release was decided at looks the kernel up, to the highest confirmed tip and
 not past that window. A kernel found moves the send from `cancelled` to `confirmed` at the
 kernel's height and stores its change `unspent` from that height, so the balance equals what a
-scan would find. This is the one transition out of `cancelled`, and only a released send takes
+scan would find. If a scan already restored the change, under an incoming entry with no slate of
+its own, the send takes the output over and that entry is dropped, so the history counts the
+change once. This is the one transition out of `cancelled`, and only a released send takes
 it. A kernel mined after the window is not looked for: the send stays `cancelled`, and a scan
 stores its change `unspent` again.
 

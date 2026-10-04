@@ -740,6 +740,12 @@ impl Releasing {
     fn cancel(&self) -> Result<(), WalletError> {
         self.harness.block_on(self.wallet.cancel(self.tx_id))
     }
+
+    fn history(&self) -> Vec<lepic_wallet::details::TransactionDetails> {
+        self.harness
+            .block_on(self.wallet.transactions(ACCOUNT))
+            .unwrap()
+    }
 }
 
 #[test]
@@ -787,4 +793,69 @@ fn refuses_a_cancel_when_the_node_pool_cannot_be_asked() {
         "{error:?}"
     );
     releasing.assert_untouched(TxState::Finalized, &outputs);
+}
+
+#[test]
+fn a_late_confirmation_takes_over_the_change_a_scan_restored_first() {
+    let releasing = Releasing::posted().made_releasable();
+    let change_before = releasing.change();
+    releasing.release().unwrap();
+    releasing.mined_elsewhere_at(RELEASABLE_FROM);
+    let sends = releasing.history().len();
+    support::complete_restore_scan(&releasing.harness.runtime, &releasing.wallet);
+    let restored = releasing.change();
+    assert_eq!(restored.len(), 1, "the scan restores the change");
+    assert_ne!(restored[0].tx, Some(releasing.tx_id));
+    assert_eq!(
+        releasing.history().len(),
+        sends + 1,
+        "under an entry of its own"
+    );
+
+    releasing.refresh();
+
+    assert_eq!(releasing.state(), TxState::Confirmed);
+    let change = releasing.change();
+    assert_eq!(change.len(), 1);
+    assert_eq!(change[0].id, change_before[0].id);
+    assert_eq!(change[0].tx, Some(releasing.tx_id));
+    assert_eq!(change[0].status, OutputStatus::Unspent);
+    let history = releasing.history();
+    assert_eq!(history.len(), sends, "the restored entry is dropped");
+    let credited: u64 = history
+        .iter()
+        .map(|details| details.transaction.entry.amount_credited.value())
+        .sum();
+    assert_eq!(credited, change_before[0].amount.value(), "counted once");
+}
+
+#[test]
+fn a_tip_held_as_pending_does_not_end_the_watch() {
+    let releasing = Releasing::posted().made_releasable();
+    releasing.release().unwrap();
+    let watched_until = RELEASABLE_FROM + RELEASED_WATCH_BLOCKS;
+    let confirmed = watched_until - 100;
+    let mut height = RELEASABLE_FROM;
+    while height < confirmed {
+        height = (height + RELEASE_AFTER_BLOCKS).min(confirmed);
+        releasing.chain_reaches(height);
+        releasing.refresh_twice();
+    }
+    // One answer past the window, too far ahead of the confirmed tip to be confirmed by itself.
+    releasing
+        .harness
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(watched_until + 10));
+    releasing.refresh();
+    assert_eq!(releasing.state(), TxState::Cancelled);
+
+    // The chain was where the wallet confirmed it, and the send is mined there.
+    releasing
+        .harness
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(confirmed));
+    releasing.mined_elsewhere_at(confirmed);
+    releasing.refresh();
+
+    assert_eq!(releasing.state(), TxState::Confirmed);
 }

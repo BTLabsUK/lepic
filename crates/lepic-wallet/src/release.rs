@@ -197,8 +197,8 @@ fn released_sends(
 }
 
 /// Confirms a released send whose kernel was found at `height` and stores its change as
-/// unspent from there, unless a scan already stored it. A send no longer cancelled, or no
-/// longer watched, is left as it is.
+/// unspent from there, or takes over the change a scan already stored. A send no longer
+/// cancelled, or no longer watched, is left as it is.
 fn confirm_mined_release(
     repos: &mut dyn Repositories,
     tx_id: TxId,
@@ -215,14 +215,53 @@ fn confirm_mined_release(
         return Ok(None);
     }
     for change in &released.change {
-        if repos.output(change.commitment.as_bytes())?.is_none() {
-            repos.put_output(&released.change_record(change, account, tx_id, height))?;
+        match repos.output(change.commitment.as_bytes())? {
+            None => repos.put_output(&released.change_record(change, account, tx_id, height))?,
+            Some(restored) => adopt_restored_change(repos, tx_id, &restored)?,
         }
     }
     let change = confirm_released(repos, tx_id, now)?;
     repos.set_confirmed_height(tx_id, height)?;
     repos.delete_setting(&record)?;
     Ok(change)
+}
+
+/// Links a change output a scan stored before the late confirmation to the send that created
+/// it, and drops the entry the scan restored it under, so the history counts the change once,
+/// in the send. An output linked to any other transaction is left alone.
+fn adopt_restored_change(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    output: &OutputRecord,
+) -> Result<(), StoreError> {
+    let restored = match output.tx {
+        Some(linked) if linked == tx_id => return Ok(()),
+        Some(linked) => {
+            let Some(entry) = repos.transaction(linked)? else {
+                return Ok(());
+            };
+            let restore_entry = entry.direction == TxDirection::Incoming
+                && entry.slate_id.is_none()
+                && entry.amount_debited == Amount::ZERO
+                && entry.amount_credited == output.amount;
+            if !restore_entry {
+                return Ok(());
+            }
+            Some(linked)
+        }
+        None => None,
+    };
+    repos.put_output(&OutputRecord {
+        tx: Some(tx_id),
+        ..output.clone()
+    })?;
+    if let Some(restored) = restored
+        && repos.outputs_of_transaction(restored)?.is_empty()
+    {
+        debug!(tx_id = %tx_id, "restored entry merged into the released send");
+        repos.delete_transaction(restored)?;
+    }
+    Ok(())
 }
 
 /// Why a transaction cannot be released.
