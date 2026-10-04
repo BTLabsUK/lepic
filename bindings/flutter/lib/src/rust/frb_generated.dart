@@ -5415,6 +5415,9 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
       RustLib.instance.api.crateApiWalletEpicWalletCancelScan(that: this);
 
   /// Cancels a transaction that was not posted and unlocks its outputs.
+  ///
+  /// Fails with `OnChain` or `InPool` when the node's chain or pool holds the kernel of a
+  /// finalized transaction, and with `NodeUnreachable` when the node cannot be asked.
   Future<void> cancelTransaction({required int txId}) => RustLib.instance.api
       .crateApiWalletEpicWalletCancelTransaction(that: this, txId: txId);
 
@@ -5591,7 +5594,8 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// and its change is dropped. The node is asked once more first.
   ///
   /// If another node still holds the transaction and mines it later, the inputs are spent by
-  /// it after all, and a new send that spends them fails.
+  /// it after all, and a new send that spends them fails. A refresh within 10080 blocks of
+  /// the release then confirms the send, with a transaction event, and restores its change.
   ///
   /// Fails with `NotReleasable`, with `OnChain` or `InPool` when the node's chain or pool
   /// holds the transaction, and with `NodeUnreachable` when the node cannot be asked.

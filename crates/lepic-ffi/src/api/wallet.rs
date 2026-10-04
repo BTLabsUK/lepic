@@ -672,6 +672,9 @@ impl EpicWallet {
     }
 
     /// Cancels a transaction that was not posted and unlocks its outputs.
+    ///
+    /// Fails with `OnChain` or `InPool` when the node's chain or pool holds the kernel of a
+    /// finalized transaction, and with `NodeUnreachable` when the node cannot be asked.
     pub async fn cancel_transaction(&self, tx_id: u32) -> Result<(), WalletError> {
         self.run("cancel_transaction", |session| async move {
             session.cancel(tx_id).await
@@ -684,7 +687,8 @@ impl EpicWallet {
     /// and its change is dropped. The node is asked once more first.
     ///
     /// If another node still holds the transaction and mines it later, the inputs are spent by
-    /// it after all, and a new send that spends them fails.
+    /// it after all, and a new send that spends them fails. A refresh within 10080 blocks of
+    /// the release then confirms the send, with a transaction event, and restores its change.
     ///
     /// Fails with `NotReleasable`, with `OnChain` or `InPool` when the node's chain or pool
     /// holds the transaction, and with `NodeUnreachable` when the node cannot be asked.

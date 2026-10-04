@@ -57,6 +57,9 @@ secret.
 7. LEPIC only: look up the kernel of each finalized or posted send at or above 1,440 blocks after
    the height it was finalized at, counting the highest confirmed tip. A kernel found confirms the
    send; a missing one makes it releasable (`docs/compat/states.md`). Upstream has no release.
+8. LEPIC only: look up the kernel of each send released at most 10,080 blocks before the highest
+   confirmed tip, up to that tip and not past the window. A kernel found moves the send from
+   `cancelled` to `confirmed` and stores its change `unspent` (`docs/compat/states.md`).
 
 ## Hardening LEPIC adds
 
