@@ -173,6 +173,13 @@ pub struct TransactionDetails {
     pub counterparty: Option<String>,
     /// The height from which the slate may no longer be completed. `None` when it sets none.
     pub ttl_cutoff_height: Option<u64>,
+    /// For a finalized or posted send, the height from which a refresh that still finds its
+    /// kernel nowhere on chain makes it releasable: 1440 blocks after it was finalized. `None`
+    /// for every other transaction.
+    pub releasable_from: Option<u64>,
+    /// Whether `release_transaction` may release the send now. A refresh at or above
+    /// `releasable_from` missed its kernel; the release asks the node once more.
+    pub releasable: bool,
 }
 
 /// What a send would take and pay, from `EpicWallet::estimate_fee` and

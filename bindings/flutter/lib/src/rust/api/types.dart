@@ -421,6 +421,15 @@ class TransactionDetails {
   /// The height from which the slate may no longer be completed. `None` when it sets none.
   final BigInt? ttlCutoffHeight;
 
+  /// For a finalized or posted send, the height from which a refresh that still finds its
+  /// kernel nowhere on chain makes it releasable: 1440 blocks after it was finalized. `None`
+  /// for every other transaction.
+  final BigInt? releasableFrom;
+
+  /// Whether `release_transaction` may release the send now. A refresh at or above
+  /// `releasable_from` missed its kernel; the release asks the node once more.
+  final bool releasable;
+
   const TransactionDetails({
     required this.txId,
     required this.direction,
@@ -436,6 +445,8 @@ class TransactionDetails {
     this.kernelExcess,
     this.counterparty,
     this.ttlCutoffHeight,
+    this.releasableFrom,
+    required this.releasable,
   });
 
   @override
@@ -453,7 +464,9 @@ class TransactionDetails {
       confirmedHeight.hashCode ^
       kernelExcess.hashCode ^
       counterparty.hashCode ^
-      ttlCutoffHeight.hashCode;
+      ttlCutoffHeight.hashCode ^
+      releasableFrom.hashCode ^
+      releasable.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -473,7 +486,9 @@ class TransactionDetails {
           confirmedHeight == other.confirmedHeight &&
           kernelExcess == other.kernelExcess &&
           counterparty == other.counterparty &&
-          ttlCutoffHeight == other.ttlCutoffHeight;
+          ttlCutoffHeight == other.ttlCutoffHeight &&
+          releasableFrom == other.releasableFrom &&
+          releasable == other.releasable;
 }
 
 enum TransportState { connecting, connected, disconnected, stopped }

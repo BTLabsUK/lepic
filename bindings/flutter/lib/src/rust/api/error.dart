@@ -96,15 +96,23 @@ enum WalletErrorKind {
   /// decides from the new state.
   changedDuringCancel,
 
-  /// The node already holds the transaction's kernel, so it can no longer be cancelled. The
-  /// next refresh confirms it.
+  /// The node already holds the transaction's kernel, so it can no longer be cancelled or
+  /// released. The next refresh confirms it.
   onChain,
 
   /// The app data file is intact but belongs to a wallet with another seed.
   foreignAppData,
 
   /// The app data file belongs to this wallet but was changed or cut short.
-  damagedAppData;
+  damagedAppData,
+
+  /// The node's transaction pool holds the transaction, so it may still be mined and is not
+  /// released. Refresh later.
+  inPool,
+
+  /// The transaction is not a finalized or posted send, or no refresh has yet missed its
+  /// kernel at `TransactionDetails.releasable_from` or above. The message says which.
+  notReleasable;
 
   /// The stable number of this kind.
   Future<int> code() =>

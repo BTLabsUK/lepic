@@ -306,6 +306,17 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// error, after the first event.
   Stream<RefreshProgress> refresh();
 
+  /// Releases a finalized or posted send the network never took, once
+  /// `TransactionDetails.releasable` says so: the send is cancelled, its inputs are unlocked
+  /// and its change is dropped. The node is asked once more first.
+  ///
+  /// If another node still holds the transaction and mines it later, the inputs are spent by
+  /// it after all, and a new send that spends them fails.
+  ///
+  /// Fails with `NotReleasable`, with `OnChain` or `InPool` when the node's chain or pool
+  /// holds the transaction, and with `NodeUnreachable` when the node cannot be asked.
+  Future<void> releaseTransaction({required int txId});
+
   /// Posts the stored final transaction of `tx_id` to the node again.
   Future<void> repostTransaction({required int txId});
 

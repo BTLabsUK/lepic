@@ -647,6 +647,22 @@ impl EpicWallet {
         .await
     }
 
+    /// Releases a finalized or posted send the network never took, once
+    /// `TransactionDetails.releasable` says so: the send is cancelled, its inputs are unlocked
+    /// and its change is dropped. The node is asked once more first.
+    ///
+    /// If another node still holds the transaction and mines it later, the inputs are spent by
+    /// it after all, and a new send that spends them fails.
+    ///
+    /// Fails with `NotReleasable`, with `OnChain` or `InPool` when the node's chain or pool
+    /// holds the transaction, and with `NodeUnreachable` when the node cannot be asked.
+    pub async fn release_transaction(&self, tx_id: u32) -> Result<(), WalletError> {
+        self.run("release_transaction", |session| async move {
+            session.release(tx_id).await
+        })
+        .await
+    }
+
     /// The wallet's Epicbox address, `<key>@<domain>[:port]`. Fails with `Unsupported` when
     /// the configuration names no relay.
     pub async fn epicbox_address(&self) -> Result<String, WalletError> {

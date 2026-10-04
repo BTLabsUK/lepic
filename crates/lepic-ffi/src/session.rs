@@ -660,6 +660,10 @@ impl Session {
         Ok(self.engine.cancel(TxId(tx_id)).await?)
     }
 
+    pub(crate) async fn release(&self, tx_id: u32) -> Result<(), WalletError> {
+        Ok(self.engine.release(TxId(tx_id)).await?)
+    }
+
     fn epicbox(&self) -> Result<&EpicboxTransport, WalletError> {
         self.epicbox.as_ref().ok_or_else(|| {
             WalletError::new(
@@ -857,6 +861,8 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             .as_ref()
             .map(|address| address.as_str().to_owned()),
         ttl_cutoff_height: details.ttl_cutoff_height.map(Height::value),
+        releasable_from: details.releasable_from.map(Height::value),
+        releasable: details.releasable,
     }
 }
 
@@ -1125,8 +1131,8 @@ mod tests {
             counterparty: Some(Destination::new(address.to_owned())),
             ttl_cutoff_height: Some(Height::new(360)),
             confirmed_at: Some(confirmed),
-            releasable_from: None,
-            releasable: false,
+            releasable_from: Some(Height::new(1_444)),
+            releasable: true,
         };
 
         assert_eq!(
@@ -1146,6 +1152,8 @@ mod tests {
                 kernel_excess: Some(excess.to_hex()),
                 counterparty: Some(address.to_owned()),
                 ttl_cutoff_height: Some(360),
+                releasable_from: Some(1_444),
+                releasable: true,
             }
         );
         let hex = excess.to_hex();

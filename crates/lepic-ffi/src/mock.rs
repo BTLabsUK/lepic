@@ -114,6 +114,12 @@ impl MockBackend {
         self.node.pushed_transactions().len()
     }
 
+    /// Puts every transaction pushed so far into the node's transaction pool.
+    pub(crate) fn pool_pushed(&self) {
+        let pushed = self.node.pushed_transactions();
+        self.node.update_chain(|chain| chain.pool = pushed);
+    }
+
     /// Adds a plain output of `amount` for key `m/0/0/<child>` of the wallet with `phrase`, mined
     /// in the tip block.
     pub(crate) fn fund(

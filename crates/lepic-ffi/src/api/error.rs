@@ -56,13 +56,19 @@ pub enum WalletErrorKind {
     /// transaction while it was being cancelled. Nothing was cancelled; cancelling again
     /// decides from the new state.
     ChangedDuringCancel,
-    /// The node already holds the transaction's kernel, so it can no longer be cancelled. The
-    /// next refresh confirms it.
+    /// The node already holds the transaction's kernel, so it can no longer be cancelled or
+    /// released. The next refresh confirms it.
     OnChain,
     /// The app data file is intact but belongs to a wallet with another seed.
     ForeignAppData,
     /// The app data file belongs to this wallet but was changed or cut short.
     DamagedAppData,
+    /// The node's transaction pool holds the transaction, so it may still be mined and is not
+    /// released. Refresh later.
+    InPool,
+    /// The transaction is not a finalized or posted send, or no refresh has yet missed its
+    /// kernel at `TransactionDetails.releasable_from` or above. The message says which.
+    NotReleasable,
 }
 
 impl WalletErrorKind {
@@ -95,6 +101,8 @@ impl WalletErrorKind {
             Self::OnChain => 24,
             Self::ForeignAppData => 25,
             Self::DamagedAppData => 26,
+            Self::InPool => 27,
+            Self::NotReleasable => 28,
         }
     }
 }
@@ -155,10 +163,12 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         E::Store(_) => WalletErrorKind::Io,
         E::SecretVault(_) | E::SecretStore(_) => WalletErrorKind::SecretStore,
         // The node reported a chain position the wallet does not believe.
-        E::Implausible(_) => WalletErrorKind::NodeUnreachable,
+        E::Implausible(_) | E::Node(_) => WalletErrorKind::NodeUnreachable,
         E::RestoreScanRequired => WalletErrorKind::RestoreScanRequired,
         E::ChangedDuringCancel(_) => WalletErrorKind::ChangedDuringCancel,
         E::OnChain(_) => WalletErrorKind::OnChain,
+        E::InPool(_) => WalletErrorKind::InPool,
+        E::NotReleasable { .. } => WalletErrorKind::NotReleasable,
         E::AppData(error) => app_data_kind(error),
         _ => WalletErrorKind::Other,
     }
@@ -329,6 +339,8 @@ mod tests {
             (K::OnChain, 24),
             (K::ForeignAppData, 25),
             (K::DamagedAppData, 26),
+            (K::InPool, 27),
+            (K::NotReleasable, 28),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -359,6 +371,18 @@ mod tests {
                 WalletErrorKind::ChangedDuringCancel,
             ),
             (E::OnChain(tx), WalletErrorKind::OnChain),
+            (E::InPool(tx), WalletErrorKind::InPool),
+            (
+                E::Node(lepic_node::NodeError::Timeout),
+                WalletErrorKind::NodeUnreachable,
+            ),
+            (
+                E::NotReleasable {
+                    tx_id: tx,
+                    reason: lepic_wallet::release::ReleaseRefusal::KernelUnknown,
+                },
+                WalletErrorKind::NotReleasable,
+            ),
         ];
         for (engine, kind) in cases {
             assert_eq!(WalletError::from(engine).kind, kind);

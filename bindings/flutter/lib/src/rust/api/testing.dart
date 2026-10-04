@@ -42,6 +42,9 @@ abstract class MockChain implements RustOpaqueInterface {
   /// Makes the next node request panic inside the engine operation that sends it.
   void panicOnNextNodeCall();
 
+  /// Lists every posted transaction in the node's transaction pool, until the next call.
+  void poolPushed();
+
   /// How many transactions wallets have posted to this chain.
   int pushedCount();
 

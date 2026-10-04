@@ -145,6 +145,15 @@ impl MockChain {
         });
     }
 
+    /// Lists every posted transaction in the node's transaction pool, until the next call.
+    #[frb(sync)]
+    pub fn pool_pushed(&self) {
+        guard_or("mock_chain_pool_pushed", (), || {
+            #[cfg(feature = "mock")]
+            self.backend.pool_pushed();
+        });
+    }
+
     /// Makes the next node request panic inside the engine operation that sends it.
     #[frb(sync)]
     pub fn panic_on_next_node_call(&self) {

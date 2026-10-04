@@ -193,12 +193,15 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 21 | `panic` | A defect inside LEPIC. The operation was abandoned. |
 | 22 | `restoreScanRequired` | The wallet was restored from its phrase and no full scan has completed since, so it cannot receive or make change yet. Run `scan` to the end first. |
 | 23 | `changedDuringCancel` | Another operation, such as the listener finalizing it, changed the transaction while it was being cancelled. Nothing was cancelled; cancel again to decide from the new state. |
-| 24 | `onChain` | The node already holds the transaction's kernel, so it cannot be cancelled. The next refresh confirms it. |
+| 24 | `onChain` | The node already holds the transaction's kernel, so it cannot be cancelled or released. The next refresh confirms it. |
 | 25 | `foreignAppData` | The app data file is intact but belongs to a wallet with another seed. |
 | 26 | `damagedAppData` | The app data file belongs to this wallet but was changed or cut short. |
+| 27 | `inPool` | The node's transaction pool holds the transaction, so it may still be mined and is not released. Refresh later. |
+| 28 | `notReleasable` | `release_transaction` refused: the transaction is not a finalized or posted send, or `releasable` is still false. |
 
 Kinds 22 to 24 used to arrive as `other`. Kinds 25 and 26 are new with `sealAppData` and
-`openAppData`. An exhaustive `switch` over `WalletErrorKind` must handle them.
+`openAppData`, 27 and 28 with `releaseTransaction`. An exhaustive `switch` over
+`WalletErrorKind` must handle them.
 
 ## Switching the app from its earlier binding
 
@@ -222,7 +225,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `summary(refresh, minimum_confirmations)` | `summary(refresh)` | Balances use the engine's 10 confirmations, as `epic-wallet info`. `refresh: false` answers from the store without the node, also on a handle that never refreshed. |
 | `refresh(minimum_confirmations, progress)` | `refresh()` stream | First event 0 %, last 100 % with `summary`. |
 | `scan(start_height, progress)` | `scan(start_height)` stream | `ScanProgress` adds `height` and `target_height`. New: `cancel_scan()`. |
-| `transactions(refresh)` | `transactions()`, `transaction(tx_id)` | From the store alone, newest first; refresh first with `summary(refresh: true)`. `TransactionDetails` carries the slate id, kernel excess, confirmed height and time, counterparty, amounts, fee, status, creation time and TTL cutoff. |
+| `transactions(refresh)` | `transactions()`, `transaction(tx_id)` | From the store alone, newest first; refresh first with `summary(refresh: true)`. `TransactionDetails` carries the slate id, kernel excess, confirmed height and time, counterparty, amounts, fee, status, creation time and TTL cutoff, and for a finalized or posted send whether and from which height it can be released. |
 | `enrich_history()` | not provided | App history archive; not an engine feature. |
 | `set_tx_note(key, note)` | not provided | App history archive; not an engine feature. |
 | `contacts()`, `save_contact`, `delete_contact` | not provided | App address book; keep it in Dart. |
@@ -240,7 +243,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `stop_listener()` | `stop_listener()` | Same. |
 | `listener_running()` | `listener_running()` | Same. |
 | `repost_transaction(key)` | `repost_transaction(tx_id)` | Local transaction id instead of the history key. |
-| `release_stuck_send(key)` | not provided | The engine never releases a posted send (claim `## Needs`). |
+| `release_stuck_send(key)` | `release_transaction(tx_id)` | `TransactionDetails.releasable` replaces `TxEntry.releasable`, and `releasable_from` gives the height a refresh must reach first: 1440 blocks after finalizing, as before. Unlike the earlier rule, a posted send the node dropped and a finalized one whose post got no answer are released too; a kernel still missing a day of blocks later means the same in each case. The node is asked once more: `onChain` or `inPool` when it holds the transaction, `nodeUnreachable` when it cannot be asked. If another node mines the transaction later, a new send that spends the same inputs fails. |
 | `cancel_transaction(tx_id)` | `cancel_transaction(tx_id)` | Same. |
 | `refresh_with`, `scan_with`, `start_listener_with`, `*_for_tests` | none | Rust-only hooks of the earlier binding. Tests use `MockChain`. |
 | `init_logging(dir)` | `LepicRuntime::open_log_ring(dir, max_bytes)`, and the `LepicRuntime::logs()` stream | The ring keeps redacted records within `max_bytes`; it does not return a file path. |
