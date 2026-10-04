@@ -41,9 +41,11 @@ where
     /// transaction can no longer be finalized here.
     ///
     /// A finalized transaction may have reached the node even though posting it failed, so its
-    /// kernel is looked up first, in the node's chain and then in its transaction pool; the
-    /// node must be reachable to cancel one. A posted transaction, which includes one the
-    /// node's pool answered it already holds, counts as on chain and is not cancelled.
+    /// kernel is looked up first, in the node's transaction pool and then in its chain; the
+    /// node must be reachable to cancel one. The pool comes first, so a transaction that
+    /// leaves the pool for a block between the two lookups is found by the second. A posted
+    /// transaction, which includes one the node's pool answered it already holds, counts as on
+    /// chain and is not cancelled.
     ///
     /// Fails with [`WalletError::Locked`], [`WalletError::UnknownTransaction`],
     /// [`WalletError::Transition`] when the transaction is posted, confirmed or expired,
@@ -66,6 +68,15 @@ where
             .await?
         };
         if let Some((excess, min_height)) = lookup {
+            // The pool is asked before the chain: a transaction that leaves the pool for a
+            // block between the two lookups is then found by the second.
+            let pooled = pool_holds(&self.ports().node, &excess)
+                .await
+                .map_err(WalletError::Node)?;
+            if pooled {
+                debug!("kernel found in the node pool");
+                return Err(WalletError::InPool(tx_id));
+            }
             let kernel = self
                 .ports()
                 .node
@@ -75,13 +86,6 @@ where
             if let Some(kernel) = kernel {
                 debug!(height = %kernel.height, "kernel found on chain");
                 return Err(WalletError::OnChain(tx_id));
-            }
-            let pooled = pool_holds(&self.ports().node, &excess)
-                .await
-                .map_err(WalletError::Node)?;
-            if pooled {
-                debug!("kernel found in the node pool");
-                return Err(WalletError::InPool(tx_id));
             }
         }
         let change = self

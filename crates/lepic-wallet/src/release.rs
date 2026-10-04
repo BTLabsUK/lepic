@@ -352,8 +352,9 @@ where
     /// [`crate::Event::Transaction`].
     ///
     /// The send must be releasable, as [`crate::details::TransactionDetails::releasable`]
-    /// reports. At the call the node is asked once more: its tip must be plausible, and neither
-    /// its chain nor its transaction pool may hold the kernel.
+    /// reports. At the call the node is asked once more: neither its transaction pool nor its
+    /// chain may hold the kernel, and its tip must be plausible. The pool is asked first, so a
+    /// transaction mined between the two lookups is found on chain.
     ///
     /// If another node still holds the transaction and mines it later, the inputs are spent by
     /// it after all, and a new send that spends them fails. A refresh up to
@@ -380,6 +381,15 @@ where
             .await?
         };
         let node = &self.ports().node;
+        // The pool is asked first, then the tip and the chain up to it, so a transaction that
+        // leaves the pool for a block between the lookups is found by the chain lookup.
+        let pooled = pool_holds(node, &check.excess)
+            .await
+            .map_err(WalletError::Node)?;
+        if pooled {
+            debug!("kernel found in the node pool");
+            return Err(WalletError::InPool(tx_id));
+        }
         let tip = node.get_tip().await.map_err(WalletError::Node)?.height;
         self.check_plausible_tip(&session, tip).await?;
         let kernel = node
@@ -389,13 +399,6 @@ where
         if let Some(kernel) = kernel {
             debug!(height = %kernel.height, "kernel found on chain");
             return Err(WalletError::OnChain(tx_id));
-        }
-        let pooled = pool_holds(node, &check.excess)
-            .await
-            .map_err(WalletError::Node)?;
-        if pooled {
-            debug!("kernel found in the node pool");
-            return Err(WalletError::InPool(tx_id));
         }
         let change = self
             .blocking(move |ports, _| {

@@ -720,3 +720,71 @@ fn refuses_to_release_an_incoming_finalized_or_posted_transaction() {
         );
     }
 }
+
+impl Releasing {
+    /// The node methods called while `operation` runs, in order, among those that look a
+    /// kernel up or read the tip.
+    fn lookups_during<R>(&self, operation: impl FnOnce() -> R) -> (R, Vec<String>) {
+        let before = self.harness.node.calls().len();
+        let result = operation();
+        let calls = self.harness.node.calls()[before..]
+            .iter()
+            .filter(|method| {
+                ["get_unconfirmed_transactions", "get_tip", "get_kernel"].contains(&method.as_str())
+            })
+            .cloned()
+            .collect();
+        (result, calls)
+    }
+
+    fn cancel(&self) -> Result<(), WalletError> {
+        self.harness.block_on(self.wallet.cancel(self.tx_id))
+    }
+}
+
+#[test]
+fn cancel_asks_the_node_pool_before_its_chain() {
+    let releasing = Releasing::refused();
+
+    let (result, calls) = releasing.lookups_during(|| releasing.cancel());
+
+    result.unwrap();
+    assert_eq!(calls, ["get_unconfirmed_transactions", "get_kernel"]);
+}
+
+#[test]
+fn release_asks_the_node_pool_before_its_chain() {
+    let releasing = Releasing::posted().made_releasable();
+
+    let (result, calls) = releasing.lookups_during(|| releasing.release());
+
+    result.unwrap();
+    assert_eq!(
+        calls,
+        ["get_unconfirmed_transactions", "get_tip", "get_kernel"]
+    );
+}
+
+#[test]
+fn refuses_a_cancel_when_the_node_pool_cannot_be_asked() {
+    let releasing = Releasing::refused();
+    let outputs = releasing.outputs();
+    assert!(
+        outputs
+            .iter()
+            .any(|output| output.status == OutputStatus::Locked),
+        "the send holds a locked input"
+    );
+    releasing
+        .harness
+        .node
+        .fail_next("get_unconfirmed_transactions", MockFailure::Unreachable);
+
+    let error = releasing.cancel().unwrap_err();
+
+    assert!(
+        matches!(error, WalletError::Node(NodeError::Connect(_))),
+        "{error:?}"
+    );
+    releasing.assert_untouched(TxState::Finalized, &outputs);
+}
