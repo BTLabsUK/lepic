@@ -1,15 +1,25 @@
 //! Every limit the client puts on a relay that goes quiet. Each test ends on the
-//! `ClientError::Timeout` the limit produces, within twice the limit, on paused time.
+//! `ClientError::Timeout` the limit produces, within twice the limit, on paused time. The suite
+//! runs for the payments address at index 0 and for an invoice address, a second identity with
+//! a prefilter beside it, so both reach every limit.
 
 #![allow(clippy::unwrap_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 mod client_support;
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use client_support::{ALICE, BOB, address, client_with, reach, sealed, settings, within};
+use client_support::{
+    ALICE, BOB, CAROL, address, client_with, reach, sealed, secret, settings, within,
+};
+use lepic_crypto::PublicKey;
 use lepic_epicbox::mock_relay::{MockRelay, Unanswered};
-use lepic_epicbox::{Awaiting, ClientError, ClientSettings, ConnectionState, Network};
+use lepic_epicbox::transport::EpicboxTransport;
+use lepic_epicbox::{
+    Admission, Awaiting, ClientError, ClientSettings, ConnectionState, EpicboxClient, Identity,
+    Network,
+};
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Envelope, Inbound};
 use tokio::time::Instant;
@@ -45,192 +55,261 @@ fn assert_ended_within(started: Instant, limit: Duration) {
     );
 }
 
-async fn post_to_bob(relay: &MockRelay) -> Result<(), ClientError> {
-    let alice = client_with(relay, ALICE, limits());
-    within(HANG, alice.post(&address(BOB), "slate")).await
+/// Bob's invoice address, a second identity beside his payments address.
+const BOB_INVOICES: u8 = 4;
+
+fn identity(byte: u8) -> Identity {
+    Identity::new(secret(byte), address(byte)).unwrap()
 }
 
-/// A drain holding one handed-out, unacknowledged message, which keeps it connected.
-async fn drain_holding_a_message(relay: &MockRelay) -> (lepic_epicbox::Subscription, Envelope) {
-    relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "slate"));
-    let bob = client_with(relay, BOB, limits()).drain().unwrap();
-    let envelope = within(HANG, bob.next_envelope()).await.unwrap().unwrap();
-    (bob, envelope)
+fn payments_client(relay: &MockRelay) -> EpicboxClient {
+    client_with(relay, BOB, limits())
 }
+
+/// The invoice client as the engine builds it: through the transport, beside the attached
+/// payments identity, admitting only Alice.
+fn invoice_client(relay: &MockRelay) -> EpicboxClient {
+    let transport = EpicboxTransport::new(limits(), Network::Mainnet, relay.connector());
+    transport.attach(identity(BOB));
+    let alice = *address(ALICE).public_key();
+    let prefilter = move |sender: &PublicKey| {
+        if *sender == alice {
+            Admission::Accept
+        } else {
+            Admission::Drop
+        }
+    };
+    transport
+        .client_for(identity(BOB_INVOICES))
+        .with_prefilter(Arc::new(prefilter))
+}
+
+macro_rules! timeout_suite {
+    ($module:ident, $own:expr, $client:path) => {
+        mod $module {
+            use super::*;
+
+            const OWN: u8 = $own;
+
+            async fn post_to_peer(relay: &MockRelay) -> Result<(), ClientError> {
+                let own = $client(relay);
+                within(HANG, own.post(&address(ALICE), "slate")).await
+            }
+
+            /// A drain holding one handed-out, unacknowledged message, which keeps it connected.
+            async fn drain_holding_a_message(
+                relay: &MockRelay,
+            ) -> (lepic_epicbox::Subscription, Envelope) {
+                relay.store(&address(ALICE), &address(OWN), &sealed(ALICE, OWN, "slate"));
+                let bob = $client(relay).drain().unwrap();
+                let envelope = within(HANG, bob.next_envelope()).await.unwrap().unwrap();
+                (bob, envelope)
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn post_ends_when_the_websocket_handshake_is_not_answered() {
+                let relay = MockRelay::new(Network::Mainnet);
+                relay.set_stalling(true);
+                let started = Instant::now();
+                assert_timed_out(post_to_peer(&relay).await, Awaiting::Connection);
+                assert_ended_within(started, CONNECT);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn post_ends_when_the_first_challenge_is_not_sent() {
+                let relay = MockRelay::new(Network::Mainnet);
+                relay.set_unanswered(Unanswered::Challenge, true);
+                let started = Instant::now();
+                assert_timed_out(post_to_peer(&relay).await, Awaiting::Challenge);
+                assert_ended_within(started, RESPONSE);
+                assert_eq!(relay.received("ClientDetails"), 0);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn post_ends_when_client_details_are_not_answered() {
+                let relay = MockRelay::new(Network::Mainnet);
+                relay.set_unanswered(Unanswered::ClientDetails, true);
+                let started = Instant::now();
+                assert_timed_out(post_to_peer(&relay).await, Awaiting::Answer);
+                assert_ended_within(started, RESPONSE);
+                assert_eq!(relay.received("GetVersion"), 0);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn post_ends_when_the_post_is_not_answered() {
+                let relay = MockRelay::new(Network::Mainnet);
+                relay.set_unanswered(Unanswered::PostSlate, true);
+                let started = Instant::now();
+                assert_timed_out(post_to_peer(&relay).await, Awaiting::Answer);
+                assert_ended_within(started, RESPONSE);
+                assert_eq!(relay.received("PostSlate"), 1);
+            }
+
+            /// A post to a relay that reads `frames` frames on the connection and then stops
+            /// reading, so the next frame the client writes cannot leave.
+            async fn post_to_a_relay_that_stops_reading_after(frames: usize) -> MockRelay {
+                let relay = MockRelay::new(Network::Mainnet);
+                relay.set_stop_reading_after(Some(frames));
+                let started = Instant::now();
+                assert_timed_out(post_to_peer(&relay).await, Awaiting::Answer);
+                // Writing a request and receiving its answer share one response timeout.
+                assert_ended_within(started, RESPONSE);
+                relay
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn post_ends_when_client_details_cannot_be_written() {
+                let relay = post_to_a_relay_that_stops_reading_after(0).await;
+                assert_eq!(relay.received("ClientDetails"), 0);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn post_ends_when_the_version_request_cannot_be_written() {
+                let relay = post_to_a_relay_that_stops_reading_after(1).await;
+                assert_eq!(relay.received("ClientDetails"), 1);
+                assert_eq!(relay.received("GetVersion"), 0);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn post_ends_when_the_post_cannot_be_written() {
+                let relay = post_to_a_relay_that_stops_reading_after(2).await;
+                assert_eq!(relay.received("GetVersion"), 1);
+                assert_eq!(relay.received("PostSlate"), 0);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn drain_ends_when_the_subscribe_is_not_answered() {
+                let relay = MockRelay::new(Network::Mainnet);
+                relay.set_unanswered(Unanswered::Subscribe, true);
+                let started = Instant::now();
+                let bob = $client(&relay).drain().unwrap();
+                assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Answer);
+                assert_ended_within(started, RESPONSE);
+                assert_eq!(relay.received("Subscribe"), 1);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn drain_ends_when_an_acknowledgement_is_not_answered() {
+                let relay = MockRelay::new(Network::Mainnet);
+                let (bob, envelope) = drain_holding_a_message(&relay).await;
+                relay.set_unanswered(Unanswered::Made, true);
+                let started = Instant::now();
+                let acknowledged = within(HANG, bob.acknowledge(envelope.ack_token())).await;
+                assert!(acknowledged.is_err());
+                assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Answer);
+                assert_ended_within(started, RESPONSE);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn drain_ends_when_no_challenge_follows_an_accepted_acknowledgement() {
+                let relay = MockRelay::new(Network::Mainnet);
+                let (bob, envelope) = drain_holding_a_message(&relay).await;
+                relay.set_unanswered(Unanswered::Challenge, true);
+                let started = Instant::now();
+                within(HANG, bob.acknowledge(envelope.ack_token()))
+                    .await
+                    .unwrap();
+                assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Challenge);
+                assert_ended_within(started, RESPONSE);
+                assert_eq!(relay.pending(&address(OWN)), 0);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn session_ends_when_the_relay_stops_reading_and_falls_silent() {
+                let relay = MockRelay::new(Network::Mainnet);
+                let (bob, _envelope) = drain_holding_a_message(&relay).await;
+                relay.stop_reading_subscribed();
+                let started = Instant::now();
+                assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Traffic);
+                // Two ping intervals of silence is the limit, checked at each ping.
+                assert_ended_within(started, PING * 2);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn session_ends_when_a_ping_cannot_be_written() {
+                let relay = MockRelay::new(Network::Mainnet);
+                let (bob, _envelope) = drain_holding_a_message(&relay).await;
+                let started = Instant::now();
+                relay.stop_reading_subscribed();
+                // Each relay ping is answered with a pong the relay never reads, so the connection
+                // fills up while the relay keeps it from looking idle.
+                relay.ping_subscribed(1024);
+                assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Traffic);
+                // The first ping is due one interval after subscribing; writing it is limited to
+                // one response timeout.
+                let elapsed = started.elapsed();
+                assert!(
+                    elapsed >= PING + RESPONSE && elapsed <= PING + RESPONSE * 2,
+                    "ended after {elapsed:?}"
+                );
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn session_ends_when_a_request_cannot_be_written() {
+                let relay = MockRelay::new(Network::Mainnet);
+                let (bob, _envelope) = drain_holding_a_message(&relay).await;
+                relay.stop_reading_subscribed();
+                relay.ping_subscribed(1024);
+                // A new challenge makes the client write a `Subscribe` into the full connection.
+                relay.send_challenges();
+                let started = Instant::now();
+                assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Answer);
+                // Writing a request and receiving its answer share one response timeout.
+                assert_ended_within(started, RESPONSE);
+            }
+
+            #[tokio::test(start_paused = true)]
+            async fn acknowledgement_ends_when_the_subscription_cannot_reconnect_in_time() {
+                let relay = MockRelay::new(Network::Mainnet);
+                relay.store(&address(ALICE), &address(OWN), &sealed(ALICE, OWN, "slate"));
+                let bob = $client(&relay).listen().unwrap();
+                let envelope = within(HANG, bob.next_envelope()).await.unwrap().unwrap();
+                relay.set_stalling(true);
+                relay.disconnect_all();
+                reach(
+                    &bob,
+                    |state| {
+                        matches!(state, ConnectionState::Connecting { attempt } if attempt >= 2)
+                    },
+                )
+                .await;
+                let started = Instant::now();
+                let acknowledged = within(HANG, bob.acknowledge(envelope.ack_token())).await;
+                let Err(TransportError::Backend { source, .. }) = acknowledged else {
+                    panic!("expected a backend error, got {acknowledged:?}");
+                };
+                let error = *source.downcast::<ClientError>().unwrap();
+                assert_timed_out(Err(error), Awaiting::Answer);
+                // The acknowledgement waits for two response timeouts, shorter than the stalled
+                // connect.
+                assert_ended_within(started, RESPONSE * 2);
+                bob.stop().await.unwrap();
+            }
+        }
+    };
+}
+
+timeout_suite!(index_0, BOB, payments_client);
+timeout_suite!(invoice, BOB_INVOICES, invoice_client);
 
 #[tokio::test(start_paused = true)]
-async fn post_ends_when_the_websocket_handshake_is_not_answered() {
+async fn drain_ends_when_the_acknowledgement_of_a_dropped_message_is_not_answered() {
     let relay = MockRelay::new(Network::Mainnet);
-    relay.set_stalling(true);
-    let started = Instant::now();
-    assert_timed_out(post_to_bob(&relay).await, Awaiting::Connection);
-    assert_ended_within(started, CONNECT);
-}
-
-#[tokio::test(start_paused = true)]
-async fn post_ends_when_the_first_challenge_is_not_sent() {
-    let relay = MockRelay::new(Network::Mainnet);
-    relay.set_unanswered(Unanswered::Challenge, true);
-    let started = Instant::now();
-    assert_timed_out(post_to_bob(&relay).await, Awaiting::Challenge);
-    assert_ended_within(started, RESPONSE);
-    assert_eq!(relay.received("ClientDetails"), 0);
-}
-
-#[tokio::test(start_paused = true)]
-async fn post_ends_when_client_details_are_not_answered() {
-    let relay = MockRelay::new(Network::Mainnet);
-    relay.set_unanswered(Unanswered::ClientDetails, true);
-    let started = Instant::now();
-    assert_timed_out(post_to_bob(&relay).await, Awaiting::Answer);
-    assert_ended_within(started, RESPONSE);
-    assert_eq!(relay.received("GetVersion"), 0);
-}
-
-#[tokio::test(start_paused = true)]
-async fn post_ends_when_the_post_is_not_answered() {
-    let relay = MockRelay::new(Network::Mainnet);
-    relay.set_unanswered(Unanswered::PostSlate, true);
-    let started = Instant::now();
-    assert_timed_out(post_to_bob(&relay).await, Awaiting::Answer);
-    assert_ended_within(started, RESPONSE);
-    assert_eq!(relay.received("PostSlate"), 1);
-}
-
-/// A post to a relay that reads `frames` frames on the connection and then stops reading, so
-/// the next frame the client writes cannot leave.
-async fn post_to_a_relay_that_stops_reading_after(frames: usize) -> MockRelay {
-    let relay = MockRelay::new(Network::Mainnet);
-    relay.set_stop_reading_after(Some(frames));
-    let started = Instant::now();
-    assert_timed_out(post_to_bob(&relay).await, Awaiting::Answer);
-    // Writing a request and receiving its answer share one response timeout.
-    assert_ended_within(started, RESPONSE);
-    relay
-}
-
-#[tokio::test(start_paused = true)]
-async fn post_ends_when_client_details_cannot_be_written() {
-    let relay = post_to_a_relay_that_stops_reading_after(0).await;
-    assert_eq!(relay.received("ClientDetails"), 0);
-}
-
-#[tokio::test(start_paused = true)]
-async fn post_ends_when_the_version_request_cannot_be_written() {
-    let relay = post_to_a_relay_that_stops_reading_after(1).await;
-    assert_eq!(relay.received("ClientDetails"), 1);
-    assert_eq!(relay.received("GetVersion"), 0);
-}
-
-#[tokio::test(start_paused = true)]
-async fn post_ends_when_the_post_cannot_be_written() {
-    let relay = post_to_a_relay_that_stops_reading_after(2).await;
-    assert_eq!(relay.received("GetVersion"), 1);
-    assert_eq!(relay.received("PostSlate"), 0);
-}
-
-#[tokio::test(start_paused = true)]
-async fn drain_ends_when_the_subscribe_is_not_answered() {
-    let relay = MockRelay::new(Network::Mainnet);
-    relay.set_unanswered(Unanswered::Subscribe, true);
-    let started = Instant::now();
-    let bob = client_with(&relay, BOB, limits()).drain().unwrap();
-    assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Answer);
-    assert_ended_within(started, RESPONSE);
-    assert_eq!(relay.received("Subscribe"), 1);
-}
-
-#[tokio::test(start_paused = true)]
-async fn drain_ends_when_an_acknowledgement_is_not_answered() {
-    let relay = MockRelay::new(Network::Mainnet);
-    let (bob, envelope) = drain_holding_a_message(&relay).await;
+    relay.store(
+        &address(CAROL),
+        &address(BOB_INVOICES),
+        &sealed(CAROL, BOB_INVOICES, "junk"),
+    );
     relay.set_unanswered(Unanswered::Made, true);
     let started = Instant::now();
-    let acknowledged = within(HANG, bob.acknowledge(envelope.ack_token())).await;
-    assert!(acknowledged.is_err());
-    assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Answer);
+    let invoices = invoice_client(&relay).drain().unwrap();
+    assert_timed_out(within(HANG, invoices.finished()).await, Awaiting::Answer);
     assert_ended_within(started, RESPONSE);
-}
-
-#[tokio::test(start_paused = true)]
-async fn drain_ends_when_no_challenge_follows_an_accepted_acknowledgement() {
-    let relay = MockRelay::new(Network::Mainnet);
-    let (bob, envelope) = drain_holding_a_message(&relay).await;
-    relay.set_unanswered(Unanswered::Challenge, true);
-    let started = Instant::now();
-    within(HANG, bob.acknowledge(envelope.ack_token()))
-        .await
-        .unwrap();
-    assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Challenge);
-    assert_ended_within(started, RESPONSE);
-    assert_eq!(relay.pending(&address(BOB)), 0);
-}
-
-#[tokio::test(start_paused = true)]
-async fn session_ends_when_the_relay_stops_reading_and_falls_silent() {
-    let relay = MockRelay::new(Network::Mainnet);
-    let (bob, _envelope) = drain_holding_a_message(&relay).await;
-    relay.stop_reading_subscribed();
-    let started = Instant::now();
-    assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Traffic);
-    // Two ping intervals of silence is the limit, checked at each ping.
-    assert_ended_within(started, PING * 2);
-}
-
-#[tokio::test(start_paused = true)]
-async fn session_ends_when_a_ping_cannot_be_written() {
-    let relay = MockRelay::new(Network::Mainnet);
-    let (bob, _envelope) = drain_holding_a_message(&relay).await;
-    let started = Instant::now();
-    relay.stop_reading_subscribed();
-    // Each relay ping is answered with a pong the relay never reads, so the connection fills up
-    // while the relay keeps it from looking idle.
-    relay.ping_subscribed(1024);
-    assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Traffic);
-    // The first ping is due one interval after subscribing; writing it is limited to one
-    // response timeout.
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed >= PING + RESPONSE && elapsed <= PING + RESPONSE * 2,
-        "ended after {elapsed:?}"
+    assert_eq!(relay.received("Made"), 1);
+    let counters = invoices.counters();
+    assert_eq!(
+        (counters.seen, counters.dropped, counters.opened),
+        (1, 1, 0)
     );
-}
-
-#[tokio::test(start_paused = true)]
-async fn session_ends_when_a_request_cannot_be_written() {
-    let relay = MockRelay::new(Network::Mainnet);
-    let (bob, _envelope) = drain_holding_a_message(&relay).await;
-    relay.stop_reading_subscribed();
-    relay.ping_subscribed(1024);
-    // A new challenge makes the client write a `Subscribe` into the full connection.
-    relay.send_challenges();
-    let started = Instant::now();
-    assert_timed_out(within(HANG, bob.finished()).await, Awaiting::Answer);
-    // Writing a request and receiving its answer share one response timeout.
-    assert_ended_within(started, RESPONSE);
-}
-
-#[tokio::test(start_paused = true)]
-async fn acknowledgement_ends_when_the_subscription_cannot_reconnect_in_time() {
-    let relay = MockRelay::new(Network::Mainnet);
-    relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "slate"));
-    let bob = client_with(&relay, BOB, limits()).listen().unwrap();
-    let envelope = within(HANG, bob.next_envelope()).await.unwrap().unwrap();
-    relay.set_stalling(true);
-    relay.disconnect_all();
-    reach(
-        &bob,
-        |state| matches!(state, ConnectionState::Connecting { attempt } if attempt >= 2),
-    )
-    .await;
-    let started = Instant::now();
-    let acknowledged = within(HANG, bob.acknowledge(envelope.ack_token())).await;
-    let Err(TransportError::Backend { source, .. }) = acknowledged else {
-        panic!("expected a backend error, got {acknowledged:?}");
-    };
-    let error = *source.downcast::<ClientError>().unwrap();
-    assert_timed_out(Err(error), Awaiting::Answer);
-    // The acknowledgement waits for two response timeouts, shorter than the stalled connect.
-    assert_ended_within(started, RESPONSE * 2);
-    bob.stop().await.unwrap();
+    assert_eq!(relay.pending(&address(BOB_INVOICES)), 1);
 }
