@@ -2,15 +2,15 @@
 //! do with the messages LEPIC plans to send. It speaks raw relay frames through the frame and
 //! message types of `lepic-epicbox`, so each step is visible and nothing is retried or hidden.
 //!
-//!   lepic-probe key <key-file> <relay-url>
+//!   lepic-interop-probe key <key-file> <relay-url>
 //!       creates the key file if missing and prints the probe's address
-//!   lepic-probe post <key-file> <relay-url> <to-address> <payload-file>
+//!   lepic-interop-probe post <key-file> <relay-url> <to-address> <payload-file>
 //!       encrypts the payload to the address, posts it and prints the relay's answer
-//!   lepic-probe drain <key-file> <relay-url> <out-dir> <want> <seconds>
+//!   lepic-interop-probe drain <key-file> <relay-url> <out-dir> <want> <seconds>
 //!       subscribes, acknowledges and saves every message until `want` arrived or the time is up
-//!   lepic-probe sessions <relay-url>
+//!   lepic-interop-probe sessions <relay-url>
 //!       how the relay treats two addresses on one socket and on two sockets
-//!   lepic-probe decode <slate-file>
+//!   lepic-interop-probe decode <slate-file>
 //!       what the Epicbox format policy decodes the file as
 //!
 //! Output is one JSON document on stdout.

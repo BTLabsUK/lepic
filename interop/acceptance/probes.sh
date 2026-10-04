@@ -94,6 +94,8 @@ probe_relay_sessions() {
     queue="$(jq -r .addresses.late_message_queue <<<"${report}")"
     [[ "$(unmade_for "${queue}")" == 1 ]] ||
         fail "the first address's late message is not left unacknowledged" || return 1
+    # Nothing listens on that probe-only key, so a kept stack would hold the message forever.
+    mongo_eval "db.slates.updateMany({queue: '${queue}', made: false}, {\$set: {made: true}})" >/dev/null
     jq -e '.two_sockets.both_queues_empty_at_subscribe and .two_sockets.made == ["Ok", "Ok"]' \
         <<<"${report}" >/dev/null || fail "two sockets did not serve two addresses: ${report}" || return 1
     jq -e '.error_kinds_seen == ["InvalidSignature"]' <<<"${report}" >/dev/null ||
