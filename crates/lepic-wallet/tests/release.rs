@@ -509,3 +509,116 @@ fn refuses_to_release_a_send_that_is_not_finalized_or_posted() {
         "{unknown:?}"
     );
 }
+
+#[test]
+fn a_released_send_mined_later_keeps_showing_cancelled_and_its_change_returns_with_a_scan() {
+    let releasing = Releasing::posted().made_releasable();
+    let change_before = releasing
+        .outputs()
+        .into_iter()
+        .find(|output| output.status == OutputStatus::Unconfirmed)
+        .unwrap();
+    releasing.release().unwrap();
+    let pushed = releasing.harness.node.pushed_transactions();
+    let mined = releasing.kernel_at(RELEASABLE_FROM);
+    // Another node held the transaction and a miner included it after all.
+    releasing.harness.node.update_chain(|chain| {
+        let transaction = &pushed[0];
+        for output in &mut chain.outputs {
+            if transaction
+                .inputs()
+                .iter()
+                .any(|input| input.commitment == output.commitment)
+            {
+                output.spent = true;
+            }
+        }
+        for (position, output) in transaction.outputs().iter().enumerate() {
+            chain.outputs.push(ChainOutput {
+                commitment: output.commitment,
+                features: output.features,
+                proof: output.proof.clone(),
+                height: Height::new(RELEASABLE_FROM),
+                mmr_index: 2 + position as u64,
+                spent: false,
+            });
+        }
+        chain.kernels.push(mined);
+    });
+
+    releasing.refresh_twice();
+
+    assert_eq!(releasing.state(), TxState::Cancelled);
+    let outputs = releasing.outputs();
+    assert_eq!(outputs.len(), 1, "the change is not back after a refresh");
+    assert_eq!(outputs[0].id, releasing.funding.id);
+    assert_eq!(outputs[0].status, OutputStatus::Spent);
+
+    support::complete_restore_scan(&releasing.harness.runtime, &releasing.wallet);
+
+    assert_eq!(releasing.state(), TxState::Cancelled);
+    let change: Vec<_> = releasing
+        .outputs()
+        .into_iter()
+        .filter(|output| output.id != releasing.funding.id)
+        .collect();
+    assert_eq!(change.len(), 1, "the scan restores the change");
+    assert_eq!(change[0].id, change_before.id);
+    assert_eq!(change[0].amount, change_before.amount);
+    assert_eq!(change[0].status, OutputStatus::Unspent);
+}
+
+#[test]
+fn refuses_to_release_an_incoming_finalized_or_posted_transaction() {
+    for state in [TxState::Finalized, TxState::Posted] {
+        let releasing = Releasing::answered();
+        // An invoice issuer's transaction: incoming, finalized from its I3, with the kernel
+        // known from the stored final slate.
+        let final_slate = releasing.harness.block_on(releasing.wallet.finalize(
+            LOOPBACK,
+            &releasing.s2,
+            Propagation::Stem,
+        ));
+        assert!(final_slate.is_ok(), "{final_slate:?}");
+        let tx_id = releasing
+            .store
+            .write(|repos| {
+                let mut entry = repos.transaction(releasing.tx_id)?.unwrap();
+                let slate_id = entry.slate_id.unwrap();
+                let s3 = repos.slate(slate_id, SlateStage::Standard3)?.unwrap();
+                let incoming_id = uuid::Uuid::from_u128(7);
+                repos.insert_slate(&lepic_store::StoredSlate {
+                    slate_id: incoming_id,
+                    stage: SlateStage::Invoice3,
+                    ..s3
+                })?;
+                entry.direction = lepic_store::TxDirection::Incoming;
+                entry.state = state;
+                entry.slate_id = Some(incoming_id);
+                repos.insert_transaction(&entry)
+            })
+            .unwrap();
+        let details = releasing
+            .harness
+            .block_on(releasing.wallet.transaction_details(tx_id))
+            .unwrap();
+        assert!(details.kernel_excess.is_some(), "{state:?}: {details:?}");
+        assert_eq!(details.releasable_from, None, "{state:?}");
+
+        let error = releasing
+            .harness
+            .block_on(releasing.wallet.release(tx_id))
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                WalletError::NotReleasable {
+                    reason: ReleaseRefusal::NotPendingSend { state: refused },
+                    ..
+                } if refused == state
+            ),
+            "{state:?}: {error:?}"
+        );
+    }
+}
