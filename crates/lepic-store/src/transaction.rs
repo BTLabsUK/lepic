@@ -68,6 +68,11 @@ pub trait TransactionRepository {
 
     fn transaction(&self, id: TxId) -> Result<Option<TransactionEntry>, StoreError>;
 
+    /// Removes an entry with its confirmed height and counterparty. Fails with
+    /// [`StoreError::UnknownTransaction`] when no entry has the id, and with
+    /// [`StoreError::InUse`] while an output is linked to it. A later insertion may reuse the id.
+    fn delete_transaction(&mut self, id: TxId) -> Result<(), StoreError>;
+
     fn transaction_by_slate(
         &self,
         slate_id: Uuid,

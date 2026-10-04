@@ -69,6 +69,8 @@ pub enum StoreError {
     Duplicate { record: Record },
     #[error("{record} does not exist")]
     NotFound { record: Record },
+    #[error("{record} is still referred to by another record")]
+    InUse { record: Record },
     #[error("private context could not be decrypted")]
     ContextUndecryptable,
     #[error("private context could not be encrypted")]

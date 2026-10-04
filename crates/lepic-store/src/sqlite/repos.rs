@@ -402,6 +402,26 @@ impl TransactionRepository for SqliteRepos<'_> {
             .map(|stored| stored.entry))
     }
 
+    fn delete_transaction(&mut self, id: TxId) -> Result<(), StoreError> {
+        let linked: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM outputs WHERE tx_id = ?1)",
+            [i64::from(id.0)],
+            |row| row.get(0),
+        )?;
+        if linked {
+            return Err(StoreError::InUse {
+                record: Record::Transaction,
+            });
+        }
+        let deleted = self
+            .conn
+            .execute("DELETE FROM transactions WHERE id = ?1", [i64::from(id.0)])?;
+        if deleted == 0 {
+            return Err(StoreError::UnknownTransaction(id));
+        }
+        Ok(())
+    }
+
     fn transaction_by_slate(
         &self,
         slate_id: Uuid,

@@ -663,6 +663,46 @@ fn counterparty_is_recorded_and_survives_updates<B: Backend>() {
     );
 }
 
+fn delete_transaction_removes_an_unlinked_entry_only<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let (kept, dropped) = write(store, |repos| {
+        let kept = repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_A)))?;
+        let dropped = repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_B)))?;
+        repos.set_confirmed_height(dropped, Height::new(7))?;
+        repos.set_counterparty(dropped, "peer@relay")?;
+        let mut linked = output(0, DEFAULT, OutputStatus::Unspent);
+        linked.tx = Some(kept);
+        repos.put_output(&linked)?;
+        Ok((kept, dropped))
+    })
+    .unwrap();
+
+    assert!(matches!(
+        write(store, |repos| repos.delete_transaction(kept)),
+        Err(StoreError::InUse {
+            record: Record::Transaction
+        })
+    ));
+    write(store, |repos| repos.delete_transaction(dropped)).unwrap();
+    assert!(matches!(
+        write(store, |repos| repos.delete_transaction(dropped)),
+        Err(StoreError::UnknownTransaction(id)) if id == dropped
+    ));
+
+    let (kept_entry, gone, height, counterparty) = read(store, |repos| {
+        Ok((
+            repos.transaction(kept)?,
+            repos.transaction(dropped)?,
+            repos.confirmed_height(dropped)?,
+            repos.counterparty(dropped)?,
+        ))
+    })
+    .unwrap();
+    assert!(kept_entry.is_some());
+    assert_eq!((gone, height, counterparty), (None, None, None));
+}
+
 macro_rules! shared_suite {
     ($backend:ty: $($test:ident),+ $(,)?) => {
         $(
@@ -710,6 +750,7 @@ for_each_backend!(
     fee_and_amount_extremes_round_trip,
     confirmed_height_is_recorded_and_survives_updates,
     counterparty_is_recorded_and_survives_updates,
+    delete_transaction_removes_an_unlinked_entry_only,
 );
 
 #[test]

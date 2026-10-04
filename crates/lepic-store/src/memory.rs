@@ -252,6 +252,26 @@ impl TransactionRepository for MemoryRepos<'_> {
         Ok(self.state.transactions.get(&id).cloned())
     }
 
+    fn delete_transaction(&mut self, id: TxId) -> Result<(), StoreError> {
+        if !self.state.transactions.contains_key(&id) {
+            return Err(StoreError::UnknownTransaction(id));
+        }
+        if self
+            .state
+            .outputs
+            .values()
+            .any(|output| output.tx == Some(id))
+        {
+            return Err(StoreError::InUse {
+                record: Record::Transaction,
+            });
+        }
+        self.state.transactions.remove(&id);
+        self.state.confirmed_heights.remove(&id);
+        self.state.counterparties.remove(&id);
+        Ok(())
+    }
+
     fn transaction_by_slate(
         &self,
         slate_id: Uuid,
