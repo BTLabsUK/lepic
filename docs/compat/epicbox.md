@@ -33,7 +33,7 @@ the client enables them only when the relay reports support.
 |---|---|
 | `Challenge` | `str` |
 | `Ok` | none; answers several requests, so it is not correlated to one |
-| `Error` | `kind` (`InvalidSignature`, `InvalidRequest`, `UnknownError`, `InvalidChallenge`, `TooManySubscriptions`), `description` |
+| `Error` | `kind` (`InvalidSignature`, `InvalidRequest`, `UnknownError`, `InvalidChallenge`, `TooManySubscriptions`), `description`; the public relay sends only `InvalidSignature` and `InvalidRequest` |
 | `Slate` | `from`, `str`, `signature`, `challenge` (always present, empty for a live push), and when the subscription carried `ver`: `epicboxmsgid`, `ver` |
 | `GetVersion` | `str`, the relay's protocol version |
 
@@ -107,3 +107,63 @@ and decrypt, then decode the slate.
 - Do not rely on ordering across transactions.
 - Ignore message types it does not know, and non-JSON keepalive text.
 - Redo the full session after any reconnect.
+
+## Invoices, markers and payloads a stock listener accepts
+
+What invoices and notices over Epicbox build on, checked against the stock `epic-wallet` `v4.0.2`
+Epicbox listener and the relay at the commit in `interop/pins.env`. `interop/acceptance/run.sh
+--probes` reproduces every point: `probes.sh` drives the stack, and the probe client in
+`interop/probe` posts payloads from a key of its own and drains what comes back. Each run keeps
+the raw probe output under `.work/logs/<time>/probes/`.
+
+1. An I1 is sent back unchanged. For a slate with a participant missing and no inputs,
+   `process_incoming_slate` (`impls/src/adapters/epicbox.rs`) does nothing at its
+   `// TODO: invoicing` branch. `on_slate` then posts the slate back to the message's `from`, in the
+   version it arrived in, and acknowledges it. In the run, LEPIC's V3 I1 (header `3/3/6`) came back
+   from the listener's key with the same slate id. Its key-sorted JSON matched what was sent, apart
+   from the marker. The stock wallet recorded no transaction, and it answered and acknowledged the
+   next message, a V3 S1. A LEPIC issuer can therefore recognise a bounce: its own slate id, stage I1,
+   from the key it invoiced.
+2. A marker key does not survive a stock round trip. Before replying, stock converts every
+   slate into its own `Slate` and back (`on_slate`). It drops any top-level key it does not know, and
+   it accepts slates that carry one. In the run, `"lepic":{"version":1}` was missing from the bounced
+   I1 and from the V3 S2 that answered a marked V3 S1.
+3. Stock acknowledges only slates. Stock sends `Made` only after the decrypted payload parses
+   as a V3 or V2 slate (`TxProof::from_response`). A payload that does not parse stays pending, and
+   the relay delivers it again when the listener next subscribes. In the run, a notice-shaped JSON
+   object was delivered twice and rejected as `Unable to parse slate` both times. It was never
+   acknowledged. LEPIC sends a payload that is not a slate only to a peer that has proved it runs
+   LEPIC.
+4. One address per socket. The relay serves a socket as the address it most recently
+   subscribed with. It accepts a `Subscribe` for a second address on the same socket and switches
+   that socket to it. Pending messages for the second address are delivered there, and `Made` is
+   then checked against the second key. A message for the first address can still be passed through
+   to that socket, because the relay keeps the first listener mapping. It cannot be acknowledged
+   there (`InvalidSignature`), so it stays pending. The relay never sends `TooManySubscriptions`,
+   which does not appear in `app_mongo.js`. The only error kind the run saw was that
+   `InvalidSignature`. Two sockets with one address each were served at the same time. An invoice
+   address therefore runs on its own socket, and a socket never re-subscribes as another identity.
+5. The Epicbox policy reads a marked V3 invoice as V3. `EpicboxPolicy::decode` selects the V3
+   shape when the `ttl_cutoff_height` key is present, even when its value is null. The marker does
+   not affect that choice. In the run, LEPIC's I1 with the marker decoded as `legacy-v3`, stage
+   `I1`, header `3/3/6` and no TTL. With `ttl_cutoff_height` set to `"1440"`, it decoded the same way
+   with a TTL of 1440.
+
+Recorded run on 2026-10-04 (`drover lock lepic-acceptance -- interop/acceptance/run.sh --probes --no-build --lepic
+target/debug/lepic`, after `cargo build -p lepic-cli`):
+
+```
+lepic: lepic 0.1.0 at target/debug/lepic
+tree: 504010f
+
+Step                                     Result   Time  Detail
+----                                     ------   ----  ------
+setup and funding                        PASS      28s  probe esXy9GNMNoP4CE8g9o7CkqQdWgF6ku5nP4x2fkTap6LKjoHxuPLv@localhost:3423, stock listener esZeFpQo6YozzwNZCgRdA487DXdhYDFNZXYuA7CRgGNW2uk8vJKK@localhost:3423
+fact 4 relay sessions and addresses      PASS       2s  one socket serves the last subscribed address only; two sockets serve two; relay source names TooManySubscriptions 0 times
+fact 1, 2 stock listener bounces a V3 I1 PASS       5s  I1 980b3df4-6cd8-41ef-bb6f-2a6eecaa6951 acknowledged, not recorded, posted back identical except the marker, which is gone
+fact 2 stock reply drops the marker      PASS       2s  V3 S1 with marker answered with a V3 S2 without it; acknowledged after the bounce
+fact 5 policy decodes a marked V3 invoice PASS       0s  legacy-v3 I1 header 3/3/6, TTL read as 1440
+fact 3 non-slate payload unacknowledged  PASS      24s  delivered 2 times, refused as no slate each time, never acknowledged
+
+6 of 6 steps passed
+```
