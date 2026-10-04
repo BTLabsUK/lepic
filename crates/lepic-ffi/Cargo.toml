@@ -29,6 +29,7 @@ lepic-telemetry.workspace = true
 lepic-transport.workspace = true
 lepic-wallet.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
+sha2.workspace = true
 tokio = { workspace = true, features = ["fs", "rt", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 zeroize.workspace = true

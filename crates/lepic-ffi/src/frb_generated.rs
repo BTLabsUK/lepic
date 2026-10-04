@@ -287,6 +287,7 @@ fn wire__crate__api__wallet__EpicWallet_confirm_pin_change_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
             >>::sse_decode(&mut deserializer);
+            let api_sealed_password = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -308,9 +309,11 @@ fn wire__crate__api__wallet__EpicWallet_confirm_pin_change_impl(
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok =
-                            crate::api::wallet::EpicWallet::confirm_pin_change(&*api_that_guard)
-                                .await?;
+                        let output_ok = crate::api::wallet::EpicWallet::confirm_pin_change(
+                            &*api_that_guard,
+                            api_sealed_password,
+                        )
+                        .await?;
                         std::result::Result::Ok(output_ok)
                     })()
                     .await,

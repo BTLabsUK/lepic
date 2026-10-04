@@ -1043,6 +1043,7 @@ dependencies = [
  "lepic-wallet",
  "rand 0.10.3",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",

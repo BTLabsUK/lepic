@@ -38,7 +38,8 @@ final wallet = await EpicWallet.create(
   app's `PlatformSecretStore` can be passed to `lepicSecretStore` unchanged. LEPIC writes
   `lepic.vault`: the seed encrypted under the wallet password (Argon2id, XChaCha20-Poly1305). A
   PIN wallet adds `lepic.pin-key`, `lepic.pin-failures` and, while a PIN change is pending,
-  `lepic.pin-key-pending` (below).
+  `lepic.pin-key-pending` (below). Store `lepic.pin-key-pending` exactly as `lepic.pin-key`, in
+  the same keystore-backed storage: it is a PIN key too.
 - Use one store per wallet, for example by prefixing keys with a wallet id in the adapter. The
   keys above have fixed names, so wallets sharing a store would share one vault slot, one PIN key
   and one failure count: a second wallet is refused with `walletAlreadyExists`, and wrong PINs
@@ -58,14 +59,19 @@ final wallet = await EpicWallet.create(
   any other. The change is two-phase:
   1. Call `changePin` and keep the old sealed text.
   2. Store the new sealed text in place of the old one.
-  3. Call `confirmPinChange()`. Only now does the old sealed text stop opening.
+  3. Call `confirmPinChange(sealedPassword)` with the text the app now holds. Only now does the
+     old sealed text stop opening.
 
   Until step 3 both pairs open, the old PIN with the old text and the new PIN with the new text,
   also after the app restarts, so an app that stops between steps 1 and 2 still opens with the
-  old pair. Never confirm while the app still holds the old text: that text would then no longer
-  open. A second `changePin` before confirmation, from either pair, replaces the pending key and
-  the text of the first change stops opening. While a change is pending both pairs share the one
-  failure count, and a wrong PIN costs two key derivations but counts as one failure.
+  old pair. `confirmPinChange` refuses with `invalidArgument`, changing nothing, unless the text
+  it is given is the one the pending change returned, so confirming with the old text that an
+  app still holds after such a stop cannot lock it out. It does nothing when no change is
+  pending. A second `changePin` before confirmation keeps the pair it started from opening:
+  from the old pair it replaces the pending key and the text of the first change stops opening;
+  from the new pair, which the app stored, it makes that pair current and the old text stops
+  opening. While a change is pending both pairs share the one failure count, and a wrong PIN
+  costs two key derivations but counts as one failure.
 - `EpicWallet.importWalletSeed` and `EpicWallet.importWalletSeedWithPin` restore from the text of
   an `epic-wallet` `wallet.seed` (at most 4096 bytes) and its password, then work as `create` and
   `createWithPin` with a phrase: scan next. A wrong file password gives `wrongPassword`, text

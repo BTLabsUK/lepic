@@ -20,6 +20,7 @@ use lepic_keychain::{
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
@@ -133,19 +134,13 @@ impl PinKey {
     }
 
     async fn load(store: &AppSecretStore) -> Result<Self, WalletError> {
-        Self::load_slot(store, KEY_KEY).await?.ok_or_else(|| {
+        let text = Zeroizing::new(store.read(KEY_KEY).await?.ok_or_else(|| {
             WalletError::new(
                 WalletErrorKind::SecretStore,
                 "the app's store holds no pin key",
             )
-        })
-    }
-
-    async fn load_slot(store: &AppSecretStore, slot: &str) -> Result<Option<Self>, WalletError> {
-        match store.read(slot).await? {
-            Some(text) => Self::from_text(&Zeroizing::new(text)).map(Some),
-            None => Ok(None),
-        }
+        })?);
+        Self::from_text(&text)
     }
 
     /// Decodes into the key's own wiped buffer, without an intermediate vector.
@@ -164,6 +159,68 @@ impl PinKey {
         passphrase.extend_from_slice(pin.as_bytes());
         passphrase
     }
+}
+
+/// The key of an unconfirmed PIN change and a digest of the sealed text that change returned,
+/// so a confirmation can check that the app holds that text without needing the PIN. Stored
+/// as `<key>.<digest>`, both in padded base64.
+struct PendingKey {
+    key: PinKey,
+    sealed_digest: [u8; DIGEST_LEN],
+}
+
+const DIGEST_LEN: usize = 32;
+
+impl PendingKey {
+    fn new(key: PinKey, sealed: &str) -> Self {
+        Self {
+            key,
+            sealed_digest: sealed_digest(sealed),
+        }
+    }
+
+    async fn store(&self, store: &AppSecretStore) -> Result<(), WalletError> {
+        let key = Zeroizing::new(self.key.to_text()?);
+        let digest = STANDARD.encode(self.sealed_digest);
+        let mut text = Zeroizing::new(String::with_capacity(
+            key.len().saturating_add(1).saturating_add(digest.len()),
+        ));
+        text.push_str(&key);
+        text.push('.');
+        text.push_str(&digest);
+        store.write(PENDING_KEY_KEY, text.as_str().to_owned()).await
+    }
+
+    async fn load(store: &AppSecretStore) -> Result<Option<Self>, WalletError> {
+        let Some(text) = store.read(PENDING_KEY_KEY).await? else {
+            return Ok(None);
+        };
+        let text = Zeroizing::new(text);
+        let (key, digest) = text.split_once('.').ok_or_else(bad_key)?;
+        let mut sealed_digest = [0u8; DIGEST_LEN];
+        match STANDARD.decode_slice(digest.as_bytes(), &mut sealed_digest) {
+            Ok(DIGEST_LEN) => Ok(Some(Self {
+                key: PinKey::from_text(key)?,
+                sealed_digest,
+            })),
+            _ => Err(bad_key()),
+        }
+    }
+
+    fn was_returned_as(&self, sealed: &str) -> bool {
+        self.sealed_digest == sealed_digest(sealed)
+    }
+}
+
+/// Trimmed as [`open`] trims, so text the app stored with a line break still matches.
+fn sealed_digest(sealed: &str) -> [u8; DIGEST_LEN] {
+    Sha256::digest(sealed.trim().as_bytes()).into()
+}
+
+/// Which stored key opened sealed text.
+enum OpenedBy {
+    Current,
+    Pending(PendingKey),
 }
 
 fn other(error: &dyn std::fmt::Display) -> WalletError {
@@ -321,15 +378,20 @@ pub(crate) async fn unlock(
     sealed: String,
 ) -> Result<Zeroizing<String>, WalletError> {
     let _attempt = guard.attempts.lock().await;
-    attempt(guard.policy, store, pin, sealed).await
+    attempt(guard.policy, store, pin, sealed)
+        .await
+        .map(|(password, _)| password)
 }
 
 /// Changes the PIN: `old_pin` must open `sealed` as in [`unlock`], `check` must accept the
 /// password it opens, and the password is then sealed under `new_pin` and a new key that
 /// becomes the pending key. Returns the new sealed text.
 ///
-/// The current key stays, so the text the app holds keeps opening until [`confirm_change`]. A
-/// pending key of an earlier change is replaced, and its sealed text stops opening.
+/// The key that opened `sealed` keeps opening it until [`confirm_change`], since that is the
+/// text the app holds. When the current key opened it, a pending key of an earlier change is
+/// replaced and its text stops opening. When the pending key opened it, the app already
+/// stored that change's text in place of the old one, so the pending key first becomes the
+/// current key and the old text stops opening.
 pub(crate) async fn change<F, Fut>(
     guard: &PinGuard,
     store: &AppSecretStore,
@@ -345,27 +407,40 @@ where
 {
     // Held to the end, so an attempt or a confirmation never sees half a change.
     let _attempt = guard.attempts.lock().await;
-    let password = attempt(guard.policy, store, old_pin, sealed).await?;
+    let (password, opened_by) = attempt(guard.policy, store, old_pin, sealed).await?;
     check(password.clone()).await?;
     let (key, sealed) = seal_with_new_key(new_pin, password, kdf).await?;
-    key.store(store, PENDING_KEY_KEY).await?;
+    // Promoted before the new pending key is written: stopping in between leaves the held
+    // text opening by the current key, and the pending slot still holding that same key.
+    if let OpenedBy::Pending(held) = opened_by {
+        held.key.store(store, KEY_KEY).await?;
+    }
+    PendingKey::new(key, &sealed).store(store).await?;
     Ok(sealed)
 }
 
 /// Makes the pending key of a PIN change the current one, so only the new sealed text opens.
-/// Does nothing when no change is pending. A damaged pending key gives `SecretStore` and
-/// leaves both keys as they were.
+/// `sealed` must be the text that change returned, which the app now holds; other text gives
+/// `InvalidArgument` and changes nothing. Does nothing when no change is pending. A damaged
+/// pending key gives `SecretStore` and leaves both keys as they were.
 pub(crate) async fn confirm_change(
     guard: &PinGuard,
     store: &AppSecretStore,
+    sealed: &str,
 ) -> Result<(), WalletError> {
     let _attempt = guard.attempts.lock().await;
-    let Some(key) = PinKey::load_slot(store, PENDING_KEY_KEY).await? else {
+    let Some(pending) = PendingKey::load(store).await? else {
         return Ok(());
     };
+    if !pending.was_returned_as(sealed) {
+        return Err(WalletError::new(
+            WalletErrorKind::InvalidArgument,
+            "sealed text is not the text of the pending pin change",
+        ));
+    }
     // The current key is overwritten before the pending one is deleted: stopping in between
     // leaves the new key in both, which opens the new text and confirms again harmlessly.
-    key.store(store, KEY_KEY).await?;
+    pending.key.store(store, KEY_KEY).await?;
     store.delete(PENDING_KEY_KEY).await
 }
 
@@ -374,20 +449,22 @@ async fn attempt(
     store: &AppSecretStore,
     pin: Zeroizing<String>,
     sealed: String,
-) -> Result<Zeroizing<String>, WalletError> {
+) -> Result<(Zeroizing<String>, OpenedBy), WalletError> {
     let failures = read_failures(store).await?;
     write_failures(store, failures.saturating_add(1)).await?;
     tokio::time::sleep(policy.delay(failures)).await;
     let key = PinKey::load(store).await?;
     // Read now but reported only when the current key does not open the text, so a damaged
     // pending key never stops the current text from opening.
-    let pending = PinKey::load_slot(store, PENDING_KEY_KEY).await;
+    let pending = PendingKey::load(store).await;
     let opened = blocking(move || match open(&key, &pin, &sealed) {
+        Ok(password) => Ok((password, OpenedBy::Current)),
         Err(error) if error.kind == WalletErrorKind::WrongPassword => match pending? {
-            Some(pending) => open(&pending, &pin, &sealed),
+            Some(pending) => open(&pending.key, &pin, &sealed)
+                .map(|password| (password, OpenedBy::Pending(pending))),
             None => Err(error),
         },
-        opened => opened,
+        Err(error) => Err(error),
     })
     .await;
     match &opened {
@@ -633,6 +710,52 @@ mod tests {
         assert_eq!(*opened, *password);
     }
 
+    /// A change opened by the pending key starts from text the app already stored in place of
+    /// the old one, so that text must keep opening while the new change is pending.
+    #[tokio::test]
+    async fn a_change_from_the_pending_pair_keeps_that_pair_opening() {
+        let store = AppSecretStore::in_memory();
+        let guard = PinGuard::new(PinPolicy::DEFAULT);
+        let (_, first) = new_wallet(&store, "1111").await;
+        let second = change_pin(&guard, &store, "1111", &first, "2222")
+            .await
+            .unwrap();
+        // The app stored `second` and dropped `first`, then changed again and stopped before
+        // it stored the third text.
+        change_pin(&guard, &store, "2222", &second, "3333")
+            .await
+            .unwrap();
+        assert!(opens(&guard, &store, "2222", &second).await);
+    }
+
+    /// An app that stopped before it stored the new text still holds the old one; confirming
+    /// then must not stop that text from opening.
+    #[tokio::test]
+    async fn a_confirmation_for_text_the_app_never_stored_keeps_the_old_text_opening() {
+        let store = AppSecretStore::in_memory();
+        let guard = PinGuard::new(PinPolicy::DEFAULT);
+        let (_, old) = new_wallet(&store, "1111").await;
+        let new = change_pin(&guard, &store, "1111", &old, "2222")
+            .await
+            .unwrap();
+        let confirmed = confirm_change(&guard, &store, &old).await;
+        assert_eq!(
+            confirmed.unwrap_err().kind,
+            WalletErrorKind::InvalidArgument
+        );
+        assert!(opens(&guard, &store, "1111", &old).await);
+        assert!(opens(&guard, &store, "2222", &new).await);
+        // Text the app stored with a line break is the same text.
+        confirm_change(&guard, &store, &format!("{new}\n"))
+            .await
+            .unwrap();
+        assert!(!opens(&guard, &store, "1111", &old).await);
+        assert!(opens(&guard, &store, "2222", &new).await);
+        // Nothing is pending any more.
+        confirm_change(&guard, &store, &old).await.unwrap();
+        assert!(opens(&guard, &store, "2222", &new).await);
+    }
+
     #[tokio::test]
     async fn a_count_that_does_not_parse_costs_the_longest_wait() {
         let store = AppSecretStore::in_memory();
@@ -681,23 +804,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_second_change_replaces_the_pending_key() {
+    async fn a_change_from_the_old_pair_replaces_the_pending_key() {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
         let (_, first) = new_wallet(&store, "1111").await;
         let second = change_pin(&guard, &store, "1111", &first, "2222")
             .await
             .unwrap();
-        // The second change starts from the pending pair.
-        let third = change_pin(&guard, &store, "2222", &second, "3333")
+        // The app never stored `second` and changes again from the pair it holds.
+        let third = change_pin(&guard, &store, "1111", &first, "3333")
             .await
             .unwrap();
         assert!(opens(&guard, &store, "1111", &first).await);
         assert!(!opens(&guard, &store, "2222", &second).await);
         assert!(opens(&guard, &store, "3333", &third).await);
 
-        confirm_change(&guard, &store).await.unwrap();
+        confirm_change(&guard, &store, &third).await.unwrap();
         assert!(!opens(&guard, &store, "1111", &first).await);
+        assert!(opens(&guard, &store, "3333", &third).await);
+    }
+
+    #[tokio::test]
+    async fn a_change_from_the_pending_pair_promotes_it_before_replacing_it() {
+        let store = AppSecretStore::in_memory();
+        let guard = PinGuard::new(PinPolicy::DEFAULT);
+        let (_, first) = new_wallet(&store, "1111").await;
+        let second = change_pin(&guard, &store, "1111", &first, "2222")
+            .await
+            .unwrap();
+        // The app stored `second` in place of `first`, so `first` is gone.
+        let third = change_pin(&guard, &store, "2222", &second, "3333")
+            .await
+            .unwrap();
+        assert!(!opens(&guard, &store, "1111", &first).await);
+        assert!(opens(&guard, &store, "2222", &second).await);
+        assert!(opens(&guard, &store, "3333", &third).await);
+
+        confirm_change(&guard, &store, &third).await.unwrap();
+        assert!(!opens(&guard, &store, "2222", &second).await);
         assert!(opens(&guard, &store, "3333", &third).await);
     }
 
@@ -729,13 +873,13 @@ mod tests {
             .unwrap();
         let key = store.read(KEY_KEY).await.unwrap();
 
-        let opened = unlock(&guard, &store, pin("2222"), new).await;
+        let opened = unlock(&guard, &store, pin("2222"), new.clone()).await;
         assert_eq!(opened.unwrap_err().kind, WalletErrorKind::SecretStore);
         assert_eq!(read_failures(&store).await.unwrap(), 1);
         let opened = unlock(&guard, &store, pin("1111"), old).await.unwrap();
         assert_eq!(*opened, *password);
 
-        let confirmed = confirm_change(&guard, &store).await;
+        let confirmed = confirm_change(&guard, &store, &new).await;
         assert_eq!(confirmed.unwrap_err().kind, WalletErrorKind::SecretStore);
         assert_eq!(store.read(KEY_KEY).await.unwrap(), key);
     }

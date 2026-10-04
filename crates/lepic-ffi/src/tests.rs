@@ -190,7 +190,7 @@ async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
     assert_eq!(kind(phrase.await), WalletErrorKind::Locked);
     assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
     assert_eq!(
-        kind(wallet.confirm_pin_change().await),
+        kind(wallet.confirm_pin_change(sealed.clone()).await),
         WalletErrorKind::Locked
     );
 
@@ -693,11 +693,14 @@ async fn a_pin_change_opens_both_pairs_until_it_is_confirmed() {
             .unwrap(),
         phrase
     );
-    wallet.confirm_pin_change().await.unwrap();
+    let held_old = wallet.confirm_pin_change(old_sealed.clone()).await;
+    assert_eq!(kind(held_old), WalletErrorKind::InvalidArgument);
+    assert!(store.read(PENDING_KEY).await.unwrap().is_some());
+    wallet.confirm_pin_change(new_sealed.clone()).await.unwrap();
     assert_eq!(store.read(PENDING_KEY).await.unwrap(), None);
     // Nothing is pending any more, so a second confirmation changes nothing.
     let key = store.read(PIN_KEY).await.unwrap();
-    wallet.confirm_pin_change().await.unwrap();
+    wallet.confirm_pin_change(old_sealed.clone()).await.unwrap();
     assert_eq!(store.read(PIN_KEY).await.unwrap(), key);
     drop(wallet);
 

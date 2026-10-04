@@ -109,6 +109,7 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiWalletEpicWalletConfirmPinChange({
     required EpicWallet that,
+    required String sealedPassword,
   });
 
   Future<EpicWallet> crateApiWalletEpicWalletCreate({
@@ -577,6 +578,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<void> crateApiWalletEpicWalletConfirmPinChange({
     required EpicWallet that,
+    required String sealedPassword,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -586,6 +588,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(sealedPassword, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -598,7 +601,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletConfirmPinChangeConstMeta,
-        argValues: [that],
+        argValues: [that, sealedPassword],
         apiImpl: this,
       ),
     );
@@ -607,7 +610,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWalletEpicWalletConfirmPinChangeConstMeta =>
       const TaskConstMeta(
         debugName: "EpicWallet_confirm_pin_change",
-        argNames: ["that"],
+        argNames: ["that", "sealedPassword"],
       );
 
   @override
@@ -5424,9 +5427,13 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// `lepic.pin-key-pending` beside `lepic.pin-key`, and both the old PIN with the old sealed
   /// text and the new PIN with the new text open the wallet, also in a later runtime. Store
   /// the new text, then confirm. If the app stops before it stored the text, the old pair
-  /// still opens. A second change before confirmation, from either pair, replaces the pending
-  /// key, so the text of the first change stops opening. While a change is pending a wrong PIN
-  /// costs two key derivations, and still counts as one failure.
+  /// still opens.
+  ///
+  /// A second change before confirmation keeps the pair it started from opening, since that
+  /// is the pair the app holds. From the old pair it replaces the pending key, and the text of
+  /// the first change stops opening. From the pending pair it makes that pair current, and
+  /// the old text stops opening. While a change is pending a wrong PIN costs two key
+  /// derivations, and still counts as one failure.
   ///
   /// Fails with `InvalidArgument` when `new_pin` has fewer than four characters, before any
   /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
@@ -5443,13 +5450,20 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
 
   /// Ends a PIN change of [`EpicWallet::change_pin`]: the old sealed text stops opening and
   /// only the new PIN with the new text opens the wallet. Call it once the app has stored the
-  /// text `change_pin` returned, never before, and never when the app still holds the old
-  /// text, which would then no longer open. Does nothing when no change is pending.
+  /// text `change_pin` returned, and pass the text it now holds as `sealed_password`. Text
+  /// other than the pending change's, such as the old text of an app that stopped before it
+  /// stored the new one, is refused, so the text the app holds always keeps opening. Does
+  /// nothing when no change is pending.
   ///
-  /// Fails with `Locked` on a locked wallet and with `SecretStore` when the store cannot be
-  /// read or written or holds a damaged pending key; the change then stays pending.
-  Future<void> confirmPinChange() =>
-      RustLib.instance.api.crateApiWalletEpicWalletConfirmPinChange(that: this);
+  /// Fails with `InvalidArgument`, changing nothing, when `sealed_password` is not the text of
+  /// the pending change, with `Locked` on a locked wallet, and with `SecretStore` when the
+  /// store cannot be read or written or holds a damaged pending key; the change then stays
+  /// pending.
+  Future<void> confirmPinChange({required String sealedPassword}) =>
+      RustLib.instance.api.crateApiWalletEpicWalletConfirmPinChange(
+        that: this,
+        sealedPassword: sealedPassword,
+      );
 
   /// Step 1 of a manual send: builds the slate, locks the inputs and returns the slate text
   /// for the recipient, whose answer goes to [`EpicWallet::finalize_and_post`].
