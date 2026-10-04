@@ -127,17 +127,23 @@ impl EpicboxTransport {
 
     /// Replaces the attached identity and returns the client that now speaks for it.
     pub fn attach(&self, identity: Identity) -> EpicboxClient {
-        let client = EpicboxClient::new(
-            self.inner.settings.clone(),
-            identity,
-            Arc::clone(&self.inner.connector),
-        );
+        let client = self.client_for(identity);
         *self
             .inner
             .client
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(client.clone());
         client
+    }
+
+    /// A client for another address of this wallet, on this transport's relay, that is not
+    /// attached: deliveries through the transport keep using the attached identity.
+    pub fn client_for(&self, identity: Identity) -> EpicboxClient {
+        EpicboxClient::new(
+            self.inner.settings.clone(),
+            identity,
+            Arc::clone(&self.inner.connector),
+        )
     }
 
     /// Drops the attached identity. Subscriptions already started keep theirs until they end.
@@ -250,6 +256,22 @@ mod tests {
             source.downcast_ref::<EpicboxTransportError>(),
             Some(&EpicboxTransportError::NoIdentity)
         );
+    }
+
+    #[test]
+    fn a_client_for_another_identity_leaves_the_attached_one() {
+        let transport = transport();
+        let attached = transport.attach(identity());
+        let secret = SecretKey::from_array([2; 32]).unwrap();
+        let address = EpicboxAddress::new(
+            PublicKey::from_secret_key(&secret).unwrap(),
+            Network::Mainnet,
+            Domain::parse("relay.test").unwrap(),
+            None,
+        );
+        let other = transport.client_for(Identity::new(secret, address.clone()).unwrap());
+        assert_eq!(other.address(), &address);
+        assert_eq!(transport.client().unwrap().address(), attached.address());
     }
 
     #[test]
