@@ -10,8 +10,9 @@
 //! unacknowledged, so the relay delivers it again.
 //!
 //! Every message is idempotent on its relay id and on `(slate_id, stage)`: a redelivered S1 is
-//! answered with the S2 stored the first time, never a new one, and finalizing an S2 again
-//! changes nothing that is stored.
+//! answered with the S2 stored the first time, never a new one, and announced as
+//! [`Event::AnsweredAgain`]; finalizing an S2 again changes nothing that is stored. A message
+//! whose relay id settled before is acknowledged without an answer or an event.
 
 use std::error::Error as StdError;
 use std::fmt;

@@ -45,7 +45,7 @@ use uuid::Uuid;
 
 use crate::account::{self, DEFAULT_ACCOUNT_LABEL};
 use crate::error::WalletError;
-use crate::event::{Event, ReceivedTransaction};
+use crate::event::{AnsweredSlate, Event, ReceivedTransaction};
 use crate::lifecycle::Session;
 use crate::ports::{Ports, SecretVault, StoreOpener};
 use crate::wallet::Wallet;
@@ -71,8 +71,8 @@ pub struct Received {
     pub slate: Slate,
     /// S2 encoded by the transport's reply rule, the bytes that were stored.
     pub reply: WireSlate,
-    /// The slate was received before and `reply` is the S2 stored then. Nothing was stored,
-    /// no key was reserved and no event was emitted for it.
+    /// The slate was received before and `reply` is the S2 stored then. Nothing was stored and
+    /// no key was reserved; the event was [`Event::AnsweredAgain`], not [`Event::Received`].
     pub repeated: bool,
 }
 
@@ -149,10 +149,11 @@ where
     /// sends the reply over the same transport.
     ///
     /// The same S1 received again, on any transport, returns the S2 stored the first time with
-    /// [`Received::repeated`] set, without asking the node, storing anything or emitting an
-    /// event, so a reply lost before it reached the sender can be sent again.
+    /// [`Received::repeated`] set, without asking the node or storing anything, so a reply lost
+    /// before it reached the sender can be sent again.
     ///
-    /// Emits [`Event::Received`] once the transaction is stored.
+    /// Emits [`Event::Received`] once the transaction is stored, and for a repeat only
+    /// [`Event::AnsweredAgain`].
     ///
     /// Asks the node for its tip. Fails with [`ReceiveError::Wallet`] carrying
     /// [`WalletError::Locked`] when the wallet is locked, with [`ReceiveError::AlreadyReceived`]
@@ -201,8 +202,7 @@ where
         span.record("stage", slate.stage().as_str());
         check_proposal(&slate)?;
         if let Some(received) = self.received_before(&slate).await? {
-            info!(tx_id = %received.tx_id, "slate answered again");
-            return Ok(received);
+            return Ok(self.answered_again(received, transport));
         }
         let tip = self
             .ports()
@@ -235,8 +235,7 @@ where
         let (received, account) = match answer {
             Answer::Stored { received, account } => (received, account),
             Answer::Repeated(received) => {
-                info!(tx_id = %received.tx_id, "slate answered again");
-                return Ok(received);
+                return Ok(self.answered_again(received, transport));
             }
         };
         info!(tx_id = %received.tx_id, "slate received");
@@ -247,6 +246,16 @@ where
             transport,
         }));
         Ok(received)
+    }
+
+    fn answered_again(&self, received: Received, transport: TransportId) -> Received {
+        info!(tx_id = %received.tx_id, "slate answered again");
+        self.emit(Event::AnsweredAgain(AnsweredSlate {
+            tx_id: received.tx_id,
+            slate_id: received.slate.id(),
+            transport,
+        }));
+        received
     }
 
     /// The S2 stored for `proposal` when this wallet received it before, read before the node

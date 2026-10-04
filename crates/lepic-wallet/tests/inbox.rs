@@ -26,7 +26,7 @@ use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxState, WalletStore};
 use lepic_transport::transport::{Inbound, Transport};
 use lepic_wallet::event::TransportState;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
-use lepic_wallet::{ReceiveRequest, WalletError};
+use lepic_wallet::{Event, ReceiveRequest, WalletError};
 use world::{RECEIVER_MNEMONIC, World, settings, transport_reaches, transport_states, within};
 
 #[test]
@@ -333,6 +333,39 @@ fn a_changed_s1_under_a_received_slate_id_is_rejected() {
     );
     assert_eq!(world.relay.pending(&World::address_of(7)), 0);
     assert_eq!(world.relay.pending(&world.sender_address), 1);
+    assert_eq!(world.receiver.transactions(), 1);
+}
+
+/// The same S1 under a second relay message id, as a sender that sent it twice posts it: the
+/// first copy is announced as received, the second only as answered again.
+#[test]
+fn an_s1_delivered_twice_is_announced_as_received_then_as_answered_again() {
+    let world = World::new();
+    world.block_on(world.send());
+    let s1 = peek_s1(&world);
+    world.post_to_receiver(7, 7, &s1);
+    let mut events = world.receiver_wallet.subscribe();
+
+    let summary = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            received: 1,
+            repeated: 1,
+            ..InboxSummary::default()
+        }
+    );
+    let receipts: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|event| matches!(event, Event::Received(_) | Event::AnsweredAgain(_)))
+        .collect();
+    let [Event::Received(received), Event::AnsweredAgain(again)] = receipts.as_slice() else {
+        panic!("{receipts:?}");
+    };
+    assert_eq!(again.tx_id, received.tx_id);
+    assert_eq!(again.transport, TRANSPORT_ID);
     assert_eq!(world.receiver.transactions(), 1);
 }
 

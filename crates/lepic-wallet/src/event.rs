@@ -3,6 +3,7 @@
 //! behind misses the oldest ones and is told how many it missed.
 
 use lepic_primitives::amount::{Amount, Height};
+use lepic_slate::model::SlateId;
 use lepic_store::{AccountIndex, TxId, TxState};
 use lepic_transport::transport::TransportId;
 
@@ -19,6 +20,9 @@ pub enum Event {
     /// A received slate created a transaction. Its later state changes arrive as
     /// [`Event::Transaction`].
     Received(ReceivedTransaction),
+    /// A slate received before arrived again and was answered with the reply stored the first
+    /// time. Nothing changed; no [`Event::Received`] follows for it.
+    AnsweredAgain(AnsweredSlate),
     Sync(SyncProgress),
     Transport(TransportStatus),
 }
@@ -59,6 +63,15 @@ pub struct ReceivedTransaction {
     pub tx_id: TxId,
     pub account: AccountIndex,
     pub amount: Amount,
+    pub transport: TransportId,
+}
+
+/// The transaction a repeated slate was received as before, and the transport it came over
+/// this time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnsweredSlate {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
     pub transport: TransportId,
 }
 

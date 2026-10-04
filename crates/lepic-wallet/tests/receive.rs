@@ -19,7 +19,7 @@ use lepic_store::{
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::TransportId;
-use lepic_wallet::event::ReceivedTransaction;
+use lepic_wallet::event::{AnsweredSlate, ReceivedTransaction};
 use lepic_wallet::{Event, ReceiveError, WalletError};
 use receive_harness::*;
 use serde_json::Value;
@@ -86,9 +86,7 @@ fn a_received_slate_announces_the_transaction_it_created() {
     let mut events = receiver.wallet.subscribe();
 
     let received = receiver.receive(transport, &json(&s1), None).unwrap();
-    let again = receiver.receive(transport, &json(&s1), None).unwrap();
 
-    assert!(again.repeated);
     let announced: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok()).collect();
     assert_eq!(
         announced,
@@ -97,6 +95,30 @@ fn a_received_slate_announces_the_transaction_it_created() {
             account: AccountIndex(0),
             amount: received.slate.amount(),
             transport,
+        })]
+    );
+}
+
+#[test]
+fn a_repeated_slate_announces_only_that_it_was_answered_again() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let receiver = Receiver::new(
+        &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+        slate_height(&s1),
+    );
+    let received = receiver.receive(transport, &json(&s1), None).unwrap();
+    let mut events = receiver.wallet.subscribe();
+
+    let again = receiver.receive(FILE, &json(&s1), None).unwrap();
+
+    assert!(again.repeated);
+    let announced: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert_eq!(
+        announced,
+        [Event::AnsweredAgain(AnsweredSlate {
+            tx_id: received.tx_id,
+            slate_id: received.slate.id(),
+            transport: FILE,
         })]
     );
 }
@@ -197,6 +219,7 @@ fn two_receives_of_one_slate_at_once_store_it_once() {
         &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
         slate_height(&s1),
     );
+    let mut events = receiver.wallet.subscribe();
 
     let (a, b) = receiver.receive_twice_at_once(transport, &json(&s1));
 
@@ -205,6 +228,17 @@ fn two_receives_of_one_slate_at_once_store_it_once() {
     assert_ne!(a.repeated, b.repeated);
     assert_eq!(a.reply.as_bytes(), b.reply.as_bytes());
     assert_eq!(receiver.transaction_count(), 1);
+    let announced: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert_eq!(announced.len(), 2, "{announced:?}");
+    assert!(announced.iter().any(|event| matches!(
+        event,
+        Event::Received(ReceivedTransaction { tx_id, .. }) if *tx_id == a.tx_id
+    )));
+    assert!(announced.contains(&Event::AnsweredAgain(AnsweredSlate {
+        tx_id: a.tx_id,
+        slate_id: a.slate.id(),
+        transport,
+    })));
 }
 
 #[test]
