@@ -88,6 +88,8 @@ pub enum StoreError {
     Undecryptable { record: Record },
     #[error("{record} could not be encrypted")]
     Unsealable { record: Record },
+    #[error("{record} cannot take the requested status")]
+    InvalidStatus { record: Record },
     #[error("{cap} cap on parked invoices is reached")]
     InvoiceCapReached { cap: InvoiceCap },
     #[error("operating system randomness is unavailable")]

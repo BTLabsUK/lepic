@@ -526,7 +526,7 @@ impl InvoiceRepository for MemoryRepos<'_> {
                 record: Record::PendingInvoice,
             });
         }
-        invoice::check_caps(
+        invoice::check_parkable(
             invoice,
             self.parked_invoices().count(),
             self.parked_invoices()
@@ -572,6 +572,7 @@ impl InvoiceRepository for MemoryRepos<'_> {
     ) -> Result<(), StoreError> {
         match self.state.pending_invoices.get_mut(&slate_id.into_bytes()) {
             Some(stored) => {
+                invoice::check_status_change(stored.fields.status, status)?;
                 stored.fields.status = status;
                 Ok(())
             }

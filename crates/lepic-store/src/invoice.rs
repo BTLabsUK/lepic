@@ -87,8 +87,9 @@ impl InvoiceAddressIndex {
 }
 
 pub trait InvoiceRepository {
-    /// Stores a received invoice with status [`PendingInvoiceStatus::Parked`] or another. Fails
-    /// with [`StoreError::Duplicate`] when one with the slate id is stored, and with
+    /// Stores a received invoice, whose status must be [`PendingInvoiceStatus::Parked`]. Fails
+    /// with [`StoreError::Duplicate`] when one with the slate id is stored, with
+    /// [`StoreError::InvalidStatus`] for any other status, and with
     /// [`StoreError::InvoiceCapReached`] when parking it would pass [`MAX_PARKED_INVOICES`] or
     /// [`MAX_PARKED_INVOICES_PER_SENDER`].
     fn park_invoice(&mut self, invoice: &PendingInvoice) -> Result<(), StoreError>;
@@ -98,7 +99,9 @@ pub trait InvoiceRepository {
     /// Every stored invoice, oldest first.
     fn pending_invoices(&self) -> Result<Vec<PendingInvoice>, StoreError>;
 
-    /// Fails with [`StoreError::NotFound`] when no invoice with the slate id is stored.
+    /// Moves a parked invoice to paid or declined. Fails with [`StoreError::NotFound`] when no
+    /// invoice with the slate id is stored, and with [`StoreError::InvalidStatus`] for any other
+    /// change, so a settled invoice never counts against the caps again.
     fn set_pending_invoice_status(
         &mut self,
         slate_id: Uuid,
@@ -118,14 +121,19 @@ pub trait InvoiceRepository {
     fn set_invoice_address_index(&mut self, index: InvoiceAddressIndex) -> Result<(), StoreError>;
 }
 
-/// Checks the caps against the parked invoices already stored, before `invoice` joins them.
-pub(crate) fn check_caps(
+const INVALID_STATUS: StoreError = StoreError::InvalidStatus {
+    record: Record::PendingInvoice,
+};
+
+/// Checks the status and the caps against the parked invoices already stored, before `invoice`
+/// joins them.
+pub(crate) fn check_parkable(
     invoice: &PendingInvoice,
     parked_total: usize,
     parked_from_sender: usize,
 ) -> Result<(), StoreError> {
     if invoice.status != PendingInvoiceStatus::Parked {
-        return Ok(());
+        return Err(INVALID_STATUS);
     }
     if parked_total >= MAX_PARKED_INVOICES {
         return Err(StoreError::InvoiceCapReached {
@@ -138,6 +146,20 @@ pub(crate) fn check_caps(
         });
     }
     Ok(())
+}
+
+/// Only a parked invoice changes status, and only to paid or declined.
+pub(crate) fn check_status_change(
+    from: PendingInvoiceStatus,
+    to: PendingInvoiceStatus,
+) -> Result<(), StoreError> {
+    match (from, to) {
+        (
+            PendingInvoiceStatus::Parked,
+            PendingInvoiceStatus::Paid | PendingInvoiceStatus::Declined,
+        ) => Ok(()),
+        _ => Err(INVALID_STATUS),
+    }
 }
 
 const ASSOCIATED_DATA_DOMAIN: &[u8] = b"lepic-store pending invoice v1";

@@ -796,7 +796,7 @@ impl InvoiceRepository for SqliteRepos<'_> {
             });
         }
         let parked = PendingInvoiceStatus::Parked.code();
-        invoice::check_caps(
+        invoice::check_parkable(
             invoice,
             self.count(
                 "SELECT COUNT(*) FROM pending_invoices WHERE status = ?1",
@@ -850,15 +850,25 @@ impl InvoiceRepository for SqliteRepos<'_> {
         slate_id: Uuid,
         status: PendingInvoiceStatus,
     ) -> Result<(), StoreError> {
-        let changed = self.conn.execute(
-            "UPDATE pending_invoices SET status = ?2 WHERE slate_id = ?1",
-            params![&slate_id.as_bytes()[..], status.code()],
+        let record = Record::PendingInvoice;
+        let slate_id = &slate_id.as_bytes()[..];
+        let current: String = self
+            .conn
+            .query_row(
+                "SELECT status FROM pending_invoices WHERE slate_id = ?1",
+                [slate_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound { record })?;
+        invoice::check_status_change(
+            decode_code(&current, PendingInvoiceStatus::from_code, record, "status")?,
+            status,
         )?;
-        if changed == 0 {
-            return Err(StoreError::NotFound {
-                record: Record::PendingInvoice,
-            });
-        }
+        self.conn.execute(
+            "UPDATE pending_invoices SET status = ?2 WHERE slate_id = ?1",
+            params![slate_id, status.code()],
+        )?;
         Ok(())
     }
 

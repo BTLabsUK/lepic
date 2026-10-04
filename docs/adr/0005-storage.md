@@ -27,7 +27,8 @@ and possibly a `wallet.seed` file.
   with the slate id and sender key as associated data, because they carry a peer's amount and
   message before the user has accepted anything. The store caps parked invoices in total and per
   sender key (`MAX_PARKED_INVOICES`, `MAX_PARKED_INVOICES_PER_SENDER`), so an allowlisted sender
-  cannot grow the database without bound; paid and declined ones do not count.
+  cannot grow the database without bound. Only parked invoices count; a parked invoice moves
+  only to paid or declined and never back, and the store parks nothing in another status.
 - The invoice allowlist and what each peer is proven to support (LEPIC notices, or no invoices)
   are keyed by the Epicbox public key alone, since the relay authenticates the key and never the
   domain. An allowlist entry keeps the full address replies go to. The current invoice address

@@ -726,14 +726,15 @@ fn pending_invoices_round_trip_oldest_first<B: Backend>() {
     let newest = invoice(invoice_id(1), 1, 30);
     let oldest = invoice(invoice_id(2), 2, 10);
     let mut paid = invoice(invoice_id(3), 1, 20);
-    paid.status = PendingInvoiceStatus::Paid;
     paid.codec = "legacy-v2".to_owned();
     write(store, |repos| {
         repos.park_invoice(&newest)?;
         repos.park_invoice(&oldest)?;
-        repos.park_invoice(&paid)
+        repos.park_invoice(&paid)?;
+        repos.set_pending_invoice_status(paid.slate_id, PendingInvoiceStatus::Paid)
     })
     .unwrap();
+    paid.status = PendingInvoiceStatus::Paid;
     let (all, one, missing) = read(store, |repos| {
         Ok((
             repos.pending_invoices()?,
@@ -791,6 +792,93 @@ fn pending_invoice_status_changes_and_delete_removes<B: Backend>() {
     .unwrap();
     let left = read(store, |repos| repos.pending_invoices()).unwrap();
     assert_eq!(left, vec![invoice(SLATE_B, 1, 2)]);
+}
+
+fn park_invoice_accepts_only_a_parked_invoice<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    for status in [PendingInvoiceStatus::Paid, PendingInvoiceStatus::Declined] {
+        let mut settled = invoice(SLATE_A, 1, 1);
+        settled.status = status;
+        assert!(matches!(
+            write(store, |repos| repos.park_invoice(&settled)),
+            Err(StoreError::InvalidStatus {
+                record: Record::PendingInvoice
+            })
+        ));
+    }
+    assert!(
+        read(store, |repos| repos.pending_invoices())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+fn pending_invoice_status_moves_only_from_parked_to_paid_or_declined<B: Backend>() {
+    use PendingInvoiceStatus::{Declined, Paid, Parked};
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    write(store, |repos| {
+        repos.park_invoice(&invoice(SLATE_A, 1, 1))?;
+        repos.park_invoice(&invoice(SLATE_B, 1, 2))?;
+        repos.set_pending_invoice_status(SLATE_A, Paid)?;
+        repos.set_pending_invoice_status(SLATE_B, Declined)
+    })
+    .unwrap();
+    for (slate_id, status) in [
+        (SLATE_A, Parked),
+        (SLATE_A, Paid),
+        (SLATE_A, Declined),
+        (SLATE_B, Parked),
+        (SLATE_B, Paid),
+        (SLATE_B, Declined),
+    ] {
+        assert!(
+            matches!(
+                write(store, |repos| repos
+                    .set_pending_invoice_status(slate_id, status)),
+                Err(StoreError::InvalidStatus {
+                    record: Record::PendingInvoice
+                })
+            ),
+            "{slate_id} to {status:?}"
+        );
+    }
+    let statuses: Vec<_> = read(store, |repos| repos.pending_invoices())
+        .unwrap()
+        .into_iter()
+        .map(|kept| kept.status)
+        .collect();
+    assert_eq!(statuses, vec![Paid, Declined]);
+}
+
+fn a_settled_invoice_cannot_return_past_the_per_sender_cap<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let cap = u32::try_from(MAX_PARKED_INVOICES_PER_SENDER).unwrap();
+    write(store, |repos| {
+        for n in 0..cap {
+            repos.park_invoice(&invoice(invoice_id(n), 1, i64::from(n)))?;
+        }
+        repos.set_pending_invoice_status(invoice_id(0), PendingInvoiceStatus::Paid)?;
+        repos.park_invoice(&invoice(invoice_id(cap), 1, 99))
+    })
+    .unwrap();
+    assert!(matches!(
+        write(store, |repos| repos.set_pending_invoice_status(
+            invoice_id(0),
+            PendingInvoiceStatus::Parked
+        )),
+        Err(StoreError::InvalidStatus {
+            record: Record::PendingInvoice
+        })
+    ));
+    let parked = read(store, |repos| repos.pending_invoices())
+        .unwrap()
+        .into_iter()
+        .filter(|kept| kept.status == PendingInvoiceStatus::Parked)
+        .count();
+    assert_eq!(parked, MAX_PARKED_INVOICES_PER_SENDER);
 }
 
 fn parking_stops_at_the_per_sender_cap<B: Backend>() {
@@ -852,9 +940,12 @@ fn parking_stops_at_the_total_cap<B: Backend>() {
             cap: InvoiceCap::Total
         })
     ));
-    let mut paid = invoice(invoice_id(total), fresh_sender, 0);
-    paid.status = PendingInvoiceStatus::Paid;
-    write(store, |repos| repos.park_invoice(&paid)).unwrap();
+    // An invoice the user paid no longer counts.
+    write(store, |repos| {
+        repos.set_pending_invoice_status(invoice_id(0), PendingInvoiceStatus::Paid)?;
+        repos.park_invoice(&invoice(invoice_id(total), fresh_sender, 0))
+    })
+    .unwrap();
     let stored = read(store, |repos| repos.pending_invoices()).unwrap();
     assert_eq!(stored.len(), MAX_PARKED_INVOICES + 1);
 }
@@ -862,11 +953,10 @@ fn parking_stops_at_the_total_cap<B: Backend>() {
 fn prune_removes_only_parked_invoices_received_before_the_cutoff<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
-    let mut old_paid = invoice(invoice_id(2), 1, 10);
-    old_paid.status = PendingInvoiceStatus::Paid;
     let pruned = write(store, |repos| {
         repos.park_invoice(&invoice(invoice_id(1), 1, 10))?;
-        repos.park_invoice(&old_paid)?;
+        repos.park_invoice(&invoice(invoice_id(2), 1, 10))?;
+        repos.set_pending_invoice_status(invoice_id(2), PendingInvoiceStatus::Paid)?;
         repos.park_invoice(&invoice(invoice_id(3), 2, 99))?;
         repos.park_invoice(&invoice(invoice_id(4), 2, 100))?;
         repos.prune_parked_invoices(support::time(100))
@@ -1043,6 +1133,9 @@ for_each_backend!(
     pending_invoices_round_trip_oldest_first,
     rejects_a_second_invoice_with_the_same_slate_id,
     pending_invoice_status_changes_and_delete_removes,
+    park_invoice_accepts_only_a_parked_invoice,
+    pending_invoice_status_moves_only_from_parked_to_paid_or_declined,
+    a_settled_invoice_cannot_return_past_the_per_sender_cap,
     parking_stops_at_the_per_sender_cap,
     parking_stops_at_the_total_cap,
     prune_removes_only_parked_invoices_received_before_the_cutoff,
