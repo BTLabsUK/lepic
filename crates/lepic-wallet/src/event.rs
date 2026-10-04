@@ -3,7 +3,7 @@
 //! behind misses the oldest ones and is told how many it missed.
 
 use lepic_primitives::amount::{Amount, Height};
-use lepic_slate::model::SlateId;
+pub use lepic_slate::model::SlateId;
 use lepic_store::{AccountIndex, TxId, TxState};
 use lepic_transport::transport::TransportId;
 

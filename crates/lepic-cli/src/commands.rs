@@ -811,13 +811,18 @@ fn post_report(tx_id: TxId, posted: Posted) -> PostReport {
     }
 }
 
-/// The line for a transaction a received slate created.
+/// The line for a transaction a received slate created, or for a slate received before that
+/// was answered again.
 fn receipt_line(event: &Event) -> Option<String> {
     match event {
         Event::Received(received) => Some(format!(
             "transaction {} received {} EPIC",
             received.tx_id.0,
             format_amount(received.amount)
+        )),
+        Event::AnsweredAgain(again) => Some(format!(
+            "transaction {} answered again; nothing new was received",
+            again.tx_id.0
         )),
         _ => None,
     }
@@ -1128,6 +1133,19 @@ mod tests {
         assert_eq!(
             receipt_line(&Event::Session(lepic_wallet::SessionState::Locked)),
             None
+        );
+    }
+
+    #[test]
+    fn a_slate_answered_again_becomes_its_own_line() {
+        let again = Event::AnsweredAgain(lepic_wallet::event::AnsweredSlate {
+            tx_id: TxId(4),
+            slate_id: lepic_wallet::event::SlateId::from_bytes([7; 16]),
+            transport: TRANSPORT_ID,
+        });
+        assert_eq!(
+            receipt_line(&again).as_deref(),
+            Some("transaction 4 answered again; nothing new was received")
         );
     }
 
