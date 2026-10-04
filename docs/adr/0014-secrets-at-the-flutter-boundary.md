@@ -20,8 +20,9 @@ Dart strings cannot be wiped, so every crossing must be deliberate and as rare a
   on the backup screen. A new wallet is created without a phrase argument;
   the app asks for the phrase afterwards through the same call.
 - Out of Rust into the app's `SecretStore` only, and back from it: the PIN key, a random 256-bit
-  value written as `lepic.pin-key` when a PIN wallet is created and read at each PIN attempt. The
-  binding passes it to the store and to nothing else.
+  value written as `lepic.pin-key` when a PIN wallet is created and read at each PIN attempt. During
+  a PIN change the new key is kept as `lepic.pin-key-pending`, with a digest of the new sealed text,
+  until `confirm_pin_change`. The binding passes both to the store and to nothing else.
 - Never out of Rust: seed bytes, private keys, blinding factors, nonces, the wallet password, vault
   keys. A wallet password generated for PIN unlock is created, sealed and used inside Rust; Dart holds
   only the sealed text.

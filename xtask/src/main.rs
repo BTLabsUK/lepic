@@ -28,7 +28,7 @@ commands:
   budget      [--measurements <file.json>]: size, restore and drain against docs/budgets.md
   check       fmt, clippy, tests, cargo deny, deps-check, ci-lint, repo-lint, the conformance
               and fuzz lockfiles, and vectors verify
-  ci-lint     every `uses:` under .github is pinned to a commit sha
+  ci-lint     workflow pins, read-only token permissions and checkout credentials
   deps-check  crate edges and banned crates against docs/architecture.md
   fuzz        (--smoke | --full) [--target <name>]... [--jobs <n>]: seed and run the fuzz targets
   install     [--dir <directory>]: build release lepic and install it, default ~/.local/bin
