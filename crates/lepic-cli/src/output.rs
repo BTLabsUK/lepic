@@ -360,8 +360,6 @@ fn json_line(value: &impl Serialize) -> String {
     text
 }
 
-/// `now` for a send `tx release` may release, the height a refresh must reach first for one
-/// that may become releasable, and `-` for any other transaction.
 /// A peer's text with control characters escaped, so it cannot move the cursor, clear the
 /// screen or forge further lines of the view.
 fn printable(text: &str) -> String {
@@ -376,6 +374,8 @@ fn printable(text: &str) -> String {
     shown
 }
 
+/// `now` for a send `tx release` may release, the height a refresh must reach first for one
+/// that may become releasable, and `-` for any other transaction.
 fn release_text(tx: &TxReport) -> String {
     match (tx.releasable, tx.releasable_from) {
         (Some(true), _) => "now".to_owned(),
