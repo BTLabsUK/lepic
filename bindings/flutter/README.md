@@ -103,7 +103,7 @@ cargo xtask mobile --package --target aarch64-linux-android
 ```
 
 The CI workflow `mobile.yml` builds the same libraries and uploads them as the artifacts
-`lepic-ffi-android`, which also holds the Linux library, and `lepic-ffi-ios`. To use libraries kept elsewhere, for example unpacked
+`lepic-ffi-android`, `lepic-ffi-linux` and `lepic-ffi-ios`. To use libraries kept elsewhere, for example unpacked
 artifacts, set the directory in the app's `pubspec.yaml`:
 
 ```yaml
