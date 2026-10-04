@@ -330,3 +330,28 @@ fn a_finalized_transaction_the_node_does_not_know_is_cancelled() {
 
     assert_eq!(state_of(&sender, tx_id), TxState::Cancelled);
 }
+
+#[test]
+fn a_finalized_transaction_whose_kernel_the_node_pool_holds_is_not_cancelled() {
+    let sender = Sender::new();
+    let (tx_id, kernel) = finalized_send(&sender);
+    let pooled = lepic_primitives::tx::Transaction::new(
+        lepic_primitives::crypto_ser::BlindingFactor::zero(),
+        lepic_primitives::tx::TransactionBody::new(Vec::new(), Vec::new(), vec![kernel.kernel]),
+    );
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.pool.push(pooled));
+
+    let error = sender
+        .harness
+        .block_on(sender.wallet.cancel(tx_id))
+        .unwrap_err();
+
+    assert!(
+        matches!(error, WalletError::InPool(id) if id == tx_id),
+        "{error:?}"
+    );
+    assert_eq!(state_of(&sender, tx_id), TxState::Finalized);
+}

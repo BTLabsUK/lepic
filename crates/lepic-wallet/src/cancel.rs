@@ -1,13 +1,13 @@
 //! Cancelling a transaction that is not confirmed, as `epic-wallet`'s `cancel_tx` does: its
 //! unconfirmed outputs are dropped, the inputs it locked become spendable again, and its private
 //! context and pending deliveries are dropped with it. A posted transaction is not cancelled, nor
-//! is a finalized one whose kernel the node already holds.
+//! is a finalized one whose kernel the node's chain or pool already holds.
 
 use std::sync::Arc;
 
 use jiff::Timestamp;
 use lepic_crypto::Commitment;
-use lepic_node::NodeApi;
+use lepic_node::{NodeApi, NodeError};
 use lepic_primitives::amount::Height;
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
@@ -41,14 +41,15 @@ where
     /// transaction can no longer be finalized here.
     ///
     /// A finalized transaction may have reached the node even though posting it failed, so its
-    /// kernel is looked up first; the node must be reachable to cancel one. A posted
-    /// transaction, which includes one the node's pool answered it already holds, counts as on
-    /// chain and is not cancelled.
+    /// kernel is looked up first, in the node's chain and then in its transaction pool; the
+    /// node must be reachable to cancel one. A posted transaction, which includes one the
+    /// node's pool answered it already holds, counts as on chain and is not cancelled.
     ///
     /// Fails with [`WalletError::Locked`], [`WalletError::UnknownTransaction`],
     /// [`WalletError::Transition`] when the transaction is posted, confirmed or expired,
-    /// [`WalletError::OnChain`] when the node holds the kernel of a finalized one,
-    /// [`WalletError::Node`] when that lookup fails, and [`WalletError::ChangedDuringCancel`]
+    /// [`WalletError::OnChain`] when the node's chain holds the kernel of a finalized one,
+    /// [`WalletError::InPool`] when the node's pool holds it, [`WalletError::Node`] when either
+    /// lookup fails, and [`WalletError::ChangedDuringCancel`]
     /// when another operation moved the transaction on after its state was read; cancelling
     /// again then decides from the new state.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
@@ -75,6 +76,13 @@ where
                 debug!(height = %kernel.height, "kernel found on chain");
                 return Err(WalletError::OnChain(tx_id));
             }
+            let pooled = pool_holds(&self.ports().node, &excess)
+                .await
+                .map_err(WalletError::Node)?;
+            if pooled {
+                debug!("kernel found in the node pool");
+                return Err(WalletError::InPool(tx_id));
+            }
         }
         let change = self
             .blocking(move |ports, _| {
@@ -93,6 +101,18 @@ where
         }
         Ok(())
     }
+}
+
+/// Whether the node's transaction pool holds a transaction with the kernel `excess`.
+pub(crate) async fn pool_holds<N: NodeApi>(
+    node: &N,
+    excess: &Commitment,
+) -> Result<bool, NodeError> {
+    let pool = node.get_unconfirmed_transactions().await?;
+    Ok(pool
+        .iter()
+        .flat_map(|transaction| &transaction.kernels)
+        .any(|kernel| kernel.excess == *excess))
 }
 
 /// The state a cancel starts from, and the kernel of a finalized transaction, to look up
