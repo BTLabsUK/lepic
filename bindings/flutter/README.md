@@ -96,7 +96,8 @@ final wallet = await EpicWallet.create(
   payment. `receiveSlate` and `receiveFile` return `ReceivedSlate.repeated` set, with the
   `txId` and the reply text of the first receive, and the listener reports kind `repeated`
   with that `txId` instead of `received`. Show it as already answered and hand out the same
-  reply. `events()` reports nothing for a repeat.
+  reply. `events()` reports nothing for a repeat. A relay copy of a message already answered
+  and acknowledged reports nothing.
 - The stream calls `refresh`, `scan`, `startListener`, `events` and `logs` report a failure as
   the stream's error: the same `WalletError` the other calls throw, after which the stream ends.
   Listen with `onError`; no error from a stream call reaches the app's zone.
