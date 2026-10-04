@@ -249,6 +249,16 @@ fn status(sender: &Sender, record: &OutputRecord) -> OutputStatus {
         .status
 }
 
+fn tip_requests(sender: &Sender) -> usize {
+    sender
+        .harness
+        .node
+        .calls()
+        .iter()
+        .filter(|method| *method == "get_tip")
+        .count()
+}
+
 fn refreshed(outcome: &Result<RefreshOutcome, RefreshError>) {
     assert!(
         matches!(outcome, Ok(RefreshOutcome::Refreshed(_))),
@@ -405,13 +415,21 @@ fn refuses_an_output_height_above_the_tip() {
             ..Script::default()
         },
     );
+    let tips_before = tip_requests(&sender);
 
     let result = sender.harness.block_on(wallet.refresh());
 
+    // The tip is read once more, and the node still reports the same one.
     assert!(
-        matches!(result, Err(RefreshError::Implausible(_))),
+        matches!(
+            result,
+            Err(RefreshError::Implausible(
+                ImplausibleNodeData::OutputAboveTip { tip, .. }
+            )) if tip == Height::new(TIP)
+        ),
         "{result:?}"
     );
+    assert_eq!(tip_requests(&sender) - tips_before, 2);
     let stored = sender
         .read(|repos| repos.output(funding.commitment()))
         .unwrap();
@@ -430,6 +448,72 @@ fn an_output_height_above_the_tip_changes_nothing_through_the_node_client() {
     let result = sender.harness.block_on(sender.wallet.refresh());
 
     assert_refused(&result);
+    let stored = sender
+        .read(|repos| repos.output(funding.commitment()))
+        .unwrap();
+    assert_eq!(stored, funding);
+    assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
+}
+
+#[test]
+fn an_output_mined_after_the_tip_was_read_is_covered_by_a_second_tip() {
+    let (sender, funding) = funded();
+    // The block holding the output lands between the tip and the outputs requests.
+    sender.harness.node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 1);
+        chain.outputs[0].height = Height::new(TIP + 1);
+    });
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![TIP],
+            ..Script::default()
+        },
+    );
+    let tips_before = tip_requests(&sender);
+
+    let outcome = sender.harness.block_on(wallet.refresh());
+
+    assert!(
+        matches!(outcome, Ok(RefreshOutcome::Refreshed(summary)) if summary.height == Height::new(TIP + 1)),
+        "{outcome:?}"
+    );
+    assert_eq!(tip_requests(&sender) - tips_before, 2);
+    let stored = sender
+        .read(|repos| repos.output(funding.commitment()))
+        .unwrap();
+    assert_eq!(stored.status, OutputStatus::Unspent);
+    assert_eq!(stored.height, Height::new(TIP + 1));
+    assert_eq!(
+        sender.wallet.last_confirmed_height().unwrap(),
+        Some(Height::new(TIP + 1))
+    );
+}
+
+#[test]
+fn an_output_above_a_second_implausible_tip_is_refused() {
+    let (sender, funding) = funded();
+    let wallet = scripted(
+        &sender,
+        Script {
+            // The second tip covers the output but is far ahead of the first.
+            tips: vec![TIP, TIP + 51],
+            raise_outputs: TIP + 50,
+            ..Script::default()
+        },
+    );
+
+    let result = sender.harness.block_on(wallet.refresh());
+
+    assert!(
+        matches!(
+            result,
+            Err(RefreshError::Implausible(
+                ImplausibleNodeData::TipChanged { .. }
+            ))
+        ),
+        "{result:?}"
+    );
     let stored = sender
         .read(|repos| repos.output(funding.commitment()))
         .unwrap();
@@ -504,6 +588,34 @@ fn refuses_a_kernel_height_above_the_tip() {
         "{result:?}"
     );
     assert_eq!(state(&sender, tx_id), TxState::Posted);
+}
+
+#[test]
+fn a_kernel_above_the_first_tip_is_covered_by_a_second_tip() {
+    let (sender, _) = funded();
+    let (tx_id, kernel) = posted_without_change(&sender);
+    let height = kernel.height.value();
+    set_tip(&sender, height + 1);
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.kernels.push(kernel));
+    let wallet = scripted(
+        &sender,
+        Script {
+            tips: vec![height],
+            raise_kernels: 1,
+            ..Script::default()
+        },
+    );
+
+    refreshed(&sender.harness.block_on(wallet.refresh()));
+
+    assert_eq!(state(&sender, tx_id), TxState::Confirmed);
+    assert_eq!(
+        sender.read(|repos| repos.confirmed_height(tx_id)),
+        Some(Height::new(height + 1))
+    );
 }
 
 /// The raw mock node with every `get_kernel` answer raised by some blocks, below the node

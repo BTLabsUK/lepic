@@ -111,6 +111,15 @@ struct StepOutcome {
     changes: Vec<StateChange>,
 }
 
+/// The tip a refresh counts at, and what [`Wallet::cover`] needs to read it once more.
+#[derive(Debug, Clone, Copy)]
+struct RefreshTip {
+    height: Height,
+    position: ChainPosition,
+    now: Timestamp,
+    read_again: bool,
+}
+
 /// An open transaction whose kernel can confirm it: one with no change output.
 #[derive(Debug, Clone, Copy)]
 struct KernelLookup {
@@ -136,8 +145,10 @@ where
     /// makes it releasable (`Wallet::release`).
     ///
     /// The tip must be plausible: below the bounds [`crate::chain`] describes. Output and
-    /// kernel heights must not be above the tip. Before expiring anything the tip is asked for
-    /// again, and the two must agree. When the tip expired nothing, it raises the last confirmed
+    /// kernel heights must not be above the tip; one above it has the tip asked for once more,
+    /// and a second tip that reaches it, is plausible and agrees with the first replaces the
+    /// first. Before expiring anything the tip is asked for again, unless it already was, and
+    /// the two must agree. When the tip expired nothing, it raises the last confirmed
     /// height if it is at most [`crate::chain::TIP_STEP_BLOCKS`] above it; a tip further ahead
     /// is held until a later refresh or scan sees the chain at or above it.
     ///
@@ -170,14 +181,17 @@ where
                 last_confirmed,
             });
         }
+        let mut tip = RefreshTip {
+            height: tip.height,
+            position: known.position,
+            now,
+            read_again: false,
+        };
         let tracked = known.tracked;
         let commitments: Vec<Commitment> =
             tracked.iter().map(|(commitment, _)| *commitment).collect();
-        let found = self.locate(&commitments, &tracked, tip.height).await?;
-        let mut summary = RefreshSummary {
-            height: tip.height,
-            ..RefreshSummary::default()
-        };
+        let found = self.locate(&commitments, &tracked, &mut tip).await?;
+        let mut summary = RefreshSummary::default();
 
         let outcome = {
             let session = Arc::clone(&session);
@@ -208,6 +222,7 @@ where
                 .await?;
             match kernel {
                 Some(kernel) => {
+                    self.cover(&mut tip, kernel.height).await?;
                     chain::check_kernel_height(kernel.height, lookup.min_height, tip.height)?;
                     kernel_confirmed.push((lookup.tx_id, kernel.height));
                 }
@@ -228,6 +243,7 @@ where
             self.record_changes(&mut summary, changes);
         }
 
+        summary.height = tip.height;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
         let due = {
             let session = Arc::clone(&session);
@@ -238,7 +254,8 @@ where
             })
             .await??
         };
-        if due {
+        // A tip read again already agreed with the first.
+        if due && !tip.read_again {
             let second = node.get_tip().await?;
             chain::check_agreement(tip.height, second.height)?;
         }
@@ -264,7 +281,7 @@ where
             .await??
         };
         self.record_changes(&mut summary, changes);
-        self.check_releases(&session, tip.height, &kernel_missing, now, &mut summary)
+        self.check_releases(&session, &mut tip, &kernel_missing, now, &mut summary)
             .await?;
 
         let balances = {
@@ -285,18 +302,17 @@ where
     async fn check_releases(
         &self,
         session: &Arc<Session<S::Store>>,
-        tip: Height,
+        tip: &mut RefreshTip,
         missing: &BTreeSet<TxId>,
         now: Timestamp,
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let at = tip.height;
         let (height, due) = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| {
-                Ok(session
-                    .store
-                    .read(|repos| releases_due(repos, &codecs, tip)))
+                Ok(session.store.read(|repos| releases_due(repos, &codecs, at)))
             })
             .await??
         };
@@ -313,11 +329,12 @@ where
             let kernel = self
                 .ports()
                 .node
-                .get_kernel(&check.excess, Some(check.min_height), Some(tip))
+                .get_kernel(&check.excess, Some(check.min_height), Some(tip.height))
                 .await?;
             match kernel {
                 Some(kernel) => {
-                    chain::check_kernel_height(kernel.height, check.min_height, tip)?;
+                    self.cover(tip, kernel.height).await?;
+                    chain::check_kernel_height(kernel.height, check.min_height, tip.height)?;
                     confirmed.push((tx_id, kernel.height));
                 }
                 None => absent.push(tx_id),
@@ -346,7 +363,7 @@ where
         &self,
         commitments: &[Commitment],
         tracked: &[(Commitment, OutputStatus)],
-        tip: Height,
+        tip: &mut RefreshTip,
     ) -> Result<BTreeMap<Commitment, OutputLocation>, RefreshError> {
         if commitments.is_empty() {
             return Ok(BTreeMap::new());
@@ -354,7 +371,8 @@ where
         let node = &self.ports().node;
         let mut found = BTreeMap::new();
         for location in node.get_outputs(commitments).await? {
-            chain::check_output_height(location.height, tip)?;
+            self.cover(tip, location.height).await?;
+            chain::check_output_height(location.height, tip.height)?;
             found.insert(location.commitment, location);
         }
         let missing: Vec<Commitment> = tracked
@@ -367,12 +385,34 @@ where
             .collect();
         if !missing.is_empty() {
             for location in node.get_outputs(&missing).await? {
-                chain::check_output_height(location.height, tip)?;
+                self.cover(tip, location.height).await?;
+                chain::check_output_height(location.height, tip.height)?;
                 debug!(height = %location.height, "output found on the second request");
                 found.insert(location.commitment, location);
             }
         }
         Ok(found)
+    }
+
+    /// Reads the tip once more when `height`, of an output or kernel the node reported, is
+    /// above it, since a block may have been mined after the tip was read. The second tip
+    /// replaces the first only when it reaches `height`; it must then be plausible and agree
+    /// with the first, as the tip read before expiry must. Reads at most once per refresh, so
+    /// the caller's height check fails as before when the tip still does not reach `height`.
+    async fn cover(&self, tip: &mut RefreshTip, height: Height) -> Result<(), RefreshError> {
+        if height <= tip.height || tip.read_again {
+            return Ok(());
+        }
+        tip.read_again = true;
+        let second = self.ports().node.get_tip().await?.height;
+        if second < height {
+            return Ok(());
+        }
+        chain::check_tip(self.config().network, &tip.position, second, tip.now)?;
+        chain::check_agreement(tip.height, second)?;
+        debug!(height = %second, "tip advanced during refresh");
+        tip.height = second;
+        Ok(())
     }
 
     /// The node's tip at the last refresh that applied, or `None` before the first one. Fails
