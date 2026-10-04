@@ -11,6 +11,8 @@
 #   ./run.sh --lepic <path>   test this lepic binary instead of the installed one
 #   ./run.sh --stack-only     start a clean stack, fund nothing, print where it listens and
 #                             keep it, and the stack lock, until stopped; ./chain.sh drives it
+#   ./run.sh --probes         run the relay and epic-wallet probes of probes.sh instead of the
+#                             steps
 set -euo pipefail
 
 ACCEPTANCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,10 +27,17 @@ source "${ACCEPTANCE_DIR}/steps.sh"
 keep=false
 build=true
 stack_only=false
+setup_step=step_setup
 LEPIC_BIN=""
 while (($# > 0)); do
     case "$1" in
         --keep) keep=true ;;
+        --probes)
+            # shellcheck source=probes.sh
+            source "${ACCEPTANCE_DIR}/probes.sh"
+            setup_step=step_probe_setup
+            STEPS=("${PROBE_STEPS[@]}")
+            ;;
         --stack-only) stack_only=true ;;
         --no-build) build=false ;;
         --lepic)
@@ -144,7 +153,7 @@ run_step() {
     log "${result}: ${DETAIL}"
 }
 
-run_step "setup and funding" step_setup
+run_step "setup and funding" "${setup_step}"
 if [[ "${results[0]}" == PASS ]]; then
     for entry in "${STEPS[@]}"; do
         run_step "${entry%%:*}" "${entry#*:}"

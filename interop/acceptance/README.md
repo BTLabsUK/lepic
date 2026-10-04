@@ -16,7 +16,14 @@ interop/acceptance/run.sh --no-build    # reuse the built binaries and the insta
 interop/acceptance/run.sh --keep        # leave the stack running afterwards
 interop/acceptance/run.sh --lepic PATH  # test another lepic binary
 interop/acceptance/run.sh --stack-only  # start a clean stack and keep it until Ctrl-C
+interop/acceptance/run.sh --probes      # probe the relay and a stock listener instead
 ```
+
+`--probes` runs the checks in `probes.sh` instead of the steps. They cover what invoices and
+notices over Epicbox build on: how a stock listener treats a V3 I1, a marker key and a payload
+that is not a slate, how the relay serves two addresses, and how LEPIC's Epicbox policy reads a
+marked V3 invoice. The probe client is `../probe`, built into `.work/probe-target`. The results are
+recorded in `docs/compat/epicbox.md`, and the raw output goes to the run's `probes/` directory.
 
 `--stack-only` funds nothing and runs no step: it prints the node URL, the node API secret file,
 the relay and the exchange directory, and holds the stack and its lock until stopped, for a

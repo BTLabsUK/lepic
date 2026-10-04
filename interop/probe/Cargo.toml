@@ -1,0 +1,25 @@
+[package]
+name = "lepic-interop-probe"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Epicbox probe client that checks relay and epic-wallet behaviour on the interop stack"
+
+# Its own workspace, like ../miner: a test tool that speaks raw relay frames, outside the product
+# graph and its lints.
+[workspace]
+
+[dependencies]
+# Versions as the product workspace pins them.
+anyhow = { version = "1.0.104", features = ["std"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+getrandom = { version = "0.4.3", default-features = false, features = ["std"] }
+lepic-crypto = { path = "../../crates/lepic-crypto" }
+lepic-epicbox = { path = "../../crates/lepic-epicbox" }
+lepic-primitives = { path = "../../crates/lepic-primitives" }
+lepic-slate = { path = "../../crates/lepic-slate" }
+lepic-transport = { path = "../../crates/lepic-transport" }
+serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
+tokio = { version = "1.53.1", default-features = false, features = ["macros", "net", "rt", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
