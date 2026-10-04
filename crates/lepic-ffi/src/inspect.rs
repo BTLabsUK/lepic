@@ -6,11 +6,11 @@ use lepic_telemetry::ErrorChain;
 use lepic_transport::file::{FilePolicy, MAX_WIRE_SLATE_LEN};
 use lepic_transport::policy::FormatPolicy as _;
 use lepic_wallet::slate::{
-    CodecRegistry, MediaType, Role, Slate, Stage, V2JsonCodec, V3JsonCodec, WireOrigin, WireSlate,
+    CodecRegistry, MediaType, Slate, Stage, V2JsonCodec, V3JsonCodec, WireOrigin, WireSlate,
 };
 
 use crate::api::error::{WalletError, WalletErrorKind};
-use crate::api::types::{SlateInfo, SlateMessage, SlateRole, SlateStage};
+use crate::api::types::{SlateInfo, SlateMessage, SlateStage};
 
 fn invalid_slate(message: impl Into<String>) -> WalletError {
     WalletError::new(WalletErrorKind::InvalidSlate, message)
@@ -43,10 +43,7 @@ fn slate_info(slate: &Slate) -> Result<SlateInfo, WalletError> {
         .participants()
         .filter_map(|(role, participant)| {
             participant.message.as_ref().map(|message| SlateMessage {
-                role: match role {
-                    Role::Sender => SlateRole::Sender,
-                    Role::Receiver => SlateRole::Receiver,
-                },
+                role: role.into(),
                 text: message.text().to_owned(),
             })
         })

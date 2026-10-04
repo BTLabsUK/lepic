@@ -600,14 +600,18 @@ impl EpicWallet {
 
     /// Step 1 of a manual send: builds the slate, locks the inputs and returns the slate text
     /// for the recipient, whose answer goes to [`EpicWallet::finalize_and_post`].
+    ///
+    /// `message` goes to the recipient signed with the slate, as `epic-wallet send --message`
+    /// sends it. It is cut to its first 256 bytes, on a character boundary, before it is signed.
     pub async fn create_send_slate(
         &self,
         amount: u64,
         minimum_confirmations: u64,
+        message: Option<String>,
     ) -> Result<Slate, WalletError> {
         self.run("create_send_slate", |session| async move {
             session
-                .create_send_slate(amount, minimum_confirmations)
+                .create_send_slate(amount, minimum_confirmations, message)
                 .await
         })
         .await
@@ -619,10 +623,11 @@ impl EpicWallet {
         amount: u64,
         minimum_confirmations: u64,
         path: String,
+        message: Option<String>,
     ) -> Result<SentTx, WalletError> {
         self.run("send_file", |session| async move {
             session
-                .send_file(amount, minimum_confirmations, PathBuf::from(path))
+                .send_file(amount, minimum_confirmations, PathBuf::from(path), message)
                 .await
         })
         .await
@@ -717,15 +722,17 @@ impl EpicWallet {
     /// Sends to `<address>@<relay>[:port]` over Epicbox. The listener or a drain finalizes and
     /// posts it when the answer arrives. Fails with `InvalidArgument`, storing nothing, for an
     /// address that [`validate_epicbox_address`] refuses, such as a key without `@<relay>`.
+    /// `message` is sent as [`EpicWallet::create_send_slate`] sends it.
     pub async fn send_epicbox(
         &self,
         amount: u64,
         minimum_confirmations: u64,
         address: String,
+        message: Option<String>,
     ) -> Result<SentTx, WalletError> {
         self.run("send_epicbox", |session| async move {
             session
-                .send_epicbox(amount, minimum_confirmations, address)
+                .send_epicbox(amount, minimum_confirmations, address, message)
                 .await
         })
         .await

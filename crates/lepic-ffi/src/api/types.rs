@@ -194,6 +194,9 @@ pub struct TransactionDetails {
     /// Whether `release_transaction` may release the send now. A refresh at or above
     /// `releasable_from` missed its kernel; the release asks the node once more.
     pub releasable: bool,
+    /// The parties' messages whose signatures verify, in the order the parties joined, as the
+    /// latest stored stage of the slate carries them. Empty for a restored output.
+    pub messages: Vec<SlateMessage>,
 }
 
 /// What a send would take and pay, from `EpicWallet::estimate_fee` and
@@ -230,6 +233,15 @@ pub enum SlateStage {
 pub enum SlateRole {
     Sender,
     Receiver,
+}
+
+impl From<lepic_wallet::slate::Role> for SlateRole {
+    fn from(role: lepic_wallet::slate::Role) -> Self {
+        match role {
+            lepic_wallet::slate::Role::Sender => Self::Sender,
+            lepic_wallet::slate::Role::Receiver => Self::Receiver,
+        }
+    }
 }
 
 /// A participant's free-text message as the slate carries it.

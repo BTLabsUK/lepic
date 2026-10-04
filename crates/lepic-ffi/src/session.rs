@@ -42,8 +42,8 @@ use crate::api::runtime::{DirClaim, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip,
-    ReceivedSlate, ScanProgress, SentTx, Slate, TransactionDetails, TransportState, TxStatus,
-    WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
+    ReceivedSlate, ScanProgress, SentTx, Slate, SlateMessage, TransactionDetails, TransportState,
+    TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -489,7 +489,7 @@ impl Session {
         amount: u64,
         minimum_confirmations: u64,
     ) -> Result<FeeEstimate, WalletError> {
-        let options = Self::send_request(amount, minimum_confirmations).selection_options();
+        let options = Self::send_request(amount, minimum_confirmations, None).selection_options();
         let selection = self
             .engine
             .estimate_fee(Amount::new(amount), options)
@@ -501,7 +501,7 @@ impl Session {
         &self,
         minimum_confirmations: u64,
     ) -> Result<FeeEstimate, WalletError> {
-        let options = Self::send_request(0, minimum_confirmations).selection_options();
+        let options = Self::send_request(0, minimum_confirmations, None).selection_options();
         let selection = self.engine.estimate_max(options).await?;
         fee_estimate(&selection)
     }
@@ -553,9 +553,14 @@ impl Session {
         }
     }
 
-    fn send_request(amount: u64, minimum_confirmations: u64) -> SendRequest {
+    fn send_request(
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+    ) -> SendRequest {
         SendRequest {
             minimum_confirmations,
+            message,
             ..SendRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
         }
     }
@@ -565,11 +570,12 @@ impl Session {
         amount: u64,
         minimum_confirmations: u64,
         path: PathBuf,
+        message: Option<String>,
     ) -> Result<SentTx, WalletError> {
         let sent = self
             .engine
             .send(
-                Self::send_request(amount, minimum_confirmations),
+                Self::send_request(amount, minimum_confirmations, message),
                 Delivery::Export {
                     transport: FILE,
                     to: Location::File(path),
@@ -583,10 +589,11 @@ impl Session {
         &self,
         amount: u64,
         minimum_confirmations: u64,
+        message: Option<String>,
     ) -> Result<Slate, WalletError> {
         let scratch = ScratchFile::new(&self.data_dir)?;
         let sent = self
-            .send_file(amount, minimum_confirmations, scratch.path.clone())
+            .send_file(amount, minimum_confirmations, scratch.path.clone(), message)
             .await?;
         let json = scratch.read().await?;
         Ok(Slate {
@@ -684,6 +691,7 @@ impl Session {
         amount: u64,
         minimum_confirmations: u64,
         address: String,
+        message: Option<String>,
     ) -> Result<SentTx, WalletError> {
         let epicbox = self.epicbox()?;
         relay_address(&address, self.network)
@@ -692,7 +700,7 @@ impl Session {
         let sent = self
             .engine
             .send(
-                Self::send_request(amount, minimum_confirmations),
+                Self::send_request(amount, minimum_confirmations, message),
                 Delivery::Deliver {
                     transport: TRANSPORT_ID,
                     to: Destination::new(address),
@@ -865,6 +873,14 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
         ttl_cutoff_height: details.ttl_cutoff_height.map(Height::value),
         releasable_from: details.releasable_from.map(Height::value),
         releasable: details.releasable,
+        messages: details
+            .messages
+            .iter()
+            .map(|message| SlateMessage {
+                role: message.role.into(),
+                text: message.text.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -1136,7 +1152,10 @@ mod tests {
             confirmed_at: Some(confirmed),
             releasable_from: Some(Height::new(1_444)),
             releasable: true,
-            messages: Vec::new(),
+            messages: vec![lepic_wallet::details::SlateMessage {
+                role: lepic_wallet::slate::Role::Receiver,
+                text: "got it".to_owned(),
+            }],
         };
 
         assert_eq!(
@@ -1158,6 +1177,10 @@ mod tests {
                 ttl_cutoff_height: Some(360),
                 releasable_from: Some(1_444),
                 releasable: true,
+                messages: vec![SlateMessage {
+                    role: crate::api::types::SlateRole::Receiver,
+                    text: "got it".to_owned(),
+                }],
             }
         );
         let hex = excess.to_hex();

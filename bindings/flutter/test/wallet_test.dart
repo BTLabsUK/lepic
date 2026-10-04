@@ -277,6 +277,9 @@ void main() {
     await scanToEnd(restored);
     final restoredBalance = await restored.summary(refresh: true);
     expect(restoredBalance.total, aliceAfter.total);
+    final restoredHistory = await restored.transactions();
+    expect(restoredHistory, isNotEmpty);
+    expect(restoredHistory.every((tx) => tx.messages.isEmpty), isTrue);
 
     // The original directory opens again with the stored vault, and only with its password.
     await expectLater(
@@ -832,6 +835,52 @@ void main() {
       inspectSlate(json: ' ' * (8 * 1024 * 1024 + 1), chain: Chain.floonet),
       throwsWalletError(WalletErrorKind.invalidSlate),
     );
+  });
+
+  test('a pasted send carries its message to both parties', () async {
+    final (alice, bob, _) = await fundedPair('message-text');
+    final s1 = await alice.createSendSlate(
+      amount: BigInt.from(epic),
+      minimumConfirmations: BigInt.one,
+      message: 'for the pizza',
+    );
+    const sender = SlateMessage(role: SlateRole.sender, text: 'for the pizza');
+    expect((await alice.transaction(txId: s1.txId)).messages, [sender]);
+
+    final s2 = await bob.receiveSlate(slateJson: s1.json);
+    expect((await bob.transaction(txId: s2.txId)).messages, [sender]);
+    expect((await bob.transactions()).single.messages, [sender]);
+
+    await alice.finalizeAndPost(slateJson: s2.json);
+    expect((await alice.transaction(txId: s1.txId)).messages, [sender]);
+  });
+
+  test('a long message is cut on a character boundary and still verifies', () async {
+    final (alice, bob, _) = await fundedPair('message-file');
+    // Three bytes each, so the 256-byte limit falls inside a character.
+    final long = '€' * 100;
+    final file = '${root.path}/message.slate';
+    final sent = await alice.sendFile(
+      amount: BigInt.from(epic),
+      minimumConfirmations: BigInt.one,
+      path: file,
+      message: long,
+    );
+    final cut = SlateMessage(role: SlateRole.sender, text: '€' * 85);
+    expect((await alice.transaction(txId: sent.txId)).messages, [cut]);
+
+    // A receive refuses a message whose signature does not verify.
+    final received = await bob.receiveFile(path: file);
+    expect((await bob.transaction(txId: received.txId)).messages, [cut]);
+  });
+
+  test('a send without a message shows none', () async {
+    final (alice, _, _) = await fundedPair('message-none');
+    final s1 = await alice.createSendSlate(
+      amount: BigInt.from(epic),
+      minimumConfirmations: BigInt.one,
+    );
+    expect((await alice.transaction(txId: s1.txId)).messages, isEmpty);
   });
 
   test('a restored wallet must finish its scan before it receives', () async {

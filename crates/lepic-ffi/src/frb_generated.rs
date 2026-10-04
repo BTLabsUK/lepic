@@ -430,6 +430,7 @@ fn wire__crate__api__wallet__EpicWallet_create_send_slate_impl(
             >>::sse_decode(&mut deserializer);
             let api_amount = <u64>::sse_decode(&mut deserializer);
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
+            let api_message = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -455,6 +456,7 @@ fn wire__crate__api__wallet__EpicWallet_create_send_slate_impl(
                             &*api_that_guard,
                             api_amount,
                             api_minimum_confirmations,
+                            api_message,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -2018,6 +2020,7 @@ fn wire__crate__api__wallet__EpicWallet_send_epicbox_impl(
             let api_amount = <u64>::sse_decode(&mut deserializer);
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
             let api_address = <String>::sse_decode(&mut deserializer);
+            let api_message = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -2044,6 +2047,7 @@ fn wire__crate__api__wallet__EpicWallet_send_epicbox_impl(
                             api_amount,
                             api_minimum_confirmations,
                             api_address,
+                            api_message,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -2082,6 +2086,7 @@ fn wire__crate__api__wallet__EpicWallet_send_file_impl(
             let api_amount = <u64>::sse_decode(&mut deserializer);
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
             let api_path = <String>::sse_decode(&mut deserializer);
+            let api_message = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -2108,6 +2113,7 @@ fn wire__crate__api__wallet__EpicWallet_send_file_impl(
                             api_amount,
                             api_minimum_confirmations,
                             api_path,
+                            api_message,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -4385,6 +4391,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_ttlCutoffHeight = <Option<u64>>::sse_decode(deserializer);
         let mut var_releasableFrom = <Option<u64>>::sse_decode(deserializer);
         let mut var_releasable = <bool>::sse_decode(deserializer);
+        let mut var_messages = <Vec<crate::api::types::SlateMessage>>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
             direction: var_direction,
@@ -4402,6 +4409,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             ttl_cutoff_height: var_ttlCutoffHeight,
             releasable_from: var_releasableFrom,
             releasable: var_releasable,
+            messages: var_messages,
         };
     }
 }
@@ -5419,6 +5427,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
             self.ttl_cutoff_height.into_into_dart().into_dart(),
             self.releasable_from.into_into_dart().into_dart(),
             self.releasable.into_into_dart().into_dart(),
+            self.messages.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -6268,6 +6277,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <Option<u64>>::sse_encode(self.ttl_cutoff_height, serializer);
         <Option<u64>>::sse_encode(self.releasable_from, serializer);
         <bool>::sse_encode(self.releasable, serializer);
+        <Vec<crate::api::types::SlateMessage>>::sse_encode(self.messages, serializer);
     }
 }
 

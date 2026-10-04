@@ -142,9 +142,13 @@ abstract class EpicWallet implements RustOpaqueInterface {
 
   /// Step 1 of a manual send: builds the slate, locks the inputs and returns the slate text
   /// for the recipient, whose answer goes to [`EpicWallet::finalize_and_post`].
+  ///
+  /// `message` goes to the recipient signed with the slate, as `epic-wallet send --message`
+  /// sends it. It is cut to its first 256 bytes, on a character boundary, before it is signed.
   Future<Slate> createSendSlate({
     required BigInt amount,
     required BigInt minimumConfirmations,
+    String? message,
   });
 
   /// [`EpicWallet::create`] with a wallet password LEPIC generates, seals under `pin` and
@@ -366,10 +370,12 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Sends to `<address>@<relay>[:port]` over Epicbox. The listener or a drain finalizes and
   /// posts it when the answer arrives. Fails with `InvalidArgument`, storing nothing, for an
   /// address that [`validate_epicbox_address`] refuses, such as a key without `@<relay>`.
+  /// `message` is sent as [`EpicWallet::create_send_slate`] sends it.
   Future<SentTx> sendEpicbox({
     required BigInt amount,
     required BigInt minimumConfirmations,
     required String address,
+    String? message,
   });
 
   /// [`EpicWallet::create_send_slate`] writing the slate to the file at `path`.
@@ -377,6 +383,7 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required BigInt amount,
     required BigInt minimumConfirmations,
     required String path,
+    String? message,
   });
 
   /// Starts the Epicbox listener, unless it runs already, and streams what it does until

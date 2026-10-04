@@ -180,7 +180,7 @@ async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
     assert_eq!(kind(wallet.summary(false).await), WalletErrorKind::Locked);
     assert_eq!(kind(wallet.summary(true).await), WalletErrorKind::Locked);
     assert_eq!(
-        kind(wallet.create_send_slate(1, 1).await),
+        kind(wallet.create_send_slate(1, 1, None).await),
         WalletErrorKind::Locked
     );
     let phrase = wallet.mnemonic_with_pin(PIN.to_owned(), sealed.clone());
@@ -451,7 +451,7 @@ async fn send_epicbox_refuses_an_address_without_its_relay() {
     let key = address.split('@').next().unwrap().to_owned();
     for bare in [key.clone(), format!("epicbox://{key}")] {
         assert_eq!(
-            kind(wallet.send_epicbox(1, 1, bare.clone()).await),
+            kind(wallet.send_epicbox(1, 1, bare.clone(), None).await),
             WalletErrorKind::InvalidArgument,
             "{bare}"
         );
