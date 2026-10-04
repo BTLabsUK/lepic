@@ -1,7 +1,8 @@
 # 0005 SQLite storage, platform keystore for secrets, legacy seed import
 
 Status: accepted
-Date: 2026-10-02
+Date: 2026-10-02 (amended 2026-10-04 for invoices over Epicbox: pending invoices, the allowlist,
+peer capability and the invoice address index)
 
 ## Context
 
@@ -21,6 +22,16 @@ and possibly a `wallet.seed` file.
 - Repository traits in `lepic-store`; the engine sees only the traits.
 - Private transaction context (blinding factors, nonces) is encrypted at rest with an AEAD key derived
   from the wallet's root key.
+- Invoices received on the invoice address are parked in their own table until the user pays or
+  declines them. Their slate bytes are sealed under the same key and format as private context,
+  with the slate id and sender key as associated data, because they carry a peer's amount and
+  message before the user has accepted anything. The store caps parked invoices in total and per
+  sender key (`MAX_PARKED_INVOICES`, `MAX_PARKED_INVOICES_PER_SENDER`), so an allowlisted sender
+  cannot grow the database without bound; paid and declined ones do not count.
+- The invoice allowlist and what each peer is proven to support (LEPIC notices, or no invoices)
+  are keyed by the Epicbox public key alone, since the relay authenticates the key and never the
+  domain. An allowlist entry keeps the full address replies go to. The current invoice address
+  index is a single row that is never 0, because index 0 is the payments address.
 - Seeds go through a `SecretStore` port. On mobile the host app implements it with Android Keystore or
   the iOS Keychain. On desktop, `lepic-keychain` provides a vault file: XChaCha20-Poly1305 under an
   Argon2id key.

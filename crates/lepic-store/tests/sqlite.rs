@@ -19,7 +19,9 @@ use lepic_store::{
 use rusqlite::Connection;
 use uuid::Uuid;
 
-use support::{Backend, SqliteBackend, account, context_key, database_path, output};
+use support::{
+    Backend, SqliteBackend, account, context_key, database_path, invoice, output, peer_key,
+};
 
 const SLATE: Uuid = Uuid::from_bytes([0x5a; 16]);
 
@@ -106,6 +108,47 @@ fn database_files_do_not_contain_private_context_plaintext() {
         );
     }
     assert!(scanned > 0);
+}
+
+#[test]
+fn database_files_do_not_contain_pending_invoice_bytes() {
+    let parked = invoice(SLATE, 1, 1);
+    let backend = SqliteBackend::create(context_key(1));
+    backend
+        .store()
+        .write(|repos| repos.park_invoice(&parked))
+        .unwrap();
+
+    let mut scanned = 0;
+    for entry in fs::read_dir(backend.dir()).unwrap() {
+        let bytes = fs::read(entry.unwrap().path()).unwrap();
+        scanned += bytes.len();
+        assert!(
+            !bytes
+                .windows(parked.bytes.len())
+                .any(|window| window == parked.bytes)
+        );
+    }
+    assert!(scanned > 0);
+}
+
+#[test]
+fn pending_invoice_moved_to_another_sender_does_not_open() {
+    let backend = SqliteBackend::create(context_key(1));
+    backend
+        .store()
+        .write(|repos| repos.park_invoice(&invoice(SLATE, 1, 1)))
+        .unwrap();
+    Connection::open(backend.path())
+        .unwrap()
+        .execute("UPDATE pending_invoices SET sender_key = ?1", [peer_key(2)])
+        .unwrap();
+    assert!(matches!(
+        backend.store().read(|repos| repos.pending_invoice(SLATE)),
+        Err(StoreError::Undecryptable {
+            record: Record::PendingInvoice
+        })
+    ));
 }
 
 #[test]

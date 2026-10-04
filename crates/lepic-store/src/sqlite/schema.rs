@@ -103,10 +103,44 @@ const V3: &str = "
 ALTER TABLE transactions ADD COLUMN counterparty TEXT;
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3];
+/// Invoices received on the invoice address, the senders it accepts, what each peer is proven to
+/// support, and the index of the invoice address.
+const V4: &str = "
+CREATE TABLE pending_invoices (
+    slate_id BLOB PRIMARY KEY,
+    sender_key TEXT NOT NULL,
+    sender_address TEXT NOT NULL,
+    received_at INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    codec TEXT NOT NULL,
+    sealed BLOB NOT NULL
+);
+CREATE INDEX pending_invoices_status_sender ON pending_invoices (status, sender_key);
+CREATE INDEX pending_invoices_received ON pending_invoices (received_at);
+
+CREATE TABLE allowed_peers (
+    key TEXT PRIMARY KEY,
+    address TEXT NOT NULL,
+    label TEXT NOT NULL,
+    added_at INTEGER NOT NULL
+);
+
+CREATE TABLE peer_capabilities (
+    key TEXT PRIMARY KEY,
+    support TEXT NOT NULL,
+    learned_at INTEGER NOT NULL
+);
+
+CREATE TABLE invoice_address (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    idx INTEGER NOT NULL CHECK (idx >= 1)
+);
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

@@ -4,6 +4,7 @@
 //! is written in that older version's schema, and the check reads it back through the current
 //! repositories.
 
+use jiff::Timestamp;
 use lepic_primitives::amount::Height;
 use rusqlite::Connection;
 
@@ -12,6 +13,8 @@ use super::schema::{SCHEMA_VERSION, migrate_to, stored_version};
 use crate::account::{AccountIndex, AccountRecord};
 use crate::context::ContextKey;
 use crate::error::StoreError;
+use crate::invoice::{InvoiceAddressIndex, PendingInvoice, PendingInvoiceStatus};
+use crate::peer::{AllowedPeer, PeerSupport};
 use crate::store::WalletStore;
 use crate::transaction::{TxId, TxState};
 
@@ -70,6 +73,55 @@ fn check_v2_seed(store: &SqliteStore) {
 fn check_v3_seed(store: &SqliteStore) {
     let counterparty = store.read(|repos| repos.counterparty(TxId(1))).unwrap();
     assert_eq!(counterparty.as_deref(), Some("peer@relay"));
+    let (invoices, peers, index) = store
+        .read(|repos| {
+            Ok::<_, StoreError>((
+                repos.pending_invoices()?,
+                repos.allowed_peers()?,
+                repos.invoice_address_index()?,
+            ))
+        })
+        .unwrap();
+    assert!(invoices.is_empty() && peers.is_empty());
+    assert_eq!(index, None);
+    let parked = PendingInvoice {
+        slate_id: uuid::Uuid::from_bytes([4; 16]),
+        sender_key: "key".to_owned(),
+        sender_address: "key@relay".to_owned(),
+        received_at: Timestamp::from_second(1).unwrap(),
+        status: PendingInvoiceStatus::Parked,
+        codec: "legacy-v3".to_owned(),
+        bytes: b"i1".to_vec(),
+    };
+    store.write(|repos| repos.park_invoice(&parked)).unwrap();
+    let stored = store.read(|repos| repos.pending_invoices()).unwrap();
+    assert_eq!(stored, vec![parked]);
+}
+
+fn check_v4_seed(store: &SqliteStore) {
+    let (peers, capability, index) = store
+        .read(|repos| {
+            Ok::<_, StoreError>((
+                repos.allowed_peers()?,
+                repos.peer_capability("key")?,
+                repos.invoice_address_index()?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        peers,
+        vec![AllowedPeer {
+            key: "key".to_owned(),
+            address: "key@relay".to_owned(),
+            label: "shop".to_owned(),
+            added_at: Timestamp::from_nanosecond(7).unwrap(),
+        }]
+    );
+    assert_eq!(
+        capability.map(|capability| capability.support),
+        Some(PeerSupport::NoInvoices)
+    );
+    assert_eq!(index, InvoiceAddressIndex::new(3));
 }
 
 const V1_SEED: &str = "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 4);
@@ -104,6 +156,15 @@ const UPGRADES: &[UpgradeCase] = &[
                    amount_debited, created_at, updated_at, counterparty)
                VALUES (1, 0, 'incoming', 'received', 5, 0, 1, 1, 'peer@relay');",
         check: check_v3_seed,
+    },
+    UpgradeCase {
+        from: 4,
+        seed: "INSERT INTO allowed_peers (key, address, label, added_at)
+               VALUES ('key', 'key@relay', 'shop', 7);
+               INSERT INTO peer_capabilities (key, support, learned_at)
+               VALUES ('key', 'no-invoices', 8);
+               INSERT INTO invoice_address (id, idx) VALUES (1, 3);",
+        check: check_v4_seed,
     },
 ];
 

@@ -3,6 +3,7 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::account::AccountIndex;
+use crate::invoice::InvoiceCap;
 use crate::transaction::TxId;
 
 /// The kind of stored record an error refers to.
@@ -17,6 +18,10 @@ pub enum Record {
     OutboxMessage,
     Setting,
     SchemaVersion,
+    PendingInvoice,
+    AllowedPeer,
+    PeerCapability,
+    InvoiceAddress,
 }
 
 impl fmt::Display for Record {
@@ -31,6 +36,10 @@ impl fmt::Display for Record {
             Self::OutboxMessage => "outbox message",
             Self::Setting => "setting",
             Self::SchemaVersion => "schema version",
+            Self::PendingInvoice => "pending invoice",
+            Self::AllowedPeer => "allowed peer",
+            Self::PeerCapability => "peer capability",
+            Self::InvoiceAddress => "invoice address",
         })
     }
 }
@@ -75,6 +84,12 @@ pub enum StoreError {
     ContextUndecryptable,
     #[error("private context could not be encrypted")]
     ContextUnsealable,
+    #[error("stored {record} could not be decrypted")]
+    Undecryptable { record: Record },
+    #[error("{record} could not be encrypted")]
+    Unsealable { record: Record },
+    #[error("{cap} cap on parked invoices is reached")]
+    InvoiceCapReached { cap: InvoiceCap },
     #[error("operating system randomness is unavailable")]
     Randomness(#[source] getrandom::Error),
     #[error("store is unusable after a panic in another thread")]

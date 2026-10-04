@@ -11,7 +11,11 @@ use crate::account::{AccountIndex, AccountRecord, AccountRepository};
 use crate::context::{self, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 use crate::encoding::timestamp_to_column;
 use crate::error::{Record, StoreError};
+use crate::invoice::{
+    self, InvoiceAddressIndex, InvoiceRepository, PendingInvoice, PendingInvoiceStatus,
+};
 use crate::output::{CommitmentBytes, OutputRecord, OutputRepository, OutputStatus};
+use crate::peer::{AllowedPeer, PeerCapability, PeerRepository};
 use crate::relay::{
     InboxEntry, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };
@@ -36,6 +40,17 @@ struct State {
     inbox: BTreeMap<String, InboxEntry>,
     outbox: BTreeMap<OutboxId, OutboxEntry>,
     settings: BTreeMap<String, String>,
+    pending_invoices: BTreeMap<[u8; 16], SealedInvoice>,
+    allowed_peers: BTreeMap<String, AllowedPeer>,
+    peer_capabilities: BTreeMap<String, PeerCapability>,
+    invoice_address_index: Option<InvoiceAddressIndex>,
+}
+
+/// A pending invoice as the SQLite row holds it: its bytes sealed, the other fields in clear.
+#[derive(Debug, Clone)]
+struct SealedInvoice {
+    fields: PendingInvoice,
+    sealed: Vec<u8>,
 }
 
 /// Holds all data in memory. Clones made with [`MemoryStore::reopen`] share it, which lets a test
@@ -477,5 +492,152 @@ impl SettingsRepository for MemoryRepos<'_> {
     fn delete_setting(&mut self, key: &str) -> Result<(), StoreError> {
         self.state.settings.remove(key);
         Ok(())
+    }
+}
+
+impl MemoryRepos<'_> {
+    fn open_invoice(&self, stored: &SealedInvoice) -> Result<PendingInvoice, StoreError> {
+        let fields = &stored.fields;
+        Ok(PendingInvoice {
+            bytes: invoice::open(
+                self.key,
+                fields.slate_id,
+                &fields.sender_key,
+                &stored.sealed,
+            )?,
+            ..fields.clone()
+        })
+    }
+
+    fn parked_invoices(&self) -> impl Iterator<Item = &PendingInvoice> {
+        self.state
+            .pending_invoices
+            .values()
+            .map(|stored| &stored.fields)
+            .filter(|fields| fields.status == PendingInvoiceStatus::Parked)
+    }
+}
+
+impl InvoiceRepository for MemoryRepos<'_> {
+    fn park_invoice(&mut self, invoice: &PendingInvoice) -> Result<(), StoreError> {
+        let id = invoice.slate_id.into_bytes();
+        if self.state.pending_invoices.contains_key(&id) {
+            return Err(StoreError::Duplicate {
+                record: Record::PendingInvoice,
+            });
+        }
+        invoice::check_caps(
+            invoice,
+            self.parked_invoices().count(),
+            self.parked_invoices()
+                .filter(|parked| parked.sender_key == invoice.sender_key)
+                .count(),
+        )?;
+        timestamp_to_column(invoice.received_at)?;
+        let sealed = invoice::seal(self.key, invoice)?;
+        self.state.pending_invoices.insert(
+            id,
+            SealedInvoice {
+                fields: PendingInvoice {
+                    bytes: Vec::new(),
+                    ..invoice.clone()
+                },
+                sealed,
+            },
+        );
+        Ok(())
+    }
+
+    fn pending_invoice(&self, slate_id: Uuid) -> Result<Option<PendingInvoice>, StoreError> {
+        self.state
+            .pending_invoices
+            .get(&slate_id.into_bytes())
+            .map(|stored| self.open_invoice(stored))
+            .transpose()
+    }
+
+    fn pending_invoices(&self) -> Result<Vec<PendingInvoice>, StoreError> {
+        let mut stored: Vec<&SealedInvoice> = self.state.pending_invoices.values().collect();
+        stored.sort_by_key(|stored| (stored.fields.received_at, stored.fields.slate_id));
+        stored
+            .into_iter()
+            .map(|stored| self.open_invoice(stored))
+            .collect()
+    }
+
+    fn set_pending_invoice_status(
+        &mut self,
+        slate_id: Uuid,
+        status: PendingInvoiceStatus,
+    ) -> Result<(), StoreError> {
+        match self.state.pending_invoices.get_mut(&slate_id.into_bytes()) {
+            Some(stored) => {
+                stored.fields.status = status;
+                Ok(())
+            }
+            None => Err(StoreError::NotFound {
+                record: Record::PendingInvoice,
+            }),
+        }
+    }
+
+    fn delete_pending_invoice(&mut self, slate_id: Uuid) -> Result<(), StoreError> {
+        self.state.pending_invoices.remove(&slate_id.into_bytes());
+        Ok(())
+    }
+
+    fn prune_parked_invoices(&mut self, received_before: Timestamp) -> Result<usize, StoreError> {
+        timestamp_to_column(received_before)?;
+        let before = self.state.pending_invoices.len();
+        self.state.pending_invoices.retain(|_, stored| {
+            stored.fields.status != PendingInvoiceStatus::Parked
+                || stored.fields.received_at >= received_before
+        });
+        Ok(before.saturating_sub(self.state.pending_invoices.len()))
+    }
+
+    fn invoice_address_index(&self) -> Result<Option<InvoiceAddressIndex>, StoreError> {
+        Ok(self.state.invoice_address_index)
+    }
+
+    fn set_invoice_address_index(&mut self, index: InvoiceAddressIndex) -> Result<(), StoreError> {
+        self.state.invoice_address_index = Some(index);
+        Ok(())
+    }
+}
+
+impl PeerRepository for MemoryRepos<'_> {
+    fn put_allowed_peer(&mut self, peer: &AllowedPeer) -> Result<(), StoreError> {
+        timestamp_to_column(peer.added_at)?;
+        self.state
+            .allowed_peers
+            .insert(peer.key.clone(), peer.clone());
+        Ok(())
+    }
+
+    fn allowed_peer(&self, key: &str) -> Result<Option<AllowedPeer>, StoreError> {
+        Ok(self.state.allowed_peers.get(key).cloned())
+    }
+
+    fn allowed_peers(&self) -> Result<Vec<AllowedPeer>, StoreError> {
+        let mut peers: Vec<AllowedPeer> = self.state.allowed_peers.values().cloned().collect();
+        peers.sort_by(|a, b| (a.added_at, &a.key).cmp(&(b.added_at, &b.key)));
+        Ok(peers)
+    }
+
+    fn remove_allowed_peer(&mut self, key: &str) -> Result<bool, StoreError> {
+        Ok(self.state.allowed_peers.remove(key).is_some())
+    }
+
+    fn put_peer_capability(&mut self, capability: &PeerCapability) -> Result<(), StoreError> {
+        timestamp_to_column(capability.learned_at)?;
+        self.state
+            .peer_capabilities
+            .insert(capability.key.clone(), capability.clone());
+        Ok(())
+    }
+
+    fn peer_capability(&self, key: &str) -> Result<Option<PeerCapability>, StoreError> {
+        Ok(self.state.peer_capabilities.get(key).cloned())
     }
 }

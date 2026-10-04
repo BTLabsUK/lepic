@@ -9,7 +9,11 @@ use crate::account::{AccountIndex, AccountRecord, AccountRepository};
 use crate::context::{self, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 use crate::encoding::{timestamp_from_column, timestamp_to_column, u64_from_column, u64_to_column};
 use crate::error::{Record, StoreError};
+use crate::invoice::{
+    self, InvoiceAddressIndex, InvoiceRepository, PendingInvoice, PendingInvoiceStatus,
+};
 use crate::output::{CommitmentBytes, KeyId, OutputRecord, OutputRepository, OutputStatus};
+use crate::peer::{AllowedPeer, PeerCapability, PeerRepository, PeerSupport};
 use crate::relay::{
     InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };
@@ -749,5 +753,241 @@ impl SettingsRepository for SqliteRepos<'_> {
         self.conn
             .execute("DELETE FROM settings WHERE key = ?1", [key])?;
         Ok(())
+    }
+}
+
+const PENDING_INVOICE_COLUMNS: &str =
+    "slate_id, sender_key, sender_address, received_at, status, codec, sealed";
+
+impl SqliteRepos<'_> {
+    fn decode_pending_invoice(&self, row: &Row<'_>) -> Result<PendingInvoice, StoreError> {
+        let record = Record::PendingInvoice;
+        let slate_id: Vec<u8> = row.get(0)?;
+        let slate_id = decode_uuid(&slate_id, record)?;
+        let sender_key: String = row.get(1)?;
+        let status: String = row.get(4)?;
+        let sealed: Vec<u8> = row.get(6)?;
+        Ok(PendingInvoice {
+            slate_id,
+            bytes: invoice::open(self.key, slate_id, &sender_key, &sealed)?,
+            sender_key,
+            sender_address: row.get(2)?,
+            received_at: timestamp_from_column(row.get(3)?, record, "received at")?,
+            status: decode_code(&status, PendingInvoiceStatus::from_code, record, "status")?,
+            codec: row.get(5)?,
+        })
+    }
+
+    fn count(&self, sql: &str, params: impl rusqlite::Params) -> Result<usize, StoreError> {
+        let count: i64 = self.conn.query_row(sql, params, |row| row.get(0))?;
+        usize::try_from(count).map_err(|_| corrupt(Record::PendingInvoice, "count"))
+    }
+}
+
+impl InvoiceRepository for SqliteRepos<'_> {
+    fn park_invoice(&mut self, invoice: &PendingInvoice) -> Result<(), StoreError> {
+        let slate_id = &invoice.slate_id.as_bytes()[..];
+        if self.exists(
+            "SELECT EXISTS (SELECT 1 FROM pending_invoices WHERE slate_id = ?1)",
+            [slate_id],
+        )? {
+            return Err(StoreError::Duplicate {
+                record: Record::PendingInvoice,
+            });
+        }
+        let parked = PendingInvoiceStatus::Parked.code();
+        invoice::check_caps(
+            invoice,
+            self.count(
+                "SELECT COUNT(*) FROM pending_invoices WHERE status = ?1",
+                [parked],
+            )?,
+            self.count(
+                "SELECT COUNT(*) FROM pending_invoices WHERE status = ?1 AND sender_key = ?2",
+                [parked, invoice.sender_key.as_str()],
+            )?,
+        )?;
+        let sealed = invoice::seal(self.key, invoice)?;
+        self.conn.execute(
+            &format!(
+                "INSERT INTO pending_invoices ({PENDING_INVOICE_COLUMNS})
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+            ),
+            params![
+                slate_id,
+                invoice.sender_key,
+                invoice.sender_address,
+                timestamp_to_column(invoice.received_at)?,
+                invoice.status.code(),
+                invoice.codec,
+                sealed,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn pending_invoice(&self, slate_id: Uuid) -> Result<Option<PendingInvoice>, StoreError> {
+        self.first(
+            &format!("SELECT {PENDING_INVOICE_COLUMNS} FROM pending_invoices WHERE slate_id = ?1"),
+            [&slate_id.as_bytes()[..]],
+            |row| self.decode_pending_invoice(row),
+        )
+    }
+
+    fn pending_invoices(&self) -> Result<Vec<PendingInvoice>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {PENDING_INVOICE_COLUMNS} FROM pending_invoices
+                 ORDER BY received_at, slate_id"
+            ),
+            [],
+            |row| self.decode_pending_invoice(row),
+        )
+    }
+
+    fn set_pending_invoice_status(
+        &mut self,
+        slate_id: Uuid,
+        status: PendingInvoiceStatus,
+    ) -> Result<(), StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE pending_invoices SET status = ?2 WHERE slate_id = ?1",
+            params![&slate_id.as_bytes()[..], status.code()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound {
+                record: Record::PendingInvoice,
+            });
+        }
+        Ok(())
+    }
+
+    fn delete_pending_invoice(&mut self, slate_id: Uuid) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM pending_invoices WHERE slate_id = ?1",
+            [&slate_id.as_bytes()[..]],
+        )?;
+        Ok(())
+    }
+
+    fn prune_parked_invoices(&mut self, received_before: Timestamp) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM pending_invoices WHERE status = ?1 AND received_at < ?2",
+            params![
+                PendingInvoiceStatus::Parked.code(),
+                timestamp_to_column(received_before)?,
+            ],
+        )?)
+    }
+
+    fn invoice_address_index(&self) -> Result<Option<InvoiceAddressIndex>, StoreError> {
+        let index: Option<i64> = self
+            .conn
+            .query_row("SELECT idx FROM invoice_address WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        index
+            .map(|index| {
+                u32::try_from(index)
+                    .ok()
+                    .and_then(InvoiceAddressIndex::new)
+                    .ok_or(corrupt(Record::InvoiceAddress, "index"))
+            })
+            .transpose()
+    }
+
+    fn set_invoice_address_index(&mut self, index: InvoiceAddressIndex) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO invoice_address (id, idx) VALUES (1, ?1)
+             ON CONFLICT (id) DO UPDATE SET idx = excluded.idx",
+            [i64::from(index.get())],
+        )?;
+        Ok(())
+    }
+}
+
+const ALLOWED_PEER_COLUMNS: &str = "key, address, label, added_at";
+
+fn decode_allowed_peer(row: &Row<'_>) -> Result<AllowedPeer, StoreError> {
+    Ok(AllowedPeer {
+        key: row.get(0)?,
+        address: row.get(1)?,
+        label: row.get(2)?,
+        added_at: timestamp_from_column(row.get(3)?, Record::AllowedPeer, "added at")?,
+    })
+}
+
+fn decode_peer_capability(row: &Row<'_>) -> Result<PeerCapability, StoreError> {
+    let record = Record::PeerCapability;
+    let support: String = row.get(1)?;
+    Ok(PeerCapability {
+        key: row.get(0)?,
+        support: decode_code(&support, PeerSupport::from_code, record, "support")?,
+        learned_at: timestamp_from_column(row.get(2)?, record, "learned at")?,
+    })
+}
+
+impl PeerRepository for SqliteRepos<'_> {
+    fn put_allowed_peer(&mut self, peer: &AllowedPeer) -> Result<(), StoreError> {
+        self.conn.execute(
+            &format!(
+                "INSERT INTO allowed_peers ({ALLOWED_PEER_COLUMNS}) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (key) DO UPDATE SET address = excluded.address,
+                     label = excluded.label, added_at = excluded.added_at"
+            ),
+            params![
+                peer.key,
+                peer.address,
+                peer.label,
+                timestamp_to_column(peer.added_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn allowed_peer(&self, key: &str) -> Result<Option<AllowedPeer>, StoreError> {
+        self.first(
+            &format!("SELECT {ALLOWED_PEER_COLUMNS} FROM allowed_peers WHERE key = ?1"),
+            [key],
+            decode_allowed_peer,
+        )
+    }
+
+    fn allowed_peers(&self) -> Result<Vec<AllowedPeer>, StoreError> {
+        self.collect(
+            &format!("SELECT {ALLOWED_PEER_COLUMNS} FROM allowed_peers ORDER BY added_at, key"),
+            [],
+            decode_allowed_peer,
+        )
+    }
+
+    fn remove_allowed_peer(&mut self, key: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM allowed_peers WHERE key = ?1", [key])?
+            > 0)
+    }
+
+    fn put_peer_capability(&mut self, capability: &PeerCapability) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO peer_capabilities (key, support, learned_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (key) DO UPDATE SET support = excluded.support,
+                 learned_at = excluded.learned_at",
+            params![
+                capability.key,
+                capability.support.code(),
+                timestamp_to_column(capability.learned_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn peer_capability(&self, key: &str) -> Result<Option<PeerCapability>, StoreError> {
+        self.first(
+            "SELECT key, support, learned_at FROM peer_capabilities WHERE key = ?1",
+            [key],
+            decode_peer_capability,
+        )
     }
 }

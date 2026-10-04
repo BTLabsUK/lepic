@@ -14,13 +14,18 @@ use jiff::Timestamp;
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_store::{
-    AccountIndex, AccountRecord, ContextKey, InboxEntry, InboxStatus, OutboxEntry, OutboxId,
-    OutboxStatus, OutputStatus, ParticipantId, PrivateContext, Record, Repositories, SlateStage,
-    StoreError, TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, AccountRecord, ContextKey, InboxEntry, InboxStatus, InvoiceAddressIndex,
+    InvoiceCap, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER, OutboxEntry, OutboxId,
+    OutboxStatus, OutputStatus, ParticipantId, PeerCapability, PeerSupport, PendingInvoiceStatus,
+    PrivateContext, Record, Repositories, SlateStage, StoreError, TxDirection, TxId, TxState,
+    WalletStore,
 };
 use uuid::Uuid;
 
-use support::{Backend, account, context_key, output, slate, transaction};
+use support::{
+    Backend, account, allowed_peer, context_key, invoice, invoice_id, output, peer_key, slate,
+    transaction,
+};
 
 const DEFAULT: AccountIndex = AccountIndex(0);
 const SLATE_A: Uuid = Uuid::from_bytes([0xa1; 16]);
@@ -532,6 +537,14 @@ fn failed_write_leaves_every_repository_unchanged<B: Backend>() {
             received_at: support::time(1),
             updated_at: support::time(1),
         })?;
+        repos.park_invoice(&invoice(SLATE_B, 1, 1))?;
+        repos.put_allowed_peer(&allowed_peer(1, 1))?;
+        repos.put_peer_capability(&PeerCapability {
+            key: peer_key(1),
+            support: PeerSupport::Lepic,
+            learned_at: support::time(1),
+        })?;
+        repos.set_invoice_address_index(InvoiceAddressIndex::FIRST)?;
         Err(EngineError::Rejected)
     });
     assert!(matches!(result, Err(EngineError::Rejected)));
@@ -543,7 +556,11 @@ fn failed_write_leaves_every_repository_unchanged<B: Backend>() {
             && repos.slates(SLATE_A)?.is_empty()
             && repos.context(SLATE_A, ParticipantId(0))?.is_none()
             && repos.setting("key")?.is_none()
-            && repos.inbox("m")?.is_none())
+            && repos.inbox("m")?.is_none()
+            && repos.pending_invoices()?.is_empty()
+            && repos.allowed_peers()?.is_empty()
+            && repos.peer_capability(&peer_key(1))?.is_none()
+            && repos.invoice_address_index()?.is_none())
     })
     .unwrap();
     assert!(empty);
@@ -703,6 +720,278 @@ fn delete_transaction_removes_an_unlinked_entry_only<B: Backend>() {
     assert_eq!((gone, height, counterparty), (None, None, None));
 }
 
+fn pending_invoices_round_trip_oldest_first<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let newest = invoice(invoice_id(1), 1, 30);
+    let oldest = invoice(invoice_id(2), 2, 10);
+    let mut paid = invoice(invoice_id(3), 1, 20);
+    paid.status = PendingInvoiceStatus::Paid;
+    paid.codec = "legacy-v2".to_owned();
+    write(store, |repos| {
+        repos.park_invoice(&newest)?;
+        repos.park_invoice(&oldest)?;
+        repos.park_invoice(&paid)
+    })
+    .unwrap();
+    let (all, one, missing) = read(store, |repos| {
+        Ok((
+            repos.pending_invoices()?,
+            repos.pending_invoice(invoice_id(3))?,
+            repos.pending_invoice(invoice_id(9))?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(all, vec![oldest, paid.clone(), newest]);
+    assert_eq!(one, Some(paid));
+    assert_eq!(missing, None);
+}
+
+fn rejects_a_second_invoice_with_the_same_slate_id<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    write(store, |repos| repos.park_invoice(&invoice(SLATE_A, 1, 1))).unwrap();
+    assert!(matches!(
+        write(store, |repos| repos.park_invoice(&invoice(SLATE_A, 2, 2))),
+        Err(StoreError::Duplicate {
+            record: Record::PendingInvoice
+        })
+    ));
+    let kept = read(store, |repos| repos.pending_invoice(SLATE_A)).unwrap();
+    assert_eq!(kept, Some(invoice(SLATE_A, 1, 1)));
+}
+
+fn pending_invoice_status_changes_and_delete_removes<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    write(store, |repos| {
+        repos.park_invoice(&invoice(SLATE_A, 1, 1))?;
+        repos.park_invoice(&invoice(SLATE_B, 1, 2))?;
+        repos.set_pending_invoice_status(SLATE_A, PendingInvoiceStatus::Declined)
+    })
+    .unwrap();
+    let declined = read(store, |repos| repos.pending_invoice(SLATE_A)).unwrap();
+    assert_eq!(
+        declined.map(|found| found.status),
+        Some(PendingInvoiceStatus::Declined)
+    );
+    assert!(matches!(
+        write(store, |repos| repos.set_pending_invoice_status(
+            invoice_id(9),
+            PendingInvoiceStatus::Paid
+        )),
+        Err(StoreError::NotFound {
+            record: Record::PendingInvoice
+        })
+    ));
+    write(store, |repos| {
+        repos.delete_pending_invoice(SLATE_A)?;
+        repos.delete_pending_invoice(SLATE_A)
+    })
+    .unwrap();
+    let left = read(store, |repos| repos.pending_invoices()).unwrap();
+    assert_eq!(left, vec![invoice(SLATE_B, 1, 2)]);
+}
+
+fn parking_stops_at_the_per_sender_cap<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let cap = u32::try_from(MAX_PARKED_INVOICES_PER_SENDER).unwrap();
+    write(store, |repos| {
+        for n in 0..cap {
+            repos.park_invoice(&invoice(invoice_id(n), 1, i64::from(n)))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        write(store, |repos| repos.park_invoice(&invoice(
+            invoice_id(cap),
+            1,
+            99
+        ))),
+        Err(StoreError::InvoiceCapReached {
+            cap: InvoiceCap::PerSender
+        })
+    ));
+    assert_eq!(
+        read(store, |repos| repos.pending_invoice(invoice_id(cap))).unwrap(),
+        None
+    );
+    // Another sender still has room, and an invoice the user paid no longer counts.
+    write(store, |repos| {
+        repos.park_invoice(&invoice(invoice_id(cap + 1), 2, 99))?;
+        repos.set_pending_invoice_status(invoice_id(0), PendingInvoiceStatus::Paid)?;
+        repos.park_invoice(&invoice(invoice_id(cap), 1, 99))
+    })
+    .unwrap();
+    let stored = read(store, |repos| repos.pending_invoices()).unwrap();
+    assert_eq!(stored.len(), MAX_PARKED_INVOICES_PER_SENDER + 2);
+}
+
+fn parking_stops_at_the_total_cap<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let total = u32::try_from(MAX_PARKED_INVOICES).unwrap();
+    let per_sender = u32::try_from(MAX_PARKED_INVOICES_PER_SENDER).unwrap();
+    write(store, |repos| {
+        for n in 0..total {
+            repos.park_invoice(&invoice(invoice_id(n), n / per_sender, i64::from(n)))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let fresh_sender = total;
+    assert!(matches!(
+        write(store, |repos| repos.park_invoice(&invoice(
+            invoice_id(total),
+            fresh_sender,
+            0
+        ))),
+        Err(StoreError::InvoiceCapReached {
+            cap: InvoiceCap::Total
+        })
+    ));
+    let mut paid = invoice(invoice_id(total), fresh_sender, 0);
+    paid.status = PendingInvoiceStatus::Paid;
+    write(store, |repos| repos.park_invoice(&paid)).unwrap();
+    let stored = read(store, |repos| repos.pending_invoices()).unwrap();
+    assert_eq!(stored.len(), MAX_PARKED_INVOICES + 1);
+}
+
+fn prune_removes_only_parked_invoices_received_before_the_cutoff<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let mut old_paid = invoice(invoice_id(2), 1, 10);
+    old_paid.status = PendingInvoiceStatus::Paid;
+    let pruned = write(store, |repos| {
+        repos.park_invoice(&invoice(invoice_id(1), 1, 10))?;
+        repos.park_invoice(&old_paid)?;
+        repos.park_invoice(&invoice(invoice_id(3), 2, 99))?;
+        repos.park_invoice(&invoice(invoice_id(4), 2, 100))?;
+        repos.prune_parked_invoices(support::time(100))
+    })
+    .unwrap();
+    assert_eq!(pruned, 2);
+    let kept: Vec<_> = read(store, |repos| repos.pending_invoices())
+        .unwrap()
+        .into_iter()
+        .map(|kept| kept.slate_id)
+        .collect();
+    assert_eq!(kept, vec![invoice_id(2), invoice_id(4)]);
+}
+
+fn pending_invoice_bytes_cannot_be_read_without_the_key<B: Backend>() {
+    let backend = B::create(context_key(1));
+    write(backend.store(), |repos| {
+        repos.park_invoice(&invoice(SLATE_A, 1, 1))
+    })
+    .unwrap();
+    let wrong_key = backend.reopen(context_key(2));
+    for result in [
+        read(&wrong_key, |repos| repos.pending_invoice(SLATE_A).map(drop)),
+        read(&wrong_key, |repos| repos.pending_invoices().map(drop)),
+    ] {
+        assert!(matches!(
+            result,
+            Err(StoreError::Undecryptable {
+                record: Record::PendingInvoice
+            })
+        ));
+    }
+    let right_key = backend.reopen(context_key(1));
+    assert_eq!(
+        read(&right_key, |repos| repos.pending_invoice(SLATE_A)).unwrap(),
+        Some(invoice(SLATE_A, 1, 1))
+    );
+}
+
+fn invoice_address_index_is_unset_until_set_then_replaced<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    assert_eq!(
+        read(store, |repos| repos.invoice_address_index()).unwrap(),
+        None
+    );
+    let last = InvoiceAddressIndex::new(u32::MAX).unwrap();
+    write(store, |repos| {
+        repos.set_invoice_address_index(InvoiceAddressIndex::FIRST)?;
+        repos.set_invoice_address_index(last)
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.invoice_address_index()).unwrap(),
+        Some(last)
+    );
+}
+
+fn allowed_peers_are_replaced_by_key_listed_in_order_and_removed<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let mut moved = allowed_peer(1, 5);
+    moved.address = format!("{}@other.example:13420", peer_key(1));
+    moved.label = "renamed".to_owned();
+    write(store, |repos| {
+        repos.put_allowed_peer(&allowed_peer(1, 5))?;
+        repos.put_allowed_peer(&allowed_peer(2, 1))?;
+        repos.put_allowed_peer(&moved)
+    })
+    .unwrap();
+    let (all, found, missing) = read(store, |repos| {
+        Ok((
+            repos.allowed_peers()?,
+            repos.allowed_peer(&peer_key(1))?,
+            repos.allowed_peer(&peer_key(3))?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(all, vec![allowed_peer(2, 1), moved.clone()]);
+    assert_eq!(found, Some(moved));
+    assert_eq!(missing, None);
+    let removed = write(store, |repos| {
+        Ok((
+            repos.remove_allowed_peer(&peer_key(1))?,
+            repos.remove_allowed_peer(&peer_key(1))?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(removed, (true, false));
+    assert_eq!(
+        read(store, |repos| repos.allowed_peers()).unwrap(),
+        vec![allowed_peer(2, 1)]
+    );
+}
+
+fn peer_capability_is_replaced_by_later_evidence<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let stock = PeerCapability {
+        key: peer_key(1),
+        support: PeerSupport::NoInvoices,
+        learned_at: support::time(1),
+    };
+    let lepic = PeerCapability {
+        support: PeerSupport::Lepic,
+        learned_at: support::time(2),
+        ..stock.clone()
+    };
+    write(store, |repos| repos.put_peer_capability(&stock)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.peer_capability(&peer_key(1))).unwrap(),
+        Some(stock)
+    );
+    write(store, |repos| repos.put_peer_capability(&lepic)).unwrap();
+    let (found, unknown) = read(store, |repos| {
+        Ok((
+            repos.peer_capability(&peer_key(1))?,
+            repos.peer_capability(&peer_key(2))?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(found, Some(lepic));
+    assert_eq!(unknown, None);
+}
+
 macro_rules! shared_suite {
     ($backend:ty: $($test:ident),+ $(,)?) => {
         $(
@@ -751,6 +1040,16 @@ for_each_backend!(
     confirmed_height_is_recorded_and_survives_updates,
     counterparty_is_recorded_and_survives_updates,
     delete_transaction_removes_an_unlinked_entry_only,
+    pending_invoices_round_trip_oldest_first,
+    rejects_a_second_invoice_with_the_same_slate_id,
+    pending_invoice_status_changes_and_delete_removes,
+    parking_stops_at_the_per_sender_cap,
+    parking_stops_at_the_total_cap,
+    prune_removes_only_parked_invoices_received_before_the_cutoff,
+    pending_invoice_bytes_cannot_be_read_without_the_key,
+    invoice_address_index_is_unset_until_set_then_replaced,
+    allowed_peers_are_replaced_by_key_listed_in_order_and_removed,
+    peer_capability_is_replaced_by_later_evidence,
 );
 
 #[test]

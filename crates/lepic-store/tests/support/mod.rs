@@ -10,9 +10,9 @@ use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::ser::{ProtocolVersion, deserialize};
 use lepic_store::{
-    AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, KEY_ID_LEN, KeyId, MemoryStore,
-    OutputRecord, OutputStatus, SlateStage, SqliteStore, StoredSlate, TransactionEntry,
-    TxDirection, TxState, WalletStore,
+    AccountIndex, AccountRecord, AllowedPeer, CONTEXT_KEY_LEN, ContextKey, KEY_ID_LEN, KeyId,
+    MemoryStore, OutputRecord, OutputStatus, PendingInvoice, PendingInvoiceStatus, SlateStage,
+    SqliteStore, StoredSlate, TransactionEntry, TxDirection, TxState, WalletStore,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -156,5 +156,37 @@ pub fn slate(slate_id: Uuid, stage: SlateStage, bytes: &[u8]) -> StoredSlate {
         stage,
         codec: "legacy-v3".to_owned(),
         bytes: bytes.to_vec(),
+    }
+}
+
+/// A test Epicbox public key, distinct per `n`.
+pub fn peer_key(n: u32) -> String {
+    format!("es{n:0>50}")
+}
+
+/// A parked invoice from the peer with `peer_key(sender)`, received at `time(second)`.
+pub fn invoice(slate_id: Uuid, sender: u32, second: i64) -> PendingInvoice {
+    PendingInvoice {
+        slate_id,
+        sender_key: peer_key(sender),
+        sender_address: format!("{}@relay.example:443", peer_key(sender)),
+        received_at: time(second),
+        status: PendingInvoiceStatus::Parked,
+        codec: "legacy-v3".to_owned(),
+        bytes: format!("{{\"invoice\":\"{slate_id}\"}}").into_bytes(),
+    }
+}
+
+/// The slate id of the `n`th generated invoice.
+pub fn invoice_id(n: u32) -> Uuid {
+    Uuid::from_u128(0x1000_0000 + u128::from(n))
+}
+
+pub fn allowed_peer(n: u32, second: i64) -> AllowedPeer {
+    AllowedPeer {
+        key: peer_key(n),
+        address: format!("{}@relay.example", peer_key(n)),
+        label: format!("service {n}"),
+        added_at: time(second),
     }
 }
