@@ -220,12 +220,12 @@ abstract class RustLibApi extends BaseApi {
     required String sealedPassword,
   });
 
-  Future<Slate> crateApiWalletEpicWalletReceiveFile({
+  Future<ReceivedSlate> crateApiWalletEpicWalletReceiveFile({
     required EpicWallet that,
     required String path,
   });
 
-  Future<Slate> crateApiWalletEpicWalletReceiveSlate({
+  Future<ReceivedSlate> crateApiWalletEpicWalletReceiveSlate({
     required EpicWallet that,
     required String slateJson,
   });
@@ -1394,7 +1394,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<Slate> crateApiWalletEpicWalletReceiveFile({
+  Future<ReceivedSlate> crateApiWalletEpicWalletReceiveFile({
     required EpicWallet that,
     required String path,
   }) {
@@ -1415,7 +1415,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_slate,
+          decodeSuccessData: sse_decode_received_slate,
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletReceiveFileConstMeta,
@@ -1432,7 +1432,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<Slate> crateApiWalletEpicWalletReceiveSlate({
+  Future<ReceivedSlate> crateApiWalletEpicWalletReceiveSlate({
     required EpicWallet that,
     required String slateJson,
   }) {
@@ -1453,7 +1453,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_slate,
+          decodeSuccessData: sse_decode_received_slate,
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletReceiveSlateConstMeta,
@@ -3323,6 +3323,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ReceivedSlate dco_decode_received_slate(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return ReceivedSlate(
+      txId: dco_decode_u_32(arr[0]),
+      slateId: dco_decode_String(arr[1]),
+      json: dco_decode_String(arr[2]),
+      repeated: dco_decode_bool(arr[3]),
+    );
+  }
+
+  @protected
   RefreshProgress dco_decode_refresh_progress(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -4174,6 +4188,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         );
     var var_sealedPassword = sse_decode_String(deserializer);
     return PinWallet(wallet: var_wallet, sealedPassword: var_sealedPassword);
+  }
+
+  @protected
+  ReceivedSlate sse_decode_received_slate(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_txId = sse_decode_u_32(deserializer);
+    var var_slateId = sse_decode_String(deserializer);
+    var var_json = sse_decode_String(deserializer);
+    var var_repeated = sse_decode_bool(deserializer);
+    return ReceivedSlate(
+      txId: var_txId,
+      slateId: var_slateId,
+      json: var_json,
+      repeated: var_repeated,
+    );
   }
 
   @protected
@@ -5141,6 +5170,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_received_slate(ReceivedSlate self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.txId, serializer);
+    sse_encode_String(self.slateId, serializer);
+    sse_encode_String(self.json, serializer);
+    sse_encode_bool(self.repeated, serializer);
+  }
+
+  @protected
   void sse_encode_refresh_progress(
     RefreshProgress self,
     SseSerializer serializer,
@@ -5573,12 +5611,20 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
       .crateApiWalletEpicWalletOpenAppData(that: this, file: file);
 
   /// [`EpicWallet::receive_slate`] for the slate file at `path`. The answer is also written to
-  /// `<path>.response`, as `epic-wallet` names it.
-  Future<Slate> receiveFile({required String path}) => RustLib.instance.api
+  /// `<path>.response`, as `epic-wallet` names it, for a repeated slate too.
+  Future<ReceivedSlate> receiveFile({required String path}) => RustLib
+      .instance
+      .api
       .crateApiWalletEpicWalletReceiveFile(that: this, path: path);
 
   /// Recipient side: signs an incoming send and returns the answer for the sender.
-  Future<Slate> receiveSlate({required String slateJson}) => RustLib
+  ///
+  /// The same slate again, from text, a file or the listener, returns the answer stored the
+  /// first time with `repeated` set and the first call's `tx_id`; nothing is stored or
+  /// signed again, so a lost answer can be handed out again. Fails with `InvalidSlate` for
+  /// another slate under an id received before, or when that receive was cancelled or
+  /// expired.
+  Future<ReceivedSlate> receiveSlate({required String slateJson}) => RustLib
       .instance
       .api
       .crateApiWalletEpicWalletReceiveSlate(that: this, slateJson: slateJson);

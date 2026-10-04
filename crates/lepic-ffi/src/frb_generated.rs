@@ -4022,9 +4022,10 @@ impl SseDecode for crate::api::types::ListenerEventKind {
             0 => crate::api::types::ListenerEventKind::Connected,
             1 => crate::api::types::ListenerEventKind::Disconnected,
             2 => crate::api::types::ListenerEventKind::Received,
-            3 => crate::api::types::ListenerEventKind::Finalized,
-            4 => crate::api::types::ListenerEventKind::Error,
-            5 => crate::api::types::ListenerEventKind::Stopped,
+            3 => crate::api::types::ListenerEventKind::Repeated,
+            4 => crate::api::types::ListenerEventKind::Finalized,
+            5 => crate::api::types::ListenerEventKind::Error,
+            6 => crate::api::types::ListenerEventKind::Stopped,
             _ => unreachable!("Invalid variant for ListenerEventKind: {}", inner),
         };
     }
@@ -4196,6 +4197,22 @@ impl SseDecode for crate::api::wallet::PinWallet {
         return crate::api::wallet::PinWallet {
             wallet: var_wallet,
             sealed_password: var_sealedPassword,
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::ReceivedSlate {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_txId = <u32>::sse_decode(deserializer);
+        let mut var_slateId = <String>::sse_decode(deserializer);
+        let mut var_json = <String>::sse_decode(deserializer);
+        let mut var_repeated = <bool>::sse_decode(deserializer);
+        return crate::api::types::ReceivedSlate {
+            tx_id: var_txId,
+            slate_id: var_slateId,
+            json: var_json,
+            repeated: var_repeated,
         };
     }
 }
@@ -5029,9 +5046,10 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ListenerEventKind {
             Self::Connected => 0.into_dart(),
             Self::Disconnected => 1.into_dart(),
             Self::Received => 2.into_dart(),
-            Self::Finalized => 3.into_dart(),
-            Self::Error => 4.into_dart(),
-            Self::Stopped => 5.into_dart(),
+            Self::Repeated => 3.into_dart(),
+            Self::Finalized => 4.into_dart(),
+            Self::Error => 5.into_dart(),
+            Self::Stopped => 6.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -5147,6 +5165,29 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::wallet::PinWallet>
     for crate::api::wallet::PinWallet
 {
     fn into_into_dart(self) -> crate::api::wallet::PinWallet {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::ReceivedSlate {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.tx_id.into_into_dart().into_dart(),
+            self.slate_id.into_into_dart().into_dart(),
+            self.json.into_into_dart().into_dart(),
+            self.repeated.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::ReceivedSlate
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ReceivedSlate>
+    for crate::api::types::ReceivedSlate
+{
+    fn into_into_dart(self) -> crate::api::types::ReceivedSlate {
         self
     }
 }
@@ -5920,9 +5961,10 @@ impl SseEncode for crate::api::types::ListenerEventKind {
                 crate::api::types::ListenerEventKind::Connected => 0,
                 crate::api::types::ListenerEventKind::Disconnected => 1,
                 crate::api::types::ListenerEventKind::Received => 2,
-                crate::api::types::ListenerEventKind::Finalized => 3,
-                crate::api::types::ListenerEventKind::Error => 4,
-                crate::api::types::ListenerEventKind::Stopped => 5,
+                crate::api::types::ListenerEventKind::Repeated => 3,
+                crate::api::types::ListenerEventKind::Finalized => 4,
+                crate::api::types::ListenerEventKind::Error => 5,
+                crate::api::types::ListenerEventKind::Stopped => 6,
                 _ => {
                     unimplemented!("");
                 }
@@ -6073,6 +6115,16 @@ impl SseEncode for crate::api::wallet::PinWallet {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <EpicWallet>::sse_encode(self.wallet, serializer);
         <String>::sse_encode(self.sealed_password, serializer);
+    }
+}
+
+impl SseEncode for crate::api::types::ReceivedSlate {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.tx_id, serializer);
+        <String>::sse_encode(self.slate_id, serializer);
+        <String>::sse_encode(self.json, serializer);
+        <bool>::sse_encode(self.repeated, serializer);
     }
 }
 

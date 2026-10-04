@@ -81,6 +81,20 @@ pub struct Slate {
     pub json: String,
 }
 
+/// The answer to a received slate, from `EpicWallet::receive_slate` and
+/// `EpicWallet::receive_file`.
+#[derive(Debug, Clone)]
+pub struct ReceivedSlate {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The reply for the sender.
+    pub json: String,
+    /// The slate was received before: `tx_id` is the transaction that receive created and
+    /// `json` the reply it stored, byte for byte. Nothing was stored this time; show it as
+    /// already answered, not as a second payment.
+    pub repeated: bool,
+}
+
 /// A send that was stored and handed to its transport.
 #[derive(Debug, Clone)]
 pub struct SentTx {
@@ -286,6 +300,9 @@ pub enum ListenerEventKind {
     Disconnected,
     /// Signed an incoming payment and answered it.
     Received,
+    /// A payment signed before arrived again and was answered with the reply stored then.
+    /// Nothing changed; it is not a second payment.
+    Repeated,
     /// Finalized and posted one of our sends.
     Finalized,
     /// The listener failed; `message` says why. `Stopped` follows.
@@ -297,7 +314,7 @@ pub enum ListenerEventKind {
 #[derive(Debug, Clone)]
 pub struct ListenerEvent {
     pub kind: ListenerEventKind,
-    /// Local id of the transaction, for `Received` and `Finalized`.
+    /// Local id of the transaction, for `Received`, `Repeated` and `Finalized`.
     pub tx_id: Option<u32>,
     pub message: String,
 }

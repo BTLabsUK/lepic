@@ -307,6 +307,71 @@ void main() {
     expect(logText, isNot(contains(password)));
   });
 
+  test(
+    'a slate received again returns the stored answer as repeated',
+    () async {
+      final alice = await EpicWallet.create(
+        runtime: runtime,
+        config: configFor(walletDir('repeat-alice')),
+        store: lepicSecretStore(MemoryStore()),
+        password: password,
+      );
+      chain.fund(
+        mnemonic: await alice.mnemonic(password: password),
+        chain: Chain.floonet,
+        amount: BigInt.from(10 * epic),
+        child: 0,
+      );
+      chain.setHeight(height: BigInt.from(20));
+      await scanToEnd(alice);
+      final bob = await EpicWallet.create(
+        runtime: runtime,
+        config: configFor(walletDir('repeat-bob')),
+        store: lepicSecretStore(MemoryStore()),
+        password: password,
+      );
+
+      // As text.
+      final s1 = await alice.createSendSlate(
+        amount: BigInt.from(epic),
+        minimumConfirmations: BigInt.one,
+      );
+      final first = await bob.receiveSlate(slateJson: s1.json);
+      final again = await bob.receiveSlate(slateJson: s1.json);
+      expect(first.repeated, isFalse);
+      expect(again.repeated, isTrue);
+      expect(again.txId, first.txId);
+      expect(again.slateId, first.slateId);
+      expect(again.json, first.json);
+      await alice.finalizeAndPost(slateJson: again.json);
+      chain.minePushed();
+      chain.setHeight(height: BigInt.from(40));
+      await alice.summary(refresh: true);
+
+      // As a file: the answer is written again, unchanged.
+      final file = '${root.path}/repeat.slate';
+      await alice.sendFile(
+        amount: BigInt.from(2 * epic),
+        minimumConfirmations: BigInt.one,
+        path: file,
+      );
+      final firstFile = await bob.receiveFile(path: file);
+      final response = File('$file.response');
+      final firstResponse = response.readAsStringSync();
+      response.deleteSync();
+      final againFile = await bob.receiveFile(path: file);
+      expect(firstFile.repeated, isFalse);
+      expect(againFile.repeated, isTrue);
+      expect(againFile.txId, firstFile.txId);
+      expect(againFile.txId, isNot(first.txId));
+      expect(againFile.json, firstFile.json);
+      expect(response.readAsStringSync(), firstResponse);
+
+      final history = await bob.transactions();
+      expect(history.length, 2, reason: 'a repeat stores no transaction');
+    },
+  );
+
   test('a panic inside the engine reaches Dart as an error', () async {
     final wallet = await EpicWallet.create(
       runtime: runtime,

@@ -41,9 +41,9 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::{DirClaim, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    FeeEstimate, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip, ScanProgress,
-    SentTx, Slate, TransactionDetails, TransportState, TxStatus, WalletConfig, WalletEvent,
-    WalletEventKind, WalletSummary,
+    FeeEstimate, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip,
+    ReceivedSlate, ScanProgress, SentTx, Slate, TransactionDetails, TransportState, TxStatus,
+    WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -597,12 +597,13 @@ impl Session {
     }
 
     /// Signs the S1 in the file at `path`. Returns the reply, also written next to the file as
-    /// `epic-wallet` names it, when `write_response` is set.
+    /// `epic-wallet` names it, when `write_response` is set. A repeated S1 gets the reply stored
+    /// the first time, written again.
     pub(crate) async fn receive_file(
         &self,
         path: &Path,
         write_response: bool,
-    ) -> Result<Slate, WalletError> {
+    ) -> Result<ReceivedSlate, WalletError> {
         let file = FileTransport::new();
         let wire = file
             .import(&Location::File(path.to_owned()))
@@ -619,14 +620,15 @@ impl Session {
         }
         let json = String::from_utf8(received.reply.as_bytes().to_vec())
             .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "reply is not text"))?;
-        Ok(Slate {
+        Ok(ReceivedSlate {
             tx_id: received.tx_id.0,
             slate_id: received.slate.id().to_string(),
             json,
+            repeated: received.repeated,
         })
     }
 
-    pub(crate) async fn receive_slate(&self, json: String) -> Result<Slate, WalletError> {
+    pub(crate) async fn receive_slate(&self, json: String) -> Result<ReceivedSlate, WalletError> {
         let scratch = ScratchFile::with_contents(&self.data_dir, json).await?;
         self.receive_file(&scratch.path, false).await
     }
@@ -947,6 +949,7 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
             }
         }
         Event::Received(received) => (ListenerEventKind::Received, Some(received.tx_id.0)),
+        Event::AnsweredAgain(again) => (ListenerEventKind::Repeated, Some(again.tx_id.0)),
         Event::Transaction(change) if change.to == TxState::Finalized => {
             (ListenerEventKind::Finalized, Some(change.tx_id.0))
         }
@@ -1193,5 +1196,99 @@ mod tests {
         assert_eq!(finalized.kind, ListenerEventKind::Finalized);
         assert_eq!(finalized.tx_id, Some(5));
         assert!(listener_event(&change(TxState::Cancelled)).is_none());
+    }
+
+    /// The sender posts the same S1 twice, as a sender that sent it again does. The receiver's
+    /// listener reports the first as a payment and the second only as answered again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_slate_delivered_twice_reaches_the_listener_as_received_then_repeated() {
+        use lepic_epicbox::mock_relay::MockRelay;
+        use lepic_transport::transport::Transport as _;
+        use lepic_wallet::slate::{MediaType, WireSlate};
+
+        let relay = MockRelay::new(RelayNetwork::Floonet);
+        let chain = crate::api::testing::MockChain::new(1).unwrap();
+        let mut runtime = chain
+            .runtime(crate::api::diagnostics::LogLevel::Warn)
+            .unwrap();
+        Arc::get_mut(&mut runtime.inner).unwrap().relay = Some(relay.connector());
+        let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+        let mut sessions = Vec::new();
+        for dir in &dirs {
+            let mut config = WalletConfig {
+                data_dir: dir.path().to_string_lossy().into_owned(),
+                chain: crate::api::types::Chain::Floonet,
+                node_url: "http://127.0.0.1:1".to_owned(),
+                node_api_secret: None,
+                epicbox_domain: "epicbox.example".to_owned(),
+                epicbox_port: 443,
+            };
+            let secret = NodeSecret::take(&mut config);
+            let session = Session::new(
+                &runtime.inner,
+                &config,
+                &secret,
+                AppSecretStore::in_memory(),
+            )
+            .unwrap();
+            session
+                .create(SeedOrigin::Generate, Zeroizing::new("password".to_owned()))
+                .await
+                .unwrap();
+            sessions.push(Arc::new(session));
+        }
+        let (sender, receiver) = (&sessions[0], &sessions[1]);
+        sender.epicbox_address().unwrap();
+        let to = Destination::new(receiver.epicbox_address().unwrap());
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/slates/send_epicbox_plain_s1_v3.json"
+        ))
+        .unwrap();
+        let s1 = WireSlate::text(
+            MediaType::JSON,
+            vector["expected"]["json"].as_str().unwrap().to_owned(),
+        );
+        let outbound = sender.epicbox().unwrap().outbound().unwrap();
+        outbound.deliver(&to, &s1).await.unwrap();
+        outbound.deliver(&to, &s1).await.unwrap();
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handle = receiver.claim_listener().unwrap().unwrap();
+        let listening = tokio::spawn({
+            let receiver = Arc::clone(receiver);
+            let seen = Arc::clone(&seen);
+            let handle = handle.clone();
+            async move {
+                receiver
+                    .listen(&handle, |event| {
+                        if matches!(
+                            event.kind,
+                            ListenerEventKind::Received | ListenerEventKind::Repeated
+                        ) {
+                            lock(&seen).push((event.kind, event.tx_id));
+                        }
+                    })
+                    .await
+            }
+        });
+        for _ in 0..2000 {
+            if lock(&seen).len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        handle.stop();
+        tokio::time::timeout(std::time::Duration::from_secs(20), listening)
+            .await
+            .expect("the listener ended")
+            .unwrap()
+            .unwrap();
+
+        let seen = lock(&seen).clone();
+        let [(ListenerEventKind::Received, Some(first)), (kind, again)] = seen.as_slice() else {
+            panic!("{seen:?}");
+        };
+        assert_eq!(*kind, ListenerEventKind::Repeated, "{seen:?}");
+        assert_eq!(*again, Some(*first));
     }
 }

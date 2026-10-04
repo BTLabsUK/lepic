@@ -317,11 +317,17 @@ abstract class EpicWallet implements RustOpaqueInterface {
   );
 
   /// [`EpicWallet::receive_slate`] for the slate file at `path`. The answer is also written to
-  /// `<path>.response`, as `epic-wallet` names it.
-  Future<Slate> receiveFile({required String path});
+  /// `<path>.response`, as `epic-wallet` names it, for a repeated slate too.
+  Future<ReceivedSlate> receiveFile({required String path});
 
   /// Recipient side: signs an incoming send and returns the answer for the sender.
-  Future<Slate> receiveSlate({required String slateJson});
+  ///
+  /// The same slate again, from text, a file or the listener, returns the answer stored the
+  /// first time with `repeated` set and the first call's `tx_id`; nothing is stored or
+  /// signed again, so a lost answer can be handed out again. Fails with `InvalidSlate` for
+  /// another slate under an id received before, or when that receive was cancelled or
+  /// expired.
+  Future<ReceivedSlate> receiveSlate({required String slateJson});
 
   /// `summary(refresh: true)` as a stream: a first event at 0 percent, then one with
   /// `summary` set at 100. A failure ends the stream with its [`WalletError`] as the stream's

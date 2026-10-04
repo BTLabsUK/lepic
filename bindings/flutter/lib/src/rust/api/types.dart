@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `network`, `of`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// Which Epic chain the wallet talks to.
 enum Chain { mainnet, floonet }
@@ -115,7 +115,7 @@ class InboxReport {
 class ListenerEvent {
   final ListenerEventKind kind;
 
-  /// Local id of the transaction, for `Received` and `Finalized`.
+  /// Local id of the transaction, for `Received`, `Repeated` and `Finalized`.
   final int? txId;
   final String message;
 
@@ -144,6 +144,10 @@ enum ListenerEventKind {
   /// Signed an incoming payment and answered it.
   received,
 
+  /// A payment signed before arrived again and was answered with the reply stored then.
+  /// Nothing changed; it is not a second payment.
+  repeated,
+
   /// Finalized and posted one of our sends.
   finalized,
 
@@ -170,6 +174,42 @@ class NodeTip {
           runtimeType == other.runtimeType &&
           height == other.height &&
           nodeVersion == other.nodeVersion;
+}
+
+/// The answer to a received slate, from `EpicWallet::receive_slate` and
+/// `EpicWallet::receive_file`.
+class ReceivedSlate {
+  final int txId;
+  final String slateId;
+
+  /// The reply for the sender.
+  final String json;
+
+  /// The slate was received before: `tx_id` is the transaction that receive created and
+  /// `json` the reply it stored, byte for byte. Nothing was stored this time; show it as
+  /// already answered, not as a second payment.
+  final bool repeated;
+
+  const ReceivedSlate({
+    required this.txId,
+    required this.slateId,
+    required this.json,
+    required this.repeated,
+  });
+
+  @override
+  int get hashCode =>
+      txId.hashCode ^ slateId.hashCode ^ json.hashCode ^ repeated.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReceivedSlate &&
+          runtimeType == other.runtimeType &&
+          txId == other.txId &&
+          slateId == other.slateId &&
+          json == other.json &&
+          repeated == other.repeated;
 }
 
 /// Progress of `EpicWallet::refresh`. Only the last event of a successful refresh has `summary`.

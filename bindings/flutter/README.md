@@ -92,6 +92,11 @@ final wallet = await EpicWallet.create(
 - A wallet directory is open in one runtime at a time, across processes too; LEPIC holds an OS
   lock on `.lepic.lock` in it while a wallet is open.
 - `EpicWallet.events()` streams session, balance, transaction, sync and transport changes.
+- A slate received a second time, as text, as a file or through the listener, is not a second
+  payment. `receiveSlate` and `receiveFile` return `ReceivedSlate.repeated` set, with the
+  `txId` and the reply text of the first receive, and the listener reports kind `repeated`
+  with that `txId` instead of `received`. Show it as already answered and hand out the same
+  reply. `events()` reports nothing for a repeat.
 - The stream calls `refresh`, `scan`, `startListener`, `events` and `logs` report a failure as
   the stream's error: the same `WalletError` the other calls throw, after which the stream ends.
   Listen with `onError`; no error from a stream call reaches the app's zone.
@@ -252,11 +257,11 @@ the secret store, which the earlier binding kept in process-wide state.
 | `estimate_fee(amount, minimum_confirmations)` | `estimate_fee(amount, minimum_confirmations)` | Returns `FeeEstimate` with the inputs and change too. The sends choose inputs the same way, so the fee matches. |
 | `epicbox_address()` | `epicbox_address()` | `unsupported` when no relay is configured. |
 | `create_send_slate(amount, minimum_confirmations)` | `create_send_slate(amount, minimum_confirmations)` | `Slate` adds `tx_id`. New file form: `send_file(amount, minimum_confirmations, path)`. |
-| `receive_slate(slate_json)` | `receive_slate(slate_json)` | Same. New file form: `receive_file(path)`, writes `<path>.response`. |
+| `receive_slate(slate_json)` | `receive_slate(slate_json)` | Returns `ReceivedSlate`: the fields of `Slate` plus `repeated`. A slate received before returns the answer stored then, with `repeated` set and the first call's `tx_id`; nothing is stored or signed again. New file form: `receive_file(path)`, writes `<path>.response`, for a repeat too. |
 | `finalize_and_post(slate_json)` | `finalize_and_post(slate_json)` | Returns `FinalizedTx`; a refused post fails with `notPosted`. New: `finalize_file(path)`. |
 | `send_http(amount, minimum_confirmations, url)` | not provided | LEPIC 1.0 speaks Epicbox and files only. |
 | `send_epicbox(amount, minimum_confirmations, address)` | `send_epicbox(amount, minimum_confirmations, address)` | Returns `SentTx`. Like `validate_epicbox_address`, refuses a bare key without `@<relay>` with `invalidArgument` and stores nothing. |
-| `start_listener(events)` | `start_listener()` stream | Kinds `connected`, `disconnected`, `received`, `finalized`, `error`, `stopped`. New: `drain_epicbox()` for background work. |
+| `start_listener(events)` | `start_listener()` stream | Kinds `connected`, `disconnected`, `received`, `repeated`, `finalized`, `error`, `stopped`. `repeated` carries the `tx_id` of a payment answered before whose slate arrived again. New: `drain_epicbox()` for background work. |
 | `stop_listener()` | `stop_listener()` | Same. |
 | `listener_running()` | `listener_running()` | Same. |
 | `repost_transaction(key)` | `repost_transaction(tx_id)` | Local transaction id instead of the history key. |

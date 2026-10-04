@@ -25,8 +25,8 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip,
-    RefreshProgress, ScanProgress, SentTx, Slate, SlateInfo, TransactionDetails, WalletConfig,
-    WalletEvent, WalletSummary,
+    ReceivedSlate, RefreshProgress, ScanProgress, SentTx, Slate, SlateInfo, TransactionDetails,
+    WalletConfig, WalletEvent, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -629,7 +629,13 @@ impl EpicWallet {
     }
 
     /// Recipient side: signs an incoming send and returns the answer for the sender.
-    pub async fn receive_slate(&self, slate_json: String) -> Result<Slate, WalletError> {
+    ///
+    /// The same slate again, from text, a file or the listener, returns the answer stored the
+    /// first time with `repeated` set and the first call's `tx_id`; nothing is stored or
+    /// signed again, so a lost answer can be handed out again. Fails with `InvalidSlate` for
+    /// another slate under an id received before, or when that receive was cancelled or
+    /// expired.
+    pub async fn receive_slate(&self, slate_json: String) -> Result<ReceivedSlate, WalletError> {
         self.run("receive_slate", |session| async move {
             session.receive_slate(slate_json).await
         })
@@ -637,8 +643,8 @@ impl EpicWallet {
     }
 
     /// [`EpicWallet::receive_slate`] for the slate file at `path`. The answer is also written to
-    /// `<path>.response`, as `epic-wallet` names it.
-    pub async fn receive_file(&self, path: String) -> Result<Slate, WalletError> {
+    /// `<path>.response`, as `epic-wallet` names it, for a repeated slate too.
+    pub async fn receive_file(&self, path: String) -> Result<ReceivedSlate, WalletError> {
         self.run("receive_file", |session| async move {
             session.receive_file(&PathBuf::from(path), true).await
         })
