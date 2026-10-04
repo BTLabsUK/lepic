@@ -19,6 +19,7 @@ use crate::address::{AddressError, EpicboxAddress};
 use crate::client_inbox::{Mode, Subscription};
 use crate::crypto::{MessageError, NONCE_LEN, Nonce, SALT_LEN, Salt, SignedMessage};
 use crate::frame::{ClientFrame, FrameError, RelayErrorKind, WalletMode};
+use crate::prefilter::Prefilter;
 use crate::session::{Connection, Connector, ProtocolVersion, RelayEndpoint, deadline_after};
 
 /// The transport id of the Epicbox method.
@@ -216,10 +217,14 @@ pub(crate) struct ClientContext {
     pub(crate) settings: ClientSettings,
     pub(crate) identity: Identity,
     pub(crate) connector: Arc<dyn Connector>,
+    pub(crate) prefilter: Option<Arc<dyn Prefilter>>,
 }
 
-/// One wallet's Epicbox client. Sending opens a short connection of its own; [`Self::listen`]
-/// and [`Self::drain`] start a subscription.
+/// The Epicbox client of one identity. Sending opens a short connection of its own;
+/// [`Self::listen`] and [`Self::drain`] start a subscription on a connection of its own.
+///
+/// The relay serves a connection as the address it last subscribed with, so a wallet with
+/// several addresses runs one client per identity, each on its own connection.
 #[derive(Clone)]
 pub struct EpicboxClient {
     context: Arc<ClientContext>,
@@ -236,6 +241,22 @@ impl EpicboxClient {
                 settings,
                 identity,
                 connector,
+                prefilter: None,
+            }),
+        }
+    }
+
+    /// The same client, whose subscriptions started from now on ask `prefilter` about each
+    /// received message before opening it. A dropped message is acknowledged and is neither
+    /// handed out nor reported as a rejection.
+    pub fn with_prefilter(self, prefilter: Arc<dyn Prefilter>) -> Self {
+        let context = &self.context;
+        Self {
+            context: Arc::new(ClientContext {
+                settings: context.settings.clone(),
+                identity: context.identity.clone(),
+                connector: Arc::clone(&context.connector),
+                prefilter: Some(prefilter),
             }),
         }
     }
@@ -305,6 +326,7 @@ impl fmt::Debug for EpicboxClient {
         f.debug_struct("EpicboxClient")
             .field("identity", &self.context.identity)
             .field("settings", &self.context.settings)
+            .field("prefiltered", &self.context.prefilter.is_some())
             .finish_non_exhaustive()
     }
 }

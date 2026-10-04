@@ -7,6 +7,7 @@ mod crypto;
 mod frame;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
+mod prefilter;
 mod session;
 pub mod transport;
 
@@ -18,7 +19,7 @@ pub use client::{
     Awaiting, Backoff, ClientError, ClientSettings, EpicboxClient, Identity, TRANSPORT_ID,
 };
 pub use client_inbox::{
-    ConnectionState, Mode, RELAY_RETENTION, Rejection, RejectionReason, Subscription,
+    ConnectionState, InboxCounters, Mode, RELAY_RETENTION, Rejection, RejectionReason, Subscription,
 };
 pub use crypto::{
     Destination, EncryptedMessage, KEY_LEN, MAX_MESSAGE_LEN, MessageError, MessageField,
@@ -30,6 +31,7 @@ pub use frame::{
     MAX_RELAY_MESSAGE_ID_LEN, PROTOCOL_VERSION, RelayErrorKind, RelayFrame, RelayMessageId,
     SlateFrame, WalletMode,
 };
+pub use prefilter::{Admission, Prefilter};
 pub use session::{
     Connector, DEFAULT_PLAIN_PORT, EndpointError, ProtocolVersion, RelayEndpoint, RelayStream,
     Security, TcpConnector,

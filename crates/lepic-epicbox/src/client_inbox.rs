@@ -26,6 +26,7 @@ use crate::address::EpicboxAddress;
 use crate::client::{Awaiting, CancelToken, ClientContext, ClientError, ErrorChain, TRANSPORT_ID};
 use crate::crypto::{MessageError, ReceivedMessage};
 use crate::frame::{ClientFrame, RelayFrame, RelayMessageId, SlateFrame, WalletMode};
+use crate::prefilter::Admission;
 use crate::session::{Connection, Greeting, ProtocolVersion, deadline_after};
 
 /// The longest a relay keeps a stored message: the public relay expires them after seven days.
@@ -113,6 +114,18 @@ impl From<&MessageError> for RejectionReason {
             _ => Self::Malformed,
         }
     }
+}
+
+/// What a subscription did with the messages the relay sent it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InboxCounters {
+    /// Messages received, redeliveries included.
+    pub seen: u64,
+    /// Messages the client's [`crate::Prefilter`] dropped without opening them.
+    pub dropped: u64,
+    /// Messages whose signature was checked and that were then decrypted or rejected.
+    pub opened: u64,
 }
 
 /// A received message that could not be opened. It stays unacknowledged, and the relay delivers
@@ -211,6 +224,11 @@ impl Subscription {
     /// report one, in which case only the baseline protocol is used.
     pub fn relay_version(&self) -> Option<ProtocolVersion> {
         self.shared.lock().relay_version
+    }
+
+    /// What the subscription did with the messages it received so far, over all its sessions.
+    pub fn counters(&self) -> InboxCounters {
+        self.shared.lock().counters
     }
 
     /// Resolves once an envelope or a rejection is ready to be handed out, or the subscription
@@ -414,6 +432,7 @@ enum Seen {
 
 struct InboxState {
     state: ConnectionState,
+    counters: InboxCounters,
     /// Whether the relay may still deliver without the caller doing anything.
     expecting: bool,
     relay_version: Option<ProtocolVersion>,
@@ -430,6 +449,7 @@ impl InboxState {
     fn new() -> Self {
         Self {
             state: ConnectionState::Connecting { attempt: 1 },
+            counters: InboxCounters::default(),
             expecting: true,
             relay_version: None,
             ready: VecDeque::new(),
@@ -902,6 +922,7 @@ impl<'a> Session<'a> {
 
     fn receive_slate(&mut self, slate: SlateFrame) {
         let shared = &self.manager.shared;
+        shared.update(|inbox| inbox.counters.seen = inbox.counters.seen.saturating_add(1));
         let msg_id = slate.epicboxmsgid;
         let seen = match &msg_id {
             Some(msg_id) => shared.lock().seen(msg_id),
@@ -916,6 +937,19 @@ impl<'a> Session<'a> {
                 self.acknowledge_unasked(msg_id);
             }
             (_, msg_id) => {
+                if !self.admits(&slate.from) {
+                    shared.update(|inbox| {
+                        inbox.counters.dropped = inbox.counters.dropped.saturating_add(1);
+                    });
+                    debug!(
+                        msg_id = msg_id.as_ref().map_or("", RelayMessageId::as_str),
+                        "epicbox message dropped by the prefilter"
+                    );
+                    if let Some(msg_id) = msg_id {
+                        self.acknowledge_unasked(msg_id);
+                    }
+                    return;
+                }
                 if shared.lock().waiting() >= MAX_READY {
                     debug!(
                         msg_id = msg_id.as_ref().map_or("", RelayMessageId::as_str),
@@ -923,6 +957,9 @@ impl<'a> Session<'a> {
                     );
                     return;
                 }
+                shared.update(|inbox| {
+                    inbox.counters.opened = inbox.counters.opened.saturating_add(1);
+                });
                 let identity = &self.manager.context.identity;
                 match ReceivedMessage::open(
                     &slate.from,
@@ -959,6 +996,17 @@ impl<'a> Session<'a> {
                 }
             }
         }
+    }
+
+    /// Whether the client's prefilter lets a message from `from` be opened. Without a prefilter
+    /// every message is opened.
+    fn admits(&self, from: &str) -> bool {
+        let context = &self.manager.context;
+        let Some(prefilter) = &context.prefilter else {
+            return true;
+        };
+        EpicboxAddress::parse(from, context.identity.address().network())
+            .is_ok_and(|sender| prefilter.admit(sender.public_key()) == Admission::Accept)
     }
 
     fn acknowledge_unasked(&mut self, msg_id: RelayMessageId) {
