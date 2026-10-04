@@ -17,7 +17,7 @@ use lepic_crypto::{CryptoError, RangeProof};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::kernel::KernelFeatures;
 use lepic_primitives::params::{MAX_TX_WEIGHT, Network};
-use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec, carries_lepic_marker};
 use lepic_slate::codec::{Codec, EncodeContext, MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
 use lepic_slate::error::{
     DecodeError, FieldProblem, HexError, ProofAddressError, SlateError, ValidationError,
@@ -1031,5 +1031,60 @@ fn snapshot_of_each_stage() {
     ] {
         let slate = decode(&vector_json(name)).unwrap();
         insta::assert_snapshot!(stage, pretty(&encode(&slate)));
+    }
+}
+
+mod lepic_marker {
+    use super::*;
+
+    fn marked(slate: &Slate) -> String {
+        let encoded = codec().with_lepic_marker().encode(slate, &CONTEXT).unwrap();
+        encoded.as_text().unwrap().to_owned()
+    }
+
+    #[test]
+    fn a_marked_slate_ends_with_the_marker_and_is_otherwise_unchanged() {
+        for name in [S1, I1, I2] {
+            let slate = decode(&vector_json(name)).unwrap();
+            let plain = encode(&slate);
+            let marked = marked(&slate);
+            let body = plain.strip_suffix('}').unwrap();
+            assert_eq!(marked, format!("{body},\"lepic\":{{\"version\":1}}}}"));
+        }
+    }
+
+    #[test]
+    fn a_marked_slate_decodes_to_the_slate_it_was_written_from() {
+        let slate = decode(&vector_json(I1)).unwrap();
+        let decoded = decode(&marked(&slate)).unwrap();
+        assert_eq!(decoded, slate);
+    }
+
+    #[test]
+    fn the_codec_writes_no_marker_unless_asked() {
+        let slate = decode(&vector_json(I1)).unwrap();
+        assert!(!carries_lepic_marker(&wire(&encode(&slate))));
+        assert!(carries_lepic_marker(&wire(&marked(&slate))));
+    }
+
+    #[test]
+    fn only_a_marker_object_with_a_positive_version_counts() {
+        let with = |marker: Value| {
+            let mut value: Value = serde_json::from_str(&vector_json(I1)).unwrap();
+            value["lepic"] = marker;
+            carries_lepic_marker(&wire(&serde_json::to_string(&value).unwrap()))
+        };
+        assert!(with(json!({"version": 1})));
+        assert!(with(json!({"version": 2, "other": true})));
+        assert!(!with(json!({"version": 0})));
+        assert!(!with(json!({"version": "1"})));
+        assert!(!with(json!({})));
+        assert!(!with(json!("lepic")));
+        assert!(!with(Value::Null));
+        assert!(!carries_lepic_marker(&wire("[1]")));
+        assert!(!carries_lepic_marker(&WireSlate::binary(
+            MediaType::JSON,
+            vec![0xff]
+        )));
     }
 }
