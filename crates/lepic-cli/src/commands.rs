@@ -241,6 +241,15 @@ impl<H: Host> Run<'_, H> {
                     state: "cancelled".to_owned(),
                 }))
             }
+            TxCommand::Release(args) => {
+                let opened = self.open().await?;
+                let tx_id = TxId(args.tx_id);
+                opened.wallet.release(tx_id).await?;
+                Ok(Report::Release(TxStateReport {
+                    tx_id: tx_id.0,
+                    state: "cancelled".to_owned(),
+                }))
+            }
             TxCommand::List(args) => {
                 let opened = self.open().await?;
                 let account = opened.wallet.account(&args.account.account)?;
@@ -1001,6 +1010,8 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
     Ok(TxReport {
         kernel_excess: details.kernel_excess.map(|excess| excess.to_hex()),
         confirmed_height: details.confirmed_height.map(Height::value),
+        releasable_from: details.releasable_from.map(Height::value),
+        releasable: details.releasable_from.map(|_| details.releasable),
         ..tx_report(tx, Some(stages))
     })
 }
@@ -1025,6 +1036,8 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         stages,
         kernel_excess: None,
         confirmed_height: None,
+        releasable_from: None,
+        releasable: None,
     }
 }
 

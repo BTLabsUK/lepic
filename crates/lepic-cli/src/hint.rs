@@ -9,6 +9,7 @@ use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::InboxError;
 use lepic_wallet::invoice::InvoiceError;
 use lepic_wallet::refresh::RefreshError;
+use lepic_wallet::release::ReleaseRefusal;
 use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
 use lepic_wallet::send::SendError;
@@ -118,6 +119,17 @@ fn wallet_hint(error: &WalletError, settings: Option<&Settings>) -> Option<Strin
         WalletError::RestoreScanRequired => Some(
             "the wallet was restored, or its database rebuilt, without a scan of the chain, so \
              the keys already in use are not known; `lepic wallet scan` scans it from genesis"
+                .to_owned(),
+        ),
+        WalletError::NotReleasable {
+            reason: ReleaseRefusal::TooEarly { from },
+            ..
+        } => Some(format!(
+            "a send is releasable once a refresh at height {from} or above still misses its \
+             kernel; `lepic wallet info` refreshes, and `lepic tx show` tells when it is"
+        )),
+        WalletError::InPool(_) => Some(
+            "the node may still mine the transaction; refresh with `lepic wallet info` later"
                 .to_owned(),
         ),
         _ => None,

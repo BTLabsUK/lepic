@@ -330,6 +330,14 @@ keeps the height of that first confirmation: a reorganisation is not followed. H
 prints `-` for what is unknown; the JSON document leaves the key out.
 
 `lepic tx cancel <ID>` gives up a transaction that is not posted and unlocks its inputs.
+`lepic tx release <ID>` gives up a finalized or posted send the network never took, and unlocks
+its inputs too. A send becomes releasable once a refresh (`lepic wallet info`) at a height 1440
+blocks, about a day, or more after it was finalized still finds its kernel nowhere on chain.
+`lepic tx show` says when: `Release` reads `now`, or the height a refresh must reach first (JSON
+`releasable` and `releasable_from`, for finalized and posted sends only). The release asks the
+node once more and is refused (exit 7, `rejected`) while the node's chain or its transaction pool
+holds the transaction. What it can cost: if another node still holds the transaction and mines it
+later, the inputs are spent by it after all, and a new send that spends the same inputs fails.
 `lepic tx post <ID>` sends a finalized transaction to the node again, for one the node dropped. A
 node whose pool already holds it counts as having taken it. When the node refuses it and its chain
 already holds the transaction's kernel, lepic records the transaction as posted and the next `lepic wallet info`
@@ -401,6 +409,8 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `epicbox subscription failed` | The relay at `epicbox_relay` is unreachable. |
 | `invoice amount differs from the approved amount` | The amount you typed is not the one in the invoice; nothing was paid. |
 | `was already received as transaction N` | The file is a different slate under the id of one received before, or that transaction was cancelled or expired. The same slate again would have rewritten its reply. |
+| `transaction N cannot be released` (exit 7) | The send is not finalized or posted, or no refresh at the height `lepic tx show` names has missed its kernel yet. |
+| `transaction N is in the node's pool` (exit 7) | The node may still mine it; refresh later instead of releasing it. |
 | `finalized but the node did not accept it` (exit 11) | The node neither took the transaction nor holds its kernel. Check the node, then `lepic tx post <ID>`. |
 | `a restore scan must complete before new outputs are created` (exit 5) | The wallet was restored with `--no-scan`, or its database was rebuilt, and has not scanned the chain from genesis since. Run `lepic wallet scan`. |
 | `The node is behind the last refresh; balances not updated.` from `wallet info` | The node is still syncing, or the wallet stored a height this chain does not have. Once the node is synced, `lepic wallet scan --reset-chain` recovers. |

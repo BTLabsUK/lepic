@@ -62,6 +62,7 @@ fn the_tree_has_every_planned_command() {
         "tx resend",
         "tx post",
         "tx cancel",
+        "tx release",
         "tx list",
         "tx show",
         "invoice issue",

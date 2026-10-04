@@ -26,6 +26,7 @@ pub enum Report {
     Finalize(FinalizeReport),
     Post(PostReport),
     Cancel(TxStateReport),
+    Release(TxStateReport),
     List(TxListReport),
     Show(TxReport),
     InvoiceIssue(InvoiceIssueReport),
@@ -199,6 +200,13 @@ pub struct TxReport {
     /// Block height the transaction was confirmed at; shown by `tx show` only, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmed_height: Option<u64>,
+    /// For a finalized or posted send, the height from which a refresh that still misses its
+    /// kernel makes it releasable; shown by `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub releasable_from: Option<u64>,
+    /// Whether `tx release` may release it now; shown by `tx show` with `releasable_from`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub releasable: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -342,6 +350,16 @@ fn json_line(value: &impl Serialize) -> String {
     text
 }
 
+/// `now` for a send `tx release` may release, the height a refresh must reach first for one
+/// that may become releasable, and `-` for any other transaction.
+fn release_text(tx: &TxReport) -> String {
+    match (tx.releasable, tx.releasable_from) {
+        (Some(true), _) => "now".to_owned(),
+        (_, Some(height)) => format!("after a refresh at height {height} or above"),
+        _ => "-".to_owned(),
+    }
+}
+
 /// What a transaction moved for the wallet, without the fee: credited minus debited, with the
 /// fee given back for an outgoing one, whose debit includes it. Negative when sent.
 fn net_amount(tx: &TxReport) -> String {
@@ -473,6 +491,11 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             _ => writeln!(out, "Transaction {} is {}.", r.tx_id, r.state),
         },
         Report::Cancel(r) => writeln!(out, "Transaction {} is {}.", r.tx_id, r.state),
+        Report::Release(r) => writeln!(
+            out,
+            "Transaction {} is released and {}; its inputs can be spent again.",
+            r.tx_id, r.state
+        ),
         Report::List(r) => {
             if r.transactions.is_empty() {
                 return writeln!(out, "No transactions in account {}.", r.account);
@@ -530,6 +553,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                     tx.confirmed_height
                         .map_or_else(|| "-".to_owned(), |height| height.to_string()),
                 ),
+                ("Release", release_text(tx)),
             ];
             for (name, value) in rows {
                 writeln!(out, "{name:<12} {value}")?;
@@ -602,6 +626,8 @@ mod tests {
             stages,
             kernel_excess: None,
             confirmed_height: None,
+            releasable_from: None,
+            releasable: None,
         }
     }
 
@@ -800,6 +826,21 @@ mod tests {
                 vec!["state", "tx_id"],
             ),
             (
+                Report::Release(TxStateReport {
+                    tx_id: 1,
+                    state: text("cancelled"),
+                }),
+                vec!["state", "tx_id"],
+            ),
+            (
+                Report::Show(TxReport {
+                    releasable_from: Some(1_444),
+                    releasable: Some(false),
+                    ..tx(Some(vec![text("S3")]))
+                }),
+                [TX, &["stages", "releasable_from", "releasable"]].concat(),
+            ),
+            (
                 Report::List(TxListReport {
                     account: text("default"),
                     transactions: vec![],
@@ -995,6 +1036,36 @@ mod tests {
         let unknown = render(&Report::Show(tx(Some(vec![]))), OutputFormat::Human).to_string();
         assert!(unknown.contains("\nKernel       -\n"), "{unknown}");
         assert!(unknown.contains("\nConfirmed at -\n"), "{unknown}");
+    }
+
+    #[test]
+    fn the_transaction_view_says_when_a_send_can_be_released() {
+        let view = |releasable_from, releasable| {
+            let report = Report::Show(TxReport {
+                releasable_from,
+                releasable,
+                ..tx(Some(vec![text("S3")]))
+            });
+            render(&report, OutputFormat::Human).to_string()
+        };
+        let waiting = view(Some(1_444), Some(false));
+        assert!(
+            waiting.contains("\nRelease      after a refresh at height 1444 or above\n"),
+            "{waiting}"
+        );
+        let ready = view(Some(1_444), Some(true));
+        assert!(ready.contains("\nRelease      now\n"), "{ready}");
+        let other = view(None, None);
+        assert!(other.contains("\nRelease      -\n"), "{other}");
+
+        let released = Report::Release(TxStateReport {
+            tx_id: 3,
+            state: text("cancelled"),
+        });
+        assert_eq!(
+            render(&released, OutputFormat::Human).to_string(),
+            "Transaction 3 is released and cancelled; its inputs can be spent again.\n"
+        );
     }
 
     #[test]

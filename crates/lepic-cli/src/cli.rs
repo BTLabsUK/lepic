@@ -210,6 +210,13 @@ delivered and finalized, or cancelled with `lepic tx cancel`.")]
     Post(PostArgs),
     /// Cancel a transaction that is not posted
     Cancel(TxIdArgs),
+    /// Release the inputs of a finalized or posted send the network never took
+    #[command(after_help = "\
+A send is releasable once a refresh a day of blocks (1440) after it was finalized still finds
+its kernel nowhere on chain; `lepic tx show` says when. The node is asked once more first, and
+the release is refused while its chain or its pool holds the transaction. If another node still
+holds it and mines it later, a new send that spends the same inputs fails.")]
+    Release(TxIdArgs),
     /// List the transactions of an account
     List(ListArgs),
     /// Show one transaction

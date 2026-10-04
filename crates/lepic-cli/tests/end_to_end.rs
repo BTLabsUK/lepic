@@ -337,6 +337,42 @@ fn tx_show_gives_the_kernel_and_the_confirmation_height() {
 }
 
 #[test]
+fn tx_release_refuses_a_send_until_it_is_releasable() {
+    let (host, sender, receiver) = two_wallets();
+    let slate = sender.path("release.slate");
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let tx_id = sent["tx_id"].to_string();
+    let unsent = sender.run(&host, &["tx", "show", &tx_id]).ok().json();
+    assert!(unsent.get("releasable_from").is_none(), "{unsent}");
+    let refused = sender.run(&host, &["tx", "release", &tx_id]);
+    assert_ne!(refused.code, 0);
+    assert_eq!(refused.json()["error"]["kind"], "rejected", "{refused:?}");
+
+    let received = receiver
+        .run(&host, &["tx", "receive", slate.to_str().unwrap()])
+        .ok()
+        .json();
+    sender
+        .run(&host, &["tx", "finalize", text(&received, "reply_file")])
+        .ok();
+    let posted = sender.run(&host, &["tx", "show", &tx_id]).ok().json();
+    assert_eq!(posted["state"], "posted", "{posted}");
+    assert_eq!(posted["releasable_from"], TIP + 1_440, "{posted}");
+    assert_eq!(posted["releasable"], false, "{posted}");
+
+    let early = sender.run(&host, &["tx", "release", &tx_id]);
+    assert_eq!(early.json()["error"]["kind"], "rejected", "{early:?}");
+    let shown = sender.run(&host, &["tx", "show", &tx_id]).ok().json();
+    assert_eq!(shown["state"], "posted", "{shown}");
+}
+
+#[test]
 fn a_cancelled_send_releases_its_inputs() {
     let (host, sender, _) = two_wallets();
     let slate = sender.path("cancelled.slate");

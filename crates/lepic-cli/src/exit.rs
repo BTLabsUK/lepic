@@ -233,6 +233,8 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         | WalletError::Account(_)
         | WalletError::Transition(_)
         | WalletError::OnChain(_)
+        | WalletError::InPool(_)
+        | WalletError::NotReleasable { .. }
         | WalletError::ChangedDuringCancel(_) => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
@@ -442,6 +444,20 @@ mod tests {
             ),
             (
                 WalletError::ChangedDuringCancel(lepic_store::TxId(6)).into(),
+                ErrorKind::Rejected,
+            ),
+            (
+                WalletError::InPool(lepic_store::TxId(7)).into(),
+                ErrorKind::Rejected,
+            ),
+            (
+                WalletError::NotReleasable {
+                    tx_id: lepic_store::TxId(8),
+                    reason: lepic_wallet::release::ReleaseRefusal::TooEarly {
+                        from: Height::new(1_444),
+                    },
+                }
+                .into(),
                 ErrorKind::Rejected,
             ),
             (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
