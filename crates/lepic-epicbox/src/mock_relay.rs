@@ -8,8 +8,9 @@
 //! live listener per address, passes each newly posted message through to an idle listener,
 //! answers the JSON `ping` with bare `pong` text, and closes sockets that send text that is not
 //! JSON. A `Subscribe` for another address switches the socket to it, and `Made` is checked
-//! against the address the socket last subscribed with, as on the public relay. Unlike the public relay it stores every message itself instead of forwarding to other
-//! domains, and its messages do not expire. Switches make it refuse or stall connections, leave
+//! against the address the socket last subscribed with, as on the public relay. Unlike the
+//! public relay it stores every message itself instead of forwarding to other domains, and its
+//! messages do not expire. Switches make it refuse or stall connections, leave
 //! chosen frames unanswered, or stop reading a connection. Tests wait on its state with
 //! [`MockRelay::wait_until`] instead of polling.
 
