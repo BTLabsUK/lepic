@@ -202,6 +202,21 @@ step_receive_by_file() {
     DETAIL="two V2 S1 files from epic-wallet answered in V3; 50 EPIC spendable"
 }
 
+# The message table of one epic-wallet transaction. epic-wallet prints it only to a terminal, so
+# `txs` runs under `script`.
+ew_tx_messages() {
+    local wallet="$1" slate_id="$2"
+    dc exec -T "${wallet}" timeout 60 script -qec "ew txs -t ${slate_id}" /dev/null </dev/null 2>>"${RUN_LOG}" |
+        sed 's/\x1b\[[0-9;]*[mK]//g; s/\x1b[()][A-Z0-9]//g'
+}
+
+lepic_tx_has_message() {
+    local tx_id="$1" role="$2" text="$3"
+    lepic tx show "${tx_id}" |
+        jq -e --arg role "${role}" --arg text "${text}" \
+            'any(.messages[]; .role == $role and .text == $text)' >/dev/null
+}
+
 step_send_over_epicbox() {
     peer_listen_start || fail "epic-wallet listener did not start" || return 1
     local sent tx_id slate_id fee summary
@@ -214,7 +229,13 @@ step_send_over_epicbox() {
     confirm_both "${tx_id}" "${slate_id}" || return 1
     EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 1.5) - fee))
     check_lepic_total || return 1
-    DETAIL="S1 by relay, S2 drained and finalized; ${slate_id} confirmed"
+    local messages
+    messages="$(ew_tx_messages peer "${slate_id}")"
+    printf 'epic-wallet (peer) txs -t %s:\n%s\n' "${slate_id}" "${messages}" >>"${RUN_LOG}"
+    # The sender's row of the message table: participant 0, the text, then its public key.
+    grep -Eq '^ *0 +acceptance +0[23][0-9a-f]{64} ' <<<"${messages}" || fail "epic-wallet txs shows no lepic message: ${messages}" || return 1
+    lepic_tx_has_message "${tx_id}" sender acceptance || fail "lepic tx show has no own message" || return 1
+    DETAIL="S1 by relay, S2 drained and finalized; ${slate_id} confirmed; message shown by epic-wallet txs"
 }
 
 step_listen_receives_over_epicbox() {
@@ -232,7 +253,7 @@ step_listen_receives_over_epicbox() {
         { kill -INT "${listen_pid}" 2>/dev/null; fail "listen did not report the connection"; } || return 1
     wait_until "peer spendable" 180 ew_spendable_at_least peer $((3 * UNIT)) ||
         { kill -INT "${listen_pid}"; fail "epic-wallet has no spendable funds"; } || return 1
-    ew peer send -m epicbox -d "${LEPIC_ADDRESS}" -c 1 -s smallest 2.25 >>"${RUN_LOG}" ||
+    ew peer send -m epicbox -d "${LEPIC_ADDRESS}" -c 1 -s smallest -g "from epic-wallet" 2.25 >>"${RUN_LOG}" ||
         { kill -INT "${listen_pid}"; fail "epic-wallet send failed"; } || return 1
     wait_until "lepic's S2 on the relay" 60 relay_messages_above "${PEER_KEY}" "${before}"
     local answered=$?
@@ -248,10 +269,12 @@ step_listen_receives_over_epicbox() {
     tx="$(lepic_incoming_after "${last}")"
     [[ -n "${tx}" && "$(wc -l <<<"${tx}")" -eq 1 ]] || fail "expected one new incoming tx: ${tx}" || return 1
     [[ "$(jq -r .amount_credited <<<"${tx}")" == 2.25000000 ]] || fail "credited amount wrong: ${tx}" || return 1
+    lepic_tx_has_message "$(jq -r .tx_id <<<"${tx}")" sender "from epic-wallet" ||
+        fail "lepic tx show lacks epic-wallet's message: $(lepic tx show "$(jq -r .tx_id <<<"${tx}")")" || return 1
     confirm_both "$(jq -r .tx_id <<<"${tx}")" "$(jq -r .slate_id <<<"${tx}")" || return 1
     EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 2.25)))
     check_lepic_total || return 1
-    DETAIL="listen answered epic-wallet's S1 and stopped on Ctrl-C with exit 0"
+    DETAIL="listen answered epic-wallet's S1 and stopped on Ctrl-C with exit 0; its message shown by tx show"
 }
 
 step_send_by_file() {

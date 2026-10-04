@@ -3,7 +3,8 @@
 `run.sh` installs `lepic` with `cargo xtask install` and drives that installed binary, as a user
 would run it from a shell, through every command against the local interop stack: the Epicbox
 relay, the reference node `v4.0.4` on a test-mode chain and two `epic-wallet` `v4.0.2` wallets. It
-covers both directions over Epicbox and slate files, invoices both ways, a failed delivery and
+covers both directions over Epicbox and slate files, a signed message each way over Epicbox
+(shown by `lepic tx show` and `epic-wallet txs`), invoices both ways, a failed delivery and
 `tx resend`, cancel, restore from the phrase, a restore with `--no-scan` that receives only after
 `wallet scan`, import of an `epic-wallet` `wallet.seed`, and the
 exit codes of common mistakes, then prints a pass or fail table. It exits 0 only when every step
