@@ -145,12 +145,14 @@ where
     /// makes it releasable (`Wallet::release`).
     ///
     /// The tip must be plausible: below the bounds [`crate::chain`] describes. Output and
-    /// kernel heights must not be above the tip; one above it has the tip asked for once more,
-    /// and a second tip that reaches it, is plausible and agrees with the first replaces the
-    /// first. Before expiring anything the tip is asked for again, unless it already was, and
-    /// the two must agree. When the tip expired nothing, it raises the last confirmed
-    /// height if it is at most [`crate::chain::TIP_STEP_BLOCKS`] above it; a tip further ahead
-    /// is held until a later refresh or scan sees the chain at or above it.
+    /// kernel heights must not be above the tip. An output or confirming kernel above it has
+    /// the tip asked for once more, and a second tip that reaches it, is plausible and agrees
+    /// with the first replaces the first. The release check's kernels do not, so the tip it
+    /// counts at is the one reported and stored. Before expiring anything the tip is asked for
+    /// again, unless it already was, and the two must agree. When the tip expired nothing, it
+    /// raises the last confirmed height if it is at most [`crate::chain::TIP_STEP_BLOCKS`]
+    /// above it; a tip further ahead is held until a later refresh or scan sees the chain at
+    /// or above it.
     ///
     /// Emits [`Event::Transaction`] for every state change and one [`Event::Balance`] per
     /// account, computed as [`Wallet::balance`] computes it, at the highest confirmed tip
@@ -281,7 +283,7 @@ where
             .await??
         };
         self.record_changes(&mut summary, changes);
-        self.check_releases(&session, &mut tip, &kernel_missing, now, &mut summary)
+        self.check_releases(&session, tip.height, &kernel_missing, now, &mut summary)
             .await?;
 
         let balances = {
@@ -302,17 +304,18 @@ where
     async fn check_releases(
         &self,
         session: &Arc<Session<S::Store>>,
-        tip: &mut RefreshTip,
+        tip: Height,
         missing: &BTreeSet<TxId>,
         now: Timestamp,
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
-        let at = tip.height;
         let (height, due) = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| {
-                Ok(session.store.read(|repos| releases_due(repos, &codecs, at)))
+                Ok(session
+                    .store
+                    .read(|repos| releases_due(repos, &codecs, tip)))
             })
             .await??
         };
@@ -329,12 +332,11 @@ where
             let kernel = self
                 .ports()
                 .node
-                .get_kernel(&check.excess, Some(check.min_height), Some(tip.height))
+                .get_kernel(&check.excess, Some(check.min_height), Some(tip))
                 .await?;
             match kernel {
                 Some(kernel) => {
-                    self.cover(tip, kernel.height).await?;
-                    chain::check_kernel_height(kernel.height, check.min_height, tip.height)?;
+                    chain::check_kernel_height(kernel.height, check.min_height, tip)?;
                     confirmed.push((tx_id, kernel.height));
                 }
                 None => absent.push(tx_id),

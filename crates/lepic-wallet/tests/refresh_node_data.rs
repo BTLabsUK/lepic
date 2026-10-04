@@ -33,9 +33,10 @@ use lepic_store::{
     TxState, WalletStore,
 };
 use lepic_transport::transport::Destination;
-use lepic_wallet::chain::ImplausibleNodeData;
+use lepic_wallet::chain::{ImplausibleNodeData, TIP_SLACK_BLOCKS};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
+use lepic_wallet::release::RELEASE_AFTER_BLOCKS;
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::{SelectionOptions, SelectionStrategy};
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
@@ -523,6 +524,11 @@ fn an_output_above_a_second_implausible_tip_is_refused() {
 
 /// A posted send without change, whose final slate is stored, as `send_file_plain` ends.
 fn posted_without_change(sender: &Sender) -> (TxId, LocatedKernel) {
+    posted(sender, Amount::ZERO)
+}
+
+/// A posted send of the `send_file_plain` final slate, crediting `change` back to the wallet.
+fn posted(sender: &Sender, change: Amount) -> (TxId, LocatedKernel) {
     let vector: serde_json::Value = serde_json::from_str(SEND_FILE_PLAIN_S3).unwrap();
     let json = vector["expected"]["json"].as_str().unwrap().to_owned();
     let slate = legacy_codecs()
@@ -541,7 +547,7 @@ fn posted_without_change(sender: &Sender) -> (TxId, LocatedKernel) {
                 state: TxState::Posted,
                 slate_id: Some(slate_id),
                 transport: None,
-                amount_credited: Amount::ZERO,
+                amount_credited: change,
                 amount_debited: Amount::new(AMOUNT),
                 fee: Some(Fee::new(800_000)),
                 created_at: fixed_time(),
@@ -615,6 +621,164 @@ fn a_kernel_above_the_first_tip_is_covered_by_a_second_tip() {
     assert_eq!(
         sender.read(|repos| repos.confirmed_height(tx_id)),
         Some(Height::new(height + 1))
+    );
+}
+
+#[test]
+fn a_tip_read_again_is_not_read_a_third_time_for_a_kernel_above_it() {
+    let (sender, _) = funded();
+    let (tx_id, kernel) = posted_without_change(&sender);
+    let height = kernel.height.value();
+    set_tip(&sender, height);
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.kernels.push(kernel));
+    let wallet = scripted(
+        &sender,
+        Script {
+            // The second tip covers the output but not the kernel two blocks above the first.
+            tips: vec![height, height + 1],
+            raise_outputs: height,
+            raise_kernels: 2,
+            ..Script::default()
+        },
+    );
+    let tips_before = tip_requests(&sender);
+
+    let result = sender.harness.block_on(wallet.refresh());
+
+    assert!(
+        matches!(
+            result,
+            Err(RefreshError::Implausible(
+                ImplausibleNodeData::KernelOutOfRange { tip, .. }
+            )) if tip == Height::new(height + 1)
+        ),
+        "{result:?}"
+    );
+    assert_eq!(tip_requests(&sender) - tips_before, 2);
+    assert_eq!(state(&sender, tx_id), TxState::Posted);
+}
+
+#[test]
+fn expiry_at_a_tip_read_again_does_not_read_it_a_third_time() {
+    let (sender, funding) = funded();
+    let sent = send_with_ttl(&sender);
+    let wallet = scripted(
+        &sender,
+        Script {
+            // Nothing expires at the first tip; the second, which covers the input, expires
+            // the send.
+            tips: vec![TIP + TTL_BLOCKS - 1, TIP + TTL_BLOCKS],
+            raise_outputs: TIP + TTL_BLOCKS - 1,
+            ..Script::default()
+        },
+    );
+    let tips_before = tip_requests(&sender);
+
+    let outcome = sender.harness.block_on(wallet.refresh());
+
+    assert!(
+        matches!(outcome, Ok(RefreshOutcome::Refreshed(summary))
+            if summary.expired_transactions == 1
+                && summary.height == Height::new(TIP + TTL_BLOCKS)),
+        "{outcome:?}"
+    );
+    assert_eq!(tip_requests(&sender) - tips_before, 2);
+    assert_eq!(state(&sender, sent), TxState::Expired);
+    assert_eq!(status(&sender, &funding), OutputStatus::Unspent);
+}
+
+#[test]
+fn a_second_tip_above_the_plausible_limit_is_refused() {
+    let (sender, funding) = funded();
+    let reference = format!("{TIP} {}", fixed_time().as_second());
+    sender
+        .store
+        .write(|repos| {
+            repos.put_setting("chain.first", &reference)?;
+            repos.put_setting("chain.reference", &reference)?;
+            repos.delete_setting("chain.pending")
+        })
+        .unwrap();
+    let limit = TIP + TIP_SLACK_BLOCKS;
+    let wallet = scripted(
+        &sender,
+        Script {
+            // Both tips agree; only the second is above the limit, and only it covers the
+            // output.
+            tips: vec![limit, limit + 1],
+            raise_outputs: limit,
+            ..Script::default()
+        },
+    );
+
+    let result = sender.harness.block_on(wallet.refresh());
+
+    assert!(
+        matches!(
+            result,
+            Err(RefreshError::Implausible(
+                ImplausibleNodeData::TipTooHigh { tip, .. }
+            )) if tip == Height::new(limit + 1)
+        ),
+        "{result:?}"
+    );
+    let stored = sender
+        .read(|repos| repos.output(funding.commitment()))
+        .unwrap();
+    assert_eq!(stored, funding);
+    assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
+    assert_eq!(
+        sender.read(|repos| repos.setting("chain.reference")),
+        Some(reference)
+    );
+}
+
+#[test]
+fn a_release_check_kernel_above_the_tip_does_not_move_the_tip() {
+    let (sender, _) = funded();
+    let (tx_id, kernel) = posted(&sender, Amount::new(1));
+    let created = kernel.height.value() - 1;
+    let due = created + RELEASE_AFTER_BLOCKS;
+    sender
+        .store
+        .write(|repos| repos.put_setting("refresh.last_confirmed_height", &due.to_string()))
+        .unwrap();
+    set_tip(&sender, due);
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.kernels.push(kernel));
+    let wallet = scripted(
+        &sender,
+        Script {
+            // A node that answers above the bound it was given, with a tip that would cover it.
+            tips: vec![due, due + 1],
+            raise_kernels: due - created,
+            clock_ahead: DAY_SECONDS,
+            ..Script::default()
+        },
+    );
+    let tips_before = tip_requests(&sender);
+
+    let result = sender.harness.block_on(wallet.refresh());
+
+    assert!(
+        matches!(
+            result,
+            Err(RefreshError::Implausible(
+                ImplausibleNodeData::KernelOutOfRange { tip, .. }
+            )) if tip == Height::new(due)
+        ),
+        "{result:?}"
+    );
+    assert_eq!(tip_requests(&sender) - tips_before, 1);
+    assert_eq!(state(&sender, tx_id), TxState::Posted);
+    assert_eq!(
+        sender.wallet.last_confirmed_height().unwrap(),
+        Some(Height::new(due))
     );
 }
 
