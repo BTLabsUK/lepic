@@ -142,7 +142,9 @@ where
     /// expired, since it may still be mined. Last, it looks up the kernel of each finalized or
     /// posted send [`crate::release::RELEASE_AFTER_BLOCKS`] or more after it was finalized,
     /// counted at the highest confirmed tip: a kernel found confirms the send, a missing one
-    /// makes it releasable (`Wallet::release`).
+    /// makes it releasable (`Wallet::release`). Then it looks up the kernel of each send
+    /// released at most [`crate::release::RELEASED_WATCH_BLOCKS`] before that tip: a kernel
+    /// found moves the send from `cancelled` to `confirmed` and stores its change as unspent.
     ///
     /// The tip must be plausible: below the bounds [`crate::chain`] describes. Output and
     /// kernel heights must not be above the tip. An output or confirming kernel above it has
@@ -285,6 +287,8 @@ where
         self.record_changes(&mut summary, changes);
         self.check_releases(&session, tip.height, &kernel_missing, now, &mut summary)
             .await?;
+        let changes = self.watch_released(&session, tip.height, now).await?;
+        self.record_changes(&mut summary, changes);
 
         let balances = {
             let session = Arc::clone(&session);
@@ -866,7 +870,7 @@ pub(crate) fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
 /// The height balances are computed at: the highest tip a refresh or scan confirmed, or zero
 /// before any. A tip held as pending does not count, so the balance a refresh reports equals
 /// what [`Wallet::balance`] reads from the store afterwards.
-fn balance_height(repos: &dyn Repositories) -> Result<Height, StoreError> {
+pub(crate) fn balance_height(repos: &dyn Repositories) -> Result<Height, StoreError> {
     Ok([
         last_confirmed(repos)?,
         chain::position(repos)?.confirmed_height(),

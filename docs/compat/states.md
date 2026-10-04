@@ -21,7 +21,7 @@ own state (`lepic-wallet`'s `state` module).
 | outgoing `sent` | `TxSentCreated` | false | creating S1, or paying an invoice (I2) |
 | outgoing `finalized` | `TxSentCreated`, with the transaction stored | false | finalizing S3 |
 | outgoing `posted` | `TxSentCreated`, or `TxSentMempool` once seen in the mempool | false | posting to the node |
-| outgoing `confirmed` | `TxSent` | true | a refresh finding one of its outputs on chain |
+| outgoing `confirmed` | `TxSent` | true | a refresh finding one of its outputs on chain, or the kernel of a released send |
 | outgoing `cancelled` | `TxSentCancelled` | false | the owner's cancel, or the owner's release of a finalized or posted send the network never took |
 | outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height |
 | incoming `received` | `TxReceived` | false | receiving S1 (S2 returned), or issuing an invoice (I1) |
@@ -47,7 +47,8 @@ changes nothing. Any other transition not listed is rejected with a typed error.
 | `sent`, `received` | `finalized`, `confirmed`, `cancelled`, `expired` |
 | `finalized` | `posted`, `confirmed`, `cancelled` |
 | `posted` | `confirmed`, `cancelled` |
-| `confirmed`, `cancelled`, `expired` | none |
+| `cancelled`, for a released send only | `confirmed`, by a refresh that finds its kernel |
+| `confirmed`, `cancelled`, `expired` | none otherwise |
 
 `confirmed` is reachable from every open state because the chain is the authority: a peer may post
 the transaction before this wallet records finalizing or posting it.
@@ -55,8 +56,8 @@ the transaction before this wallet records finalizing or posting it.
 Upstream cancels and expires any entry whose `tx_type` is still `TxSentCreated` or `TxReceived`,
 which includes a transaction it finalized or posted but has not yet seen in the mempool. LEPIC
 expires neither a finalized nor a posted transaction, because either may still be mined after the
-TTL cutoff. The owner may still cancel a finalized one; a posted one ends only by confirmation.
-Upstream refuses to cancel an entry with `confirmed = true`, and so does LEPIC: `confirmed` is final.
+TTL cutoff. The owner may still cancel a finalized one, unless the node's chain or its transaction
+pool holds its kernel; a posted one ends only by confirmation. Upstream refuses to cancel an entry with `confirmed = true`, and so does LEPIC: `confirmed` is final.
 
 Upstream also refuses to cancel an entry whose type is neither `TxSentCreated` nor `TxReceived`, so
 a transaction the mempool has seen (`TxSentMempool`, `TxReceivedMempool`) cannot be cancelled there.
@@ -72,9 +73,14 @@ releasable. The release then asks the node once more and refuses while its chain
 transaction pool holds the kernel. It moves the send to `cancelled` as the owner's cancel does,
 which upstream records as `TxSentCancelled`. If another node still holds the transaction and it is
 mined later, its inputs are spent after all: a refresh marks them spent, and a newer send that
-spent them fails. The transaction stays `cancelled`, since a refresh never moves an ended
-transaction, and its change output, deleted by the release, comes back only with a scan, which
-stores it `unspent` again.
+spent them fails. The release keeps the kernel excess, the height the lookup starts from and the
+key and amount of each change output it deletes. Each refresh up to 10,080 blocks, about a week,
+after the height the release was decided at looks the kernel up, to the highest confirmed tip and
+not past that window. A kernel found moves the send from `cancelled` to `confirmed` at the
+kernel's height and stores its change `unspent` from that height, so the balance equals what a
+scan would find. This is the one transition out of `cancelled`, and only a released send takes
+it. A kernel mined after the window is not looked for: the send stays `cancelled`, and a scan
+stores its change `unspent` again.
 
 The app releases only a send whose post the node refused with a JSON-RPC error. LEPIC also
 releases a posted send the node dropped and a finalized one whose post got no answer: a kernel

@@ -213,7 +213,7 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 24 | `onChain` | The node already holds the transaction's kernel, so it cannot be cancelled or released. The next refresh confirms it. |
 | 25 | `foreignAppData` | The app data file is intact but belongs to a wallet with another seed. |
 | 26 | `damagedAppData` | The app data file belongs to this wallet but was changed or cut short. |
-| 27 | `inPool` | The node's transaction pool holds the transaction, so it may still be mined and is not released. Refresh later. |
+| 27 | `inPool` | The node's transaction pool holds the transaction, so it may still be mined and is not cancelled or released. Refresh later. |
 | 28 | `notReleasable` | `release_transaction` refused: the transaction is not a finalized or posted send, or `releasable` is still false. |
 
 Kinds 22 to 24 used to arrive as `other`. Kinds 25 and 26 are new with `sealAppData` and
@@ -260,8 +260,8 @@ the secret store, which the earlier binding kept in process-wide state.
 | `stop_listener()` | `stop_listener()` | Same. |
 | `listener_running()` | `listener_running()` | Same. |
 | `repost_transaction(key)` | `repost_transaction(tx_id)` | Local transaction id instead of the history key. |
-| `release_stuck_send(key)` | `release_transaction(tx_id)` | `TransactionDetails.releasable` replaces `TxEntry.releasable`, and `releasable_from` gives the height a refresh must reach first: 1440 blocks after finalizing, as before. Unlike the earlier rule, a posted send the node dropped and a finalized one whose post got no answer are released too; a kernel still missing a day of blocks later means the same in each case. The node is asked once more: `onChain` or `inPool` when it holds the transaction, `nodeUnreachable` when it cannot be asked. If another node mines the transaction later, a new send that spends the same inputs fails; a refresh then marks the inputs spent, the transaction keeps showing `cancelled`, and its change returns to the balance only after a `scan`. |
-| `cancel_transaction(tx_id)` | `cancel_transaction(tx_id)` | Same. |
+| `release_stuck_send(key)` | `release_transaction(tx_id)` | `TransactionDetails.releasable` replaces `TxEntry.releasable`, and `releasable_from` gives the height a refresh must reach first: 1440 blocks after finalizing, as before. Unlike the earlier rule, a posted send the node dropped and a finalized one whose post got no answer are released too; a kernel still missing a day of blocks later means the same in each case. The node is asked once more: `onChain` or `inPool` when it holds the transaction, `nodeUnreachable` when it cannot be asked. If another node mines the transaction later, a new send that spends the same inputs fails. A refresh within 10080 blocks, about a week, of the release finds the kernel: the transaction moves from `cancelled` to `confirmed`, with an event, and its change returns to the balance. One mined later keeps showing `cancelled`, and its change returns only after a `scan`. |
+| `cancel_transaction(tx_id)` | `cancel_transaction(tx_id)` | A finalized transaction is refused with `onChain` or `inPool` while the node's chain or pool holds its kernel. |
 | `refresh_with`, `scan_with`, `start_listener_with`, `*_for_tests` | none | Rust-only hooks of the earlier binding. Tests use `MockChain`. |
 | `init_logging(dir)` | `LepicRuntime::open_log_ring(dir, max_bytes)`, and the `LepicRuntime::logs()` stream | The ring keeps redacted records within `max_bytes`; it does not return a file path. |
 | `log_message(level, tag, message)` | `LepicRuntime::log_message(level, tag, message)` | Target `dart`, tag as a field. |

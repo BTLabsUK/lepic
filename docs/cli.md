@@ -329,7 +329,9 @@ height with it. A transaction with no change output is confirmed by its kernel i
 keeps the height of that first confirmation: a reorganisation is not followed. Human output
 prints `-` for what is unknown; the JSON document leaves the key out.
 
-`lepic tx cancel <ID>` gives up a transaction that is not posted and unlocks its inputs.
+`lepic tx cancel <ID>` gives up a transaction that is not posted and unlocks its inputs. A
+finalized one is refused (exit 7, `rejected`) while the node's chain or its transaction pool holds
+its kernel.
 `lepic tx release <ID>` gives up a finalized or posted send the network never took, and unlocks
 its inputs too. A send becomes releasable once a refresh (`lepic wallet info`) at a height 1440
 blocks, about a day, or more after it was finalized still finds its kernel nowhere on chain.
@@ -338,8 +340,10 @@ blocks, about a day, or more after it was finalized still finds its kernel nowhe
 node once more and is refused (exit 7, `rejected`) while the node's chain or its transaction pool
 holds the transaction. What it can cost: if another node still holds the transaction and mines it
 later, the inputs are spent by it after all, and a new send that spends the same inputs fails.
-The next refresh then marks the inputs spent, but the transaction keeps showing `cancelled` and
-its change is missing from the balance until `lepic wallet scan` finds it on chain again.
+A refresh within 10080 blocks, about a week, of the release then finds the kernel: the
+transaction shows `confirmed` and its change is back in the balance. A transaction mined later
+than that keeps showing `cancelled`, and its change is missing from the balance until
+`lepic wallet scan` finds it on chain again.
 `lepic tx post <ID>` sends a finalized transaction to the node again, for one the node dropped. A
 node whose pool already holds it counts as having taken it. When the node refuses it and its chain
 already holds the transaction's kernel, lepic records the transaction as posted and the next `lepic wallet info`

@@ -37,8 +37,8 @@ use lepic_transport::file::FILE;
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::event::TransactionState;
 use lepic_wallet::finalize::FinalizeError;
-use lepic_wallet::refresh::RefreshOutcome;
-use lepic_wallet::release::{RELEASE_AFTER_BLOCKS, ReleaseRefusal};
+use lepic_wallet::refresh::{BALANCE_MINIMUM_CONFIRMATIONS, RefreshOutcome};
+use lepic_wallet::release::{RELEASE_AFTER_BLOCKS, RELEASED_WATCH_BLOCKS, ReleaseRefusal};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Clock, Event, Ports, StoreOpener, Wallet, WalletError};
@@ -510,61 +510,159 @@ fn refuses_to_release_a_send_that_is_not_finalized_or_posted() {
     );
 }
 
+impl Releasing {
+    /// Another node held the transaction and a miner included it at `height` after all: its
+    /// inputs are spent, its outputs and kernel are on chain.
+    fn mined_elsewhere_at(&self, height: u64) {
+        let pushed = self.harness.node.pushed_transactions();
+        let mined = self.kernel_at(height);
+        self.harness.node.update_chain(|chain| {
+            let transaction = &pushed[0];
+            for output in &mut chain.outputs {
+                if transaction
+                    .inputs()
+                    .iter()
+                    .any(|input| input.commitment == output.commitment)
+                {
+                    output.spent = true;
+                }
+            }
+            for (position, output) in transaction.outputs().iter().enumerate() {
+                chain.outputs.push(ChainOutput {
+                    commitment: output.commitment,
+                    features: output.features,
+                    proof: output.proof.clone(),
+                    height: Height::new(height),
+                    mmr_index: 2 + position as u64,
+                    spent: false,
+                });
+            }
+            chain.kernels.push(mined);
+        });
+    }
+
+    fn change(&self) -> Vec<OutputRecord> {
+        self.outputs()
+            .into_iter()
+            .filter(|output| output.id != self.funding.id)
+            .collect()
+    }
+
+    fn balance(&self) -> lepic_wallet::event::Balance {
+        self.wallet.balance(ACCOUNT).unwrap()
+    }
+
+    fn kernel_lookups_by_one_refresh(&self) -> usize {
+        let before = self.harness.node.calls().len();
+        self.refresh();
+        self.harness.node.calls()[before..]
+            .iter()
+            .filter(|method| *method == "get_kernel")
+            .count()
+    }
+}
+
 #[test]
-fn a_released_send_mined_later_keeps_showing_cancelled_and_its_change_returns_with_a_scan() {
+fn a_released_send_mined_inside_the_watch_is_confirmed_and_its_change_returns() {
     let releasing = Releasing::posted().made_releasable();
-    let change_before = releasing
+    let change_before = releasing.change();
+    assert_eq!(change_before.len(), 1);
+    releasing.release().unwrap();
+    assert!(
+        releasing.change().is_empty(),
+        "the release drops the change"
+    );
+    releasing.mined_elsewhere_at(RELEASABLE_FROM);
+    let mut events = releasing.wallet.subscribe();
+
+    releasing.refresh();
+
+    assert_eq!(releasing.state(), TxState::Confirmed);
+    assert_eq!(
+        transaction_events(&mut events),
+        vec![(TxState::Cancelled, TxState::Confirmed)]
+    );
+    let details = releasing
+        .harness
+        .block_on(releasing.wallet.transaction_details(releasing.tx_id))
+        .unwrap();
+    assert_eq!(details.confirmed_height, Some(Height::new(RELEASABLE_FROM)));
+    let change = releasing.change();
+    assert_eq!(change.len(), 1, "the refresh stores the change again");
+    assert_eq!(change[0].id, change_before[0].id);
+    assert_eq!(change[0].key_id, change_before[0].key_id);
+    assert_eq!(change[0].amount, change_before[0].amount);
+    assert_eq!(change[0].status, OutputStatus::Unspent);
+    assert_eq!(change[0].height, Height::new(RELEASABLE_FROM));
+    let funding = releasing
         .outputs()
         .into_iter()
-        .find(|output| output.status == OutputStatus::Unconfirmed)
+        .find(|output| output.id == releasing.funding.id)
         .unwrap();
-    releasing.release().unwrap();
-    let pushed = releasing.harness.node.pushed_transactions();
-    let mined = releasing.kernel_at(RELEASABLE_FROM);
-    // Another node held the transaction and a miner included it after all.
-    releasing.harness.node.update_chain(|chain| {
-        let transaction = &pushed[0];
-        for output in &mut chain.outputs {
-            if transaction
-                .inputs()
-                .iter()
-                .any(|input| input.commitment == output.commitment)
-            {
-                output.spent = true;
-            }
-        }
-        for (position, output) in transaction.outputs().iter().enumerate() {
-            chain.outputs.push(ChainOutput {
-                commitment: output.commitment,
-                features: output.features,
-                proof: output.proof.clone(),
-                height: Height::new(RELEASABLE_FROM),
-                mmr_index: 2 + position as u64,
-                spent: false,
-            });
-        }
-        chain.kernels.push(mined);
-    });
+    assert_eq!(funding.status, OutputStatus::Spent);
+    let amount = change_before[0].amount;
+    let balance = releasing.balance();
+    assert_eq!(
+        (balance.awaiting_confirmation, balance.spendable),
+        (amount, Amount::ZERO)
+    );
 
-    releasing.refresh_twice();
+    // Spendable once it has its confirmations.
+    let confirmed_from = RELEASABLE_FROM + BALANCE_MINIMUM_CONFIRMATIONS - 1;
+    releasing.chain_reaches(confirmed_from);
+    releasing.refresh();
+    let balance = releasing.balance();
+    assert_eq!(balance.height, Height::new(confirmed_from));
+    assert_eq!(
+        (balance.spendable, balance.awaiting_confirmation),
+        (amount, Amount::ZERO)
+    );
+    assert_eq!(releasing.state(), TxState::Confirmed);
+
+    // A scan finds nothing the refresh did not already store.
+    support::complete_restore_scan(&releasing.harness.runtime, &releasing.wallet);
+
+    assert_eq!(releasing.balance(), balance);
+    assert_eq!(releasing.change().len(), 1);
+    assert_eq!(releasing.state(), TxState::Confirmed);
+}
+
+#[test]
+fn a_released_send_mined_after_the_watch_stays_cancelled_and_a_scan_recovers_its_change() {
+    let releasing = Releasing::posted().made_releasable();
+    let change_before = releasing.change();
+    releasing.release().unwrap();
+    assert_eq!(
+        releasing.kernel_lookups_by_one_refresh(),
+        1,
+        "a refresh inside the watch looks the kernel up"
+    );
+    let watched_until = RELEASABLE_FROM + RELEASED_WATCH_BLOCKS;
+    releasing.mined_elsewhere_at(watched_until + 1);
+
+    // A node client accepts a day of blocks at once, so the chain gets there a day at a time.
+    let mut height = RELEASABLE_FROM;
+    while height <= watched_until {
+        height = (height + RELEASE_AFTER_BLOCKS).min(watched_until + 1);
+        releasing.chain_reaches(height);
+        releasing.refresh_twice();
+    }
 
     assert_eq!(releasing.state(), TxState::Cancelled);
-    let outputs = releasing.outputs();
-    assert_eq!(outputs.len(), 1, "the change is not back after a refresh");
-    assert_eq!(outputs[0].id, releasing.funding.id);
-    assert_eq!(outputs[0].status, OutputStatus::Spent);
+    assert!(releasing.change().is_empty(), "the change is not back");
+    assert_eq!(
+        releasing.kernel_lookups_by_one_refresh(),
+        0,
+        "the watch has ended"
+    );
 
     support::complete_restore_scan(&releasing.harness.runtime, &releasing.wallet);
 
     assert_eq!(releasing.state(), TxState::Cancelled);
-    let change: Vec<_> = releasing
-        .outputs()
-        .into_iter()
-        .filter(|output| output.id != releasing.funding.id)
-        .collect();
+    let change = releasing.change();
     assert_eq!(change.len(), 1, "the scan restores the change");
-    assert_eq!(change[0].id, change_before.id);
-    assert_eq!(change[0].amount, change_before.amount);
+    assert_eq!(change[0].id, change_before[0].id);
+    assert_eq!(change[0].amount, change_before[0].amount);
     assert_eq!(change[0].status, OutputStatus::Unspent);
 }
 

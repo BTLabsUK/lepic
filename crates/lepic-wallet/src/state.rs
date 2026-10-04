@@ -8,6 +8,9 @@
 //!   └─> Confirmed, Cancelled, Expired
 //! ```
 //!
+//! A released send leaves `cancelled` for `confirmed` when the chain mines it after all
+//! (`confirm_released`); outside that step the final states are final.
+//!
 //! Moving a transaction to the state it is already in succeeds without a change, so a repeated
 //! step (a slate delivered twice, a second post) is harmless.
 //!
@@ -109,4 +112,115 @@ pub fn apply_transition(
     entry.updated_at = at;
     repos.update_transaction(tx_id, &entry)?;
     Ok(Some(change))
+}
+
+/// Moves a released send the chain mined after all from `cancelled` to `confirmed`, the one
+/// step out of a final state (`docs/compat/states.md`): the chain is the authority, and a
+/// kernel on chain means the send happened. Only a refresh that found the kernel of a send it
+/// knows was released takes this step; every other cancelled transaction stays final. Returns
+/// `Ok(None)` when the send is already confirmed.
+pub(crate) fn confirm_released(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    at: Timestamp,
+) -> Result<Option<StateChange>, WalletError> {
+    let mut entry = repos
+        .transaction(tx_id)?
+        .ok_or(WalletError::UnknownTransaction(tx_id))?;
+    match entry.state {
+        TxState::Confirmed => return Ok(None),
+        TxState::Cancelled => {}
+        from => {
+            return Err(InvalidTransition {
+                from,
+                to: TxState::Confirmed,
+            }
+            .into());
+        }
+    }
+    let change = StateChange {
+        tx_id,
+        from: entry.state,
+        to: TxState::Confirmed,
+    };
+    entry.state = TxState::Confirmed;
+    entry.updated_at = at;
+    repos.update_transaction(tx_id, &entry)?;
+    Ok(Some(change))
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_primitives::amount::Amount;
+    use lepic_store::{
+        AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, MemoryStore, TransactionEntry,
+        TxDirection, WalletStore,
+    };
+
+    use super::*;
+
+    fn at() -> Timestamp {
+        Timestamp::from_second(1_790_000_000).unwrap()
+    }
+
+    fn store_with(state: TxState) -> (MemoryStore, TxId) {
+        let store = MemoryStore::new(ContextKey::from_bytes([2; CONTEXT_KEY_LEN]));
+        let tx_id = store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(0),
+                    label: "default".to_owned(),
+                    next_child: 0,
+                })?;
+                repos.insert_transaction(&TransactionEntry {
+                    account: AccountIndex(0),
+                    direction: TxDirection::Outgoing,
+                    state,
+                    slate_id: None,
+                    transport: None,
+                    amount_credited: Amount::ZERO,
+                    amount_debited: Amount::ZERO,
+                    fee: None,
+                    created_at: at(),
+                    updated_at: at(),
+                })
+            })
+            .unwrap();
+        (store, tx_id)
+    }
+
+    #[test]
+    fn confirms_a_cancelled_transaction_once() {
+        let (store, tx_id) = store_with(TxState::Cancelled);
+
+        let first = store.write(|repos| confirm_released(repos, tx_id, at()));
+        let second = store.write(|repos| confirm_released(repos, tx_id, at()));
+
+        assert_eq!(
+            first.unwrap(),
+            Some(StateChange {
+                tx_id,
+                from: TxState::Cancelled,
+                to: TxState::Confirmed,
+            })
+        );
+        assert_eq!(second.unwrap(), None);
+    }
+
+    #[test]
+    fn confirms_no_other_state_out_of_turn() {
+        for state in [TxState::Expired, TxState::Sent, TxState::Posted] {
+            let (store, tx_id) = store_with(state);
+
+            let result = store.write(|repos| confirm_released(repos, tx_id, at()));
+
+            assert!(
+                matches!(
+                    result,
+                    Err(WalletError::Transition(InvalidTransition { from, .. })) if from == state
+                ),
+                "{state:?}: {result:?}"
+            );
+        }
+    }
 }
