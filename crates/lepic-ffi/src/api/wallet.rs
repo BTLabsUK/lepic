@@ -416,15 +416,17 @@ impl EpicWallet {
     }
 
     /// Changes the PIN of a wallet from [`EpicWallet::create_with_pin`] and returns the new
-    /// sealed text, which replaces `sealed_password` in the app's storage. `old_pin` must open
-    /// `sealed_password`; that attempt is counted and delayed as in
-    /// [`EpicWallet::open_with_pin`]. The wallet password stays the same, but it is sealed under
-    /// `new_pin` with a new PIN key that replaces `lepic.pin-key` in the store, so the old
-    /// sealed text no longer opens with any PIN.
+    /// sealed text, for the same wallet password under `new_pin` and a new PIN key. `old_pin`
+    /// must open `sealed_password`; that attempt is counted and delayed as in
+    /// [`EpicWallet::open_with_pin`].
     ///
-    /// Store the new sealed text at once. If the app stops between the call and storing it, the
-    /// wallet cannot be opened by PIN; delete it with [`delete_wallet`] and restore it from its
-    /// recovery phrase.
+    /// The change is pending until [`EpicWallet::confirm_pin_change`]: the new key is kept as
+    /// `lepic.pin-key-pending` beside `lepic.pin-key`, and both the old PIN with the old sealed
+    /// text and the new PIN with the new text open the wallet, also in a later runtime. Store
+    /// the new text, then confirm. If the app stops before it stored the text, the old pair
+    /// still opens. A second change before confirmation, from either pair, replaces the pending
+    /// key, so the text of the first change stops opening. While a change is pending a wrong PIN
+    /// costs two key derivations, and still counts as one failure.
     ///
     /// Fails with `InvalidArgument` when `new_pin` has fewer than four characters, before any
     /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
@@ -440,11 +442,33 @@ impl EpicWallet {
             session.ensure_unlocked()?;
             let new_pin = pin::NewPin::new(new_pin)?;
             let runtime = session.runtime();
-            let password =
-                pin::unlock(&runtime.pin, session.store(), old_pin, sealed_password).await?;
             // Never reseal a password that does not open this wallet's vault.
-            session.check_password(password.clone()).await?;
-            pin::seal_new(session.store(), new_pin, password, runtime.kdf).await
+            let check = |password| session.check_password(password);
+            pin::change(
+                &runtime.pin,
+                session.store(),
+                old_pin,
+                sealed_password,
+                new_pin,
+                runtime.kdf,
+                check,
+            )
+            .await
+        })
+        .await
+    }
+
+    /// Ends a PIN change of [`EpicWallet::change_pin`]: the old sealed text stops opening and
+    /// only the new PIN with the new text opens the wallet. Call it once the app has stored the
+    /// text `change_pin` returned, never before, and never when the app still holds the old
+    /// text, which would then no longer open. Does nothing when no change is pending.
+    ///
+    /// Fails with `Locked` on a locked wallet and with `SecretStore` when the store cannot be
+    /// read or written or holds a damaged pending key; the change then stays pending.
+    pub async fn confirm_pin_change(&self) -> Result<(), WalletError> {
+        self.run("confirm_pin_change", |session| async move {
+            session.ensure_unlocked()?;
+            pin::confirm_change(&session.runtime().pin, session.store()).await
         })
         .await
     }

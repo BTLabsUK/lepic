@@ -1041,7 +1041,7 @@ void main() {
     },
   );
 
-  test('after a pin change only the new pin opens the wallet', () async {
+  test('a pin change keeps both pins working until it is confirmed', () async {
     final dir = walletDir('change-pin');
     final store = MemoryStore();
     final created = await EpicWallet.createWithPin(
@@ -1073,32 +1073,150 @@ void main() {
     expect(newSealed, isNot(contains('9876')));
     created.wallet.dispose();
 
-    for (final (pin, sealed) in [('1234', oldSealed), ('9876', oldSealed)]) {
-      await expectLater(
+    Future<EpicWallet> open(String pin, String sealed) =>
         EpicWallet.openWithPin(
           runtime: runtime,
           config: configFor(dir),
           store: lepicSecretStore(store),
           pin: pin,
           sealedPassword: sealed,
-        ),
+        );
+
+    // Until the change is confirmed each pin opens its own sealed text, and only that one.
+    for (final (pin, sealed) in [('1234', newSealed), ('9876', oldSealed)]) {
+      await expectLater(
+        open(pin, sealed),
         throwsWalletError(WalletErrorKind.wrongPassword),
         reason: pin,
       );
     }
-    final reopened = await EpicWallet.openWithPin(
-      runtime: runtime,
-      config: configFor(dir),
-      store: lepicSecretStore(store),
-      pin: '9876',
-      sealedPassword: newSealed,
+    final withOld = await open('1234', oldSealed);
+    expect(
+      await withOld.mnemonicWithPin(pin: '1234', sealedPassword: oldSealed),
+      phrase,
     );
+    withOld.dispose();
+    final withNew = await open('9876', newSealed);
+    expect(
+      await withNew.mnemonicWithPin(pin: '9876', sealedPassword: newSealed),
+      phrase,
+    );
+    expect(store.values['lepic.pin-failures'], isNull);
+
+    await withNew.confirmPinChange();
+    expect(store.values.keys.toSet(), {'lepic.vault', 'lepic.pin-key'});
+    withNew.dispose();
+    // Two attempts, so the right pin below does not wait out a third failure.
+    for (final (pin, sealed) in [('1234', oldSealed), ('9876', oldSealed)]) {
+      await expectLater(
+        open(pin, sealed),
+        throwsWalletError(WalletErrorKind.wrongPassword),
+        reason: pin,
+      );
+    }
+    final reopened = await open('9876', newSealed);
     expect(
       await reopened.mnemonicWithPin(pin: '9876', sealedPassword: newSealed),
       phrase,
     );
     expect(store.values['lepic.pin-failures'], isNull);
   });
+
+  test('an unconfirmed pin change survives a reopened runtime', () async {
+    final dir = walletDir('change-pin-restart');
+    final store = MemoryStore();
+    final created = await EpicWallet.createWithPin(
+      runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
+      pin: '1234',
+    );
+    final oldSealed = created.sealedPassword;
+    final newSealed = await created.wallet.changePin(
+      sealedPassword: oldSealed,
+      oldPin: '1234',
+      newPin: '9876',
+    );
+    created.wallet.dispose();
+    // The app stopped before it stored the new text or confirmed the change.
+    runtime.dispose();
+
+    runtime = chain.runtime(logLevel: LogLevel.info);
+    for (final (pin, sealed) in [('1234', oldSealed), ('9876', newSealed)]) {
+      final opened = await EpicWallet.openWithPin(
+        runtime: runtime,
+        config: configFor(dir),
+        store: lepicSecretStore(store),
+        pin: pin,
+        sealedPassword: sealed,
+      );
+      opened.dispose();
+    }
+  });
+
+  test(
+    'pin failures during a pending change count once each and wait',
+    () async {
+      final dir = walletDir('change-pin-pending-backoff');
+      final store = MemoryStore();
+      final created = await EpicWallet.createWithPin(
+        runtime: runtime,
+        config: configFor(dir),
+        store: lepicSecretStore(store),
+        pin: '1234',
+      );
+      final oldSealed = created.sealedPassword;
+      final newSealed = await created.wallet.changePin(
+        sealedPassword: oldSealed,
+        oldPin: '1234',
+        newPin: '9876',
+      );
+      created.wallet.dispose();
+
+      Future<EpicWallet> open(String pin, String sealed) =>
+          EpicWallet.openWithPin(
+            runtime: runtime,
+            config: configFor(dir),
+            store: lepicSecretStore(store),
+            pin: pin,
+            sealedPassword: sealed,
+          );
+
+      // One counter for both pins: a wrong pin is one failure, whichever text it is tried on,
+      // and a right pin for either text clears the count.
+      final wrong = [('0000', oldSealed), ('0000', newSealed)];
+      for (final (index, (pin, sealed)) in wrong.indexed) {
+        await expectLater(
+          open(pin, sealed),
+          throwsWalletError(WalletErrorKind.wrongPassword),
+        );
+        expect(store.values['lepic.pin-failures'], '${index + 1}');
+      }
+      (await open('1234', oldSealed)).dispose();
+      expect(store.values['lepic.pin-failures'], isNull);
+
+      for (var failures = 1; failures <= 3; failures++) {
+        final sealed = failures.isOdd ? oldSealed : newSealed;
+        final started = DateTime.now();
+        await expectLater(
+          open('0000', sealed),
+          throwsWalletError(WalletErrorKind.wrongPassword),
+        );
+        expect(DateTime.now().difference(started).inSeconds, lessThan(5));
+        expect(store.values['lepic.pin-failures'], '$failures');
+      }
+      // After three failures the next attempt, even with the right new pin, first waits 30 s.
+      var finished = false;
+      unawaited(
+        open('9876', newSealed)
+            .then((wallet) => wallet.dispose(), onError: (_) {})
+            .whenComplete(() => finished = true),
+      );
+      await Future<void>.delayed(const Duration(seconds: 3));
+      expect(finished, isFalse);
+      expect(store.values['lepic.pin-failures'], '4');
+    },
+  );
 
   test('a wrong old pin is counted and delayed like any pin attempt', () async {
     final store = MemoryStore();

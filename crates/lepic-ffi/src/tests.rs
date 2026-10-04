@@ -15,6 +15,7 @@ const PIN: &str = "4711";
 
 /// Store keys next to `lepic.vault`; apps may see them in their store.
 const PIN_KEY: &str = "lepic.pin-key";
+const PENDING_KEY: &str = "lepic.pin-key-pending";
 const FAILURES_KEY: &str = "lepic.pin-failures";
 
 struct Fixture {
@@ -148,6 +149,11 @@ async fn delete_wallet_removes_the_pin_entries() {
     let store = AppSecretStore::in_memory();
     let created = fixture.create_with_pin(&store, PIN).await;
     let sealed = created.sealed_password.clone();
+    let pending = created
+        .wallet
+        .change_pin(sealed.clone(), PIN.to_owned(), "2468".to_owned())
+        .await;
+    assert!(pending.is_ok());
     drop(created);
     let wrong = fixture.open_with_pin(&store, "0000", &sealed).await;
     assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
@@ -155,7 +161,7 @@ async fn delete_wallet_removes_the_pin_entries() {
     delete_wallet(&fixture.runtime, fixture.config(), &store)
         .await
         .unwrap();
-    for key in [VAULT_KEY, PIN_KEY, FAILURES_KEY] {
+    for key in [VAULT_KEY, PIN_KEY, PENDING_KEY, FAILURES_KEY] {
         assert_eq!(store.read(key).await.unwrap(), None, "{key}");
     }
 }
@@ -183,6 +189,10 @@ async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
     let phrase = wallet.mnemonic_with_pin("0000".to_owned(), sealed.clone());
     assert_eq!(kind(phrase.await), WalletErrorKind::Locked);
     assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
+    assert_eq!(
+        kind(wallet.confirm_pin_change().await),
+        WalletErrorKind::Locked
+    );
 
     drop(wallet);
     let reopened = fixture.open_with_pin(&store, PIN, &sealed).await.unwrap();
@@ -533,7 +543,12 @@ fn a_panic_in_a_call_without_an_error_gives_its_fallback() {
 fn the_docs_name_every_key_lepic_writes_to_the_app_store() {
     let readme = include_str!("../../../bindings/flutter/README.md");
     let adr = include_str!("../../../docs/adr/0014-secrets-at-the-flutter-boundary.md");
-    for key in [VAULT_KEY, crate::pin::KEY_KEY, crate::pin::FAILURES_KEY] {
+    for key in [
+        VAULT_KEY,
+        crate::pin::KEY_KEY,
+        crate::pin::PENDING_KEY_KEY,
+        crate::pin::FAILURES_KEY,
+    ] {
         assert!(readme.contains(&format!("`{key}`")), "{key}");
     }
     assert!(adr.contains(&format!("`{}`", crate::pin::KEY_KEY)));
@@ -641,7 +656,7 @@ async fn import_of_text_that_is_no_wallet_seed_is_an_invalid_argument() {
 }
 
 #[tokio::test]
-async fn after_a_pin_change_only_the_new_pin_and_sealed_text_open() {
+async fn a_pin_change_opens_both_pairs_until_it_is_confirmed() {
     let fixture = Fixture::new();
     let store = AppSecretStore::in_memory();
     let created = fixture.create_with_pin(&store, PIN).await;
@@ -671,6 +686,19 @@ async fn after_a_pin_change_only_the_new_pin_and_sealed_text_open() {
         .mnemonic_with_pin("2468".to_owned(), new_sealed.clone())
         .await
         .unwrap();
+    assert_eq!(
+        wallet
+            .mnemonic_with_pin(PIN.to_owned(), old_sealed.clone())
+            .await
+            .unwrap(),
+        phrase
+    );
+    wallet.confirm_pin_change().await.unwrap();
+    assert_eq!(store.read(PENDING_KEY).await.unwrap(), None);
+    // Nothing is pending any more, so a second confirmation changes nothing.
+    let key = store.read(PIN_KEY).await.unwrap();
+    wallet.confirm_pin_change().await.unwrap();
+    assert_eq!(store.read(PIN_KEY).await.unwrap(), key);
     drop(wallet);
 
     for (pin, sealed) in [
