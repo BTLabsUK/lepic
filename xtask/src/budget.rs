@@ -329,14 +329,26 @@ fn probe_named(name: &str) -> Result<&'static Probe> {
         .with_context(|| format!("no probe named `{name}`"))
 }
 
+/// Why `host_os` (a `std::env::consts::OS` value) cannot build the library for `target`, or
+/// `None` when it can. Apple targets need the Xcode SDK; the Linux library links against the
+/// host's glibc, so `cargo xtask mobile` builds it only natively.
+fn unbuildable_on_host(target: &str, host_os: &str) -> Option<String> {
+    let (needed_os, name) = if target.contains("-apple-") {
+        ("macos", "macOS")
+    } else if target.ends_with("-linux-gnu") {
+        ("linux", "Linux")
+    } else {
+        return None;
+    };
+    (host_os != needed_os).then(|| format!("`{target}` builds only on {name}"))
+}
+
 /// The stripped release `lepic-ffi` library as `cargo xtask mobile --package` ships it.
 fn library_size(root: &Path, target: &str) -> Result<Measured> {
-    let apple = target.contains("-apple-");
-    if apple && std::env::consts::OS != "macos" {
-        return Ok(Measured::Skipped(format!(
-            "`{target}` builds only on macOS"
-        )));
+    if let Some(reason) = unbuildable_on_host(target, std::env::consts::OS) {
+        return Ok(Measured::Skipped(reason));
     }
+    let apple = target.contains("-apple-");
     eprintln!(
         "xtask budget: building the release lepic-ffi library for {target}, this takes minutes"
     );
@@ -689,6 +701,27 @@ mod tests {
             memory_measurement(None, "windows").unwrap(),
             Measured::Skipped(_)
         ));
+    }
+
+    #[test]
+    fn libraries_a_host_cannot_build_are_skipped_with_a_reason() {
+        let linux = "x86_64-unknown-linux-gnu";
+        assert_eq!(unbuildable_on_host(linux, "linux"), None);
+        for os in ["macos", "windows"] {
+            assert_eq!(
+                unbuildable_on_host(linux, os),
+                Some(format!("`{linux}` builds only on Linux"))
+            );
+        }
+        assert_eq!(unbuildable_on_host("aarch64-apple-ios", "macos"), None);
+        assert_eq!(
+            unbuildable_on_host("aarch64-apple-ios", "linux"),
+            Some("`aarch64-apple-ios` builds only on macOS".to_owned())
+        );
+        for os in ["linux", "macos", "windows"] {
+            assert_eq!(unbuildable_on_host("aarch64-linux-android", os), None);
+            assert_eq!(unbuildable_on_host("armv7-linux-androideabi", os), None);
+        }
     }
 
     #[test]
