@@ -93,34 +93,83 @@ fn associated_data(slate_id: Uuid, participant: ParticipantId) -> Vec<u8> {
     data
 }
 
-fn cipher(key: &ContextKey) -> Result<XChaCha20Poly1305, StoreError> {
-    XChaCha20Poly1305::new_from_slice(key.0.as_slice()).map_err(|_| StoreError::ContextUnsealable)
+/// Why sealing or opening failed, for the caller to turn into the error of its record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SealFailure {
+    Randomness(getrandom::Error),
+    Unsealable,
+    Malformed,
+    Undecryptable,
+}
+
+fn cipher(key: &ContextKey) -> Result<XChaCha20Poly1305, SealFailure> {
+    XChaCha20Poly1305::new_from_slice(key.0.as_slice()).map_err(|_| SealFailure::Unsealable)
 }
 
 /// Sealed layout: format byte, nonce, ciphertext with tag.
+pub(crate) fn seal_bytes(
+    key: &ContextKey,
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, SealFailure> {
+    let mut nonce = [0_u8; NONCE_LEN];
+    getrandom::fill(&mut nonce).map_err(SealFailure::Randomness)?;
+    let ciphertext = cipher(key)?
+        .encrypt(
+            &XNonce::from(nonce),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| SealFailure::Unsealable)?;
+    let mut sealed = Vec::with_capacity(SEALED_OVERHEAD.saturating_add(plaintext.len()));
+    sealed.push(SEALED_FORMAT_V1);
+    sealed.extend_from_slice(&nonce);
+    sealed.extend_from_slice(&ciphertext);
+    Ok(sealed)
+}
+
+pub(crate) fn open_bytes(
+    key: &ContextKey,
+    aad: &[u8],
+    sealed: &[u8],
+) -> Result<Vec<u8>, SealFailure> {
+    let Some((&SEALED_FORMAT_V1, rest)) = sealed.split_first() else {
+        return Err(SealFailure::Malformed);
+    };
+    let Some((nonce, ciphertext)) = rest.split_first_chunk::<NONCE_LEN>() else {
+        return Err(SealFailure::Malformed);
+    };
+    if ciphertext.len() < TAG_LEN {
+        return Err(SealFailure::Malformed);
+    }
+    cipher(key)?
+        .decrypt(
+            &XNonce::from(*nonce),
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
+        .map_err(|_| SealFailure::Undecryptable)
+}
+
 pub(crate) fn seal(
     key: &ContextKey,
     slate_id: Uuid,
     participant: ParticipantId,
     context: &PrivateContext,
 ) -> Result<Vec<u8>, StoreError> {
-    let mut nonce = [0_u8; NONCE_LEN];
-    getrandom::fill(&mut nonce).map_err(StoreError::Randomness)?;
-    let aad = associated_data(slate_id, participant);
-    let ciphertext = cipher(key)?
-        .encrypt(
-            &XNonce::from(nonce),
-            Payload {
-                msg: context.expose(),
-                aad: &aad,
-            },
-        )
-        .map_err(|_| StoreError::ContextUnsealable)?;
-    let mut sealed = Vec::with_capacity(SEALED_OVERHEAD.saturating_add(context.expose().len()));
-    sealed.push(SEALED_FORMAT_V1);
-    sealed.extend_from_slice(&nonce);
-    sealed.extend_from_slice(&ciphertext);
-    Ok(sealed)
+    seal_bytes(
+        key,
+        &associated_data(slate_id, participant),
+        context.expose(),
+    )
+    .map_err(|failure| match failure {
+        SealFailure::Randomness(error) => StoreError::Randomness(error),
+        _ => StoreError::ContextUnsealable,
+    })
 }
 
 pub(crate) fn open(
@@ -129,30 +178,17 @@ pub(crate) fn open(
     participant: ParticipantId,
     sealed: &[u8],
 ) -> Result<PrivateContext, StoreError> {
-    let malformed = StoreError::Corrupt {
-        record: Record::Context,
-        field: "sealed bytes",
-    };
-    let Some((&SEALED_FORMAT_V1, rest)) = sealed.split_first() else {
-        return Err(malformed);
-    };
-    let Some((nonce, ciphertext)) = rest.split_first_chunk::<NONCE_LEN>() else {
-        return Err(malformed);
-    };
-    if ciphertext.len() < TAG_LEN {
-        return Err(malformed);
-    }
-    let aad = associated_data(slate_id, participant);
-    let plaintext = cipher(key)?
-        .decrypt(
-            &XNonce::from(*nonce),
-            Payload {
-                msg: ciphertext,
-                aad: &aad,
+    open_bytes(key, &associated_data(slate_id, participant), sealed)
+        .map(PrivateContext::new)
+        .map_err(|failure| match failure {
+            SealFailure::Malformed => StoreError::Corrupt {
+                record: Record::Context,
+                field: "sealed bytes",
             },
-        )
-        .map_err(|_| StoreError::ContextUndecryptable)?;
-    Ok(PrivateContext::new(plaintext))
+            SealFailure::Undecryptable => StoreError::ContextUndecryptable,
+            SealFailure::Randomness(error) => StoreError::Randomness(error),
+            SealFailure::Unsealable => StoreError::ContextUnsealable,
+        })
 }
 
 #[cfg(test)]
