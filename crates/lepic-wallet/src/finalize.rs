@@ -48,6 +48,7 @@ use uuid::Uuid;
 use crate::account;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
+use crate::release::record_finalized;
 use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version};
 use crate::state::{StateChange, apply_transition, state_name};
 use crate::wallet::Wallet;
@@ -585,6 +586,7 @@ fn finalize_stored(
     // Upstream drops the context once the slate is final; nothing signs with it again.
     repos.delete_context(slate_uuid, SENDER_CONTEXT)?;
     let change = apply_transition(repos, tx_id, TxState::Finalized, env.now)?;
+    record_finalized(repos, tx_id, env.tip)?;
     Ok(StoredS3 {
         tx_id,
         finalized,

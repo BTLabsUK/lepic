@@ -3,14 +3,15 @@
 //! `docs/compat/node-api.md` (refresh), the state mapping in `docs/compat/states.md`.
 //!
 //! A refresh runs in steps, each stored in its own store transaction: outputs, then kernel
-//! confirmations, then TTL expiry. Every step re-reads what it changes inside its transaction,
+//! confirmations, then TTL expiry, then the kernel checks that make a send releasable
+//! ([`crate::release`]). Every step re-reads what it changes inside its transaction,
 //! so dropping the future between steps, or a send running at the same time, leaves a
 //! consistent store that the next refresh completes.
 //!
 //! Upstream's update also rescans the last blocks for outputs it does not know; in LEPIC that is
 //! a separate [`Wallet::scan`] with [`crate::scan::ScanOptions::update`], run after a refresh.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
 use std::fmt;
 use std::sync::Arc;
@@ -36,7 +37,9 @@ use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Balance, Event};
 use crate::finalize::kernel_excess;
+use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
+use crate::release::{ReleaseCheck, record_kernel_absent, release_check};
 use crate::send::SENDER_CONTEXT;
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
@@ -127,7 +130,10 @@ where
     /// locked ones it does not hold spent once a second request misses them too, confirms open
     /// transactions with no change output by their kernel, and expires transactions at or past
     /// their TTL cutoff, releasing their inputs. A posted or finalized transaction is never
-    /// expired, since it may still be mined.
+    /// expired, since it may still be mined. Last, it looks up the kernel of each finalized or
+    /// posted send [`crate::release::RELEASE_AFTER_BLOCKS`] or more after it was finalized,
+    /// counted at the highest confirmed tip: a kernel found confirms the send, a missing one
+    /// makes it releasable (`Wallet::release`).
     ///
     /// The tip must be plausible: below the bounds [`crate::chain`] describes. Output and
     /// kernel heights must not be above the tip. Before expiring anything the tip is asked for
@@ -195,13 +201,19 @@ where
             .await??
         };
         let mut kernel_confirmed = Vec::new();
+        let mut kernel_missing = BTreeSet::new();
         for lookup in lookups {
             let kernel = node
                 .get_kernel(&lookup.excess, Some(lookup.min_height), Some(tip.height))
                 .await?;
-            if let Some(kernel) = kernel {
-                chain::check_kernel_height(kernel.height, lookup.min_height, tip.height)?;
-                kernel_confirmed.push((lookup.tx_id, kernel.height));
+            match kernel {
+                Some(kernel) => {
+                    chain::check_kernel_height(kernel.height, lookup.min_height, tip.height)?;
+                    kernel_confirmed.push((lookup.tx_id, kernel.height));
+                }
+                None => {
+                    kernel_missing.insert(lookup.tx_id);
+                }
             }
         }
         if !kernel_confirmed.is_empty() {
@@ -252,6 +264,8 @@ where
             .await??
         };
         self.record_changes(&mut summary, changes);
+        self.check_releases(&session, tip.height, &kernel_missing, now, &mut summary)
+            .await?;
 
         let balances = {
             let session = Arc::clone(&session);
@@ -263,6 +277,66 @@ where
         }
         info!(height = %tip.height, "refresh completed");
         Ok(RefreshOutcome::Refreshed(summary))
+    }
+
+    /// Looks up the kernel of every finalized or posted send that a missing kernel would make
+    /// releasable at the highest confirmed tip, unless this refresh already missed it. A kernel
+    /// found confirms its transaction; a missing one is recorded at that height.
+    async fn check_releases(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        tip: Height,
+        missing: &BTreeSet<TxId>,
+        now: Timestamp,
+        summary: &mut RefreshSummary,
+    ) -> Result<(), RefreshError> {
+        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let (height, due) = {
+            let session = Arc::clone(session);
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| releases_due(repos, &codecs, tip)))
+            })
+            .await??
+        };
+        if due.is_empty() {
+            return Ok(());
+        }
+        let mut confirmed = Vec::new();
+        let mut absent = Vec::new();
+        for (tx_id, check) in due {
+            if missing.contains(&tx_id) {
+                absent.push(tx_id);
+                continue;
+            }
+            let kernel = self
+                .ports()
+                .node
+                .get_kernel(&check.excess, Some(check.min_height), Some(tip))
+                .await?;
+            match kernel {
+                Some(kernel) => {
+                    chain::check_kernel_height(kernel.height, check.min_height, tip)?;
+                    confirmed.push((tx_id, kernel.height));
+                }
+                None => absent.push(tx_id),
+            }
+        }
+        let session = Arc::clone(session);
+        let changes = self
+            .blocking(move |_, _| {
+                Ok(session.store.write(|repos| {
+                    for &tx_id in &absent {
+                        debug!(tx_id = %tx_id, height = %height, "kernel still not on chain");
+                        record_kernel_absent(repos, tx_id, height)?;
+                    }
+                    confirm_all(repos, &confirmed, now)
+                }))
+            })
+            .await??;
+        self.record_changes(summary, changes);
+        Ok(())
     }
 
     /// Where the node holds the tracked outputs. An unspent or locked output missing from the
@@ -516,6 +590,26 @@ fn confirm_all(
         changes.extend(confirm(repos, tx_id, height, now)?);
     }
     Ok(changes)
+}
+
+/// The height a release check counts at, the highest confirmed tip but not above `tip`, and
+/// the sends due for a check there. A tip held as pending does not count, so one implausible
+/// answer cannot make a send releasable.
+fn releases_due(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tip: Height,
+) -> Result<(Height, Vec<(TxId, ReleaseCheck)>), RefreshError> {
+    let height = balance_height(repos)?.min(tip);
+    let mut due = Vec::new();
+    for stored in open_transactions(repos)? {
+        if let Ok(check) = release_check(repos, codecs, &stored)?
+            && check.due_at(height)
+        {
+            due.push((stored.id, check));
+        }
+    }
+    Ok((height, due))
 }
 
 /// Open transactions with no change output, which no output of this wallet can confirm, and

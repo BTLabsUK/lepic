@@ -22,7 +22,7 @@ own state (`lepic-wallet`'s `state` module).
 | outgoing `finalized` | `TxSentCreated`, with the transaction stored | false | finalizing S3 |
 | outgoing `posted` | `TxSentCreated`, or `TxSentMempool` once seen in the mempool | false | posting to the node |
 | outgoing `confirmed` | `TxSent` | true | a refresh finding one of its outputs on chain |
-| outgoing `cancelled` | `TxSentCancelled` | false | the owner's cancel |
+| outgoing `cancelled` | `TxSentCancelled` | false | the owner's cancel, or the owner's release of a finalized or posted send the network never took |
 | outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height |
 | incoming `received` | `TxReceived` | false | receiving S1 (S2 returned), or issuing an invoice (I1) |
 | incoming `finalized` | `TxReceived`, with the transaction stored | false | the invoice issuer finalizing I3 |
@@ -60,8 +60,22 @@ Upstream refuses to cancel an entry with `confirmed = true`, and so does LEPIC: 
 
 Upstream also refuses to cancel an entry whose type is neither `TxSentCreated` nor `TxReceived`, so
 a transaction the mempool has seen (`TxSentMempool`, `TxReceivedMempool`) cannot be cancelled there.
-LEPIC's state machine allows `posted` to `cancelled` for the scan's repair, but the owner's cancel
-refuses a `posted` transaction; only confirmation ends it.
+LEPIC's state machine allows `posted` to `cancelled` for the scan's repair and for a release, but
+the owner's cancel refuses a `posted` transaction.
+
+A release (`Wallet::release`) ends an outgoing `finalized` or `posted` send the network never took,
+as the Flutter app's `release_stuck_send` does. A refresh at or above 1,440 blocks after the
+height the send was finalized at (for a send finalized before that height was stored, after the
+height its slate was created at) looks up its kernel up to the tip, counting the highest confirmed
+tip and not a tip held as pending. A kernel found confirms the send; a missing one makes it
+releasable. The release then asks the node once more and refuses while its chain or its
+transaction pool holds the kernel. It moves the send to `cancelled` as the owner's cancel does,
+which upstream records as `TxSentCancelled`. If another node still holds the transaction and it is
+mined later, its inputs are spent after all: a refresh marks them spent, and a newer send that
+spent them fails. The app releases only a send whose post the node refused with a JSON-RPC error.
+LEPIC also releases a posted send the node dropped and a finalized one whose post got no answer:
+a kernel still missing a day of blocks later, and in neither the node's chain nor its pool at the
+release, means the same in each case.
 
 The state machine does not know the direction of a transaction. Which side may take a step, for
 example that only an invoice issuer finalizes an incoming transaction, is enforced by the stages

@@ -12,6 +12,7 @@ use crate::account::AccountError;
 use crate::chain::ImplausibleNodeData;
 use crate::config::ConfigError;
 use crate::ports::SecretVaultError;
+use crate::release::ReleaseRefusal;
 use crate::state::InvalidTransition;
 
 /// Every failure of an engine operation. Variants never carry secrets.
@@ -63,8 +64,18 @@ pub enum WalletError {
     /// refresh confirms it.
     #[error("transaction {0} is already on chain")]
     OnChain(TxId),
+    /// The node's transaction pool holds the transaction's kernel, so it may still be mined
+    /// and is not released.
+    #[error("transaction {0} is in the node's pool")]
+    InPool(TxId),
+    #[error("transaction {tx_id} cannot be released")]
+    NotReleasable {
+        tx_id: TxId,
+        #[source]
+        reason: ReleaseRefusal,
+    },
     /// Another operation, for example the inbox finalizing it, changed the transaction while
-    /// it was being cancelled. Nothing was changed by the cancel.
+    /// it was being cancelled or released. Nothing was changed.
     #[error("transaction {0} changed while it was being cancelled")]
     ChangedDuringCancel(TxId),
     /// The database was rebuilt from the seed and no scan from genesis has completed since, so

@@ -1125,6 +1125,8 @@ mod tests {
             counterparty: Some(Destination::new(address.to_owned())),
             ttl_cutoff_height: Some(Height::new(360)),
             confirmed_at: Some(confirmed),
+            releasable_from: None,
+            releasable: false,
         };
 
         assert_eq!(

@@ -13,6 +13,7 @@ use crate::account::AccountError;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{final_kernel, legacy_codecs, ttl_cutoff};
+use crate::release::release_check;
 use crate::wallet::Wallet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +39,13 @@ pub struct TransactionDetails {
     pub ttl_cutoff_height: Option<Height>,
     /// When this wallet saw the transaction confirmed. `None` unless it is confirmed.
     pub confirmed_at: Option<Timestamp>,
+    /// For a finalized or posted send, the height from which a refresh that still misses its
+    /// kernel makes it releasable: [`crate::release::RELEASE_AFTER_BLOCKS`] after it was
+    /// finalized. `None` for any other transaction, and when its kernel is not known.
+    pub releasable_from: Option<Height>,
+    /// Whether [`Wallet::release`] may release the send now: a refresh looked its kernel up at
+    /// or above `releasable_from` and did not find it. The release asks the node once more.
+    pub releasable: bool,
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -110,7 +118,10 @@ fn details(
     // update is the moment it was confirmed.
     let confirmed_at =
         (transaction.entry.state == TxState::Confirmed).then_some(transaction.entry.updated_at);
+    let release = release_check(repos, codecs, &transaction)?.ok();
     Ok(TransactionDetails {
+        releasable_from: release.map(|check| check.from),
+        releasable: release.is_some_and(|check| check.releasable()),
         kernel_excess,
         confirmed_height: repos.confirmed_height(tx_id)?,
         counterparty: repos.counterparty(tx_id)?.map(Destination::new),

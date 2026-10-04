@@ -25,6 +25,7 @@ pub mod ports;
 mod process;
 pub mod receive;
 pub mod refresh;
+pub mod release;
 pub mod scan;
 pub mod selection;
 pub mod send;
