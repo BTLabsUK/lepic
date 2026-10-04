@@ -329,6 +329,13 @@ height with it. A transaction with no change output is confirmed by its kernel i
 keeps the height of that first confirmation: a reorganisation is not followed. Human output
 prints `-` for what is unknown; the JSON document leaves the key out.
 
+`tx show` also lists the parties' messages, one `Message` line each, `sender:` or `receiver:` of
+the money before the text (JSON `messages`, an array of `role` and `text`), from the latest slate
+stage stored: a send shows its own message, a receive the sender's and its own, a finalized send
+both. Only a message whose signature verifies is listed, and control characters in it are
+escaped in human output. A message of more than 256 bytes is cut on a character boundary before
+it is signed, as `epic-wallet` keeps it. A transaction restored from the chain has none.
+
 `lepic tx cancel <ID>` gives up a transaction that is not posted and unlocks its inputs. A
 finalized one is refused (exit 7, `rejected`) while the node's chain or its transaction pool holds
 its kernel.

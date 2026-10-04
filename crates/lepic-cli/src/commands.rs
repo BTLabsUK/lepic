@@ -52,9 +52,9 @@ use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, FinalizeReport, InboxReport, InfoReport,
-    InitReport, InvoiceIssueReport, InvoicePayReport, NodeStatusReport, PostReport, ReceiveReport,
-    Report, ResendReport, RestoreReport, ScanReport, SendReport, TxListReport, TxReport,
-    TxStateReport, WalletScanReport,
+    InitReport, InvoiceIssueReport, InvoicePayReport, MessageReport, NodeStatusReport, PostReport,
+    ReceiveReport, Report, ResendReport, RestoreReport, ScanReport, SendReport, TxListReport,
+    TxReport, TxStateReport, WalletScanReport,
 };
 use crate::progress::Progress;
 use crate::settings::{OutputFormat, Settings};
@@ -1017,6 +1017,16 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
         confirmed_height: details.confirmed_height.map(Height::value),
         releasable_from: details.releasable_from.map(Height::value),
         releasable: details.releasable_from.map(|_| details.releasable),
+        messages: Some(
+            details
+                .messages
+                .iter()
+                .map(|message| MessageReport {
+                    role: message.role.as_str().to_owned(),
+                    text: message.text.clone(),
+                })
+                .collect(),
+        ),
         ..tx_report(tx, Some(stages))
     })
 }
@@ -1043,6 +1053,7 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         confirmed_height: None,
         releasable_from: None,
         releasable: None,
+        messages: None,
     }
 }
 

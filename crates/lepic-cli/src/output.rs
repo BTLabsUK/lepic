@@ -207,6 +207,16 @@ pub struct TxReport {
     /// Whether `tx release` may release it now; shown by `tx show` with `releasable_from`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub releasable: Option<bool>,
+    /// The parties' messages whose signatures verify; listed by `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub messages: Option<Vec<MessageReport>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MessageReport {
+    /// `sender` or `receiver` of the money.
+    pub role: String,
+    pub text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -352,6 +362,20 @@ fn json_line(value: &impl Serialize) -> String {
 
 /// `now` for a send `tx release` may release, the height a refresh must reach first for one
 /// that may become releasable, and `-` for any other transaction.
+/// A peer's text with control characters escaped, so it cannot move the cursor, clear the
+/// screen or forge further lines of the view.
+fn printable(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() {
+            shown.extend(c.escape_default());
+        } else {
+            shown.push(c);
+        }
+    }
+    shown
+}
+
 fn release_text(tx: &TxReport) -> String {
     match (tx.releasable, tx.releasable_from) {
         (Some(true), _) => "now".to_owned(),
@@ -558,6 +582,15 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             for (name, value) in rows {
                 writeln!(out, "{name:<12} {value}")?;
             }
+            match tx.messages.as_deref() {
+                Some(messages) if !messages.is_empty() => {
+                    for message in messages {
+                        let text = printable(&message.text);
+                        writeln!(out, "{:<12} {}: {text}", "Message", message.role)?;
+                    }
+                }
+                _ => writeln!(out, "{:<12} -", "Message")?,
+            }
             Ok(())
         }
         Report::InvoiceIssue(r) => writeln!(
@@ -628,6 +661,7 @@ mod tests {
             confirmed_height: None,
             releasable_from: None,
             releasable: None,
+            messages: None,
         }
     }
 
@@ -1066,6 +1100,41 @@ mod tests {
             render(&released, OutputFormat::Human).to_string(),
             "Transaction 3 is released and cancelled; its inputs can be spent again.\n"
         );
+    }
+
+    #[test]
+    fn the_transaction_view_lists_the_messages_with_control_characters_escaped() {
+        let report = Report::Show(TxReport {
+            messages: Some(vec![
+                MessageReport {
+                    role: text("sender"),
+                    text: text("for the pizza"),
+                },
+                MessageReport {
+                    role: text("receiver"),
+                    text: text("got it\nState        confirmed\u{1b}[2J"),
+                },
+            ]),
+            ..tx(Some(vec![text("S3")]))
+        });
+        let rendered = render(&report, OutputFormat::Human).to_string();
+        assert!(
+            rendered.ends_with(
+                "\nMessage      sender: for the pizza\n\
+                 Message      receiver: got it\\nState        confirmed\\u{1b}[2J\n"
+            ),
+            "{rendered}"
+        );
+        let json = render(&report, OutputFormat::Json).to_string();
+        let value: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["messages"][0]["role"], "sender");
+        assert_eq!(
+            value["messages"][1]["text"],
+            "got it\nState        confirmed\u{1b}[2J"
+        );
+
+        let none = render(&Report::Show(tx(Some(vec![]))), OutputFormat::Human).to_string();
+        assert!(none.ends_with("\nMessage      -\n"), "{none}");
     }
 
     #[test]
