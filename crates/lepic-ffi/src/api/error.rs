@@ -4,6 +4,7 @@
 use lepic_keychain::AppDataError;
 use lepic_telemetry::ErrorChain;
 use lepic_wallet::inbox::InboxError;
+use lepic_wallet::invoice::InvoiceError;
 use lepic_wallet::refresh::RefreshError;
 use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
@@ -69,6 +70,14 @@ pub enum WalletErrorKind {
     /// The transaction is not a finalized or posted send, or no refresh has yet missed its
     /// kernel at `TransactionDetails.releasable_from` or above. The message says which.
     NotReleasable,
+    /// No invoice with that slate id waits on the invoice address to be paid or declined: it
+    /// was paid, declined, deleted by a sweep, or never arrived.
+    InvoiceNotFound,
+    /// The invoice asks for another amount than the one the user typed. Nothing was paid.
+    AmountMismatch,
+    /// The invoice or its payment is stored, but the relay did not take it. Deliver a payment
+    /// again with `resend_invoice_payment`, or cancel either with `cancel_transaction`.
+    NotDelivered,
 }
 
 impl WalletErrorKind {
@@ -103,6 +112,9 @@ impl WalletErrorKind {
             Self::DamagedAppData => 26,
             Self::InPool => 27,
             Self::NotReleasable => 28,
+            Self::InvoiceNotFound => 29,
+            Self::AmountMismatch => 30,
+            Self::NotDelivered => 31,
         }
     }
 }
@@ -194,6 +206,7 @@ impl From<SendError> for WalletError {
             }
             SendError::Selection(_)
             | SendError::NotResendable { .. }
+            | SendError::PayeeMismatch { .. }
             | SendError::UnknownTransport { .. }
             | SendError::CannotDeliver { .. }
             | SendError::CannotExport { .. } => WalletErrorKind::InvalidArgument,
@@ -282,12 +295,52 @@ impl From<InboxError> for WalletError {
     fn from(error: InboxError) -> Self {
         let kind = match &error {
             InboxError::Wallet(inner) => return Self::from_inner(inner, &error),
-            InboxError::NetworkMismatch | InboxError::UnknownTransport { .. } => {
-                WalletErrorKind::InvalidArgument
-            }
+            InboxError::NetworkMismatch
+            | InboxError::UnknownTransport { .. }
+            | InboxError::Address(_)
+            | InboxError::PaymentsAddressIndex
+            | InboxError::InvoiceIndexExhausted
+            | InboxError::InvoiceExpiry
+            | InboxError::SenderLabel => WalletErrorKind::InvalidArgument,
             InboxError::Subscription(_) | InboxError::Transport(_) => {
                 WalletErrorKind::TransportFailed
             }
+            _ => WalletErrorKind::Other,
+        };
+        Self::chained(kind, &error)
+    }
+}
+
+impl From<InvoiceError> for WalletError {
+    fn from(error: InvoiceError) -> Self {
+        use InvoiceError as E;
+        let kind = match &error {
+            E::Wallet(inner) => return Self::from_inner(inner, &error),
+            E::Node(_) => WalletErrorKind::NodeUnreachable,
+            E::Selection(SelectionError::NotEnoughFunds { .. }) => WalletErrorKind::NotEnoughFunds,
+            E::Selection(_)
+            | E::UnknownTransport { .. }
+            | E::CannotDeliver { .. }
+            | E::CannotExport { .. }
+            | E::NotFinalizable { .. } => WalletErrorKind::InvalidArgument,
+            E::Decode(_)
+            | E::WrongStage { .. }
+            | E::AlreadyPaid { .. }
+            | E::AlreadyFinalized { .. }
+            | E::UnknownSlate { .. }
+            | E::MessageSignature { .. }
+            | E::Mismatch { .. }
+            | E::PayerSignature(_)
+            | E::FeeBelowMinimum { .. }
+            | E::InvalidTransaction(_)
+            | E::Slate(_)
+            | E::Encode(_)
+            | E::Unrepresentable(_) => WalletErrorKind::InvalidSlate,
+            E::AmountMismatch { .. } => WalletErrorKind::AmountMismatch,
+            E::Expired { .. } => WalletErrorKind::PaymentExpired,
+            E::NotParked { .. } => WalletErrorKind::InvoiceNotFound,
+            E::Undelivered { .. } | E::PaymentUndelivered { .. } => WalletErrorKind::NotDelivered,
+            E::NotPosted { .. } => WalletErrorKind::NotPosted,
             _ => WalletErrorKind::Other,
         };
         Self::chained(kind, &error)
@@ -341,6 +394,9 @@ mod tests {
             (K::DamagedAppData, 26),
             (K::InPool, 27),
             (K::NotReleasable, 28),
+            (K::InvoiceNotFound, 29),
+            (K::AmountMismatch, 30),
+            (K::NotDelivered, 31),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -389,6 +445,71 @@ mod tests {
         }
         let receive = WalletError::from(ReceiveError::Wallet(E::RestoreScanRequired));
         assert_eq!(receive.kind, WalletErrorKind::RestoreScanRequired);
+    }
+
+    #[test]
+    fn invoice_refusals_have_their_own_kinds() {
+        use lepic_primitives::amount::Amount;
+        use lepic_wallet::event::SlateId;
+        let slate_id = SlateId::from_bytes([7; 16]);
+        let tx_id = lepic_store::TxId(2);
+        let undelivered = || lepic_transport::error::TransportError::UnknownDestination {
+            transport: lepic_epicbox::TRANSPORT_ID,
+        };
+        let cases = [
+            (
+                InvoiceError::NotParked { slate_id },
+                WalletErrorKind::InvoiceNotFound,
+            ),
+            (
+                InvoiceError::AmountMismatch {
+                    invoiced: Amount::new(2),
+                    approved: Amount::new(1),
+                },
+                WalletErrorKind::AmountMismatch,
+            ),
+            (
+                InvoiceError::PaymentUndelivered {
+                    tx_id,
+                    slate_id,
+                    source: undelivered(),
+                },
+                WalletErrorKind::NotDelivered,
+            ),
+            (
+                InvoiceError::Undelivered {
+                    tx_id,
+                    slate_id,
+                    source: undelivered(),
+                },
+                WalletErrorKind::NotDelivered,
+            ),
+            (
+                InvoiceError::Wallet(lepic_wallet::WalletError::Locked),
+                WalletErrorKind::Locked,
+            ),
+            (
+                InvoiceError::Selection(SelectionError::NotEnoughFunds {
+                    needed: Amount::new(2),
+                    available: Amount::new(1),
+                }),
+                WalletErrorKind::NotEnoughFunds,
+            ),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(WalletError::from(error).kind, kind);
+        }
+        for error in [
+            InboxError::PaymentsAddressIndex,
+            InboxError::InvoiceExpiry,
+            InboxError::SenderLabel,
+            InboxError::InvoiceIndexExhausted,
+        ] {
+            assert_eq!(
+                WalletError::from(error).kind,
+                WalletErrorKind::InvalidArgument
+            );
+        }
     }
 
     #[test]

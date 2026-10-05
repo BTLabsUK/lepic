@@ -50,6 +50,7 @@ use crate::node::{Node, NodeSecret, node_error};
 use crate::vault_port::{AppVault, SharedStorage, VAULT_KEY, VaultBytes, vault_error};
 
 mod app_data;
+mod invoice;
 
 type EngineWallet = Wallet<Node, SqliteStores, AppVault>;
 
@@ -186,7 +187,7 @@ fn epicbox_transport(
         return Ok(None);
     }
     let endpoint = relay_endpoint(config)?;
-    #[cfg(test)]
+    #[cfg(feature = "mock")]
     if let Some(relay) = &runtime.relay {
         return Ok(Some(EpicboxTransport::new(
             ClientSettings::new(endpoint),
@@ -194,7 +195,7 @@ fn epicbox_transport(
             Arc::clone(relay),
         )));
     }
-    #[cfg(not(test))]
+    #[cfg(not(feature = "mock"))]
     let _ = runtime;
     let tls = webpki_tls_config().map_err(|error| node_error(&error))?;
     Ok(Some(EpicboxTransport::new(
@@ -951,6 +952,21 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             transport_state: Some(transport_state(status.state)),
             ..WalletEvent::of(WalletEventKind::Transport)
         },
+        Event::InvoiceParked(parked) => WalletEvent {
+            slate_id: Some(parked.slate_id.to_string()),
+            amount: Some(parked.amount.value()),
+            ..WalletEvent::of(WalletEventKind::InvoiceReceived)
+        },
+        Event::InvoiceFinalized(finalized) => WalletEvent {
+            tx_id: Some(finalized.tx_id.0),
+            slate_id: Some(finalized.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceFinalized)
+        },
+        Event::InvoiceExpired(expired) => WalletEvent {
+            tx_id: expired.tx_id.map(|tx_id| tx_id.0),
+            slate_id: Some(expired.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceExpired)
+        },
         _ => return None,
     })
 }
@@ -1189,6 +1205,35 @@ mod tests {
             hex.bytes()
                 .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
         );
+    }
+
+    #[test]
+    fn invoice_events_reach_the_event_stream_with_their_slate() {
+        use lepic_wallet::event::{ExpiredInvoice, FinalizedInvoice, ParkedInvoice, SlateId};
+        let slate_id = SlateId::from_bytes([9; 16]);
+        let parked = wallet_event(&Event::InvoiceParked(ParkedInvoice {
+            slate_id,
+            amount: Amount::new(300),
+        }))
+        .unwrap();
+        assert_eq!(parked.kind, WalletEventKind::InvoiceReceived);
+        assert_eq!(parked.slate_id, Some(slate_id.to_string()));
+        assert_eq!(parked.amount, Some(300));
+        let finalized = wallet_event(&Event::InvoiceFinalized(FinalizedInvoice {
+            tx_id: TxId(4),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(finalized.kind, WalletEventKind::InvoiceFinalized);
+        assert_eq!(finalized.tx_id, Some(4));
+        let expired = wallet_event(&Event::InvoiceExpired(ExpiredInvoice {
+            slate_id,
+            tx_id: None,
+        }))
+        .unwrap();
+        assert_eq!(expired.kind, WalletEventKind::InvoiceExpired);
+        assert_eq!(expired.tx_id, None);
+        assert_eq!(expired.slate_id, Some(slate_id.to_string()));
     }
 
     #[test]

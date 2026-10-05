@@ -52,8 +52,29 @@ abstract class MockChain implements RustOpaqueInterface {
   /// with, and seal vaults with the cheapest Argon2 setting so tests stay fast.
   LepicRuntime runtime({required LogLevel logLevel});
 
+  /// [`MockChain::runtime`] whose wallets also reach `relay` for every Epicbox connection,
+  /// whatever relay they are configured with.
+  LepicRuntime runtimeWithRelay({
+    required LogLevel logLevel,
+    required MockRelay relay,
+  });
+
   void setHeight({required BigInt height});
 
   /// While `unreachable`, every node request fails as if the node refused the connection.
   void setNodeUnreachable({required bool unreachable});
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MockRelay>>
+abstract class MockRelay implements RustOpaqueInterface {
+  /// An empty relay for the addresses of `chain`.
+  factory MockRelay({required Chain chain}) =>
+      RustLib.instance.api.crateApiTestingMockRelayNew(chain: chain);
+
+  /// Messages for `address` that no wallet acknowledged yet. Fails with `InvalidArgument`
+  /// for an address that does not parse on the relay's chain.
+  int pending({required String address});
+
+  /// While `refusing`, new connections fail as with an unreachable relay.
+  void setRefusing({required bool refusing});
 }

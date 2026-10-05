@@ -11,9 +11,9 @@ publish.workspace = true
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
-# An in-process scripted node for the Dart package tests (`bindings/flutter/test`). Never in an
-# app build.
-mock = ["lepic-node/mock"]
+# An in-process scripted node and Epicbox relay for the Dart package tests
+# (`bindings/flutter/test`). Never in an app build.
+mock = ["lepic-node/mock", "lepic-epicbox/mock-relay"]
 
 [dependencies]
 base64 = { workspace = true, features = ["alloc"] }

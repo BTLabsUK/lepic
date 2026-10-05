@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `app_data_kind`, `chained`, `engine_kind`, `from_inner`, `new`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// The error of every fallible call. `message` is English for logs and bug reports; it never
 /// holds a secret.
@@ -112,7 +112,18 @@ enum WalletErrorKind {
 
   /// The transaction is not a finalized or posted send, or no refresh has yet missed its
   /// kernel at `TransactionDetails.releasable_from` or above. The message says which.
-  notReleasable;
+  notReleasable,
+
+  /// No invoice with that slate id waits on the invoice address to be paid or declined: it
+  /// was paid, declined, deleted by a sweep, or never arrived.
+  invoiceNotFound,
+
+  /// The invoice asks for another amount than the one the user typed. Nothing was paid.
+  amountMismatch,
+
+  /// The invoice or its payment is stored, but the relay did not take it. Deliver a payment
+  /// again with `resend_invoice_payment`, or cancel either with `cancel_transaction`.
+  notDelivered;
 
   /// The stable number of this kind.
   Future<int> code() =>

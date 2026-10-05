@@ -55,8 +55,8 @@ pub(crate) struct RuntimeInner {
     pub(crate) kdf: KdfParams,
     pub(crate) pin: PinGuard,
     open: Mutex<BTreeSet<PathBuf>>,
-    /// The in-process relay Epicbox connections go to in Rust tests.
-    #[cfg(test)]
+    /// The in-process relay Epicbox connections go to in tests.
+    #[cfg(feature = "mock")]
     pub(crate) relay: Option<Arc<dyn lepic_epicbox::Connector>>,
 }
 
@@ -115,7 +115,7 @@ impl LepicRuntime {
                 kdf,
                 pin: PinGuard::new(pin),
                 open: Mutex::default(),
-                #[cfg(test)]
+                #[cfg(feature = "mock")]
                 relay: None,
             }),
         })

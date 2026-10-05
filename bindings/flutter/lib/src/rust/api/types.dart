@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `network`, `of`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
 
 /// Which Epic chain the wallet talks to.
 enum Chain { mainnet, floonet }
@@ -112,6 +112,195 @@ class InboxReport {
           held == other.held;
 }
 
+/// An invoice waiting on the invoice address for the user to pay or decline, from
+/// `EpicWallet::pending_invoices`. Times are milliseconds since the Unix epoch, by the device
+/// clock.
+class IncomingInvoice {
+  final String slateId;
+
+  /// The allowed address of the sender, where the payment goes.
+  final String senderAddress;
+
+  /// What the sender asks for; the fee comes on top.
+  final BigInt amount;
+
+  /// The sender's message when its signature verifies, with control, bidirectional and
+  /// zero-width characters removed and cut to 256 bytes. Safe to display as it is.
+  final String? message;
+  final PlatformInt64 receivedAtMs;
+
+  /// When `EpicWallet::sweep_invoices` with the same expiry deletes it unpaid.
+  final PlatformInt64 expiresAtMs;
+
+  const IncomingInvoice({
+    required this.slateId,
+    required this.senderAddress,
+    required this.amount,
+    this.message,
+    required this.receivedAtMs,
+    required this.expiresAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      slateId.hashCode ^
+      senderAddress.hashCode ^
+      amount.hashCode ^
+      message.hashCode ^
+      receivedAtMs.hashCode ^
+      expiresAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is IncomingInvoice &&
+          runtimeType == other.runtimeType &&
+          slateId == other.slateId &&
+          senderAddress == other.senderAddress &&
+          amount == other.amount &&
+          message == other.message &&
+          receivedAtMs == other.receivedAtMs &&
+          expiresAtMs == other.expiresAtMs;
+}
+
+/// What one drain of the invoice address did, from `EpicWallet::drain_invoices`.
+class InvoiceReport {
+  /// Invoices from allowed senders stored for the user to pay or decline.
+  final int parked;
+
+  /// Payments of invoices this wallet issued that were finalized.
+  final int finalized;
+
+  /// Messages handled before and acknowledged again, such as an invoice parked before.
+  final int repeated;
+
+  /// Messages refused for good.
+  final int rejected;
+
+  /// Messages left on the relay for a later drain.
+  final int held;
+
+  /// Messages acknowledged and forgotten unopened: from senders that are not allowed, or
+  /// invoices over the limit of waiting invoices.
+  final int dropped;
+
+  const InvoiceReport({
+    required this.parked,
+    required this.finalized,
+    required this.repeated,
+    required this.rejected,
+    required this.held,
+    required this.dropped,
+  });
+
+  @override
+  int get hashCode =>
+      parked.hashCode ^
+      finalized.hashCode ^
+      repeated.hashCode ^
+      rejected.hashCode ^
+      held.hashCode ^
+      dropped.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is InvoiceReport &&
+          runtimeType == other.runtimeType &&
+          parked == other.parked &&
+          finalized == other.finalized &&
+          repeated == other.repeated &&
+          rejected == other.rejected &&
+          held == other.held &&
+          dropped == other.dropped;
+}
+
+/// A sender whose invoices the invoice address accepts, from `EpicWallet::invoice_senders`.
+class InvoiceSender {
+  /// The full address the user added, where payments of its invoices go.
+  final String address;
+  final String label;
+
+  /// Milliseconds since the Unix epoch, by the device clock.
+  final PlatformInt64 addedAtMs;
+
+  const InvoiceSender({
+    required this.address,
+    required this.label,
+    required this.addedAtMs,
+  });
+
+  @override
+  int get hashCode => address.hashCode ^ label.hashCode ^ addedAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is InvoiceSender &&
+          runtimeType == other.runtimeType &&
+          address == other.address &&
+          label == other.label &&
+          addedAtMs == other.addedAtMs;
+}
+
+/// What one `EpicWallet::sweep_invoices` did.
+class InvoiceSweep {
+  /// Slate ids of waiting invoices deleted unpaid, and of declined ones.
+  final List<String> deleted;
+
+  /// Invoices this wallet issued that were cancelled unpaid; a late payment is refused.
+  final Uint32List cancelled;
+
+  /// Payments of invoices whose time to live passed with the transaction neither on chain
+  /// nor in the node's pool. Nothing was changed: offer the user `cancel_transaction`.
+  final Uint32List cancellable;
+
+  const InvoiceSweep({
+    required this.deleted,
+    required this.cancelled,
+    required this.cancellable,
+  });
+
+  @override
+  int get hashCode =>
+      deleted.hashCode ^ cancelled.hashCode ^ cancellable.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is InvoiceSweep &&
+          runtimeType == other.runtimeType &&
+          deleted == other.deleted &&
+          cancelled == other.cancelled &&
+          cancellable == other.cancellable;
+}
+
+/// An invoice this wallet issued and handed to the relay, from
+/// `EpicWallet::issue_invoice_epicbox`.
+class IssuedInvoice {
+  final int txId;
+  final String slateId;
+  final BigInt amount;
+
+  const IssuedInvoice({
+    required this.txId,
+    required this.slateId,
+    required this.amount,
+  });
+
+  @override
+  int get hashCode => txId.hashCode ^ slateId.hashCode ^ amount.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is IssuedInvoice &&
+          runtimeType == other.runtimeType &&
+          txId == other.txId &&
+          slateId == other.slateId &&
+          amount == other.amount;
+}
+
 class ListenerEvent {
   final ListenerEventKind kind;
 
@@ -174,6 +363,35 @@ class NodeTip {
           runtimeType == other.runtimeType &&
           height == other.height &&
           nodeVersion == other.nodeVersion;
+}
+
+/// A paid invoice, from `EpicWallet::pay_invoice`.
+class PaidInvoice {
+  final int txId;
+  final String slateId;
+  final BigInt amount;
+  final BigInt fee;
+
+  const PaidInvoice({
+    required this.txId,
+    required this.slateId,
+    required this.amount,
+    required this.fee,
+  });
+
+  @override
+  int get hashCode =>
+      txId.hashCode ^ slateId.hashCode ^ amount.hashCode ^ fee.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PaidInvoice &&
+          runtimeType == other.runtimeType &&
+          txId == other.txId &&
+          slateId == other.slateId &&
+          amount == other.amount &&
+          fee == other.fee;
 }
 
 /// The answer to a received slate, from `EpicWallet::receive_slate` and
@@ -630,6 +848,8 @@ class WalletEvent {
   final String? transport;
   final TransportState? transportState;
   final BigInt? missed;
+  final String? slateId;
+  final BigInt? amount;
 
   const WalletEvent({
     required this.kind,
@@ -644,6 +864,8 @@ class WalletEvent {
     this.transport,
     this.transportState,
     this.missed,
+    this.slateId,
+    this.amount,
   });
 
   @override
@@ -659,7 +881,9 @@ class WalletEvent {
       targetHeight.hashCode ^
       transport.hashCode ^
       transportState.hashCode ^
-      missed.hashCode;
+      missed.hashCode ^
+      slateId.hashCode ^
+      amount.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -677,7 +901,9 @@ class WalletEvent {
           targetHeight == other.targetHeight &&
           transport == other.transport &&
           transportState == other.transportState &&
-          missed == other.missed;
+          missed == other.missed &&
+          slateId == other.slateId &&
+          amount == other.amount;
 }
 
 enum WalletEventKind {
@@ -699,6 +925,18 @@ enum WalletEventKind {
 
   /// The stream fell behind and `missed` events were dropped. Refresh to catch up.
   missed,
+
+  /// An invoice from an allowed sender is waiting to be paid or declined: `slate_id` and
+  /// `amount` are set. Nothing was paid.
+  invoiceReceived,
+
+  /// An invoice this wallet issued was paid and finalized: `tx_id` and `slate_id` are set.
+  /// Its posting follows as `Transaction`.
+  invoiceFinalized,
+
+  /// An invoice expired unpaid: `slate_id` is set, and `tx_id` for one this wallet issued,
+  /// which was cancelled. A waiting invoice was deleted.
+  invoiceExpired,
 }
 
 /// The balance of the default account, in the categories `epic-wallet info` reports.

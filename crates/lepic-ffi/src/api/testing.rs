@@ -1,6 +1,6 @@
-//! Test support for the Dart package tests: an in-process scripted node. It works only in a
-//! library built with the `mock` feature, which app builds never enable; elsewhere every call
-//! fails with `Unsupported`.
+//! Test support for the Dart package tests: an in-process scripted node and Epicbox relay. It
+//! works only in a library built with the `mock` feature, which app builds never enable;
+//! elsewhere every call fails with `Unsupported`.
 
 use flutter_rust_bridge::frb;
 
@@ -66,6 +66,33 @@ impl MockChain {
                 Err(unsupported())
             }
         })
+    }
+
+    /// [`MockChain::runtime`] whose wallets also reach `relay` for every Epicbox connection,
+    /// whatever relay they are configured with.
+    #[frb(sync)]
+    pub fn runtime_with_relay(
+        &self,
+        log_level: LogLevel,
+        relay: &MockRelay,
+    ) -> Result<LepicRuntime, WalletError> {
+        #[cfg(feature = "mock")]
+        {
+            let mut runtime = self.runtime(log_level)?;
+            guard("mock_chain_runtime_with_relay", || {
+                let inner = std::sync::Arc::get_mut(&mut runtime.inner).ok_or_else(|| {
+                    WalletError::new(WalletErrorKind::Other, "runtime is shared already")
+                })?;
+                inner.relay = Some(relay.relay.connector());
+                Ok(())
+            })?;
+            Ok(runtime)
+        }
+        #[cfg(not(feature = "mock"))]
+        {
+            let _ = relay;
+            self.runtime(log_level)
+        }
     }
 
     #[frb(sync)]
@@ -182,6 +209,74 @@ impl MockChain {
             self.backend.set_unreachable(unreachable);
             #[cfg(not(feature = "mock"))]
             let _ = unreachable;
+        });
+    }
+}
+
+/// An in-process Epicbox relay with the public relay's semantics, for the wallets of
+/// [`MockChain::runtime_with_relay`].
+#[frb(opaque)]
+pub struct MockRelay {
+    #[cfg(feature = "mock")]
+    relay: lepic_epicbox::mock_relay::MockRelay,
+    #[cfg(feature = "mock")]
+    chain: Chain,
+}
+
+impl MockRelay {
+    /// An empty relay for the addresses of `chain`.
+    #[frb(sync)]
+    pub fn new(chain: Chain) -> Result<MockRelay, WalletError> {
+        guard("mock_relay", || {
+            #[cfg(feature = "mock")]
+            {
+                Ok(Self {
+                    relay: lepic_epicbox::mock_relay::MockRelay::new(
+                        crate::session::relay_network(chain.network()),
+                    ),
+                    chain,
+                })
+            }
+            #[cfg(not(feature = "mock"))]
+            {
+                let _ = chain;
+                Err(unsupported())
+            }
+        })
+    }
+
+    /// Messages for `address` that no wallet acknowledged yet. Fails with `InvalidArgument`
+    /// for an address that does not parse on the relay's chain.
+    #[frb(sync)]
+    pub fn pending(&self, address: String) -> Result<u32, WalletError> {
+        guard("mock_relay_pending", || {
+            #[cfg(feature = "mock")]
+            {
+                let address = lepic_epicbox::EpicboxAddress::parse(
+                    &address,
+                    crate::session::relay_network(self.chain.network()),
+                )
+                .map_err(|_| {
+                    WalletError::new(WalletErrorKind::InvalidArgument, "not an epicbox address")
+                })?;
+                Ok(u32::try_from(self.relay.pending(&address)).unwrap_or(u32::MAX))
+            }
+            #[cfg(not(feature = "mock"))]
+            {
+                let _ = address;
+                Err(unsupported())
+            }
+        })
+    }
+
+    /// While `refusing`, new connections fail as with an unreachable relay.
+    #[frb(sync)]
+    pub fn set_refusing(&self, refusing: bool) {
+        guard_or("mock_relay_set_refusing", (), || {
+            #[cfg(feature = "mock")]
+            self.relay.set_refusing(refusing);
+            #[cfg(not(feature = "mock"))]
+            let _ = refusing;
         });
     }
 }

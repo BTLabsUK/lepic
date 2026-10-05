@@ -104,6 +104,9 @@ const errorCodes = {
   WalletErrorKind.damagedAppData: 26,
   WalletErrorKind.inPool: 27,
   WalletErrorKind.notReleasable: 28,
+  WalletErrorKind.invoiceNotFound: 29,
+  WalletErrorKind.amountMismatch: 30,
+  WalletErrorKind.notDelivered: 31,
 };
 
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(

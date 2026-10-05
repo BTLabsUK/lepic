@@ -304,6 +304,82 @@ pub struct InboxReport {
     pub held: u32,
 }
 
+/// A sender whose invoices the invoice address accepts, from `EpicWallet::invoice_senders`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvoiceSender {
+    /// The full address the user added, where payments of its invoices go.
+    pub address: String,
+    pub label: String,
+    /// Milliseconds since the Unix epoch, by the device clock.
+    pub added_at_ms: i64,
+}
+
+/// An invoice this wallet issued and handed to the relay, from
+/// `EpicWallet::issue_invoice_epicbox`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuedInvoice {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: u64,
+}
+
+/// An invoice waiting on the invoice address for the user to pay or decline, from
+/// `EpicWallet::pending_invoices`. Times are milliseconds since the Unix epoch, by the device
+/// clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingInvoice {
+    pub slate_id: String,
+    /// The allowed address of the sender, where the payment goes.
+    pub sender_address: String,
+    /// What the sender asks for; the fee comes on top.
+    pub amount: u64,
+    /// The sender's message when its signature verifies, with control, bidirectional and
+    /// zero-width characters removed and cut to 256 bytes. Safe to display as it is.
+    pub message: Option<String>,
+    pub received_at_ms: i64,
+    /// When `EpicWallet::sweep_invoices` with the same expiry deletes it unpaid.
+    pub expires_at_ms: i64,
+}
+
+/// A paid invoice, from `EpicWallet::pay_invoice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaidInvoice {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: u64,
+    pub fee: u64,
+}
+
+/// What one drain of the invoice address did, from `EpicWallet::drain_invoices`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvoiceReport {
+    /// Invoices from allowed senders stored for the user to pay or decline.
+    pub parked: u32,
+    /// Payments of invoices this wallet issued that were finalized.
+    pub finalized: u32,
+    /// Messages handled before and acknowledged again, such as an invoice parked before.
+    pub repeated: u32,
+    /// Messages refused for good.
+    pub rejected: u32,
+    /// Messages left on the relay for a later drain.
+    pub held: u32,
+    /// Messages acknowledged and forgotten unopened: from senders that are not allowed, or
+    /// invoices over the limit of waiting invoices.
+    pub dropped: u32,
+}
+
+/// What one `EpicWallet::sweep_invoices` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvoiceSweep {
+    /// Slate ids of waiting invoices deleted unpaid, and of declined ones.
+    pub deleted: Vec<String>,
+    /// Invoices this wallet issued that were cancelled unpaid; a late payment is refused.
+    pub cancelled: Vec<u32>,
+    /// Payments of invoices whose time to live passed with the transaction neither on chain
+    /// nor in the node's pool. Nothing was changed: offer the user `cancel_transaction`.
+    pub cancellable: Vec<u32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListenerEventKind {
     /// Subscribed at the relay.
@@ -361,6 +437,15 @@ pub enum WalletEventKind {
     Transport,
     /// The stream fell behind and `missed` events were dropped. Refresh to catch up.
     Missed,
+    /// An invoice from an allowed sender is waiting to be paid or declined: `slate_id` and
+    /// `amount` are set. Nothing was paid.
+    InvoiceReceived,
+    /// An invoice this wallet issued was paid and finalized: `tx_id` and `slate_id` are set.
+    /// Its posting follows as `Transaction`.
+    InvoiceFinalized,
+    /// An invoice expired unpaid: `slate_id` is set, and `tx_id` for one this wallet issued,
+    /// which was cancelled. A waiting invoice was deleted.
+    InvoiceExpired,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its
@@ -379,6 +464,8 @@ pub struct WalletEvent {
     pub transport: Option<String>,
     pub transport_state: Option<TransportState>,
     pub missed: Option<u64>,
+    pub slate_id: Option<String>,
+    pub amount: Option<u64>,
 }
 
 impl WalletEvent {
@@ -396,6 +483,8 @@ impl WalletEvent {
             transport: None,
             transport_state: None,
             missed: None,
+            slate_id: None,
+            amount: None,
         }
     }
 }

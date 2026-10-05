@@ -71,6 +71,19 @@ Future<NodeTip> nodeTip({
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>>
 abstract class EpicWallet implements RustOpaqueInterface {
+  /// Accepts invoices from the service at `address`, the full address it shows,
+  /// `<key>@<relay>[:port]` as `validate_epicbox_address` accepts it.
+  /// Only the key is matched, because the relay vouches for the key of a message and never
+  /// for its relay part; payments of its invoices go to `address` as added. Adding a key
+  /// again replaces its address and label.
+  ///
+  /// Fails with `InvalidArgument` for any other address, and for a `label` longer than 64
+  /// bytes or holding control characters.
+  Future<InvoiceSender> allowInvoiceSender({
+    required String address,
+    required String label,
+  });
+
   /// Stops a running scan at its next page.
   void cancelScan();
 
@@ -175,9 +188,20 @@ abstract class EpicWallet implements RustOpaqueInterface {
     pin: pin,
   );
 
+  /// Declines the waiting invoice `slate_id`: it is never paid and leaves
+  /// [`EpicWallet::pending_invoices`]. Fails with `InvoiceNotFound` when no invoice with that
+  /// id waits.
+  Future<void> declineInvoice({required String slateId});
+
   /// Connects to the relay once, handles every pending message and disconnects: the call for
   /// background work.
   Future<InboxReport> drainEpicbox();
+
+  /// Connects to the relay as the invoice address once, handles every pending message and
+  /// disconnects. An invoice from an allowed sender is stored, with an `InvoiceReceived`
+  /// event, before the relay is told it arrived; anything from another sender is dropped
+  /// unopened. Fails as [`EpicWallet::drain_epicbox`] does.
+  Future<InvoiceReport> drainInvoices();
 
   /// The wallet's Epicbox address, `<key>@<domain>[:port]`. Fails with `Unsupported` when
   /// the configuration names no relay.
@@ -256,6 +280,33 @@ abstract class EpicWallet implements RustOpaqueInterface {
     pin: pin,
   );
 
+  /// The invoice address, `<key>@<domain>[:port]`, to give to services that invoice this
+  /// wallet. Its index starts at 1, also after a restore; see
+  /// [`EpicWallet::set_invoice_address_index`].
+  Future<String> invoiceAddress();
+
+  /// The address index of the invoice address, 1 or higher.
+  Future<int> invoiceAddressIndex();
+
+  /// The senders the invoice address accepts, in the order they were added.
+  Future<List<InvoiceSender>> invoiceSenders();
+
+  /// Issues an invoice for `amount` to the payer's invoice address `address` over Epicbox.
+  /// The payer pays `amount` plus the fee. Its payment arrives on this wallet's payments
+  /// address, where [`EpicWallet::drain_epicbox`] or the listener finalizes and posts it, with
+  /// an `InvoiceFinalized` event. `message` is signed into the invoice as
+  /// [`EpicWallet::create_send_slate`] signs it. Withdraw an unpaid invoice with
+  /// `cancel_transaction`.
+  ///
+  /// Fails with `InvalidArgument`, storing nothing, for an address
+  /// `validate_epicbox_address` refuses, and with `NotDelivered` when the
+  /// invoice was stored but the relay did not take it.
+  Future<IssuedInvoice> issueInvoiceEpicbox({
+    required BigInt amount,
+    required String address,
+    String? message,
+  });
+
   bool listenerRunning();
 
   /// Locks the wallet now, for example when the app goes to the background: stops the
@@ -320,6 +371,26 @@ abstract class EpicWallet implements RustOpaqueInterface {
     sealedPassword: sealedPassword,
   );
 
+  /// Pays the waiting invoice `slate_id` and delivers the payment over Epicbox to the
+  /// sender's allowed address. `amount` is what the user typed: an invoice for any other
+  /// amount is refused, as `epic-wallet pay` refuses it. Inputs need `minimum_confirmations`;
+  /// `message` goes to the sender signed, as in [`EpicWallet::create_send_slate`].
+  ///
+  /// Fails with `InvoiceNotFound` when no invoice with that id waits, `AmountMismatch`,
+  /// `PaymentExpired`, `NotEnoughFunds`, `InvalidSlate`, `NodeUnreachable`, and with
+  /// `NotDelivered` when the payment was stored but the relay did not take it: deliver it
+  /// with [`EpicWallet::resend_invoice_payment`] or give up with `cancel_transaction`.
+  Future<PaidInvoice> payInvoice({
+    required String slateId,
+    required BigInt amount,
+    required BigInt minimumConfirmations,
+    String? message,
+  });
+
+  /// The invoices waiting to be paid or declined, oldest first, with when a sweep with
+  /// `expiry_secs` deletes them. `expiry_secs` is as in [`EpicWallet::sweep_invoices`].
+  Future<List<IncomingInvoice>> pendingInvoices({BigInt? expirySecs});
+
   /// [`EpicWallet::receive_slate`] for the slate file at `path`. The answer is also written to
   /// `<path>.response`, as `epic-wallet` names it, for a repeated slate too.
   Future<ReceivedSlate> receiveFile({required String path});
@@ -350,8 +421,23 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// holds the transaction, and with `NodeUnreachable` when the node cannot be asked.
   Future<void> releaseTransaction({required int txId});
 
+  /// Stops accepting invoices from the key of `address`, and returns whether it was
+  /// accepted. Invoices it sent that wait already stay. Fails with `InvalidArgument` for an
+  /// address that does not parse on this wallet's chain.
+  Future<bool> removeInvoiceSender({required String address});
+
   /// Posts the stored final transaction of `tx_id` to the node again.
   Future<void> repostTransaction({required int txId});
+
+  /// Delivers the stored payment `tx_id` of an invoice again, to the sender's allowed
+  /// address, after [`EpicWallet::pay_invoice`] failed with `NotDelivered`. Fails with
+  /// `InvalidArgument` for a transaction that is not an undelivered payment of an invoice,
+  /// and with `TransportFailed` when the relay fails again.
+  Future<void> resendInvoicePayment({required int txId});
+
+  /// Moves the invoice address to the next index and returns it. The old address is
+  /// abandoned: messages to it are no longer read, so give the new one to every service.
+  Future<String> rotateInvoiceAddress();
 
   /// Scans the chain for this wallet's outputs from `start_height`, or, by default, from
   /// shortly before the last completed scan (the whole chain after a restore), streaming
@@ -386,6 +472,12 @@ abstract class EpicWallet implements RustOpaqueInterface {
     String? message,
   });
 
+  /// Sets the address index of the invoice address, for example to the one the app kept
+  /// before the wallet was restored from its phrase, which does not record it. Messages to
+  /// the previous invoice address are no longer read. Fails with `InvalidArgument` for 0,
+  /// the payments address.
+  Future<void> setInvoiceAddressIndex({required int index});
+
   /// Starts the Epicbox listener, unless it runs already, and streams what it does until
   /// [`EpicWallet::stop_listener`]. The last event is `Stopped`; a listener that fails while
   /// running reports an `Error` event first. When the listener cannot start, for example
@@ -402,6 +494,18 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// refresh or scan, without the node, also before the first refresh of this handle, with
   /// `validated_with_node` false.
   Future<WalletSummary> summary({required bool refresh});
+
+  /// Expires what invoices left unpaid; run it from time to time, for example after a drain.
+  /// Waiting and declined invoices received more than `expiry_secs` ago are deleted, and
+  /// invoices this wallet issued over Epicbox that long ago and not paid are cancelled, each
+  /// with an `InvoiceExpired` event. Payments of invoices whose time to live passed with the
+  /// transaction neither on chain nor in the node's pool are listed in `cancellable`,
+  /// unchanged.
+  ///
+  /// `expiry_secs` defaults to a day and may be at most two days. Fails with
+  /// `InvalidArgument` for 0 or more than two days, `NodeUnreachable` when a payment past its
+  /// time to live cannot be looked up, and as `cancel_transaction` does.
+  Future<InvoiceSweep> sweepInvoices({BigInt? expirySecs});
 
   /// The transaction `tx_id`, from the store alone. Fails with `InvalidArgument` when the
   /// wallet holds no such transaction.

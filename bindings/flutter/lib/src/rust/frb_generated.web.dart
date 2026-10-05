@@ -45,6 +45,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   get rust_arc_decrement_strong_count_MockChainPtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain;
 
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_MockRelayPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay;
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
 
@@ -73,6 +77,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  MockRelay
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+    dynamic raw,
+  );
+
+  @protected
   AppSecretStore
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore(
     dynamic raw,
@@ -93,6 +103,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MockChain
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
+    dynamic raw,
+  );
+
+  @protected
+  MockRelay
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
     dynamic raw,
   );
 
@@ -132,6 +148,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MockChain
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
+    dynamic raw,
+  );
+
+  @protected
+  MockRelay
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
     dynamic raw,
   );
 
@@ -210,13 +232,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   InboxReport dco_decode_inbox_report(dynamic raw);
 
   @protected
+  IncomingInvoice dco_decode_incoming_invoice(dynamic raw);
+
+  @protected
+  InvoiceReport dco_decode_invoice_report(dynamic raw);
+
+  @protected
+  InvoiceSender dco_decode_invoice_sender(dynamic raw);
+
+  @protected
+  InvoiceSweep dco_decode_invoice_sweep(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_isize(dynamic raw);
+
+  @protected
+  IssuedInvoice dco_decode_issued_invoice(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
 
   @protected
+  List<IncomingInvoice> dco_decode_list_incoming_invoice(dynamic raw);
+
+  @protected
+  List<InvoiceSender> dco_decode_list_invoice_sender(dynamic raw);
+
+  @protected
   List<LogField> dco_decode_list_log_field(dynamic raw);
+
+  @protected
+  Uint32List dco_decode_list_prim_u_32_strict(dynamic raw);
 
   @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
@@ -274,6 +320,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WalletSummary? dco_decode_opt_box_autoadd_wallet_summary(dynamic raw);
+
+  @protected
+  PaidInvoice dco_decode_paid_invoice(dynamic raw);
 
   @protected
   PinWallet dco_decode_pin_wallet(dynamic raw);
@@ -387,6 +436,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  MockRelay
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   AppSecretStore
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore(
     SseDeserializer deserializer,
@@ -407,6 +462,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MockChain
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  MockRelay
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
     SseDeserializer deserializer,
   );
 
@@ -434,6 +495,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MockChain
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  MockRelay
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
     SseDeserializer deserializer,
   );
 
@@ -522,13 +589,41 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   InboxReport sse_decode_inbox_report(SseDeserializer deserializer);
 
   @protected
+  IncomingInvoice sse_decode_incoming_invoice(SseDeserializer deserializer);
+
+  @protected
+  InvoiceReport sse_decode_invoice_report(SseDeserializer deserializer);
+
+  @protected
+  InvoiceSender sse_decode_invoice_sender(SseDeserializer deserializer);
+
+  @protected
+  InvoiceSweep sse_decode_invoice_sweep(SseDeserializer deserializer);
+
+  @protected
   PlatformInt64 sse_decode_isize(SseDeserializer deserializer);
+
+  @protected
+  IssuedInvoice sse_decode_issued_invoice(SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
+  List<IncomingInvoice> sse_decode_list_incoming_invoice(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<InvoiceSender> sse_decode_list_invoice_sender(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<LogField> sse_decode_list_log_field(SseDeserializer deserializer);
+
+  @protected
+  Uint32List sse_decode_list_prim_u_32_strict(SseDeserializer deserializer);
 
   @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
@@ -598,6 +693,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WalletSummary? sse_decode_opt_box_autoadd_wallet_summary(
     SseDeserializer deserializer,
   );
+
+  @protected
+  PaidInvoice sse_decode_paid_invoice(SseDeserializer deserializer);
 
   @protected
   PinWallet sse_decode_pin_wallet(SseDeserializer deserializer);
@@ -721,6 +819,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+    MockRelay self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore(
     AppSecretStore self,
     SseSerializer serializer,
@@ -744,6 +849,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
     MockChain self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+    MockRelay self,
     SseSerializer serializer,
   );
 
@@ -788,6 +900,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
     MockChain self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+    MockRelay self,
     SseSerializer serializer,
   );
 
@@ -891,13 +1010,49 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_inbox_report(InboxReport self, SseSerializer serializer);
 
   @protected
+  void sse_encode_incoming_invoice(
+    IncomingInvoice self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_invoice_report(InvoiceReport self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_invoice_sender(InvoiceSender self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_invoice_sweep(InvoiceSweep self, SseSerializer serializer);
+
+  @protected
   void sse_encode_isize(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_issued_invoice(IssuedInvoice self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_incoming_invoice(
+    List<IncomingInvoice> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_invoice_sender(
+    List<InvoiceSender> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_log_field(List<LogField> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_prim_u_32_strict(
+    Uint32List self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
@@ -982,6 +1137,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     WalletSummary? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_paid_invoice(PaidInvoice self, SseSerializer serializer);
 
   @protected
   void sse_encode_pin_wallet(PinWallet self, SseSerializer serializer);
@@ -1151,6 +1309,22 @@ class RustLibWire implements BaseWire {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
         ptr,
       );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+        ptr,
+      );
 }
 
 @JS('wasm_bindgen')
@@ -1196,6 +1370,16 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
 
   external void
   rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockChain(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
     int ptr,
   );
 }

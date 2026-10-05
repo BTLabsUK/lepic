@@ -91,7 +91,9 @@ final wallet = await EpicWallet.create(
   restore it from the recovery phrase. Confirm with the user before calling it.
 - A wallet directory is open in one runtime at a time, across processes too; LEPIC holds an OS
   lock on `.lepic.lock` in it while a wallet is open.
-- `EpicWallet.events()` streams session, balance, transaction, sync and transport changes.
+- `EpicWallet.events()` streams session, balance, transaction, sync and transport changes, and
+  the invoice events `invoiceReceived`, `invoiceFinalized` and `invoiceExpired`, which set
+  `slateId`.
 - A slate received a second time, as text, as a file or through the listener, is not a second
   payment. `receiveSlate` and `receiveFile` return `ReceivedSlate.repeated` set, with the
   `txId` and the reply text of the first receive, and the listener reports kind `repeated`
@@ -221,10 +223,54 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 26 | `damagedAppData` | The app data file belongs to this wallet but was changed or cut short. |
 | 27 | `inPool` | The node's transaction pool holds the transaction, so it may still be mined and is not cancelled or released. Refresh later. |
 | 28 | `notReleasable` | `release_transaction` refused: the transaction is not a finalized or posted send, or `releasable` is still false. |
+| 29 | `invoiceNotFound` | No invoice with that slate id waits to be paid or declined: it was paid, declined, deleted by a sweep, or never arrived. |
+| 30 | `amountMismatch` | The invoice asks for another amount than the one the user typed. Nothing was paid. |
+| 31 | `notDelivered` | The invoice or its payment is stored, but the relay did not take it. Deliver a payment again with `resendInvoicePayment`, or cancel either with `cancelTransaction`. |
 
 Kinds 22 to 24 used to arrive as `other`. Kinds 25 and 26 are new with `sealAppData` and
-`openAppData`, 27 and 28 with `releaseTransaction`. An exhaustive `switch` over
-`WalletErrorKind` must handle them.
+`openAppData`, 27 and 28 with `releaseTransaction`, 29 to 31 with the invoice calls. An
+exhaustive `switch` over `WalletErrorKind` must handle them.
+
+## Invoices over Epicbox
+
+A service issues an invoice, the user pays it with one call, and the service finalizes and
+posts it, so a user on a weak connection answers only once. Invoices travel between LEPIC
+wallets; a stock `epic-wallet` sends an invoice back unpaid.
+
+Payer, the app:
+
+- `invoiceAddress()` is the address to give to services, at address index 1 or higher beside the
+  payments address of `epicboxAddress()`. `rotateInvoiceAddress()` moves to the next index and
+  abandons the old address. A restore from the phrase starts at index 1 again; keep
+  `invoiceAddressIndex()` and give it back with `setInvoiceAddressIndex(index)`.
+- The invoice address hears only from allowed senders: `allowInvoiceSender(address, label)` with
+  the full `<key>@<relay>[:port]` the service shows, `invoiceSenders()`, `removeInvoiceSender`.
+  Only the key is matched, and payments go to the address as added.
+- `drainInvoices()` reads the invoice address once, as `drainEpicbox()` reads the payments
+  address; no listener runs on it. Messages from other senders are dropped unopened and counted
+  in `InvoiceReport.dropped`. Each new invoice raises an `invoiceReceived` event.
+- `pendingInvoices(expirySecs)` lists what waits: slate id, sender address, amount, the sender's
+  message cleaned for display, and when it was received and expires. Nothing in the inbox ever
+  pays.
+- `payInvoice(slateId, amount, minimumConfirmations, message)` pays only when `amount` is the
+  invoiced amount (`amountMismatch` otherwise) and delivers the payment to the sender. On
+  `notDelivered` the payment is stored with its inputs locked: `resendInvoicePayment(txId)` with
+  the `txId` of the transaction whose `slateId` is the invoice's, or `cancelTransaction(txId)`.
+- `declineInvoice(slateId)` refuses it for good.
+
+Issuer, a service wallet:
+
+- `issueInvoiceEpicbox(amount, address, message)` sends the invoice to the payer's invoice
+  address. The payment arrives on the payments address, where `drainEpicbox()` or the listener
+  finalizes and posts it with an `invoiceFinalized` event. `cancelTransaction` withdraws an
+  unpaid invoice.
+
+Both sides run `sweepInvoices(expirySecs)` from time to time. Unpaid invoices expire after
+`expirySecs`, a day by default and at most two days: waiting and declined ones are deleted,
+issued ones cancelled, each with an `invoiceExpired` event. A payment whose time to live passed
+with the transaction neither on chain nor in the node's pool is listed in
+`InvoiceSweep.cancellable`; offer the user `cancelTransaction`. Pass the same `expirySecs` to
+`pendingInvoices` and `sweepInvoices`.
 
 ## Switching the app from its earlier binding
 
@@ -310,7 +356,9 @@ It builds `lepic-ffi` with the scripted node (`mock` feature) for the host, writ
 `flutter test` here. The build hook bundles the library from there, as it would for a Linux app,
 and the tests open the copy it installed. After a Rust change, run the command again; for Dart
 changes alone `flutter test` is enough. `MockChain` works only in a `mock` build; in any other
-build it fails with `unsupported`.
+build it fails with `unsupported`. So does `MockRelay`: with
+`MockChain.runtimeWithRelay(logLevel, relay)` every Epicbox connection of the runtime's wallets
+goes to it, whatever relay they are configured with.
 
 `emulator_test/` is an app with no UI whose integration test loads the bundled library on an
 Android device and runs create, restore, file send, receive and finalize against `MockChain`.
