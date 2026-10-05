@@ -3,6 +3,7 @@
 //! behind misses the oldest ones and is told how many it missed.
 
 use lepic_crypto::Commitment;
+use lepic_epicbox::EpicboxAddress;
 use lepic_primitives::amount::{Amount, Height};
 pub use lepic_slate::model::SlateId;
 use lepic_store::{AccountIndex, TxId, TxState};
@@ -46,6 +47,10 @@ pub enum Event {
     /// paid, `tx_id` names the payment, which the host may offer the user to cancel; nothing
     /// was cancelled.
     InvoiceWithdrawn(WithdrawnInvoice),
+    /// A payer sent an invoice this wallet issued back unchanged, as a wallet that does not
+    /// pay invoices does. The peer is recorded as not paying invoices; the invoice stays
+    /// issued until the host cancels it or it expires.
+    InvoiceBounced(BouncedInvoice),
 }
 
 /// Whether the root key is in memory.
@@ -135,6 +140,15 @@ pub struct WithdrawnInvoice {
     pub slate_id: SlateId,
     /// The payment still waiting for the issuer; `None` when the invoice was not paid.
     pub tx_id: Option<TxId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BouncedInvoice {
+    /// The issued invoice.
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    /// The address the invoice was issued to.
+    pub peer: EpicboxAddress,
 }
 
 impl From<StateChange> for Event {

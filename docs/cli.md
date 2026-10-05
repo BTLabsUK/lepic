@@ -348,7 +348,9 @@ the sender's allowed address only.
 
 The service's `epicbox listen` or `epicbox drain` finalizes and posts the payment when it
 arrives. An invoice that comes back unpaid from a wallet that does not pay invoices over Epicbox,
-as `epic-wallet` does, counts as `bounced`; send that payer a slate file instead.
+as `epic-wallet` does, counts as `bounced`, and with human output a line on stderr names the
+invoice, its transaction and the payer; `lepic tx cancel <ID>` withdraws it, and a slate file
+reaches that payer instead.
 
 Two LEPIC wallets also tell each other what happened to an invoice, with short notices that
 never move funds. The payer's next `epicbox drain --invoices` hears that the service posted the

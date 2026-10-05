@@ -216,6 +216,7 @@ impl<H: Host> Run<'_, H> {
                     | Event::InvoicePosted(_)
                     | Event::InvoiceDeclined(_)
                     | Event::InvoiceWithdrawn(_)
+                    | Event::InvoiceBounced(_)
             ) && let Some(line) = receipt_line(&event)
             {
                 self.show_line(&line);
@@ -992,6 +993,11 @@ fn receipt_line(event: &Event) -> Option<String> {
                 withdrawn.slate_id
             ),
         }),
+        Event::InvoiceBounced(bounced) => Some(format!(
+            "invoice {} sent back unpaid by {}, which does not pay invoices; `lepic tx cancel {}` \
+             withdraws it",
+            bounced.slate_id, bounced.peer, bounced.tx_id.0
+        )),
         _ => None,
     }
 }
@@ -1461,6 +1467,28 @@ mod tests {
         assert_eq!(
             receipt_line(&again).as_deref(),
             Some("transaction 4 answered again; nothing new was received")
+        );
+    }
+
+    #[test]
+    fn a_bounced_invoice_names_the_invoice_and_its_peer() {
+        let peer = EpicboxAddress::parse(
+            "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@epicbox.epiccash.com",
+            lepic_epicbox::Network::Mainnet,
+        )
+        .unwrap();
+        let bounced = Event::InvoiceBounced(lepic_wallet::event::BouncedInvoice {
+            tx_id: TxId(5),
+            slate_id: lepic_wallet::event::SlateId::from_bytes([7; 16]),
+            peer,
+        });
+        assert_eq!(
+            receipt_line(&bounced).as_deref(),
+            Some(
+                "invoice 07070707-0707-0707-0707-070707070707 sent back unpaid by \
+                 esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@epicbox.epiccash.com, which \
+                 does not pay invoices; `lepic tx cancel 5` withdraws it"
+            )
         );
     }
 

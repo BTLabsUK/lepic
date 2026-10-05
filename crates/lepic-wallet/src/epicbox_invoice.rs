@@ -42,7 +42,7 @@ use uuid::Uuid;
 use crate::cancel::pool_holds;
 use crate::epicbox_notice::record_lepic;
 use crate::error::WalletError;
-use crate::event::{Event, ExpiredInvoice, ParkedInvoice};
+use crate::event::{BouncedInvoice, Event, ExpiredInvoice, ParkedInvoice};
 use crate::inbox::{
     Handled, Hold, InboxError, InboxSummary, Mailbox, Refusal, Settlement, relay_network,
 };
@@ -241,31 +241,37 @@ fn park_stored(
     }
 }
 
-/// Whether `slate` is an I1 this wallet issued and still holds, sent back unchanged from the
-/// address it went to.
-fn is_returned_invoice(
+/// The issued invoice and the address it went to, when `slate` is an I1 this wallet issued and
+/// still holds, sent back unchanged from that address.
+fn returned_invoice(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
     slate: &Slate,
     from: &PublicKey,
     network: RelayNetwork,
-) -> Result<bool, StoreError> {
+) -> Result<Option<BouncedInvoice>, StoreError> {
     let slate_uuid = uuid(slate.id());
     let Some(issued) = repos.transaction_by_slate(slate_uuid, TxDirection::Incoming)? else {
-        return Ok(false);
+        return Ok(None);
     };
-    let went_to = repos
+    let Some(went_to) = repos
         .counterparty(issued.id)?
-        .and_then(|address| EpicboxAddress::parse(&address, network).ok());
-    if went_to.is_none_or(|address| address.public_key() != from) {
-        return Ok(false);
-    }
-    let Some(stored) = repos.slate(slate_uuid, SlateStage::Invoice1)? else {
-        return Ok(false);
+        .and_then(|address| EpicboxAddress::parse(&address, network).ok())
+        .filter(|address| address.public_key() == from)
+    else {
+        return Ok(None);
     };
-    Ok(codecs
+    let Some(stored) = repos.slate(slate_uuid, SlateStage::Invoice1)? else {
+        return Ok(None);
+    };
+    let unchanged = codecs
         .decode(&WireSlate::binary(MediaType::JSON, stored.bytes))
-        .is_ok_and(|issued| issued.with_origin(None) == slate.clone().with_origin(None)))
+        .is_ok_and(|issued| issued.with_origin(None) == slate.clone().with_origin(None));
+    Ok(unchanged.then(|| BouncedInvoice {
+        tx_id: issued.id,
+        slate_id: slate.id(),
+        peer: went_to,
+    }))
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -688,16 +694,17 @@ where
             .map_err(InboxError::Address)
     }
 
-    /// Whether an I1 that arrived from `reply_to` is one this wallet issued to that address,
-    /// sent back unchanged: what a stock `epic-wallet` listener does with an invoice.
-    pub(crate) async fn is_bounce(
+    /// The issued invoice, when an I1 that arrived from `reply_to` is one this wallet issued to
+    /// that address, sent back unchanged: what a stock `epic-wallet` listener does with an
+    /// invoice.
+    pub(crate) async fn bounced_invoice(
         &self,
         slate: &Slate,
         reply_to: &Destination,
-    ) -> Result<bool, Hold> {
+    ) -> Result<Option<BouncedInvoice>, Hold> {
         let network = relay_network(self.config().network);
         let Ok(from) = EpicboxAddress::parse(reply_to.as_str(), network) else {
-            return Ok(false);
+            return Ok(None);
         };
         let codecs = stored_codecs(self.config().network);
         let session = self.session()?;
@@ -705,20 +712,16 @@ where
         Ok(self
             .blocking(move |_, _| {
                 Ok(session.store.read(|repos| {
-                    is_returned_invoice(repos, &codecs, &slate, from.public_key(), network)
+                    returned_invoice(repos, &codecs, &slate, from.public_key(), network)
                 })?)
             })
             .await?)
     }
 
-    /// Records that the peer at `reply_to` does not pay invoices, so nothing but slates is
-    /// ever sent to it.
-    pub(crate) async fn record_bounce(&self, reply_to: &Destination) -> Result<(), Hold> {
-        let network = relay_network(self.config().network);
-        let Ok(from) = EpicboxAddress::parse(reply_to.as_str(), network) else {
-            return Ok(());
-        };
-        let key = peer_key(&from);
+    /// Records that the peer of a bounced invoice does not pay invoices, so nothing but slates
+    /// is ever sent to it, and tells the host which invoice came back.
+    pub(crate) async fn record_bounce(&self, bounced: BouncedInvoice) -> Result<(), Hold> {
+        let key = peer_key(&bounced.peer);
         self.inbox_write(move |repos, now| {
             repos.put_peer_capability(&PeerCapability {
                 key,
@@ -727,7 +730,8 @@ where
             })
         })
         .await?;
-        info!("invoice returned unpaid");
+        info!(tx_id = %bounced.tx_id, slate_id = %bounced.slate_id, "invoice returned unpaid");
+        self.emit(Event::InvoiceBounced(bounced));
         Ok(())
     }
 

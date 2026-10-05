@@ -18,7 +18,7 @@ mod world;
 
 use std::time::Duration;
 
-use lepic_epicbox::TRANSPORT_ID;
+use lepic_epicbox::{EpicboxClient, TRANSPORT_ID};
 use lepic_primitives::amount::Height;
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::marked_v3::carries_lepic_marker;
@@ -28,10 +28,12 @@ use lepic_store::{PeerSupport, PendingInvoiceStatus, SlateStage, TxDirection, Tx
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::Event;
 use lepic_wallet::epicbox_invoice::InvoiceExpiry;
-use lepic_wallet::inbox::InboxSummary;
+use lepic_wallet::event::BouncedInvoice;
+use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, PayRequest};
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
+use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
 use world::{AMOUNT, TIP, World, pay_request};
 
@@ -288,13 +290,10 @@ fn a_paid_invoice_is_finalized_and_posted_by_the_issuer() {
     assert_eq!(finalized, vec![(issued.tx_id, issued.slate_id)]);
 }
 
-#[test]
-fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
-    let world = World::new();
-    let stock = world.peer_client(7);
-    let issued = world.issue_to(stock.address(), None);
-    // A stock listener posts the I1 back as it parsed it, without the marker.
-    let bounced = world.block_on(async {
+/// The I1 `stock` received, as a stock listener posts it back: as it parsed it, without the
+/// marker.
+fn echoed_i1(world: &World, stock: &EpicboxClient) -> String {
+    world.block_on(async {
         let subscription = stock.drain().unwrap();
         let envelope = world
             .within(subscription.next_envelope())
@@ -320,8 +319,26 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
         )
         .unwrap();
         unmarked.as_text().unwrap().to_owned()
-    });
+    })
+}
+
+fn bounce_events(events: &mut Receiver<Event>) -> Vec<BouncedInvoice> {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::InvoiceBounced(bounced) => Some(bounced),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
+    let world = World::new();
+    let stock = world.peer_client(7);
+    let issued = world.issue_to(stock.address(), None);
+    let bounced = echoed_i1(&world, &stock);
     world.post(7, &world.issuer.address, &bounced, 1);
+    let mut events = world.issuer.wallet.subscribe();
 
     let summary = world
         .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
@@ -333,6 +350,14 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
             bounced: 1,
             ..InboxSummary::default()
         }
+    );
+    assert_eq!(
+        bounce_events(&mut events),
+        vec![BouncedInvoice {
+            tx_id: issued.tx_id,
+            slate_id: issued.slate_id,
+            peer: stock.address().clone(),
+        }]
     );
     assert_eq!(world.relay.pending(&world.issuer.address), 0);
     let key = stock.address().key_text();
@@ -346,6 +371,45 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
         .issuer
         .read(|repos| repos.transaction_by_slate(uuid(issued.slate_id), TxDirection::Incoming));
     assert_eq!(issued_tx.unwrap().entry.state, TxState::Received);
+}
+
+#[test]
+fn a_listener_names_the_invoice_a_peer_sent_back() {
+    let world = World::new();
+    let stock = world.peer_client(7);
+    let issued = world.issue_to(stock.address(), None);
+    let bounced = echoed_i1(&world, &stock);
+    world.post(7, &world.issuer.address, &bounced, 1);
+    let mut events = world.issuer.wallet.subscribe();
+    let handle = ListenHandle::new();
+
+    let summary = world.block_on(async {
+        let listen = world
+            .issuer
+            .wallet
+            .epicbox_listen(&world.issuer.epicbox, &handle);
+        let script = async {
+            world
+                .within(
+                    world
+                        .relay
+                        .wait_until(|relay| relay.pending(&world.issuer.address) == 0),
+                )
+                .await;
+            handle.stop();
+        };
+        tokio::join!(listen, script).0
+    });
+
+    assert_eq!(summary.unwrap().bounced, 1);
+    assert_eq!(
+        bounce_events(&mut events),
+        vec![BouncedInvoice {
+            tx_id: issued.tx_id,
+            slate_id: issued.slate_id,
+            peer: stock.address().clone(),
+        }]
+    );
 }
 
 #[test]

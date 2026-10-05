@@ -945,11 +945,14 @@ where
         match (slate.stage(), mailbox) {
             (Stage::S1, Mailbox::Payments) => self.answer(envelope, reply_to).await,
             (Stage::S2, Mailbox::Payments) => self.complete(envelope, &slate).await,
-            (Stage::I1, _) if self.is_bounce(&slate, reply_to).await? => {
-                self.record_bounce(reply_to).await?;
-                Ok(Handled::Bounced)
-            }
-            (Stage::I1, Mailbox::Invoices) => self.park(envelope, &slate, reply_to).await,
+            (Stage::I1, mailbox) => match self.bounced_invoice(&slate, reply_to).await? {
+                Some(bounced) => {
+                    self.record_bounce(bounced).await?;
+                    Ok(Handled::Bounced)
+                }
+                None if mailbox == Mailbox::Invoices => self.park(envelope, &slate, reply_to).await,
+                None => Err(Refusal::UnsupportedStage { stage: Stage::I1 }.into()),
+            },
             (Stage::I2, _) => self.complete_invoice(envelope, &slate, reply_to).await,
             (stage, _) => Err(Refusal::UnsupportedStage { stage }.into()),
         }
