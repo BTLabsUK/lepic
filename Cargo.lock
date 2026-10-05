@@ -1174,6 +1174,7 @@ version = "0.1.0"
 dependencies = [
  "blake2",
  "ed25519-dalek",
+ "insta",
  "jiff",
  "lepic-crypto",
  "lepic-epicbox",
@@ -1184,8 +1185,10 @@ dependencies = [
  "lepic-store",
  "lepic-telemetry",
  "lepic-transport",
+ "proptest",
  "rand 0.10.3",
  "rand_core 0.10.1",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror",

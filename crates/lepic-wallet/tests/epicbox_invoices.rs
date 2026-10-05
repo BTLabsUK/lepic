@@ -577,7 +577,14 @@ fn a_declined_invoice_cannot_be_paid() {
     let issued = world.issue(None);
     world.drain_payer_invoices();
 
-    world.payer.wallet.decline_invoice(issued.slate_id).unwrap();
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.epicbox, issued.slate_id),
+        )
+        .unwrap();
 
     assert_eq!(
         world.read_parked(&world.payer, issued.slate_id).status,
@@ -596,7 +603,12 @@ fn a_declined_invoice_cannot_be_paid() {
         "{error:?}"
     );
     assert!(matches!(
-        world.payer.wallet.decline_invoice(issued.slate_id),
+        world.block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.epicbox, issued.slate_id)
+        ),
         Err(InvoiceError::NotParked { .. })
     ));
 }

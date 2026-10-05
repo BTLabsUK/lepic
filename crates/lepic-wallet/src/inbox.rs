@@ -28,6 +28,7 @@ use lepic_epicbox::{
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::params::Network;
 use lepic_slate::codec::WireSlate;
+use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -45,6 +46,7 @@ use crate::error::WalletError;
 use crate::event::{Event, FinalizedInvoice, TransportState, TransportStatus};
 use crate::finalize::FinalizeError;
 use crate::invoice::InvoiceError;
+use crate::notice::{self, Payload};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
 use crate::refresh::last_confirmed;
@@ -117,9 +119,13 @@ pub struct InboxSummary {
     /// Invoices this wallet issued that the payer sent back unchanged, so it does not pay
     /// invoices.
     pub bounced: u32,
-    /// Messages acknowledged and forgotten on the invoice address: from a sender that is not
-    /// allowed, never opened, or invoices over the parking caps.
+    /// Messages acknowledged and forgotten: on the invoice address, from a sender that is not
+    /// allowed, never opened, or invoices over the parking caps; on either address, notices
+    /// not from the counterparty of their slate, of an unknown version or type, oversize or
+    /// malformed.
     pub dropped: u32,
+    /// Notices accepted from the counterparty of their slate (ADR 0016).
+    pub notices: u32,
 }
 
 impl InboxSummary {
@@ -132,6 +138,7 @@ impl InboxSummary {
             Handled::Parked => &mut self.parked,
             Handled::Bounced => &mut self.bounced,
             Handled::Dropped => &mut self.dropped,
+            Handled::Notice => &mut self.notices,
         };
         *counter = counter.saturating_add(1);
     }
@@ -188,15 +195,19 @@ pub(crate) enum Handled {
     Parked,
     Bounced,
     Dropped,
+    Notice,
 }
 
 impl Handled {
     fn inbox_status(self) -> InboxStatus {
         match self {
             Self::Rejected | Self::Dropped => InboxStatus::Rejected,
-            Self::Received | Self::Finalized | Self::Repeated | Self::Parked | Self::Bounced => {
-                InboxStatus::Processed
-            }
+            Self::Received
+            | Self::Finalized
+            | Self::Repeated
+            | Self::Parked
+            | Self::Bounced
+            | Self::Notice => InboxStatus::Processed,
         }
     }
 }
@@ -914,6 +925,18 @@ where
                 },
             ))
             .map_err(Hold::from)?;
+        match notice::classify(envelope.wire()) {
+            Payload::Slate => {}
+            Payload::Notice(notice) => return Ok(self.take_notice(notice, reply_to).await?),
+            Payload::Unknown => {
+                debug!("notice of an unknown version or type ignored");
+                return Ok(Handled::Dropped);
+            }
+            Payload::Oversize | Payload::Malformed => {
+                debug!("notice dropped as oversize or malformed");
+                return Ok(Handled::Dropped);
+            }
+        }
         let codecs = legacy_codecs(network).map_err(Hold::Receive)?;
         let slate = transport
             .policy()
@@ -927,18 +950,23 @@ where
                 Ok(Handled::Bounced)
             }
             (Stage::I1, Mailbox::Invoices) => self.park(envelope, &slate, reply_to).await,
-            (Stage::I2, _) => self.complete_invoice(envelope, &slate).await,
+            (Stage::I2, _) => self.complete_invoice(envelope, &slate, reply_to).await,
             (stage, _) => Err(Refusal::UnsupportedStage { stage }.into()),
         }
     }
 
     /// Finalizes an I2 and posts it, as [`Self::complete`] does for an S2. Only an I2 that
     /// answers an invoice this wallet issued and still waits for payment is finalized.
+    ///
+    /// A payment that carries the LEPIC marker proves that its payer runs LEPIC. Once it is
+    /// pushed, that payer is sent a `posted` notice.
     async fn complete_invoice(
         &self,
         envelope: &Envelope,
         payment: &Slate,
+        reply_to: &Destination,
     ) -> Result<Handled, Settlement> {
+        let marked = carries_lepic_marker(envelope.wire());
         let session = self.session().map_err(Hold::from)?;
         let slate_id = Uuid::from_bytes(*payment.id().as_bytes());
         let finalized_before = self
@@ -954,9 +982,21 @@ where
             .finalize_invoice(TRANSPORT_ID, envelope.wire(), POST_PROPAGATION)
             .await
         {
-            Ok(finalized) => Ok(self.invoice_finalized(finalized.tx_id, payment, finalized_before)),
+            Ok(finalized) => {
+                if marked {
+                    self.record_paying_peer(finalized.tx_id, reply_to).await;
+                }
+                if let Some(kernel) = finalized.slate.kernel() {
+                    self.notify_posted(finalized.tx_id, payment.id(), kernel.excess)
+                        .await;
+                }
+                Ok(self.invoice_finalized(finalized.tx_id, payment, finalized_before))
+            }
             Err(InvoiceError::NotPosted { tx_id, source }) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
+                if marked {
+                    self.record_paying_peer(tx_id, reply_to).await;
+                }
                 Ok(self.invoice_finalized(tx_id, payment, finalized_before))
             }
             Err(error @ InvoiceError::Expired { cutoff, .. }) => {

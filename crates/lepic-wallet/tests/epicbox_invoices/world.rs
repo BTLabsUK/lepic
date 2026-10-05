@@ -328,7 +328,7 @@ impl Party {
 
     /// Adds an unspent coinbase output of `value` at child `child`, mined at height 1, and moves
     /// the key counter past it.
-    fn fund(&self, child: u32, value: u64) {
+    pub fn fund(&self, child: u32, value: u64) {
         let keychain = Keychain::from_seed(&self.seed, Network::Floonet).unwrap();
         let id = Identifier::new(3, [0, 0, child, 0]).unwrap();
         let output = OutputRecord {

@@ -1,0 +1,524 @@
+//! Notices between LEPIC wallets over Epicbox on the mock relay (ADR 0016): the payer hears
+//! that its payment was posted or the invoice withdrawn, the issuer hears a decline, notices
+//! from anyone but the counterparty of their slate are dropped, and no notice is ever posted to
+//! a peer that has not proved it runs LEPIC.
+
+// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
+// treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
+
+mod support;
+#[path = "epicbox_invoices/world.rs"]
+mod world;
+
+use lepic_epicbox::EpicboxClient;
+use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_slate::codec::{Codec, EncodeContext};
+use lepic_slate::model::SlateId;
+use lepic_store::{PeerSupport, PendingInvoiceStatus, TxDirection, TxState};
+use lepic_transport::transport::Inbound;
+use lepic_wallet::Event;
+use lepic_wallet::event::{DeclinedInvoice, PostedInvoice, WithdrawnInvoice};
+use lepic_wallet::inbox::InboxSummary;
+use lepic_wallet::invoice::{IssuedInvoice, PaidInvoice};
+use lepic_wallet::notice::{MAX_NOTICE_LEN, Notice, NoticeKind, Payload, classify_text};
+use tokio::sync::broadcast::Receiver;
+use uuid::Uuid;
+use world::{World, pay_request};
+
+fn uuid(slate_id: SlateId) -> Uuid {
+    Uuid::from_bytes(*slate_id.as_bytes())
+}
+
+fn events(receiver: &mut Receiver<Event>) -> Vec<Event> {
+    std::iter::from_fn(|| receiver.try_recv().ok()).collect()
+}
+
+fn notice_events(receiver: &mut Receiver<Event>) -> Vec<Event> {
+    events(receiver)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::InvoicePosted(_) | Event::InvoiceDeclined(_) | Event::InvoiceWithdrawn(_)
+            )
+        })
+        .collect()
+}
+
+fn notice(kind: &str, slate_id: SlateId) -> String {
+    format!(r#"{{"lepic":1,"type":"{kind}","slate_id":"{slate_id}"}}"#)
+}
+
+impl World {
+    fn drain_payer_invoices(&self) -> InboxSummary {
+        self.block_on(
+            self.payer
+                .wallet
+                .epicbox_drain_invoices(&self.payer.epicbox),
+        )
+        .unwrap()
+    }
+
+    fn drain_issuer(&self) -> InboxSummary {
+        self.block_on(self.issuer.wallet.epicbox_drain(&self.issuer.epicbox))
+            .unwrap()
+    }
+
+    fn pay(&self, issued: &IssuedInvoice) -> PaidInvoice {
+        self.block_on(
+            self.payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap()
+    }
+
+    /// An invoice issued, parked, paid, finalized and posted, after which each side holds
+    /// proof that the other runs LEPIC.
+    fn settle_one_invoice(&self) -> (IssuedInvoice, PaidInvoice) {
+        let issued = self.issue(None);
+        assert_eq!(self.drain_payer_invoices().parked, 1);
+        let paid = self.pay(&issued);
+        assert_eq!(self.drain_issuer().finalized, 1);
+        (issued, paid)
+    }
+
+    fn issuer_capability(&self, key: &str) -> Option<PeerSupport> {
+        self.issuer
+            .read(|repos| repos.peer_capability(key))
+            .map(|capability| capability.support)
+    }
+
+    /// Takes every message waiting for `peer`, acknowledges it and returns its plaintext.
+    fn drain_peer(&self, peer: &EpicboxClient) -> Vec<String> {
+        self.block_on(async {
+            let subscription = peer.drain().unwrap();
+            let mut received = Vec::new();
+            while let Some(envelope) = self.within(subscription.next_envelope()).await.unwrap() {
+                received.push(envelope.wire().as_text().unwrap().to_owned());
+                subscription
+                    .acknowledge(envelope.ack_token())
+                    .await
+                    .unwrap();
+            }
+            subscription.stop().await.unwrap();
+            received
+        })
+    }
+
+    /// The issuer's I1 as `peer` received it, written again without the marker, as a stock
+    /// wallet would write it.
+    fn unmarked_i1(&self, peer: &EpicboxClient) -> String {
+        let received = self.drain_peer(peer);
+        assert_eq!(received.len(), 1);
+        let codec = V3JsonCodec::new(
+            lepic_primitives::params::Network::Floonet
+                .params()
+                .default_base_fee(),
+        );
+        let wire = lepic_wallet::slate::WireSlate::text(
+            lepic_wallet::slate::MediaType::JSON,
+            received[0].clone(),
+        );
+        let slate = codec.decode(&wire).unwrap();
+        codec
+            .encode(
+                &slate,
+                &EncodeContext {
+                    block_header_version: 6,
+                },
+            )
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .to_owned()
+    }
+}
+
+#[test]
+fn the_payer_receives_posted_with_the_kernel_excess() {
+    let world = World::new();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let (issued, paid) = world.settle_one_invoice();
+    let pushed = world.node.pushed_transactions();
+    assert_eq!(pushed.len(), 1);
+    let excess = pushed[0].kernels()[0].excess;
+    // The marked payment proved both of the payer's keys.
+    let invoiced = world.payer.invoice_address().key_text();
+    assert_eq!(world.issuer_capability(&invoiced), Some(PeerSupport::Lepic));
+    let payments = world.payer.address.key_text();
+    assert_eq!(world.issuer_capability(&payments), Some(PeerSupport::Lepic));
+    let _ = events(&mut payer_events);
+
+    let summary = world.drain_payer_invoices();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            notices: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.payer.invoice_address()), 0);
+    assert_eq!(
+        notice_events(&mut payer_events),
+        vec![Event::InvoicePosted(PostedInvoice {
+            tx_id: paid.tx_id,
+            slate_id: issued.slate_id,
+            excess,
+        })]
+    );
+    // Advisory: the payment waits for a refresh to see the kernel.
+    let state = world
+        .payer
+        .read(|repos| repos.transaction(paid.tx_id))
+        .unwrap()
+        .state;
+    assert_eq!(state, TxState::Sent);
+}
+
+#[test]
+fn an_unpaid_payer_receives_withdrawn_for_a_cancelled_invoice() {
+    let world = World::new();
+    world.settle_one_invoice();
+    let issued = world.issue(None);
+    let summary = world.drain_payer_invoices();
+    assert_eq!((summary.parked, summary.notices), (1, 1));
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    world
+        .block_on(world.issuer.wallet.cancel(issued.tx_id))
+        .unwrap();
+    let summary = world.drain_payer_invoices();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            notices: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(
+        notice_events(&mut payer_events),
+        vec![Event::InvoiceWithdrawn(WithdrawnInvoice {
+            slate_id: issued.slate_id,
+            tx_id: None,
+        })]
+    );
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.pending_invoice(uuid(issued.slate_id)))
+            .is_none()
+    );
+}
+
+#[test]
+fn a_withdrawn_paid_invoice_raises_an_event_and_moves_nothing() {
+    let world = World::new();
+    world.settle_one_invoice();
+    // The first payment locked the only output; a second one pays this time.
+    world.payer.fund(10, world::FUNDING);
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    let paid = world.pay(&issued);
+    let locked_before = world
+        .payer
+        .read(|repos| repos.outputs_of_transaction(paid.tx_id));
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    world
+        .block_on(world.issuer.wallet.cancel(issued.tx_id))
+        .unwrap();
+    let summary = world.drain_payer_invoices();
+
+    assert_eq!(summary.notices, 1);
+    assert_eq!(
+        notice_events(&mut payer_events),
+        vec![Event::InvoiceWithdrawn(WithdrawnInvoice {
+            slate_id: issued.slate_id,
+            tx_id: Some(paid.tx_id),
+        })]
+    );
+    let state = world
+        .payer
+        .read(|repos| repos.transaction(paid.tx_id))
+        .unwrap()
+        .state;
+    assert_eq!(state, TxState::Sent);
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.outputs_of_transaction(paid.tx_id)),
+        locked_before
+    );
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.pending_invoice(uuid(issued.slate_id)))
+            .unwrap()
+            .status,
+        PendingInvoiceStatus::Paid
+    );
+}
+
+#[test]
+fn the_issuer_hears_a_decline_from_the_invoiced_address() {
+    let world = World::new();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.epicbox, issued.slate_id),
+        )
+        .unwrap();
+    let summary = world.drain_issuer();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            notices: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(
+        notice_events(&mut issuer_events),
+        vec![Event::InvoiceDeclined(DeclinedInvoice {
+            tx_id: issued.tx_id,
+            slate_id: issued.slate_id,
+        })]
+    );
+    // Advisory: the invoice stays open until the user cancels it or it expires.
+    let state = world
+        .issuer
+        .read(|repos| repos.transaction(issued.tx_id))
+        .unwrap()
+        .state;
+    assert_eq!(state, TxState::Received);
+    let invoiced = world.payer.invoice_address().key_text();
+    assert_eq!(world.issuer_capability(&invoiced), Some(PeerSupport::Lepic));
+}
+
+#[test]
+fn a_peer_proven_by_its_notice_is_sent_withdrawn() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let issued = world.issue_to(peer.address(), None);
+    world.drain_peer(&peer);
+    world.post(
+        9,
+        &world.issuer.address,
+        &notice("declined", issued.slate_id),
+        1,
+    );
+    assert_eq!(world.drain_issuer().notices, 1);
+
+    world
+        .block_on(world.issuer.wallet.cancel(issued.tx_id))
+        .unwrap();
+
+    let received = world.drain_peer(&peer);
+    assert_eq!(received.len(), 1);
+    assert_eq!(
+        classify_text(&received[0]),
+        Payload::Notice(Notice {
+            slate_id: issued.slate_id,
+            kind: NoticeKind::Withdrawn,
+        })
+    );
+}
+
+#[test]
+fn a_notice_from_another_key_is_dropped() {
+    let world = World::new();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let peer = world.peer_client(9);
+    let issued = world.issue_to(peer.address(), None);
+    world.post(
+        8,
+        &world.issuer.address,
+        &notice("declined", issued.slate_id),
+        1,
+    );
+
+    let summary = world.drain_issuer();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert!(notice_events(&mut issuer_events).is_empty());
+    let key = World::address_of(8).key_text();
+    assert_eq!(world.issuer_capability(&key), None);
+
+    // On the payer's invoice address, an allowed sender that did not issue the invoice
+    // cannot withdraw it.
+    world
+        .payer
+        .wallet
+        .allow_invoice_sender(&World::address_of(8).to_string(), "other")
+        .unwrap();
+    let parked = world.issue(None);
+    assert_eq!(world.drain_payer_invoices().parked, 1);
+    let mut payer_events = world.payer.wallet.subscribe();
+    world.post(
+        8,
+        &world.payer.invoice_address(),
+        &notice("withdrawn", parked.slate_id),
+        1,
+    );
+
+    let summary = world.drain_payer_invoices();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert!(notice_events(&mut payer_events).is_empty());
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.pending_invoice(uuid(parked.slate_id)))
+            .unwrap()
+            .status,
+        PendingInvoiceStatus::Parked
+    );
+}
+
+#[test]
+fn an_unknown_notice_type_or_version_is_acknowledged_and_ignored() {
+    let world = World::new();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let peer = world.peer_client(9);
+    let issued = world.issue_to(peer.address(), None);
+    world.post(
+        9,
+        &world.issuer.address,
+        &notice("thanks", issued.slate_id),
+        1,
+    );
+    let newer = format!(
+        r#"{{"lepic":2,"type":"declined","slate_id":"{}"}}"#,
+        issued.slate_id
+    );
+    world.post(9, &world.issuer.address, &newer, 1);
+
+    let summary = world.drain_issuer();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            dropped: 2,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert!(notice_events(&mut issuer_events).is_empty());
+    let key = World::address_of(9).key_text();
+    assert_eq!(world.issuer_capability(&key), None);
+}
+
+#[test]
+fn an_oversize_notice_is_dropped() {
+    let world = World::new();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let peer = world.peer_client(9);
+    let issued = world.issue_to(peer.address(), None);
+    let padding = "a".repeat(MAX_NOTICE_LEN);
+    let oversize = format!(
+        r#"{{"lepic":1,"type":"declined","slate_id":"{}","pad":"{padding}"}}"#,
+        issued.slate_id
+    );
+    world.post(9, &world.issuer.address, &oversize, 1);
+
+    let summary = world.drain_issuer();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert!(notice_events(&mut issuer_events).is_empty());
+    let key = World::address_of(9).key_text();
+    assert_eq!(world.issuer_capability(&key), None);
+}
+
+#[test]
+fn no_notice_is_posted_to_a_peer_without_proof() {
+    let world = World::new();
+    let posts = || world.relay.received("PostSlate");
+
+    // A peer that never answered: cancelling its invoice posts nothing.
+    let silent = world.peer_client(7);
+    let unanswered = world.issue_to(silent.address(), None);
+    let i1 = world.unmarked_i1(&silent);
+    let before = posts();
+    world
+        .block_on(world.issuer.wallet.cancel(unanswered.tx_id))
+        .unwrap();
+    assert_eq!(posts(), before);
+    assert!(world.drain_peer(&silent).is_empty());
+
+    // A peer that sent an invoice back unchanged: cancelling posts nothing either.
+    let stock = world.peer_client(6);
+    let bounced = world.issue_to(stock.address(), None);
+    let echo = world.unmarked_i1(&stock);
+    world.post(6, &world.issuer.address, &echo, 1);
+    assert_eq!(world.drain_issuer().bounced, 1);
+    let before = posts();
+    world
+        .block_on(world.issuer.wallet.cancel(bounced.tx_id))
+        .unwrap();
+    assert_eq!(posts(), before);
+    assert!(world.drain_peer(&stock).is_empty());
+
+    // A payer declining an unmarked invoice from an allowed sender posts nothing.
+    world
+        .payer
+        .wallet
+        .allow_invoice_sender(&World::address_of(7).to_string(), "stock")
+        .unwrap();
+    world.post(7, &world.payer.invoice_address(), &i1, 1);
+    assert_eq!(world.drain_payer_invoices().parked, 1);
+    let before = posts();
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.epicbox, unanswered.slate_id),
+        )
+        .unwrap();
+    assert_eq!(posts(), before);
+    assert!(world.drain_peer(&silent).is_empty());
+    let key = World::address_of(7).key_text();
+    assert_eq!(world.payer.read(|repos| repos.peer_capability(&key)), None);
+    assert!(
+        world
+            .issuer
+            .read(|repos| repos
+                .transaction_by_slate(uuid(unanswered.slate_id), TxDirection::Incoming))
+            .is_some()
+    );
+}

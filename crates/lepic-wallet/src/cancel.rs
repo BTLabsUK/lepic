@@ -38,7 +38,9 @@ where
     /// one store transaction. Cancelling a cancelled transaction changes nothing.
     ///
     /// A slate already delivered is not recalled; if the peer still completes it, the
-    /// transaction can no longer be finalized here.
+    /// transaction can no longer be finalized here. For an invoice issued over Epicbox, the
+    /// payer is sent a `withdrawn` notice when it proved that it runs LEPIC; a failure to send
+    /// it is logged and not returned.
     ///
     /// A finalized transaction may have reached the node even though posting it failed, so its
     /// kernel is looked up first, in the node's transaction pool and then in its chain; the
@@ -100,6 +102,7 @@ where
             Some(change) => {
                 info!("transaction cancelled");
                 self.emit(change.into());
+                self.notify_withdrawn(tx_id).await;
             }
             None => debug!("transaction already cancelled"),
         }

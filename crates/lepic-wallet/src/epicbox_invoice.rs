@@ -25,6 +25,7 @@ use lepic_epicbox::{
 use lepic_node::NodeApi;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::params::Network;
+use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::{MAX_MESSAGE_LEN, Slate, SlateId};
 use lepic_slate::registry::CodecRegistry;
@@ -39,6 +40,7 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::cancel::pool_holds;
+use crate::epicbox_notice::record_lepic;
 use crate::error::WalletError;
 use crate::event::{Event, ExpiredInvoice, ParkedInvoice};
 use crate::inbox::{
@@ -201,6 +203,8 @@ struct Arrival {
     sender_key: String,
     codec: String,
     bytes: Vec<u8>,
+    /// The I1 carried the LEPIC marker, so its sender runs LEPIC.
+    marked: bool,
 }
 
 fn park_stored(
@@ -211,6 +215,9 @@ fn park_stored(
     let Some(allowed) = repos.allowed_peer(&arrival.sender_key)? else {
         return Ok(Parking::NotAllowed);
     };
+    if arrival.marked {
+        record_lepic(repos, arrival.sender_key.clone(), now)?;
+    }
     let invoice = PendingInvoice {
         slate_id: arrival.slate_id,
         sender_key: arrival.sender_key,
@@ -439,7 +446,9 @@ where
         Ok(summary)
     }
 
-    /// The client of the invoice address, with the allowlist as it is stored now.
+    /// The client of the invoice address, which admits the allowlist as it is stored now and
+    /// the senders of the invoices this wallet holds, whose notices about them arrive here
+    /// even after a sender was removed from the allowlist.
     async fn invoice_client(
         &self,
         epicbox: &EpicboxTransport,
@@ -447,12 +456,27 @@ where
         let identity = self.identity_at(epicbox, self.invoice_address_index()?)?;
         let network = relay_network(self.config().network);
         let session = self.session()?;
-        let peers = self
-            .blocking(move |_, _| Ok(session.store.read(|repos| repos.allowed_peers())?))
+        let addresses = self
+            .blocking(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let mut addresses: Vec<String> = repos
+                        .allowed_peers()?
+                        .into_iter()
+                        .map(|peer| peer.address)
+                        .collect();
+                    addresses.extend(
+                        repos
+                            .pending_invoices()?
+                            .into_iter()
+                            .map(|invoice| invoice.sender_address),
+                    );
+                    Ok::<_, StoreError>(addresses)
+                })?)
+            })
             .await?;
-        let keys = peers
+        let keys = addresses
             .iter()
-            .filter_map(|peer| EpicboxAddress::parse(&peer.address, network).ok())
+            .filter_map(|address| EpicboxAddress::parse(address, network).ok())
             .map(|address| *address.public_key())
             .collect();
         Ok(epicbox
@@ -558,10 +582,24 @@ where
         Ok(paid)
     }
 
-    /// Declines the parked invoice `slate_id`: it is kept as declined and never paid. Fails
-    /// with [`InvoiceError::NotParked`] when no invoice with the slate id waits to be paid.
+    /// Declines the parked invoice `slate_id`: it is kept as declined and never paid. When its
+    /// sender proved that it runs LEPIC, it is sent a `declined` notice from the current
+    /// invoice address of `epicbox`; the notice is advisory, so a failure to send it is logged
+    /// and not returned. Fails with [`InvoiceError::NotParked`] when no invoice with the slate
+    /// id waits to be paid.
     #[instrument(skip_all, fields(wallet = %self.config().name, slate_id = %slate_id))]
-    pub fn decline_invoice(&self, slate_id: SlateId) -> Result<(), InvoiceError> {
+    pub async fn decline_invoice(
+        &self,
+        epicbox: &EpicboxTransport,
+        slate_id: SlateId,
+    ) -> Result<(), InvoiceError> {
+        self.decline_parked(slate_id)?;
+        info!("invoice declined");
+        self.notify_declined(epicbox, slate_id).await;
+        Ok(())
+    }
+
+    fn decline_parked(&self, slate_id: SlateId) -> Result<(), InvoiceError> {
         let session = self.session()?;
         session.store.write(|repos| {
             match repos.set_pending_invoice_status(uuid(slate_id), PendingInvoiceStatus::Declined) {
@@ -571,9 +609,7 @@ where
                 }
                 Err(error) => Err(error.into()),
             }
-        })?;
-        info!("invoice declined");
-        Ok(())
+        })
     }
 
     /// Expires what invoices left unpaid, as a host or a listener runs it from time to time:
@@ -714,6 +750,7 @@ where
                 .map(|origin| origin.codec().as_str().to_owned())
                 .unwrap_or_default(),
             bytes: envelope.wire().as_bytes().to_vec(),
+            marked: carries_lepic_marker(envelope.wire()),
         };
         let parking = self
             .inbox_write(move |repos, now| park_stored(repos, arrival, now))
@@ -747,7 +784,7 @@ fn current_index(repos: &dyn Repositories) -> Result<InvoiceAddressIndex, Wallet
 }
 
 /// The legacy codecs at the network's base fee, which read every slate this wallet stores.
-fn stored_codecs(network: Network) -> CodecRegistry {
+pub(crate) fn stored_codecs(network: Network) -> CodecRegistry {
     legacy_codecs(network.params().default_base_fee())
 }
 

@@ -2,6 +2,7 @@
 //! [`crate::Wallet::subscribe`]; a subscriber that falls more than [`EVENT_CAPACITY`] events
 //! behind misses the oldest ones and is told how many it missed.
 
+use lepic_crypto::Commitment;
 use lepic_primitives::amount::{Amount, Height};
 pub use lepic_slate::model::SlateId;
 use lepic_store::{AccountIndex, TxId, TxState};
@@ -34,6 +35,17 @@ pub enum Event {
     /// An invoice expired unpaid: a parked one was deleted, or one this wallet issued was
     /// cancelled.
     InvoiceExpired(ExpiredInvoice),
+    /// The issuer of an invoice this wallet paid reports that it pushed the transaction, with
+    /// the kernel excess the payment expects. Advisory: the transaction's state changes only
+    /// when a refresh finds the kernel.
+    InvoicePosted(PostedInvoice),
+    /// The payer declined an invoice this wallet issued. Nothing changed; the host may cancel
+    /// the invoice.
+    InvoiceDeclined(DeclinedInvoice),
+    /// The issuer withdrew an invoice. A parked one was deleted. For one this wallet already
+    /// paid, `tx_id` names the payment, which the host may offer the user to cancel; nothing
+    /// was cancelled.
+    InvoiceWithdrawn(WithdrawnInvoice),
 }
 
 /// Whether the root key is in memory.
@@ -100,6 +112,28 @@ pub struct FinalizedInvoice {
 pub struct ExpiredInvoice {
     pub slate_id: SlateId,
     /// The issuer's cancelled transaction; `None` for a parked invoice, which has none.
+    pub tx_id: Option<TxId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PostedInvoice {
+    /// The payment of the invoice.
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    pub excess: Commitment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeclinedInvoice {
+    /// The issued invoice.
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WithdrawnInvoice {
+    pub slate_id: SlateId,
+    /// The payment still waiting for the issuer; `None` when the invoice was not paid.
     pub tx_id: Option<TxId>,
 }
 

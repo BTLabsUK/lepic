@@ -2399,6 +2399,8 @@ dependencies = [
  "lepic-store",
  "lepic-transport",
  "rand_core 0.10.1",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
