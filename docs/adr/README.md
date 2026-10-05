@@ -20,7 +20,8 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0012](0012-native-slate-format.md) | A compact native slate format for LEPIC-to-LEPIC methods | proposed |
 | [0013](0013-network-parameters.md) | Network parameters live with the format that uses them | accepted |
 | [0014](0014-secrets-at-the-flutter-boundary.md) | Which secrets may cross the Flutter boundary | accepted |
-| [0015](0015-file-method-writes-v3.md) | The file method writes V3; Epicbox stays V2 | accepted |
+| [0015](0015-file-method-writes-v3.md) | The file method writes V3; Epicbox stays V2 for S1, V3 for invoice stages | accepted |
+| [0016](0016-epicbox-notices.md) | LEPIC notices over Epicbox, sent only to proven peers | accepted |
 
 Template:
 

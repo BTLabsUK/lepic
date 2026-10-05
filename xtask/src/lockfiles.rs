@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::cargo;
 
-const WORKSPACES: &[&str] = &["conformance", "fuzz"];
+const WORKSPACES: &[&str] = &["conformance", "fuzz", "interop/probe"];
 
 pub(crate) fn run(root: &Path) -> Result<()> {
     check(root, WORKSPACES)
