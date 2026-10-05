@@ -347,7 +347,8 @@ code 11 and the inputs stay locked; `lepic tx resend <ID> --to <ADDRESS>` delive
 the sender's allowed address only.
 
 The service's `epicbox listen` or `epicbox drain` finalizes and posts the payment when it
-arrives.
+arrives. An invoice that comes back unpaid from a wallet that does not pay invoices over Epicbox,
+as `epic-wallet` does, counts as `bounced`; send that payer a slate file instead.
 
 Two LEPIC wallets also tell each other what happened to an invoice, with short notices that
 never move funds. The payer's next `epicbox drain --invoices` hears that the service posted the
@@ -356,8 +357,7 @@ drain deletes it if it was not paid yet, and names the payment if it was, so the
 up on it with `tx cancel`; nothing is cancelled for the payer. `invoice decline` tells the
 service, whose next drain or listen names the invoice to withdraw. Notices go only to a wallet
 that has shown it runs LEPIC, because `epic-wallet` cannot read them; they are counted as
-`notices` and, with human output, shown on stderr. An invoice that comes back unpaid from a wallet that does not pay invoices over
-Epicbox, as `epic-wallet` does, counts as `bounced`; send that payer a slate file instead.
+`notices` and, with human output, shown on stderr.
 
 Unpaid invoices expire after `invoice_expiry_hours`, 24 unless set, at most 48. Each `epicbox
 drain`, and `epicbox listen` when it starts and every few minutes while it runs, deletes parked
@@ -365,8 +365,8 @@ invoices that were not paid in time, and cancels invoices this wallet issued tha
 which drops the output and keys they reserved, so a late payment is refused. A payment of an
 invoice that was not posted within its TTL is never cancelled on its own; the drain names it,
 and `lepic tx cancel <ID>` gives up on it. The JSON document of a drain or listen has `parked`,
-`bounced`, `dropped`, `notices` and `expired`, which lists the `deleted` slate ids and the `cancelled` and
-`cancellable` transaction ids, or is `null` when the expiry could not run.
+`bounced`, `dropped`, `notices` and `expired`, which lists the `deleted` slate ids and the
+`cancelled` and `cancellable` transaction ids, or is `null` when the expiry could not run.
 
 ### Through slate files
 
