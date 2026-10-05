@@ -263,7 +263,9 @@ Issuer, a service wallet:
 - `issueInvoiceEpicbox(amount, address, message)` sends the invoice to the payer's invoice
   address. The payment arrives on the payments address, where `drainEpicbox()` or the listener
   finalizes and posts it with an `invoiceFinalized` event. `cancelTransaction` withdraws an
-  unpaid invoice.
+  unpaid invoice. A payer that does not pay invoices, such as a stock `epic-wallet`, sends the
+  invoice back; `drainEpicbox()` counts it in `InboxReport.bounced`, and that payer is never
+  sent a notice. Cancel the invoice.
 
 Notices tell each side what the other did: the issuer sends `posted`, with the kernel excess,
 after it posts a payment and `withdrawn` when it cancels an invoice; the payer sends `declined`.
@@ -368,7 +370,9 @@ and the tests open the copy it installed. After a Rust change, run the command a
 changes alone `flutter test` is enough. `MockChain` works only in a `mock` build; in any other
 build it fails with `unsupported`. So does `MockRelay`: with
 `MockChain.runtimeWithRelay(logLevel, relay)` every Epicbox connection of the runtime's wallets
-goes to it, whatever relay they are configured with.
+goes to it, whatever relay they are configured with. `MockStockPeer` is a peer on that relay
+that sends every message back as a stock `epic-wallet` does with an invoice, and can post any
+text.
 
 `emulator_test/` is an app with no UI whose integration test loads the bundled library on an
 Android device and runs create, restore, file send, receive and finalize against `MockChain`.

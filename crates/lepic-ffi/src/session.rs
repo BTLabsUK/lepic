@@ -730,6 +730,8 @@ impl Session {
             rejected: summary.rejected,
             held: summary.held,
             notices: summary.notices,
+            bounced: summary.bounced,
+            dropped: summary.dropped,
         })
     }
 

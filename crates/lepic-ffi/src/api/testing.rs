@@ -280,3 +280,175 @@ impl MockRelay {
         });
     }
 }
+
+/// A peer on a [`MockRelay`] that behaves as a stock `epic-wallet` listener does with an
+/// invoice: it sends every message back to its sender as it arrived, unpaid.
+#[frb(opaque)]
+pub struct MockStockPeer {
+    #[cfg(feature = "mock")]
+    client: lepic_epicbox::EpicboxClient,
+    #[cfg(feature = "mock")]
+    chain: Chain,
+}
+
+impl MockStockPeer {
+    /// A peer at `<key>@epicbox.example` on `relay`, its key derived from `seed`. The seed
+    /// is a test value; never pass a real one.
+    #[frb(sync)]
+    pub fn new(relay: &MockRelay, seed: Vec<u8>) -> Result<MockStockPeer, WalletError> {
+        guard("mock_stock_peer", || {
+            #[cfg(feature = "mock")]
+            {
+                mock_peer::new(relay, &seed)
+            }
+            #[cfg(not(feature = "mock"))]
+            {
+                let _ = (relay, seed);
+                Err(unsupported())
+            }
+        })
+    }
+
+    #[frb(sync)]
+    pub fn address(&self) -> String {
+        guard_or("mock_stock_peer_address", String::new(), || {
+            #[cfg(feature = "mock")]
+            {
+                self.client.address().to_string()
+            }
+            #[cfg(not(feature = "mock"))]
+            {
+                String::new()
+            }
+        })
+    }
+
+    /// Posts `text` to `address` as this peer, on the threads of `runtime`. Fails with
+    /// `InvalidArgument` for an address that does not parse on the relay's chain.
+    pub async fn send(
+        &self,
+        runtime: &LepicRuntime,
+        to: String,
+        text: String,
+    ) -> Result<(), WalletError> {
+        #[cfg(feature = "mock")]
+        {
+            let client = self.client.clone();
+            let network = crate::session::relay_network(self.chain.network());
+            runtime
+                .inner
+                .boundary
+                .run("mock_stock_peer_send", async move {
+                    mock_peer::send(&client, network, &to, &text).await
+                })
+                .await
+        }
+        #[cfg(not(feature = "mock"))]
+        {
+            let _ = (runtime, to, text);
+            Err(unsupported())
+        }
+    }
+
+    /// Reads every message waiting for the peer, sends each back to its sender unchanged and
+    /// acknowledges it, on the threads of `runtime`. Returns how many it sent back.
+    pub async fn return_messages(&self, runtime: &LepicRuntime) -> Result<u32, WalletError> {
+        #[cfg(feature = "mock")]
+        {
+            let client = self.client.clone();
+            let network = crate::session::relay_network(self.chain.network());
+            runtime
+                .inner
+                .boundary
+                .run("mock_stock_peer_return_messages", async move {
+                    mock_peer::return_messages(&client, network).await
+                })
+                .await
+        }
+        #[cfg(not(feature = "mock"))]
+        {
+            let _ = runtime;
+            Err(unsupported())
+        }
+    }
+}
+
+#[cfg(feature = "mock")]
+mod mock_peer {
+    use lepic_epicbox::{
+        ClientSettings, Domain, EpicboxAddress, EpicboxClient, Identity, Network, RelayEndpoint,
+        Security,
+    };
+    use lepic_keychain::ExtendedPrivKey;
+    use lepic_transport::transport::Inbound as _;
+
+    use super::{MockRelay, MockStockPeer};
+    use crate::api::error::{WalletError, WalletErrorKind};
+
+    const DOMAIN: &str = "epicbox.example";
+    const PORT: u16 = 443;
+
+    fn failed(error: &(dyn std::error::Error + 'static)) -> WalletError {
+        WalletError::new(
+            WalletErrorKind::TransportFailed,
+            lepic_telemetry::ErrorChain(error).to_string(),
+        )
+    }
+
+    pub(super) fn new(relay: &MockRelay, seed: &[u8]) -> Result<MockStockPeer, WalletError> {
+        let key = ExtendedPrivKey::new_master(seed).map_err(|error| failed(&error))?;
+        let public = key.public_key().map_err(|error| failed(&error))?;
+        let domain = Domain::parse(DOMAIN).map_err(|error| failed(&error))?;
+        let network = crate::session::relay_network(relay.chain.network());
+        let address = EpicboxAddress::new(public, network, domain.clone(), Some(PORT));
+        let identity =
+            Identity::new(key.secret_key().clone(), address).map_err(|error| failed(&error))?;
+        let settings = ClientSettings::new(RelayEndpoint::new(domain, Some(PORT), Security::Tls));
+        Ok(MockStockPeer {
+            client: EpicboxClient::new(settings, identity, relay.relay.connector()),
+            chain: relay.chain,
+        })
+    }
+
+    pub(super) async fn send(
+        client: &EpicboxClient,
+        network: Network,
+        to: &str,
+        text: &str,
+    ) -> Result<(), WalletError> {
+        let to = EpicboxAddress::parse(to, network).map_err(|_| {
+            WalletError::new(WalletErrorKind::InvalidArgument, "not an epicbox address")
+        })?;
+        client.post(&to, text).await.map_err(|error| failed(&error))
+    }
+
+    pub(super) async fn return_messages(
+        client: &EpicboxClient,
+        network: Network,
+    ) -> Result<u32, WalletError> {
+        let subscription = client.drain().map_err(|error| failed(&error))?;
+        let mut returned = 0u32;
+        while let Some(envelope) = subscription
+            .next_envelope()
+            .await
+            .map_err(|error| failed(&error))?
+        {
+            let sender = envelope
+                .reply_to()
+                .and_then(|to| EpicboxAddress::parse(to.as_str(), network).ok());
+            if let (Some(sender), Some(text)) = (sender, envelope.wire().as_text()) {
+                client
+                    .post(&sender, text)
+                    .await
+                    .map_err(|error| failed(&error))?;
+                returned = returned.saturating_add(1);
+            }
+            subscription
+                .acknowledge(envelope.ack_token())
+                .await
+                .map_err(|error| failed(&error))?;
+        }
+        subscription.stop().await.map_err(|error| failed(&error))?;
+        Ok(returned)
+    }
+}

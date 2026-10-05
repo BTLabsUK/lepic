@@ -305,6 +305,13 @@ pub struct InboxReport {
     /// Notices about invoices accepted from the other party: `posted`, `declined` and
     /// `withdrawn`, each also reported as its event.
     pub notices: u32,
+    /// Invoices this wallet issued that the payer sent back unpaid, as a stock `epic-wallet`
+    /// does: that payer does not pay invoices and is sent nothing but slates from now on.
+    /// Nothing changed; cancel the invoice with `cancel_transaction`.
+    pub bounced: u32,
+    /// Messages acknowledged and forgotten: notices not from the other party of their invoice,
+    /// of a kind this version does not know, oversize or malformed.
+    pub dropped: u32,
 }
 
 /// A sender whose invoices the invoice address accepts, from `EpicWallet::invoice_senders`.
@@ -372,6 +379,10 @@ pub struct InvoiceReport {
     pub dropped: u32,
     /// Notices about invoices accepted from the other party, each also reported as its event.
     pub notices: u32,
+    /// Invoices this wallet issued that came back unpaid from the address they went to: that
+    /// payer does not pay invoices. Nothing changed; cancel the invoice with
+    /// `cancel_transaction`.
+    pub bounced: u32,
 }
 
 /// What one `EpicWallet::sweep_invoices` did.

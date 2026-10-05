@@ -345,6 +345,52 @@ void main() {
     },
   );
 
+  test('an invoice a stock wallet sends back is counted as bounced', () async {
+    final p = await parties('bounced');
+    final stock = MockStockPeer(relay: relay, seed: List.filled(32, 7));
+    final issued = await p.issuer.issueInvoiceEpicbox(
+      amount: BigInt.from(epic),
+      address: stock.address(),
+    );
+    expect(await stock.returnMessages(runtime: runtime), 1);
+    expect(relay.pending(address: p.issuerAddress), 1);
+
+    final report = await p.issuer.drainEpicbox();
+    expect(report.bounced, 1);
+    expect(report.finalized, 0);
+    expect(report.dropped, 0);
+    expect(relay.pending(address: p.issuerAddress), 0);
+    expect(
+      (await p.issuer.transaction(txId: issued.txId)).status,
+      TxStatus.received,
+    );
+
+    // A wallet that does not pay invoices is never sent a notice: the cancel posts nothing.
+    await p.issuer.cancelTransaction(txId: issued.txId);
+    expect(relay.pending(address: stock.address()), 0);
+  });
+
+  test('a notice from a key that is not the other party is dropped', () async {
+    final p = await parties('foreign-notice');
+    final stranger = MockStockPeer(relay: relay, seed: List.filled(32, 9));
+    final (issued, _) = await parked(p);
+    for (final text in [
+      '{"lepic":1,"type":"declined","slate_id":"${issued.slateId}"}',
+      '{"lepic":1,"type":"surprise","slate_id":"${issued.slateId}"}',
+    ]) {
+      await stranger.send(runtime: runtime, to: p.issuerAddress, text: text);
+    }
+
+    final report = await p.issuer.drainEpicbox();
+    expect(report.dropped, 2);
+    expect(report.notices, 0);
+    expect(relay.pending(address: p.issuerAddress), 0);
+    expect(
+      p.issuerEvents.where((e) => e.kind == WalletEventKind.invoiceDeclined),
+      isEmpty,
+    );
+  });
+
   test('a declined invoice is never paid', () async {
     final p = await parties('declined');
     final (issued, _) = await parked(p);

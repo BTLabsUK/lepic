@@ -75,7 +75,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1972104990;
+  int get rustContentHash => -892613148;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -442,6 +442,25 @@ abstract class RustLibApi extends BaseApi {
     required bool refusing,
   });
 
+  String crateApiTestingMockStockPeerAddress({required MockStockPeer that});
+
+  MockStockPeer crateApiTestingMockStockPeerNew({
+    required MockRelay relay,
+    required List<int> seed,
+  });
+
+  Future<int> crateApiTestingMockStockPeerReturnMessages({
+    required MockStockPeer that,
+    required LepicRuntime runtime,
+  });
+
+  Future<void> crateApiTestingMockStockPeerSend({
+    required MockStockPeer that,
+    required LepicRuntime runtime,
+    required String to,
+    required String text,
+  });
+
   Future<void> crateApiWalletDeleteWallet({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -514,6 +533,15 @@ abstract class RustLibApi extends BaseApi {
   get rust_arc_decrement_strong_count_MockRelay;
 
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_MockRelayPtr;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_MockStockPeer;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_MockStockPeer;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_MockStockPeerPtr;
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3259,6 +3287,155 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  String crateApiTestingMockStockPeerAddress({required MockStockPeer that}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 74)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTestingMockStockPeerAddressConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTestingMockStockPeerAddressConstMeta =>
+      const TaskConstMeta(
+        debugName: "MockStockPeer_address",
+        argNames: ["that"],
+      );
+
+  @override
+  MockStockPeer crateApiTestingMockStockPeerNew({
+    required MockRelay relay,
+    required List<int> seed,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay(
+            relay,
+            serializer,
+          );
+          sse_encode_list_prim_u_8_loose(seed, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 75)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiTestingMockStockPeerNewConstMeta,
+        argValues: [relay, seed],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTestingMockStockPeerNewConstMeta =>
+      const TaskConstMeta(
+        debugName: "MockStockPeer_new",
+        argNames: ["relay", "seed"],
+      );
+
+  @override
+  Future<int> crateApiTestingMockStockPeerReturnMessages({
+    required MockStockPeer that,
+    required LepicRuntime runtime,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+            that,
+            serializer,
+          );
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLepicRuntime(
+            runtime,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 76,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_u_32,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiTestingMockStockPeerReturnMessagesConstMeta,
+        argValues: [that, runtime],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTestingMockStockPeerReturnMessagesConstMeta =>
+      const TaskConstMeta(
+        debugName: "MockStockPeer_return_messages",
+        argNames: ["that", "runtime"],
+      );
+
+  @override
+  Future<void> crateApiTestingMockStockPeerSend({
+    required MockStockPeer that,
+    required LepicRuntime runtime,
+    required String to,
+    required String text,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+            that,
+            serializer,
+          );
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLepicRuntime(
+            runtime,
+            serializer,
+          );
+          sse_encode_String(to, serializer);
+          sse_encode_String(text, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 77,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiTestingMockStockPeerSendConstMeta,
+        argValues: [that, runtime, to, text],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTestingMockStockPeerSendConstMeta =>
+      const TaskConstMeta(
+        debugName: "MockStockPeer_send",
+        argNames: ["that", "runtime", "to", "text"],
+      );
+
+  @override
   Future<void> crateApiWalletDeleteWallet({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -3280,7 +3457,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 74,
+            funcId: 78,
             port: port_,
           );
         },
@@ -3309,7 +3486,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 75,
+            funcId: 79,
             port: port_,
           );
         },
@@ -3341,7 +3518,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 76,
+            funcId: 80,
             port: port_,
           );
         },
@@ -3378,7 +3555,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 77,
+            funcId: 81,
             port: port_,
           );
         },
@@ -3409,7 +3586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(address, serializer);
           sse_encode_chain(chain, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 82)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -3435,7 +3612,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(phrase, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 79)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -3463,7 +3640,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 80,
+            funcId: 84,
             port: port_,
           );
         },
@@ -3504,7 +3681,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 81,
+            funcId: 85,
             port: port_,
           );
         },
@@ -3635,6 +3812,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   get rust_arc_decrement_strong_count_MockRelay => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockRelay;
 
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_MockStockPeer => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_MockStockPeer => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer;
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -3687,6 +3872,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MockStockPeer
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return MockStockPeerImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
   AppSecretStore
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore(
     dynamic raw,
@@ -3729,6 +3923,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return MockRelayImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  MockStockPeer
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return MockStockPeerImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -3798,6 +4001,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return MockRelayImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  MockStockPeer
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return MockStockPeerImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -3952,8 +4164,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   InboxReport dco_decode_inbox_report(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return InboxReport(
       received: dco_decode_u_32(arr[0]),
       finalized: dco_decode_u_32(arr[1]),
@@ -3961,6 +4173,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       rejected: dco_decode_u_32(arr[3]),
       held: dco_decode_u_32(arr[4]),
       notices: dco_decode_u_32(arr[5]),
+      bounced: dco_decode_u_32(arr[6]),
+      dropped: dco_decode_u_32(arr[7]),
     );
   }
 
@@ -3984,8 +4198,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   InvoiceReport dco_decode_invoice_report(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 7)
-      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return InvoiceReport(
       parked: dco_decode_u_32(arr[0]),
       finalized: dco_decode_u_32(arr[1]),
@@ -3994,6 +4208,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       held: dco_decode_u_32(arr[4]),
       dropped: dco_decode_u_32(arr[5]),
       notices: dco_decode_u_32(arr[6]),
+      bounced: dco_decode_u_32(arr[7]),
     );
   }
 
@@ -4605,6 +4820,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MockStockPeer
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return MockStockPeerImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
   AppSecretStore
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore(
     SseDeserializer deserializer,
@@ -4659,6 +4886,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return MockRelayImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  MockStockPeer
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return MockStockPeerImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
@@ -4726,6 +4965,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return MockRelayImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  MockStockPeer
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return MockStockPeerImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
@@ -4897,6 +5148,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_rejected = sse_decode_u_32(deserializer);
     var var_held = sse_decode_u_32(deserializer);
     var var_notices = sse_decode_u_32(deserializer);
+    var var_bounced = sse_decode_u_32(deserializer);
+    var var_dropped = sse_decode_u_32(deserializer);
     return InboxReport(
       received: var_received,
       finalized: var_finalized,
@@ -4904,6 +5157,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       rejected: var_rejected,
       held: var_held,
       notices: var_notices,
+      bounced: var_bounced,
+      dropped: var_dropped,
     );
   }
 
@@ -4936,6 +5191,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_held = sse_decode_u_32(deserializer);
     var var_dropped = sse_decode_u_32(deserializer);
     var var_notices = sse_decode_u_32(deserializer);
+    var var_bounced = sse_decode_u_32(deserializer);
     return InvoiceReport(
       parked: var_parked,
       finalized: var_finalized,
@@ -4944,6 +5200,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       held: var_held,
       dropped: var_dropped,
       notices: var_notices,
+      bounced: var_bounced,
     );
   }
 
@@ -5690,6 +5947,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    MockStockPeer self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as MockStockPeerImpl).frbInternalSseEncode(move: true),
+      serializer,
+    );
+  }
+
+  @protected
+  void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppSecretStore(
     AppSecretStore self,
     SseSerializer serializer,
@@ -5749,6 +6019,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
       (self as MockRelayImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    MockStockPeer self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as MockStockPeerImpl).frbInternalSseEncode(move: false),
       serializer,
     );
   }
@@ -5856,6 +6139,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
       (self as MockRelayImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMockStockPeer(
+    MockStockPeer self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as MockStockPeerImpl).frbInternalSseEncode(move: null),
       serializer,
     );
   }
@@ -6072,6 +6368,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.rejected, serializer);
     sse_encode_u_32(self.held, serializer);
     sse_encode_u_32(self.notices, serializer);
+    sse_encode_u_32(self.bounced, serializer);
+    sse_encode_u_32(self.dropped, serializer);
   }
 
   @protected
@@ -6098,6 +6396,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.held, serializer);
     sse_encode_u_32(self.dropped, serializer);
     sse_encode_u_32(self.notices, serializer);
+    sse_encode_u_32(self.bounced, serializer);
   }
 
   @protected
@@ -7304,4 +7603,47 @@ class MockRelayImpl extends RustOpaque implements MockRelay {
   /// While `refusing`, new connections fail as with an unreachable relay.
   void setRefusing({required bool refusing}) => RustLib.instance.api
       .crateApiTestingMockRelaySetRefusing(that: this, refusing: refusing);
+}
+
+@sealed
+class MockStockPeerImpl extends RustOpaque implements MockStockPeer {
+  // Not to be used by end users
+  MockStockPeerImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  MockStockPeerImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_MockStockPeer,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_MockStockPeer,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_MockStockPeerPtr,
+  );
+
+  String address() =>
+      RustLib.instance.api.crateApiTestingMockStockPeerAddress(that: this);
+
+  /// Reads every message waiting for the peer, sends each back to its sender unchanged and
+  /// acknowledges it, on the threads of `runtime`. Returns how many it sent back.
+  Future<int> returnMessages({required LepicRuntime runtime}) => RustLib
+      .instance
+      .api
+      .crateApiTestingMockStockPeerReturnMessages(that: this, runtime: runtime);
+
+  /// Posts `text` to `address` as this peer, on the threads of `runtime`. Fails with
+  /// `InvalidArgument` for an address that does not parse on the relay's chain.
+  Future<void> send({
+    required LepicRuntime runtime,
+    required String to,
+    required String text,
+  }) => RustLib.instance.api.crateApiTestingMockStockPeerSend(
+    that: this,
+    runtime: runtime,
+    to: to,
+    text: text,
+  );
 }

@@ -137,6 +137,7 @@ impl Session {
             held: summary.held,
             dropped: summary.dropped,
             notices: summary.notices,
+            bounced: summary.bounced,
         })
     }
 

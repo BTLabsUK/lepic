@@ -88,6 +88,15 @@ class InboxReport {
   /// `withdrawn`, each also reported as its event.
   final int notices;
 
+  /// Invoices this wallet issued that the payer sent back unpaid, as a stock `epic-wallet`
+  /// does: that payer does not pay invoices and is sent nothing but slates from now on.
+  /// Nothing changed; cancel the invoice with `cancel_transaction`.
+  final int bounced;
+
+  /// Messages acknowledged and forgotten: notices not from the other party of their invoice,
+  /// of a kind this version does not know, oversize or malformed.
+  final int dropped;
+
   const InboxReport({
     required this.received,
     required this.finalized,
@@ -95,6 +104,8 @@ class InboxReport {
     required this.rejected,
     required this.held,
     required this.notices,
+    required this.bounced,
+    required this.dropped,
   });
 
   @override
@@ -104,7 +115,9 @@ class InboxReport {
       repeated.hashCode ^
       rejected.hashCode ^
       held.hashCode ^
-      notices.hashCode;
+      notices.hashCode ^
+      bounced.hashCode ^
+      dropped.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -116,7 +129,9 @@ class InboxReport {
           repeated == other.repeated &&
           rejected == other.rejected &&
           held == other.held &&
-          notices == other.notices;
+          notices == other.notices &&
+          bounced == other.bounced &&
+          dropped == other.dropped;
 }
 
 /// An invoice waiting on the invoice address for the user to pay or decline, from
@@ -195,6 +210,11 @@ class InvoiceReport {
   /// Notices about invoices accepted from the other party, each also reported as its event.
   final int notices;
 
+  /// Invoices this wallet issued that came back unpaid from the address they went to: that
+  /// payer does not pay invoices. Nothing changed; cancel the invoice with
+  /// `cancel_transaction`.
+  final int bounced;
+
   const InvoiceReport({
     required this.parked,
     required this.finalized,
@@ -203,6 +223,7 @@ class InvoiceReport {
     required this.held,
     required this.dropped,
     required this.notices,
+    required this.bounced,
   });
 
   @override
@@ -213,7 +234,8 @@ class InvoiceReport {
       rejected.hashCode ^
       held.hashCode ^
       dropped.hashCode ^
-      notices.hashCode;
+      notices.hashCode ^
+      bounced.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -226,7 +248,8 @@ class InvoiceReport {
           rejected == other.rejected &&
           held == other.held &&
           dropped == other.dropped &&
-          notices == other.notices;
+          notices == other.notices &&
+          bounced == other.bounced;
 }
 
 /// A sender whose invoices the invoice address accepts, from `EpicWallet::invoice_senders`.

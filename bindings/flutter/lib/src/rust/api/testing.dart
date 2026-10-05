@@ -78,3 +78,28 @@ abstract class MockRelay implements RustOpaqueInterface {
   /// While `refusing`, new connections fail as with an unreachable relay.
   void setRefusing({required bool refusing});
 }
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MockStockPeer>>
+abstract class MockStockPeer implements RustOpaqueInterface {
+  String address();
+
+  /// A peer at `<key>@epicbox.example` on `relay`, its key derived from `seed`. The seed
+  /// is a test value; never pass a real one.
+  factory MockStockPeer({required MockRelay relay, required List<int> seed}) =>
+      RustLib.instance.api.crateApiTestingMockStockPeerNew(
+        relay: relay,
+        seed: seed,
+      );
+
+  /// Reads every message waiting for the peer, sends each back to its sender unchanged and
+  /// acknowledges it, on the threads of `runtime`. Returns how many it sent back.
+  Future<int> returnMessages({required LepicRuntime runtime});
+
+  /// Posts `text` to `address` as this peer, on the threads of `runtime`. Fails with
+  /// `InvalidArgument` for an address that does not parse on the relay's chain.
+  Future<void> send({
+    required LepicRuntime runtime,
+    required String to,
+    required String text,
+  });
+}
