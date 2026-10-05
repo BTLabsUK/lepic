@@ -549,6 +549,9 @@ struct StoredS1 {
     fee: Fee,
     wire: WireSlate,
     outbox: Option<OutboxId>,
+    /// Where the slate must go whatever the caller named: the allowed address of a parked
+    /// invoice's payment.
+    bound_to: Option<Destination>,
 }
 
 /// What the store transaction of a send or resend runs with, so it needs no `Ports`.
@@ -687,6 +690,7 @@ fn create_s1(
         fee: plan.fee,
         wire,
         outbox,
+        bound_to: None,
     })
 }
 
@@ -821,6 +825,7 @@ fn stored_s1_for_delivery(
         fee: slate.fee(),
         wire,
         outbox,
+        bound_to: None,
     })
 }
 
@@ -861,16 +866,20 @@ fn stored_i2_for_delivery(
     if slate.stage() != Stage::I2 {
         return Err(SendError::NotResendable { tx_id });
     }
-    if repos.pending_invoice(slate_uuid)?.is_some() {
+    let bound_to = if repos.pending_invoice(slate_uuid)?.is_some() {
         // A parked invoice is paid only to the address the user allowed, recorded when it was
-        // paid; the recorded address also decides whose notices count for the payment.
+        // paid; the recorded address also decides whose notices count for the payment. The
+        // caller's address may name the same key under another domain, which the relay does
+        // not authenticate, so the recorded one is used.
         let allowed = repos.counterparty(tx_id)?;
         if !same_epicbox_key(env.network, delivery, allowed.as_deref()) {
             return Err(SendError::PayeeMismatch { tx_id });
         }
+        allowed.map(Destination::new)
     } else {
         record_counterparty(repos, tx_id, delivery)?;
-    }
+        None
+    };
     Ok(StoredS1 {
         tx_id,
         slate_id: slate.id(),
@@ -878,6 +887,7 @@ fn stored_i2_for_delivery(
         fee: slate.fee(),
         wire,
         outbox: None,
+        bound_to,
     })
 }
 
@@ -961,7 +971,8 @@ where
 
     /// Delivers the stored S1 of a transaction whose delivery failed, through `delivery`, which
     /// may name another transport than the first attempt. For an invoice payment, delivers its
-    /// stored I2 as it was first encoded.
+    /// stored I2 as it was first encoded; the payment of a parked invoice goes to the recorded
+    /// allowed address, whatever domain `delivery` names for its key.
     ///
     /// Fails with [`SendError::Wallet`] carrying [`WalletError::UnknownTransaction`],
     /// [`SendError::NotResendable`] when the
@@ -993,6 +1004,13 @@ where
             })
             .await??;
         Span::current().record("slate_id", tracing::field::display(stored.slate_id));
+        let delivery = match &stored.bound_to {
+            Some(to) => Delivery::Deliver {
+                transport: delivery.transport(),
+                to: to.clone(),
+            },
+            None => delivery,
+        };
         self.deliver(&stored, &delivery).await
     }
 

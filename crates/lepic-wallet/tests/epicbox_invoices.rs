@@ -790,6 +790,53 @@ fn the_payments_address_parks_nothing_even_from_an_allowed_sender() {
     );
 }
 
+#[test]
+fn a_resend_goes_to_the_allowed_address_whatever_domain_the_caller_names() {
+    let world = World::new();
+    let allowed = format!("{}@pay.shop.test:9443", world.issuer.address.key_text());
+    world
+        .payer
+        .wallet
+        .allow_invoice_sender(&allowed, "shop")
+        .unwrap();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world.relay.set_refusing(true);
+    let error = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap_err();
+    let InvoiceError::PaymentUndelivered { tx_id, .. } = error else {
+        panic!("unexpected error {error:?}");
+    };
+    world.relay.set_refusing(false);
+
+    // The issuer's own address: the same key under the domain its messages name.
+    world
+        .block_on(world.payer.wallet.resend(
+            tx_id,
+            Delivery::Deliver {
+                transport: TRANSPORT_ID,
+                to: Destination::new(world.issuer.address.to_string()),
+            },
+        ))
+        .unwrap();
+
+    assert_eq!(
+        world.payer.delivered_to(),
+        vec![allowed.clone(), allowed.clone()]
+    );
+    assert_eq!(
+        world.payer.read(|repos| repos.counterparty(tx_id)),
+        Some(allowed)
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 1);
+}
+
 impl World {
     fn drain_payer_invoices(&self) {
         let summary = self

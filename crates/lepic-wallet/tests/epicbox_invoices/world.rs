@@ -35,12 +35,15 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
+use lepic_slate::codec::WireSlate;
 use lepic_store::{
     AccountIndex, ContextKey, KeyId, MemoryStore, OutputRecord, OutputStatus, Repositories,
     StoreError, WalletStore,
 };
+use lepic_transport::error::TransportError;
+use lepic_transport::policy::FormatPolicy;
 use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::Destination;
+use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, TransportId};
 use lepic_wallet::invoice::{InvoiceRequest, IssuedInvoice, PayRequest};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::Delivery;
@@ -154,6 +157,40 @@ impl StoreOpener for CountingStores {
     }
 }
 
+/// The Epicbox transport as the wallet's registry holds it, recording where each delivery went.
+struct RecordingEpicbox {
+    inner: EpicboxTransport,
+    delivered_to: Arc<Mutex<Vec<String>>>,
+}
+
+impl Transport for RecordingEpicbox {
+    fn id(&self) -> TransportId {
+        self.inner.id()
+    }
+
+    fn policy(&self) -> &dyn FormatPolicy {
+        self.inner.policy()
+    }
+
+    fn outbound(&self) -> Option<&dyn Outbound> {
+        Some(self)
+    }
+}
+
+impl Outbound for RecordingEpicbox {
+    fn deliver<'a>(
+        &'a self,
+        to: &'a Destination,
+        wire: &'a WireSlate,
+    ) -> BoxFuture<'a, Result<(), TransportError>> {
+        self.delivered_to
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(to.as_str().to_owned());
+        self.inner.deliver(to, wire)
+    }
+}
+
 pub fn settings() -> ClientSettings {
     let mut settings = ClientSettings::new(RelayEndpoint::new(
         Domain::parse("relay.test").unwrap(),
@@ -190,6 +227,7 @@ pub struct Party {
     /// The payments address, index 0, attached to `epicbox`.
     pub address: EpicboxAddress,
     pub clock: TestClock,
+    delivered_to: Arc<Mutex<Vec<String>>>,
     stores: CountingStores,
     seed: Seed,
     data_dir: PathBuf,
@@ -205,8 +243,14 @@ impl Party {
         runtime: &tokio::runtime::Runtime,
     ) -> Self {
         let epicbox = EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
+        let delivered_to = Arc::default();
         let mut transports = TransportRegistry::new();
-        transports.register(Box::new(epicbox.clone())).unwrap();
+        transports
+            .register(Box::new(RecordingEpicbox {
+                inner: epicbox.clone(),
+                delivered_to: Arc::clone(&delivered_to),
+            }))
+            .unwrap();
         let stores = CountingStores::default();
         let clock = TestClock(Arc::new(Mutex::new(fixed_time())));
         let data_dir = PathBuf::from(format!("/{name}"));
@@ -237,6 +281,7 @@ impl Party {
             epicbox,
             address,
             clock,
+            delivered_to,
             stores,
             seed: Seed::from_mnemonic(mnemonic).unwrap(),
             data_dir,
@@ -258,6 +303,14 @@ impl Party {
     /// Write transactions run so far through the wallet's store opener.
     pub fn writes(&self) -> usize {
         self.stores.writes.load(Ordering::SeqCst)
+    }
+
+    /// The destinations the wallet handed its registered Epicbox transport, oldest first.
+    pub fn delivered_to(&self) -> Vec<String> {
+        self.delivered_to
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Lets `succeeding` more write transactions through, then fails the one after.
