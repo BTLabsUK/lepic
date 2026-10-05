@@ -14,9 +14,10 @@ interop/run.sh --keep     # leave the stack running afterwards
 interop/run.sh --no-build # reuse the binaries already in .work/bin
 ```
 
-Needs Docker with Compose 2.17 or later, `git`, `jq` and `bash`. The first build compiles the node,
-the wallet and the relay's checker from source and takes 20 to 30 minutes; later runs take about six
-minutes. Builds use `CARGO_BUILD_JOBS` (default 4).
+Needs Docker with Compose 2.17 or later, `git`, `jq`, `bash` and `python3` (with its standard
+`sqlite3` module, which the acceptance run uses). The first build compiles the node, the wallet
+and the relay's checker from source and takes 20 to 30 minutes; later runs take about six minutes.
+Builds use `CARGO_BUILD_JOBS` (default 4).
 
 ## What runs
 

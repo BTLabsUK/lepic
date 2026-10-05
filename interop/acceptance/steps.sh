@@ -664,6 +664,7 @@ step_stock_listener_bounces_invoice() {
     [[ "$(unmade_for "${PEER_KEY}")" == 0 ]] || fail "the stock listener left a message unacknowledged" || return 1
     EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 0.3) - fee))
     check_lepic_total || return 1
+    peer_listen_stop
     DETAIL="I1 ${slate_id} bounced and acknowledged, peer recorded no-invoices, no notice on cancel; later S1 confirmed"
 }
 
