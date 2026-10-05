@@ -30,6 +30,7 @@ use lepic_primitives::params::Network;
 use lepic_primitives::validate::ValidationError;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+use lepic_slate::codec::marked_v3::MarkedV3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, RegistryError, SlateError};
 use lepic_slate::model::{Slate, SlateId};
@@ -279,25 +280,23 @@ pub struct PaidInvoice {
 
 /// The codecs a legacy transport policy decodes and encodes with, at the network's base fee.
 fn legacy_codecs(base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
-    codecs_with(V3JsonCodec::new(base_fee), base_fee)
+    codecs_with(Box::new(V3JsonCodec::new(base_fee)), base_fee)
 }
 
-/// The codecs invoice stages go out with over `transport`: over Epicbox the V3 codec writes
+/// The codecs invoice stages go out with over `transport`: over Epicbox the V3 shape carries
 /// the LEPIC marker, so a reply that keeps it proves the peer runs LEPIC.
 fn invoice_codecs(transport: TransportId, base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
     let v3 = V3JsonCodec::new(base_fee);
     if transport == EPICBOX {
-        codecs_with(v3.with_lepic_marker(), base_fee)
+        codecs_with(Box::new(MarkedV3JsonCodec::new(v3)), base_fee)
     } else {
-        codecs_with(v3, base_fee)
+        codecs_with(Box::new(v3), base_fee)
     }
 }
 
-fn codecs_with(v3: V3JsonCodec, base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
+fn codecs_with(v3: Box<dyn Codec>, base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
     let mut codecs = CodecRegistry::new();
-    codecs
-        .register(Box::new(v3))
-        .map_err(InvoiceError::Codecs)?;
+    codecs.register(v3).map_err(InvoiceError::Codecs)?;
     codecs
         .register(Box::new(V2JsonCodec::new(base_fee)))
         .map_err(InvoiceError::Codecs)?;

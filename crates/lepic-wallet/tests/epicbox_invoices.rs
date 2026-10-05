@@ -20,7 +20,8 @@ use std::time::Duration;
 
 use lepic_epicbox::TRANSPORT_ID;
 use lepic_primitives::amount::Height;
-use lepic_slate::codec::legacy::v3_json::{V3JsonCodec, carries_lepic_marker};
+use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::stage::Stage;
 use lepic_store::{PeerSupport, PendingInvoiceStatus, SlateStage, TxDirection, TxState};

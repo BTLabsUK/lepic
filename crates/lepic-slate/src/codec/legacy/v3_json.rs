@@ -33,35 +33,16 @@ pub const LEGACY_V3_JSON: CodecId = CodecId::new("legacy-v3");
 /// The header of a slate this codec starts, rather than one that answers a received slate.
 const NEW_SLATE_VERSION: u16 = 3;
 
-/// The top-level key of the LEPIC marker, and the marker version this codec writes.
-const MARKER_KEY: &str = "lepic";
-const MARKER_VERSION: u64 = 1;
-
 /// The V3 JSON codec. It refuses slates whose fee is below `base_fee` per unit of the final
 /// transaction's fee weight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct V3JsonCodec {
     base_fee: Fee,
-    marker: bool,
 }
 
 impl V3JsonCodec {
     pub const fn new(base_fee: Fee) -> Self {
-        Self {
-            base_fee,
-            marker: false,
-        }
-    }
-
-    /// The same codec, writing the LEPIC marker `"lepic":{"version":1}` as the last top-level
-    /// key. Stock `epic-wallet` ignores the key and drops it when it rewrites the slate, so a
-    /// slate that still carries it came from LEPIC (`docs/compat/epicbox.md`). No slate
-    /// signature covers it: it proves a capability, never anything about the slate.
-    pub const fn with_lepic_marker(self) -> Self {
-        Self {
-            marker: true,
-            ..self
-        }
+        Self { base_fee }
     }
 
     const fn syntax(position: Option<crate::error::TextPosition>) -> DecodeError {
@@ -110,39 +91,8 @@ impl Codec for V3JsonCodec {
                 orig_version: NEW_SLATE_VERSION,
                 block_header_version: context.block_header_version,
             });
-        Ok(WireSlate::text(
-            MediaType::JSON,
-            write_slate(slate, header, self.marker),
-        ))
+        Ok(WireSlate::text(MediaType::JSON, write_slate(slate, header)))
     }
-}
-
-/// Whether `wire` is a JSON object whose top-level `lepic` key is a marker object with a
-/// numeric `version` of at least 1, as [`V3JsonCodec::with_lepic_marker`] writes it. Reads
-/// nothing else, and is false for anything over the slate size bound.
-pub fn carries_lepic_marker(wire: &WireSlate) -> bool {
-    #[derive(Deserialize)]
-    struct MarkerProbe {
-        #[serde(default)]
-        lepic: Option<Marker>,
-    }
-    #[derive(Deserialize)]
-    struct Marker {
-        #[serde(default)]
-        version: Scalar,
-    }
-    if check_size(wire).is_err() {
-        return false;
-    }
-    let Some(text) = wire.as_text() else {
-        return false;
-    };
-    text.trim_start().starts_with('{')
-        && serde_json::from_str::<MarkerProbe>(text).is_ok_and(|probe| {
-            probe.lepic.is_some_and(
-                |marker| matches!(marker.version, Scalar::Unsigned(version) if version >= 1),
-            )
-        })
 }
 
 /// A JSON object with a top-level `ttl_cutoff_height` key, whatever its value.
@@ -502,7 +452,7 @@ fn check_fee_covers_weight(slate: &Slate, base_fee: Fee) -> Result<(), Validatio
 
 /// Writes the slate with upstream's key order and value forms: integers as strings except the
 /// header and participant count, `null` for every absent optional value.
-fn write_slate(slate: &Slate, header: LegacyHeader, marker: bool) -> String {
+fn write_slate(slate: &Slate, header: LegacyHeader) -> String {
     let mut out = String::new();
     let mut object = ObjectWriter::open(&mut out);
     write_header(object.key("version_info"), header);
@@ -528,11 +478,6 @@ fn write_slate(slate: &Slate, header: LegacyHeader, marker: bool) -> String {
     match slate.payment_proof() {
         Some(proof) => write_payment_proof(object.key("payment_proof"), proof),
         None => write_null(object.key("payment_proof")),
-    }
-    if marker {
-        let mut lepic = ObjectWriter::open(object.key(MARKER_KEY));
-        write_number(lepic.key("version"), MARKER_VERSION);
-        lepic.close();
     }
     object.close();
     out
