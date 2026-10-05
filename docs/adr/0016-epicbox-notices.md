@@ -10,10 +10,9 @@ guessing about the other: the payer does not learn that its payment was pushed o
 withdrew the invoice, and the issuer does not learn that the payer declined. A slate cannot say
 any of this, and no slate stage exists for it.
 
-A stock `epic-wallet` `v4.0.2` listener sends `Made` only for a payload that parses as a V3 or V2
-slate (fact 3 in `docs/compat/epicbox.md`). Anything else stays pending on the relay and is
-delivered again, so one payload that is not a slate holds back every later message to that
-address. LEPIC must therefore never send one to a peer that might run stock software.
+A stock `epic-wallet` `v4.0.2` listener processes only V2 and V3 slates (fact 3 in
+`docs/compat/epicbox.md`), so LEPIC sends a payload that is not a slate only to a peer proven to
+run LEPIC.
 
 ## Decision
 
@@ -77,7 +76,7 @@ depends on it arriving.
 
 - Notices as a new slate stage or a field in a slate: a stock listener would act on or reject a
   slate it cannot finalize, and the legacy codecs are frozen.
-- Sending notices to every peer and relying on stock to skip them: fact 3 shows stock never
-  acknowledges them, which blocks the peer's address.
+- Sending notices to every peer: stock processes only slates (fact 3), so a notice is for
+  LEPIC peers only.
 - Retrying undelivered notices from an outbox: the information is advisory and the state each
   side keeps is enough; a retry queue would add storage for no change in what funds do.

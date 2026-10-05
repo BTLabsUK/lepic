@@ -2,8 +2,8 @@
 //! one does, and who sends which.
 //!
 //! A peer is proven to run LEPIC once a slate from it carried the LEPIC marker, or it sent a
-//! notice this wallet accepted; only then does it get a notice, because a stock listener never
-//! acknowledges a payload that is not a slate. A notice is accepted only from the recorded
+//! notice this wallet accepted; only then does it get a notice, because a stock listener processes
+//! only V2 and V3 slates. A notice is accepted only from the recorded
 //! counterparty of its slate, and it never moves funds or unlocks anything: it deletes a parked
 //! invoice at most, and otherwise only tells the host.
 

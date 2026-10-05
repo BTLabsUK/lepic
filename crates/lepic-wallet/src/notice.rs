@@ -3,8 +3,8 @@
 //!
 //! A notice is the JSON object `{"lepic":1,"type":<kind>,"slate_id":<uuid>}`, with the kernel
 //! `excess` added for `posted`, at most [`MAX_NOTICE_LEN`] bytes. A stock `epic-wallet` listener
-//! never acknowledges a payload that is not a slate, so a notice goes only to a peer whose own
-//! messages proved it runs LEPIC. A notice never moves funds or unlocks anything, and is taken
+//! processes only V2 and V3 slates, so a notice goes only to a peer whose own messages proved
+//! it runs LEPIC. A notice never moves funds or unlocks anything, and is taken
 //! only from the recorded counterparty of its slate.
 
 use lepic_crypto::Commitment;
