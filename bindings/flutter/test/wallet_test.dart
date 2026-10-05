@@ -608,6 +608,7 @@ void main() {
     final sent = await alice.transaction(txId: s1.txId);
     expect(sent.status, TxStatus.sent);
     expect(sent.direction, TxDirection.outgoing);
+    expect(sent.flow, TxFlow.payment);
     expect(sent.slateId, s1.slateId);
     expect(sent.fee, estimate.fee);
     expect(
@@ -647,6 +648,7 @@ void main() {
 
     final bobHistory = await bob.transactions();
     expect(bobHistory.first.direction, TxDirection.incoming);
+    expect(bobHistory.first.flow, TxFlow.payment);
     expect(bobHistory.first.slateId, s1.slateId);
     expect(bobHistory.first.amountCredited, BigInt.from(3 * epic));
     await expectLater(

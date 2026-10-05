@@ -22,9 +22,9 @@ use lepic_crypto::PublicKey;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::mock::MockFailure;
-use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxState, WalletStore};
+use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxDirection, TxState, WalletStore};
 use lepic_transport::transport::{Destination, Inbound, Transport};
-use lepic_wallet::details::SlateMessage;
+use lepic_wallet::details::{SlateMessage, TxFlow};
 use lepic_wallet::event::TransportState;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::send::{Delivery, SendRequest};
@@ -129,6 +129,36 @@ fn each_side_records_the_others_epicbox_address() {
     assert_eq!(
         counterparty(&world.sender.wallet),
         Some(world.receiver_address.to_string())
+    );
+}
+
+#[test]
+fn a_send_and_its_receive_are_payments() {
+    let world = World::new();
+    world.block_on(async {
+        world.send().await;
+        world
+            .receiver_wallet
+            .epicbox_drain(&world.receiver_epicbox)
+            .await
+            .unwrap();
+    });
+
+    let only = |wallet: &support::TestWallet| {
+        let transactions = world
+            .block_on(wallet.transactions(AccountIndex(0)))
+            .unwrap();
+        assert_eq!(transactions.len(), 1);
+        let details = &transactions[0];
+        (details.transaction.entry.direction, details.flow)
+    };
+    assert_eq!(
+        only(&world.sender.wallet),
+        (TxDirection::Outgoing, TxFlow::Payment)
+    );
+    assert_eq!(
+        only(&world.receiver_wallet),
+        (TxDirection::Incoming, TxFlow::Payment)
     );
 }
 

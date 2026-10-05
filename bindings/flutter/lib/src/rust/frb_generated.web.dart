@@ -392,6 +392,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   TxDirection dco_decode_tx_direction(dynamic raw);
 
   @protected
+  TxFlow dco_decode_tx_flow(dynamic raw);
+
+  @protected
   TxStatus dco_decode_tx_status(dynamic raw);
 
   @protected
@@ -783,6 +786,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TxDirection sse_decode_tx_direction(SseDeserializer deserializer);
+
+  @protected
+  TxFlow sse_decode_tx_flow(SseDeserializer deserializer);
 
   @protected
   TxStatus sse_decode_tx_status(SseDeserializer deserializer);
@@ -1255,6 +1261,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_tx_direction(TxDirection self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_tx_flow(TxFlow self, SseSerializer serializer);
 
   @protected
   void sse_encode_tx_status(TxStatus self, SseSerializer serializer);

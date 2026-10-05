@@ -4591,8 +4591,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TransactionDetails dco_decode_transaction_details(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 17)
-      throw Exception('unexpected arr length: expect 17 but see ${arr.length}');
+    if (arr.length != 18)
+      throw Exception('unexpected arr length: expect 18 but see ${arr.length}');
     return TransactionDetails(
       txId: dco_decode_u_32(arr[0]),
       direction: dco_decode_tx_direction(arr[1]),
@@ -4611,6 +4611,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       releasableFrom: dco_decode_opt_box_autoadd_u_64(arr[14]),
       releasable: dco_decode_bool(arr[15]),
       messages: dco_decode_list_slate_message(arr[16]),
+      flow: dco_decode_tx_flow(arr[17]),
     );
   }
 
@@ -4624,6 +4625,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TxDirection dco_decode_tx_direction(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return TxDirection.values[raw as int];
+  }
+
+  @protected
+  TxFlow dco_decode_tx_flow(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return TxFlow.values[raw as int];
   }
 
   @protected
@@ -5695,6 +5702,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_releasableFrom = sse_decode_opt_box_autoadd_u_64(deserializer);
     var var_releasable = sse_decode_bool(deserializer);
     var var_messages = sse_decode_list_slate_message(deserializer);
+    var var_flow = sse_decode_tx_flow(deserializer);
     return TransactionDetails(
       txId: var_txId,
       direction: var_direction,
@@ -5713,6 +5721,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       releasableFrom: var_releasableFrom,
       releasable: var_releasable,
       messages: var_messages,
+      flow: var_flow,
     );
   }
 
@@ -5728,6 +5737,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return TxDirection.values[inner];
+  }
+
+  @protected
+  TxFlow sse_decode_tx_flow(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return TxFlow.values[inner];
   }
 
   @protected
@@ -6823,6 +6839,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_box_autoadd_u_64(self.releasableFrom, serializer);
     sse_encode_bool(self.releasable, serializer);
     sse_encode_list_slate_message(self.messages, serializer);
+    sse_encode_tx_flow(self.flow, serializer);
   }
 
   @protected
@@ -6836,6 +6853,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_tx_direction(TxDirection self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_tx_flow(TxFlow self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
   }

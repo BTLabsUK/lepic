@@ -27,6 +27,7 @@ use lepic_slate::stage::Stage;
 use lepic_store::{PeerSupport, PendingInvoiceStatus, SlateStage, TxDirection, TxState};
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::Event;
+use lepic_wallet::details::TxFlow;
 use lepic_wallet::epicbox_invoice::InvoiceExpiry;
 use lepic_wallet::event::BouncedInvoice;
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
@@ -288,6 +289,47 @@ fn a_paid_invoice_is_finalized_and_posted_by_the_issuer() {
         })
         .collect();
     assert_eq!(finalized, vec![(issued.tx_id, issued.slate_id)]);
+}
+
+#[test]
+fn an_issued_and_a_paid_invoice_are_invoices_on_both_sides() {
+    let world = World::new();
+    let issued = world.issue(None);
+    let flow = |wallet: &world::PartyWallet, tx_id| {
+        let details = world.block_on(wallet.transaction_details(tx_id)).unwrap();
+        (details.transaction.entry.direction, details.flow)
+    };
+    assert_eq!(
+        flow(&world.issuer.wallet, issued.tx_id),
+        (TxDirection::Incoming, TxFlow::Invoice)
+    );
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .epicbox_drain_invoices(&world.payer.epicbox),
+        )
+        .unwrap();
+    let paid = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+    assert_eq!(
+        flow(&world.payer.wallet, paid.tx_id),
+        (TxDirection::Outgoing, TxFlow::Invoice)
+    );
+    world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+    assert_eq!(
+        flow(&world.issuer.wallet, issued.tx_id),
+        (TxDirection::Incoming, TxFlow::Invoice)
+    );
 }
 
 /// The I1 `stock` received, as a stock listener posts it back: as it parsed it, without the

@@ -159,6 +159,26 @@ impl From<lepic_store::TxDirection> for TxDirection {
     }
 }
 
+/// Which slate flow a transaction belongs to. With `TxDirection` it tells the four kinds
+/// apart: an incoming payment was received and an outgoing one sent; an incoming invoice was
+/// issued by this wallet and an outgoing one paid by it. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxFlow {
+    /// The sender started it. Also an output a scan restored.
+    Payment,
+    /// The receiver started it with an invoice.
+    Invoice,
+}
+
+impl From<lepic_wallet::details::TxFlow> for TxFlow {
+    fn from(flow: lepic_wallet::details::TxFlow) -> Self {
+        match flow {
+            lepic_wallet::details::TxFlow::Payment => Self::Payment,
+            lepic_wallet::details::TxFlow::Invoice => Self::Invoice,
+        }
+    }
+}
+
 /// One stored transaction of the default account. Times are milliseconds since the Unix epoch,
 /// by the device clock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +217,8 @@ pub struct TransactionDetails {
     /// The parties' messages whose signatures verify, in the order the parties joined, as the
     /// latest stored stage of the slate carries them. Empty for a restored output.
     pub messages: Vec<SlateMessage>,
+    /// Whether it is a payment or an invoice, from the slate stages the wallet stored.
+    pub flow: TxFlow,
 }
 
 /// What a send would take and pay, from `EpicWallet::estimate_fee` and

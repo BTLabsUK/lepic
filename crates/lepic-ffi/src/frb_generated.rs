@@ -5862,6 +5862,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_releasableFrom = <Option<u64>>::sse_decode(deserializer);
         let mut var_releasable = <bool>::sse_decode(deserializer);
         let mut var_messages = <Vec<crate::api::types::SlateMessage>>::sse_decode(deserializer);
+        let mut var_flow = <crate::api::types::TxFlow>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
             direction: var_direction,
@@ -5880,6 +5881,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             releasable_from: var_releasableFrom,
             releasable: var_releasable,
             messages: var_messages,
+            flow: var_flow,
         };
     }
 }
@@ -5906,6 +5908,18 @@ impl SseDecode for crate::api::types::TxDirection {
             0 => crate::api::types::TxDirection::Outgoing,
             1 => crate::api::types::TxDirection::Incoming,
             _ => unreachable!("Invalid variant for TxDirection: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::TxFlow {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::types::TxFlow::Payment,
+            1 => crate::api::types::TxFlow::Invoice,
+            _ => unreachable!("Invalid variant for TxFlow: {}", inner),
         };
     }
 }
@@ -7188,6 +7202,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
             self.releasable_from.into_into_dart().into_dart(),
             self.releasable.into_into_dart().into_dart(),
             self.messages.into_into_dart().into_dart(),
+            self.flow.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -7244,6 +7259,22 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::TxDirection>
     for crate::api::types::TxDirection
 {
     fn into_into_dart(self) -> crate::api::types::TxDirection {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::TxFlow {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Payment => 0.into_dart(),
+            Self::Invoice => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::TxFlow {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::TxFlow> for crate::api::types::TxFlow {
+    fn into_into_dart(self) -> crate::api::types::TxFlow {
         self
     }
 }
@@ -8185,6 +8216,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <Option<u64>>::sse_encode(self.releasable_from, serializer);
         <bool>::sse_encode(self.releasable, serializer);
         <Vec<crate::api::types::SlateMessage>>::sse_encode(self.messages, serializer);
+        <crate::api::types::TxFlow>::sse_encode(self.flow, serializer);
     }
 }
 
@@ -8213,6 +8245,22 @@ impl SseEncode for crate::api::types::TxDirection {
             match self {
                 crate::api::types::TxDirection::Outgoing => 0,
                 crate::api::types::TxDirection::Incoming => 1,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::types::TxFlow {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::types::TxFlow::Payment => 0,
+                crate::api::types::TxFlow::Invoice => 1,
                 _ => {
                     unimplemented!("");
                 }

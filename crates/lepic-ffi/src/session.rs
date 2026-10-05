@@ -895,6 +895,7 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
                 text: message.text.clone(),
             })
             .collect(),
+        flow: details.flow.into(),
     }
 }
 
@@ -1215,6 +1216,7 @@ mod tests {
                 role: lepic_wallet::slate::Role::Receiver,
                 text: "got it".to_owned(),
             }],
+            flow: lepic_wallet::details::TxFlow::Invoice,
         };
 
         assert_eq!(
@@ -1240,6 +1242,7 @@ mod tests {
                     role: crate::api::types::SlateRole::Receiver,
                     text: "got it".to_owned(),
                 }],
+                flow: crate::api::types::TxFlow::Invoice,
             }
         );
         let hex = excess.to_hex();

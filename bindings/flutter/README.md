@@ -263,7 +263,8 @@ Payer, the app:
 Issuer, a service wallet:
 
 - `issueInvoiceEpicbox(amount, address, message)` sends the invoice to the payer's invoice
-  address. The payment arrives on the payments address, where `drainEpicbox()` or the listener
+  address. Its transaction is `incoming` like a received payment, with `flow` `invoice`; a
+  paid invoice is `outgoing` with `flow` `invoice`. The payment arrives on the payments address, where `drainEpicbox()` or the listener
   finalizes and posts it with an `invoiceFinalized` event. `cancelTransaction` withdraws an
   unpaid invoice. A payer that does not pay invoices, such as a stock `epic-wallet`, sends the
   invoice back; `drainEpicbox()` counts it in `InboxReport.bounced`, and that payer is never
@@ -310,7 +311,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `summary(refresh, minimum_confirmations)` | `summary(refresh)` | Balances use the engine's 10 confirmations, as `epic-wallet info`. `refresh: false` answers from the store without the node, also on a handle that never refreshed. |
 | `refresh(minimum_confirmations, progress)` | `refresh()` stream | First event 0 %, last 100 % with `summary`. |
 | `scan(start_height, progress)` | `scan(start_height)` stream | `ScanProgress` adds `height` and `target_height`. New: `cancel_scan()`. |
-| `transactions(refresh)` | `transactions()`, `transaction(tx_id)` | From the store alone, newest first; refresh first with `summary(refresh: true)`. `TransactionDetails` carries the slate id, kernel excess, confirmed height and time, counterparty, amounts, fee, status, creation time and TTL cutoff, and for a finalized or posted send whether and from which height it can be released. `messages` lists each party's message whose signature verifies, as a `SlateMessage` with `role` (`sender` or `receiver` of the money) and `text`, from the latest stage the wallet stored: a send shows its own, a receive the sender's and its own, a finalized send both. A transaction restored by a scan has none. |
+| `transactions(refresh)` | `transactions()`, `transaction(tx_id)` | From the store alone, newest first; refresh first with `summary(refresh: true)`. `TransactionDetails` carries the slate id, kernel excess, confirmed height and time, counterparty, amounts, fee, status, creation time and TTL cutoff, and for a finalized or posted send whether and from which height it can be released. `messages` lists each party's message whose signature verifies, as a `SlateMessage` with `role` (`sender` or `receiver` of the money) and `text`, from the latest stage the wallet stored: a send shows its own, a receive the sender's and its own, a finalized send both. A transaction restored by a scan has none. `flow` is `payment` or `invoice`, from the slate stages stored: with `direction`, an incoming payment was received and an outgoing one sent, an incoming invoice was issued by this wallet and an outgoing one paid by it. |
 | `enrich_history()` | not provided | App history archive; not an engine feature. |
 | `set_tx_note(key, note)` | not provided | App history archive; not an engine feature. |
 | `contacts()`, `save_contact`, `delete_contact` | not provided | App address book; keep it in Dart. |

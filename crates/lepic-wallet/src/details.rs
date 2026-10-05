@@ -57,6 +57,19 @@ pub struct TransactionDetails {
     /// The participants' messages whose signatures verify, in the order the parties joined,
     /// read from the latest stored stage of the slate. Empty for a restored output.
     pub messages: Vec<SlateMessage>,
+    /// Whether the transaction is a payment or an invoice, from the stages stored with it.
+    pub flow: TxFlow,
+}
+
+/// Which slate flow a transaction belongs to. With the direction it tells the four kinds
+/// apart: an incoming payment was received, an outgoing one sent; an incoming invoice was
+/// issued by this wallet, an outgoing one paid by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxFlow {
+    /// The sender started it with S1. Also an output a scan restored, which has no slate.
+    Payment,
+    /// The receiver started it with I1.
+    Invoice,
 }
 
 /// A participant's message as the slate carries it, with the signature checked.
@@ -137,13 +150,14 @@ fn details(
     transaction: StoredTransaction,
 ) -> Result<TransactionDetails, WalletError> {
     let tx_id = transaction.id;
-    let (kernel_excess, ttl_cutoff_height, messages) = match transaction.entry.slate_id {
+    let (kernel_excess, ttl_cutoff_height, messages, flow) = match transaction.entry.slate_id {
         Some(slate_id) => (
             final_kernel(repos, codecs, tx_id, slate_id)?.map(|(excess, _)| excess),
             ttl_cutoff(repos, codecs, tx_id, slate_id)?,
             messages(repos, codecs, tx_id, slate_id)?,
+            flow(repos, slate_id)?,
         ),
-        None => (None, None, Vec::new()),
+        None => (None, None, Vec::new(), TxFlow::Payment),
     };
     // A confirmed transaction is final, and only a state change updates an entry, so its last
     // update is the moment it was confirmed.
@@ -159,8 +173,24 @@ fn details(
         ttl_cutoff_height,
         confirmed_at,
         messages,
+        flow,
         transaction,
     })
+}
+
+/// A transaction stores stages of one flow only, so any stored invoice stage makes it an
+/// invoice.
+fn flow(repos: &dyn Repositories, slate_id: Uuid) -> Result<TxFlow, StoreError> {
+    for stage in [
+        SlateStage::Invoice1,
+        SlateStage::Invoice2,
+        SlateStage::Invoice3,
+    ] {
+        if repos.slate(slate_id, stage)?.is_some() {
+            return Ok(TxFlow::Invoice);
+        }
+    }
+    Ok(TxFlow::Payment)
 }
 
 /// A later stage carries every message of an earlier one, since a party adds its own and keeps

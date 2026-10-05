@@ -248,6 +248,9 @@ void main() {
       final p = await parties('paid');
       final (issued, invoice) = await parked(p);
       expect(issued.amount, BigInt.from(3 * epic));
+      final waiting = await p.issuer.transaction(txId: issued.txId);
+      expect(waiting.direction, TxDirection.incoming);
+      expect(waiting.flow, TxFlow.invoice);
       expect(invoice.slateId, issued.slateId);
       expect(invoice.senderAddress, p.issuerAddress);
       expect(invoice.amount, BigInt.from(3 * epic));
@@ -278,6 +281,9 @@ void main() {
       expect(paid.slateId, issued.slateId);
       expect(paid.amount, BigInt.from(3 * epic));
       expect(paid.fee, greaterThan(BigInt.zero));
+      final payment = await p.payer.transaction(txId: paid.txId);
+      expect(payment.direction, TxDirection.outgoing);
+      expect(payment.flow, TxFlow.invoice);
       expect(await p.payer.pendingInvoices(), isEmpty);
       await expectLater(
         p.payer.payInvoice(
