@@ -192,3 +192,23 @@ LEPIC's behaviour on top of the protocol above; nothing on the wire or the relay
   equal to the stored I1 apart from its wire form, is what a stock listener sends back. It is
   acknowledged and ignored, and the peer is recorded as not paying invoices.
 - Nothing in the inbox pays. Paying a parked I1 is a host call that names the invoiced amount.
+
+## Notices between LEPIC wallets
+
+ADR 0016 has the reasons; this is the format and who sends what.
+
+- Plaintext: a JSON object of at most 512 bytes whose `lepic` key is the number 1, with `type`
+  and `slate_id` (hyphenated UUID). `posted` adds `excess`, the kernel excess as 66 hex
+  characters. A slate never has a number under `lepic`, which is how a receiver tells the two
+  apart.
+- `declined`: payer to issuer, from the payer's current invoice address to the allowed address.
+  `withdrawn`: issuer to payer, on a cancel or an expiry. `posted`: issuer to payer, after the
+  paid invoice was pushed. Both go to the address the invoice was issued to.
+- Sent only to a key proven to run LEPIC: one whose marked I1 was parked, whose marked I2 for an
+  issued invoice was finalized (which also proves the key the invoice went to), or whose notice
+  was accepted. A key that sent an issued I1 back unchanged never gets one.
+- Accepted only from the recorded counterparty of the slate, and for `posted` only with the
+  excess the payment implies. Every other notice, one of another version or an unknown type, and
+  one over 512 bytes, is acknowledged and dropped.
+- Advisory: a notice moves no funds. `withdrawn` deletes an unpaid parked invoice and reports a
+  paid one for the host to offer a cancel; `posted` and `declined` are reported only.
