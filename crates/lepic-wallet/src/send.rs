@@ -18,6 +18,7 @@ use blake2::Blake2b256;
 use blake2::digest::{FixedOutput, Update};
 use jiff::Timestamp;
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, SecretKey, aggsig};
+use lepic_epicbox::{EpicboxAddress, TRANSPORT_ID as EPICBOX};
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{
     Identifier, IdentifierError, Keychain, KeychainError, ProofBuilder, ProofError,
@@ -57,6 +58,7 @@ use uuid::Uuid;
 
 use crate::account::{self, AccountError, next_output_key};
 use crate::error::WalletError;
+use crate::inbox::relay_network;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::selection::{self, SelectionError, SelectionOptions, SelectionStrategy};
 use crate::wallet::Wallet;
@@ -116,6 +118,10 @@ pub enum SendError {
     /// payment with its stored I2, is delivered again.
     #[error("transaction {tx_id} is not waiting for its slate to be delivered")]
     NotResendable { tx_id: TxId },
+    /// The payment of a parked invoice goes only over Epicbox to the address the invoice's
+    /// sender was allowed under.
+    #[error("payment {tx_id} goes only to the allowed address of its invoice")]
+    PayeeMismatch { tx_id: TxId },
     /// The transaction and its slate are stored and the inputs locked;
     /// [`crate::Wallet::resend`] tries again and [`crate::Wallet::cancel`] gives up.
     #[error("slate {slate_id} of transaction {tx_id} is stored but was not delivered")]
@@ -818,6 +824,23 @@ fn stored_s1_for_delivery(
     })
 }
 
+/// Whether `delivery` goes over Epicbox to the key of the address `allowed`.
+fn same_epicbox_key(network: Network, delivery: &Delivery, allowed: Option<&str>) -> bool {
+    let Delivery::Deliver { transport, to } = delivery else {
+        return false;
+    };
+    let network = relay_network(network);
+    let key = |address: &str| {
+        EpicboxAddress::parse(address, network)
+            .ok()
+            .map(|address| *address.public_key())
+    };
+    *transport == EPICBOX
+        && allowed
+            .and_then(key)
+            .is_some_and(|allowed| key(to.as_str()) == Some(allowed))
+}
+
 /// The stored I2 of an invoice payment, as it was encoded for its first delivery. It was
 /// encoded by the reply rule of the transport the invoice came over, which gave it the shape of
 /// the I1 and over Epicbox the LEPIC marker, so it goes out unchanged.
@@ -838,7 +861,16 @@ fn stored_i2_for_delivery(
     if slate.stage() != Stage::I2 {
         return Err(SendError::NotResendable { tx_id });
     }
-    record_counterparty(repos, tx_id, delivery)?;
+    if repos.pending_invoice(slate_uuid)?.is_some() {
+        // A parked invoice is paid only to the address the user allowed, recorded when it was
+        // paid; the recorded address also decides whose notices count for the payment.
+        let allowed = repos.counterparty(tx_id)?;
+        if !same_epicbox_key(env.network, delivery, allowed.as_deref()) {
+            return Err(SendError::PayeeMismatch { tx_id });
+        }
+    } else {
+        record_counterparty(repos, tx_id, delivery)?;
+    }
     Ok(StoredS1 {
         tx_id,
         slate_id: slate.id(),
@@ -933,8 +965,10 @@ where
     ///
     /// Fails with [`SendError::Wallet`] carrying [`WalletError::UnknownTransaction`],
     /// [`SendError::NotResendable`] when the
-    /// transaction is not an outgoing one in state `sent`, the transport errors of
-    /// [`Wallet::send`], or [`SendError::Undelivered`] when the transport fails again.
+    /// transaction is not an outgoing one in state `sent`, [`SendError::PayeeMismatch`] when the
+    /// payment of a parked invoice would go anywhere but its sender's allowed address over
+    /// Epicbox, the transport errors of [`Wallet::send`], or [`SendError::Undelivered`] when
+    /// the transport fails again.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
         transport = %delivery.transport(),

@@ -30,7 +30,7 @@ use lepic_wallet::Event;
 use lepic_wallet::epicbox_invoice::InvoiceExpiry;
 use lepic_wallet::inbox::InboxSummary;
 use lepic_wallet::invoice::{InvoiceError, PayRequest};
-use lepic_wallet::send::Delivery;
+use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
 use uuid::Uuid;
 use world::{AMOUNT, TIP, World, pay_request};
@@ -533,6 +533,27 @@ fn a_stored_payment_is_delivered_again_after_a_failed_delivery() {
     world.relay.set_refusing(false);
     assert_eq!(world.relay.pending(&world.issuer.address), 0);
 
+    // Only the address the issuer was allowed under takes the payment.
+    let elsewhere = World::address_of(8);
+    let error = world
+        .block_on(world.payer.wallet.resend(
+            tx_id,
+            Delivery::Deliver {
+                transport: TRANSPORT_ID,
+                to: Destination::new(elsewhere.to_string()),
+            },
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(error, SendError::PayeeMismatch { tx_id: id } if id == tx_id),
+        "{error:?}"
+    );
+    assert_eq!(world.relay.pending(&elsewhere), 0);
+    assert_eq!(
+        world.payer.read(|repos| repos.counterparty(tx_id)),
+        Some(world.issuer.address.to_string())
+    );
+
     world
         .block_on(world.payer.wallet.resend(
             tx_id,
@@ -634,6 +655,138 @@ fn the_allowlist_matches_on_the_key_and_keeps_the_address_the_user_added() {
             dropped: 1,
             ..InboxSummary::default()
         }
+    );
+}
+
+#[test]
+fn an_invoice_whose_park_write_fails_stays_on_the_relay_until_it_is_parked() {
+    let world = World::new();
+    let issued = world.issue(None);
+    let invoice_address = world.payer.invoice_address();
+    // The drain prunes the relay inbox and records the message as received before it parks.
+    world.payer.fail_write_after(2);
+
+    let summary = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .epicbox_drain_invoices(&world.payer.epicbox),
+        )
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            held: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&invoice_address), 1);
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.pending_invoices())
+            .is_empty()
+    );
+
+    let summary = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .epicbox_drain_invoices(&world.payer.epicbox),
+        )
+        .unwrap();
+
+    assert_eq!(summary.parked, 1);
+    assert_eq!(world.relay.pending(&invoice_address), 0);
+    assert_eq!(
+        world.read_parked(&world.payer, issued.slate_id).status,
+        PendingInvoiceStatus::Parked
+    );
+}
+
+#[test]
+fn the_payment_goes_to_the_allowed_address_not_to_the_sender_named_in_the_message() {
+    let world = World::new();
+    // The issuer's key, allowed under another domain and port than its messages name.
+    let allowed = format!("{}@pay.shop.test:9443", world.issuer.address.key_text());
+    world
+        .payer
+        .wallet
+        .allow_invoice_sender(&allowed, "shop")
+        .unwrap();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+
+    assert_eq!(
+        world
+            .read_parked(&world.payer, issued.slate_id)
+            .sender_address,
+        allowed
+    );
+    let pending = world
+        .payer
+        .wallet
+        .pending_invoices(InvoiceExpiry::default())
+        .unwrap();
+    assert_eq!(pending[0].sender.to_string(), allowed);
+    assert_ne!(pending[0].sender, world.issuer.address);
+
+    let paid = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+
+    assert_eq!(
+        world.payer.read(|repos| repos.counterparty(paid.tx_id)),
+        Some(allowed)
+    );
+    // The relay queues by key, so the issuer still receives it.
+    assert_eq!(world.relay.pending(&world.issuer.address), 1);
+}
+
+#[test]
+fn the_payments_address_parks_nothing_even_from_an_allowed_sender() {
+    let world = World::new();
+    world.issue_to(&world.payer.address, None);
+
+    let summary = world
+        .block_on(world.payer.wallet.epicbox_drain(&world.payer.epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.payer.address), 0);
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.pending_invoices())
+            .is_empty()
+    );
+    assert!(
+        world
+            .payer
+            .wallet
+            .pending_invoices(InvoiceExpiry::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.transactions(world::ACCOUNT))
+            .is_empty()
     );
 }
 

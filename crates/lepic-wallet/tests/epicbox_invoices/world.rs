@@ -86,10 +86,12 @@ impl Clock for TestClock {
     }
 }
 
-/// A memory store that counts the write transactions the engine runs on it.
+/// A memory store that counts the write transactions the engine runs on it, and fails one when
+/// a test asks.
 pub struct CountingStore {
     inner: MemoryStore,
     writes: Arc<AtomicUsize>,
+    failing: Arc<Mutex<Option<usize>>>,
 }
 
 impl WalletStore for CountingStore {
@@ -108,6 +110,23 @@ impl WalletStore for CountingStore {
         E: From<StoreError>,
     {
         self.writes.fetch_add(1, Ordering::SeqCst);
+        let fail = {
+            let mut failing = self.failing.lock().unwrap_or_else(PoisonError::into_inner);
+            match *failing {
+                Some(0) => {
+                    *failing = None;
+                    true
+                }
+                Some(left) => {
+                    *failing = Some(left - 1);
+                    false
+                }
+                None => false,
+            }
+        };
+        if fail {
+            return Err(StoreError::Poisoned.into());
+        }
         self.inner.write(operation)
     }
 }
@@ -116,6 +135,7 @@ impl WalletStore for CountingStore {
 pub struct CountingStores {
     stores: Arc<Mutex<BTreeMap<PathBuf, MemoryStore>>>,
     writes: Arc<AtomicUsize>,
+    failing: Arc<Mutex<Option<usize>>>,
 }
 
 impl StoreOpener for CountingStores {
@@ -129,6 +149,7 @@ impl StoreOpener for CountingStores {
         Ok(CountingStore {
             inner: store.reopen(key),
             writes: Arc::clone(&self.writes),
+            failing: Arc::clone(&self.failing),
         })
     }
 }
@@ -237,6 +258,15 @@ impl Party {
     /// Write transactions run so far through the wallet's store opener.
     pub fn writes(&self) -> usize {
         self.stores.writes.load(Ordering::SeqCst)
+    }
+
+    /// Lets `succeeding` more write transactions through, then fails the one after.
+    pub fn fail_write_after(&self, succeeding: usize) {
+        *self
+            .stores
+            .failing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(succeeding);
     }
 
     pub fn invoice_address(&self) -> EpicboxAddress {
