@@ -31,6 +31,7 @@ use lepic_primitives::tx::Transaction;
 use lepic_store::{
     AccountIndex, KeyId, OutputRecord, OutputStatus, TransactionEntry, TxDirection, TxId, TxState,
 };
+use lepic_wallet::details::TxFlow;
 use lepic_wallet::scan::{ScanCancel, ScanError, ScanOptions, ScanStart};
 use lepic_wallet::{Event, Ports, Wallet, WalletError};
 use scan_support::{PASSWORD, Snapshot, full_scan_vector, options, restore, snapshot, write};
@@ -848,5 +849,6 @@ fn details_of_a_restored_output_show_its_height_and_no_kernel() {
         assert_eq!(details.transaction.entry.slate_id, None);
         assert_eq!(details.kernel_excess, None);
         assert_eq!(details.confirmed_height, Some(output.height));
+        assert_eq!(details.flow, TxFlow::Payment);
     }
 }
