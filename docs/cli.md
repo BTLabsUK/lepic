@@ -66,6 +66,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `output` | `LEPIC_OUTPUT` | `--output` | `human` |
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
+| `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24`, at most `48` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
 names. It holds `key = value` lines; values are bare words or double-quoted strings, `#` starts a
@@ -201,7 +202,8 @@ moves slates in one of two ways:
 - Slate files, which you carry to the other party yourself. `lepic` writes V3 slate JSON and reads
   V2 and V3, so `epic-wallet` `v4.0.2` reads its files and it reads `epic-wallet`'s.
 - An Epicbox relay, which holds encrypted slates for an address until its wallet fetches them.
-  Over Epicbox `lepic` sends V2 slates, as `epic-wallet` does.
+  Over Epicbox `lepic` sends payments as V2 slates, as `epic-wallet` does, and invoices as V3
+  slates, which carry the payment's TTL.
 
 ## Receive and send with slate files
 
@@ -269,7 +271,8 @@ The receiving wallet answers when it next connects. Your wallet picks the answer
 it the next time it connects, with either of:
 
 - `lepic epicbox drain` handles everything waiting on the relay once and exits. It prints what it
-  did: `Received 0, finalized 1, repeated 0, rejected 0, held for retry 0.`
+  did: `Received 0, finalized 1, repeated 0, rejected 0, held for retry 0, parked 0, bounced 0,
+  dropped 0.`
 - `lepic epicbox listen` stays connected, answers incoming payments and finalizes answers as they
   arrive, printing each change on stderr, until Ctrl-C. Then it prints the same summary.
 
@@ -291,7 +294,72 @@ lepic tx cancel 3
 
 ## Invoices
 
-Ask for a payment:
+An invoice asks the payer for an amount: the issuer builds I1, the payer answers with I2 and the
+issuer finalizes and posts. A service that runs `lepic` all the time can invoice a user over
+Epicbox, so the user answers once and never has to come back to finalize.
+
+### Over Epicbox
+
+The payer receives invoices on an invoice address of its own, apart from the payments address
+`wallet address` prints. It accepts invoices only from senders the payer allowed, and drops
+everything else unread:
+
+```
+$ lepic epicbox invoice-address
+esABC...@epicbox.epiccash.com
+$ lepic epicbox allow add esShop...@epicbox.epiccash.com --label "bike shop"
+Invoices from esShop...@epicbox.epiccash.com are accepted.
+```
+
+The payer gives the service its invoice address and allows the address the service shows, its
+`wallet address`. Senders are matched on the key, the part before `@`, because the relay vouches
+for the key of a message and never for its domain; payments always go to the address given to
+`allow add`. `epicbox allow list` shows the allowed senders, `epicbox allow remove <ADDRESS>`
+removes one, and invoices already parked from it stay. The invoice address is derived from the
+recovery phrase at index 1 or higher; `epicbox invoice-address --rotate` moves to the next index
+and abandons the old address. A restored wallet starts again at index 1.
+
+The service issues the invoice to the payer's invoice address:
+
+```
+$ lepic invoice issue 0.8 --to esABC...@epicbox.epiccash.com -m "order 42"
+Transaction 5 asks for 0.80000000 EPIC; the invoice went by epicbox to esABC...@epicbox.epiccash.com.
+```
+
+The payer fetches it, looks at it, and pays or declines it. Nothing is paid until the payer runs
+`invoice pay` and types the amount again:
+
+```
+$ lepic epicbox drain --invoices
+Received 0, finalized 0, repeated 0, rejected 0, held for retry 0, parked 1, bounced 0, dropped 0.
+$ lepic invoice list
+2f4a6c1e-5b3d-4e8f-9a0b-1c2d3e4f5a6b  0.80000000 EPIC from esShop...@epicbox.epiccash.com
+    received 2026-10-05 09:12:40, expires 2026-10-06 09:12:40 (UTC)
+    message: order 42
+$ lepic invoice pay 2f4a6c1e-5b3d-4e8f-9a0b-1c2d3e4f5a6b 0.8
+Transaction 4 pays 0.80000000 EPIC (fee 0.00800000); the payment went by epicbox to esShop...@epicbox.epiccash.com.
+```
+
+`lepic invoice decline <SLATE_ID>` declines a parked invoice instead; it is never paid. The
+payment carries a TTL of 1440 blocks, about a day, unless `--ttl-blocks` says otherwise, and
+takes the other spending options of `tx send`. If the relay does not take it, `lepic` exits with
+code 11 and the inputs stay locked; `lepic tx resend <ID> --to <ADDRESS>` delivers it again, to
+the sender's allowed address only.
+
+The service's `epicbox listen` or `epicbox drain` finalizes and posts the payment when it
+arrives. An invoice that comes back unpaid from a wallet that does not pay invoices over
+Epicbox, as `epic-wallet` does, counts as `bounced`; send that payer a slate file instead.
+
+Unpaid invoices expire after `invoice_expiry_hours`, 24 unless set, at most 48. Each `epicbox
+drain`, and `epicbox listen` when it starts and every few minutes while it runs, deletes parked
+invoices that were not paid in time, and cancels invoices this wallet issued that nobody paid,
+which drops the output and keys they reserved, so a late payment is refused. A payment of an
+invoice that was not posted within its TTL is never cancelled on its own; the drain names it,
+and `lepic tx cancel <ID>` gives up on it. The JSON document of a drain or listen has `parked`,
+`bounced`, `dropped` and `expired`, which lists the `deleted` slate ids and the `cancelled` and
+`cancellable` transaction ids, or is `null` when the expiry could not run.
+
+### Through slate files
 
 ```
 $ lepic invoice issue 0.8 --to-file invoice.slate
@@ -299,14 +367,16 @@ Transaction 5 asks for 0.80000000 EPIC. Give invoice.slate to the payer.
 ```
 
 The payer answers it; then finalize their answer with `lepic tx finalize invoice.slate.response`.
-To pay an invoice, type the amount it asks for again, so a changed file cannot charge you more:
+To pay an invoice file, type the amount it asks for again, so a changed file cannot charge you
+more:
 
 ```
 lepic invoice pay invoice.slate 0.8
 ```
 
 It writes `invoice.slate.response` for the issuer, and takes the spending options of `tx send`.
-Invoices travel by file only.
+`invoice pay` reads its first argument as a parked invoice's slate id when it is one, so a file
+whose name is a slate id is given with its directory, as in `./<SLATE_ID>`.
 
 ## Transactions
 
@@ -421,6 +491,8 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `stored but was not delivered` (exit 11) | The relay did not take the slate; check the address and its port, then `tx resend` or `tx cancel`. |
 | `epicbox subscription failed` | The relay at `epicbox_relay` is unreachable. |
 | `invoice amount differs from the approved amount` | The amount you typed is not the one in the invoice; nothing was paid. |
+| `invoice ... is not waiting to be paid` (exit 6) | The slate id is not a parked invoice: it was paid, declined or expired. `lepic invoice list` shows the ones waiting. |
+| `goes only to the allowed address of its invoice` (exit 7) | `tx resend` of an invoice payment names another key than the sender's allowed address; `epicbox allow list` shows it. |
 | `was already received as transaction N` | The file is a different slate under the id of one received before, or that transaction was cancelled or expired. The same slate again would have rewritten its reply. |
 | `transaction N cannot be released` (exit 7) | The send is not finalized or posted, or no refresh at the height `lepic tx show` names has missed its kernel yet. |
 | `transaction N is in the node's pool` (exit 7) | The node may still mine it; refresh later instead of releasing it. |

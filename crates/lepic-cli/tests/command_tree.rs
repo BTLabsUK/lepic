@@ -67,9 +67,15 @@ fn the_tree_has_every_planned_command() {
         "tx show",
         "invoice issue",
         "invoice pay",
+        "invoice list",
+        "invoice decline",
         "epicbox listen",
         "epicbox drain",
         "epicbox status",
+        "epicbox allow add",
+        "epicbox allow remove",
+        "epicbox allow list",
+        "epicbox invoice-address",
         "node status",
     ] {
         assert!(

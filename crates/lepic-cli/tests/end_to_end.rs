@@ -409,7 +409,17 @@ fn listen_handles_a_waiting_slate_and_stops_when_interrupted() {
     let listened = receiver.run(&host, &["epicbox", "listen"]).ok().json();
     assert_eq!(
         keys(&listened),
-        ["finalized", "held", "received", "rejected", "repeated"]
+        [
+            "bounced",
+            "dropped",
+            "expired",
+            "finalized",
+            "held",
+            "parked",
+            "received",
+            "rejected",
+            "repeated"
+        ]
     );
     assert_eq!(listened["received"], 1, "{listened}");
 }
@@ -433,7 +443,18 @@ fn issue_pay_and_finalize_an_invoice_through_files() {
         )
         .ok()
         .json();
-    assert_eq!(keys(&issued), ["amount", "file", "slate_id", "tx_id"]);
+    assert_eq!(
+        keys(&issued),
+        [
+            "amount",
+            "destination",
+            "file",
+            "slate_id",
+            "transport",
+            "tx_id"
+        ]
+    );
+    assert_eq!(issued["transport"], "file");
     assert_eq!(issued["amount"], "3.00000000");
     assert!(invoice.is_file());
 
@@ -443,7 +464,15 @@ fn issue_pay_and_finalize_an_invoice_through_files() {
         .json();
     assert_eq!(
         keys(&paid),
-        ["amount", "fee", "reply_file", "slate_id", "tx_id"]
+        [
+            "amount",
+            "destination",
+            "fee",
+            "reply_file",
+            "slate_id",
+            "transport",
+            "tx_id"
+        ]
     );
     assert_eq!(paid["slate_id"], issued["slate_id"]);
     let reply = text(&paid, "reply_file").to_owned();

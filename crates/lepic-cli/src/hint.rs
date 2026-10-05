@@ -40,6 +40,20 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
                  cancel {tx_id}` and issue it again"
             ));
         }
+        CliError::Invoice(InvoiceError::PaymentUndelivered { tx_id, .. }) => {
+            return Some(format!(
+                "the payment is stored and its inputs stay locked; deliver it again with `lepic \
+                 tx resend {tx_id} --to <ADDRESS>`, the sender's address `lepic epicbox allow \
+                 list` shows, or give up with `lepic tx cancel {tx_id}`"
+            ));
+        }
+        CliError::Invoice(InvoiceError::NotParked { .. }) => {
+            return Some(
+                "`lepic invoice list` shows the invoices waiting to be paid, and `lepic epicbox \
+                 drain --invoices` fetches new ones"
+                    .to_owned(),
+            );
+        }
         CliError::Send(SendError::Undelivered { tx_id, source, .. }) => {
             let mut text = format!(
                 "the inputs stay locked; deliver it again with `lepic tx resend {tx_id} --to \
@@ -258,17 +272,35 @@ mod tests {
         assert!(text.contains("nor holds its kernel"), "{text}");
     }
 
+    fn undelivered() -> TransportError {
+        TransportError::UnknownDestination {
+            transport: lepic_epicbox::TRANSPORT_ID,
+        }
+    }
+
     #[test]
     fn an_undelivered_invoice_names_tx_cancel_not_tx_resend() {
         let text = hint_for(&CliError::Invoice(InvoiceError::Undelivered {
             tx_id: TxId(5),
             slate_id: lepic_wallet::event::SlateId::from_bytes([2; 16]),
-            source: TransportError::UnknownDestination {
-                transport: lepic_epicbox::TRANSPORT_ID,
-            },
+            source: undelivered(),
         }));
         assert!(text.contains("`lepic tx cancel 5`"), "{text}");
         assert!(!text.contains("resend"), "{text}");
+    }
+
+    #[test]
+    fn an_undelivered_invoice_payment_names_tx_resend_and_the_allowlist() {
+        let text = hint_for(&CliError::Invoice(InvoiceError::PaymentUndelivered {
+            tx_id: TxId(6),
+            slate_id: lepic_wallet::event::SlateId::from_bytes([3; 16]),
+            source: undelivered(),
+        }));
+        assert!(
+            text.contains("`lepic tx resend 6 --to <ADDRESS>`"),
+            "{text}"
+        );
+        assert!(text.contains("`lepic epicbox allow list`"), "{text}");
     }
 
     #[test]

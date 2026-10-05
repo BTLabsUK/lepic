@@ -23,7 +23,8 @@ use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
 use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::details::TransactionDetails;
-use lepic_wallet::event::Balance;
+use lepic_wallet::epicbox_invoice::{AllowedSender, IncomingInvoice, InvoiceExpiry, InvoiceSweep};
+use lepic_wallet::event::{Balance, SlateId};
 use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
@@ -44,15 +45,18 @@ use zeroize::Zeroizing;
 use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
-    Command, DestinationArgs, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs,
-    InvoiceCommand, NodeCommand, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
-    SelectionArg, SendArgs, SpendArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
+    AllowCommand, Command, DestinationArgs, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs,
+    InvoiceCommand, IssueArgs, NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs,
+    RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs, TxCommand, WalletCommand,
+    WalletScanArgs, WordsArg,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
-    AccountReport, AddressReport, EpicboxStatusReport, FinalizeReport, InboxReport, InfoReport,
-    InitReport, InvoiceIssueReport, InvoicePayReport, MessageReport, NodeStatusReport, PostReport,
+    AccountReport, AddressReport, AllowListReport, AllowRemoveReport, AllowedSenderReport,
+    EpicboxStatusReport, ExpiredReport, FinalizeReport, InboxReport, InfoReport, InitReport,
+    InvoiceAddressReport, InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport,
+    InvoicePayReport, MessageReport, NodeStatusReport, ParkedInvoiceReport, PostReport,
     ReceiveReport, Report, ResendReport, RestoreReport, ScanReport, SendReport, TxListReport,
     TxReport, TxStateReport, WalletScanReport,
 };
@@ -197,6 +201,23 @@ impl<H: Host> Run<'_, H> {
         }
     }
 
+    /// With human output, a line on stderr for each invoice event `events` holds: what a drain
+    /// parked, finalized or expired.
+    fn show_invoice_events(&mut self, mut events: broadcast::Receiver<Event>) {
+        if self.settings.output != OutputFormat::Human {
+            return;
+        }
+        while let Ok(event) = events.try_recv() {
+            if matches!(
+                event,
+                Event::InvoiceParked(_) | Event::InvoiceFinalized(_) | Event::InvoiceExpired(_)
+            ) && let Some(line) = receipt_line(&event)
+            {
+                self.show_line(&line);
+            }
+        }
+    }
+
     fn show_line(&mut self, line: &str) {
         // Progress is a courtesy; a closed stderr must not end the command.
         let _ = writeln!(self.console.stderr, "{line}");
@@ -273,16 +294,36 @@ impl<H: Host> Run<'_, H> {
 
     async fn epicbox(&mut self, command: EpicboxCommand) -> Result<Report, CliError> {
         let opened = self.open().await?;
-        let summary = match command {
-            EpicboxCommand::Drain => opened.wallet.epicbox_drain(&opened.epicbox).await?,
+        let expiry = self.settings.invoice_expiry;
+        let (summary, expired) = match command {
+            EpicboxCommand::Drain(args) => {
+                let events = opened.wallet.subscribe();
+                let expired = sweep(&opened.wallet, expiry).await;
+                let summary = if args.invoices {
+                    opened
+                        .wallet
+                        .epicbox_drain_invoices(&opened.epicbox)
+                        .await?
+                } else {
+                    opened.wallet.epicbox_drain(&opened.epicbox).await?
+                };
+                self.show_invoice_events(events);
+                (summary, expired)
+            }
             EpicboxCommand::Listen => {
                 let handle = ListenHandle::new();
-                self.until_interrupted(
-                    opened.wallet.subscribe(),
-                    opened.wallet.epicbox_listen(&opened.epicbox, &handle),
-                    || handle.stop(),
-                )
-                .await?
+                let swept = std::sync::Mutex::new(Some(InvoiceSweep::default()));
+                let summary = self
+                    .until_interrupted(
+                        opened.wallet.subscribe(),
+                        listen_and_sweep(&opened, &handle, expiry, &swept),
+                        || handle.stop(),
+                    )
+                    .await?;
+                let expired = swept
+                    .into_inner()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                (summary, expired)
             }
             EpicboxCommand::Status => {
                 let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
@@ -296,8 +337,21 @@ impl<H: Host> Run<'_, H> {
                     pending_deliveries: pending,
                 }));
             }
+            EpicboxCommand::Allow(command) => return allow(&opened, command),
+            EpicboxCommand::InvoiceAddress(args) => {
+                let address = if args.rotate {
+                    opened.wallet.rotate_invoice_address(&opened.epicbox)?
+                } else {
+                    opened.wallet.invoice_address(&opened.epicbox)?
+                };
+                return Ok(Report::InvoiceAddress(InvoiceAddressReport {
+                    address: address.to_string(),
+                    index: opened.wallet.invoice_address_index()?,
+                    rotated: args.rotate,
+                }));
+            }
         };
-        Ok(Report::Inbox(inbox_report(summary)))
+        Ok(Report::Inbox(inbox_report(summary, expired)))
     }
 
     async fn node_status(&mut self) -> Result<Report, CliError> {
@@ -626,68 +680,128 @@ impl<H: Host> Run<'_, H> {
 
     async fn invoice(&mut self, command: InvoiceCommand) -> Result<Report, CliError> {
         match command {
-            InvoiceCommand::Issue(args) => {
-                let amount = parse_amount(&args.amount)?;
+            InvoiceCommand::Issue(args) => self.issue_invoice(args).await,
+            InvoiceCommand::Pay(args) => match parked_slate_id(&args.invoice) {
+                Some(slate_id) => self.pay_parked_invoice(slate_id, args).await,
+                None => self.pay_invoice_file(args).await,
+            },
+            InvoiceCommand::List => {
                 let opened = self.open().await?;
-                let account = opened.wallet.account(&args.account.account)?;
-                let file = args.to_file.display().to_string();
-                let issued = opened
+                let invoices = opened
                     .wallet
-                    .issue_invoice(
-                        InvoiceRequest {
-                            account: account.index,
-                            amount,
-                            message: args.message.message,
-                        },
-                        Delivery::Export {
-                            transport: FILE,
-                            to: Location::File(args.to_file),
-                        },
-                    )
-                    .await?;
-                Ok(Report::InvoiceIssue(InvoiceIssueReport {
-                    tx_id: issued.tx_id.0,
-                    slate_id: issued.slate_id.to_string(),
-                    amount: format_amount(issued.amount),
-                    file,
+                    .pending_invoices(self.settings.invoice_expiry)?;
+                Ok(Report::InvoiceList(InvoiceListReport {
+                    invoices: invoices.into_iter().map(parked_invoice_report).collect(),
                 }))
             }
-            InvoiceCommand::Pay(args) => {
-                let amount = parse_amount(&args.amount)?;
-                let spend = Spend::from_args(&args.spend)?;
+            InvoiceCommand::Decline(args) => {
+                let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
                 let opened = self.open().await?;
-                let account = opened.wallet.account(&args.account.account)?;
-                let files = FileTransport::new();
-                let wire = files
-                    .import(&Location::File(args.slate.file.clone()))
-                    .await
-                    .map_err(slate_file(&args.slate.file))?;
-                let request = PayRequest {
-                    minimum_confirmations: spend.minimum_confirmations,
-                    change_outputs: spend.change_outputs,
-                    strategy: spend.strategy,
-                    ttl_blocks: spend.ttl_blocks,
-                    message: args.message.message,
-                    ..PayRequest::new(account.index, amount)
-                };
-                let paid = opened.wallet.pay_invoice(FILE, &wire, request).await?;
-                let reply = args
-                    .reply
-                    .reply_file
-                    .unwrap_or_else(|| response_path(&args.slate.file));
-                files
-                    .export(&paid.reply, &Location::File(reply.clone()))
-                    .await
-                    .map_err(slate_file(&reply))?;
-                Ok(Report::InvoicePay(InvoicePayReport {
-                    tx_id: paid.tx_id.0,
-                    slate_id: paid.slate.id().to_string(),
-                    amount: format_amount(paid.slate.amount()),
-                    fee: format_fee(paid.slate.fee()),
-                    reply_file: reply.display().to_string(),
+                opened.wallet.decline_invoice(slate_id)?;
+                Ok(Report::InvoiceDecline(InvoiceDeclineReport {
+                    slate_id: slate_id.to_string(),
+                    state: "declined".to_owned(),
                 }))
             }
         }
+    }
+
+    async fn issue_invoice(&mut self, args: IssueArgs) -> Result<Report, CliError> {
+        let amount = parse_amount(&args.amount)?;
+        let (delivery, destination) = self.delivery(args.destination)?;
+        let opened = self.open().await?;
+        let account = opened.wallet.account(&args.account.account)?;
+        if delivery.transport() == TRANSPORT_ID {
+            opened.wallet.epicbox_attach(&opened.epicbox)?;
+        }
+        let transport = delivery.transport().to_string();
+        let file = matches!(delivery, Delivery::Export { .. }).then(|| destination.clone());
+        let issued = opened
+            .wallet
+            .issue_invoice(
+                InvoiceRequest {
+                    account: account.index,
+                    amount,
+                    message: args.message.message,
+                },
+                delivery,
+            )
+            .await?;
+        Ok(Report::InvoiceIssue(InvoiceIssueReport {
+            tx_id: issued.tx_id.0,
+            slate_id: issued.slate_id.to_string(),
+            amount: format_amount(issued.amount),
+            transport,
+            destination,
+            file,
+        }))
+    }
+
+    /// Pays a parked invoice over Epicbox, to the address its sender was allowed under.
+    async fn pay_parked_invoice(
+        &mut self,
+        slate_id: SlateId,
+        args: PayArgs,
+    ) -> Result<Report, CliError> {
+        if args.reply.reply_file.is_some() {
+            return Err(CliError::ReplyFileForParked);
+        }
+        let amount = parse_amount(&args.amount)?;
+        let spend = Spend::from_args(&args.spend)?;
+        let opened = self.open().await?;
+        let account = opened.wallet.account(&args.account.account)?;
+        let sender = opened
+            .wallet
+            .pending_invoices(self.settings.invoice_expiry)?
+            .into_iter()
+            .find(|invoice| invoice.slate_id == slate_id)
+            .map(|invoice| invoice.sender.to_string())
+            .ok_or(InvoiceError::NotParked { slate_id })?;
+        opened.wallet.epicbox_attach(&opened.epicbox)?;
+        let request = spend.pay_request(account.index, amount, args.message.message);
+        let paid = opened.wallet.pay_parked_invoice(slate_id, request).await?;
+        Ok(Report::InvoicePay(InvoicePayReport {
+            tx_id: paid.tx_id.0,
+            slate_id: paid.slate.id().to_string(),
+            amount: format_amount(paid.slate.amount()),
+            fee: format_fee(paid.slate.fee()),
+            transport: TRANSPORT_ID.to_string(),
+            destination: sender,
+            reply_file: None,
+        }))
+    }
+
+    async fn pay_invoice_file(&mut self, args: PayArgs) -> Result<Report, CliError> {
+        let amount = parse_amount(&args.amount)?;
+        let spend = Spend::from_args(&args.spend)?;
+        let opened = self.open().await?;
+        let account = opened.wallet.account(&args.account.account)?;
+        let file = std::path::PathBuf::from(&args.invoice);
+        let files = FileTransport::new();
+        let wire = files
+            .import(&Location::File(file.clone()))
+            .await
+            .map_err(slate_file(&file))?;
+        let request = spend.pay_request(account.index, amount, args.message.message);
+        let paid = opened.wallet.pay_invoice(FILE, &wire, request).await?;
+        let reply = args
+            .reply
+            .reply_file
+            .unwrap_or_else(|| response_path(&file));
+        files
+            .export(&paid.reply, &Location::File(reply.clone()))
+            .await
+            .map_err(slate_file(&reply))?;
+        let reply = reply.display().to_string();
+        Ok(Report::InvoicePay(InvoicePayReport {
+            tx_id: paid.tx_id.0,
+            slate_id: paid.slate.id().to_string(),
+            amount: format_amount(paid.slate.amount()),
+            fee: format_fee(paid.slate.fee()),
+            transport: FILE.to_string(),
+            destination: reply.clone(),
+            reply_file: Some(reply),
+        }))
     }
 
     async fn new_password(&mut self) -> Result<Password, CliError> {
@@ -824,6 +938,27 @@ fn receipt_line(event: &Event) -> Option<String> {
             "transaction {} answered again; nothing new was received",
             again.tx_id.0
         )),
+        Event::InvoiceParked(parked) => Some(format!(
+            "invoice {} for {} EPIC parked; `lepic invoice pay {} {}` pays it",
+            parked.slate_id,
+            format_amount(parked.amount),
+            parked.slate_id,
+            format_amount(parked.amount)
+        )),
+        Event::InvoiceFinalized(finalized) => Some(format!(
+            "invoice {} paid; transaction {} finalized",
+            finalized.slate_id, finalized.tx_id.0
+        )),
+        Event::InvoiceExpired(expired) => Some(match expired.tx_id {
+            Some(tx_id) => format!(
+                "invoice {} expired unpaid; transaction {} cancelled",
+                expired.slate_id, tx_id.0
+            ),
+            None => format!(
+                "invoice {} expired unpaid and was deleted",
+                expired.slate_id
+            ),
+        }),
         _ => None,
     }
 }
@@ -866,6 +1001,22 @@ struct Spend {
 }
 
 impl Spend {
+    fn pay_request(
+        self,
+        account: lepic_store::AccountIndex,
+        amount: lepic_primitives::amount::Amount,
+        message: Option<String>,
+    ) -> PayRequest {
+        PayRequest {
+            minimum_confirmations: self.minimum_confirmations,
+            change_outputs: self.change_outputs,
+            strategy: self.strategy,
+            ttl_blocks: self.ttl_blocks,
+            message,
+            ..PayRequest::new(account, amount)
+        }
+    }
+
     fn from_args(args: &SpendArgs) -> Result<Self, CliError> {
         Ok(Self {
             minimum_confirmations: args.min_confirmations,
@@ -992,13 +1143,132 @@ fn lock_data_dir(dir: &Path) -> Result<Option<std::fs::File>, CliError> {
     }
 }
 
-fn inbox_report(summary: InboxSummary) -> InboxReport {
+fn inbox_report(summary: InboxSummary, expired: Option<InvoiceSweep>) -> InboxReport {
     InboxReport {
         received: summary.received,
         finalized: summary.finalized,
         repeated: summary.repeated,
         rejected: summary.rejected,
         held: summary.held,
+        parked: summary.parked,
+        bounced: summary.bounced,
+        dropped: summary.dropped,
+        expired: expired.map(|sweep| ExpiredReport {
+            deleted: sweep.deleted.iter().map(ToString::to_string).collect(),
+            cancelled: sweep.cancelled.iter().map(|tx_id| tx_id.0).collect(),
+            cancellable: sweep.cancellable.iter().map(|tx_id| tx_id.0).collect(),
+        }),
+    }
+}
+
+/// How often a listen expires unpaid invoices. Expiry is counted in hours, so a sweep every
+/// few minutes keeps it close without loading the store.
+const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Expires unpaid invoices once. A failure, such as the node being unreachable while a payment
+/// is checked, is logged and leaves the inbox work to go on; the next sweep tries again.
+async fn sweep<N: NodeApi + 'static>(
+    wallet: &CliWallet<N>,
+    expiry: InvoiceExpiry,
+) -> Option<InvoiceSweep> {
+    match wallet.sweep_invoices(expiry).await {
+        Ok(sweep) => Some(sweep),
+        Err(error) => {
+            tracing::warn!(error = %lepic_telemetry::ErrorChain(&error), "invoice expiry failed");
+            None
+        }
+    }
+}
+
+/// Listens until `handle` stops, and expires unpaid invoices when it starts and every
+/// [`SWEEP_INTERVAL`] while it runs. The listen is polled during a sweep, so the relay
+/// connection is never left unattended. `swept` collects what every sweep did, and becomes
+/// `None` once a sweep fails.
+async fn listen_and_sweep<N: NodeApi + 'static>(
+    opened: &Opened<N>,
+    handle: &ListenHandle,
+    expiry: InvoiceExpiry,
+    swept: &std::sync::Mutex<Option<InvoiceSweep>>,
+) -> Result<InboxSummary, lepic_wallet::inbox::InboxError> {
+    let listen = opened.wallet.epicbox_listen(&opened.epicbox, handle);
+    tokio::pin!(listen);
+    let mut ticks = tokio::time::interval(SWEEP_INTERVAL);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            result = &mut listen => return result,
+            _ = ticks.tick() => {
+                let once = sweep(&opened.wallet, expiry);
+                tokio::pin!(once);
+                let outcome = tokio::select! {
+                    result = &mut listen => return result,
+                    outcome = &mut once => outcome,
+                };
+                let mut total = swept.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                *total = total.take().zip(outcome).map(|(mut total, more)| {
+                    total.deleted.extend(more.deleted);
+                    total.cancelled.extend(more.cancelled);
+                    total.cancellable.extend(more.cancellable);
+                    total.cancellable.sort_unstable();
+                    total.cancellable.dedup();
+                    total
+                });
+            }
+        }
+    }
+}
+
+/// The slate id `text` names, when it is one: `invoice pay` then pays a parked invoice. Any
+/// other text is a slate file path.
+fn parked_slate_id(text: &str) -> Option<SlateId> {
+    SlateId::parse(text).ok()
+}
+
+fn parked_invoice_report(invoice: IncomingInvoice) -> ParkedInvoiceReport {
+    ParkedInvoiceReport {
+        slate_id: invoice.slate_id.to_string(),
+        sender: invoice.sender.to_string(),
+        amount: format_amount(invoice.amount),
+        message: invoice.message,
+        received_at: invoice.received_at.to_string(),
+        expires_at: invoice.expires_at.to_string(),
+    }
+}
+
+fn allowed_sender_report(sender: AllowedSender) -> AllowedSenderReport {
+    AllowedSenderReport {
+        address: sender.address.to_string(),
+        label: sender.label,
+        added_at: sender.added_at.to_string(),
+    }
+}
+
+fn allow<N: NodeApi + 'static>(
+    opened: &Opened<N>,
+    command: AllowCommand,
+) -> Result<Report, CliError> {
+    match command {
+        AllowCommand::Add(args) => {
+            let sender = opened
+                .wallet
+                .allow_invoice_sender(&args.address.address, &args.label)?;
+            Ok(Report::AllowAdd(allowed_sender_report(sender)))
+        }
+        AllowCommand::Remove(args) => {
+            let removed = opened.wallet.remove_invoice_sender(&args.address)?;
+            Ok(Report::AllowRemove(AllowRemoveReport {
+                address: args.address,
+                removed,
+            }))
+        }
+        AllowCommand::List => Ok(Report::AllowList(AllowListReport {
+            senders: opened
+                .wallet
+                .invoice_senders()?
+                .into_iter()
+                .map(allowed_sender_report)
+                .collect(),
+        })),
     }
 }
 

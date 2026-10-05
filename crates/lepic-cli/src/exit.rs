@@ -138,6 +138,10 @@ pub enum CliError {
     Store(#[from] StoreError),
     #[error("give --to or --to-file")]
     NoDestination,
+    #[error("slate id is not of the form xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")]
+    SlateId,
+    #[error("--reply-file applies to an invoice slate file, not to a parked invoice")]
+    ReplyFileForParked,
     #[error("start height {start} is above the node's tip {tip}")]
     StartAboveTip { start: u64, tip: u64 },
     #[error("epicbox address rejected")]
@@ -171,6 +175,8 @@ impl CliError {
             | Self::Amount(_)
             | Self::Zero { .. }
             | Self::NoDestination
+            | Self::SlateId
+            | Self::ReplyFileForParked
             | Self::StartAboveTip { .. }
             | Self::Address(_) => ErrorKind::Usage,
             Self::Wallet(error) => wallet_kind(error),
@@ -248,7 +254,8 @@ fn send_kind(error: &SendError) -> ErrorKind {
         SendError::Selection(_)
         | SendError::Unrepresentable(_)
         | SendError::ProofAddress(_)
-        | SendError::NotResendable { .. } => ErrorKind::Rejected,
+        | SendError::NotResendable { .. }
+        | SendError::PayeeMismatch { .. } => ErrorKind::Rejected,
         SendError::UnknownTransport { .. }
         | SendError::CannotDeliver { .. }
         | SendError::CannotExport { .. } => ErrorKind::Transport,
@@ -311,8 +318,10 @@ fn invoice_kind(error: &InvoiceError) -> ErrorKind {
         InvoiceError::UnknownTransport { .. }
         | InvoiceError::CannotDeliver { .. }
         | InvoiceError::CannotExport { .. } => ErrorKind::Transport,
-        InvoiceError::Undelivered { .. } | InvoiceError::NotPosted { .. } => ErrorKind::Incomplete,
-        InvoiceError::UnknownSlate { .. } => ErrorKind::NotFound,
+        InvoiceError::Undelivered { .. }
+        | InvoiceError::PaymentUndelivered { .. }
+        | InvoiceError::NotPosted { .. } => ErrorKind::Incomplete,
+        InvoiceError::UnknownSlate { .. } | InvoiceError::NotParked { .. } => ErrorKind::NotFound,
         InvoiceError::Decode(_)
         | InvoiceError::WrongStage { .. }
         | InvoiceError::Selection(_)
@@ -337,6 +346,11 @@ fn inbox_kind(error: &InboxError) -> ErrorKind {
         InboxError::Wallet(error) => wallet_kind(error),
         InboxError::UnknownTransport { .. } | InboxError::NetworkMismatch => ErrorKind::Config,
         InboxError::Subscription(_) | InboxError::Transport(_) => ErrorKind::Transport,
+        InboxError::Address(_) | InboxError::SenderLabel | InboxError::PaymentsAddressIndex => {
+            ErrorKind::Usage
+        }
+        InboxError::InvoiceIndexExhausted => ErrorKind::Rejected,
+        InboxError::InvoiceExpiry => ErrorKind::Config,
         _ => ErrorKind::Internal,
     }
 }
@@ -462,6 +476,27 @@ mod tests {
             ),
             (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
             (CliError::DataDirInUse, ErrorKind::WalletState),
+            (
+                InvoiceError::NotParked {
+                    slate_id: lepic_wallet::event::SlateId::from_bytes([1; 16]),
+                }
+                .into(),
+                ErrorKind::NotFound,
+            ),
+            (
+                SendError::PayeeMismatch {
+                    tx_id: lepic_store::TxId(9),
+                }
+                .into(),
+                ErrorKind::Rejected,
+            ),
+            (InboxError::SenderLabel.into(), ErrorKind::Usage),
+            (
+                InboxError::InvoiceIndexExhausted.into(),
+                ErrorKind::Rejected,
+            ),
+            (CliError::SlateId, ErrorKind::Usage),
+            (CliError::ReplyFileForParked, ErrorKind::Usage),
             (
                 CliError::StartAboveTip { start: 9, tip: 8 },
                 ErrorKind::Usage,

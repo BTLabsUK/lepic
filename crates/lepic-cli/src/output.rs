@@ -31,7 +31,13 @@ pub enum Report {
     Show(TxReport),
     InvoiceIssue(InvoiceIssueReport),
     InvoicePay(InvoicePayReport),
+    InvoiceList(InvoiceListReport),
+    InvoiceDecline(InvoiceDeclineReport),
     Inbox(InboxReport),
+    AllowAdd(AllowedSenderReport),
+    AllowRemove(AllowRemoveReport),
+    AllowList(AllowListReport),
+    InvoiceAddress(InvoiceAddressReport),
     EpicboxStatus(EpicboxStatusReport),
     NodeStatus(NodeStatusReport),
 }
@@ -224,8 +230,12 @@ pub struct InvoiceIssueReport {
     pub tx_id: u32,
     pub slate_id: String,
     pub amount: String,
-    /// The invoice slate file to give the payer.
-    pub file: String,
+    pub transport: String,
+    /// The payer's invoice address or the file path the invoice went to.
+    pub destination: String,
+    /// The invoice slate file to give the payer; only for `--to-file`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -234,8 +244,36 @@ pub struct InvoicePayReport {
     pub slate_id: String,
     pub amount: String,
     pub fee: String,
-    /// The reply to give the issuer, who finalizes it.
-    pub reply_file: String,
+    pub transport: String,
+    /// The issuer's allowed address or the file path the payment went to.
+    pub destination: String,
+    /// The reply to give the issuer, who finalizes it; only for an invoice slate file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_file: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvoiceListReport {
+    pub invoices: Vec<ParkedInvoiceReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ParkedInvoiceReport {
+    pub slate_id: String,
+    /// The allowed address of the sender, where a payment goes.
+    pub sender: String,
+    pub amount: String,
+    /// The issuer's message, when its signature verifies, with hidden formatting removed.
+    pub message: Option<String>,
+    pub received_at: String,
+    /// When a drain or listen deletes it unpaid.
+    pub expires_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvoiceDeclineReport {
+    pub slate_id: String,
+    pub state: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,6 +283,52 @@ pub struct InboxReport {
     pub repeated: u32,
     pub rejected: u32,
     pub held: u32,
+    /// Invoices stored on the invoice address for the user to pay or decline.
+    pub parked: u32,
+    /// Invoices this wallet issued that came back unpaid from a payer that does not pay them.
+    pub bounced: u32,
+    /// Messages on the invoice address acknowledged and forgotten unread.
+    pub dropped: u32,
+    /// What the invoice expiry did; `null` when it could not run, which the log says why.
+    pub expired: Option<ExpiredReport>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct ExpiredReport {
+    /// Slate ids of parked invoices deleted unpaid.
+    pub deleted: Vec<String>,
+    /// Invoices this wallet issued and cancelled unpaid.
+    pub cancelled: Vec<u32>,
+    /// Payments of invoices that were not posted within their TTL; `tx cancel` gives up on
+    /// them.
+    pub cancellable: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AllowedSenderReport {
+    pub address: String,
+    pub label: String,
+    pub added_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AllowRemoveReport {
+    pub address: String,
+    /// False when the address was not allowed.
+    pub removed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AllowListReport {
+    pub senders: Vec<AllowedSenderReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvoiceAddressReport {
+    pub address: String,
+    pub index: u32,
+    /// The address moved to `index` in this command.
+    pub rotated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -413,6 +497,34 @@ fn short_time(timestamp: &str) -> String {
     timestamp
         .get(..19)
         .map_or_else(|| timestamp.to_owned(), |text| text.replacen('T', " ", 1))
+}
+
+/// The lines of an inbox report that say what the invoice expiry did, if anything.
+fn write_expired(out: &mut Vec<u8>, expired: Option<&ExpiredReport>) -> std::io::Result<()> {
+    let Some(expired) = expired else {
+        return writeln!(out, "Invoice expiry did not run; the log says why.");
+    };
+    if !expired.deleted.is_empty() {
+        writeln!(
+            out,
+            "Deleted {} parked invoices that were not paid in time.",
+            expired.deleted.len()
+        )?;
+    }
+    for tx_id in &expired.cancelled {
+        writeln!(
+            out,
+            "Transaction {tx_id} cancelled; its invoice was not paid in time."
+        )?;
+    }
+    for tx_id in &expired.cancellable {
+        writeln!(
+            out,
+            "Transaction {tx_id} paid an invoice that was not posted in time; `lepic tx cancel \
+             {tx_id}` gives up on it."
+        )?;
+    }
+    Ok(())
 }
 
 fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
@@ -593,21 +705,117 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             }
             Ok(())
         }
-        Report::InvoiceIssue(r) => writeln!(
-            out,
-            "Transaction {} asks for {} EPIC. Give {} to the payer.\nSlate {}.",
-            r.tx_id, r.amount, r.file, r.slate_id
-        ),
-        Report::InvoicePay(r) => writeln!(
-            out,
-            "Transaction {} pays {} EPIC (fee {}). Return {} to the issuer.\nSlate {}.",
-            r.tx_id, r.amount, r.fee, r.reply_file, r.slate_id
-        ),
-        Report::Inbox(r) => writeln!(
-            out,
-            "Received {}, finalized {}, repeated {}, rejected {}, held for retry {}.",
-            r.received, r.finalized, r.repeated, r.rejected, r.held
-        ),
+        Report::InvoiceIssue(r) => match &r.file {
+            Some(file) => writeln!(
+                out,
+                "Transaction {} asks for {} EPIC. Give {file} to the payer.\nSlate {}.",
+                r.tx_id, r.amount, r.slate_id
+            ),
+            None => writeln!(
+                out,
+                "Transaction {} asks for {} EPIC; the invoice went by {} to {}.\nSlate {}.",
+                r.tx_id, r.amount, r.transport, r.destination, r.slate_id
+            ),
+        },
+        Report::InvoicePay(r) => match &r.reply_file {
+            Some(reply) => writeln!(
+                out,
+                "Transaction {} pays {} EPIC (fee {}). Return {reply} to the issuer.\nSlate {}.",
+                r.tx_id, r.amount, r.fee, r.slate_id
+            ),
+            None => writeln!(
+                out,
+                "Transaction {} pays {} EPIC (fee {}); the payment went by {} to {}.\nSlate {}.",
+                r.tx_id, r.amount, r.fee, r.transport, r.destination, r.slate_id
+            ),
+        },
+        Report::InvoiceList(r) => {
+            if r.invoices.is_empty() {
+                return writeln!(
+                    out,
+                    "No invoices are waiting; `lepic epicbox drain --invoices` fetches new ones."
+                );
+            }
+            for invoice in &r.invoices {
+                writeln!(
+                    out,
+                    "{}  {} EPIC from {}",
+                    invoice.slate_id, invoice.amount, invoice.sender
+                )?;
+                writeln!(
+                    out,
+                    "    received {}, expires {} (UTC)",
+                    short_time(&invoice.received_at),
+                    short_time(&invoice.expires_at)
+                )?;
+                if let Some(message) = &invoice.message {
+                    writeln!(out, "    message: {}", printable(message))?;
+                }
+            }
+            Ok(())
+        }
+        Report::InvoiceDecline(r) => {
+            writeln!(
+                out,
+                "Invoice {} is {}; it is not paid.",
+                r.slate_id, r.state
+            )
+        }
+        Report::Inbox(r) => {
+            writeln!(
+                out,
+                "Received {}, finalized {}, repeated {}, rejected {}, held for retry {}, parked \
+                 {}, bounced {}, dropped {}.",
+                r.received,
+                r.finalized,
+                r.repeated,
+                r.rejected,
+                r.held,
+                r.parked,
+                r.bounced,
+                r.dropped
+            )?;
+            write_expired(out, r.expired.as_ref())
+        }
+        Report::AllowAdd(r) => writeln!(out, "Invoices from {} are accepted.", r.address),
+        Report::AllowRemove(r) if r.removed => {
+            writeln!(out, "Invoices from {} are no longer accepted.", r.address)
+        }
+        Report::AllowRemove(r) => writeln!(out, "{} was not allowed.", r.address),
+        Report::AllowList(r) => {
+            if r.senders.is_empty() {
+                return writeln!(
+                    out,
+                    "No senders are allowed; `lepic epicbox allow add <ADDRESS>` adds one."
+                );
+            }
+            for sender in &r.senders {
+                let label = if sender.label.is_empty() {
+                    "-"
+                } else {
+                    &sender.label
+                };
+                writeln!(
+                    out,
+                    "{}  {}  added {}",
+                    sender.address,
+                    printable(label),
+                    short_time(&sender.added_at)
+                )?;
+            }
+            Ok(())
+        }
+        Report::InvoiceAddress(r) => {
+            writeln!(out, "{}", r.address)?;
+            if r.rotated {
+                writeln!(
+                    out,
+                    "Moved to invoice address index {}; the previous address is no longer read.",
+                    r.index
+                )?;
+            }
+            Ok(())
+        }
         Report::EpicboxStatus(r) => {
             writeln!(out, "Relay    {}", r.relay)?;
             writeln!(out, "Address  {}", r.address)?;
@@ -899,9 +1107,29 @@ mod tests {
                     tx_id: 1,
                     slate_id: text("s"),
                     amount: text("1"),
-                    file: text("f"),
+                    transport: text("file"),
+                    destination: text("f"),
+                    file: Some(text("f")),
                 }),
-                vec!["amount", "file", "slate_id", "tx_id"],
+                vec![
+                    "amount",
+                    "destination",
+                    "file",
+                    "slate_id",
+                    "transport",
+                    "tx_id",
+                ],
+            ),
+            (
+                Report::InvoiceIssue(InvoiceIssueReport {
+                    tx_id: 1,
+                    slate_id: text("s"),
+                    amount: text("1"),
+                    transport: text("epicbox"),
+                    destination: text("a"),
+                    file: None,
+                }),
+                vec!["amount", "destination", "slate_id", "transport", "tx_id"],
             ),
             (
                 Report::InvoicePay(InvoicePayReport {
@@ -909,9 +1137,49 @@ mod tests {
                     slate_id: text("s"),
                     amount: text("1"),
                     fee: text("1"),
-                    reply_file: text("f"),
+                    transport: text("file"),
+                    destination: text("f"),
+                    reply_file: Some(text("f")),
                 }),
-                vec!["amount", "fee", "reply_file", "slate_id", "tx_id"],
+                vec![
+                    "amount",
+                    "destination",
+                    "fee",
+                    "reply_file",
+                    "slate_id",
+                    "transport",
+                    "tx_id",
+                ],
+            ),
+            (
+                Report::InvoicePay(InvoicePayReport {
+                    tx_id: 1,
+                    slate_id: text("s"),
+                    amount: text("1"),
+                    fee: text("1"),
+                    transport: text("epicbox"),
+                    destination: text("a"),
+                    reply_file: None,
+                }),
+                vec![
+                    "amount",
+                    "destination",
+                    "fee",
+                    "slate_id",
+                    "transport",
+                    "tx_id",
+                ],
+            ),
+            (
+                Report::InvoiceList(InvoiceListReport { invoices: vec![] }),
+                vec!["invoices"],
+            ),
+            (
+                Report::InvoiceDecline(InvoiceDeclineReport {
+                    slate_id: text("s"),
+                    state: text("declined"),
+                }),
+                vec!["slate_id", "state"],
             ),
             (
                 Report::Inbox(InboxReport {
@@ -920,8 +1188,49 @@ mod tests {
                     repeated: 0,
                     rejected: 0,
                     held: 0,
+                    parked: 0,
+                    bounced: 0,
+                    dropped: 0,
+                    expired: None,
                 }),
-                vec!["finalized", "held", "received", "rejected", "repeated"],
+                vec![
+                    "bounced",
+                    "dropped",
+                    "expired",
+                    "finalized",
+                    "held",
+                    "parked",
+                    "received",
+                    "rejected",
+                    "repeated",
+                ],
+            ),
+            (
+                Report::AllowAdd(AllowedSenderReport {
+                    address: text("a"),
+                    label: text("l"),
+                    added_at: text("t"),
+                }),
+                vec!["added_at", "address", "label"],
+            ),
+            (
+                Report::AllowRemove(AllowRemoveReport {
+                    address: text("a"),
+                    removed: true,
+                }),
+                vec!["address", "removed"],
+            ),
+            (
+                Report::AllowList(AllowListReport { senders: vec![] }),
+                vec!["senders"],
+            ),
+            (
+                Report::InvoiceAddress(InvoiceAddressReport {
+                    address: text("a"),
+                    index: 1,
+                    rotated: false,
+                }),
+                vec!["address", "index", "rotated"],
             ),
             (
                 Report::EpicboxStatus(EpicboxStatusReport {
@@ -982,6 +1291,27 @@ mod tests {
                 "locked",
                 "spendable",
                 "total"
+            ]
+        );
+        let expired = json_line(&ExpiredReport::default());
+        assert_eq!(keys(&expired), ["cancellable", "cancelled", "deleted"]);
+        let parked = json_line(&ParkedInvoiceReport {
+            slate_id: text("s"),
+            sender: text("a"),
+            amount: text("1"),
+            message: None,
+            received_at: text("t"),
+            expires_at: text("t"),
+        });
+        assert_eq!(
+            keys(&parked),
+            [
+                "amount",
+                "expires_at",
+                "message",
+                "received_at",
+                "sender",
+                "slate_id"
             ]
         );
         let scan = json_line(&ScanReport {
@@ -1160,6 +1490,70 @@ mod tests {
                 "Transaction 4 received this slate before; its reply is written again."
             ) && again.contains("Return pay.slate.response to the sender."),
             "{again}"
+        );
+    }
+
+    #[test]
+    fn a_parked_invoice_lists_with_its_message_escaped() {
+        let report = Report::InvoiceList(InvoiceListReport {
+            invoices: vec![ParkedInvoiceReport {
+                slate_id: text("0436430c-2b02-624c-2032-570501212b00"),
+                sender: text("esAddr@relay.example.org"),
+                amount: text("3.00000000"),
+                message: Some(text("for the bike\u{1b}[2J")),
+                received_at: text("2026-10-05T01:00:00Z"),
+                expires_at: text("2026-10-06T01:00:00Z"),
+            }],
+        });
+        assert_eq!(
+            render(&report, OutputFormat::Human).to_string(),
+            "0436430c-2b02-624c-2032-570501212b00  3.00000000 EPIC from esAddr@relay.example.org\n\
+             \x20   received 2026-10-05 01:00:00, expires 2026-10-06 01:00:00 (UTC)\n\
+             \x20   message: for the bike\\u{1b}[2J\n"
+        );
+        let empty = Report::InvoiceList(InvoiceListReport { invoices: vec![] });
+        assert!(
+            render(&empty, OutputFormat::Human).contains("epicbox drain --invoices"),
+            "empty list names the drain"
+        );
+    }
+
+    #[test]
+    fn an_inbox_report_says_what_the_invoice_expiry_did() {
+        let report = |expired| {
+            let report = Report::Inbox(InboxReport {
+                received: 0,
+                finalized: 1,
+                repeated: 0,
+                rejected: 0,
+                held: 0,
+                parked: 2,
+                bounced: 0,
+                dropped: 5,
+                expired,
+            });
+            render(&report, OutputFormat::Human).to_string()
+        };
+        assert_eq!(
+            report(Some(ExpiredReport::default())),
+            "Received 0, finalized 1, repeated 0, rejected 0, held for retry 0, parked 2, \
+             bounced 0, dropped 5.\n"
+        );
+        let swept = report(Some(ExpiredReport {
+            deleted: vec![text("s")],
+            cancelled: vec![4],
+            cancellable: vec![7],
+        }));
+        assert!(
+            swept.contains("\nDeleted 1 parked invoices")
+                && swept.contains("\nTransaction 4 cancelled;")
+                && swept.contains("`lepic tx cancel 7` gives up on it.\n"),
+            "{swept}"
+        );
+        assert!(
+            report(None).ends_with("Invoice expiry did not run; the log says why.\n"),
+            "{}",
+            report(None)
         );
     }
 

@@ -14,6 +14,7 @@ use clap::ValueEnum;
 use lepic_epicbox::{Domain, RelayEndpoint, Security};
 use lepic_primitives::params::Network;
 use lepic_wallet::NodeEndpoint;
+use lepic_wallet::epicbox_invoice::InvoiceExpiry;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -43,6 +44,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "epicbox_relay",
         "LEPIC_EPICBOX_RELAY",
         "relay as wss://host[:port], or ws://host[:port] for a loopback host",
+    ),
+    (
+        "invoice_expiry_hours",
+        "LEPIC_INVOICE_EXPIRY_HOURS",
+        "hours an unpaid invoice is kept, 1 to 48",
     ),
 ];
 
@@ -177,6 +183,8 @@ pub struct Settings {
     pub node: NodeEndpoint,
     pub node_api_secret_file: Option<PathBuf>,
     pub relay: RelayEndpoint,
+    /// How long an unpaid invoice is kept, on either side.
+    pub invoice_expiry: InvoiceExpiry,
 }
 
 /// The output format alone, for reporting errors that happen before the rest resolves.
@@ -256,6 +264,9 @@ impl Settings {
         let relay = lookup
             .parse("epicbox_relay", parse_relay)?
             .unwrap_or_default();
+        let invoice_expiry = lookup
+            .parse("invoice_expiry_hours", parse_expiry_hours)?
+            .unwrap_or_default();
 
         Ok(Self {
             network,
@@ -273,8 +284,18 @@ impl Settings {
             node,
             node_api_secret_file: lookup.path("node_api_secret_file")?,
             relay,
+            invoice_expiry,
         })
     }
+}
+
+const SECONDS_PER_HOUR: u64 = 60 * 60;
+
+/// A whole number of hours the engine accepts as an invoice expiry.
+fn parse_expiry_hours(text: &str) -> Option<InvoiceExpiry> {
+    let hours: u64 = text.parse().ok()?;
+    let seconds = hours.checked_mul(SECONDS_PER_HOUR)?;
+    InvoiceExpiry::new(std::time::Duration::from_secs(seconds)).ok()
 }
 
 /// The ports `epic-wallet`'s default node configuration listens on.
@@ -492,6 +513,19 @@ mod tests {
         assert_eq!(parse_value(r#""a\"b\\c" # x"#), Some(r#"a"b\c"#.to_owned()));
         for bad in ["", r#""open"#, r#""a" b"#, r#""\n""#, "a b", "'x'"] {
             assert_eq!(parse_value(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn invoice_expiry_is_whole_hours_from_one_to_two_days() {
+        let hours = |h: u64| Some(std::time::Duration::from_secs(h * SECONDS_PER_HOUR));
+        assert_eq!(parse_expiry_hours("1").map(InvoiceExpiry::window), hours(1));
+        assert_eq!(
+            parse_expiry_hours("48").map(InvoiceExpiry::window),
+            hours(48)
+        );
+        for bad in ["0", "49", "-1", "1.5", "", "24h", "18446744073709551615"] {
+            assert!(parse_expiry_hours(bad).is_none(), "{bad}");
         }
     }
 
