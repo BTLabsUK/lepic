@@ -451,7 +451,8 @@ pub enum ListenerEventKind {
     Stopped,
     /// A payer sent back unpaid an invoice this wallet issued, as a wallet that does not pay
     /// invoices does: `tx_id` and `slate_id` name the invoice. Nothing changed; cancel it with
-    /// `cancel_transaction`, or send that payer a slate file instead.
+    /// `cancel_transaction`, or send that payer a slate file instead. A repeat for the same
+    /// `tx_id` is the same bounce, redelivered.
     InvoiceBounced,
 }
 
@@ -518,7 +519,9 @@ pub enum WalletEventKind {
     InvoiceWithdrawn,
     /// A payer sent back unpaid an invoice this wallet issued, as a wallet that does not pay
     /// invoices does: `tx_id` and `slate_id` name the invoice. The payer is recorded as not
-    /// paying invoices. Nothing changed; cancel the invoice with `cancel_transaction`.
+    /// paying invoices. Nothing changed; cancel the invoice with `cancel_transaction`. A bounce
+    /// redelivered before its relay message was settled raises this again for the same
+    /// `tx_id`; treat a repeat as the same bounce.
     InvoiceBounced,
 }
 

@@ -96,6 +96,8 @@ final wallet = await EpicWallet.create(
   `invoiceDeclined`, `invoiceWithdrawn` and `invoiceBounced`, which set `slateId`.
   `WalletEventKind` and `ListenerEventKind` only gain values, at the end, and a value never
   changes meaning; an exhaustive `switch` over either must handle the new ones.
+  `TransactionDetails` has the required field `flow` and `ListenerEvent` the required field
+  `slateId`; code that builds them, such as a fake wallet, must pass them.
 - A slate received a second time, as text, as a file or through the listener, is not a second
   payment. `receiveSlate` and `receiveFile` return `ReceivedSlate.repeated` set, with the
   `txId` and the reply text of the first receive, and the listener reports kind `repeated`
@@ -264,12 +266,14 @@ Issuer, a service wallet:
 
 - `issueInvoiceEpicbox(amount, address, message)` sends the invoice to the payer's invoice
   address. Its transaction is `incoming` like a received payment, with `flow` `invoice`; a
-  paid invoice is `outgoing` with `flow` `invoice`. The payment arrives on the payments address, where `drainEpicbox()` or the listener
-  finalizes and posts it with an `invoiceFinalized` event. `cancelTransaction` withdraws an
-  unpaid invoice. A payer that does not pay invoices, such as a stock `epic-wallet`, sends the
+  paid invoice is `outgoing` with `flow` `invoice`. The payment arrives on the payments
+  address, where `drainEpicbox()` or the listener finalizes and posts it with an
+  `invoiceFinalized` event. `cancelTransaction` withdraws an unpaid invoice. A payer that does not pay invoices, such as a stock `epic-wallet`, sends the
   invoice back; `drainEpicbox()` counts it in `InboxReport.bounced`, and that payer is never
   sent a notice. Each bounced invoice raises one `invoiceBounced` event with its `txId` and
   `slateId`, on `events()` and, while it runs, the listener's stream (`ListenerEvent.slateId`).
+  If the app stops before the relay message is settled, the redelivered bounce raises it again
+  for the same `txId`; treat a repeat as the same bounce.
   Cancel the invoice, or send that payer a slate file.
 - `peerCapability(address)` says what this wallet learned about a payer from its own
   messages, matched on the key: `unknown` before any contact, `noInvoices` once it sent an

@@ -49,7 +49,8 @@ pub enum Event {
     InvoiceWithdrawn(WithdrawnInvoice),
     /// A payer sent an invoice this wallet issued back unchanged, as a wallet that does not
     /// pay invoices does. The peer is recorded as not paying invoices; the invoice stays
-    /// issued until the host cancels it or it expires.
+    /// issued until the host cancels it or it expires. A bounce redelivered before its relay
+    /// message was settled raises this again for the same `tx_id`; treat it as the same bounce.
     InvoiceBounced(BouncedInvoice),
 }
 
