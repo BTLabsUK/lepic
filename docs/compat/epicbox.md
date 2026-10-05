@@ -167,3 +167,28 @@ fact 3 non-slate payload unacknowledged  PASS      24s  delivered 2 times, refus
 
 6 of 6 steps passed
 ```
+
+## Invoices between LEPIC wallets
+
+LEPIC's behaviour on top of the protocol above; nothing on the wire or the relay changes.
+
+- Invoice address. The address key at index 1 or higher (`m/0/1/<index>`), derived as index 0 is.
+  Only services get it. It runs on its own connection, never re-subscribing a socket as another
+  identity, and the host drains it on demand. Rotating moves to the next index; after a restore
+  the wallet starts at index 1.
+- Allowlist. Entries are full `key@domain[:port]` addresses, matched on the key only, because the
+  relay authenticates the key that signed a message and never its domain. Payments go to the
+  stored entry's address, never to a message's `from`.
+- Prefilter. On the invoice address, a message whose `from` key is not allowed is answered with
+  `Made` and dropped before the signature check, key agreement, key derivation or decryption, with no
+  inbox row and no store write. An allowed sender's I1 is parked before `Made`. Over the caps on
+  parked invoices, it is acknowledged and dropped.
+- Shapes. I1 goes out in the V3 shape, header `3/3/<b>`, and I2 answers in the shape of I1. Both
+  carry `"lepic":{"version":1}` as their last top-level key. S1 keeps the V2 shape.
+- Replies. The payer sends I2 from its payments address to the issuer's allowed address. The
+  issuer's payments address finalizes an I2 that answers an invoice it issued and still waits for,
+  and posts it with `stem`, as for an S2.
+- Bounce. An I1 that arrives with a slate id this wallet issued, from the key it was sent to, and
+  equal to the stored I1 apart from its wire form, is what a stock listener sends back. It is
+  acknowledged and ignored, and the peer is recorded as not paying invoices.
+- Nothing in the inbox pays. Paying a parked I1 is a host call that names the invoiced amount.

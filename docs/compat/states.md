@@ -93,6 +93,23 @@ The state machine does not know the direction of a transaction. Which side may t
 example that only an invoice issuer finalizes an incoming transaction, is enforced by the stages
 that take it (W-03 to W-05, W-08).
 
+## Invoices over Epicbox
+
+LEPIC's own rules; upstream has no invoice flow over Epicbox. They use the states above and add
+none to transactions.
+
+- A received I1 is parked, not stored as a transaction. A parked invoice is `parked`, then `paid`
+  when the user pays it, in the same store transaction that stores the payment (outgoing `sent`), or
+  `declined`. No other change is allowed, so a settled invoice never counts against the parking caps.
+- Expiry, 24 hours by default and 48 at most, runs only when the host or `epicbox listen` sweeps. A
+  parked or declined invoice older than the window is deleted. An invoice the wallet issued over
+  Epicbox whose incoming transaction is still `received` after the window is cancelled, as the
+  owner's cancel does: its output and private context are dropped, so a late I2 is refused.
+- A payment over Epicbox carries a TTL, 1440 blocks unless the payer sets one. A refresh does not
+  expire it at its cutoff, unlike other open transactions, because the issuer may have posted it.
+  Once a confirmed height reaches the cutoff with the kernel neither in the node's pool nor on its
+  chain, the sweep lists it as cancellable, and the user decides.
+
 ## Output states
 
 | LEPIC `OutputStatus` | Upstream `OutputStatus` | Meaning |

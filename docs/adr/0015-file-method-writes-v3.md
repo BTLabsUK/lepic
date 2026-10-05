@@ -27,3 +27,9 @@ from LEPIC is accepted, and LEPIC accepts the V2 or V3 file an `epic-wallet` pee
   proof. Compatibility is shown by the differential and interop suites (`epic-wallet` reads every
   LEPIC file and LEPIC finalizes every reply), not by byte equality with upstream's V2 files.
 - Payment proofs and TTL can travel in files; over Epicbox they still return `Unrepresentable`.
+
+## Amendment 2026-10-05
+
+The Epicbox row holds for S1 and S2. Invoice stages over Epicbox go out as V3 with the LEPIC
+marker, as the amendment to ADR 0003 records. The file row is unchanged, and the marker is not
+written to files.

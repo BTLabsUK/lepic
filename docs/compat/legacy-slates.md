@@ -115,8 +115,10 @@ File naming has no enforced extension. The CLI writes the receiver's reply to `<
 Kernel features: `Plain { fee }` when `lock_height` is 0, otherwise `HeightLocked { fee, lock_height }`.
 The kernel signature message is in `docs/compat/keys-and-proofs.md`.
 
-Invoice flow (file method only; Epicbox has none upstream): issuer creates I1, payer adds inputs and
-signs (I2), issuer finalizes (I3).
+Invoice flow: issuer creates I1, payer adds inputs and signs (I2), issuer finalizes (I3). Upstream
+runs it over the file method only; its Epicbox listener posts an I1 back unchanged. LEPIC also runs
+it over Epicbox between LEPIC wallets, with I1 and I2 in the V3 shape and the LEPIC marker
+(`docs/compat/epicbox.md`, "Invoices between LEPIC wallets").
 
 ## Checks LEPIC performs on decode
 

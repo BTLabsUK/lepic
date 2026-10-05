@@ -64,3 +64,13 @@ integrator records the choice here and sets the status.
 RFC 0001 lists the alternatives to each recommendation, among them Slatepack unchanged, age
 encryption, the Epicbox key as the native address, a capability suffix on the Epicbox address, and
 Grin V4's minimal replies, with the reasons each was not recommended.
+
+## Amendment 2026-10-05: a capability marker on legacy methods
+
+Invoices and notices over Epicbox  need to know whether a peer runs LEPIC before sending it
+anything that is not a slate, because a stock listener leaves such a payload unacknowledged. Every
+invoice stage LEPIC sends over Epicbox carries the top-level key `"lepic":{"version":1}` in its V3
+JSON. Stock `epic-wallet` ignores the key and drops it when it rewrites the slate, so a slate from
+a peer that still carries it, or a valid notice from its key, proves the peer runs LEPIC. No slate
+signature covers the key: it is evidence of a capability and nothing else. This is the first
+capability signal on a legacy method; the native-format discovery above stays as proposed.

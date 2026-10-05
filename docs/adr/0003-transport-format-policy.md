@@ -41,3 +41,21 @@ shown it understands it (ADR 0012). Never by default.
 
 - A global "preferred slate version" setting, as `epic-wallet` has with `target_slate_version`. Two
   methods ignore it today, which shows the setting is in the wrong place.
+
+## Amendment 2026-10-05: invoice stages over Epicbox
+
+The operator approved invoices between LEPIC wallets over Epicbox . The payer sets a TTL
+on I2, which the V2 shape cannot carry, and I2 answers in the shape of I1. So over Epicbox an I1 goes
+out in the V3 shape, header `3/3/<b>`, and both invoice stages LEPIC writes carry the LEPIC marker
+`"lepic":{"version":1}` (ADR 0012 amendment). S1 keeps the V2 shape and S2 the shape of its S1.
+Stock `epic-wallet` tries V3 first, so it parses the I1; it does not pay invoices over Epicbox and
+posts the I1 back unchanged (`docs/compat/epicbox.md`).
+
+| Transport | Stage | New slate | Reply |
+|---|---|---|---|
+| Epicbox | S1, S2 | V2 shape | shape of the inbound slate, header echoed |
+| Epicbox | I1, I2 | V3, header `3/3/<b>`, with the marker | V3 as I1 arrived, header echoed, with the marker |
+
+The policy in `lepic-epicbox` still returns V2 for every new slate; until its `for_new_slate`
+looks at the stage, the engine picks V3 for a new I1 over Epicbox itself. That is the one place the
+engine names a codec.

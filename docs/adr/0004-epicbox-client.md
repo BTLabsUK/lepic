@@ -42,3 +42,16 @@ other transactions. Protocol facts are in `docs/compat/epicbox.md`.
 
 - Wrap the existing client. Its loop-based design does not fit start, stop and drain on mobile.
 - Acknowledge on receipt. Simpler, but a crash between receipt and storage would lose the slate.
+
+## Amendment 2026-10-05: an invoice address beside index 0
+
+A later change adds a second identity: the invoice address, the address key at index 1 or higher derived
+as index 0 is, so a seed restores it. The relay serves a socket as the address it last subscribed
+with (`docs/compat/epicbox.md`), so the invoice address runs on its own connection, and the host
+drains it on demand; nothing listens on it in the background. Its client carries a prefilter: a
+message whose sender key is not on the wallet's allowlist is acknowledged and dropped before the
+signature check, key agreement, decryption or any store write. An allowed sender's I1 is parked in
+the store before `Made`, within caps on parked invoices in total and per sender; one over a cap is
+acknowledged and dropped. Index 0 is unchanged, except that it now also finalizes an I2 answering an
+invoice the wallet issued, and recognises an I1 sent back unchanged by a peer that does not pay
+invoices. After a restore the invoice address starts at index 1; the host may set the index it kept.
