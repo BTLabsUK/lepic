@@ -528,3 +528,109 @@ fn a_drain_shows_each_parked_invoice_for_people() {
         "{listed:?}"
     );
 }
+
+impl Parties {
+    /// Runs `args` for `instance` with human output and returns what it printed.
+    fn human(&self, instance: &Instance, args: &[&str]) -> support::Outcome {
+        let mut env = instance.env();
+        env.retain(|(key, _)| key != "LEPIC_OUTPUT");
+        instance.run_with(&self.host, args, env, "").ok()
+    }
+
+    /// Issues, parks and pays an invoice for 1 EPIC, and the issuer finalizes and posts it.
+    /// Returns the issuer's transaction id and the slate id.
+    fn paid_invoice(&self) -> (String, String) {
+        let slate_id = self.issue("1");
+        assert_eq!(self.drain_invoices()["parked"], 1);
+        self.payer
+            .run(&self.host, &["invoice", "pay", &slate_id, "1"])
+            .ok();
+        let drained = self
+            .issuer
+            .run(&self.host, &["epicbox", "drain"])
+            .ok()
+            .json();
+        assert_eq!(drained["finalized"], 1, "{drained}");
+        let list = self.issuer.run(&self.host, &["tx", "list"]).ok().json();
+        let tx = list["transactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tx| tx["slate_id"] == slate_id.as_str())
+            .unwrap()
+            .clone();
+        (tx["tx_id"].to_string(), slate_id)
+    }
+}
+
+#[test]
+fn the_payer_hears_posted_and_a_cancelled_invoice_is_withdrawn() {
+    let parties = parties();
+    parties.allow_issuer();
+    let (_, slate_id) = parties.paid_invoice();
+
+    let heard = parties.human(&parties.payer, &["epicbox", "drain", "--invoices"]);
+    assert!(
+        heard
+            .stderr
+            .contains(&format!("invoice {slate_id} posted by the issuer;")),
+        "{heard:?}"
+    );
+    assert!(heard.stdout.contains("notices 1."), "{heard:?}");
+
+    let second = parties.issue("2");
+    assert_eq!(parties.drain_invoices()["parked"], 1);
+    let list = parties
+        .issuer
+        .run(&parties.host, &["tx", "list"])
+        .ok()
+        .json();
+    let issued = list["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tx| tx["slate_id"] == second.as_str())
+        .unwrap()["tx_id"]
+        .to_string();
+    parties
+        .issuer
+        .run(&parties.host, &["tx", "cancel", &issued])
+        .ok();
+
+    let withdrawn = parties.drain_invoices();
+    assert_eq!(withdrawn["notices"], 1, "{withdrawn}");
+    assert!(parties.parked().is_empty());
+}
+
+#[test]
+fn the_issuer_hears_a_decline_and_withdraws_the_invoice() {
+    let parties = parties();
+    parties.allow_issuer();
+    let slate_id = parties.issue("2");
+    parties.drain_invoices();
+    parties
+        .payer
+        .run(&parties.host, &["invoice", "decline", &slate_id])
+        .ok();
+
+    let heard = parties.human(&parties.issuer, &["epicbox", "drain"]);
+    let list = parties
+        .issuer
+        .run(&parties.host, &["tx", "list"])
+        .ok()
+        .json();
+    let tx_id = list["transactions"][0]["tx_id"].to_string();
+    assert!(
+        heard.stderr.contains(&format!(
+            "invoice {slate_id} declined by the payer; `lepic tx cancel {tx_id}` withdraws it"
+        )),
+        "{heard:?}"
+    );
+    assert!(heard.stdout.contains("notices 1."), "{heard:?}");
+    let cancelled = parties
+        .issuer
+        .run(&parties.host, &["tx", "cancel", &tx_id])
+        .ok()
+        .json();
+    assert_eq!(cancelled["state"], "cancelled");
+}

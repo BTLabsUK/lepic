@@ -415,6 +415,7 @@ fn listen_handles_a_waiting_slate_and_stops_when_interrupted() {
             "expired",
             "finalized",
             "held",
+            "notices",
             "parked",
             "received",
             "rejected",

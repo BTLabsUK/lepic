@@ -272,7 +272,7 @@ it the next time it connects, with either of:
 
 - `lepic epicbox drain` handles everything waiting on the relay once and exits. It prints what it
   did: `Received 0, finalized 1, repeated 0, rejected 0, held for retry 0, parked 0, bounced 0,
-  dropped 0.`
+  dropped 0, notices 0.`
 - `lepic epicbox listen` stays connected, answers incoming payments and finalizes answers as they
   arrive, printing each change on stderr, until Ctrl-C. Then it prints the same summary.
 
@@ -331,7 +331,7 @@ The payer fetches it, looks at it, and pays or declines it. Nothing is paid unti
 
 ```
 $ lepic epicbox drain --invoices
-Received 0, finalized 0, repeated 0, rejected 0, held for retry 0, parked 1, bounced 0, dropped 0.
+Received 0, finalized 0, repeated 0, rejected 0, held for retry 0, parked 1, bounced 0, dropped 0, notices 0.
 $ lepic invoice list
 2f4a6c1e-5b3d-4e8f-9a0b-1c2d3e4f5a6b  0.80000000 EPIC from esShop...@epicbox.epiccash.com
     received 2026-10-05 09:12:40, expires 2026-10-06 09:12:40 (UTC)
@@ -347,7 +347,16 @@ code 11 and the inputs stay locked; `lepic tx resend <ID> --to <ADDRESS>` delive
 the sender's allowed address only.
 
 The service's `epicbox listen` or `epicbox drain` finalizes and posts the payment when it
-arrives. An invoice that comes back unpaid from a wallet that does not pay invoices over
+arrives.
+
+Two LEPIC wallets also tell each other what happened to an invoice, with short notices that
+never move funds. The payer's next `epicbox drain --invoices` hears that the service posted the
+payment. When the service cancels an invoice with `lepic tx cancel`, or it expires, the payer's
+drain deletes it if it was not paid yet, and names the payment if it was, so the payer can give
+up on it with `tx cancel`; nothing is cancelled for the payer. `invoice decline` tells the
+service, whose next drain or listen names the invoice to withdraw. Notices go only to a wallet
+that has shown it runs LEPIC, because `epic-wallet` cannot read them; they are counted as
+`notices` and, with human output, shown on stderr. An invoice that comes back unpaid from a wallet that does not pay invoices over
 Epicbox, as `epic-wallet` does, counts as `bounced`; send that payer a slate file instead.
 
 Unpaid invoices expire after `invoice_expiry_hours`, 24 unless set, at most 48. Each `epicbox
@@ -356,7 +365,7 @@ invoices that were not paid in time, and cancels invoices this wallet issued tha
 which drops the output and keys they reserved, so a late payment is refused. A payment of an
 invoice that was not posted within its TTL is never cancelled on its own; the drain names it,
 and `lepic tx cancel <ID>` gives up on it. The JSON document of a drain or listen has `parked`,
-`bounced`, `dropped` and `expired`, which lists the `deleted` slate ids and the `cancelled` and
+`bounced`, `dropped`, `notices` and `expired`, which lists the `deleted` slate ids and the `cancelled` and
 `cancellable` transaction ids, or is `null` when the expiry could not run.
 
 ### Through slate files

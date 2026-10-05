@@ -289,6 +289,8 @@ pub struct InboxReport {
     pub bounced: u32,
     /// Messages on the invoice address acknowledged and forgotten unread.
     pub dropped: u32,
+    /// Notices about invoices accepted from the other party: posted, declined or withdrawn.
+    pub notices: u32,
     /// What the invoice expiry did; `null` when it could not run, which the log says why.
     pub expired: Option<ExpiredReport>,
 }
@@ -765,7 +767,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             writeln!(
                 out,
                 "Received {}, finalized {}, repeated {}, rejected {}, held for retry {}, parked \
-                 {}, bounced {}, dropped {}.",
+                 {}, bounced {}, dropped {}, notices {}.",
                 r.received,
                 r.finalized,
                 r.repeated,
@@ -773,7 +775,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                 r.held,
                 r.parked,
                 r.bounced,
-                r.dropped
+                r.dropped,
+                r.notices
             )?;
             write_expired(out, r.expired.as_ref())
         }
@@ -1191,6 +1194,7 @@ mod tests {
                     parked: 0,
                     bounced: 0,
                     dropped: 0,
+                    notices: 0,
                     expired: None,
                 }),
                 vec![
@@ -1199,6 +1203,7 @@ mod tests {
                     "expired",
                     "finalized",
                     "held",
+                    "notices",
                     "parked",
                     "received",
                     "rejected",
@@ -1530,6 +1535,7 @@ mod tests {
                 parked: 2,
                 bounced: 0,
                 dropped: 5,
+                notices: 1,
                 expired,
             });
             render(&report, OutputFormat::Human).to_string()
@@ -1537,7 +1543,7 @@ mod tests {
         assert_eq!(
             report(Some(ExpiredReport::default())),
             "Received 0, finalized 1, repeated 0, rejected 0, held for retry 0, parked 2, \
-             bounced 0, dropped 5.\n"
+             bounced 0, dropped 5, notices 1.\n"
         );
         let swept = report(Some(ExpiredReport {
             deleted: vec![text("s")],

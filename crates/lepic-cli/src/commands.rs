@@ -210,7 +210,12 @@ impl<H: Host> Run<'_, H> {
         while let Ok(event) = events.try_recv() {
             if matches!(
                 event,
-                Event::InvoiceParked(_) | Event::InvoiceFinalized(_) | Event::InvoiceExpired(_)
+                Event::InvoiceParked(_)
+                    | Event::InvoiceFinalized(_)
+                    | Event::InvoiceExpired(_)
+                    | Event::InvoicePosted(_)
+                    | Event::InvoiceDeclined(_)
+                    | Event::InvoiceWithdrawn(_)
             ) && let Some(line) = receipt_line(&event)
             {
                 self.show_line(&line);
@@ -255,6 +260,8 @@ impl<H: Host> Run<'_, H> {
             }
             TxCommand::Cancel(args) => {
                 let opened = self.open().await?;
+                // Cancelling an invoice issued over Epicbox tells its payer it is withdrawn.
+                opened.wallet.epicbox_attach(&opened.epicbox)?;
                 let tx_id = TxId(args.tx_id);
                 opened.wallet.cancel(tx_id).await?;
                 Ok(Report::Cancel(TxStateReport {
@@ -298,6 +305,9 @@ impl<H: Host> Run<'_, H> {
         let (summary, expired) = match command {
             EpicboxCommand::Drain(args) => {
                 let events = opened.wallet.subscribe();
+                // A sweep that cancels an invoice sends its `withdrawn` notice from the
+                // payments address.
+                opened.wallet.epicbox_attach(&opened.epicbox)?;
                 let expired = sweep(&opened.wallet, expiry).await;
                 let summary = if args.invoices {
                     opened
@@ -311,6 +321,7 @@ impl<H: Host> Run<'_, H> {
                 (summary, expired)
             }
             EpicboxCommand::Listen => {
+                opened.wallet.epicbox_attach(&opened.epicbox)?;
                 let handle = ListenHandle::new();
                 let swept = std::sync::Mutex::new(Some(InvoiceSweep::default()));
                 let summary = self
@@ -697,7 +708,10 @@ impl<H: Host> Run<'_, H> {
             InvoiceCommand::Decline(args) => {
                 let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
                 let opened = self.open().await?;
-                opened.wallet.decline_invoice(slate_id)?;
+                opened
+                    .wallet
+                    .decline_invoice(&opened.epicbox, slate_id)
+                    .await?;
                 Ok(Report::InvoiceDecline(InvoiceDeclineReport {
                     slate_id: slate_id.to_string(),
                     state: "declined".to_owned(),
@@ -959,6 +973,25 @@ fn receipt_line(event: &Event) -> Option<String> {
                 expired.slate_id
             ),
         }),
+        Event::InvoicePosted(posted) => Some(format!(
+            "invoice {} posted by the issuer; transaction {} waits for confirmation",
+            posted.slate_id, posted.tx_id.0
+        )),
+        Event::InvoiceDeclined(declined) => Some(format!(
+            "invoice {} declined by the payer; `lepic tx cancel {}` withdraws it",
+            declined.slate_id, declined.tx_id.0
+        )),
+        Event::InvoiceWithdrawn(withdrawn) => Some(match withdrawn.tx_id {
+            Some(tx_id) => format!(
+                "invoice {} withdrawn by the issuer after transaction {} paid it; `lepic tx \
+                 cancel {}` gives up on the payment",
+                withdrawn.slate_id, tx_id.0, tx_id.0
+            ),
+            None => format!(
+                "invoice {} withdrawn by the issuer and deleted",
+                withdrawn.slate_id
+            ),
+        }),
         _ => None,
     }
 }
@@ -1153,6 +1186,7 @@ fn inbox_report(summary: InboxSummary, expired: Option<InvoiceSweep>) -> InboxRe
         parked: summary.parked,
         bounced: summary.bounced,
         dropped: summary.dropped,
+        notices: summary.notices,
         expired: expired.map(|sweep| ExpiredReport {
             deleted: sweep.deleted.iter().map(ToString::to_string).collect(),
             cancelled: sweep.cancelled.iter().map(|tx_id| tx_id.0).collect(),
