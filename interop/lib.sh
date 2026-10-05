@@ -183,7 +183,7 @@ peer_listen_stop() { ew_listen_stop peer; }
 drain_until() {
     local name="$1" want="$2" timeout="$3" expression="${4:-.$1}"
     local deadline=$((SECONDS + timeout))
-    local total='{"received":0,"finalized":0,"repeated":0,"rejected":0,"held":0}'
+    local total='{"received":0,"finalized":0,"repeated":0,"rejected":0,"held":0,"parked":0,"bounced":0,"dropped":0,"notices":0}'
     while :; do
         local report
         report="$(lepic epicbox drain)" || return 1

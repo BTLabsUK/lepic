@@ -7,8 +7,13 @@ covers both directions over Epicbox and slate files, a signed message each way o
 (shown by `lepic tx show` and `epic-wallet txs`), invoices both ways, a failed delivery and
 `tx resend`, cancel, restore from the phrase, a restore with `--no-scan` that receives only after
 `wallet scan`, import of an `epic-wallet` `wallet.seed`, and the
-exit codes of common mistakes, then prints a pass or fail table. It exits 0 only when every step
-passed.
+exit codes of common mistakes. Last, lepic invoices a second lepic wallet over Epicbox: the
+payer allows the service, parks the invoice from its invoice address and pays it once, the
+service finalizes, and the payer's drain shows the `posted` receipt. A stock `epic-wallet`
+listener sends lepic's invoice back unpaid; lepic counts it as bounced, records that peer as not
+paying invoices (read from its store, which no command shows), sends it no notice when the
+invoice is cancelled, and pays it over Epicbox afterwards. It then prints a pass or fail table and
+exits 0 only when every step passed.
 
 ```
 interop/acceptance/run.sh               # build, install, start a clean stack, run, tear down

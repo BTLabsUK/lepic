@@ -506,6 +506,167 @@ step_import_seed() {
     DETAIL="epic-wallet's wallet.seed imported; total ${peer_total} matches epic-wallet"
 }
 
+# A second lepic wallet, the payer of the service's invoices over Epicbox. Its data directory is
+# its own, and so is its lock, so it runs beside the service's.
+payer() { lepic --data-dir "${STATE_DIR}/payer" "$@"; }
+
+payer_balance() { to_units "$(payer wallet info | jq -r ".accounts[0].$1")"; }
+
+payer_spendable_at_least() { (($(payer_balance spendable) >= $1)); }
+
+payer_tx_confirmed() {
+    payer wallet info >/dev/null
+    [[ "$(payer tx show "$1" | jq -r .state)" == confirmed ]]
+}
+
+# The payer's `epicbox drain --invoices` with human output, which shows each notice it took on
+# stderr. Succeeds once a drain took a notice whose stderr line matches `pattern`; the drains'
+# output is appended to the run log.
+payer_drain_shows() {
+    local pattern="$1" out="${STATE_DIR}/payer-drain.out" err="${STATE_DIR}/payer-drain.err"
+    lepic_env "${LEPIC_BIN}" --data-dir "${STATE_DIR}/payer" epicbox drain --invoices \
+        >"${out}" 2>"${err}" </dev/null || return 1
+    cat "${out}" "${err}" >>"${RUN_LOG}"
+    grep -q 'notices [1-9]' "${out}" && grep -q -- "${pattern}" "${err}"
+}
+
+# Messages for `key` the relay holds that nobody acknowledged.
+unmade_for() { mongo_eval "print(db.slates.countDocuments({queue: '$1', made: false}))"; }
+
+# What lepic's store recorded about the peer with this Epicbox key, read without lepic, since no
+# command shows it: `no-invoices`, `lepic`, or nothing.
+lepic_peer_support() {
+    local database
+    database="$(find "${STATE_DIR}/lepic" -name wallet.sqlite3 -print -quit)"
+    [[ -n "${database}" ]] || return 1
+    python3 - "${database}" "$1" <<'EOF'
+import sqlite3, sys
+connection = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+row = connection.execute("SELECT support FROM peer_capabilities WHERE key = ?", (sys.argv[2],)).fetchone()
+print(row[0] if row else "")
+EOF
+}
+
+step_fund_payer() {
+    payer wallet init --words 12 >/dev/null || fail "the payer's wallet init failed" || return 1
+    local slate="${EXCHANGE_DIR}/payer.slate"
+    ew funder send -m file -d /exchange/payer.slate -c 1 -s smallest 3 >>"${RUN_LOG}" ||
+        fail "epic-wallet send to the payer failed" || return 1
+    local received tx_id
+    received="$(payer tx receive "${slate}")" || fail "the payer could not receive" || return 1
+    ew funder finalize -i /exchange/payer.slate.response >>"${RUN_LOG}" ||
+        fail "epic-wallet could not finalize the payer's reply" || return 1
+    tx_id="$(jq -r .tx_id <<<"${received}")"
+    wait_until "payer tx ${tx_id} confirmed" 180 payer_tx_confirmed "${tx_id}" ||
+        fail "the payer's funding did not confirm" || return 1
+    wait_until "payer spendable" 180 payer_spendable_at_least "$(to_units 3)" ||
+        fail "the payer's funds did not become spendable" || return 1
+    DETAIL="a second lepic wallet holds 3 EPIC, spendable"
+}
+
+# A service issues an invoice over Epicbox to a payer that allowed it; the payer answers once and
+# never finalizes, and hears from the service that the payment was posted.
+step_invoice_lepic_over_epicbox() {
+    local address invoice_address
+    address="$(payer epicbox invoice-address)" || fail "epicbox invoice-address failed" || return 1
+    invoice_address="$(jq -r .address <<<"${address}")"
+    [[ "$(jq -r .index <<<"${address}")" == 1 ]] || fail "invoice address ${address} is not at index 1" || return 1
+    [[ "${invoice_address}" != "$(payer wallet address | jq -r .address)" ]] ||
+        fail "the invoice address is the payments address" || return 1
+    payer epicbox allow add "${LEPIC_ADDRESS}" --label service >/dev/null ||
+        fail "epicbox allow add failed" || return 1
+    payer epicbox allow list | jq -e --arg a "${LEPIC_ADDRESS}" '[.senders[].address] == [$a]' >/dev/null ||
+        fail "allow list: $(payer epicbox allow list)" || return 1
+
+    local issued tx_id slate_id
+    issued="$(lepic invoice issue 0.6 --to "${invoice_address}" -m "order 1")" ||
+        fail "lepic invoice issue over epicbox failed" || return 1
+    jq -e --arg to "${invoice_address}" '.transport == "epicbox" and .destination == $to' <<<"${issued}" >/dev/null ||
+        fail "issue report: ${issued}" || return 1
+    tx_id="$(jq -r .tx_id <<<"${issued}")"
+    slate_id="$(jq -r .slate_id <<<"${issued}")"
+
+    local parked=0 deadline=$((SECONDS + 60)) report
+    until ((parked >= 1)); do
+        ((SECONDS < deadline)) || fail "the payer parked nothing in 60s" || return 1
+        report="$(payer epicbox drain --invoices)" || fail "payer drain --invoices failed" || return 1
+        parked=$((parked + $(jq -r .parked <<<"${report}")))
+        ((parked >= 1)) || sleep 3
+    done
+    local listed
+    listed="$(payer invoice list)" || fail "invoice list failed" || return 1
+    jq -e --arg id "${slate_id}" --arg from "${LEPIC_ADDRESS}" '.invoices | length == 1
+        and .[0].slate_id == $id and .[0].amount == "0.60000000" and .[0].sender == $from
+        and .[0].message == "order 1"' <<<"${listed}" >/dev/null || fail "invoice list: ${listed}" || return 1
+
+    local paid payment_tx fee
+    paid="$(payer invoice pay "${slate_id}" 0.6)" || fail "the payer could not pay the parked invoice" || return 1
+    jq -e --arg to "${LEPIC_ADDRESS}" '.transport == "epicbox" and .destination == $to' <<<"${paid}" >/dev/null ||
+        fail "pay report: ${paid}" || return 1
+    payment_tx="$(jq -r .tx_id <<<"${paid}")"
+    fee="$(to_units "$(jq -r .fee <<<"${paid}")")"
+
+    local summary
+    summary="$(drain_until finalized 1 120)" || fail "the service finalized nothing: ${summary}" || return 1
+    wait_until "the posted receipt" 60 payer_drain_shows "invoice ${slate_id} posted by the issuer" ||
+        fail "the payer got no posted receipt: $(cat "${STATE_DIR}/payer-drain.out" "${STATE_DIR}/payer-drain.err")" ||
+        return 1
+    [[ "$(payer invoice list | jq '.invoices | length')" == 0 ]] || fail "the paid invoice is still parked" || return 1
+
+    wait_until "lepic tx ${tx_id} confirmed" 180 lepic_tx_confirmed "${tx_id}" ||
+        fail "the service's tx ${tx_id} is $(lepic_tx_state "${tx_id}"), not confirmed" || return 1
+    wait_until "payer tx ${payment_tx} confirmed" 180 payer_tx_confirmed "${payment_tx}" ||
+        fail "the payer's tx ${payment_tx} did not confirm" || return 1
+    local excess
+    excess="$(lepic tx show "${tx_id}" | jq -r .kernel_excess)"
+    [[ -n "${excess}" && "${excess}" == "$(payer tx show "${payment_tx}" | jq -r .kernel_excess)" ]] ||
+        fail "service and payer disagree on the kernel" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 0.6)))
+    check_lepic_total || return 1
+    (($(payer_balance total) == $(to_units 3) - $(to_units 0.6) - fee)) ||
+        fail "payer total $(payer_balance total) units after paying" || return 1
+    DETAIL="I1 parked from an allowed sender, paid once, finalized by the service; posted receipt; ${slate_id} confirmed"
+}
+
+# A stock epic-wallet listener sends an invoice straight back; lepic counts it as bounced,
+# records that the peer does not pay invoices, and sends it no notice. The listener keeps
+# acknowledging: a payment after the bounce goes through.
+step_stock_listener_bounces_invoice() {
+    peer_listen_start || fail "epic-wallet listener did not start" || return 1
+    local issued tx_id slate_id summary
+    issued="$(lepic invoice issue 0.5 --to "${PEER_ADDRESS}")" || fail "lepic invoice issue to epic-wallet failed" || return 1
+    tx_id="$(jq -r .tx_id <<<"${issued}")"
+    slate_id="$(jq -r .slate_id <<<"${issued}")"
+    summary="$(drain_until bounced 1 120)" || fail "no bounce came back: ${summary}" || return 1
+    jq -e '.bounced == 1 and .finalized == 0' <<<"${summary}" >/dev/null || fail "drain: ${summary}" || return 1
+    [[ "$(unmade_for "${PEER_KEY}")" == 0 ]] || fail "the stock listener left the I1 unacknowledged" || return 1
+    ! ew_tx_known peer "${slate_id}" || fail "epic-wallet recorded the invoice" || return 1
+    local support
+    support="$(lepic_peer_support "${PEER_KEY}")" || fail "lepic's store was not found" || return 1
+    [[ "${support}" == no-invoices ]] || fail "lepic recorded the peer as '${support}'" || return 1
+
+    local before
+    before="$(relay_messages_for "${PEER_KEY}")"
+    [[ "$(lepic tx cancel "${tx_id}" | jq -r .state)" == cancelled ]] || fail "cancelling the invoice failed" || return 1
+    sleep 3
+    [[ "$(relay_messages_for "${PEER_KEY}")" == "${before}" ]] ||
+        fail "lepic sent the stock wallet something on cancel" || return 1
+
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(to_units 0.4)" ||
+        fail "lepic has no spendable funds" || return 1
+    local sent send_tx send_slate fee
+    sent="$(lepic tx send 0.3 --to "${PEER_ADDRESS}")" || fail "lepic send after the bounce failed" || return 1
+    send_tx="$(jq -r .tx_id <<<"${sent}")"
+    send_slate="$(jq -r .slate_id <<<"${sent}")"
+    fee="$(to_units "$(jq -r .fee <<<"${sent}")")"
+    summary="$(drain_until finalized 1 120)" || fail "epic-wallet stopped answering after the bounce: ${summary}" || return 1
+    confirm_both "${send_tx}" "${send_slate}" || return 1
+    [[ "$(unmade_for "${PEER_KEY}")" == 0 ]] || fail "the stock listener left a message unacknowledged" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 0.3) - fee))
+    check_lepic_total || return 1
+    DETAIL="I1 ${slate_id} bounced and acknowledged, peer recorded no-invoices, no notice on cancel; later S1 confirmed"
+}
+
 STEPS=(
     "node status:step_node_status"
     "wallet init:step_wallet_init"
@@ -523,4 +684,7 @@ STEPS=(
     "wallet restore:step_restore"
     "restore --no-scan, then wallet scan:step_scan_after_restore_without_scan"
     "wallet import-seed:step_import_seed"
+    "a second lepic wallet funded by file:step_fund_payer"
+    "lepic invoices lepic by epicbox:step_invoice_lepic_over_epicbox"
+    "epic-wallet bounces an epicbox invoice:step_stock_listener_bounces_invoice"
 )

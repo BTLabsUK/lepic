@@ -27,8 +27,6 @@ probe_saved() {
     printf '%s\n' "${output}" | tee "${PROBE_DIR}/${name}.json"
 }
 
-unmade_for() { mongo_eval "print(db.slates.countDocuments({queue: '$1', made: false}))"; }
-
 # How often the relay has handed a message for this key to a socket so far.
 relay_deliveries_to() { dc logs epicbox 2>/dev/null | grep -cE "(Sent|Passthrough) slate to $1\$" || true; }
 
