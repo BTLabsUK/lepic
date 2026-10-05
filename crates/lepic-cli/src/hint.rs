@@ -34,8 +34,13 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         ));
     }
     match error {
-        CliError::Send(SendError::Undelivered { tx_id, source, .. })
-        | CliError::Invoice(InvoiceError::Undelivered { tx_id, source, .. }) => {
+        CliError::Invoice(InvoiceError::Undelivered { tx_id, .. }) => {
+            return Some(format!(
+                "the invoice is stored but the payer did not get it; withdraw it with `lepic tx \
+                 cancel {tx_id}` and issue it again"
+            ));
+        }
+        CliError::Send(SendError::Undelivered { tx_id, source, .. }) => {
             let mut text = format!(
                 "the inputs stay locked; deliver it again with `lepic tx resend {tx_id} --to \
                  <ADDRESS>` or `--to-file <FILE>`, or give up with `lepic tx cancel {tx_id}`"
@@ -251,6 +256,19 @@ mod tests {
         }));
         assert!(text.contains("lepic tx post 7"), "{text}");
         assert!(text.contains("nor holds its kernel"), "{text}");
+    }
+
+    #[test]
+    fn an_undelivered_invoice_names_tx_cancel_not_tx_resend() {
+        let text = hint_for(&CliError::Invoice(InvoiceError::Undelivered {
+            tx_id: TxId(5),
+            slate_id: lepic_wallet::event::SlateId::from_bytes([2; 16]),
+            source: TransportError::UnknownDestination {
+                transport: lepic_epicbox::TRANSPORT_ID,
+            },
+        }));
+        assert!(text.contains("`lepic tx cancel 5`"), "{text}");
+        assert!(!text.contains("resend"), "{text}");
     }
 
     #[test]
