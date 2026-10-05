@@ -131,20 +131,22 @@ pub struct InvoiceSweep {
     pub cancellable: Vec<TxId>,
 }
 
-/// Bidirectional formatting characters, which can make displayed text read differently from
-/// what was signed.
-const BIDI_CONTROLS: [char; 12] = [
+/// Characters that make displayed text read differently from what was signed: bidirectional
+/// formatting, line and paragraph separators, and zero-width characters.
+const HIDDEN_FORMATTING: [char; 18] = [
     '\u{061C}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}',
-    '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+    '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{2028}', '\u{2029}', '\u{200B}', '\u{200C}',
+    '\u{200D}', '\u{FEFF}',
 ];
 
-/// `text` as a host may display it: control and bidirectional formatting characters removed,
-/// then cut to [`MAX_MESSAGE_LEN`] bytes on a character boundary.
+/// `text` as a host may display it: control characters, bidirectional formatting, line and
+/// paragraph separators and zero-width characters removed, then cut to [`MAX_MESSAGE_LEN`]
+/// bytes on a character boundary.
 pub fn display_message(text: &str) -> String {
     let mut shown = String::with_capacity(text.len().min(MAX_MESSAGE_LEN));
     for c in text
         .chars()
-        .filter(|c| !c.is_control() && !BIDI_CONTROLS.contains(c))
+        .filter(|c| !c.is_control() && !HIDDEN_FORMATTING.contains(c))
     {
         if shown.len().saturating_add(c.len_utf8()) > MAX_MESSAGE_LEN {
             break;
@@ -574,8 +576,7 @@ where
         Ok(())
     }
 
-    /// Expires what invoices left unpaid, as a host runs it from time to time and
-    /// `epicbox listen` runs it while it listens:
+    /// Expires what invoices left unpaid, as a host or a listener runs it from time to time:
     ///
     /// - a parked or declined invoice received more than `expiry` ago is deleted;
     /// - an invoice this wallet issued over Epicbox more than `expiry` ago and not paid is
@@ -869,6 +870,10 @@ mod tests {
         assert_eq!(
             display_message("pay\u{202E}evil\u{2066} me\n\tnow\u{0007}"),
             "payevil menow"
+        );
+        assert_eq!(
+            display_message("a\u{2028}b\u{2029}c\u{200B}d\u{200C}e\u{200D}f\u{FEFF}g"),
+            "abcdefg"
         );
     }
 

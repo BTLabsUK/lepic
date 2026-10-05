@@ -101,7 +101,7 @@ none to transactions.
 - A received I1 is parked, not stored as a transaction. A parked invoice is `parked`, then `paid`
   when the user pays it, in the same store transaction that stores the payment (outgoing `sent`), or
   `declined`. No other change is allowed, so a settled invoice never counts against the parking caps.
-- Expiry, 24 hours by default and 48 at most, runs only when the host or `epicbox listen` sweeps. A
+- Expiry, 24 hours by default and 48 at most, runs only when a host or a listener sweeps. A
   parked or declined invoice older than the window is deleted. An invoice the wallet issued over
   Epicbox whose incoming transaction is still `received` after the window is cancelled, as the
   owner's cancel does: its output and private context are dropped, so a late I2 is refused.
