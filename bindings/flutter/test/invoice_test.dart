@@ -295,9 +295,22 @@ void main() {
       );
       expect(relay.pending(address: p.issuerAddress), 1);
 
+      expect(
+        await p.issuer.peerCapability(address: p.invoiceAddress),
+        PeerCapability.unknown,
+      );
       final report = await p.issuer.drainEpicbox();
       expect(report.finalized, 1);
       expect(chain.pushedCount(), 1);
+      // The payment carried the LEPIC marker.
+      expect(
+        await p.issuer.peerCapability(address: p.invoiceAddress),
+        PeerCapability.lepic,
+      );
+      await expectLater(
+        p.issuer.peerCapability(address: 'not an address'),
+        throwsWalletError(WalletErrorKind.invalidArgument),
+      );
       final finalized = await eventWhere(
         p.issuerEvents,
         (e) => e.kind == WalletEventKind.invoiceFinalized,
@@ -360,9 +373,17 @@ void main() {
     );
     expect(await stock.returnMessages(runtime: runtime), 1);
     expect(relay.pending(address: p.issuerAddress), 1);
+    expect(
+      await p.issuer.peerCapability(address: stock.address()),
+      PeerCapability.unknown,
+    );
 
     final report = await p.issuer.drainEpicbox();
     expect(report.bounced, 1);
+    expect(
+      await p.issuer.peerCapability(address: stock.address()),
+      PeerCapability.noInvoices,
+    );
     expect(report.finalized, 0);
     expect(report.dropped, 0);
     expect(relay.pending(address: p.issuerAddress), 0);

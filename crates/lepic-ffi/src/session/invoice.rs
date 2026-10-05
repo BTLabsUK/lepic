@@ -8,7 +8,7 @@ use lepic_primitives::amount::Amount;
 use lepic_store::TxId;
 use lepic_transport::transport::Destination;
 use lepic_wallet::epicbox_invoice::{
-    AllowedSender, IncomingInvoice as EngineIncomingInvoice, InvoiceExpiry,
+    AllowedSender, IncomingInvoice as EngineIncomingInvoice, InvoiceExpiry, PeerInvoiceSupport,
 };
 use lepic_wallet::event::SlateId;
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
@@ -18,6 +18,7 @@ use super::{DEFAULT_ACCOUNT, Session, invalid, relay_address};
 use crate::api::error::WalletError;
 use crate::api::types::{
     IncomingInvoice, InvoiceReport, InvoiceSender, InvoiceSweep, IssuedInvoice, PaidInvoice,
+    PeerCapability,
 };
 
 /// `seconds` as the window after which unpaid invoices expire; `None` is the default day.
@@ -89,6 +90,16 @@ impl Session {
         relay_address(address, self.network)
             .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
         Ok(sender(self.engine.allow_invoice_sender(address, label)?))
+    }
+
+    pub(crate) fn peer_capability(&self, address: &str) -> Result<PeerCapability, WalletError> {
+        relay_address(address, self.network)
+            .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
+        Ok(match self.engine.peer_capability(address)? {
+            PeerInvoiceSupport::Unknown => PeerCapability::Unknown,
+            PeerInvoiceSupport::Lepic => PeerCapability::Lepic,
+            PeerInvoiceSupport::NoInvoices => PeerCapability::NoInvoices,
+        })
     }
 
     pub(crate) fn remove_invoice_sender(&self, address: &str) -> Result<bool, WalletError> {

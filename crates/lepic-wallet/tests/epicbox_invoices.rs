@@ -28,9 +28,9 @@ use lepic_store::{PeerSupport, PendingInvoiceStatus, SlateStage, TxDirection, Tx
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::Event;
 use lepic_wallet::details::TxFlow;
-use lepic_wallet::epicbox_invoice::InvoiceExpiry;
+use lepic_wallet::epicbox_invoice::{InvoiceExpiry, PeerInvoiceSupport};
 use lepic_wallet::event::BouncedInvoice;
-use lepic_wallet::inbox::{InboxSummary, ListenHandle};
+use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, PayRequest};
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
@@ -332,6 +332,42 @@ fn an_issued_and_a_paid_invoice_are_invoices_on_both_sides() {
     );
 }
 
+#[test]
+fn a_payer_is_known_to_run_lepic_after_its_marked_payment() {
+    let world = World::new();
+    let payer = world.payer.invoice_address().to_string();
+    let capability = || world.issuer.wallet.peer_capability(&payer).unwrap();
+    assert_eq!(capability(), PeerInvoiceSupport::Unknown);
+    let issued = world.issue(None);
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .epicbox_drain_invoices(&world.payer.epicbox),
+        )
+        .unwrap();
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+    assert_eq!(capability(), PeerInvoiceSupport::Unknown);
+
+    world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+
+    assert_eq!(capability(), PeerInvoiceSupport::Lepic);
+    assert!(matches!(
+        world.issuer.wallet.peer_capability("not an address"),
+        Err(InboxError::Address(_))
+    ));
+}
+
 /// The I1 `stock` received, as a stock listener posts it back: as it parsed it, without the
 /// marker.
 fn echoed_i1(world: &World, stock: &EpicboxClient) -> String {
@@ -381,6 +417,14 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
     let bounced = echoed_i1(&world, &stock);
     world.post(7, &world.issuer.address, &bounced, 1);
     let mut events = world.issuer.wallet.subscribe();
+    let capability = || {
+        world
+            .issuer
+            .wallet
+            .peer_capability(&stock.address().to_string())
+            .unwrap()
+    };
+    assert_eq!(capability(), PeerInvoiceSupport::Unknown);
 
     let summary = world
         .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
@@ -408,6 +452,14 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
         .read(|repos| repos.peer_capability(&key))
         .unwrap();
     assert_eq!(capability.support, PeerSupport::NoInvoices);
+    assert_eq!(
+        world
+            .issuer
+            .wallet
+            .peer_capability(&stock.address().to_string())
+            .unwrap(),
+        PeerInvoiceSupport::NoInvoices
+    );
     // The invoice itself waits for its expiry.
     let issued_tx = world
         .issuer

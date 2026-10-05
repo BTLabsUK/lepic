@@ -336,6 +336,19 @@ pub struct InboxReport {
     pub dropped: u32,
 }
 
+/// What the wallet learned from a peer's own messages, from `EpicWallet::peer_capability`.
+/// Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerCapability {
+    /// Nothing yet: no marked slate or notice from it, and no invoice sent back.
+    Unknown,
+    /// It proved it runs LEPIC: it pays invoices and is sent notices.
+    Lepic,
+    /// It sent an invoice back unpaid, as a stock `epic-wallet` does: it does not pay
+    /// invoices. Send it a slate file, or ask it to send instead.
+    NoInvoices,
+}
+
 /// A sender whose invoices the invoice address accepts, from `EpicWallet::invoice_senders`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvoiceSender {

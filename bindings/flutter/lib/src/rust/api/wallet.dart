@@ -391,6 +391,14 @@ abstract class EpicWallet implements RustOpaqueInterface {
     String? message,
   });
 
+  /// What this wallet learned about the peer at `address`, `<key>@<relay>[:port]`, from
+  /// its own messages: `Lepic` once it proved it runs LEPIC, `NoInvoices` once it sent an
+  /// invoice back unpaid, `Unknown` before either. Only the key is matched. Warn before
+  /// invoicing a `NoInvoices` peer. Reads only the wallet database.
+  ///
+  /// Fails with `InvalidArgument` for any other address.
+  Future<PeerCapability> peerCapability({required String address});
+
   /// The invoices waiting to be paid or declined, oldest first, with when a sweep with
   /// `expiry_secs` deletes them. `expiry_secs` is as in [`EpicWallet::sweep_invoices`].
   Future<List<IncomingInvoice>> pendingInvoices({BigInt? expirySecs});

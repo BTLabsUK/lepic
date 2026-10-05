@@ -347,6 +347,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PaidInvoice dco_decode_paid_invoice(dynamic raw);
 
   @protected
+  PeerCapability dco_decode_peer_capability(dynamic raw);
+
+  @protected
   PinWallet dco_decode_pin_wallet(dynamic raw);
 
   @protected
@@ -739,6 +742,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PaidInvoice sse_decode_paid_invoice(SseDeserializer deserializer);
+
+  @protected
+  PeerCapability sse_decode_peer_capability(SseDeserializer deserializer);
 
   @protected
   PinWallet sse_decode_pin_wallet(SseDeserializer deserializer);
@@ -1207,6 +1213,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_paid_invoice(PaidInvoice self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_peer_capability(
+    PeerCapability self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_pin_wallet(PinWallet self, SseSerializer serializer);

@@ -271,6 +271,10 @@ Issuer, a service wallet:
   sent a notice. Each bounced invoice raises one `invoiceBounced` event with its `txId` and
   `slateId`, on `events()` and, while it runs, the listener's stream (`ListenerEvent.slateId`).
   Cancel the invoice, or send that payer a slate file.
+- `peerCapability(address)` says what this wallet learned about a payer from its own
+  messages, matched on the key: `unknown` before any contact, `noInvoices` once it sent an
+  invoice back, `lepic` once a payment or notice from it proved it runs LEPIC. Warn before
+  invoicing a `noInvoices` payer. It reads only the wallet database and needs no relay.
 
 Notices tell each side what the other did: the issuer sends `posted`, with the kernel excess,
 after it posts a payment and `withdrawn` when it cancels an invoice; the payer sends `declined`.

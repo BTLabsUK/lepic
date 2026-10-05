@@ -13,13 +13,15 @@
 //! events, are advisory, and never move funds. A notice goes only to a wallet that proved it
 //! runs LEPIC in an earlier invoice exchange, so a stock wallet is never sent one.
 //!
-//! Every call here except [`EpicWallet::pending_invoices`] and the allowlist calls fails with
+//! Every call here except [`EpicWallet::pending_invoices`], [`EpicWallet::peer_capability`]
+//! and the allowlist calls fails with
 //! `Unsupported` when the configuration names no relay, and every call fails with `Locked` on
 //! a locked wallet.
 
 use crate::api::error::WalletError;
 use crate::api::types::{
     IncomingInvoice, InvoiceReport, InvoiceSender, InvoiceSweep, IssuedInvoice, PaidInvoice,
+    PeerCapability,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -58,6 +60,19 @@ impl EpicWallet {
     pub async fn rotate_invoice_address(&self) -> Result<String, WalletError> {
         self.run("rotate_invoice_address", |session| async move {
             session.rotate_invoice_address()
+        })
+        .await
+    }
+
+    /// What this wallet learned about the peer at `address`, `<key>@<relay>[:port]`, from
+    /// its own messages: `Lepic` once it proved it runs LEPIC, `NoInvoices` once it sent an
+    /// invoice back unpaid, `Unknown` before either. Only the key is matched. Warn before
+    /// invoicing a `NoInvoices` peer. Reads only the wallet database.
+    ///
+    /// Fails with `InvalidArgument` for any other address.
+    pub async fn peer_capability(&self, address: String) -> Result<PeerCapability, WalletError> {
+        self.run("peer_capability", |session| async move {
+            session.peer_capability(&address)
         })
         .await
     }

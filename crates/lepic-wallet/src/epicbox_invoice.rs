@@ -52,6 +52,18 @@ use crate::receive::verify_message;
 use crate::refresh::{final_kernel, last_confirmed, legacy_codecs, ttl_cutoff};
 use crate::wallet::Wallet;
 
+/// What a peer's own messages showed about invoices, from [`Wallet::peer_capability`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerInvoiceSupport {
+    /// Nothing yet: no marked slate or notice from it, and no invoice sent back.
+    Unknown,
+    /// A slate or notice from it carried the LEPIC marker, so it pays invoices and reads
+    /// notices.
+    Lepic,
+    /// It sent an invoice back unpaid, so it neither pays invoices nor reads notices.
+    NoInvoices,
+}
+
 /// How long an unpaid invoice is kept by default, on either side.
 pub const DEFAULT_INVOICE_EXPIRY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -345,6 +357,26 @@ where
         let address = self.identity_at(epicbox, next.get())?.address().clone();
         info!("invoice address rotated");
         Ok(address)
+    }
+
+    /// What this wallet learned about the peer at `address` from its own messages: whether it
+    /// proved it runs LEPIC, or sent an invoice back unpaid. Matched on the key only, as the
+    /// allowlist is. Reads only the store.
+    ///
+    /// Fails with [`InboxError::Address`] for an address that does not parse or is on the other
+    /// network, and with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn peer_capability(&self, address: &str) -> Result<PeerInvoiceSupport, InboxError> {
+        let key = peer_key(&self.parse_address(address)?);
+        let session = self.session()?;
+        let learned = session
+            .store
+            .read(|repos| Ok::<_, WalletError>(repos.peer_capability(&key)?))?;
+        Ok(match learned.map(|capability| capability.support) {
+            None => PeerInvoiceSupport::Unknown,
+            Some(PeerSupport::Lepic) => PeerInvoiceSupport::Lepic,
+            Some(PeerSupport::NoInvoices) => PeerInvoiceSupport::NoInvoices,
+        })
     }
 
     /// Allows invoices from the key of `address`, a full Epicbox address on the wallet's
