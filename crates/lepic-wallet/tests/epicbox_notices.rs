@@ -117,28 +117,49 @@ impl World {
     fn unmarked_i1(&self, peer: &EpicboxClient) -> String {
         let received = self.drain_peer(peer);
         assert_eq!(received.len(), 1);
-        let codec = V3JsonCodec::new(
-            lepic_primitives::params::Network::Floonet
-                .params()
-                .default_base_fee(),
-        );
-        let wire = lepic_wallet::slate::WireSlate::text(
-            lepic_wallet::slate::MediaType::JSON,
-            received[0].clone(),
-        );
-        let slate = codec.decode(&wire).unwrap();
-        codec
-            .encode(
-                &slate,
-                &EncodeContext {
-                    block_header_version: 6,
-                },
-            )
-            .unwrap()
-            .as_text()
-            .unwrap()
-            .to_owned()
+        unmarked(&received[0])
     }
+
+    /// The issuer invoices `peer`, which forwards the I1 unmarked under its own key to the
+    /// payer's invoice address, where it is allowed; the payer pays it to `peer`. Returns the
+    /// invoice, the payment and the I2 as `peer` received it.
+    fn pay_through(&self, peer: &EpicboxClient, byte: u8) -> (IssuedInvoice, PaidInvoice, String) {
+        self.payer
+            .wallet
+            .allow_invoice_sender(&peer.address().to_string(), "relayed")
+            .unwrap();
+        let issued = self.issue_to(peer.address(), None);
+        let i1 = self.unmarked_i1(peer);
+        self.post(byte, &self.payer.invoice_address(), &i1, 1);
+        assert_eq!(self.drain_payer_invoices().parked, 1);
+        let paid = self.pay(&issued);
+        let received = self.drain_peer(peer);
+        assert_eq!(received.len(), 1);
+        (issued, paid, received[0].clone())
+    }
+}
+
+/// `json`, a V3 slate, written again without the marker, as a stock wallet would write it.
+fn unmarked(json: &str) -> String {
+    let codec = V3JsonCodec::new(
+        lepic_primitives::params::Network::Floonet
+            .params()
+            .default_base_fee(),
+    );
+    let wire =
+        lepic_wallet::slate::WireSlate::text(lepic_wallet::slate::MediaType::JSON, json.to_owned());
+    let slate = codec.decode(&wire).unwrap();
+    codec
+        .encode(
+            &slate,
+            &EncodeContext {
+                block_header_version: 6,
+            },
+        )
+        .unwrap()
+        .as_text()
+        .unwrap()
+        .to_owned()
 }
 
 #[test]
@@ -521,4 +542,79 @@ fn no_notice_is_posted_to_a_peer_without_proof() {
                 .transaction_by_slate(uuid(unanswered.slate_id), TxDirection::Incoming))
             .is_some()
     );
+}
+
+#[test]
+fn a_posted_notice_with_another_excess_is_dropped() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let (issued, paid, _) = world.pay_through(&peer, 9);
+    let expected = world
+        .block_on(world.payer.wallet.transaction_details(paid.tx_id))
+        .unwrap()
+        .kernel_excess
+        .unwrap();
+    let other = lepic_crypto::Commitment::commit_value(1).unwrap();
+    assert_ne!(other, expected);
+    let posted = |excess: lepic_crypto::Commitment| {
+        Notice {
+            slate_id: issued.slate_id,
+            kind: NoticeKind::Posted { excess },
+        }
+        .encode()
+        .as_text()
+        .unwrap()
+        .to_owned()
+    };
+    let mut payer_events = world.payer.wallet.subscribe();
+    world.post(9, &world.payer.invoice_address(), &posted(other), 1);
+
+    let summary = world.drain_payer_invoices();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.payer.invoice_address()), 0);
+    assert!(notice_events(&mut payer_events).is_empty());
+
+    // The same sender with the excess the payment implies is heard.
+    world.post(9, &world.payer.invoice_address(), &posted(expected), 1);
+    assert_eq!(world.drain_payer_invoices().notices, 1);
+    assert_eq!(
+        notice_events(&mut payer_events),
+        vec![Event::InvoicePosted(PostedInvoice {
+            tx_id: paid.tx_id,
+            slate_id: issued.slate_id,
+            excess: expected,
+        })]
+    );
+}
+
+#[test]
+fn an_unmarked_payment_proves_nothing_and_gets_no_notice() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let (issued, _, i2) = world.pay_through(&peer, 9);
+    world.post(9, &world.issuer.address, &unmarked(&i2), 1);
+    let before = world.relay.received("PostSlate");
+
+    let summary = world.drain_issuer();
+
+    assert_eq!(summary.finalized, 1);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    let state = world
+        .issuer
+        .read(|repos| repos.transaction(issued.tx_id))
+        .unwrap()
+        .state;
+    assert_eq!(state, TxState::Posted);
+    // The key it came from is also the key the invoice went to.
+    let key = World::address_of(9).key_text();
+    assert_eq!(world.issuer_capability(&key), None);
+    assert_eq!(world.relay.received("PostSlate"), before);
+    assert!(world.drain_peer(&peer).is_empty());
 }
