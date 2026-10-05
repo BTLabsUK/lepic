@@ -341,14 +341,24 @@ class IssuedInvoice {
 class ListenerEvent {
   final ListenerEventKind kind;
 
-  /// Local id of the transaction, for `Received`, `Repeated` and `Finalized`.
+  /// Local id of the transaction, for `Received`, `Repeated`, `Finalized` and
+  /// `InvoiceBounced`.
   final int? txId;
+
+  /// The slate id, for `InvoiceBounced`.
+  final String? slateId;
   final String message;
 
-  const ListenerEvent({required this.kind, this.txId, required this.message});
+  const ListenerEvent({
+    required this.kind,
+    this.txId,
+    this.slateId,
+    required this.message,
+  });
 
   @override
-  int get hashCode => kind.hashCode ^ txId.hashCode ^ message.hashCode;
+  int get hashCode =>
+      kind.hashCode ^ txId.hashCode ^ slateId.hashCode ^ message.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -357,6 +367,7 @@ class ListenerEvent {
           runtimeType == other.runtimeType &&
           kind == other.kind &&
           txId == other.txId &&
+          slateId == other.slateId &&
           message == other.message;
 }
 
@@ -382,6 +393,11 @@ enum ListenerEventKind {
 
   /// The listener ended; no more events follow.
   stopped,
+
+  /// A payer sent back unpaid an invoice this wallet issued, as a wallet that does not pay
+  /// invoices does: `tx_id` and `slate_id` name the invoice. Nothing changed; cancel it with
+  /// `cancel_transaction`, or send that payer a slate file instead.
+  invoiceBounced,
 }
 
 class NodeTip {
@@ -994,6 +1010,11 @@ enum WalletEventKind {
   /// this wallet already paid, `tx_id` names the payment: offer the user
   /// `cancel_transaction`; nothing was cancelled.
   invoiceWithdrawn,
+
+  /// A payer sent back unpaid an invoice this wallet issued, as a wallet that does not pay
+  /// invoices does: `tx_id` and `slate_id` name the invoice. The payer is recorded as not
+  /// paying invoices. Nothing changed; cancel the invoice with `cancel_transaction`.
+  invoiceBounced,
 }
 
 /// The balance of the default account, in the categories `epic-wallet info` reports.

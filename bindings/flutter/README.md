@@ -93,7 +93,9 @@ final wallet = await EpicWallet.create(
   lock on `.lepic.lock` in it while a wallet is open.
 - `EpicWallet.events()` streams session, balance, transaction, sync and transport changes, and
   the invoice events `invoiceReceived`, `invoiceFinalized`, `invoiceExpired`, `invoicePosted`,
-  `invoiceDeclined` and `invoiceWithdrawn`, which set `slateId`.
+  `invoiceDeclined`, `invoiceWithdrawn` and `invoiceBounced`, which set `slateId`.
+  `WalletEventKind` and `ListenerEventKind` only gain values, at the end, and a value never
+  changes meaning; an exhaustive `switch` over either must handle the new ones.
 - A slate received a second time, as text, as a file or through the listener, is not a second
   payment. `receiveSlate` and `receiveFile` return `ReceivedSlate.repeated` set, with the
   `txId` and the reply text of the first receive, and the listener reports kind `repeated`
@@ -265,7 +267,9 @@ Issuer, a service wallet:
   finalizes and posts it with an `invoiceFinalized` event. `cancelTransaction` withdraws an
   unpaid invoice. A payer that does not pay invoices, such as a stock `epic-wallet`, sends the
   invoice back; `drainEpicbox()` counts it in `InboxReport.bounced`, and that payer is never
-  sent a notice. Cancel the invoice.
+  sent a notice. Each bounced invoice raises one `invoiceBounced` event with its `txId` and
+  `slateId`, on `events()` and, while it runs, the listener's stream (`ListenerEvent.slateId`).
+  Cancel the invoice, or send that payer a slate file.
 
 Notices tell each side what the other did: the issuer sends `posted`, with the kernel excess,
 after it posts a payment and `withdrawn` when it cancels an invoice; the payer sends `declined`.
@@ -320,7 +324,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `finalize_and_post(slate_json)` | `finalize_and_post(slate_json)` | Returns `FinalizedTx`; a refused post fails with `notPosted`. New: `finalize_file(path)`. |
 | `send_http(amount, minimum_confirmations, url)` | not provided | LEPIC 1.0 speaks Epicbox and files only. |
 | `send_epicbox(amount, minimum_confirmations, address)` | `send_epicbox(amount, minimum_confirmations, address, message)` | Returns `SentTx`. `message` as for `create_send_slate`. Like `validate_epicbox_address`, refuses a bare key without `@<relay>` with `invalidArgument` and stores nothing. |
-| `start_listener(events)` | `start_listener()` stream | Kinds `connected`, `disconnected`, `received`, `repeated`, `finalized`, `error`, `stopped`. `repeated` carries the `tx_id` of a payment answered before whose slate arrived again. New: `drain_epicbox()` for background work. |
+| `start_listener(events)` | `start_listener()` stream | Kinds `connected`, `disconnected`, `received`, `repeated`, `finalized`, `error`, `stopped`, `invoiceBounced`. `repeated` carries the `tx_id` of a payment answered before whose slate arrived again; `invoiceBounced` the `tx_id` and `slate_id` of an issued invoice the payer sent back. New: `drain_epicbox()` for background work. |
 | `stop_listener()` | `stop_listener()` | Same. |
 | `listener_running()` | `listener_running()` | Same. |
 | `repost_transaction(key)` | `repost_transaction(tx_id)` | Local transaction id instead of the history key. |

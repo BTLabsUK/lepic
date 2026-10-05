@@ -414,13 +414,20 @@ pub enum ListenerEventKind {
     Error,
     /// The listener ended; no more events follow.
     Stopped,
+    /// A payer sent back unpaid an invoice this wallet issued, as a wallet that does not pay
+    /// invoices does: `tx_id` and `slate_id` name the invoice. Nothing changed; cancel it with
+    /// `cancel_transaction`, or send that payer a slate file instead.
+    InvoiceBounced,
 }
 
 #[derive(Debug, Clone)]
 pub struct ListenerEvent {
     pub kind: ListenerEventKind,
-    /// Local id of the transaction, for `Received`, `Repeated` and `Finalized`.
+    /// Local id of the transaction, for `Received`, `Repeated`, `Finalized` and
+    /// `InvoiceBounced`.
     pub tx_id: Option<u32>,
+    /// The slate id, for `InvoiceBounced`.
+    pub slate_id: Option<String>,
     pub message: String,
 }
 
@@ -474,6 +481,10 @@ pub enum WalletEventKind {
     /// this wallet already paid, `tx_id` names the payment: offer the user
     /// `cancel_transaction`; nothing was cancelled.
     InvoiceWithdrawn,
+    /// A payer sent back unpaid an invoice this wallet issued, as a wallet that does not pay
+    /// invoices does: `tx_id` and `slate_id` name the invoice. The payer is recorded as not
+    /// paying invoices. Nothing changed; cancel the invoice with `cancel_transaction`.
+    InvoiceBounced,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its

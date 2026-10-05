@@ -5462,10 +5462,12 @@ impl SseDecode for crate::api::types::ListenerEvent {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_kind = <crate::api::types::ListenerEventKind>::sse_decode(deserializer);
         let mut var_txId = <Option<u32>>::sse_decode(deserializer);
+        let mut var_slateId = <Option<String>>::sse_decode(deserializer);
         let mut var_message = <String>::sse_decode(deserializer);
         return crate::api::types::ListenerEvent {
             kind: var_kind,
             tx_id: var_txId,
+            slate_id: var_slateId,
             message: var_message,
         };
     }
@@ -5483,6 +5485,7 @@ impl SseDecode for crate::api::types::ListenerEventKind {
             4 => crate::api::types::ListenerEventKind::Finalized,
             5 => crate::api::types::ListenerEventKind::Error,
             6 => crate::api::types::ListenerEventKind::Stopped,
+            7 => crate::api::types::ListenerEventKind::InvoiceBounced,
             _ => unreachable!("Invalid variant for ListenerEventKind: {}", inner),
         };
     }
@@ -6095,6 +6098,7 @@ impl SseDecode for crate::api::types::WalletEventKind {
             9 => crate::api::types::WalletEventKind::InvoicePosted,
             10 => crate::api::types::WalletEventKind::InvoiceDeclined,
             11 => crate::api::types::WalletEventKind::InvoiceWithdrawn,
+            12 => crate::api::types::WalletEventKind::InvoiceBounced,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -6762,6 +6766,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ListenerEvent {
         [
             self.kind.into_into_dart().into_dart(),
             self.tx_id.into_into_dart().into_dart(),
+            self.slate_id.into_into_dart().into_dart(),
             self.message.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -6789,6 +6794,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ListenerEventKind {
             Self::Finalized => 4.into_dart(),
             Self::Error => 5.into_dart(),
             Self::Stopped => 6.into_dart(),
+            Self::InvoiceBounced => 7.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -7411,6 +7417,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::InvoicePosted => 9.into_dart(),
             Self::InvoiceDeclined => 10.into_dart(),
             Self::InvoiceWithdrawn => 11.into_dart(),
+            Self::InvoiceBounced => 12.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -7846,6 +7853,7 @@ impl SseEncode for crate::api::types::ListenerEvent {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <crate::api::types::ListenerEventKind>::sse_encode(self.kind, serializer);
         <Option<u32>>::sse_encode(self.tx_id, serializer);
+        <Option<String>>::sse_encode(self.slate_id, serializer);
         <String>::sse_encode(self.message, serializer);
     }
 }
@@ -7862,6 +7870,7 @@ impl SseEncode for crate::api::types::ListenerEventKind {
                 crate::api::types::ListenerEventKind::Finalized => 4,
                 crate::api::types::ListenerEventKind::Error => 5,
                 crate::api::types::ListenerEventKind::Stopped => 6,
+                crate::api::types::ListenerEventKind::InvoiceBounced => 7,
                 _ => {
                     unimplemented!("");
                 }
@@ -8381,6 +8390,7 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::InvoicePosted => 9,
                 crate::api::types::WalletEventKind::InvoiceDeclined => 10,
                 crate::api::types::WalletEventKind::InvoiceWithdrawn => 11,
+                crate::api::types::WalletEventKind::InvoiceBounced => 12,
                 _ => {
                     unimplemented!("");
                 }

@@ -4315,12 +4315,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ListenerEvent dco_decode_listener_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return ListenerEvent(
       kind: dco_decode_listener_event_kind(arr[0]),
       txId: dco_decode_opt_box_autoadd_u_32(arr[1]),
-      message: dco_decode_String(arr[2]),
+      slateId: dco_decode_opt_String(arr[2]),
+      message: dco_decode_String(arr[3]),
     );
   }
 
@@ -5355,8 +5356,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_kind = sse_decode_listener_event_kind(deserializer);
     var var_txId = sse_decode_opt_box_autoadd_u_32(deserializer);
+    var var_slateId = sse_decode_opt_String(deserializer);
     var var_message = sse_decode_String(deserializer);
-    return ListenerEvent(kind: var_kind, txId: var_txId, message: var_message);
+    return ListenerEvent(
+      kind: var_kind,
+      txId: var_txId,
+      slateId: var_slateId,
+      message: var_message,
+    );
   }
 
   @protected
@@ -6535,6 +6542,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_listener_event_kind(self.kind, serializer);
     sse_encode_opt_box_autoadd_u_32(self.txId, serializer);
+    sse_encode_opt_String(self.slateId, serializer);
     sse_encode_String(self.message, serializer);
   }
 

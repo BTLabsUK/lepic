@@ -345,7 +345,7 @@ void main() {
     },
   );
 
-  test('an invoice a stock wallet sends back is counted as bounced', () async {
+  test('an invoice a stock wallet sends back is counted and named as bounced', () async {
     final p = await parties('bounced');
     final stock = MockStockPeer(relay: relay, seed: List.filled(32, 7));
     final issued = await p.issuer.issueInvoiceEpicbox(
@@ -360,6 +360,16 @@ void main() {
     expect(report.finalized, 0);
     expect(report.dropped, 0);
     expect(relay.pending(address: p.issuerAddress), 0);
+    await eventWhere(
+      p.issuerEvents,
+      (e) => e.kind == WalletEventKind.invoiceBounced,
+    );
+    final bounced = p.issuerEvents
+        .where((e) => e.kind == WalletEventKind.invoiceBounced)
+        .toList();
+    expect(bounced, hasLength(1));
+    expect(bounced.single.txId, issued.txId);
+    expect(bounced.single.slateId, issued.slateId);
     expect(
       (await p.issuer.transaction(txId: issued.txId)).status,
       TxStatus.received,
@@ -368,6 +378,44 @@ void main() {
     // A wallet that does not pay invoices is never sent a notice: the cancel posts nothing.
     await p.issuer.cancelTransaction(txId: issued.txId);
     expect(relay.pending(address: stock.address()), 0);
+  });
+
+  test('the listener names an invoice a stock wallet sends back', () async {
+    final p = await parties('bounced-listener');
+    final stock = MockStockPeer(relay: relay, seed: List.filled(32, 7));
+    final issued = await p.issuer.issueInvoiceEpicbox(
+      amount: BigInt.from(epic),
+      address: stock.address(),
+    );
+    expect(await stock.returnMessages(runtime: runtime), 1);
+
+    final heard = <ListenerEvent>[];
+    final stopped = Completer<void>();
+    final listening = p.issuer.startListener().listen((event) {
+      heard.add(event);
+      if (event.kind == ListenerEventKind.stopped) stopped.complete();
+    });
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (!heard.any((e) => e.kind == ListenerEventKind.invoiceBounced) &&
+        DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    p.issuer.stopListener();
+    await stopped.future.timeout(const Duration(seconds: 10));
+    await listening.cancel();
+
+    final bounced = heard
+        .where((e) => e.kind == ListenerEventKind.invoiceBounced)
+        .toList();
+    expect(bounced, hasLength(1), reason: '$heard');
+    expect(bounced.single.txId, issued.txId);
+    expect(bounced.single.slateId, issued.slateId);
+    final events = p.issuerEvents
+        .where((e) => e.kind == WalletEventKind.invoiceBounced)
+        .toList();
+    expect(events, hasLength(1));
+    expect(events.single.txId, issued.txId);
+    expect(events.single.slateId, issued.slateId);
   });
 
   test('a notice from a key that is not the other party is dropped', () async {

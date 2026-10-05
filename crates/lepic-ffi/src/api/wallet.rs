@@ -777,12 +777,14 @@ impl EpicWallet {
                 let _ = events.add(ListenerEvent {
                     kind: ListenerEventKind::Error,
                     tx_id: None,
+                    slate_id: None,
                     message: error.to_string(),
                 });
             }
             let _ = events.add(ListenerEvent {
                 kind: ListenerEventKind::Stopped,
                 tx_id: None,
+                slate_id: None,
                 message: String::new(),
             });
         });

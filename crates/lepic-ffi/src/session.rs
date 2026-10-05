@@ -996,11 +996,24 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             slate_id: Some(withdrawn.slate_id.to_string()),
             ..WalletEvent::of(WalletEventKind::InvoiceWithdrawn)
         },
+        Event::InvoiceBounced(bounced) => WalletEvent {
+            tx_id: Some(bounced.tx_id.0),
+            slate_id: Some(bounced.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceBounced)
+        },
         _ => return None,
     })
 }
 
 fn listener_event(event: &Event) -> Option<ListenerEvent> {
+    if let Event::InvoiceBounced(bounced) = event {
+        return Some(ListenerEvent {
+            kind: ListenerEventKind::InvoiceBounced,
+            tx_id: Some(bounced.tx_id.0),
+            slate_id: Some(bounced.slate_id.to_string()),
+            message: String::new(),
+        });
+    }
     let (kind, tx_id) = match event {
         Event::Transport(status) if status.transport == TRANSPORT_ID => {
             match transport_state(status.state) {
@@ -1019,6 +1032,7 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
     Some(ListenerEvent {
         kind,
         tx_id,
+        slate_id: None,
         message: String::new(),
     })
 }
@@ -1281,6 +1295,29 @@ mod tests {
         assert_eq!(withdrawn.kind, WalletEventKind::InvoiceWithdrawn);
         assert_eq!(withdrawn.tx_id, Some(7));
         assert_eq!(withdrawn.slate_id, Some(slate_id.to_string()));
+    }
+
+    #[test]
+    fn a_bounced_invoice_reaches_the_events_and_the_listener_with_its_ids() {
+        use lepic_wallet::event::{BouncedInvoice, SlateId};
+        let slate_id = SlateId::from_bytes([9; 16]);
+        let bounced = Event::InvoiceBounced(BouncedInvoice {
+            tx_id: TxId(8),
+            slate_id,
+            peer: lepic_epicbox::EpicboxAddress::parse(
+                "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@epicbox.epiccash.com",
+                lepic_epicbox::Network::Mainnet,
+            )
+            .unwrap(),
+        });
+        let event = wallet_event(&bounced).unwrap();
+        assert_eq!(event.kind, WalletEventKind::InvoiceBounced);
+        assert_eq!(event.tx_id, Some(8));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
+        let heard = listener_event(&bounced).unwrap();
+        assert_eq!(heard.kind, ListenerEventKind::InvoiceBounced);
+        assert_eq!(heard.tx_id, Some(8));
+        assert_eq!(heard.slate_id, Some(slate_id.to_string()));
     }
 
     #[test]
