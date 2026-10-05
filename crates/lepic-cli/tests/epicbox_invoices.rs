@@ -637,3 +637,41 @@ fn the_issuer_hears_a_decline_and_withdraws_the_invoice() {
         .json();
     assert_eq!(cancelled["state"], "cancelled");
 }
+
+#[test]
+fn the_issuer_learns_that_a_payer_runs_lepic_from_its_payment() {
+    let parties = parties();
+    parties.allow_issuer();
+    let peer = |instance: &Instance| {
+        instance
+            .run(
+                &parties.host,
+                &["epicbox", "peer", &parties.invoice_address],
+            )
+            .ok()
+            .json()
+    };
+    let before = peer(&parties.issuer);
+    assert_eq!(keys(&before), ["address", "capability"]);
+    assert_eq!(before["address"], parties.invoice_address.as_str());
+    assert_eq!(before["capability"], "unknown");
+
+    parties.paid_invoice();
+
+    assert_eq!(peer(&parties.issuer)["capability"], "lepic");
+    let shown = parties.human(
+        &parties.issuer,
+        &["epicbox", "peer", &parties.invoice_address],
+    );
+    assert_eq!(
+        shown.stdout,
+        format!(
+            "{} runs LEPIC: it pays invoices and is sent notices.\n",
+            parties.invoice_address
+        )
+    );
+    let wrong = parties
+        .issuer
+        .run(&parties.host, &["epicbox", "peer", "not an address"]);
+    assert_eq!(wrong.code, 2, "{wrong:?}");
+}

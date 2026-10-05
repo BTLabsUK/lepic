@@ -352,6 +352,18 @@ as `epic-wallet` does, counts as `bounced`, and with human output a line on stde
 invoice, its transaction and the payer; `lepic tx cancel <ID>` withdraws it, and a slate file
 reaches that payer instead.
 
+Before invoicing a payer, `lepic epicbox peer <ADDRESS>` shows what the wallet learned from that
+payer's own messages, matched on the key: `lepic` once a payment or notice from it carried the
+LEPIC marker, `no_invoices` once it sent an invoice back, `unknown` before either. It reads
+only the wallet and sends nothing:
+
+```
+$ lepic epicbox peer esABC...@epicbox.epiccash.com
+esABC...@epicbox.epiccash.com runs LEPIC: it pays invoices and is sent notices.
+```
+
+Its JSON document has `address` and `capability`.
+
 Two LEPIC wallets also tell each other what happened to an invoice, with short notices that
 never move funds. The payer's next `epicbox drain --invoices` hears that the service posted the
 payment. When the service cancels an invoice with `lepic tx cancel`, or it expires, the payer's

@@ -446,6 +446,19 @@ The invoice address is derived from the recovery phrase at an index of its own, 
 a restored wallet starts again at 1. Rotating moves to the next index, and invoices sent to
 the old address are no longer read.")]
     InvoiceAddress(InvoiceAddressArgs),
+    /// Show whether a peer is known to pay invoices
+    #[command(after_help = "\
+What this wallet learned from the peer's own messages, matched on the key: lepic once a
+payment or notice from it carried the LEPIC marker, no_invoices once it sent an invoice back
+unpaid, unknown before either. Nothing is sent.")]
+    Peer(PeerArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PeerArgs {
+    /// Full Epicbox address of the peer
+    #[arg(value_name = "ADDRESS")]
+    pub address: String,
 }
 
 #[derive(Debug, Args)]

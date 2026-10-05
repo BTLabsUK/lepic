@@ -39,6 +39,7 @@ pub enum Report {
     AllowList(AllowListReport),
     InvoiceAddress(InvoiceAddressReport),
     EpicboxStatus(EpicboxStatusReport),
+    Peer(PeerReport),
     NodeStatus(NodeStatusReport),
 }
 
@@ -331,6 +332,13 @@ pub struct InvoiceAddressReport {
     pub index: u32,
     /// The address moved to `index` in this command.
     pub rotated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PeerReport {
+    pub address: String,
+    /// `unknown`, `lepic` or `no_invoices`.
+    pub capability: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -824,6 +832,24 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             writeln!(out, "Address  {}", r.address)?;
             writeln!(out, "Pending  {} deliveries", r.pending_deliveries)
         }
+        Report::Peer(r) => match r.capability {
+            "lepic" => writeln!(
+                out,
+                "{} runs LEPIC: it pays invoices and is sent notices.",
+                r.address
+            ),
+            "no_invoices" => writeln!(
+                out,
+                "{} sent an invoice back unpaid: it does not pay invoices. Send it a slate file \
+                 instead.",
+                r.address
+            ),
+            _ => writeln!(
+                out,
+                "Nothing is known yet about {}: it has not paid an invoice or sent one back.",
+                r.address
+            ),
+        },
         Report::NodeStatus(r) => {
             writeln!(out, "Node     {} (version {})", r.node, r.node_version)?;
             writeln!(out, "Height   {}", r.height)?;
@@ -1246,6 +1272,13 @@ mod tests {
                 vec!["address", "pending_deliveries", "relay"],
             ),
             (
+                Report::Peer(PeerReport {
+                    address: text("a"),
+                    capability: "unknown",
+                }),
+                vec!["address", "capability"],
+            ),
+            (
                 Report::NodeStatus(NodeStatusReport {
                     node: text("n"),
                     node_version: text("v"),
@@ -1520,6 +1553,31 @@ mod tests {
         assert!(
             render(&empty, OutputFormat::Human).contains("epicbox drain --invoices"),
             "empty list names the drain"
+        );
+    }
+
+    #[test]
+    fn a_peer_report_says_what_is_known_about_invoices() {
+        let line = |capability| {
+            let report = Report::Peer(PeerReport {
+                address: text("esPeer@relay.example.org"),
+                capability,
+            });
+            render(&report, OutputFormat::Human).to_string()
+        };
+        assert_eq!(
+            line("unknown"),
+            "Nothing is known yet about esPeer@relay.example.org: it has not paid an invoice or \
+             sent one back.\n"
+        );
+        assert_eq!(
+            line("lepic"),
+            "esPeer@relay.example.org runs LEPIC: it pays invoices and is sent notices.\n"
+        );
+        assert_eq!(
+            line("no_invoices"),
+            "esPeer@relay.example.org sent an invoice back unpaid: it does not pay invoices. \
+             Send it a slate file instead.\n"
         );
     }
 

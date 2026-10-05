@@ -23,7 +23,9 @@ use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
 use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::details::TransactionDetails;
-use lepic_wallet::epicbox_invoice::{AllowedSender, IncomingInvoice, InvoiceExpiry, InvoiceSweep};
+use lepic_wallet::epicbox_invoice::{
+    AllowedSender, IncomingInvoice, InvoiceExpiry, InvoiceSweep, PeerInvoiceSupport,
+};
 use lepic_wallet::event::{Balance, SlateId};
 use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
@@ -56,7 +58,7 @@ use crate::output::{
     AccountReport, AddressReport, AllowListReport, AllowRemoveReport, AllowedSenderReport,
     EpicboxStatusReport, ExpiredReport, FinalizeReport, InboxReport, InfoReport, InitReport,
     InvoiceAddressReport, InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport,
-    InvoicePayReport, MessageReport, NodeStatusReport, ParkedInvoiceReport, PostReport,
+    InvoicePayReport, MessageReport, NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport,
     ReceiveReport, Report, ResendReport, RestoreReport, ScanReport, SendReport, TxListReport,
     TxReport, TxStateReport, WalletScanReport,
 };
@@ -350,6 +352,17 @@ impl<H: Host> Run<'_, H> {
                 }));
             }
             EpicboxCommand::Allow(command) => return allow(&opened, command),
+            EpicboxCommand::Peer(args) => {
+                let capability = match opened.wallet.peer_capability(&args.address)? {
+                    PeerInvoiceSupport::Unknown => "unknown",
+                    PeerInvoiceSupport::Lepic => "lepic",
+                    PeerInvoiceSupport::NoInvoices => "no_invoices",
+                };
+                return Ok(Report::Peer(PeerReport {
+                    address: args.address,
+                    capability,
+                }));
+            }
             EpicboxCommand::InvoiceAddress(args) => {
                 let address = if args.rotate {
                     opened.wallet.rotate_invoice_address(&opened.epicbox)?
