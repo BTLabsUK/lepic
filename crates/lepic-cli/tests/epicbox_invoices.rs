@@ -227,6 +227,9 @@ fn an_invoice_is_parked_paid_and_finalized_by_the_issuers_listen() {
     parties.host.interrupt_when = None;
     assert_eq!(listened["finalized"], 1, "{listened}");
     assert_eq!(parties.host.node.pushed_transactions().len(), 1);
+    // The listen sent the `posted` receipt to the payer's invoice address.
+    let heard = parties.drain_invoices();
+    assert_eq!(heard["notices"], 1, "{heard}");
     let list = parties
         .issuer
         .run(&parties.host, &["tx", "list"])
