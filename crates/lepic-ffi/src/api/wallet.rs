@@ -682,7 +682,9 @@ impl EpicWallet {
         .await
     }
 
-    /// Cancels a transaction that was not posted and unlocks its outputs.
+    /// Cancels a transaction that was not posted and unlocks its outputs. Cancelling an
+    /// invoice issued with `issue_invoice_epicbox` withdraws it and sends the payer a
+    /// `withdrawn` notice when the payer proved it runs LEPIC.
     ///
     /// Fails with `OnChain` or `InPool` when the node's chain or pool holds the kernel of a
     /// finalized transaction, and with `NodeUnreachable` when the node cannot be asked.

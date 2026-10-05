@@ -4973,12 +4973,14 @@ impl SseDecode for crate::api::types::InboxReport {
         let mut var_repeated = <u32>::sse_decode(deserializer);
         let mut var_rejected = <u32>::sse_decode(deserializer);
         let mut var_held = <u32>::sse_decode(deserializer);
+        let mut var_notices = <u32>::sse_decode(deserializer);
         return crate::api::types::InboxReport {
             received: var_received,
             finalized: var_finalized,
             repeated: var_repeated,
             rejected: var_rejected,
             held: var_held,
+            notices: var_notices,
         };
     }
 }
@@ -5012,6 +5014,7 @@ impl SseDecode for crate::api::types::InvoiceReport {
         let mut var_rejected = <u32>::sse_decode(deserializer);
         let mut var_held = <u32>::sse_decode(deserializer);
         let mut var_dropped = <u32>::sse_decode(deserializer);
+        let mut var_notices = <u32>::sse_decode(deserializer);
         return crate::api::types::InvoiceReport {
             parked: var_parked,
             finalized: var_finalized,
@@ -5019,6 +5022,7 @@ impl SseDecode for crate::api::types::InvoiceReport {
             rejected: var_rejected,
             held: var_held,
             dropped: var_dropped,
+            notices: var_notices,
         };
     }
 }
@@ -5774,6 +5778,7 @@ impl SseDecode for crate::api::types::WalletEvent {
         let mut var_missed = <Option<u64>>::sse_decode(deserializer);
         let mut var_slateId = <Option<String>>::sse_decode(deserializer);
         let mut var_amount = <Option<u64>>::sse_decode(deserializer);
+        let mut var_kernelExcess = <Option<String>>::sse_decode(deserializer);
         return crate::api::types::WalletEvent {
             kind: var_kind,
             session: var_session,
@@ -5789,6 +5794,7 @@ impl SseDecode for crate::api::types::WalletEvent {
             missed: var_missed,
             slate_id: var_slateId,
             amount: var_amount,
+            kernel_excess: var_kernelExcess,
         };
     }
 }
@@ -5807,6 +5813,9 @@ impl SseDecode for crate::api::types::WalletEventKind {
             6 => crate::api::types::WalletEventKind::InvoiceReceived,
             7 => crate::api::types::WalletEventKind::InvoiceFinalized,
             8 => crate::api::types::WalletEventKind::InvoiceExpired,
+            9 => crate::api::types::WalletEventKind::InvoicePosted,
+            10 => crate::api::types::WalletEventKind::InvoiceDeclined,
+            11 => crate::api::types::WalletEventKind::InvoiceWithdrawn,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -6308,6 +6317,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::InboxReport {
             self.repeated.into_into_dart().into_dart(),
             self.rejected.into_into_dart().into_dart(),
             self.held.into_into_dart().into_dart(),
+            self.notices.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -6358,6 +6368,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::InvoiceReport {
             self.rejected.into_into_dart().into_dart(),
             self.held.into_into_dart().into_dart(),
             self.dropped.into_into_dart().into_dart(),
+            self.notices.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -7062,6 +7073,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEvent {
             self.missed.into_into_dart().into_dart(),
             self.slate_id.into_into_dart().into_dart(),
             self.amount.into_into_dart().into_dart(),
+            self.kernel_excess.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -7090,6 +7102,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::InvoiceReceived => 6.into_dart(),
             Self::InvoiceFinalized => 7.into_dart(),
             Self::InvoiceExpired => 8.into_dart(),
+            Self::InvoicePosted => 9.into_dart(),
+            Self::InvoiceDeclined => 10.into_dart(),
+            Self::InvoiceWithdrawn => 11.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -7353,6 +7368,7 @@ impl SseEncode for crate::api::types::InboxReport {
         <u32>::sse_encode(self.repeated, serializer);
         <u32>::sse_encode(self.rejected, serializer);
         <u32>::sse_encode(self.held, serializer);
+        <u32>::sse_encode(self.notices, serializer);
     }
 }
 
@@ -7377,6 +7393,7 @@ impl SseEncode for crate::api::types::InvoiceReport {
         <u32>::sse_encode(self.rejected, serializer);
         <u32>::sse_encode(self.held, serializer);
         <u32>::sse_encode(self.dropped, serializer);
+        <u32>::sse_encode(self.notices, serializer);
     }
 }
 
@@ -8016,6 +8033,7 @@ impl SseEncode for crate::api::types::WalletEvent {
         <Option<u64>>::sse_encode(self.missed, serializer);
         <Option<String>>::sse_encode(self.slate_id, serializer);
         <Option<u64>>::sse_encode(self.amount, serializer);
+        <Option<String>>::sse_encode(self.kernel_excess, serializer);
     }
 }
 
@@ -8033,6 +8051,9 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::InvoiceReceived => 6,
                 crate::api::types::WalletEventKind::InvoiceFinalized => 7,
                 crate::api::types::WalletEventKind::InvoiceExpired => 8,
+                crate::api::types::WalletEventKind::InvoicePosted => 9,
+                crate::api::types::WalletEventKind::InvoiceDeclined => 10,
+                crate::api::types::WalletEventKind::InvoiceWithdrawn => 11,
                 _ => {
                     unimplemented!("");
                 }

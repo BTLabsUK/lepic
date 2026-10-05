@@ -3952,14 +3952,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   InboxReport dco_decode_inbox_report(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return InboxReport(
       received: dco_decode_u_32(arr[0]),
       finalized: dco_decode_u_32(arr[1]),
       repeated: dco_decode_u_32(arr[2]),
       rejected: dco_decode_u_32(arr[3]),
       held: dco_decode_u_32(arr[4]),
+      notices: dco_decode_u_32(arr[5]),
     );
   }
 
@@ -3983,8 +3984,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   InvoiceReport dco_decode_invoice_report(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return InvoiceReport(
       parked: dco_decode_u_32(arr[0]),
       finalized: dco_decode_u_32(arr[1]),
@@ -3992,6 +3993,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       rejected: dco_decode_u_32(arr[3]),
       held: dco_decode_u_32(arr[4]),
       dropped: dco_decode_u_32(arr[5]),
+      notices: dco_decode_u_32(arr[6]),
     );
   }
 
@@ -4489,8 +4491,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   WalletEvent dco_decode_wallet_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 14)
-      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
+    if (arr.length != 15)
+      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
     return WalletEvent(
       kind: dco_decode_wallet_event_kind(arr[0]),
       session: dco_decode_opt_box_autoadd_session_state(arr[1]),
@@ -4506,6 +4508,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       missed: dco_decode_opt_box_autoadd_u_64(arr[11]),
       slateId: dco_decode_opt_String(arr[12]),
       amount: dco_decode_opt_box_autoadd_u_64(arr[13]),
+      kernelExcess: dco_decode_opt_String(arr[14]),
     );
   }
 
@@ -4893,12 +4896,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_repeated = sse_decode_u_32(deserializer);
     var var_rejected = sse_decode_u_32(deserializer);
     var var_held = sse_decode_u_32(deserializer);
+    var var_notices = sse_decode_u_32(deserializer);
     return InboxReport(
       received: var_received,
       finalized: var_finalized,
       repeated: var_repeated,
       rejected: var_rejected,
       held: var_held,
+      notices: var_notices,
     );
   }
 
@@ -4930,6 +4935,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_rejected = sse_decode_u_32(deserializer);
     var var_held = sse_decode_u_32(deserializer);
     var var_dropped = sse_decode_u_32(deserializer);
+    var var_notices = sse_decode_u_32(deserializer);
     return InvoiceReport(
       parked: var_parked,
       finalized: var_finalized,
@@ -4937,6 +4943,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       rejected: var_rejected,
       held: var_held,
       dropped: var_dropped,
+      notices: var_notices,
     );
   }
 
@@ -5555,6 +5562,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_missed = sse_decode_opt_box_autoadd_u_64(deserializer);
     var var_slateId = sse_decode_opt_String(deserializer);
     var var_amount = sse_decode_opt_box_autoadd_u_64(deserializer);
+    var var_kernelExcess = sse_decode_opt_String(deserializer);
     return WalletEvent(
       kind: var_kind,
       session: var_session,
@@ -5570,6 +5578,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       missed: var_missed,
       slateId: var_slateId,
       amount: var_amount,
+      kernelExcess: var_kernelExcess,
     );
   }
 
@@ -6062,6 +6071,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.repeated, serializer);
     sse_encode_u_32(self.rejected, serializer);
     sse_encode_u_32(self.held, serializer);
+    sse_encode_u_32(self.notices, serializer);
   }
 
   @protected
@@ -6087,6 +6097,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.rejected, serializer);
     sse_encode_u_32(self.held, serializer);
     sse_encode_u_32(self.dropped, serializer);
+    sse_encode_u_32(self.notices, serializer);
   }
 
   @protected
@@ -6608,6 +6619,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_box_autoadd_u_64(self.missed, serializer);
     sse_encode_opt_String(self.slateId, serializer);
     sse_encode_opt_box_autoadd_u_64(self.amount, serializer);
+    sse_encode_opt_String(self.kernelExcess, serializer);
   }
 
   @protected
@@ -6694,7 +6706,9 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   void cancelScan() =>
       RustLib.instance.api.crateApiWalletEpicWalletCancelScan(that: this);
 
-  /// Cancels a transaction that was not posted and unlocks its outputs.
+  /// Cancels a transaction that was not posted and unlocks its outputs. Cancelling an
+  /// invoice issued with `issue_invoice_epicbox` withdraws it and sends the payer a
+  /// `withdrawn` notice when the payer proved it runs LEPIC.
   ///
   /// Fails with `OnChain` or `InPool` when the node's chain or pool holds the kernel of a
   /// finalized transaction, and with `NodeUnreachable` when the node cannot be asked.
@@ -6765,8 +6779,9 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   );
 
   /// Declines the waiting invoice `slate_id`: it is never paid and leaves
-  /// [`EpicWallet::pending_invoices`]. Fails with `InvoiceNotFound` when no invoice with that
-  /// id waits.
+  /// [`EpicWallet::pending_invoices`]. The sender gets a `declined` notice when it proved
+  /// that it runs LEPIC; a failure to send it is not reported. Fails with `InvoiceNotFound`
+  /// when no invoice with that id waits.
   Future<void> declineInvoice({required String slateId}) => RustLib.instance.api
       .crateApiWalletEpicWalletDeclineInvoice(that: this, slateId: slateId);
 
@@ -6778,7 +6793,8 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// Connects to the relay as the invoice address once, handles every pending message and
   /// disconnects. An invoice from an allowed sender is stored, with an `InvoiceReceived`
   /// event, before the relay is told it arrived; anything from another sender is dropped
-  /// unopened. Fails as [`EpicWallet::drain_epicbox`] does.
+  /// unopened. Notices from the senders of invoices this wallet holds raise their events. Fails
+  /// as [`EpicWallet::drain_epicbox`] does.
   Future<InvoiceReport> drainInvoices() =>
       RustLib.instance.api.crateApiWalletEpicWalletDrainInvoices(that: this);
 
@@ -6850,9 +6866,9 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// Issues an invoice for `amount` to the payer's invoice address `address` over Epicbox.
   /// The payer pays `amount` plus the fee. Its payment arrives on this wallet's payments
   /// address, where [`EpicWallet::drain_epicbox`] or the listener finalizes and posts it, with
-  /// an `InvoiceFinalized` event. `message` is signed into the invoice as
-  /// [`EpicWallet::create_send_slate`] signs it. Withdraw an unpaid invoice with
-  /// `cancel_transaction`.
+  /// an `InvoiceFinalized` event, and the payer gets a `posted` notice. `message` is signed
+  /// into the invoice as [`EpicWallet::create_send_slate`] signs it. Withdraw an unpaid
+  /// invoice with `cancel_transaction`, which sends the payer a `withdrawn` notice.
   ///
   /// Fails with `InvalidArgument`, storing nothing, for an address
   /// `validate_epicbox_address` refuses, and with `NotDelivered` when the

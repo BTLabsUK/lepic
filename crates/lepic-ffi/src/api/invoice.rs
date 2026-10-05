@@ -7,9 +7,15 @@
 //! [`EpicWallet::drain_invoices`]; no listener runs on it. Nothing that arrives ever pays:
 //! paying is always [`EpicWallet::pay_invoice`].
 //!
-//! Every call here except [`EpicWallet::pending_invoices`], the allowlist calls and
-//! [`EpicWallet::decline_invoice`] fails with `Unsupported` when the configuration names no
-//! relay, and every call fails with `Locked` on a locked wallet.
+//! The two sides tell each other what happened with short notices, which only LEPIC wallets
+//! read: the issuer reports `posted` and `withdrawn`, the payer `declined`. They arrive with
+//! drains and the listener as the `InvoicePosted`, `InvoiceWithdrawn` and `InvoiceDeclined`
+//! events, are advisory, and never move funds. A notice goes only to a wallet that proved it
+//! runs LEPIC in an earlier invoice exchange, so a stock wallet is never sent one.
+//!
+//! Every call here except [`EpicWallet::pending_invoices`] and the allowlist calls fails with
+//! `Unsupported` when the configuration names no relay, and every call fails with `Locked` on
+//! a locked wallet.
 
 use crate::api::error::WalletError;
 use crate::api::types::{
@@ -96,9 +102,9 @@ impl EpicWallet {
     /// Issues an invoice for `amount` to the payer's invoice address `address` over Epicbox.
     /// The payer pays `amount` plus the fee. Its payment arrives on this wallet's payments
     /// address, where [`EpicWallet::drain_epicbox`] or the listener finalizes and posts it, with
-    /// an `InvoiceFinalized` event. `message` is signed into the invoice as
-    /// [`EpicWallet::create_send_slate`] signs it. Withdraw an unpaid invoice with
-    /// `cancel_transaction`.
+    /// an `InvoiceFinalized` event, and the payer gets a `posted` notice. `message` is signed
+    /// into the invoice as [`EpicWallet::create_send_slate`] signs it. Withdraw an unpaid
+    /// invoice with `cancel_transaction`, which sends the payer a `withdrawn` notice.
     ///
     /// Fails with `InvalidArgument`, storing nothing, for an address
     /// `validate_epicbox_address` refuses, and with `NotDelivered` when the
@@ -120,7 +126,8 @@ impl EpicWallet {
     /// Connects to the relay as the invoice address once, handles every pending message and
     /// disconnects. An invoice from an allowed sender is stored, with an `InvoiceReceived`
     /// event, before the relay is told it arrived; anything from another sender is dropped
-    /// unopened. Fails as [`EpicWallet::drain_epicbox`] does.
+    /// unopened. Notices from the senders of invoices this wallet holds raise their events. Fails
+    /// as [`EpicWallet::drain_epicbox`] does.
     pub async fn drain_invoices(&self) -> Result<InvoiceReport, WalletError> {
         self.run("drain_invoices", |session| async move {
             session.drain_invoices().await
@@ -165,11 +172,12 @@ impl EpicWallet {
     }
 
     /// Declines the waiting invoice `slate_id`: it is never paid and leaves
-    /// [`EpicWallet::pending_invoices`]. Fails with `InvoiceNotFound` when no invoice with that
-    /// id waits.
+    /// [`EpicWallet::pending_invoices`]. The sender gets a `declined` notice when it proved
+    /// that it runs LEPIC; a failure to send it is not reported. Fails with `InvoiceNotFound`
+    /// when no invoice with that id waits.
     pub async fn decline_invoice(&self, slate_id: String) -> Result<(), WalletError> {
         self.run("decline_invoice", |session| async move {
-            session.decline_invoice(&slate_id)
+            session.decline_invoice(&slate_id).await
         })
         .await
     }

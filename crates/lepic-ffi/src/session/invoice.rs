@@ -136,6 +136,7 @@ impl Session {
             rejected: summary.rejected,
             held: summary.held,
             dropped: summary.dropped,
+            notices: summary.notices,
         })
     }
 
@@ -175,8 +176,12 @@ impl Session {
         })
     }
 
-    pub(crate) fn decline_invoice(&self, slate_id: &str) -> Result<(), WalletError> {
-        Ok(self.engine.decline_invoice(self::slate_id(slate_id)?)?)
+    pub(crate) async fn decline_invoice(&self, slate_id: &str) -> Result<(), WalletError> {
+        let slate_id = self::slate_id(slate_id)?;
+        Ok(self
+            .engine
+            .decline_invoice(self.epicbox()?, slate_id)
+            .await?)
     }
 
     pub(crate) async fn resend_invoice_payment(&self, tx_id: u32) -> Result<(), WalletError> {
@@ -204,7 +209,9 @@ impl Session {
         &self,
         expiry_secs: Option<u64>,
     ) -> Result<InvoiceSweep, WalletError> {
-        let sweep = self.engine.sweep_invoices(expiry(expiry_secs)?).await?;
+        let expiry = expiry(expiry_secs)?;
+        self.attach_for_notices()?;
+        let sweep = self.engine.sweep_invoices(expiry).await?;
         Ok(InvoiceSweep {
             deleted: sweep.deleted.iter().map(ToString::to_string).collect(),
             cancelled: sweep.cancelled.iter().map(|tx_id| tx_id.0).collect(),

@@ -92,8 +92,8 @@ final wallet = await EpicWallet.create(
 - A wallet directory is open in one runtime at a time, across processes too; LEPIC holds an OS
   lock on `.lepic.lock` in it while a wallet is open.
 - `EpicWallet.events()` streams session, balance, transaction, sync and transport changes, and
-  the invoice events `invoiceReceived`, `invoiceFinalized` and `invoiceExpired`, which set
-  `slateId`.
+  the invoice events `invoiceReceived`, `invoiceFinalized`, `invoiceExpired`, `invoicePosted`,
+  `invoiceDeclined` and `invoiceWithdrawn`, which set `slateId`.
 - A slate received a second time, as text, as a file or through the listener, is not a second
   payment. `receiveSlate` and `receiveFile` return `ReceivedSlate.repeated` set, with the
   `txId` and the reply text of the first receive, and the listener reports kind `repeated`
@@ -256,7 +256,7 @@ Payer, the app:
   invoiced amount (`amountMismatch` otherwise) and delivers the payment to the sender. On
   `notDelivered` the payment is stored with its inputs locked: `resendInvoicePayment(txId)` with
   the `txId` of the transaction whose `slateId` is the invoice's, or `cancelTransaction(txId)`.
-- `declineInvoice(slateId)` refuses it for good.
+- `declineInvoice(slateId)` refuses it for good and tells the sender.
 
 Issuer, a service wallet:
 
@@ -264,6 +264,16 @@ Issuer, a service wallet:
   address. The payment arrives on the payments address, where `drainEpicbox()` or the listener
   finalizes and posts it with an `invoiceFinalized` event. `cancelTransaction` withdraws an
   unpaid invoice.
+
+Notices tell each side what the other did: the issuer sends `posted`, with the kernel excess,
+after it posts a payment and `withdrawn` when it cancels an invoice; the payer sends `declined`.
+They arrive with `drainInvoices()` (`posted`, `withdrawn`) and `drainEpicbox()` or the listener
+(`declined`), are counted in `notices`, and raise the events `invoicePosted` (`txId` of the
+payment, `slateId`, `kernelExcess`), `invoiceWithdrawn` and `invoiceDeclined`. They are advisory
+and never move funds: `withdrawn` deletes a waiting invoice, and for one already paid names the
+payment in `txId` so the app can offer `cancelTransaction`. A notice goes only to a wallet that
+proved it runs LEPIC in an earlier exchange, so the first invoice to a new payer is withdrawn
+silently, and a stock `epic-wallet` is never sent one.
 
 Both sides run `sweepInvoices(expirySecs)` from time to time. Unpaid invoices expire after
 `expirySecs`, a day by default and at most two days: waiting and declined ones are deleted,

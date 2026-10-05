@@ -302,6 +302,9 @@ pub struct InboxReport {
     pub rejected: u32,
     /// Messages left on the relay for a later drain.
     pub held: u32,
+    /// Notices about invoices accepted from the other party: `posted`, `declined` and
+    /// `withdrawn`, each also reported as its event.
+    pub notices: u32,
 }
 
 /// A sender whose invoices the invoice address accepts, from `EpicWallet::invoice_senders`.
@@ -364,8 +367,11 @@ pub struct InvoiceReport {
     /// Messages left on the relay for a later drain.
     pub held: u32,
     /// Messages acknowledged and forgotten unopened: from senders that are not allowed, or
-    /// invoices over the limit of waiting invoices.
+    /// invoices over the limit of waiting invoices. Also notices not from the other party of
+    /// their invoice, or of a kind this version does not know.
     pub dropped: u32,
+    /// Notices about invoices accepted from the other party, each also reported as its event.
+    pub notices: u32,
 }
 
 /// What one `EpicWallet::sweep_invoices` did.
@@ -446,6 +452,17 @@ pub enum WalletEventKind {
     /// An invoice expired unpaid: `slate_id` is set, and `tx_id` for one this wallet issued,
     /// which was cancelled. A waiting invoice was deleted.
     InvoiceExpired,
+    /// The issuer of an invoice this wallet paid reports that it posted the transaction:
+    /// `tx_id` (the payment), `slate_id` and `kernel_excess` are set. Advisory; the payment
+    /// confirms when a refresh finds the kernel.
+    InvoicePosted,
+    /// The payer declined an invoice this wallet issued: `tx_id` and `slate_id` are set.
+    /// Nothing changed; cancel the invoice with `cancel_transaction` to free its output.
+    InvoiceDeclined,
+    /// The issuer withdrew an invoice: `slate_id` is set. A waiting one was deleted. For one
+    /// this wallet already paid, `tx_id` names the payment: offer the user
+    /// `cancel_transaction`; nothing was cancelled.
+    InvoiceWithdrawn,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its
@@ -466,6 +483,8 @@ pub struct WalletEvent {
     pub missed: Option<u64>,
     pub slate_id: Option<String>,
     pub amount: Option<u64>,
+    /// Hex of the kernel excess, for `InvoicePosted`.
+    pub kernel_excess: Option<String>,
 }
 
 impl WalletEvent {
@@ -485,6 +504,7 @@ impl WalletEvent {
             missed: None,
             slate_id: None,
             amount: None,
+            kernel_excess: None,
         }
     }
 }

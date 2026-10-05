@@ -87,7 +87,9 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Stops a running scan at its next page.
   void cancelScan();
 
-  /// Cancels a transaction that was not posted and unlocks its outputs.
+  /// Cancels a transaction that was not posted and unlocks its outputs. Cancelling an
+  /// invoice issued with `issue_invoice_epicbox` withdraws it and sends the payer a
+  /// `withdrawn` notice when the payer proved it runs LEPIC.
   ///
   /// Fails with `OnChain` or `InPool` when the node's chain or pool holds the kernel of a
   /// finalized transaction, and with `NodeUnreachable` when the node cannot be asked.
@@ -189,8 +191,9 @@ abstract class EpicWallet implements RustOpaqueInterface {
   );
 
   /// Declines the waiting invoice `slate_id`: it is never paid and leaves
-  /// [`EpicWallet::pending_invoices`]. Fails with `InvoiceNotFound` when no invoice with that
-  /// id waits.
+  /// [`EpicWallet::pending_invoices`]. The sender gets a `declined` notice when it proved
+  /// that it runs LEPIC; a failure to send it is not reported. Fails with `InvoiceNotFound`
+  /// when no invoice with that id waits.
   Future<void> declineInvoice({required String slateId});
 
   /// Connects to the relay once, handles every pending message and disconnects: the call for
@@ -200,7 +203,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Connects to the relay as the invoice address once, handles every pending message and
   /// disconnects. An invoice from an allowed sender is stored, with an `InvoiceReceived`
   /// event, before the relay is told it arrived; anything from another sender is dropped
-  /// unopened. Fails as [`EpicWallet::drain_epicbox`] does.
+  /// unopened. Notices from the senders of invoices this wallet holds raise their events. Fails
+  /// as [`EpicWallet::drain_epicbox`] does.
   Future<InvoiceReport> drainInvoices();
 
   /// The wallet's Epicbox address, `<key>@<domain>[:port]`. Fails with `Unsupported` when
@@ -294,9 +298,9 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Issues an invoice for `amount` to the payer's invoice address `address` over Epicbox.
   /// The payer pays `amount` plus the fee. Its payment arrives on this wallet's payments
   /// address, where [`EpicWallet::drain_epicbox`] or the listener finalizes and posts it, with
-  /// an `InvoiceFinalized` event. `message` is signed into the invoice as
-  /// [`EpicWallet::create_send_slate`] signs it. Withdraw an unpaid invoice with
-  /// `cancel_transaction`.
+  /// an `InvoiceFinalized` event, and the payer gets a `posted` notice. `message` is signed
+  /// into the invoice as [`EpicWallet::create_send_slate`] signs it. Withdraw an unpaid
+  /// invoice with `cancel_transaction`, which sends the payer a `withdrawn` notice.
   ///
   /// Fails with `InvalidArgument`, storing nothing, for an address
   /// `validate_epicbox_address` refuses, and with `NotDelivered` when the

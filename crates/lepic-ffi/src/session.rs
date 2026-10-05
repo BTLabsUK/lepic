@@ -667,7 +667,17 @@ impl Session {
     }
 
     pub(crate) async fn cancel(&self, tx_id: u32) -> Result<(), WalletError> {
+        self.attach_for_notices()?;
         Ok(self.engine.cancel(TxId(tx_id)).await?)
+    }
+
+    /// Attaches the payments identity when a relay is configured, so the `withdrawn` notice
+    /// a cancel of an issued invoice sends leaves from the address the invoice came from.
+    fn attach_for_notices(&self) -> Result<(), WalletError> {
+        if let Some(epicbox) = &self.epicbox {
+            self.engine.epicbox_attach(epicbox)?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn release(&self, tx_id: u32) -> Result<(), WalletError> {
@@ -719,6 +729,7 @@ impl Session {
             repeated: summary.repeated,
             rejected: summary.rejected,
             held: summary.held,
+            notices: summary.notices,
         })
     }
 
@@ -967,6 +978,22 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             slate_id: Some(expired.slate_id.to_string()),
             ..WalletEvent::of(WalletEventKind::InvoiceExpired)
         },
+        Event::InvoicePosted(posted) => WalletEvent {
+            tx_id: Some(posted.tx_id.0),
+            slate_id: Some(posted.slate_id.to_string()),
+            kernel_excess: Some(posted.excess.to_hex()),
+            ..WalletEvent::of(WalletEventKind::InvoicePosted)
+        },
+        Event::InvoiceDeclined(declined) => WalletEvent {
+            tx_id: Some(declined.tx_id.0),
+            slate_id: Some(declined.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceDeclined)
+        },
+        Event::InvoiceWithdrawn(withdrawn) => WalletEvent {
+            tx_id: withdrawn.tx_id.map(|tx_id| tx_id.0),
+            slate_id: Some(withdrawn.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceWithdrawn)
+        },
         _ => return None,
     })
 }
@@ -1209,7 +1236,10 @@ mod tests {
 
     #[test]
     fn invoice_events_reach_the_event_stream_with_their_slate() {
-        use lepic_wallet::event::{ExpiredInvoice, FinalizedInvoice, ParkedInvoice, SlateId};
+        use lepic_wallet::event::{
+            DeclinedInvoice, ExpiredInvoice, FinalizedInvoice, ParkedInvoice, SlateId,
+            WithdrawnInvoice,
+        };
         let slate_id = SlateId::from_bytes([9; 16]);
         let parked = wallet_event(&Event::InvoiceParked(ParkedInvoice {
             slate_id,
@@ -1234,6 +1264,21 @@ mod tests {
         assert_eq!(expired.kind, WalletEventKind::InvoiceExpired);
         assert_eq!(expired.tx_id, None);
         assert_eq!(expired.slate_id, Some(slate_id.to_string()));
+        let declined = wallet_event(&Event::InvoiceDeclined(DeclinedInvoice {
+            tx_id: TxId(6),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(declined.kind, WalletEventKind::InvoiceDeclined);
+        assert_eq!(declined.tx_id, Some(6));
+        let withdrawn = wallet_event(&Event::InvoiceWithdrawn(WithdrawnInvoice {
+            slate_id,
+            tx_id: Some(TxId(7)),
+        }))
+        .unwrap();
+        assert_eq!(withdrawn.kind, WalletEventKind::InvoiceWithdrawn);
+        assert_eq!(withdrawn.tx_id, Some(7));
+        assert_eq!(withdrawn.slate_id, Some(slate_id.to_string()));
     }
 
     #[test]

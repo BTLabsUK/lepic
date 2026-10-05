@@ -298,10 +298,21 @@ void main() {
       );
       expect(finalized.txId, issued.txId);
       expect(finalized.slateId, issued.slateId);
-      expect(
-        (await p.issuer.transaction(txId: issued.txId)).status,
-        TxStatus.posted,
+      final posted = await p.issuer.transaction(txId: issued.txId);
+      expect(posted.status, TxStatus.posted);
+
+      // The issuer's receipt waits on the payer's invoice address.
+      expect(relay.pending(address: p.invoiceAddress), 1);
+      final receipt = await p.payer.drainInvoices();
+      expect(receipt.notices, 1);
+      final notice = await eventWhere(
+        p.payerEvents,
+        (e) => e.kind == WalletEventKind.invoicePosted,
       );
+      expect(notice.txId, paid.txId);
+      expect(notice.slateId, issued.slateId);
+      expect(notice.kernelExcess, isNotNull);
+      expect(notice.kernelExcess, posted.kernelExcess);
     },
   );
 
@@ -356,7 +367,83 @@ void main() {
       p.payer.declineInvoice(slateId: 'not-a-slate-id'),
       throwsWalletError(WalletErrorKind.invalidArgument),
     );
-    expect(relay.pending(address: p.issuerAddress), 0);
+    // The parked invoice proved the issuer runs LEPIC, so it hears of the decline.
+    expect(relay.pending(address: p.issuerAddress), 1);
+    final report = await p.issuer.drainEpicbox();
+    expect(report.notices, 1);
+    final declined = await eventWhere(
+      p.issuerEvents,
+      (e) => e.kind == WalletEventKind.invoiceDeclined,
+    );
+    expect(declined.txId, issued.txId);
+    expect(declined.slateId, issued.slateId);
+    expect(
+      (await p.issuer.transaction(txId: issued.txId)).status,
+      TxStatus.received,
+    );
+  });
+
+  test('a withdrawn invoice reaches the payer only once it proved LEPIC', () async {
+    final p = await parties('withdrawn');
+
+    // Nothing proves yet that the payer runs LEPIC: the cancel sends no notice.
+    final (unproven, _) = await parked(p);
+    await p.issuer.cancelTransaction(txId: unproven.txId);
+    expect(relay.pending(address: p.invoiceAddress), 0);
+    await p.payer.declineInvoice(slateId: unproven.slateId);
+    await p.issuer.drainEpicbox();
+
+    // A paid and finalized invoice proves it.
+    final (first, _) = await parked(p);
+    await p.payer.payInvoice(
+      slateId: first.slateId,
+      amount: BigInt.from(3 * epic),
+      minimumConfirmations: BigInt.one,
+    );
+    expect((await p.issuer.drainEpicbox()).finalized, 1);
+    expect((await p.payer.drainInvoices()).notices, 1);
+
+    final (unpaid, _) = await parked(p);
+    await p.issuer.cancelTransaction(txId: unpaid.txId);
+    expect(relay.pending(address: p.invoiceAddress), 1);
+    expect((await p.payer.drainInvoices()).notices, 1);
+    final gone = await eventWhere(
+      p.payerEvents,
+      (e) =>
+          e.kind == WalletEventKind.invoiceWithdrawn &&
+          e.slateId == unpaid.slateId,
+    );
+    expect(gone.txId, isNull);
+    expect(await p.payer.pendingInvoices(), isEmpty);
+
+    // Withdrawn after the payer paid: the payment is named for a cancel, nothing moves. The
+    // first payment's change is mined first, so there is something to pay with.
+    chain.minePushed();
+    chain.setHeight(height: BigInt.from(30));
+    await p.payer.summary(refresh: true);
+    final (late, _) = await parked(p);
+    final payment = await p.payer.payInvoice(
+      slateId: late.slateId,
+      amount: BigInt.from(3 * epic),
+      minimumConfirmations: BigInt.one,
+    );
+    await p.issuer.cancelTransaction(txId: late.txId);
+    expect((await p.payer.drainInvoices()).notices, 1);
+    final offer = await eventWhere(
+      p.payerEvents,
+      (e) =>
+          e.kind == WalletEventKind.invoiceWithdrawn &&
+          e.slateId == late.slateId,
+    );
+    expect(offer.txId, payment.txId);
+    expect(
+      (await p.payer.transaction(txId: payment.txId)).status,
+      TxStatus.sent,
+    );
+    final pushed = chain.pushedCount();
+    expect((await p.issuer.drainEpicbox()).finalized, 0);
+    expect(chain.pushedCount(), pushed);
+    await p.payer.cancelTransaction(txId: payment.txId);
   });
 
   test('a payment the relay did not take is delivered again', () async {

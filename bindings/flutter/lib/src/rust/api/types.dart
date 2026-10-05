@@ -84,12 +84,17 @@ class InboxReport {
   /// Messages left on the relay for a later drain.
   final int held;
 
+  /// Notices about invoices accepted from the other party: `posted`, `declined` and
+  /// `withdrawn`, each also reported as its event.
+  final int notices;
+
   const InboxReport({
     required this.received,
     required this.finalized,
     required this.repeated,
     required this.rejected,
     required this.held,
+    required this.notices,
   });
 
   @override
@@ -98,7 +103,8 @@ class InboxReport {
       finalized.hashCode ^
       repeated.hashCode ^
       rejected.hashCode ^
-      held.hashCode;
+      held.hashCode ^
+      notices.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -109,7 +115,8 @@ class InboxReport {
           finalized == other.finalized &&
           repeated == other.repeated &&
           rejected == other.rejected &&
-          held == other.held;
+          held == other.held &&
+          notices == other.notices;
 }
 
 /// An invoice waiting on the invoice address for the user to pay or decline, from
@@ -181,8 +188,12 @@ class InvoiceReport {
   final int held;
 
   /// Messages acknowledged and forgotten unopened: from senders that are not allowed, or
-  /// invoices over the limit of waiting invoices.
+  /// invoices over the limit of waiting invoices. Also notices not from the other party of
+  /// their invoice, or of a kind this version does not know.
   final int dropped;
+
+  /// Notices about invoices accepted from the other party, each also reported as its event.
+  final int notices;
 
   const InvoiceReport({
     required this.parked,
@@ -191,6 +202,7 @@ class InvoiceReport {
     required this.rejected,
     required this.held,
     required this.dropped,
+    required this.notices,
   });
 
   @override
@@ -200,7 +212,8 @@ class InvoiceReport {
       repeated.hashCode ^
       rejected.hashCode ^
       held.hashCode ^
-      dropped.hashCode;
+      dropped.hashCode ^
+      notices.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -212,7 +225,8 @@ class InvoiceReport {
           repeated == other.repeated &&
           rejected == other.rejected &&
           held == other.held &&
-          dropped == other.dropped;
+          dropped == other.dropped &&
+          notices == other.notices;
 }
 
 /// A sender whose invoices the invoice address accepts, from `EpicWallet::invoice_senders`.
@@ -851,6 +865,9 @@ class WalletEvent {
   final String? slateId;
   final BigInt? amount;
 
+  /// Hex of the kernel excess, for `InvoicePosted`.
+  final String? kernelExcess;
+
   const WalletEvent({
     required this.kind,
     this.session,
@@ -866,6 +883,7 @@ class WalletEvent {
     this.missed,
     this.slateId,
     this.amount,
+    this.kernelExcess,
   });
 
   @override
@@ -883,7 +901,8 @@ class WalletEvent {
       transportState.hashCode ^
       missed.hashCode ^
       slateId.hashCode ^
-      amount.hashCode;
+      amount.hashCode ^
+      kernelExcess.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -903,7 +922,8 @@ class WalletEvent {
           transportState == other.transportState &&
           missed == other.missed &&
           slateId == other.slateId &&
-          amount == other.amount;
+          amount == other.amount &&
+          kernelExcess == other.kernelExcess;
 }
 
 enum WalletEventKind {
@@ -937,6 +957,20 @@ enum WalletEventKind {
   /// An invoice expired unpaid: `slate_id` is set, and `tx_id` for one this wallet issued,
   /// which was cancelled. A waiting invoice was deleted.
   invoiceExpired,
+
+  /// The issuer of an invoice this wallet paid reports that it posted the transaction:
+  /// `tx_id` (the payment), `slate_id` and `kernel_excess` are set. Advisory; the payment
+  /// confirms when a refresh finds the kernel.
+  invoicePosted,
+
+  /// The payer declined an invoice this wallet issued: `tx_id` and `slate_id` are set.
+  /// Nothing changed; cancel the invoice with `cancel_transaction` to free its output.
+  invoiceDeclined,
+
+  /// The issuer withdrew an invoice: `slate_id` is set. A waiting one was deleted. For one
+  /// this wallet already paid, `tx_id` names the payment: offer the user
+  /// `cancel_transaction`; nothing was cancelled.
+  invoiceWithdrawn,
 }
 
 /// The balance of the default account, in the categories `epic-wallet info` reports.
