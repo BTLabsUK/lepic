@@ -112,8 +112,9 @@ pub enum SendError {
     StoredSlate(#[source] DecodeError),
     #[error("stored private context is malformed")]
     MalformedContext,
-    /// Only an outgoing transaction in state `sent` with a stored S1 slate is delivered again.
-    #[error("transaction {tx_id} is not waiting for its first slate to be delivered")]
+    /// Only an outgoing transaction in state `sent` with a stored S1 slate, or an invoice
+    /// payment with its stored I2, is delivered again.
+    #[error("transaction {tx_id} is not waiting for its slate to be delivered")]
     NotResendable { tx_id: TxId },
     /// The transaction and its slate are stored and the inputs locked;
     /// [`crate::Wallet::resend`] tries again and [`crate::Wallet::cancel`] gives up.
@@ -775,10 +776,12 @@ fn stored_s1_for_delivery(
     else {
         return Err(not_resendable);
     };
-    let stored = repos
+    let Some(stored) = repos
         .slate(slate_uuid, SlateStage::Standard1)?
         .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
-        .ok_or(not_resendable)?;
+    else {
+        return stored_i2_for_delivery(repos, env, tx_id, slate_uuid, delivery);
+    };
     let base_fee = env.base_fee();
     let slate = V3JsonCodec::new(base_fee)
         .decode(&WireSlate::binary(MediaType::JSON, stored.bytes))
@@ -812,6 +815,37 @@ fn stored_s1_for_delivery(
         fee: slate.fee(),
         wire,
         outbox,
+    })
+}
+
+/// The stored I2 of an invoice payment, as it was encoded for its first delivery. It was
+/// encoded by the reply rule of the transport the invoice came over, which gave it the shape of
+/// the I1 and over Epicbox the LEPIC marker, so it goes out unchanged.
+fn stored_i2_for_delivery(
+    repos: &mut dyn Repositories,
+    env: &SendEnvironment<'_>,
+    tx_id: TxId,
+    slate_uuid: Uuid,
+    delivery: &Delivery,
+) -> Result<StoredS1, SendError> {
+    let stored = repos
+        .slate(slate_uuid, SlateStage::Invoice2)?
+        .ok_or(SendError::NotResendable { tx_id })?;
+    let wire = WireSlate::binary(MediaType::JSON, stored.bytes);
+    let slate = legacy_codecs(env.base_fee())
+        .decode(&wire)
+        .map_err(SendError::StoredSlate)?;
+    if slate.stage() != Stage::I2 {
+        return Err(SendError::NotResendable { tx_id });
+    }
+    record_counterparty(repos, tx_id, delivery)?;
+    Ok(StoredS1 {
+        tx_id,
+        slate_id: slate.id(),
+        amount: slate.amount(),
+        fee: slate.fee(),
+        wire,
+        outbox: None,
     })
 }
 
@@ -894,7 +928,8 @@ where
     }
 
     /// Delivers the stored S1 of a transaction whose delivery failed, through `delivery`, which
-    /// may name another transport than the first attempt.
+    /// may name another transport than the first attempt. For an invoice payment, delivers its
+    /// stored I2 as it was first encoded.
     ///
     /// Fails with [`SendError::Wallet`] carrying [`WalletError::UnknownTransaction`],
     /// [`SendError::NotResendable`] when the

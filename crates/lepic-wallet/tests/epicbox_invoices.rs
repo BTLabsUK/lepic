@@ -1,0 +1,660 @@
+//! Invoices over Epicbox between two LEPIC wallets on the mock relay: the payer's invoice
+//! address parks invoices from allowed senders only and drops the rest unopened, the issuer
+//! finalizes and posts the payment, recognises an invoice a stock wallet sent back, and both
+//! sides expire what was left unpaid.
+
+// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
+// treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
+
+mod support;
+#[path = "epicbox_invoices/world.rs"]
+mod world;
+
+use std::time::Duration;
+
+use lepic_epicbox::TRANSPORT_ID;
+use lepic_primitives::amount::Height;
+use lepic_slate::codec::legacy::v3_json::{V3JsonCodec, carries_lepic_marker};
+use lepic_slate::codec::{Codec, EncodeContext};
+use lepic_slate::stage::Stage;
+use lepic_store::{PeerSupport, PendingInvoiceStatus, SlateStage, TxDirection, TxState};
+use lepic_transport::transport::{Destination, Inbound};
+use lepic_wallet::Event;
+use lepic_wallet::epicbox_invoice::InvoiceExpiry;
+use lepic_wallet::inbox::InboxSummary;
+use lepic_wallet::invoice::{InvoiceError, PayRequest};
+use lepic_wallet::send::Delivery;
+use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
+use uuid::Uuid;
+use world::{AMOUNT, TIP, World, pay_request};
+
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn uuid(slate_id: lepic_slate::model::SlateId) -> Uuid {
+    Uuid::from_bytes(*slate_id.as_bytes())
+}
+
+fn codecs() -> CodecRegistry {
+    let base_fee = lepic_primitives::params::Network::Floonet
+        .params()
+        .default_base_fee();
+    let mut codecs = CodecRegistry::new();
+    codecs
+        .register(Box::new(V3JsonCodec::new(base_fee)))
+        .unwrap();
+    codecs
+        .register(Box::new(V2JsonCodec::new(base_fee)))
+        .unwrap();
+    codecs
+}
+
+#[test]
+fn an_invoice_from_an_allowed_sender_is_parked_and_acknowledged() {
+    let world = World::new();
+    let mut events = world.payer.wallet.subscribe();
+    let issued = world.issue(Some("order 17"));
+    let invoice_address = world.payer.invoice_address();
+    assert_eq!(world.relay.pending(&invoice_address), 1);
+
+    let summary = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .epicbox_drain_invoices(&world.payer.epicbox),
+        )
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            parked: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&invoice_address), 0);
+    let parked = world.read_parked(&world.payer, issued.slate_id);
+    assert_eq!(parked.status, PendingInvoiceStatus::Parked);
+    assert_eq!(parked.sender_address, world.issuer.address.to_string());
+    let pending = world
+        .payer
+        .wallet
+        .pending_invoices(InvoiceExpiry::default())
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].slate_id, issued.slate_id);
+    assert_eq!(pending[0].amount.value(), AMOUNT);
+    assert_eq!(pending[0].message.as_deref(), Some("order 17"));
+    assert_eq!(pending[0].sender, world.issuer.address);
+    assert_eq!(
+        pending[0].expires_at,
+        pending[0].received_at.checked_add(DAY).unwrap()
+    );
+    let parked_events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::InvoiceParked(parked) => Some(parked.slate_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(parked_events, vec![issued.slate_id]);
+    // Parking pays nothing.
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.transactions(world::ACCOUNT))
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_invoice_goes_out_as_v3_with_the_marker() {
+    let world = World::new();
+    let peer = world.peer_client(7);
+    world.issue_to(peer.address(), None);
+    let wire = world.block_on(async {
+        let subscription = peer.drain().unwrap();
+        let envelope = world
+            .within(subscription.next_envelope())
+            .await
+            .unwrap()
+            .unwrap();
+        let wire = envelope.wire().clone();
+        subscription
+            .acknowledge(envelope.ack_token())
+            .await
+            .unwrap();
+        subscription.stop().await.unwrap();
+        wire
+    });
+    let slate = V3JsonCodec::new(
+        lepic_primitives::params::Network::Floonet
+            .params()
+            .default_base_fee(),
+    )
+    .decode(&wire)
+    .unwrap();
+    assert_eq!(slate.stage(), Stage::I1);
+    assert!(carries_lepic_marker(&wire));
+}
+
+#[test]
+fn a_message_from_a_sender_not_allowed_is_dropped_unopened_with_no_store_write() {
+    let world = World::new();
+    let invoice_address = world.payer.invoice_address();
+    let drain = || {
+        world
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .epicbox_drain_invoices(&world.payer.epicbox),
+            )
+            .unwrap()
+    };
+    // An empty drain only prunes the relay inbox, which is the baseline.
+    let before = world.payer.writes();
+    assert_eq!(drain(), InboxSummary::default());
+    let baseline = world.payer.writes() - before;
+
+    let msg_ids = world.post(9, &invoice_address, "not a slate", 1);
+    let before = world.payer.writes();
+    let summary = drain();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.payer.writes() - before, baseline);
+    assert_eq!(world.relay.pending(&invoice_address), 0);
+    assert!(world.payer.read(|repos| repos.inbox(&msg_ids[0])).is_none());
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.pending_invoices())
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_thousand_messages_from_strangers_cost_no_store_write_before_an_allowed_invoice() {
+    let world = World::new();
+    let invoice_address = world.payer.invoice_address();
+    let drain = || {
+        world
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .epicbox_drain_invoices(&world.payer.epicbox),
+            )
+            .unwrap()
+    };
+    // Parking one invoice alone gives the writes an allowed invoice costs.
+    world.issue(None);
+    let before = world.payer.writes();
+    assert_eq!(drain().parked, 1);
+    let one_invoice = world.payer.writes() - before;
+
+    world.post(9, &invoice_address, "junk", 1000);
+    let issued = world.issue(None);
+    let before = world.payer.writes();
+    let summary = drain();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            parked: 1,
+            dropped: 1000,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.payer.writes() - before, one_invoice);
+    assert_eq!(world.relay.pending(&invoice_address), 0);
+    assert_eq!(
+        world.read_parked(&world.payer, issued.slate_id).status,
+        PendingInvoiceStatus::Parked
+    );
+}
+
+#[test]
+fn a_paid_invoice_is_finalized_and_posted_by_the_issuer() {
+    let world = World::new();
+    let mut events = world.issuer.wallet.subscribe();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+
+    let paid = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+    assert_eq!(paid.slate.stage(), Stage::I2);
+    assert!(carries_lepic_marker(&paid.reply));
+    assert_eq!(
+        paid.slate.ttl_cutoff_height(),
+        Some(Height::new(TIP + 1440))
+    );
+    assert_eq!(
+        world.read_parked(&world.payer, issued.slate_id).status,
+        PendingInvoiceStatus::Paid
+    );
+    // Paid invoices are no longer offered.
+    assert!(
+        world
+            .payer
+            .wallet
+            .pending_invoices(InvoiceExpiry::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 1);
+
+    let summary = world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            finalized: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    let issued_tx = world
+        .issuer
+        .read(|repos| repos.transaction_by_slate(uuid(issued.slate_id), TxDirection::Incoming));
+    assert_eq!(issued_tx.unwrap().entry.state, TxState::Posted);
+    let finalized: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::InvoiceFinalized(finalized) => Some((finalized.tx_id, finalized.slate_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finalized, vec![(issued.tx_id, issued.slate_id)]);
+}
+
+#[test]
+fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
+    let world = World::new();
+    let stock = world.peer_client(7);
+    let issued = world.issue_to(stock.address(), None);
+    // A stock listener posts the I1 back as it parsed it, without the marker.
+    let bounced = world.block_on(async {
+        let subscription = stock.drain().unwrap();
+        let envelope = world
+            .within(subscription.next_envelope())
+            .await
+            .unwrap()
+            .unwrap();
+        subscription
+            .acknowledge(envelope.ack_token())
+            .await
+            .unwrap();
+        subscription.stop().await.unwrap();
+        let slate = codecs().decode(envelope.wire()).unwrap();
+        let unmarked = V3JsonCodec::new(
+            lepic_primitives::params::Network::Floonet
+                .params()
+                .default_base_fee(),
+        )
+        .encode(
+            &slate,
+            &EncodeContext {
+                block_header_version: 6,
+            },
+        )
+        .unwrap();
+        unmarked.as_text().unwrap().to_owned()
+    });
+    world.post(7, &world.issuer.address, &bounced, 1);
+
+    let summary = world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            bounced: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    let key = stock.address().key_text();
+    let capability = world
+        .issuer
+        .read(|repos| repos.peer_capability(&key))
+        .unwrap();
+    assert_eq!(capability.support, PeerSupport::NoInvoices);
+    // The invoice itself waits for its expiry.
+    let issued_tx = world
+        .issuer
+        .read(|repos| repos.transaction_by_slate(uuid(issued.slate_id), TxDirection::Incoming));
+    assert_eq!(issued_tx.unwrap().entry.state, TxState::Received);
+}
+
+#[test]
+fn an_i1_from_another_key_is_not_taken_for_a_bounce() {
+    let world = World::new();
+    let stock = world.peer_client(7);
+    world.issue_to(stock.address(), None);
+    let i1 = world.block_on(async {
+        let subscription = stock.drain().unwrap();
+        let envelope = world
+            .within(subscription.next_envelope())
+            .await
+            .unwrap()
+            .unwrap();
+        subscription
+            .acknowledge(envelope.ack_token())
+            .await
+            .unwrap();
+        subscription.stop().await.unwrap();
+        envelope.wire().as_text().unwrap().to_owned()
+    });
+    world.post(8, &world.issuer.address, &i1, 1);
+
+    let summary = world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    let key = World::address_of(8).key_text();
+    assert!(
+        world
+            .issuer
+            .read(|repos| repos.peer_capability(&key))
+            .is_none()
+    );
+}
+
+#[test]
+fn expiry_deletes_parked_invoices_cancels_issued_ones_and_refuses_late_payments() {
+    let world = World::new();
+    let expiry = InvoiceExpiry::default();
+    // One invoice the payer pays late, one it never answers.
+    let late = world.issue(None);
+    let ignored = world.issue(None);
+    world.drain_payer_invoices();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    world.payer.clock.advance(DAY + Duration::from_secs(1));
+    world.issuer.clock.advance(DAY + Duration::from_secs(1));
+    // The payer pays the first before its own sweep; the issuer sweeps before it reads it.
+    let paid = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(late.slate_id, pay_request()),
+        )
+        .unwrap();
+    let payer_sweep = world
+        .block_on(world.payer.wallet.sweep_invoices(expiry))
+        .unwrap();
+    let issuer_sweep = world
+        .block_on(world.issuer.wallet.sweep_invoices(expiry))
+        .unwrap();
+
+    assert_eq!(payer_sweep.deleted, vec![ignored.slate_id]);
+    assert!(payer_sweep.cancelled.is_empty());
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.pending_invoice(uuid(ignored.slate_id)))
+            .is_none()
+    );
+    // A paid invoice is never deleted.
+    assert_eq!(
+        world.read_parked(&world.payer, late.slate_id).status,
+        PendingInvoiceStatus::Paid
+    );
+    let mut cancelled = issuer_sweep.cancelled.clone();
+    cancelled.sort_by_key(|tx_id| tx_id.0);
+    let mut expected = vec![late.tx_id, ignored.tx_id];
+    expected.sort_by_key(|tx_id| tx_id.0);
+    assert_eq!(cancelled, expected);
+    for issued in [&late, &ignored] {
+        let state = world
+            .issuer
+            .read(|repos| repos.transaction(issued.tx_id))
+            .unwrap()
+            .state;
+        assert_eq!(state, TxState::Cancelled);
+    }
+    let expired = |events: &mut tokio::sync::broadcast::Receiver<Event>| {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|event| matches!(event, Event::InvoiceExpired(_)))
+            .count()
+    };
+    assert_eq!(expired(&mut payer_events), 1);
+    assert_eq!(expired(&mut issuer_events), 2);
+
+    let summary = world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert!(world.node.pushed_transactions().is_empty());
+    assert!(
+        world
+            .issuer
+            .read(|repos| repos.slate(uuid(paid.slate.id()), SlateStage::Invoice3))
+            .is_none()
+    );
+}
+
+#[test]
+fn a_payment_past_its_ttl_is_offered_for_cancel_and_not_expired_by_refresh() {
+    let world = World::new();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    let paid = world
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            issued.slate_id,
+            PayRequest {
+                ttl_blocks: Some(2),
+                ..pay_request()
+            },
+        ))
+        .unwrap();
+    world
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 3));
+    world.block_on(world.payer.wallet.refresh()).unwrap();
+
+    let sweep = world
+        .block_on(world.payer.wallet.sweep_invoices(InvoiceExpiry::default()))
+        .unwrap();
+
+    assert_eq!(sweep.cancellable, vec![paid.tx_id]);
+    let state = world
+        .payer
+        .read(|repos| repos.transaction(paid.tx_id))
+        .unwrap()
+        .state;
+    assert_eq!(state, TxState::Sent);
+    world
+        .block_on(world.payer.wallet.cancel(paid.tx_id))
+        .unwrap();
+}
+
+#[test]
+fn a_stored_payment_is_delivered_again_after_a_failed_delivery() {
+    let world = World::new();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world.relay.set_refusing(true);
+
+    let error = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap_err();
+    let InvoiceError::PaymentUndelivered {
+        tx_id, slate_id, ..
+    } = error
+    else {
+        panic!("unexpected error {error:?}");
+    };
+    assert_eq!(slate_id, issued.slate_id);
+    world.relay.set_refusing(false);
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+
+    world
+        .block_on(world.payer.wallet.resend(
+            tx_id,
+            Delivery::Deliver {
+                transport: TRANSPORT_ID,
+                to: Destination::new(world.issuer.address.to_string()),
+            },
+        ))
+        .unwrap();
+    let summary = world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+
+    assert_eq!(summary.finalized, 1);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn a_declined_invoice_cannot_be_paid() {
+    let world = World::new();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+
+    world.payer.wallet.decline_invoice(issued.slate_id).unwrap();
+
+    assert_eq!(
+        world.read_parked(&world.payer, issued.slate_id).status,
+        PendingInvoiceStatus::Declined
+    );
+    let error = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, InvoiceError::NotParked { slate_id } if slate_id == issued.slate_id),
+        "{error:?}"
+    );
+    assert!(matches!(
+        world.payer.wallet.decline_invoice(issued.slate_id),
+        Err(InvoiceError::NotParked { .. })
+    ));
+}
+
+#[test]
+fn the_invoice_address_is_index_one_until_rotated_and_never_index_zero() {
+    let world = World::new();
+    let wallet = &world.payer.wallet;
+    assert_eq!(wallet.invoice_address_index().unwrap(), 1);
+    let first = world.payer.invoice_address();
+    assert_ne!(first, world.payer.address);
+
+    let rotated = wallet.rotate_invoice_address(&world.payer.epicbox).unwrap();
+
+    assert_ne!(rotated, first);
+    assert_eq!(wallet.invoice_address_index().unwrap(), 2);
+    assert_eq!(world.payer.invoice_address(), rotated);
+    assert!(matches!(
+        wallet.set_invoice_address_index(0),
+        Err(lepic_wallet::inbox::InboxError::PaymentsAddressIndex)
+    ));
+    wallet.set_invoice_address_index(1).unwrap();
+    assert_eq!(world.payer.invoice_address(), first);
+}
+
+#[test]
+fn the_allowlist_matches_on_the_key_and_keeps_the_address_the_user_added() {
+    let world = World::new();
+    let wallet = &world.payer.wallet;
+    let senders = wallet.invoice_senders().unwrap();
+    assert_eq!(senders.len(), 1);
+    assert_eq!(senders[0].address, world.issuer.address);
+    assert_eq!(senders[0].label, "shop");
+
+    assert!(matches!(
+        wallet.allow_invoice_sender("not an address", "x"),
+        Err(lepic_wallet::inbox::InboxError::Address(_))
+    ));
+    // The same key under another domain is the same sender.
+    let key = world.issuer.address.key_text();
+    assert!(
+        wallet
+            .remove_invoice_sender(&format!("{key}@elsewhere.test"))
+            .unwrap()
+    );
+    assert!(wallet.invoice_senders().unwrap().is_empty());
+
+    // Once removed, its invoices are dropped unopened.
+    world.issue(None);
+    let summary = world
+        .block_on(wallet.epicbox_drain_invoices(&world.payer.epicbox))
+        .unwrap();
+    assert_eq!(
+        summary,
+        InboxSummary {
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+}
+
+impl World {
+    fn drain_payer_invoices(&self) {
+        let summary = self
+            .block_on(
+                self.payer
+                    .wallet
+                    .epicbox_drain_invoices(&self.payer.epicbox),
+            )
+            .unwrap();
+        assert!(summary.parked >= 1, "{summary:?}");
+    }
+
+    fn read_parked(
+        &self,
+        party: &world::Party,
+        slate_id: lepic_slate::model::SlateId,
+    ) -> lepic_store::PendingInvoice {
+        party
+            .read(|repos| repos.pending_invoice(uuid(slate_id)))
+            .unwrap()
+    }
+}

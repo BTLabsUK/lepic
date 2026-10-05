@@ -7,6 +7,10 @@
 //! their meaning (sender 0, receiver 1) while the initiator is participant 1; the legacy
 //! codecs handle that order.
 //!
+//! Over Epicbox, where upstream has nothing, invoice stages travel as V3 with the LEPIC marker,
+//! because the payer sets a TTL on I2 and only the V3 shape carries one; S1 keeps the V2 shape
+//! (`docs/compat/epicbox.md`). [`crate::epicbox_invoice`] parks received invoices and pays them.
+//!
 //! [`build_i1`], [`build_i2`] and [`build_i3`] are the constructions on their own.
 //! [`crate::Wallet::issue_invoice`], [`crate::Wallet::pay_invoice`] and
 //! [`crate::Wallet::finalize_invoice`] run them against the store, each in one store
@@ -16,6 +20,7 @@ mod build;
 
 use jiff::Timestamp;
 use lepic_crypto::CryptoError;
+use lepic_epicbox::TRANSPORT_ID as EPICBOX;
 use lepic_keychain::{IdentifierError, Keychain, KeychainError, ProofError, SwitchCommitment};
 use lepic_node::{NodeApi, NodeError, Propagation};
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
@@ -33,13 +38,14 @@ use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    AccountIndex, KeyId, OutputRecord, OutputStatus, ParticipantId, Repositories, SlateStage,
-    StoreError, StoredSlate, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, KeyId, OutputRecord, OutputStatus, ParticipantId, PendingInvoiceStatus,
+    Repositories, SlateStage, StoreError, StoredSlate, TransactionEntry, TxDirection, TxId,
+    TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
-use lepic_transport::policy::{FormatPolicy, encode_with};
+use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
 use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{Transport, TransportId};
+use lepic_transport::transport::{Destination, Transport, TransportId};
 use thiserror::Error;
 use tracing::field::Empty;
 use tracing::{Span, debug, info, instrument};
@@ -181,6 +187,18 @@ pub enum InvoiceError {
         #[source]
         source: NodeError,
     },
+    /// No invoice with the slate id waits on the invoice address to be paid or declined.
+    #[error("invoice {slate_id} is not waiting to be paid")]
+    NotParked { slate_id: SlateId },
+    /// The payment is stored and its inputs locked; [`crate::Wallet::resend`] delivers the
+    /// stored I2 again, and [`crate::Wallet::cancel`] gives up.
+    #[error("payment {tx_id} of invoice {slate_id} is stored but was not delivered")]
+    PaymentUndelivered {
+        tx_id: TxId,
+        slate_id: SlateId,
+        #[source]
+        source: TransportError,
+    },
 }
 
 impl From<StoreError> for InvoiceError {
@@ -261,9 +279,24 @@ pub struct PaidInvoice {
 
 /// The codecs a legacy transport policy decodes and encodes with, at the network's base fee.
 fn legacy_codecs(base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
+    codecs_with(V3JsonCodec::new(base_fee), base_fee)
+}
+
+/// The codecs invoice stages go out with over `transport`: over Epicbox the V3 codec writes
+/// the LEPIC marker, so a reply that keeps it proves the peer runs LEPIC.
+fn invoice_codecs(transport: TransportId, base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
+    let v3 = V3JsonCodec::new(base_fee);
+    if transport == EPICBOX {
+        codecs_with(v3.with_lepic_marker(), base_fee)
+    } else {
+        codecs_with(v3, base_fee)
+    }
+}
+
+fn codecs_with(v3: V3JsonCodec, base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
     let mut codecs = CodecRegistry::new();
     codecs
-        .register(Box::new(V3JsonCodec::new(base_fee)))
+        .register(Box::new(v3))
         .map_err(InvoiceError::Codecs)?;
     codecs
         .register(Box::new(V2JsonCodec::new(base_fee)))
@@ -302,8 +335,26 @@ fn delivering<'a>(
     }
 }
 
+/// The encoding of a new I1 over `transport`. Over Epicbox it is V3, which upstream's
+/// untagged parse reads first, instead of the V2 shape the Epicbox policy gives a new S1: the
+/// payer's TTL on I2 has no field in V2, and I2 answers in the shape of I1.
+fn new_invoice_encoding(
+    transport: &dyn Transport,
+    slate: &Slate,
+    context: &EncodeContext,
+) -> Encoding {
+    if transport.id() == EPICBOX {
+        Encoding {
+            codec: LEGACY_V3_JSON,
+            legacy_header: None,
+        }
+    } else {
+        transport.policy().for_new_slate(slate, context)
+    }
+}
+
 /// An I1 or I2 whose sender and receiver messages, if any, are signed by their authors.
-fn check_messages(slate: &Slate) -> Result<(), InvoiceError> {
+pub(crate) fn check_messages(slate: &Slate) -> Result<(), InvoiceError> {
     for (role, participant) in slate.participants() {
         if let Some(message) = &participant.message {
             verify_message(message, &participant.public_blind_excess)
@@ -390,14 +441,14 @@ fn issue_stored(
         randomness,
     )?;
     let slate = built.slate;
-    let wire = transport
-        .policy()
-        .encode_new_slate(
-            &legacy_codecs(env.base_fee())?,
-            &slate,
-            &encode_context(env.network, &slate),
-        )
-        .map_err(InvoiceError::Encode)?;
+    let context = encode_context(env.network, &slate);
+    let wire = encode_with(
+        &invoice_codecs(transport.id(), env.base_fee())?,
+        new_invoice_encoding(transport, &slate, &context),
+        &slate,
+        &context,
+    )
+    .map_err(InvoiceError::Encode)?;
     let stored = env.stored(&slate)?;
 
     let slate_id = uuid(slate.id());
@@ -497,8 +548,13 @@ fn pay_stored(
     let slate = build_i2(env.keychain, i1, &plan, randomness)?;
     let context = encode_context(env.network, &slate);
     let encoding = policy.for_reply(&slate, &context);
-    let reply = encode_with(&legacy_codecs(env.base_fee())?, encoding, &slate, &context)
-        .map_err(InvoiceError::Encode)?;
+    let reply = encode_with(
+        &invoice_codecs(transport, env.base_fee())?,
+        encoding,
+        &slate,
+        &context,
+    )
+    .map_err(InvoiceError::Encode)?;
 
     let slate_uuid = uuid(slate_id);
     let total_change = plan.change.iter().try_fold(Amount::ZERO, |total, change| {
@@ -654,7 +710,8 @@ where
     /// Issues an invoice for `request.amount` to `request.account`: builds the I1 with this
     /// wallet's output, stores the output, the private context, the transaction (incoming,
     /// `received`) and the I1, then delivers it as `delivery` says, encoded with that
-    /// transport's rule for a new slate.
+    /// transport's rule for a new slate. Over Epicbox the I1 goes out as V3 with the LEPIC
+    /// marker, for the payer's invoice address.
     ///
     /// Asks the node for its tip. Fails, with nothing stored, with [`InvoiceError::Wallet`]
     /// carrying [`WalletError::Locked`], an unknown account or
@@ -763,7 +820,6 @@ where
         wire: &WireSlate,
         request: PayRequest,
     ) -> Result<PaidInvoice, InvoiceError> {
-        let session = self.session()?;
         let network = self.config().network;
         let i1 = registered(&self.ports().transports, transport)?
             .policy()
@@ -772,6 +828,23 @@ where
         let span = Span::current();
         span.record("slate_id", tracing::field::display(i1.id()));
         span.record("stage", i1.stage().as_str());
+        let paid = self.pay_decoded(transport, i1, request, None).await?;
+        span.record("tx_id", paid.tx_id.0);
+        info!("invoice paid");
+        Ok(paid)
+    }
+
+    /// Checks and pays a decoded I1, as [`Wallet::pay_invoice`] describes. With `parked`, the
+    /// same store transaction marks that parked invoice paid and records where the I2 goes.
+    pub(crate) async fn pay_decoded(
+        &self,
+        transport: TransportId,
+        i1: Slate,
+        request: PayRequest,
+        parked: Option<Destination>,
+    ) -> Result<PaidInvoice, InvoiceError> {
+        let session = self.session()?;
+        let network = self.config().network;
         if i1.stage() != Stage::I1 {
             return Err(InvoiceError::WrongStage { stage: i1.stage() });
         }
@@ -805,7 +878,7 @@ where
                     let randomness = I2Randomness::draw(&mut **ports.rng.lock())
                         .map_err(InvoiceError::Signing)?;
                     session.store.write(|repos| {
-                        pay_stored(
+                        let paid = pay_stored(
                             repos,
                             &env,
                             transport,
@@ -813,14 +886,20 @@ where
                             &i1,
                             &request,
                             &randomness,
-                        )
+                        )?;
+                        if let Some(to) = &parked {
+                            repos.set_pending_invoice_status(
+                                uuid(i1.id()),
+                                PendingInvoiceStatus::Paid,
+                            )?;
+                            repos.set_counterparty(paid.tx_id, to.as_str())?;
+                        }
+                        Ok(paid)
                     })
                 });
                 Ok(paid)
             })
             .await??;
-        span.record("tx_id", paid.tx_id.0);
-        info!("invoice paid");
         Ok(paid)
     }
 

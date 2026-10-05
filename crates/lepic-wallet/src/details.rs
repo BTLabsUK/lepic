@@ -16,6 +16,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::account::AccountError;
+use crate::epicbox_invoice::display_message;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
@@ -63,6 +64,7 @@ pub struct TransactionDetails {
 pub struct SlateMessage {
     /// The party that wrote it: the sender or the receiver of the money, whoever started.
     pub role: Role,
+    /// The signed text as [`display_message`] makes it safe to display.
     pub text: String,
 }
 
@@ -186,7 +188,7 @@ fn verified_messages(slate: &Slate) -> Vec<SlateMessage> {
                 .ok()
                 .map(|()| SlateMessage {
                     role,
-                    text: message.text().to_owned(),
+                    text: display_message(message.text()),
                 })
         })
         .collect()

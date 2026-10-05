@@ -198,3 +198,19 @@ fn a_send_without_a_message_shows_none() {
 
     assert!(sender_messages(&sender, sent.tx_id).is_empty());
 }
+
+#[test]
+fn a_message_is_shown_without_control_or_bidirectional_characters() {
+    let (sender, tx_id, s1) = sent("pay \u{202E}evil\u{2069}\nnow");
+    // The signed text keeps every character; only what the host sees loses them.
+    let signed: Value = serde_json::from_str(s1.as_text().unwrap()).unwrap();
+    assert_eq!(
+        signed["participant_data"][0]["message"],
+        "pay \u{202E}evil\u{2069}\nnow"
+    );
+
+    assert_eq!(
+        sender_messages(&sender, tx_id),
+        [message(Role::Sender, "pay evilnow")]
+    );
+}

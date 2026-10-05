@@ -34,6 +34,7 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
+use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
 use crate::event::{Balance, Event};
 use crate::finalize::kernel_excess;
@@ -712,7 +713,8 @@ pub(crate) fn final_kernel(
 
 /// Open transactions at or past their TTL cutoff at `tip`. A finalized or posted transaction
 /// is left out, as upstream leaves out what it has finalized: its kernel may reach the chain
-/// whatever the TTL says.
+/// whatever the TTL says. So is the payment of an invoice over Epicbox, which the issuer may
+/// have posted: [`Wallet::sweep_invoices`] offers it to the user to cancel instead.
 fn expiring(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -720,7 +722,9 @@ fn expiring(
 ) -> Result<Vec<StoredTransaction>, RefreshError> {
     let mut expiring = Vec::new();
     for stored in open_transactions(repos)? {
-        if matches!(stored.entry.state, TxState::Posted | TxState::Finalized) {
+        if matches!(stored.entry.state, TxState::Posted | TxState::Finalized)
+            || epicbox_invoice_payment(repos, &stored)?.is_some()
+        {
             continue;
         }
         let Some(slate_id) = stored.entry.slate_id else {

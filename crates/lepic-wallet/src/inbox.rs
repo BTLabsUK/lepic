@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
-    Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
+    AddressError, Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
     Network as RelayNetwork, RELAY_RETENTION, Rejection, RelayMessageId, Subscription,
     TRANSPORT_ID,
 };
@@ -31,7 +31,7 @@ use lepic_slate::codec::WireSlate;
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    AccountIndex, InboxEntry, InboxStatus, Repositories, SlateStage, StoreError, WalletStore,
+    AccountIndex, InboxEntry, InboxStatus, Repositories, SlateStage, StoreError, TxId, WalletStore,
 };
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Destination, Envelope, Inbound, TransportId};
@@ -42,8 +42,9 @@ use uuid::Uuid;
 
 use crate::account;
 use crate::error::WalletError;
-use crate::event::{Event, TransportState, TransportStatus};
+use crate::event::{Event, FinalizedInvoice, TransportState, TransportStatus};
 use crate::finalize::FinalizeError;
+use crate::invoice::InvoiceError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
 use crate::refresh::last_confirmed;
@@ -79,6 +80,22 @@ pub enum InboxError {
     Subscription(#[source] ClientError),
     #[error("epicbox subscription failed")]
     Transport(#[source] TransportError),
+    #[error("epicbox address rejected")]
+    Address(#[source] AddressError),
+    #[error("address index 0 is the payments address, not an invoice address")]
+    PaymentsAddressIndex,
+    #[error("no invoice address index is left to rotate to")]
+    InvoiceIndexExhausted,
+    #[error("invoice expiry must be positive and at most two days")]
+    InvoiceExpiry,
+    #[error("sender label is too long or holds control characters")]
+    SenderLabel,
+}
+
+impl From<StoreError> for InboxError {
+    fn from(error: StoreError) -> Self {
+        Self::Wallet(WalletError::Store(error))
+    }
 }
 
 /// What one listen or drain did with the messages it was handed.
@@ -86,7 +103,7 @@ pub enum InboxError {
 pub struct InboxSummary {
     /// S1 slates received and answered with S2.
     pub received: u32,
-    /// S2 slates finalized for the first time; posting may still be pending.
+    /// S2 and I2 slates finalized for the first time; posting may still be pending.
     pub finalized: u32,
     /// Messages handled before and acknowledged again: an S1 answered again with its stored S2,
     /// or an S2 that was already finalized.
@@ -95,6 +112,14 @@ pub struct InboxSummary {
     pub rejected: u32,
     /// Messages left unacknowledged after a transient failure; the relay delivers them again.
     pub held: u32,
+    /// Invoices stored on the invoice address for the user to pay or decline.
+    pub parked: u32,
+    /// Invoices this wallet issued that the payer sent back unchanged, so it does not pay
+    /// invoices.
+    pub bounced: u32,
+    /// Messages acknowledged and forgotten on the invoice address: from a sender that is not
+    /// allowed, never opened, or invoices over the parking caps.
+    pub dropped: u32,
 }
 
 impl InboxSummary {
@@ -104,6 +129,9 @@ impl InboxSummary {
             Handled::Finalized => &mut self.finalized,
             Handled::Repeated => &mut self.repeated,
             Handled::Rejected => &mut self.rejected,
+            Handled::Parked => &mut self.parked,
+            Handled::Bounced => &mut self.bounced,
+            Handled::Dropped => &mut self.dropped,
         };
         *counter = counter.saturating_add(1);
     }
@@ -141,20 +169,34 @@ impl Default for ListenHandle {
     }
 }
 
+/// Which of the wallet's addresses a subscription serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mailbox {
+    /// Index 0, which accepts payments from anyone.
+    Payments,
+    /// The invoice address, which hears only from allowed senders.
+    Invoices,
+}
+
 /// What became of one message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Handled {
+pub(crate) enum Handled {
     Received,
     Finalized,
     Repeated,
     Rejected,
+    Parked,
+    Bounced,
+    Dropped,
 }
 
 impl Handled {
     fn inbox_status(self) -> InboxStatus {
         match self {
-            Self::Rejected => InboxStatus::Rejected,
-            Self::Received | Self::Finalized | Self::Repeated => InboxStatus::Processed,
+            Self::Rejected | Self::Dropped => InboxStatus::Rejected,
+            Self::Received | Self::Finalized | Self::Repeated | Self::Parked | Self::Bounced => {
+                InboxStatus::Processed
+            }
         }
     }
 }
@@ -196,7 +238,7 @@ impl Item {
 
 /// Why a message is rejected for good, for the log.
 #[derive(Debug, Error)]
-enum Refusal {
+pub(crate) enum Refusal {
     #[error("message carries no reply address")]
     NoReplyAddress,
     #[error("slate could not be decoded")]
@@ -209,11 +251,17 @@ enum Refusal {
     Receive(#[source] ReceiveError),
     #[error("slate was not finalized")]
     Finalize(#[source] FinalizeError),
+    #[error("invoice was not finalized")]
+    Invoice(#[source] InvoiceError),
+    #[error("invoice comes from a sender that is not allowed")]
+    SenderNotAllowed,
+    #[error("invoice message signature does not verify")]
+    InvoiceMessage(#[source] InvoiceError),
 }
 
 /// A failure that leaves the message for the relay to deliver again.
 #[derive(Debug, Error)]
-enum Hold {
+pub(crate) enum Hold {
     #[error("wallet operation failed")]
     Wallet(#[from] WalletError),
     #[error("transport {transport} cannot deliver the reply")]
@@ -224,6 +272,8 @@ enum Hold {
     Receive(#[source] ReceiveError),
     #[error("slate was not finalized")]
     Finalize(#[source] FinalizeError),
+    #[error("invoice was not finalized")]
+    Invoice(#[source] InvoiceError),
 }
 
 impl From<StoreError> for Hold {
@@ -233,7 +283,7 @@ impl From<StoreError> for Hold {
 }
 
 /// Displays an error with its source chain, for the `error` log field.
-struct ErrorChain<'a>(&'a (dyn StdError + 'static));
+pub(crate) struct ErrorChain<'a>(pub(crate) &'a (dyn StdError + 'static));
 
 impl fmt::Display for ErrorChain<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -306,12 +356,56 @@ fn finalize_is_permanent(error: &FinalizeError) -> bool {
     }
 }
 
+/// Failures of finalizing an I2 that the same message would meet again, as for an S2. A late
+/// I2 for an invoice cancelled or expired here is refused this way.
+fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
+    match error {
+        InvoiceError::Wallet(_)
+        | InvoiceError::Node(_)
+        | InvoiceError::UnknownTransport { .. }
+        | InvoiceError::CannotDeliver { .. }
+        | InvoiceError::CannotExport { .. }
+        | InvoiceError::Codecs(_)
+        | InvoiceError::Selection(_)
+        | InvoiceError::NotPosted { .. }
+        | InvoiceError::Undelivered { .. }
+        | InvoiceError::PaymentUndelivered { .. } => false,
+        InvoiceError::Decode(_)
+        | InvoiceError::WrongStage { .. }
+        | InvoiceError::AmountMismatch { .. }
+        | InvoiceError::AlreadyPaid { .. }
+        | InvoiceError::Expired { .. }
+        | InvoiceError::MessageSignature { .. }
+        | InvoiceError::Mismatch { .. }
+        | InvoiceError::InputKeyMismatch
+        | InvoiceError::KeyIdentifier(_)
+        | InvoiceError::Output(_)
+        | InvoiceError::Signing(_)
+        | InvoiceError::PayerSignature(_)
+        | InvoiceError::FeeBelowMinimum { .. }
+        | InvoiceError::FeeOverflow
+        | InvoiceError::Excess(_)
+        | InvoiceError::InvalidTransaction(_)
+        | InvoiceError::Slate(_)
+        | InvoiceError::Arithmetic(_)
+        | InvoiceError::Encode(_)
+        | InvoiceError::Unrepresentable(_)
+        | InvoiceError::StoredSlate(_)
+        | InvoiceError::UnknownSlate { .. }
+        | InvoiceError::AlreadyFinalized { .. }
+        | InvoiceError::NotFinalizable { .. }
+        | InvoiceError::MissingContext { .. }
+        | InvoiceError::MalformedContext
+        | InvoiceError::NotParked { .. } => true,
+    }
+}
+
 /// The relay client's reconnect backoff also paces the retries of a held message.
 fn backoff(epicbox: &EpicboxTransport) -> Backoff {
     epicbox.settings().backoff
 }
 
-fn relay_network(network: Network) -> RelayNetwork {
+pub(crate) fn relay_network(network: Network) -> RelayNetwork {
     match network {
         Network::Mainnet => RelayNetwork::Mainnet,
         Network::Floonet => RelayNetwork::Floonet,
@@ -345,7 +439,10 @@ fn put_inbox(
 
 /// Forgets relay message ids received longer ago than the relay keeps messages, since the relay
 /// can no longer deliver them; `(slate_id, stage)` still makes a late copy harmless.
-fn prune_inbox(repos: &mut dyn Repositories, now: jiff::Timestamp) -> Result<usize, StoreError> {
+pub(crate) fn prune_inbox(
+    repos: &mut dyn Repositories,
+    now: jiff::Timestamp,
+) -> Result<usize, StoreError> {
     match now.checked_sub(RELAY_RETENTION) {
         Ok(cutoff) => repos.prune_inbox(cutoff),
         Err(_) => Ok(0),
@@ -424,6 +521,16 @@ where
     }
 
     fn attached_client(&self, epicbox: &EpicboxTransport) -> Result<EpicboxClient, InboxError> {
+        Ok(epicbox.attach(self.identity_at(epicbox, ADDRESS_INDEX)?))
+    }
+
+    /// The wallet's Epicbox identity at address index `index` of the default account, at the
+    /// relay of `epicbox`.
+    pub(crate) fn identity_at(
+        &self,
+        epicbox: &EpicboxTransport,
+        index: u32,
+    ) -> Result<Identity, InboxError> {
         let network = relay_network(self.config().network);
         if epicbox.network() != network {
             return Err(InboxError::NetworkMismatch);
@@ -432,7 +539,7 @@ where
         let parent = account::parent_key_id(ADDRESS_ACCOUNT)?;
         let secret = session
             .keychain
-            .address_key(&parent, ADDRESS_INDEX)
+            .address_key(&parent, index)
             .map_err(WalletError::Keychain)?;
         let public = lepic_crypto::PublicKey::from_secret_key(&secret)
             .map_err(|_| InboxError::Identity(ClientError::IdentityMismatch))?;
@@ -443,8 +550,7 @@ where
             endpoint.domain().clone(),
             Some(endpoint.port()),
         );
-        let identity = Identity::new(secret, address).map_err(InboxError::Identity)?;
-        Ok(epicbox.attach(identity))
+        Identity::new(secret, address).map_err(InboxError::Identity)
     }
 
     /// Connects to the relay once, handles every pending message and disconnects: the mode for
@@ -467,7 +573,8 @@ where
     ) -> Result<InboxSummary, InboxError> {
         let client = self.inbox_client(epicbox).await?;
         let subscription = client.drain().map_err(InboxError::Subscription)?;
-        self.run_inbox(&subscription, None, backoff(epicbox)).await
+        self.run_inbox(&subscription, None, backoff(epicbox), Mailbox::Payments)
+            .await
     }
 
     /// Holds a relay connection and handles messages as they arrive, until `handle` is stopped:
@@ -488,35 +595,56 @@ where
     ) -> Result<InboxSummary, InboxError> {
         let client = self.inbox_client(epicbox).await?;
         let subscription = client.listen().map_err(InboxError::Subscription)?;
-        self.run_inbox(&subscription, Some(handle), backoff(epicbox))
-            .await
+        self.run_inbox(
+            &subscription,
+            Some(handle),
+            backoff(epicbox),
+            Mailbox::Payments,
+        )
+        .await
     }
 
     /// The attached client for a drain or a listen, after pruning the relay inbox. Pruning runs
     /// before the subscription starts, so the host sees every connection state.
     async fn inbox_client(&self, epicbox: &EpicboxTransport) -> Result<EpicboxClient, InboxError> {
+        self.check_epicbox_registered()?;
+        let client = self.attached_client(epicbox)?;
+        self.prune_relay_inbox().await;
+        Ok(client)
+    }
+
+    pub(crate) fn check_epicbox_registered(&self) -> Result<(), InboxError> {
         if self.ports().transports.get(TRANSPORT_ID).is_none() {
             return Err(InboxError::UnknownTransport {
                 transport: TRANSPORT_ID,
             });
         }
-        let client = self.attached_client(epicbox)?;
+        Ok(())
+    }
+
+    pub(crate) async fn prune_relay_inbox(&self) {
         if let Err(error) = self.inbox_write(prune_inbox).await {
             warn!(error = %ErrorChain(&error), "epicbox inbox not pruned");
         }
-        Ok(client)
     }
 
     /// Consumes the subscription and stops it, while its connection state goes out as events.
-    async fn run_inbox(
+    pub(crate) async fn run_inbox(
         &self,
         subscription: &Subscription,
         listen: Option<&ListenHandle>,
         backoff: Backoff,
+        mailbox: Mailbox,
     ) -> Result<InboxSummary, InboxError> {
         let consume = async {
             let consumed = self
-                .consume(subscription, listen, backoff, &PruneSchedule::default())
+                .consume(
+                    subscription,
+                    listen,
+                    backoff,
+                    &PruneSchedule::default(),
+                    mailbox,
+                )
                 .await;
             // A failed connection explains a failed consume better than the consume does.
             subscription
@@ -554,6 +682,7 @@ where
         listen: Option<&ListenHandle>,
         backoff: Backoff,
         pruning: &PruneSchedule,
+        mailbox: Mailbox,
     ) -> Result<InboxSummary, InboxError> {
         let mut summary = InboxSummary::default();
         loop {
@@ -593,7 +722,7 @@ where
                 }
             };
             match self
-                .settle(subscription, &item, listen, backoff, pruning)
+                .settle(subscription, &item, listen, backoff, pruning, mailbox)
                 .await
             {
                 Some(handled) => summary.count(handled),
@@ -614,15 +743,16 @@ where
         listen: Option<&ListenHandle>,
         backoff: Backoff,
         pruning: &PruneSchedule,
+        mailbox: Mailbox,
     ) -> Option<Handled> {
         let mut attempt: u32 = 0;
         let handled = loop {
             let disposition = match listen {
-                None => self.handle(item, pruning).await,
+                None => self.handle(item, pruning, mailbox).await,
                 Some(handle) => tokio::select! {
                     biased;
                     () = handle.stopped() => return None,
-                    disposition = self.handle(item, pruning) => disposition,
+                    disposition = self.handle(item, pruning, mailbox) => disposition,
                 },
             };
             match (disposition, listen) {
@@ -676,7 +806,7 @@ where
             }
         }
         debug!(msg_id, "epicbox message settled");
-        if handled == Handled::Rejected {
+        if handled.inbox_status() == InboxStatus::Rejected {
             return;
         }
         let Some(msg_id) = item.msg_id().map(str::to_owned) else {
@@ -692,7 +822,7 @@ where
         }
     }
 
-    async fn handle(&self, item: &Item, pruning: &PruneSchedule) -> Disposition {
+    async fn handle(&self, item: &Item, pruning: &PruneSchedule, mailbox: Mailbox) -> Disposition {
         let msg_id = item.msg_id().map(str::to_owned);
         let outcome = match item {
             Item::Rejection(rejection) => {
@@ -703,7 +833,10 @@ where
                 );
                 Ok(Handled::Rejected)
             }
-            Item::Envelope(envelope, _) => self.handle_envelope(msg_id.as_deref(), envelope).await,
+            Item::Envelope(envelope, _) => {
+                self.handle_envelope(msg_id.as_deref(), envelope, mailbox)
+                    .await
+            }
         };
         let handled = match outcome {
             Ok(handled) => handled,
@@ -740,6 +873,7 @@ where
         &self,
         msg_id: Option<&str>,
         envelope: &Envelope,
+        mailbox: Mailbox,
     ) -> Result<Handled, Hold> {
         if let Some(msg_id) = msg_id.map(str::to_owned) {
             let previous = self
@@ -753,7 +887,7 @@ where
                 return Ok(Handled::Repeated);
             }
         }
-        match self.apply(envelope).await {
+        match self.apply(envelope, mailbox).await {
             Ok(handled) => Ok(handled),
             Err(Settlement::Hold(hold)) => Err(hold),
             Err(Settlement::Refuse(refusal)) => {
@@ -767,7 +901,7 @@ where
         }
     }
 
-    async fn apply(&self, envelope: &Envelope) -> Result<Handled, Settlement> {
+    async fn apply(&self, envelope: &Envelope, mailbox: Mailbox) -> Result<Handled, Settlement> {
         let reply_to = envelope.reply_to().ok_or(Refusal::NoReplyAddress)?;
         let network = self.config().network;
         let transport = self
@@ -785,11 +919,69 @@ where
             .policy()
             .decode(&codecs, envelope.wire())
             .map_err(Refusal::Decode)?;
-        match slate.stage() {
-            Stage::S1 => self.answer(envelope, reply_to).await,
-            Stage::S2 => self.complete(envelope, &slate).await,
-            stage => Err(Refusal::UnsupportedStage { stage }.into()),
+        match (slate.stage(), mailbox) {
+            (Stage::S1, Mailbox::Payments) => self.answer(envelope, reply_to).await,
+            (Stage::S2, Mailbox::Payments) => self.complete(envelope, &slate).await,
+            (Stage::I1, _) if self.is_bounce(&slate, reply_to).await? => {
+                self.record_bounce(reply_to).await?;
+                Ok(Handled::Bounced)
+            }
+            (Stage::I1, Mailbox::Invoices) => self.park(envelope, &slate, reply_to).await,
+            (Stage::I2, _) => self.complete_invoice(envelope, &slate).await,
+            (stage, _) => Err(Refusal::UnsupportedStage { stage }.into()),
         }
+    }
+
+    /// Finalizes an I2 and posts it, as [`Self::complete`] does for an S2. Only an I2 that
+    /// answers an invoice this wallet issued and still waits for payment is finalized.
+    async fn complete_invoice(
+        &self,
+        envelope: &Envelope,
+        payment: &Slate,
+    ) -> Result<Handled, Settlement> {
+        let session = self.session().map_err(Hold::from)?;
+        let slate_id = Uuid::from_bytes(*payment.id().as_bytes());
+        let finalized_before = self
+            .blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| repos.slate(slate_id, SlateStage::Invoice3))?
+                    .is_some())
+            })
+            .await
+            .map_err(Hold::from)?;
+        match self
+            .finalize_invoice(TRANSPORT_ID, envelope.wire(), POST_PROPAGATION)
+            .await
+        {
+            Ok(finalized) => Ok(self.invoice_finalized(finalized.tx_id, payment, finalized_before)),
+            Err(InvoiceError::NotPosted { tx_id, source }) => {
+                warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
+                Ok(self.invoice_finalized(tx_id, payment, finalized_before))
+            }
+            Err(error @ InvoiceError::Expired { cutoff, .. }) => {
+                if self.confirmed_at(cutoff).await? {
+                    Err(Refusal::Invoice(error).into())
+                } else {
+                    Err(Hold::Invoice(error).into())
+                }
+            }
+            Err(error) if invoice_finalize_is_permanent(&error) => {
+                Err(Refusal::Invoice(error).into())
+            }
+            Err(error) => Err(Hold::Invoice(error).into()),
+        }
+    }
+
+    fn invoice_finalized(&self, tx_id: TxId, payment: &Slate, finalized_before: bool) -> Handled {
+        if finalized_before {
+            return Handled::Repeated;
+        }
+        self.emit(Event::InvoiceFinalized(FinalizedInvoice {
+            tx_id,
+            slate_id: payment.id(),
+        }));
+        Handled::Finalized
     }
 
     /// Receives an S1 and replies with S2, or replies again with the S2 stored for it. A
@@ -891,7 +1083,10 @@ where
     /// Whether a refresh stored a confirmed height at or past `cutoff`. Only then is a slate
     /// that expired by the node's tip refused for good; until then the tip alone may be wrong,
     /// so the message stays on the relay.
-    async fn confirmed_at(&self, cutoff: lepic_primitives::amount::Height) -> Result<bool, Hold> {
+    pub(crate) async fn confirmed_at(
+        &self,
+        cutoff: lepic_primitives::amount::Height,
+    ) -> Result<bool, Hold> {
         let session = self.session()?;
         let confirmed = self
             .blocking(move |_, _| Ok(session.store.read(|repos| last_confirmed(repos))?))
@@ -899,7 +1094,7 @@ where
         Ok(confirmed.is_some_and(|height| height >= cutoff))
     }
 
-    async fn inbox_write<T: Send + 'static>(
+    pub(crate) async fn inbox_write<T: Send + 'static>(
         &self,
         work: impl FnOnce(&mut dyn Repositories, jiff::Timestamp) -> Result<T, StoreError>
         + Send
@@ -915,7 +1110,7 @@ where
 }
 
 /// How a message that was not handled ends: refused for good, or held for redelivery.
-enum Settlement {
+pub(crate) enum Settlement {
     Refuse(Refusal),
     Hold(Hold),
 }

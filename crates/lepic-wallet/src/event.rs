@@ -25,6 +25,15 @@ pub enum Event {
     AnsweredAgain(AnsweredSlate),
     Sync(SyncProgress),
     Transport(TransportStatus),
+    /// An invoice from an allowed sender was stored on the invoice address, waiting for the
+    /// user to pay or decline it. Nothing was paid.
+    InvoiceParked(ParkedInvoice),
+    /// An invoice this wallet issued was paid and finalized. Its posting shows as
+    /// [`Event::Transaction`].
+    InvoiceFinalized(FinalizedInvoice),
+    /// An invoice expired unpaid: a parked one was deleted, or one this wallet issued was
+    /// cancelled.
+    InvoiceExpired(ExpiredInvoice),
 }
 
 /// Whether the root key is in memory.
@@ -73,6 +82,25 @@ pub struct AnsweredSlate {
     pub tx_id: TxId,
     pub slate_id: SlateId,
     pub transport: TransportId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParkedInvoice {
+    pub slate_id: SlateId,
+    pub amount: Amount,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FinalizedInvoice {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpiredInvoice {
+    pub slate_id: SlateId,
+    /// The issuer's cancelled transaction; `None` for a parked invoice, which has none.
+    pub tx_id: Option<TxId>,
 }
 
 impl From<StateChange> for Event {

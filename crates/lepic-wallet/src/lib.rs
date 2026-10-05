@@ -14,6 +14,7 @@ mod cancel;
 pub mod chain;
 pub mod config;
 pub mod details;
+pub mod epicbox_invoice;
 pub mod error;
 mod estimate;
 pub mod event;
