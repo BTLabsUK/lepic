@@ -460,7 +460,7 @@ fn an_s1_redelivered_after_its_receive_was_cancelled_is_rejected() {
 }
 
 #[test]
-fn an_s1_expired_by_the_tip_alone_stays_on_the_relay_until_a_refresh_confirms_the_height() {
+fn an_s1_expired_by_the_tip_alone_stays_on_the_relay_while_no_refresh_confirms_the_height() {
     let world = World::new();
     let path = format!(
         "{}/../../testdata/vectors/slates/send_file_ttl_s1_v3.json",
@@ -476,8 +476,12 @@ fn an_s1_expired_by_the_tip_alone_stays_on_the_relay_until_a_refresh_confirms_th
         .parse()
         .unwrap();
     let msg_id = world.post_to_receiver(7, 7, &s1);
+    // Further ahead than one node answer may move the confirmed height, so the refresh the
+    // drain makes before holding the slate keeps this tip pending.
     world.receiver.harness.node.update_chain(|chain| {
-        chain.tip.height = lepic_primitives::amount::Height::new(cutoff);
+        chain.tip.height = lepic_primitives::amount::Height::new(
+            cutoff + lepic_wallet::chain::TIP_STEP_BLOCKS + 1,
+        );
     });
 
     let held = world

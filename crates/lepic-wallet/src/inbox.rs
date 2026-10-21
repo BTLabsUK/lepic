@@ -9,6 +9,15 @@
 //! when the relay gave it one; a transient failure leaves it
 //! unacknowledged, so the relay delivers it again.
 //!
+//! A held message holds back everything behind it, because the relay delivers one message at a
+//! time. So holds are bounded: a reply the relay refuses, or one still undelivered
+//! [`HOLD_PATIENCE`] after its message first arrived, leaves the payment received and settles
+//! the message with [`Event::ReplyUndelivered`]; a slate still expired by the tip alone after one
+//! refresh and that long is refused.
+//!
+//! Payments nobody asked for are bounded too: at most [`MAX_OPEN_RECEIPTS_PER_SENDER`] open
+//! receipts per sender key and [`MAX_OPEN_RECEIPTS`] in all (see their docs).
+//!
 //! Every message is idempotent on its relay id and on `(slate_id, stage)`: a redelivered S1 is
 //! answered with the S2 stored the first time, never a new one, and announced as
 //! [`Event::AnsweredAgain`]; finalizing an S2 again changes nothing that is stored. A message
@@ -22,8 +31,8 @@ use std::time::Duration;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
     AddressError, Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
-    Network as RelayNetwork, RELAY_RETENTION, Rejection, RelayMessageId, Subscription,
-    TRANSPORT_ID,
+    Network as RelayNetwork, RELAY_RETENTION, Rejection, RelayErrorKind, RelayMessageId,
+    Subscription, TRANSPORT_ID,
 };
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::params::Network;
@@ -32,7 +41,8 @@ use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    AccountIndex, InboxEntry, InboxStatus, Repositories, SlateStage, StoreError, TxId, WalletStore,
+    AccountIndex, InboxEntry, InboxStatus, OpenReceipt, Repositories, SlateStage, StoreError,
+    TxDirection, TxId, WalletStore,
 };
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Destination, Envelope, Inbound, TransportId};
@@ -43,7 +53,7 @@ use uuid::Uuid;
 
 use crate::account;
 use crate::error::WalletError;
-use crate::event::{Event, FinalizedInvoice, TransportState, TransportStatus};
+use crate::event::{Event, FinalizedInvoice, TransportState, TransportStatus, UndeliveredReply};
 use crate::finalize::FinalizeError;
 use crate::invoice::InvoiceError;
 use crate::notice::{self, Payload};
@@ -65,6 +75,30 @@ const MAX_ERROR_SOURCES: usize = 8;
 
 /// Settling messages prunes the relay inbox at most this often, on the wallet clock.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// How long after its message first arrived a reply that keeps failing, or a slate that only
+/// the node's tip says has expired, is still held. Every message behind it waits meanwhile, so
+/// this is long enough to ride out a relay or node outage and short enough that one sender
+/// cannot hold up receiving for long.
+const HOLD_PATIENCE: Duration = Duration::from_secs(15 * 60);
+
+/// An expired slate makes the inbox refresh the tip at most this often, on the wallet clock, so
+/// a stream of expired slates costs bounded node work.
+const TIP_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+const TIP_REFRESHED_SETTING: &str = "inbox.tip_refreshed_at";
+
+/// Open receipts, payments received over Epicbox and answered with S2 that the sender has not
+/// finalized, kept from one sender key. A paying wallet finalizes as soon as the S2 arrives, so
+/// a sender with this many open is not finalizing; a further S1 from its key is refused and
+/// acknowledged without being signed or stored. The same cap applies to parked invoices.
+pub const MAX_OPEN_RECEIPTS_PER_SENDER: usize = 10;
+
+/// Open receipts kept over every sender. Each holds an unconfirmed output, a transaction and its
+/// slates, so this bounds what unsolicited payments can store. At the cap the oldest open
+/// receipt is cancelled to make room, as [`Wallet::cancel`] does, so throwaway keys cannot stop
+/// new payments from arriving; only when that cancel fails is the new S1 refused.
+pub const MAX_OPEN_RECEIPTS: usize = 100;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -268,6 +302,10 @@ pub(crate) enum Refusal {
     SenderNotAllowed,
     #[error("invoice message signature does not verify")]
     InvoiceMessage(#[source] InvoiceError),
+    #[error("sender already has the most open receipts allowed")]
+    OpenReceiptsFromSender,
+    #[error("open receipts are at the cap and the oldest could not be cancelled")]
+    OpenReceipts(#[source] WalletError),
 }
 
 /// A failure that leaves the message for the relay to deliver again.
@@ -412,6 +450,39 @@ fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::MalformedContext
         | InvoiceError::NotParked { .. } => true,
     }
+}
+
+/// Reply failures that delivering the same reply again would meet: the relay refused the post,
+/// or the reply cannot be sealed for or sent to the address.
+fn reply_is_permanent(hold: &Hold) -> bool {
+    let Hold::Reply(error) = hold else {
+        return false;
+    };
+    match error {
+        TransportError::UnsupportedLocation { .. } | TransportError::UnknownDestination { .. } => {
+            true
+        }
+        TransportError::Backend { source, .. } => {
+            source
+                .downcast_ref::<ClientError>()
+                .is_some_and(|error| match error {
+                    ClientError::Relay { kind } => *kind == RelayErrorKind::InvalidRequest,
+                    ClientError::Destination(_)
+                    | ClientError::Message(_)
+                    | ClientError::Frame(_)
+                    | ClientError::BinarySlate => true,
+                    _ => false,
+                })
+        }
+        _ => false,
+    }
+}
+
+/// The key part of an Epicbox address text, which alone identifies a sender: the domain is not
+/// signed. Text that is not an address is compared whole.
+fn sender_key(address: &str, network: RelayNetwork) -> String {
+    EpicboxAddress::parse(address, network)
+        .map_or_else(|_| address.to_owned(), |address| address.key_text())
 }
 
 /// The relay client's reconnect backoff also paces the retries of a held message.
@@ -574,9 +645,9 @@ where
     ///
     /// Stops at the first message that fails for a transient reason, such as the node being
     /// unreachable, and leaves it and everything behind it on the relay for the next drain.
-    /// A slate the node's tip says has expired is such a message until [`Wallet::refresh`]
-    /// stores a confirmed height at or past its cutoff, so hosts refresh before they drain;
-    /// otherwise a slate expired since the last refresh holds back every message behind it.
+    /// A slate the node's tip says has expired is such a message until a refresh stores a
+    /// confirmed height at or past its cutoff; the drain makes one refresh itself before it
+    /// holds one. A reply or an expired slate is not held past the bound the module docs give.
     /// Fails with [`InboxError::Subscription`] when the relay connection fails; whatever was
     /// handled until then stays handled. Fails as [`Wallet::epicbox_attach`] does, and with
     /// [`InboxError::UnknownTransport`] when Epicbox is not registered.
@@ -598,9 +669,10 @@ where
     ///
     /// A message that fails for a transient reason is tried again with backoff, and nothing
     /// behind it is delivered until it settles. A slate the node's tip says has expired settles
-    /// only after [`Wallet::refresh`] stores a confirmed height at or past its cutoff, so hosts
-    /// keep refreshing while they listen. Fails as [`Wallet::epicbox_drain`] does before
-    /// it connects.
+    /// once a refresh stores a confirmed height at or past its cutoff; the listen refreshes the
+    /// tip itself before it holds one, at most once a minute. A reply or an expired slate is not
+    /// held past the bound the module docs give. Fails as [`Wallet::epicbox_drain`] does
+    /// before it connects.
     #[instrument(skip_all, fields(wallet = %self.config().name, transport = TRANSPORT_ID.as_str()))]
     pub async fn epicbox_listen(
         &self,
@@ -901,7 +973,7 @@ where
                 return Ok(Handled::Repeated);
             }
         }
-        match self.apply(envelope, mailbox).await {
+        match self.apply(msg_id, envelope, mailbox).await {
             Ok(handled) => Ok(handled),
             Err(Settlement::Hold(hold)) => Err(hold),
             Err(Settlement::Refuse(refusal)) => {
@@ -915,7 +987,12 @@ where
         }
     }
 
-    async fn apply(&self, envelope: &Envelope, mailbox: Mailbox) -> Result<Handled, Settlement> {
+    async fn apply(
+        &self,
+        msg_id: Option<&str>,
+        envelope: &Envelope,
+        mailbox: Mailbox,
+    ) -> Result<Handled, Settlement> {
         let reply_to = envelope.reply_to().ok_or(Refusal::NoReplyAddress)?;
         let network = self.config().network;
         let transport = self
@@ -946,7 +1023,7 @@ where
             .decode(&codecs, envelope.wire())
             .map_err(Refusal::Decode)?;
         match (slate.stage(), mailbox) {
-            (Stage::S1, Mailbox::Payments) => self.answer(envelope, reply_to).await,
+            (Stage::S1, Mailbox::Payments) => self.answer(msg_id, envelope, &slate, reply_to).await,
             (Stage::S2, Mailbox::Payments) => self.complete(envelope, &slate).await,
             (Stage::I1, mailbox) => match self.bounced_invoice(&slate, reply_to).await? {
                 Some(bounced) => {
@@ -1031,12 +1108,17 @@ where
     }
 
     /// Receives an S1 and replies with S2, or replies again with the S2 stored for it. A
-    /// different S1 under a slate id received before is refused.
+    /// different S1 under a slate id received before is refused, and so is a new one over the
+    /// open receipt caps. A reply that cannot be delivered is given up as [`HOLD_PATIENCE`]
+    /// says.
     async fn answer(
         &self,
+        msg_id: Option<&str>,
         envelope: &Envelope,
+        proposal: &Slate,
         reply_to: &Destination,
     ) -> Result<Handled, Settlement> {
+        self.make_room_for(proposal, reply_to).await?;
         match self
             .receive_from(
                 TRANSPORT_ID,
@@ -1047,7 +1129,19 @@ where
             .await
         {
             Ok(received) => {
-                self.reply(reply_to, &received.reply).await?;
+                match self.reply(reply_to, &received.reply).await {
+                    Ok(()) => {}
+                    Err(hold)
+                        if reply_is_permanent(&hold) || self.held_too_long(msg_id).await? =>
+                    {
+                        warn!(tx_id = %received.tx_id, error = %ErrorChain(&hold), "slate reply undelivered");
+                        self.emit(Event::ReplyUndelivered(UndeliveredReply {
+                            tx_id: received.tx_id,
+                            slate_id: received.slate.id(),
+                        }));
+                    }
+                    Err(hold) => return Err(hold.into()),
+                }
                 Ok(if received.repeated {
                     Handled::Repeated
                 } else {
@@ -1056,7 +1150,7 @@ where
             }
             Err(ReceiveError::AlreadyReceived { .. }) => Err(Refusal::SlateIdReused.into()),
             Err(error @ ReceiveError::Expired { cutoff, .. }) => {
-                if self.confirmed_at(cutoff).await? {
+                if self.expired_for_good(msg_id, cutoff).await? {
                     Err(Refusal::Receive(error).into())
                 } else {
                     Err(Hold::Receive(error).into())
@@ -1123,6 +1217,128 @@ where
             }
             Err(error) if finalize_is_permanent(&error) => Err(Refusal::Finalize(error).into()),
             Err(error) => Err(Hold::Finalize(error).into()),
+        }
+    }
+
+    /// Whether a slate the node's tip says expired at `cutoff` is refused for good: a refresh
+    /// stored a confirmed height at or past it, before or in one refresh made now, or the
+    /// message has been held as long as [`HOLD_PATIENCE`]. A failed refresh leaves it held.
+    async fn expired_for_good(
+        &self,
+        msg_id: Option<&str>,
+        cutoff: lepic_primitives::amount::Height,
+    ) -> Result<bool, Hold> {
+        if self.confirmed_at(cutoff).await? {
+            return Ok(true);
+        }
+        if self.tip_refresh_due().await? {
+            match self.refresh().await {
+                Ok(_) => {
+                    if self.confirmed_at(cutoff).await? {
+                        return Ok(true);
+                    }
+                }
+                Err(error) => warn!(error = %ErrorChain(&error), "tip not refreshed"),
+            }
+        }
+        self.held_too_long(msg_id).await
+    }
+
+    /// Records a tip refresh for the inbox now when none was made in the last
+    /// [`TIP_REFRESH_INTERVAL`], and says whether it is due.
+    async fn tip_refresh_due(&self) -> Result<bool, Hold> {
+        Ok(self
+            .inbox_write(|repos, now| {
+                let last = repos
+                    .setting(TIP_REFRESHED_SETTING)?
+                    .and_then(|text| text.parse::<jiff::Timestamp>().ok());
+                let due = last.is_none_or(|last| {
+                    now.checked_sub(TIP_REFRESH_INTERVAL)
+                        .is_ok_and(|due_from| last <= due_from || last > now)
+                });
+                if due {
+                    repos.put_setting(TIP_REFRESHED_SETTING, &now.to_string())?;
+                }
+                Ok(due)
+            })
+            .await?)
+    }
+
+    /// Whether the message `msg_id` first arrived [`HOLD_PATIENCE`] or longer ago. A message
+    /// without a relay id cannot be told from a new one, so it is not held at all.
+    async fn held_too_long(&self, msg_id: Option<&str>) -> Result<bool, Hold> {
+        let Some(msg_id) = msg_id.map(str::to_owned) else {
+            return Ok(true);
+        };
+        let session = self.session()?;
+        let now = self.ports().clock.now();
+        let first_seen = self
+            .blocking(move |_, _| Ok(session.store.read(|repos| repos.inbox(&msg_id))?))
+            .await?
+            .map(|entry| entry.received_at);
+        Ok(match (first_seen, now.checked_sub(HOLD_PATIENCE)) {
+            (Some(first_seen), Ok(held_from)) => first_seen <= held_from,
+            _ => false,
+        })
+    }
+
+    /// Checks the open receipt caps before a new S1 from `reply_to` is received. A slate id
+    /// received before passes, so its stored S2 is sent again. At the total cap the oldest open
+    /// receipt is cancelled; over the sender's cap, or when that cancel fails, the S1 is
+    /// refused.
+    async fn make_room_for(
+        &self,
+        proposal: &Slate,
+        reply_to: &Destination,
+    ) -> Result<(), Settlement> {
+        let session = self.session().map_err(Hold::from)?;
+        let slate_id = Uuid::from_bytes(*proposal.id().as_bytes());
+        let network = relay_network(self.config().network);
+        let sender = sender_key(reply_to.as_str(), network);
+        let (known, open) = self
+            .blocking(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let known = repos
+                        .transaction_by_slate(slate_id, TxDirection::Incoming)?
+                        .is_some();
+                    let open = if known {
+                        Vec::new()
+                    } else {
+                        repos.open_receipts(TRANSPORT_ID.as_str())?
+                    };
+                    Ok::<_, StoreError>((known, open))
+                })?)
+            })
+            .await
+            .map_err(Hold::from)?;
+        if known {
+            return Ok(());
+        }
+        let from_sender = open
+            .iter()
+            .filter(|receipt| {
+                receipt
+                    .counterparty
+                    .as_deref()
+                    .is_some_and(|address| sender_key(address, network) == sender)
+            })
+            .count();
+        if from_sender >= MAX_OPEN_RECEIPTS_PER_SENDER {
+            return Err(Refusal::OpenReceiptsFromSender.into());
+        }
+        if open.len() < MAX_OPEN_RECEIPTS {
+            return Ok(());
+        }
+        let Some(OpenReceipt { id: oldest, .. }) = open.first() else {
+            return Ok(());
+        };
+        match self.cancel(*oldest).await {
+            Ok(()) => {
+                info!(tx_id = %oldest, "oldest open receipt cancelled to make room");
+                Ok(())
+            }
+            Err(error @ WalletError::Node(_)) => Err(Hold::Wallet(error).into()),
+            Err(error) => Err(Refusal::OpenReceipts(error).into()),
         }
     }
 

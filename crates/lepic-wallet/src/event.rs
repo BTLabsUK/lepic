@@ -25,6 +25,10 @@ pub enum Event {
     /// A slate received before arrived again and was answered with the reply stored the first
     /// time. Nothing changed; no [`Event::Received`] follows for it.
     AnsweredAgain(AnsweredSlate),
+    /// A payment received over Epicbox was stored, but its S2 reply could not be delivered: the
+    /// relay refused it, or delivering it kept failing. The transaction stays received and its
+    /// message is settled; a sender that sends the same S1 again is answered with the stored S2.
+    ReplyUndelivered(UndeliveredReply),
     Sync(SyncProgress),
     Transport(TransportStatus),
     /// An invoice from an allowed sender was stored on the invoice address, waiting for the
@@ -91,6 +95,13 @@ pub struct ReceivedTransaction {
     pub account: AccountIndex,
     pub amount: Amount,
     pub transport: TransportId,
+}
+
+/// A received transaction whose S2 reply was not delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UndeliveredReply {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
 }
 
 /// The transaction a repeated slate was received as before, and the transport it came over
