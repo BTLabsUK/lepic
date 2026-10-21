@@ -386,6 +386,7 @@ fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::AmountMismatch { .. }
         | InvoiceError::AlreadyPaid { .. }
         | InvoiceError::Expired { .. }
+        | InvoiceError::LockedUntil { .. }
         | InvoiceError::MessageSignature { .. }
         | InvoiceError::Mismatch { .. }
         | InvoiceError::InputKeyMismatch

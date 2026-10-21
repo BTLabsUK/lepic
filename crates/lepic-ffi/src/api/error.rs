@@ -343,7 +343,8 @@ impl From<InvoiceError> for WalletError {
             | E::InvalidTransaction(_)
             | E::Slate(_)
             | E::Encode(_)
-            | E::Unrepresentable(_) => WalletErrorKind::InvalidSlate,
+            | E::Unrepresentable(_)
+            | E::LockedUntil { .. } => WalletErrorKind::InvalidSlate,
             E::AmountMismatch { .. } => WalletErrorKind::AmountMismatch,
             E::Expired { .. } => WalletErrorKind::PaymentExpired,
             E::NotParked { .. } => WalletErrorKind::InvoiceNotFound,
@@ -496,6 +497,13 @@ mod tests {
             (
                 InvoiceError::Wallet(lepic_wallet::WalletError::Locked),
                 WalletErrorKind::Locked,
+            ),
+            (
+                InvoiceError::LockedUntil {
+                    lock_height: lepic_primitives::amount::Height::new(9),
+                    tip: lepic_primitives::amount::Height::new(4),
+                },
+                WalletErrorKind::InvalidSlate,
             ),
             (
                 InvoiceError::Selection(SelectionError::NotEnoughFunds {

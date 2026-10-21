@@ -122,6 +122,10 @@ pub enum InvoiceError {
     AlreadyPaid { slate_id: SlateId, tx_id: TxId },
     #[error("slate expired at height {cutoff}, the chain tip is at {tip}")]
     Expired { cutoff: Height, tip: Height },
+    /// The invoice's kernel may not be mined before `lock_height`, which the chain has not
+    /// reached. `epic-wallet` issues invoices without a lock height.
+    #[error("invoice kernel is locked until height {lock_height}, the chain tip is at {tip}")]
+    LockedUntil { lock_height: Height, tip: Height },
     #[error("{role} message signature does not verify")]
     MessageSignature {
         role: Role,
@@ -369,6 +373,16 @@ fn check_ttl(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
         Some(cutoff) if tip >= cutoff => Err(InvoiceError::Expired { cutoff, tip }),
         _ => Ok(()),
     }
+}
+
+/// Refuses an invoice whose kernel could not be mined at the node's current tip, which would
+/// keep the payer's inputs locked in a transaction the chain cannot take until then.
+fn check_lock(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
+    let lock_height = slate.lock().lock_height();
+    if lock_height > tip {
+        return Err(InvoiceError::LockedUntil { lock_height, tip });
+    }
+    Ok(())
 }
 
 /// The header block version of a slate this wallet answers or stores: the one it arrived
@@ -802,7 +816,8 @@ where
     /// `request.ttl_blocks`. Fails with [`InvoiceError::AmountMismatch`] when the invoice asks
     /// for another amount than `request.amount`, [`InvoiceError::AlreadyPaid`] for an invoice
     /// this wallet paid before, [`InvoiceError::Expired`] when the tip has reached the
-    /// invoice's TTL cutoff, a [`InvoiceError::Selection`] error, and a typed rejection for
+    /// invoice's TTL cutoff, [`InvoiceError::LockedUntil`] when its kernel lock height is above
+    /// the tip, a [`InvoiceError::Selection`] error, and a typed rejection for
     /// any slate that is malformed, not an I1, or whose message does not verify. A payment with
     /// change fails with [`WalletError::RestoreScanRequired`] on a database rebuilt from the
     /// seed before a scan from genesis completed. Nothing is stored on failure.
@@ -863,6 +878,7 @@ where
             .height;
         self.check_plausible_tip(&session, tip).await?;
         check_ttl(&i1, tip)?;
+        check_lock(&i1, tip)?;
         debug!(height = tip.value(), "slate checked");
 
         let paid = self

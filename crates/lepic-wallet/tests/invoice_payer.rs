@@ -1,5 +1,6 @@
 //! The payer's side of an invoice once it has answered with an I2: the issuer can still post
-//! the payment, so a cancel asks the node first and keeps the payment watched.
+//! the payment, so a cancel asks the node first and keeps the payment watched. And the payer
+//! refuses an invoice whose kernel the chain could not take yet.
 
 // Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
 // treat as test code.
@@ -20,11 +21,12 @@ use lepic_node::{LocatedKernel, NodeVersion, Tip};
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::tx::Transaction;
-use lepic_slate::codec::WireSlate;
+use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_store::{OutputRecord, OutputStatus, TxDirection, TxId, TxState};
 use lepic_wallet::WalletError;
-use lepic_wallet::invoice::PayRequest;
+use lepic_wallet::invoice::{InvoiceError, PayRequest};
 use lepic_wallet::selection::SelectionStrategy;
+use serde_json::Value;
 use uuid::Uuid;
 
 const AMOUNT: u64 = 300_000_000;
@@ -49,6 +51,13 @@ fn request() -> PayRequest {
         strategy: SelectionStrategy::Smallest,
         ..PayRequest::new(ACCOUNT, Amount::new(AMOUNT))
     }
+}
+
+/// `wire` with its JSON changed by `change`.
+fn tampered(wire: &WireSlate, change: impl FnOnce(&mut Value)) -> WireSlate {
+    let mut slate: Value = serde_json::from_str(wire.as_text().unwrap()).unwrap();
+    change(&mut slate);
+    WireSlate::text(MediaType::JSON, slate.to_string())
 }
 
 struct Invoice {
@@ -176,4 +185,69 @@ fn a_payer_cancel_after_the_i2_is_refused_while_the_node_pool_holds_the_issuers_
     );
     assert_eq!(invoice.payment(), Some((tx_id, TxState::Sent)));
     assert_eq!(invoice.outputs(), outputs);
+}
+
+fn locked_at(wire: &WireSlate, height: u64) -> WireSlate {
+    tampered(wire, |slate| {
+        slate["lock_height"] = Value::String(height.to_string());
+        let kernel = &mut slate["tx"]["body"]["kernels"][0];
+        kernel["features"] = Value::String("HeightLocked".to_owned());
+        kernel["lock_height"] = Value::String(height.to_string());
+    })
+}
+
+#[test]
+fn refuses_an_invoice_whose_kernel_is_locked_above_the_tip_and_stores_nothing() {
+    let invoice = Invoice::issued();
+    let outputs = invoice.outputs();
+    let far = TIP + 1_000_000;
+
+    let error = invoice
+        .payer
+        .pay(&locked_at(&invoice.i1, far), request())
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::LockedUntil { lock_height, tip }
+                if lock_height == Height::new(far) && tip == Height::new(TIP)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(invoice.payment(), None);
+    assert_eq!(invoice.outputs(), outputs);
+    assert!(
+        invoice
+            .payer
+            .read(|repos| repos.slates(invoice.slate_id))
+            .is_empty()
+    );
+}
+
+#[test]
+fn refuses_an_invoice_locked_one_block_above_the_tip() {
+    let invoice = Invoice::issued();
+
+    let error = invoice
+        .payer
+        .pay(&locked_at(&invoice.i1, TIP + 1), request())
+        .unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::LockedUntil { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn pays_an_invoice_whose_lock_height_the_chain_has_reached() {
+    let invoice = Invoice::issued();
+
+    invoice
+        .payer
+        .pay(&locked_at(&invoice.i1, TIP), request())
+        .unwrap();
+
+    assert!(matches!(invoice.payment(), Some((_, TxState::Sent))));
 }
