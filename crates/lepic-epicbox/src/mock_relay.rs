@@ -118,8 +118,10 @@ struct RelayState {
     listeners: HashMap<String, u64>,
     messages: Vec<Stored>,
     refusing: bool,
-    /// Keys of addresses whose posts are answered `InvalidRequest`.
+    /// Keys of addresses whose posts are never answered.
     unroutable: HashSet<String>,
+    /// Keys of addresses whose posts are answered `InvalidRequest`.
+    post_refused: HashSet<String>,
     stalling: bool,
     stalled: Vec<DuplexStream>,
     unanswered: HashSet<Unanswered>,
@@ -145,6 +147,7 @@ impl MockRelay {
                     messages: Vec::new(),
                     refusing: false,
                     unroutable: HashSet::new(),
+                    post_refused: HashSet::new(),
                     stalling: false,
                     stalled: Vec::new(),
                     unanswered: HashSet::new(),
@@ -182,11 +185,19 @@ impl MockRelay {
         self.update(|state| state.refusing = refusing);
     }
 
-    /// Answers posts to `address` with `InvalidRequest`, as the relay does when it cannot
-    /// forward a message to the address's domain.
+    /// Leaves posts to `address` unanswered, as the relay does when it forwards a message to
+    /// another domain that does not take it.
     pub fn set_unroutable(&self, address: &EpicboxAddress) {
         self.update(|state| {
             state.unroutable.insert(address.key_text());
+        });
+    }
+
+    /// Answers posts to `address` with `InvalidRequest`, as the relay does when forwarding a
+    /// message to another domain fails.
+    pub fn set_post_refused(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.post_refused.insert(address.key_text());
         });
     }
 
@@ -727,6 +738,9 @@ impl RelayState {
             return;
         };
         if self.unroutable.contains(&recipient.key_text()) {
+            return;
+        }
+        if self.post_refused.contains(&recipient.key_text()) {
             self.send(
                 id,
                 error("InvalidRequest", "Error forward slate to foreign epicbox."),

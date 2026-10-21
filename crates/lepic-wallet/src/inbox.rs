@@ -10,10 +10,11 @@
 //! unacknowledged, so the relay delivers it again.
 //!
 //! A held message holds back everything behind it, because the relay delivers one message at a
-//! time. So holds are bounded: a reply the relay refuses, or one still undelivered
-//! [`HOLD_PATIENCE`] after its message first arrived, leaves the payment received and settles
-//! the message with [`Event::ReplyUndelivered`]; a slate still expired by the tip alone after one
-//! refresh and that long is refused.
+//! time, and the relay discards everything queued for the address when one message stays
+//! unacknowledged for long. So holds are bounded by [`MAX_HOLD_ATTEMPTS`] and [`HOLD_PATIENCE`]:
+//! a reply the relay refuses, or one still undelivered at the bound, leaves the payment received
+//! and settles the message with [`Event::ReplyUndelivered`]; a slate still expired by the tip
+//! alone after one refresh and at the bound is refused.
 //!
 //! Payments nobody asked for are bounded too: at most [`MAX_OPEN_RECEIPTS_PER_SENDER`] open
 //! receipts per sender key and [`MAX_OPEN_RECEIPTS`] in all (see their docs).
@@ -76,11 +77,17 @@ const MAX_ERROR_SOURCES: usize = 8;
 /// Settling messages prunes the relay inbox at most this often, on the wallet clock.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-/// How long after its message first arrived a reply that keeps failing, or a slate that only
-/// the node's tip says has expired, is still held. Every message behind it waits meanwhile, so
-/// this is long enough to ride out a relay or node outage and short enough that one sender
-/// cannot hold up receiving for long.
-const HOLD_PATIENCE: Duration = Duration::from_secs(15 * 60);
+/// Tries of a message in one listen before a reply that keeps failing, or a slate that only the
+/// node's tip says has expired, is settled anyway. The relay discards every message queued for
+/// an address when one stays unacknowledged across several of its challenge rounds, which come
+/// about a minute apart, and every message behind a held one waits meanwhile; so a held message
+/// is settled well before that, while its payment can still be stored.
+const MAX_HOLD_ATTEMPTS: u32 = 3;
+
+/// How long after its message first arrived such a message is still held, for drains, which
+/// try each message once: well under the relay's challenge rounds that end in the queue being
+/// discarded, as for [`MAX_HOLD_ATTEMPTS`].
+const HOLD_PATIENCE: Duration = Duration::from_secs(3 * 60);
 
 /// An expired slate makes the inbox refresh the tip at most this often, on the wallet clock, so
 /// a stream of expired slates costs bounded node work.
@@ -833,12 +840,13 @@ where
     ) -> Option<Handled> {
         let mut attempt: u32 = 0;
         let handled = loop {
+            let try_number = attempt.saturating_add(1);
             let disposition = match listen {
-                None => self.handle(item, pruning, mailbox).await,
+                None => self.handle(item, pruning, mailbox, try_number).await,
                 Some(handle) => tokio::select! {
                     biased;
                     () = handle.stopped() => return None,
-                    disposition = self.handle(item, pruning, mailbox) => disposition,
+                    disposition = self.handle(item, pruning, mailbox, try_number) => disposition,
                 },
             };
             match (disposition, listen) {
@@ -908,7 +916,14 @@ where
         }
     }
 
-    async fn handle(&self, item: &Item, pruning: &PruneSchedule, mailbox: Mailbox) -> Disposition {
+    /// Handles `item` on its try number `attempt`, counted from 1.
+    async fn handle(
+        &self,
+        item: &Item,
+        pruning: &PruneSchedule,
+        mailbox: Mailbox,
+        attempt: u32,
+    ) -> Disposition {
         let msg_id = item.msg_id().map(str::to_owned);
         let outcome = match item {
             Item::Rejection(rejection) => {
@@ -920,7 +935,7 @@ where
                 Ok(Handled::Rejected)
             }
             Item::Envelope(envelope, _) => {
-                self.handle_envelope(msg_id.as_deref(), envelope, mailbox)
+                self.handle_envelope(msg_id.as_deref(), envelope, mailbox, attempt)
                     .await
             }
         };
@@ -960,6 +975,7 @@ where
         msg_id: Option<&str>,
         envelope: &Envelope,
         mailbox: Mailbox,
+        attempt: u32,
     ) -> Result<Handled, Hold> {
         if let Some(msg_id) = msg_id.map(str::to_owned) {
             let previous = self
@@ -973,7 +989,7 @@ where
                 return Ok(Handled::Repeated);
             }
         }
-        match self.apply(msg_id, envelope, mailbox).await {
+        match self.apply(msg_id, envelope, mailbox, attempt).await {
             Ok(handled) => Ok(handled),
             Err(Settlement::Hold(hold)) => Err(hold),
             Err(Settlement::Refuse(refusal)) => {
@@ -992,6 +1008,7 @@ where
         msg_id: Option<&str>,
         envelope: &Envelope,
         mailbox: Mailbox,
+        attempt: u32,
     ) -> Result<Handled, Settlement> {
         let reply_to = envelope.reply_to().ok_or(Refusal::NoReplyAddress)?;
         let network = self.config().network;
@@ -1023,7 +1040,10 @@ where
             .decode(&codecs, envelope.wire())
             .map_err(Refusal::Decode)?;
         match (slate.stage(), mailbox) {
-            (Stage::S1, Mailbox::Payments) => self.answer(msg_id, envelope, &slate, reply_to).await,
+            (Stage::S1, Mailbox::Payments) => {
+                self.answer(msg_id, attempt, envelope, &slate, reply_to)
+                    .await
+            }
             (Stage::S2, Mailbox::Payments) => self.complete(envelope, &slate).await,
             (Stage::I1, mailbox) => match self.bounced_invoice(&slate, reply_to).await? {
                 Some(bounced) => {
@@ -1109,11 +1129,11 @@ where
 
     /// Receives an S1 and replies with S2, or replies again with the S2 stored for it. A
     /// different S1 under a slate id received before is refused, and so is a new one over the
-    /// open receipt caps. A reply that cannot be delivered is given up as [`HOLD_PATIENCE`]
-    /// says.
+    /// open receipt caps. A reply that cannot be delivered is given up at the hold bound.
     async fn answer(
         &self,
         msg_id: Option<&str>,
+        attempt: u32,
         envelope: &Envelope,
         proposal: &Slate,
         reply_to: &Destination,
@@ -1132,7 +1152,8 @@ where
                 match self.reply(reply_to, &received.reply).await {
                     Ok(()) => {}
                     Err(hold)
-                        if reply_is_permanent(&hold) || self.held_too_long(msg_id).await? =>
+                        if reply_is_permanent(&hold)
+                            || self.hold_exhausted(msg_id, attempt).await? =>
                     {
                         warn!(tx_id = %received.tx_id, error = %ErrorChain(&hold), "slate reply undelivered");
                         self.emit(Event::ReplyUndelivered(UndeliveredReply {
@@ -1150,7 +1171,7 @@ where
             }
             Err(ReceiveError::AlreadyReceived { .. }) => Err(Refusal::SlateIdReused.into()),
             Err(error @ ReceiveError::Expired { cutoff, .. }) => {
-                if self.expired_for_good(msg_id, cutoff).await? {
+                if self.expired_for_good(msg_id, attempt, cutoff).await? {
                     Err(Refusal::Receive(error).into())
                 } else {
                     Err(Hold::Receive(error).into())
@@ -1222,10 +1243,11 @@ where
 
     /// Whether a slate the node's tip says expired at `cutoff` is refused for good: a refresh
     /// stored a confirmed height at or past it, before or in one refresh made now, or the
-    /// message has been held as long as [`HOLD_PATIENCE`]. A failed refresh leaves it held.
+    /// message reached the hold bound. A failed refresh leaves it held.
     async fn expired_for_good(
         &self,
         msg_id: Option<&str>,
+        attempt: u32,
         cutoff: lepic_primitives::amount::Height,
     ) -> Result<bool, Hold> {
         if self.confirmed_at(cutoff).await? {
@@ -1241,7 +1263,7 @@ where
                 Err(error) => warn!(error = %ErrorChain(&error), "tip not refreshed"),
             }
         }
-        self.held_too_long(msg_id).await
+        self.hold_exhausted(msg_id, attempt).await
     }
 
     /// Records a tip refresh for the inbox now when none was made in the last
@@ -1264,9 +1286,13 @@ where
             .await?)
     }
 
-    /// Whether the message `msg_id` first arrived [`HOLD_PATIENCE`] or longer ago. A message
+    /// Whether the message `msg_id`, on its try `attempt`, reached the hold bound: this is try
+    /// [`MAX_HOLD_ATTEMPTS`], or it first arrived [`HOLD_PATIENCE`] or longer ago. A message
     /// without a relay id cannot be told from a new one, so it is not held at all.
-    async fn held_too_long(&self, msg_id: Option<&str>) -> Result<bool, Hold> {
+    async fn hold_exhausted(&self, msg_id: Option<&str>, attempt: u32) -> Result<bool, Hold> {
+        if attempt >= MAX_HOLD_ATTEMPTS {
+            return Ok(true);
+        }
         let Some(msg_id) = msg_id.map(str::to_owned) else {
             return Ok(true);
         };

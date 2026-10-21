@@ -129,7 +129,17 @@ impl Receiver {
         relay: &MockRelay,
         runtime: tokio::runtime::Handle,
     ) -> (TestWallet, EpicboxTransport) {
-        let epicbox = EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
+        self.wallet_with(relay, runtime, settings())
+    }
+
+    /// [`Self::wallet`] with its Epicbox transport on `settings`.
+    pub fn wallet_with(
+        &self,
+        relay: &MockRelay,
+        runtime: tokio::runtime::Handle,
+        settings: ClientSettings,
+    ) -> (TestWallet, EpicboxTransport) {
+        let epicbox = EpicboxTransport::new(settings, RelayNetwork::Floonet, relay.connector());
         let mut transports = lepic_transport::registry::TransportRegistry::new();
         transports.register(Box::new(epicbox.clone())).unwrap();
         let mut config = self.harness.config(Network::Floonet);
@@ -170,6 +180,11 @@ pub struct World {
 
 impl World {
     pub fn new() -> Self {
+        Self::with_receiver_settings(settings())
+    }
+
+    /// A world whose receiver's Epicbox transport runs on `receiver_settings`.
+    pub fn with_receiver_settings(receiver_settings: ClientSettings) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -180,7 +195,8 @@ impl World {
         let sender = Sender::with_transports(vec![Box::new(sender_epicbox.clone())]);
         let sender_address = sender.wallet.epicbox_attach(&sender_epicbox).unwrap();
         let receiver = Receiver::new();
-        let (receiver_wallet, receiver_epicbox) = receiver.wallet(&relay, runtime.handle().clone());
+        let (receiver_wallet, receiver_epicbox) =
+            receiver.wallet_with(&relay, runtime.handle().clone(), receiver_settings);
         runtime
             .block_on(receiver_wallet.restore(password(RECEIVER_PASSWORD), RECEIVER_MNEMONIC))
             .unwrap();

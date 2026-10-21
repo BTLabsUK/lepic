@@ -1,4 +1,4 @@
-//! The Epicbox inbox stays bounded: a reply the relay will not deliver does not stop the
+//! The Epicbox inbox stays bounded: a reply the relay refuses or never answers does not stop the
 //! messages behind it, a slate expired by a stale tip is settled after one refresh, and
 //! unsolicited payments are capped per sender key and in total.
 
@@ -20,7 +20,9 @@ mod world;
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::{Domain, EpicboxAddress, Network as RelayNetwork, Nonce, Salt, SignedMessage};
 use lepic_primitives::amount::Height;
-use lepic_store::{AccountIndex, TxDirection, TxState, WalletStore};
+use std::time::Duration;
+
+use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxDirection, TxState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::inbox::{
     InboxSummary, ListenHandle, MAX_OPEN_RECEIPTS, MAX_OPEN_RECEIPTS_PER_SENDER,
@@ -102,7 +104,7 @@ fn incoming(world: &World, state: TxState) -> usize {
 #[test]
 fn a_reply_the_relay_refuses_does_not_stop_the_payment_behind_it_in_a_drain() {
     let world = World::new();
-    world.relay.set_unroutable(&sender_address(1));
+    world.relay.set_post_refused(&sender_address(1));
     post_from(&world, 1, &s1_numbered(1));
     world.block_on(world.send());
 
@@ -139,7 +141,7 @@ fn a_reply_the_relay_refuses_does_not_stop_the_payment_behind_it_in_a_drain() {
 #[test]
 fn a_reply_the_relay_refuses_does_not_stop_the_payment_behind_it_in_a_listen() {
     let world = World::new();
-    world.relay.set_unroutable(&sender_address(1));
+    world.relay.set_post_refused(&sender_address(1));
     post_from(&world, 1, &s1_numbered(1));
     world.block_on(world.send());
     let handle = ListenHandle::new();
@@ -257,4 +259,109 @@ fn open_receipts_over_all_senders_are_capped_by_cancelling_the_oldest() {
         .unwrap()
         .unwrap();
     assert_eq!(newest.entry.state, TxState::Received);
+}
+
+/// Tries of a held message in one listen, as the inbox bounds them.
+const MAX_HOLD_ATTEMPTS: usize = 3;
+
+/// The receiver's client waits briefly for answers, so an unanswered post fails fast.
+fn quick_receiver() -> World {
+    let mut settings = world::settings();
+    settings.response_timeout = Duration::from_secs(1);
+    World::with_receiver_settings(settings)
+}
+
+fn undelivered_replies(events: &mut tokio::sync::broadcast::Receiver<Event>) -> usize {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|event| matches!(event, Event::ReplyUndelivered(_)))
+        .count()
+}
+
+#[test]
+fn a_reply_the_relay_never_answers_is_given_up_after_bounded_tries_in_a_listen() {
+    let world = quick_receiver();
+    world.relay.set_unroutable(&sender_address(1));
+    post_from(&world, 1, &s1_numbered(1));
+    world.block_on(world.send());
+    let mut events = world.receiver_wallet.subscribe();
+    let handle = ListenHandle::new();
+
+    let summary = world.block_on(async {
+        let listen = world
+            .receiver_wallet
+            .epicbox_listen(&world.receiver_epicbox, &handle);
+        let script = async {
+            world.until_acknowledged(&world.receiver_address).await;
+            handle.stop();
+        };
+        tokio::join!(listen, script).0
+    });
+
+    // The first payment was stored on its first try, so the try that settles it is a repeat.
+    assert_eq!(
+        summary.unwrap(),
+        InboxSummary {
+            received: 1,
+            repeated: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(incoming(&world, TxState::Received), 2);
+    assert_eq!(undelivered_replies(&mut events), 1);
+    // The sender's S1, the bounded tries of the unanswered reply, and the second reply.
+    assert_eq!(world.relay.received("PostSlate"), 1 + MAX_HOLD_ATTEMPTS + 1);
+    assert_eq!(world.relay.pending(&world.sender_address), 1);
+}
+
+#[test]
+fn a_drain_gives_up_an_unanswered_reply_once_its_message_waited_the_hold_bound() {
+    let world = quick_receiver();
+    world.relay.set_unroutable(&sender_address(1));
+    let msg_id = post_from(&world, 1, &s1_numbered(1));
+    world.block_on(world.send());
+    let mut events = world.receiver_wallet.subscribe();
+
+    let held = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+
+    assert_eq!(
+        held,
+        InboxSummary {
+            held: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 2);
+
+    let arrived = support::fixed_time()
+        .checked_sub(Duration::from_secs(3 * 60))
+        .unwrap();
+    world
+        .receiver
+        .store()
+        .write(|repos| {
+            repos.put_inbox(&InboxEntry {
+                msg_id: msg_id.clone(),
+                status: InboxStatus::Received,
+                received_at: arrived,
+                updated_at: arrived,
+            })
+        })
+        .unwrap();
+    let settled = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+
+    assert_eq!(
+        settled,
+        InboxSummary {
+            received: 1,
+            repeated: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(incoming(&world, TxState::Received), 2);
+    assert_eq!(undelivered_replies(&mut events), 1);
 }
