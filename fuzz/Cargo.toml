@@ -17,11 +17,13 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4.13"
 lepic-crypto = { path = "../crates/lepic-crypto" }
 lepic-epicbox = { path = "../crates/lepic-epicbox" }
+lepic-ffi = { path = "../crates/lepic-ffi" }
 lepic-keychain = { path = "../crates/lepic-keychain" }
 lepic-node = { path = "../crates/lepic-node" }
 lepic-primitives = { path = "../crates/lepic-primitives" }
 lepic-slate = { path = "../crates/lepic-slate" }
 lepic-transport = { path = "../crates/lepic-transport" }
+lepic-wallet = { path = "../crates/lepic-wallet" }
 
 [lints.rust]
 unsafe_code = "deny"
@@ -110,6 +112,20 @@ bench = false
 [[bin]]
 name = "wallet_seed"
 path = "fuzz_targets/wallet_seed.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "notice_classify"
+path = "fuzz_targets/notice_classify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ffi_inspect_slate"
+path = "fuzz_targets/ffi_inspect_slate.rs"
 test = false
 doc = false
 bench = false

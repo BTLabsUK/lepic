@@ -46,6 +46,8 @@ const TARGETS: &[&str] = &[
     "node_response",
     "vault_file",
     "wallet_seed",
+    "notice_classify",
+    "ffi_inspect_slate",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -320,7 +322,7 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                 }
             }
         }
-        "slate_v2" | "slate_v3" | "slate_detect" | "file_import" => {
+        "slate_v2" | "slate_v3" | "slate_detect" | "file_import" | "ffi_inspect_slate" => {
             for vector in read_area(&vectors, "slates", "")? {
                 seeds.extend(text_fields(&vector, "json"));
             }
@@ -363,6 +365,9 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                     seeds.insert(response.to_string().into_bytes());
                 }
             }
+        }
+        "notice_classify" => {
+            seeds.extend(NOTICE_SEEDS.iter().map(|notice| notice.as_bytes().to_vec()));
         }
         "vault_file" => seeds.extend(vault_seeds()),
         "wallet_seed" => {
@@ -439,6 +444,18 @@ const FIXED_FRAMES: &[&str] = &[
 /// Minimal vault files in the layout of `crates/lepic-keychain/src/vault/format.rs`: an empty
 /// sealed payload under the smallest and the default Argon2id parameters. They do not decrypt;
 /// the target reads the framing only.
+/// Notices of every kind, and near misses of each.
+const NOTICE_SEEDS: &[&str] = &[
+    r#"{"lepic":1,"type":"declined","slate_id":"0436430c-2b02-624c-2032-570501212b00"}"#,
+    r#"{"lepic":1,"type":"withdrawn","slate_id":"0436430c-2b02-624c-2032-570501212b00"}"#,
+    r#"{"lepic":1,"type":"posted","slate_id":"0436430c-2b02-624c-2032-570501212b00","excess":"08b1d9a2c1b5f3d0c8c8f6cbd0f4e6a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c"}"#,
+    r#"{"lepic":2,"type":"declined","slate_id":"0436430c-2b02-624c-2032-570501212b00"}"#,
+    r#"{"lepic":1,"type":"posted","slate_id":"0436430c-2b02-624c-2032-570501212b00"}"#,
+    r#"{"lepic":{"version":1}}"#,
+    "{}",
+    "a message\u{202E}with\tcontrols",
+];
+
 fn vault_seeds() -> Vec<Vec<u8>> {
     [(8u32, 1u32, 1u32), (64 * 1024, 3, 1)]
         .into_iter()
