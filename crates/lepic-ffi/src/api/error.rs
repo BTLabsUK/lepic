@@ -344,7 +344,8 @@ impl From<InvoiceError> for WalletError {
             | E::Slate(_)
             | E::Encode(_)
             | E::Unrepresentable(_)
-            | E::LockedUntil { .. } => WalletErrorKind::InvalidSlate,
+            | E::LockedUntil { .. }
+            | E::AheadOfTip { .. } => WalletErrorKind::InvalidSlate,
             E::AmountMismatch { .. } => WalletErrorKind::AmountMismatch,
             E::Expired { .. } => WalletErrorKind::PaymentExpired,
             E::NotParked { .. } => WalletErrorKind::InvoiceNotFound,
@@ -501,6 +502,13 @@ mod tests {
             (
                 InvoiceError::LockedUntil {
                     lock_height: lepic_primitives::amount::Height::new(9),
+                    tip: lepic_primitives::amount::Height::new(4),
+                },
+                WalletErrorKind::InvalidSlate,
+            ),
+            (
+                InvoiceError::AheadOfTip {
+                    height: lepic_primitives::amount::Height::new(99),
                     tip: lepic_primitives::amount::Height::new(4),
                 },
                 WalletErrorKind::InvalidSlate,

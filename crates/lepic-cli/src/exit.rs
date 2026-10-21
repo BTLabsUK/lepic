@@ -331,6 +331,7 @@ fn invoice_kind(error: &InvoiceError) -> ErrorKind {
         | InvoiceError::AlreadyPaid { .. }
         | InvoiceError::Expired { .. }
         | InvoiceError::LockedUntil { .. }
+        | InvoiceError::AheadOfTip { .. }
         | InvoiceError::MessageSignature { .. }
         | InvoiceError::Mismatch { .. }
         | InvoiceError::PayerSignature(_)

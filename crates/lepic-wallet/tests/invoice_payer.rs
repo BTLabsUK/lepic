@@ -22,8 +22,12 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::tx::Transaction;
 use lepic_slate::codec::{MediaType, WireSlate};
-use lepic_store::{OutputRecord, OutputStatus, TxDirection, TxId, TxState};
+use lepic_store::{
+    OutputRecord, OutputStatus, SlateStage, StoreError, StoredSlate, TxDirection, TxId, TxState,
+    WalletStore,
+};
 use lepic_wallet::WalletError;
+use lepic_wallet::chain::SLATE_LEAD_BLOCKS;
 use lepic_wallet::invoice::{InvoiceError, PayRequest};
 use lepic_wallet::selection::SelectionStrategy;
 use serde_json::Value;
@@ -250,4 +254,94 @@ fn pays_an_invoice_whose_lock_height_the_chain_has_reached() {
         .unwrap();
 
     assert!(matches!(invoice.payment(), Some((_, TxState::Sent))));
+}
+
+/// `wire` with its slate height set to `height`.
+fn created_at(wire: &WireSlate, height: u64) -> WireSlate {
+    tampered(wire, |slate| {
+        slate["height"] = Value::String(height.to_string());
+    })
+}
+
+#[test]
+fn refuses_an_invoice_created_above_the_tip_and_stores_nothing() {
+    let invoice = Invoice::issued();
+    let outputs = invoice.outputs();
+    let ahead = TIP + SLATE_LEAD_BLOCKS + 1;
+
+    let error = invoice
+        .payer
+        .pay(&created_at(&invoice.i1, ahead), request())
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::AheadOfTip { height, tip }
+                if height == Height::new(ahead) && tip == Height::new(TIP)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(invoice.payment(), None);
+    assert_eq!(invoice.outputs(), outputs);
+    assert!(
+        invoice
+            .payer
+            .read(|repos| repos.slates(invoice.slate_id))
+            .is_empty()
+    );
+}
+
+#[test]
+fn pays_an_invoice_created_a_few_blocks_above_the_tip_at_its_own_height() {
+    let invoice = Invoice::issued();
+
+    let i2 = invoice
+        .payer
+        .pay(&created_at(&invoice.i1, TIP + SLATE_LEAD_BLOCKS), request())
+        .unwrap()
+        .slate;
+
+    assert!(matches!(invoice.payment(), Some((_, TxState::Sent))));
+    assert_eq!(i2.height(), Height::new(TIP));
+}
+
+#[test]
+fn a_payment_stored_with_a_height_above_the_tip_can_be_cancelled() {
+    let invoice = Invoice::issued();
+    invoice.payer.pay(&invoice.i1, request()).unwrap();
+    let (tx_id, _) = invoice.payment().unwrap();
+    // As a database written before slate heights were checked may hold one: a copy of the
+    // payment whose I2 has a height far above any chain.
+    let id = Uuid::from_u128(7);
+    let copy = invoice
+        .payer
+        .store()
+        .write(|repos| {
+            let mut entry = repos.transaction(tx_id)?.unwrap();
+            let i2 = repos
+                .slate(entry.slate_id.unwrap(), SlateStage::Invoice2)?
+                .unwrap();
+            let mut slate: Value = serde_json::from_slice(&i2.bytes).unwrap();
+            slate["id"] = Value::String(id.to_string());
+            slate["height"] = Value::String("1000000000000".to_owned());
+            entry.slate_id = Some(id);
+            let copy = repos.insert_transaction(&entry)?;
+            repos.insert_slate(&StoredSlate {
+                slate_id: id,
+                stage: SlateStage::Invoice2,
+                codec: i2.codec,
+                bytes: slate.to_string().into_bytes(),
+            })?;
+            Ok::<_, StoreError>(copy)
+        })
+        .unwrap();
+
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.cancel(copy))
+        .unwrap();
+
+    let state = invoice.payer.read(|repos| repos.transaction(copy));
+    assert_eq!(state.unwrap().state, TxState::Cancelled);
 }

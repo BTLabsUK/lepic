@@ -319,6 +319,11 @@ pub(crate) fn check_kernel_height(
     Ok(())
 }
 
+/// Whether a peer's slate height is at most [`SLATE_LEAD_BLOCKS`] above `tip`.
+pub(crate) fn slate_height_near(height: Height, tip: Height) -> bool {
+    height.value() <= tip.value().saturating_add(SLATE_LEAD_BLOCKS)
+}
+
 /// The lowest height to look a kernel up from, for a slate created at `slate_height`, when
 /// looking up to `tip`. A slate height can come from the peer, which may be ahead of this
 /// wallet by [`SLATE_LEAD_BLOCKS`] or report a height the chain has not reached, so the lookup
@@ -628,6 +633,24 @@ mod tests {
         assert!(check_kernel_height(Height::new(5), Height::new(5), tip).is_ok());
         assert!(check_kernel_height(Height::new(4), Height::new(5), tip).is_err());
         assert!(check_kernel_height(Height::new(11), Height::new(5), tip).is_err());
+    }
+
+    #[test]
+    fn slate_heights_may_lead_the_tip_by_a_few_blocks() {
+        let tip = Height::new(1_000);
+        assert!(slate_height_near(Height::ZERO, tip));
+        assert!(slate_height_near(
+            Height::new(1_000 + SLATE_LEAD_BLOCKS),
+            tip
+        ));
+        assert!(!slate_height_near(
+            Height::new(1_001 + SLATE_LEAD_BLOCKS),
+            tip
+        ));
+        assert!(slate_height_near(
+            Height::new(u64::MAX),
+            Height::new(u64::MAX)
+        ));
     }
 
     #[test]

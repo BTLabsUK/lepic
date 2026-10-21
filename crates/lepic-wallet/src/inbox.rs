@@ -387,6 +387,7 @@ fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::AlreadyPaid { .. }
         | InvoiceError::Expired { .. }
         | InvoiceError::LockedUntil { .. }
+        | InvoiceError::AheadOfTip { .. }
         | InvoiceError::MessageSignature { .. }
         | InvoiceError::Mismatch { .. }
         | InvoiceError::InputKeyMismatch
