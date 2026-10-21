@@ -107,6 +107,13 @@ I2 or S2, which hold every input, output and the final offset.
   output it deletes (the payer's change, the receiver's output). A refresh up to 10,080 blocks
   after the tip the cancel or expiry was decided at that finds the kernel moves it to
   `confirmed` and stores those outputs `unspent` from the kernel's height.
+- Every such lookup starts 10 blocks below the slate's height, and never above the tip or below
+  height 1: the slate's height may be the peer's, and the node answers a lookup from a height it
+  has no block for with an error, not with "not found". A lookup the node refuses for one
+  transaction leaves that transaction as it is until a later refresh; the rest of the refresh
+  goes on.
+- Receiving an S1 or paying an I1 whose height is more than 10 blocks above the node's tip is
+  refused, and nothing is stored. Upstream does not check the height.
 
 A received payment with no TTL, which every V2 slate is, would otherwise stay `received` for
 ever. A refresh records the tip at which it first sees one, not the slate's height, which the
