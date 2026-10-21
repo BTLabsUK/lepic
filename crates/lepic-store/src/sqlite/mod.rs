@@ -109,14 +109,16 @@ fn is_damage(error: &StoreError) -> bool {
 }
 
 /// Renames the database at `path` and its log files to one free `<name>.damaged-<seconds>`
-/// name. The logs go first: a database left without them opens as it was, whereas logs left
-/// without their database are set aside on the next open.
+/// name. The database goes first: if its rename fails, it keeps its logs and nothing has moved,
+/// whereas a database moved without its logs would drop the commits still in its write-ahead
+/// log. Logs left behind without their database are set aside on the next open.
 fn set_aside(path: &Path) -> Result<(), StoreError> {
     let aside = free_set_aside_name(path)?;
+    rename_if_present(path, &aside)?;
     for suffix in LOG_SUFFIXES {
         rename_if_present(&with_suffix(path, suffix), &with_suffix(&aside, suffix))?;
     }
-    rename_if_present(path, &aside)
+    Ok(())
 }
 
 fn set_aside_logs_without_database(path: &Path) -> Result<(), StoreError> {
