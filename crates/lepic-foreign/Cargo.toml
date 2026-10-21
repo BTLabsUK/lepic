@@ -1,0 +1,30 @@
+[package]
+name = "lepic-foreign"
+description = "The wallet foreign API over HTTP: send a slate to a listening wallet, and listen."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "server", "http1"] }
+hyper-rustls.workspace = true
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "server", "tokio"] }
+lepic-slate.workspace = true
+lepic-transport.workspace = true
+rustls = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std", "raw_value"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+webpki-roots.workspace = true
+
+[dev-dependencies]
+proptest = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
