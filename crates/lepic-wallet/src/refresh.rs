@@ -26,13 +26,14 @@ use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    AccountIndex, OutboxStatus, OutputRecord, OutputStatus, ParticipantId, Repositories,
-    SlateStage, StoreError, StoredTransaction, TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, OutputRecord, OutputStatus, Repositories, SlateStage, StoreError,
+    StoredTransaction, TxDirection, TxId, TxState, WalletStore,
 };
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
+use crate::cancel::{drop_holdings, pool_holds};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
@@ -40,8 +41,9 @@ use crate::event::{Balance, Event};
 use crate::finalize::kernel_excess;
 use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::release::{ReleaseCheck, record_kernel_absent, release_check};
-use crate::send::SENDER_CONTEXT;
+use crate::release::{
+    RELEASED_WATCH_BLOCKS, ReleaseCheck, record_kernel_absent, record_watch, release_check,
+};
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
 
@@ -49,11 +51,14 @@ use crate::wallet::Wallet;
 /// `epic-wallet info` counts by default.
 pub const BALANCE_MINIMUM_CONFIRMATIONS: u64 = 10;
 
+/// Blocks after a refresh first saw a received payment with no TTL that its sender has not
+/// finalized, after which a refresh ends it: a week of blocks, as long as a released send is
+/// watched.
+pub const UNFINALIZED_RECEIVE_BLOCKS: u64 = RELEASED_WATCH_BLOCKS;
+
 pub(crate) const LAST_CONFIRMED_SETTING: &str = "refresh.last_confirmed_height";
 
-/// The private context of the party that adds only an output, under the participant id
-/// `epic-wallet` gives the receiver.
-const RECEIVER_CONTEXT: ParticipantId = ParticipantId(1);
+const RECEIVE_SEEN_PREFIX: &str = "refresh.receive_seen.";
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -120,6 +125,9 @@ struct RefreshTip {
     now: Timestamp,
     read_again: bool,
 }
+
+/// A kernel excess and the height below which the kernel cannot be on chain.
+type KernelAt = (Commitment, Height);
 
 /// An open transaction whose kernel can confirm it: one with no change output.
 #[derive(Debug, Clone, Copy)]
@@ -250,20 +258,27 @@ where
 
         summary.height = tip.height;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
-        let due = {
+        let candidates = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
-                Ok(session
-                    .store
-                    .read(|repos| expiry_due(repos, &codecs, tip.height)))
+                Ok(session.store.read(|repos| {
+                    Ok::<_, RefreshError>(
+                        expiring(repos, &codecs, tip.height)?
+                            .into_iter()
+                            .map(|(stored, kernel)| (stored.id, kernel))
+                            .collect::<Vec<_>>(),
+                    )
+                }))
             })
             .await??
         };
+        let due = !candidates.is_empty();
         // A tip read again already agreed with the first.
         if due && !tip.read_again {
             let second = node.get_tip().await?;
             chain::check_agreement(tip.height, second.height)?;
         }
+        let cleared = self.not_held(&candidates, &mut tip).await?;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
         let changes = {
             let session = Arc::clone(&session);
@@ -271,10 +286,11 @@ where
                 Ok(session.store.write(|repos| {
                     // Only a tip that was confirmed by a second one expires anything.
                     let changes = if due {
-                        expire_all(repos, &codecs, tip.height, now)?
+                        expire_all(repos, &codecs, tip.height, &cleared, now)?
                     } else {
                         Vec::new()
                     };
+                    record_receives_seen(repos, &codecs, tip.height)?;
                     // A tip that expired transactions is not trusted as a reference until a
                     // later refresh sees the chain there without expiring anything.
                     if changes.is_empty() {
@@ -361,6 +377,38 @@ where
             .await??;
         self.record_changes(summary, changes);
         Ok(())
+    }
+
+    /// The transactions due to expire whose kernel, if one is known, neither the node's pool
+    /// nor its chain up to the tip holds: the peer may have completed one that it does hold.
+    /// The pool is asked first, so a transaction that leaves it for a block between the two
+    /// lookups is found on chain.
+    async fn not_held(
+        &self,
+        candidates: &[(TxId, Option<KernelAt>)],
+        tip: &mut RefreshTip,
+    ) -> Result<BTreeSet<TxId>, RefreshError> {
+        let node = &self.ports().node;
+        let mut cleared = BTreeSet::new();
+        for &(tx_id, kernel) in candidates {
+            if let Some((excess, min_height)) = kernel {
+                if pool_holds(node, &excess).await? {
+                    debug!(tx_id = %tx_id, "kernel found in the node pool");
+                    continue;
+                }
+                if let Some(kernel) = node
+                    .get_kernel(&excess, Some(min_height), Some(tip.height))
+                    .await?
+                {
+                    self.cover(tip, kernel.height).await?;
+                    chain::check_kernel_height(kernel.height, min_height, tip.height)?;
+                    debug!(tx_id = %tx_id, height = %kernel.height, "kernel found on chain");
+                    continue;
+                }
+            }
+            cleared.insert(tx_id);
+        }
+        Ok(cleared)
     }
 
     /// Where the node holds the tracked outputs. An unspent or locked output missing from the
@@ -624,6 +672,7 @@ fn confirm(
     }
     let change = apply_transition(repos, tx_id, TxState::Confirmed, now)?;
     repos.set_confirmed_height(tx_id, height)?;
+    forget_receive_seen(repos, tx_id)?;
     Ok(change)
 }
 
@@ -711,15 +760,47 @@ pub(crate) fn final_kernel(
     }))
 }
 
-/// Open transactions at or past their TTL cutoff at `tip`. A finalized or posted transaction
-/// is left out, as upstream leaves out what it has finalized: its kernel may reach the chain
-/// whatever the TTL says. So is the payment of an invoice over Epicbox, which the issuer may
-/// have posted: [`Wallet::sweep_invoices`] offers it to the user to cancel instead.
+/// The kernel of a transaction the peer may still complete without this wallet, and the height
+/// below which it cannot be: one finalized here, an invoice payment once its I2 exists, and a
+/// received payment once its S2 exists. The S2 holds every input, output and the final offset,
+/// so the excess the sender finalizes to is computed from it, as for the I2.
+pub(crate) fn pending_kernel(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    stored: &StoredTransaction,
+) -> Result<Option<KernelAt>, StoreError> {
+    let entry = &stored.entry;
+    let Some(slate_id) = entry.slate_id else {
+        return Ok(None);
+    };
+    match (entry.direction, entry.state) {
+        (_, TxState::Finalized) | (TxDirection::Outgoing, TxState::Sent) => {
+            final_kernel(repos, codecs, stored.id, slate_id)
+        }
+        (TxDirection::Incoming, TxState::Received) => {
+            let reply = stored_slate(repos, codecs, stored.id, slate_id, SlateStage::Standard2)?;
+            Ok(reply.and_then(|slate| {
+                kernel_excess(&slate)
+                    .ok()
+                    .map(|excess| (excess, slate.height()))
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Open transactions that end at `tip`: those at or past their TTL cutoff, and a received
+/// payment with no TTL, answered with an S2, once [`UNFINALIZED_RECEIVE_BLOCKS`] have passed
+/// since a refresh first saw it. A finalized or posted transaction is left out, as upstream
+/// leaves out what it has finalized: its kernel may reach the chain whatever the TTL says. So
+/// is the payment of an invoice over Epicbox, which the issuer may have posted:
+/// [`Wallet::sweep_invoices`] offers it to the user to cancel instead. Each comes with the
+/// kernel the peer may still complete it with, which is looked up before it ends.
 fn expiring(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
     tip: Height,
-) -> Result<Vec<StoredTransaction>, RefreshError> {
+) -> Result<Vec<(StoredTransaction, Option<KernelAt>)>, RefreshError> {
     let mut expiring = Vec::new();
     for stored in open_transactions(repos)? {
         if matches!(stored.entry.state, TxState::Posted | TxState::Finalized)
@@ -730,33 +811,116 @@ fn expiring(
         let Some(slate_id) = stored.entry.slate_id else {
             continue;
         };
-        let Some(cutoff) = ttl_cutoff(repos, codecs, stored.id, slate_id)? else {
-            continue;
+        let cutoff = match ttl_cutoff(repos, codecs, stored.id, slate_id)? {
+            Some(cutoff) => Some(cutoff),
+            None => unfinalized_receive_cutoff(repos, codecs, &stored)?,
         };
-        if tip >= cutoff {
-            expiring.push(stored);
+        if cutoff.is_some_and(|cutoff| tip >= cutoff) {
+            let kernel = pending_kernel(repos, codecs, &stored)?;
+            expiring.push((stored, kernel));
         }
     }
     Ok(expiring)
 }
 
-fn expiry_due(
+/// The height a received payment with no TTL ends at, if it is one: an incoming `received`
+/// transaction this wallet answered with an S2. The window counts from the first refresh that
+/// saw it, not from the slate's height, which the sender chose.
+fn unfinalized_receive_cutoff(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
-    tip: Height,
-) -> Result<bool, RefreshError> {
-    Ok(!expiring(repos, codecs, tip)?.is_empty())
+    stored: &StoredTransaction,
+) -> Result<Option<Height>, StoreError> {
+    if !awaits_finalization(repos, codecs, stored)? {
+        return Ok(None);
+    }
+    let Some(seen) = receive_seen_at(repos, stored.id)? else {
+        return Ok(None);
+    };
+    // A height that overflows is never reached, so the payment never ends by itself.
+    Ok(Some(
+        seen.checked_add_blocks(UNFINALIZED_RECEIVE_BLOCKS)
+            .unwrap_or(Height::new(u64::MAX)),
+    ))
 }
 
-/// Expires every transaction [`expiring`] lists, as upstream cancels it.
+/// Whether `stored` is a received payment with no TTL that waits for its sender to finalize.
+fn awaits_finalization(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    stored: &StoredTransaction,
+) -> Result<bool, StoreError> {
+    let entry = &stored.entry;
+    let Some(slate_id) = entry
+        .slate_id
+        .filter(|_| entry.direction == TxDirection::Incoming && entry.state == TxState::Received)
+    else {
+        return Ok(false);
+    };
+    Ok(repos.slate(slate_id, SlateStage::Standard2)?.is_some()
+        && ttl_cutoff(repos, codecs, stored.id, slate_id)?.is_none())
+}
+
+fn receive_seen_at(repos: &dyn Repositories, tx_id: TxId) -> Result<Option<Height>, StoreError> {
+    Ok(match repos.setting(&receive_seen_key(tx_id))? {
+        Some(text) => {
+            let height = text.parse().ok().map(Height::new);
+            if height.is_none() {
+                warn!(tx_id = %tx_id, "receive height unreadable");
+            }
+            height
+        }
+        None => None,
+    })
+}
+
+/// Forgets when a refresh first saw a received payment. Run it when the payment ends.
+pub(crate) fn forget_receive_seen(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+) -> Result<(), StoreError> {
+    repos.delete_setting(&receive_seen_key(tx_id))
+}
+
+fn receive_seen_key(tx_id: TxId) -> String {
+    format!("{RECEIVE_SEEN_PREFIX}{tx_id}")
+}
+
+/// Records `tip` as the height a refresh first saw each received payment with no TTL that
+/// waits for its sender.
+fn record_receives_seen(
+    repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
+    tip: Height,
+) -> Result<(), RefreshError> {
+    for stored in open_transactions(repos)? {
+        if awaits_finalization(repos, codecs, &stored)?
+            && repos.setting(&receive_seen_key(stored.id))?.is_none()
+        {
+            repos.put_setting(&receive_seen_key(stored.id), &tip.value().to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Expires every transaction [`expiring`] lists that is in `cleared`, the ones whose kernel
+/// the node's pool and chain were found not to hold, as upstream cancels it. One whose kernel
+/// is known stays watched, so it is confirmed if the peer still completes it.
 fn expire_all(
     repos: &mut dyn Repositories,
     codecs: &CodecRegistry,
     tip: Height,
+    cleared: &BTreeSet<TxId>,
     now: Timestamp,
 ) -> Result<Vec<StateChange>, RefreshError> {
     let mut changes = Vec::new();
-    for stored in expiring(repos, codecs, tip)? {
+    for (stored, kernel) in expiring(repos, codecs, tip)? {
+        if !cleared.contains(&stored.id) {
+            continue;
+        }
+        if let Some((excess, min_height)) = kernel {
+            record_watch(repos, stored.id, excess, min_height, tip)?;
+        }
         changes.extend(expire(repos, &stored, now)?);
     }
     Ok(changes)
@@ -783,28 +947,7 @@ fn expire(
     stored: &StoredTransaction,
     now: Timestamp,
 ) -> Result<Option<StateChange>, RefreshError> {
-    for output in repos.outputs_of_transaction(stored.id)? {
-        match output.status {
-            OutputStatus::Unconfirmed => repos.delete_output(output.commitment())?,
-            OutputStatus::Locked => repos.put_output(&OutputRecord {
-                status: OutputStatus::Unspent,
-                ..output
-            })?,
-            OutputStatus::Unspent | OutputStatus::Spent => {}
-        }
-    }
-    if let Some(slate_id) = stored.entry.slate_id {
-        let participant = match stored.entry.direction {
-            TxDirection::Outgoing => SENDER_CONTEXT,
-            TxDirection::Incoming => RECEIVER_CONTEXT,
-        };
-        repos.delete_context(slate_id, participant)?;
-        for pending in repos.outbox(OutboxStatus::Pending)? {
-            if pending.entry.slate_id == slate_id {
-                repos.delete_outbox(pending.id)?;
-            }
-        }
-    }
+    drop_holdings(repos, stored.id, &stored.entry)?;
     Ok(apply_transition(repos, stored.id, TxState::Expired, now)?)
 }
 

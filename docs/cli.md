@@ -292,6 +292,13 @@ lepic tx resend 3 --to-file pay-alice.slate
 lepic tx cancel 3
 ```
 
+`tx cancel` of a transaction the other party can still complete on its own (a finalized send, an
+invoice you paid, a payment you received and answered) first asks the node, and is refused with
+exit code 7 while its pool or chain already holds it. After a cancel, the next week of refreshes
+still looks for it, and if it is mined after all, the transaction becomes `confirmed` and its
+outputs come back. A received payment that carries no TTL ends by itself a week of blocks after
+the wallet first saw it, under the same check.
+
 ## Invoices
 
 An invoice asks the payer for an amount: the issuer builds I1, the payer answers with I2 and the

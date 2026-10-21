@@ -145,13 +145,17 @@ impl ReleasedSend {
     }
 }
 
-/// Keeps what recognises a released send, before its change is deleted. Run it in the store
-/// transaction that releases it.
-fn record_released(
+/// Keeps what recognises a transaction that ends unconfirmed although its kernel may still be
+/// mined, before its unconfirmed outputs are deleted: its kernel `excess`, the height
+/// `min_height` below which the kernel cannot be, and those outputs. A refresh up to
+/// [`RELEASED_WATCH_BLOCKS`] after `ended_at` then confirms it if the kernel is found. Run it in
+/// the store transaction that ends it.
+pub(crate) fn record_watch(
     repos: &mut dyn Repositories,
     tx_id: TxId,
-    check: &ReleaseCheck,
-    released_at: Height,
+    excess: Commitment,
+    min_height: Height,
+    ended_at: Height,
 ) -> Result<(), StoreError> {
     let change = repos
         .outputs_of_transaction(tx_id)?
@@ -164,16 +168,17 @@ fn record_released(
         })
         .collect();
     let released = ReleasedSend {
-        excess: check.excess,
-        min_height: check.min_height,
-        released_at,
+        excess,
+        min_height,
+        released_at: ended_at,
         change,
     };
     repos.put_setting(&key(RELEASED_PREFIX, tx_id), &released.encode())
 }
 
-/// The released sends still watched for, with the account each belongs to. A record that does
-/// not parse is skipped: the send then keeps its state, as it did before releases were watched.
+/// The cancelled or expired transactions still watched for, with the account each belongs to.
+/// A record that does not parse is skipped: the transaction then keeps its state, as it did
+/// before ended transactions were watched.
 fn released_sends(
     repos: &dyn Repositories,
 ) -> Result<Vec<(TxId, AccountIndex, ReleasedSend)>, StoreError> {
@@ -181,7 +186,7 @@ fn released_sends(
     for account in repos.accounts()? {
         for stored in repos.transactions(account.index)? {
             let entry = &stored.entry;
-            if entry.direction != TxDirection::Outgoing || entry.state != TxState::Cancelled {
+            if !matches!(entry.state, TxState::Cancelled | TxState::Expired) {
                 continue;
             }
             let Some(text) = repos.setting(&key(RELEASED_PREFIX, stored.id))? else {
@@ -196,9 +201,9 @@ fn released_sends(
     Ok(released)
 }
 
-/// Confirms a released send whose kernel was found at `height` and stores its change as
-/// unspent from there, or takes over the change a scan already stored. A send no longer
-/// cancelled, or no longer watched, is left as it is.
+/// Confirms a watched transaction whose kernel was found at `height` and stores the outputs it
+/// dropped as unspent from there, or takes over those a scan already stored. A transaction no
+/// longer cancelled or expired, or no longer watched, is left as it is.
 fn confirm_mined_release(
     repos: &mut dyn Repositories,
     tx_id: TxId,
@@ -208,10 +213,10 @@ fn confirm_mined_release(
     now: Timestamp,
 ) -> Result<Option<StateChange>, WalletError> {
     let record = key(RELEASED_PREFIX, tx_id);
-    let still_cancelled = repos
+    let still_ended = repos
         .transaction(tx_id)?
-        .is_some_and(|entry| entry.state == TxState::Cancelled);
-    if !still_cancelled || repos.setting(&record)?.is_none() {
+        .is_some_and(|entry| matches!(entry.state, TxState::Cancelled | TxState::Expired));
+    if !still_ended || repos.setting(&record)?.is_none() {
         return Ok(None);
     }
     for change in &released.change {
@@ -449,7 +454,7 @@ where
                     if entry.state != observed {
                         return Err(WalletError::ChangedDuringCancel(tx_id));
                     }
-                    record_released(repos, tx_id, &check, tip)?;
+                    record_watch(repos, tx_id, check.excess, check.min_height, tip)?;
                     drop_holdings(repos, tx_id, &entry)?;
                     apply_transition(repos, tx_id, TxState::Cancelled, now)
                 })

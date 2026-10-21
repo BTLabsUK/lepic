@@ -21,18 +21,18 @@ own state (`lepic-wallet`'s `state` module).
 | outgoing `sent` | `TxSentCreated` | false | creating S1, or paying an invoice (I2) |
 | outgoing `finalized` | `TxSentCreated`, with the transaction stored | false | finalizing S3 |
 | outgoing `posted` | `TxSentCreated`, or `TxSentMempool` once seen in the mempool | false | posting to the node |
-| outgoing `confirmed` | `TxSent` | true | a refresh finding one of its outputs on chain, or the kernel of a released send |
+| outgoing `confirmed` | `TxSent` | true | a refresh finding one of its outputs on chain, or the kernel of a watched transaction (below) |
 | outgoing `cancelled` | `TxSentCancelled` | false | the owner's cancel, or the owner's release of a finalized or posted send the network never took |
-| outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height |
+| outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height, once the node holds no kernel the peer could have completed |
 | incoming `received` | `TxReceived` | false | receiving S1 (S2 returned), or issuing an invoice (I1) |
 | incoming `finalized` | `TxReceived`, with the transaction stored | false | the invoice issuer finalizing I3 |
 | incoming `posted` | `TxReceived`, or `TxReceivedMempool` once seen in the mempool | false | the invoice issuer posting |
-| incoming `confirmed` | `TxReceived` | true | a refresh finding one of its outputs on chain |
+| incoming `confirmed` | `TxReceived` | true | a refresh finding one of its outputs on chain, or the kernel of a watched transaction (below) |
 | incoming `confirmed` | `TxReceivedMempool` | true | the same, for an invoice issuer whose posted transaction was seen in the mempool; the refresh rewrites only outgoing types |
 | incoming `confirmed` | `ConfirmedCoinbase` | true | a refresh confirming a coinbase output, or a restore finding one; no slate |
 | incoming `confirmed` | `TxReceived`, no slate id | true | a restore finding an output with no entry |
 | incoming `cancelled` | `TxReceivedCancelled` | false | the owner's cancel |
-| incoming `expired` | `TxReceivedCancelled` | false | a refresh at or past the TTL cutoff height |
+| incoming `expired` | `TxReceivedCancelled` | false | a refresh at or past the TTL cutoff height, or, for a received payment with no TTL, 10,080 blocks after a refresh first saw it; in both cases once the node holds no kernel the sender could have completed |
 
 Upstream marks an expired transaction cancelled; LEPIC keeps `expired` apart so the user can tell the
 two causes apart. Both map to the same upstream type.
@@ -47,7 +47,7 @@ changes nothing. Any other transition not listed is rejected with a typed error.
 | `sent`, `received` | `finalized`, `confirmed`, `cancelled`, `expired` |
 | `finalized` | `posted`, `confirmed`, `cancelled` |
 | `posted` | `confirmed`, `cancelled` |
-| `cancelled`, for a released send only | `confirmed`, by a refresh that finds its kernel |
+| `cancelled`, `expired`, for a watched transaction only | `confirmed`, by a refresh that finds its kernel |
 | `confirmed`, `cancelled`, `expired` | none otherwise |
 
 `confirmed` is reachable from every open state because the chain is the authority: a peer may post
@@ -80,14 +80,38 @@ not past that window. A kernel found moves the send from `cancelled` to `confirm
 kernel's height and stores its change `unspent` from that height, so the balance equals what a
 scan would find. If a scan already restored the change, under an incoming entry with no slate of
 its own, the send takes the output over and that entry is dropped, so the history counts the
-change once. This is the one transition out of `cancelled`, and only a released send takes
-it. A kernel mined after the window is not looked for: the send stays `cancelled`, and a scan
+change once. This is the one transition out of `cancelled` or `expired`, and only a watched
+transaction takes it. A kernel mined after the window is not looked for: the send stays `cancelled`, and a scan
 stores its change `unspent` again.
 
 The app releases only a send whose post the node refused with a JSON-RPC error. LEPIC also
 releases a posted send the node dropped and a finalized one whose post got no answer: a kernel
 still missing a day of blocks later, and in neither the node's chain nor its pool at the release,
 means the same in each case.
+
+### Transactions the peer can still complete
+
+Once the peer holds this wallet's signature it can complete the transaction without this wallet:
+a send this wallet finalized, whose post may have reached the node even when it failed; an
+invoice payment once the payer has its I2; and a received payment once the receiver has
+answered with S2. LEPIC knows the kernel of each: from the stored S3 or I3, or computed from the
+I2 or S2, which hold every input, output and the final offset.
+
+- The owner's cancel of one first asks the node's pool, then its chain up to a plausible tip,
+  for that kernel, and refuses while either holds it. Upstream's `cancel_tx` checks neither.
+  As upstream does, the receiver may cancel an unconfirmed incoming payment.
+- A refresh that would expire one, at its TTL cutoff or by the no-TTL window, asks the same
+  first, and leaves it open while either holds the kernel.
+- A cancel or expiry that goes ahead keeps the transaction watched exactly as a release does:
+  its kernel, the height below which it cannot be, and the key and amount of each unconfirmed
+  output it deletes (the payer's change, the receiver's output). A refresh up to 10,080 blocks
+  after the tip the cancel or expiry was decided at that finds the kernel moves it to
+  `confirmed` and stores those outputs `unspent` from the kernel's height.
+
+A received payment with no TTL, which every V2 slate is, would otherwise stay `received` for
+ever. A refresh records the tip at which it first sees one, not the slate's height, which the
+sender chose, and expires it 10,080 blocks later under the rules above. An issued invoice
+(`received` with no S2) is not ended this way.
 
 The state machine does not know the direction of a transaction. Which side may take a step, for
 example that only an invoice issuer finalizes an incoming transaction, is enforced by the stages

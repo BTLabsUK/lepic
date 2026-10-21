@@ -8,8 +8,10 @@
 //!   └─> Confirmed, Cancelled, Expired
 //! ```
 //!
-//! A released send leaves `cancelled` for `confirmed` when the chain mines it after all
-//! (`confirm_released`); outside that step the final states are final.
+//! A transaction that ended unconfirmed while its kernel could still be mined (a released send,
+//! a cancel or expiry after the peer could complete it) leaves `cancelled` or `expired` for
+//! `confirmed` when the chain mines it after all (`confirm_released`); outside that step the
+//! final states are final.
 //!
 //! Moving a transaction to the state it is already in succeeds without a change, so a repeated
 //! step (a slate delivered twice, a second post) is harmless.
@@ -114,11 +116,11 @@ pub fn apply_transition(
     Ok(Some(change))
 }
 
-/// Moves a released send the chain mined after all from `cancelled` to `confirmed`, the one
-/// step out of a final state (`docs/compat/states.md`): the chain is the authority, and a
-/// kernel on chain means the send happened. Only a refresh that found the kernel of a send it
-/// knows was released takes this step; every other cancelled transaction stays final. Returns
-/// `Ok(None)` when the send is already confirmed.
+/// Moves a watched transaction the chain mined after all from `cancelled` or `expired` to
+/// `confirmed`, the one step out of a final state (`docs/compat/states.md`): the chain is the
+/// authority, and a kernel on chain means the transaction happened. Only a refresh that found
+/// the kernel of a transaction it watches takes this step; every other cancelled or expired
+/// transaction stays final. Returns `Ok(None)` when it is already confirmed.
 pub(crate) fn confirm_released(
     repos: &mut dyn Repositories,
     tx_id: TxId,
@@ -129,7 +131,7 @@ pub(crate) fn confirm_released(
         .ok_or(WalletError::UnknownTransaction(tx_id))?;
     match entry.state {
         TxState::Confirmed => return Ok(None),
-        TxState::Cancelled => {}
+        TxState::Cancelled | TxState::Expired => {}
         from => {
             return Err(InvalidTransition {
                 from,
@@ -190,26 +192,28 @@ mod tests {
     }
 
     #[test]
-    fn confirms_a_cancelled_transaction_once() {
-        let (store, tx_id) = store_with(TxState::Cancelled);
+    fn confirms_a_cancelled_or_expired_transaction_once() {
+        for state in [TxState::Cancelled, TxState::Expired] {
+            let (store, tx_id) = store_with(state);
 
-        let first = store.write(|repos| confirm_released(repos, tx_id, at()));
-        let second = store.write(|repos| confirm_released(repos, tx_id, at()));
+            let first = store.write(|repos| confirm_released(repos, tx_id, at()));
+            let second = store.write(|repos| confirm_released(repos, tx_id, at()));
 
-        assert_eq!(
-            first.unwrap(),
-            Some(StateChange {
-                tx_id,
-                from: TxState::Cancelled,
-                to: TxState::Confirmed,
-            })
-        );
-        assert_eq!(second.unwrap(), None);
+            assert_eq!(
+                first.unwrap(),
+                Some(StateChange {
+                    tx_id,
+                    from: state,
+                    to: TxState::Confirmed,
+                })
+            );
+            assert_eq!(second.unwrap(), None);
+        }
     }
 
     #[test]
     fn confirms_no_other_state_out_of_turn() {
-        for state in [TxState::Expired, TxState::Sent, TxState::Posted] {
+        for state in [TxState::Received, TxState::Sent, TxState::Posted] {
             let (store, tx_id) = store_with(state);
 
             let result = store.write(|repos| confirm_released(repos, tx_id, at()));

@@ -1,7 +1,9 @@
 //! Cancelling a transaction that is not confirmed, as `epic-wallet`'s `cancel_tx` does: its
 //! unconfirmed outputs are dropped, the inputs it locked become spendable again, and its private
 //! context and pending deliveries are dropped with it. A posted transaction is not cancelled, nor
-//! is a finalized one whose kernel the node's chain or pool already holds.
+//! is one the peer may complete without this wallet whose kernel the node's chain or pool
+//! already holds. Such a transaction stays watched after the cancel, so a refresh confirms it
+//! and restores its outputs if the peer still completes it.
 
 use std::sync::Arc;
 
@@ -11,14 +13,15 @@ use lepic_node::{NodeApi, NodeError};
 use lepic_primitives::amount::Height;
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    OutboxStatus, OutputRecord, OutputStatus, ParticipantId, Repositories, TransactionEntry,
-    TxDirection, TxId, TxState, WalletStore,
+    OutboxStatus, OutputRecord, OutputStatus, ParticipantId, Repositories, StoredTransaction,
+    TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use tracing::{debug, info, instrument};
 
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::refresh::{final_kernel, legacy_codecs};
+use crate::refresh::{forget_receive_seen, legacy_codecs, pending_kernel};
+use crate::release::record_watch;
 use crate::send::SENDER_CONTEXT;
 use crate::state::{InvalidTransition, StateChange, apply_transition, check_transition};
 use crate::wallet::Wallet;
@@ -42,20 +45,25 @@ where
     /// payer is sent a `withdrawn` notice when it proved that it runs LEPIC; a failure to send
     /// it is logged and not returned.
     ///
-    /// A finalized transaction may have reached the node even though posting it failed, so its
-    /// kernel is looked up first, in the node's transaction pool and then in its chain; the
-    /// node must be reachable to cancel one. The pool comes first, so a transaction that
-    /// leaves the pool for a block between the two lookups is found by the second. A posted
-    /// transaction, which includes one the node's pool answered it already holds, counts as on
-    /// chain and is not cancelled.
+    /// The peer may complete a transaction without this wallet once it holds this wallet's
+    /// signature: a finalized one, whose post may have reached the node even though it failed,
+    /// an invoice payment once its I2 exists, and a received payment once its S2 exists. Its
+    /// kernel is looked up first, in the node's transaction pool and then in its chain up to
+    /// the node's tip, which must be plausible; the node must be reachable to cancel one. The
+    /// pool comes first, so a transaction that leaves the pool for a block between the two
+    /// lookups is found by the second. A posted transaction, which includes one the node's
+    /// pool answered it already holds, counts as on chain and is not cancelled. After the
+    /// cancel, a refresh up to [`crate::release::RELEASED_WATCH_BLOCKS`] past that tip still
+    /// looks the kernel up: a kernel found confirms the transaction and stores the outputs the
+    /// cancel dropped as unspent ([`Wallet::refresh`]).
     ///
     /// Fails with [`WalletError::Locked`], [`WalletError::UnknownTransaction`],
     /// [`WalletError::Transition`] when the transaction is posted, confirmed or expired,
-    /// [`WalletError::OnChain`] when the node's chain holds the kernel of a finalized one,
-    /// [`WalletError::InPool`] when the node's pool holds it, [`WalletError::Node`] when either
-    /// lookup fails, and [`WalletError::ChangedDuringCancel`]
-    /// when another operation moved the transaction on after its state was read; cancelling
-    /// again then decides from the new state.
+    /// [`WalletError::OnChain`] when the node's chain holds the kernel, [`WalletError::InPool`]
+    /// when the node's pool holds it, [`WalletError::Node`] or [`WalletError::Implausible`]
+    /// when the node cannot be asked, and [`WalletError::ChangedDuringCancel`] when another
+    /// operation moved the transaction on after its state was read; cancelling again then
+    /// decides from the new state.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn cancel(&self, tx_id: TxId) -> Result<(), WalletError> {
         let session = self.session()?;
@@ -65,37 +73,42 @@ where
             self.blocking(move |_, _| {
                 session
                     .store
-                    .read(|repos| finalized_kernel(repos, &codecs, tx_id))
+                    .read(|repos| cancel_lookup(repos, &codecs, tx_id))
             })
             .await?
         };
+        let mut watch = None;
         if let Some((excess, min_height)) = lookup {
+            let node = &self.ports().node;
             // The pool is asked before the chain: a transaction that leaves the pool for a
             // block between the two lookups is then found by the second.
-            let pooled = pool_holds(&self.ports().node, &excess)
-                .await
-                .map_err(WalletError::Node)?;
+            let pooled = pool_holds(node, &excess).await.map_err(WalletError::Node)?;
             if pooled {
                 debug!("kernel found in the node pool");
                 return Err(WalletError::InPool(tx_id));
             }
-            let kernel = self
-                .ports()
-                .node
-                .get_kernel(&excess, Some(min_height), None)
+            let tip = node.get_tip().await.map_err(WalletError::Node)?.height;
+            self.check_plausible_tip(&session, tip).await?;
+            let kernel = node
+                .get_kernel(&excess, Some(min_height), Some(tip))
                 .await
                 .map_err(WalletError::Node)?;
             if let Some(kernel) = kernel {
                 debug!(height = %kernel.height, "kernel found on chain");
                 return Err(WalletError::OnChain(tx_id));
             }
+            watch = Some(Watch {
+                excess,
+                min_height,
+                ended_at: tip,
+            });
         }
         let change = self
             .blocking(move |ports, _| {
                 let now = ports.clock.now();
                 session
                     .store
-                    .write(|repos| cancel_transaction(repos, tx_id, observed, now))
+                    .write(|repos| cancel_transaction(repos, tx_id, observed, watch, now))
             })
             .await?;
         match change {
@@ -122,9 +135,9 @@ pub(crate) async fn pool_holds<N: NodeApi>(
         .any(|kernel| kernel.excess == *excess))
 }
 
-/// The state a cancel starts from, and the kernel of a finalized transaction, to look up
-/// before it is cancelled.
-fn finalized_kernel(
+/// The state a cancel starts from, and the kernel to look up before it is cancelled, of a
+/// transaction the peer may complete without this wallet.
+fn cancel_lookup(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
     tx_id: TxId,
@@ -132,18 +145,28 @@ fn finalized_kernel(
     let entry = repos
         .transaction(tx_id)?
         .ok_or(WalletError::UnknownTransaction(tx_id))?;
-    let Some(slate_id) = entry.slate_id.filter(|_| entry.state == TxState::Finalized) else {
-        return Ok((entry.state, None));
-    };
-    Ok((entry.state, final_kernel(repos, codecs, tx_id, slate_id)?))
+    let state = entry.state;
+    let kernel = pending_kernel(repos, codecs, &StoredTransaction { id: tx_id, entry })?;
+    Ok((state, kernel))
+}
+
+/// What keeps a cancelled transaction recognisable if the peer completes it later.
+#[derive(Debug, Clone, Copy)]
+struct Watch {
+    excess: Commitment,
+    min_height: Height,
+    /// The tip the kernel was last looked up to.
+    ended_at: Height,
 }
 
 /// Cancels the transaction if it is still in the state `observed`, the one the kernel lookup
-/// was decided on. A transaction finalized or posted since may be on its way to the chain.
+/// was decided on, and keeps `watch` for it. A transaction finalized or posted since may be on
+/// its way to the chain.
 fn cancel_transaction(
     repos: &mut dyn Repositories,
     tx_id: TxId,
     observed: TxState,
+    watch: Option<Watch>,
     now: Timestamp,
 ) -> Result<Option<StateChange>, WalletError> {
     let entry = repos
@@ -164,6 +187,9 @@ fn cancel_transaction(
     }
     if entry.state != observed {
         return Err(WalletError::ChangedDuringCancel(tx_id));
+    }
+    if let Some(watch) = watch {
+        record_watch(repos, tx_id, watch.excess, watch.min_height, watch.ended_at)?;
     }
     drop_holdings(repos, tx_id, &entry)?;
     apply_transition(repos, tx_id, TxState::Cancelled, now)
@@ -187,6 +213,7 @@ pub(crate) fn drop_holdings(
             OutputStatus::Unspent | OutputStatus::Spent => {}
         }
     }
+    forget_receive_seen(repos, tx_id)?;
     if let Some(slate_id) = entry.slate_id {
         let participant = match entry.direction {
             TxDirection::Outgoing => SENDER_CONTEXT,
@@ -253,7 +280,8 @@ mod tests {
     fn refuses_a_transaction_finalized_after_its_state_was_read() {
         let (store, tx_id) = store_with(TxState::Finalized);
 
-        let result = store.write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, at()));
+        let result =
+            store.write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, None, at()));
 
         assert!(
             matches!(result, Err(WalletError::ChangedDuringCancel(id)) if id == tx_id),
@@ -267,7 +295,7 @@ mod tests {
         let (store, tx_id) = store_with(TxState::Sent);
 
         let change = store
-            .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, at()))
+            .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, None, at()))
             .unwrap();
 
         assert_eq!(change.map(|change| change.to), Some(TxState::Cancelled));
@@ -278,7 +306,7 @@ mod tests {
         let (store, tx_id) = store_with(TxState::Cancelled);
 
         let change = store
-            .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, at()))
+            .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, None, at()))
             .unwrap();
 
         assert_eq!(change, None);

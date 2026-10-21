@@ -755,7 +755,10 @@ fn cancel_asks_the_node_pool_before_its_chain() {
     let (result, calls) = releasing.lookups_during(|| releasing.cancel());
 
     result.unwrap();
-    assert_eq!(calls, ["get_unconfirmed_transactions", "get_kernel"]);
+    assert_eq!(
+        calls,
+        ["get_unconfirmed_transactions", "get_tip", "get_kernel"]
+    );
 }
 
 #[test]
