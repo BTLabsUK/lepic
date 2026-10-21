@@ -44,7 +44,6 @@ use tracing::{Span, debug, info, instrument};
 use uuid::Uuid;
 
 use crate::account::{self, DEFAULT_ACCOUNT_LABEL};
-use crate::chain;
 use crate::error::WalletError;
 use crate::event::{AnsweredSlate, Event, ReceivedTransaction};
 use crate::lifecycle::Session;
@@ -97,9 +96,9 @@ pub enum ReceiveError {
     AlreadyReceived { slate_id: SlateId, tx_id: TxId },
     #[error("slate expired at height {cutoff}, the chain tip is at {tip}")]
     Expired { cutoff: Height, tip: Height },
-    /// The slate's height is more than [`crate::chain::SLATE_LEAD_BLOCKS`] above the tip.
-    #[error("slate height {height} is ahead of the chain tip at {tip}")]
-    AheadOfTip { height: Height, tip: Height },
+    /// The slate's height is above any height the chain can have reached by now.
+    #[error("slate height {height} is above the highest plausible height {limit}")]
+    AheadOfTip { height: Height, limit: Height },
     #[error("fee is below the minimum for the transaction")]
     FeeBelowMinimum { fee: Fee, minimum: Fee },
     #[error("minimum fee could not be computed")]
@@ -164,7 +163,7 @@ where
     /// for another S1 under a slate id this wallet has received before or for a slate whose
     /// transaction was cancelled or expired, with [`ReceiveError::Expired`] when the
     /// tip has reached the slate's TTL cutoff, with [`ReceiveError::AheadOfTip`] when its height
-    /// is more than [`crate::chain::SLATE_LEAD_BLOCKS`] above the tip, and with a typed
+    /// is above any the chain can have reached by now, and with a typed
     /// rejection for any slate that is malformed, not an S1, pays nothing, or whose fee or
     /// messages do not check. Fails with
     /// [`WalletError::RestoreScanRequired`] inside [`ReceiveError::Wallet`] on a database rebuilt
@@ -217,9 +216,9 @@ where
             .await
             .map_err(ReceiveError::Node)?
             .height;
-        self.check_plausible_tip(&session, tip).await?;
+        let limit = self.check_plausible_tip(&session, tip).await?;
         check_ttl(&slate, tip)?;
-        check_height(&slate, tip)?;
+        check_height(&slate, limit)?;
         let context = self.encode_context(&slate).await?;
         debug!(height = tip.value(), "slate checked");
 
@@ -412,11 +411,13 @@ fn check_ttl(slate: &Slate, tip: Height) -> Result<(), ReceiveError> {
     }
 }
 
-/// Refuses a slate created at a height the chain is not near yet.
-fn check_height(slate: &Slate, tip: Height) -> Result<(), ReceiveError> {
+/// Refuses a slate created at a height the chain cannot have reached yet. A slate a few blocks,
+/// or more, above the node's tip is received: the sender's node may simply be ahead of this
+/// wallet's, and kernel lookups start at or below the tip either way ([`crate::chain::kernel_floor`]).
+fn check_height(slate: &Slate, limit: Height) -> Result<(), ReceiveError> {
     let height = slate.height();
-    if !chain::slate_height_near(height, tip) {
-        return Err(ReceiveError::AheadOfTip { height, tip });
+    if height > limit {
+        return Err(ReceiveError::AheadOfTip { height, limit });
     }
     Ok(())
 }

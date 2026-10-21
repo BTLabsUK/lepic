@@ -349,8 +349,8 @@ fn rejects_a_slate_created_far_above_the_tip_and_stores_nothing() {
     assert!(
         matches!(
             error,
-            ReceiveError::AheadOfTip { height, tip: seen }
-                if height == Height::new(far) && seen == Height::new(tip)
+            ReceiveError::AheadOfTip { height, limit }
+                if height == Height::new(far) && limit > Height::new(tip)
         ),
         "{error:?}"
     );
@@ -358,27 +358,19 @@ fn rejects_a_slate_created_far_above_the_tip_and_stores_nothing() {
 }
 
 #[test]
-fn receives_a_slate_created_a_few_blocks_above_the_tip_and_refuses_one_more() {
+fn receives_a_slate_created_above_a_lagging_node_tip() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let tip = slate_height(&s1);
     let mnemonic = receiver_mnemonic(&vector("send_file_plain_s2_v3"));
 
-    let receiver = Receiver::new(&mnemonic, tip);
-    let error = receiver
-        .receive(
-            transport,
-            &s1_at_height(&s1, tip + SLATE_LEAD_BLOCKS + 1),
-            None,
-        )
-        .unwrap_err();
-    assert!(
-        matches!(error, ReceiveError::AheadOfTip { .. }),
-        "{error:?}"
-    );
-
+    // The sender's node is ahead of this wallet's, which lags by more than a few blocks.
     let receiver = Receiver::new(&mnemonic, tip);
     receiver
-        .receive(transport, &s1_at_height(&s1, tip + SLATE_LEAD_BLOCKS), None)
+        .receive(
+            transport,
+            &s1_at_height(&s1, tip + 10 * SLATE_LEAD_BLOCKS),
+            None,
+        )
         .unwrap();
     assert_eq!(receiver.transaction_count(), 1);
 }

@@ -386,19 +386,21 @@ where
     }
 
     /// Refuses a tip a stage is about to act on when it is not plausible for what the wallet
-    /// stored, with [`WalletError::Implausible`].
+    /// stored, with [`WalletError::Implausible`]. Returns the highest height the chain can
+    /// plausibly have reached now, which bounds heights a peer reports too.
     pub(crate) async fn check_plausible_tip(
         &self,
         session: &Arc<Session<S::Store>>,
         tip: Height,
-    ) -> Result<(), WalletError> {
+    ) -> Result<Height, WalletError> {
         let session = Arc::clone(session);
         self.blocking(move |ports, config| {
             let stored = session
                 .store
                 .read(|repos| Ok::<_, WalletError>(position(repos)?))?;
-            check_tip(config.network, &stored, tip, ports.clock.now())?;
-            Ok(())
+            let now = ports.clock.now();
+            check_tip(config.network, &stored, tip, now)?;
+            Ok(plausible_limit(config.network, &stored, now))
         })
         .await
     }
