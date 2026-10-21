@@ -522,3 +522,54 @@ fn lifecycle_futures_can_move_between_threads() {
     assert_send(&wallet.import_wallet_seed(password(PASSWORD), "", password("")));
     assert_send(&wallet.open(password(PASSWORD)));
 }
+
+/// A damaged database is reported once and kept beside the wallet; the next open rebuilds it as
+/// if it were missing, so a scan from genesis must run before new outputs are made.
+#[test]
+fn a_damaged_database_is_set_aside_and_the_next_open_rebuilds_it() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = harness.config(Network::Floonet);
+    config.data_dir = dir.path().to_owned();
+    let ports = |vault: TestVault| {
+        let memory = harness.ports(vault);
+        lepic_wallet::Ports {
+            node: memory.node,
+            stores: SqliteStores,
+            secrets: memory.secrets,
+            transports: memory.transports,
+            clock: memory.clock,
+            rng: memory.rng,
+            runtime: memory.runtime,
+        }
+    };
+    let wallet = Wallet::new(config.clone(), ports(harness.vault.clone())).unwrap();
+    harness
+        .block_on(wallet.create(password(PASSWORD), WordCount::default()))
+        .unwrap();
+    wallet.close();
+    let database = dir.path().join(lepic_wallet::DATABASE_FILE);
+    std::fs::write(&database, [0x5a; 8192]).unwrap();
+
+    let reopened = Wallet::new(config.clone(), ports(harness.vault.clone())).unwrap();
+    let result = harness.block_on(reopened.open(password(PASSWORD)));
+    assert!(
+        matches!(
+            result,
+            Err(WalletError::Store(lepic_store::StoreError::DamagedSetAside))
+        ),
+        "{result:?}"
+    );
+    assert!(!reopened.is_unlocked());
+    let kept: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().contains(".damaged-"))
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(std::fs::read(&kept[0]).unwrap(), [0x5a; 8192]);
+
+    harness.block_on(reopened.open(password(PASSWORD))).unwrap();
+    assert_eq!(reopened.accounts().unwrap().len(), 1);
+    assert!(reopened.restore_scan_required().unwrap());
+}

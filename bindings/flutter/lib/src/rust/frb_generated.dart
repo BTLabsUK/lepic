@@ -7127,7 +7127,7 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// the old text stops opening. While a change is pending a wrong PIN costs two key
   /// derivations, and still counts as one failure.
   ///
-  /// Fails with `InvalidArgument` when `new_pin` has fewer than four characters, before any
+  /// Fails with `InvalidArgument` when `new_pin` has fewer than six characters, before any
   /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
   Future<String> changePin({
     required String sealedPassword,
@@ -7288,7 +7288,8 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// and open the wallet anew. Locking a locked wallet does nothing.
   void lock() => RustLib.instance.api.crateApiWalletEpicWalletLock(that: this);
 
-  /// The recovery phrase, after checking `password` against the stored vault.
+  /// The recovery phrase, after checking `password` against the stored vault. Attempts are
+  /// counted and delayed as in [`EpicWallet::open`].
   Future<String> mnemonic({required String password}) => RustLib.instance.api
       .crateApiWalletEpicWalletMnemonic(that: this, password: password);
 

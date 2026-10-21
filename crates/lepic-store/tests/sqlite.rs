@@ -194,3 +194,114 @@ fn second_handle_sees_committed_writes() {
         Some("100")
     );
 }
+
+/// The files in `dir` whose names start with the database's, sorted.
+fn database_files(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("wallet.sqlite"))
+        .collect();
+    names.sort();
+    names
+}
+
+fn set_aside(dir: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    let names = database_files(dir);
+    let name = names
+        .iter()
+        .find(|name| name.starts_with("wallet.sqlite.damaged-") && name.ends_with(suffix))
+        .unwrap();
+    dir.join(name)
+}
+
+#[test]
+fn a_file_that_is_no_database_is_moved_aside_with_its_logs_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    let with_suffix = |suffix: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        std::path::PathBuf::from(name)
+    };
+    fs::write(&path, [0x5a; 8192]).unwrap();
+    fs::write(with_suffix("-wal"), b"log").unwrap();
+    fs::write(with_suffix("-shm"), b"index").unwrap();
+
+    let result = SqliteStore::open(&path, context_key(1));
+    assert!(
+        matches!(result, Err(StoreError::DamagedSetAside)),
+        "{result:?}"
+    );
+
+    let database = set_aside(dir.path(), "");
+    assert!(!database.to_string_lossy().ends_with("-wal"));
+    assert_eq!(fs::read(&database).unwrap(), [0x5a; 8192]);
+    let mut wal = database.as_os_str().to_owned();
+    wal.push("-wal");
+    assert_eq!(fs::read(wal).unwrap(), b"log");
+    let mut shm = database.as_os_str().to_owned();
+    shm.push("-shm");
+    // SQLite rebuilds this index of the log whenever it opens one, so only its place matters.
+    assert!(std::path::Path::new(&shm).is_file());
+    assert!(!path.exists());
+
+    let reopened = SqliteStore::open(&path, context_key(1)).unwrap();
+    assert!(reopened.read(|repos| repos.accounts()).unwrap().is_empty());
+}
+
+#[test]
+fn a_database_that_fails_its_integrity_check_is_moved_aside() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    let store = SqliteStore::open(&path, context_key(1)).unwrap();
+    store
+        .write(|repos| repos.put_account(&account(0, "default")))
+        .unwrap();
+    drop(store);
+    let mut bytes = fs::read(&path).unwrap();
+    let page_size = 4096;
+    assert!(bytes.len() > 2 * page_size);
+    for byte in &mut bytes[page_size..page_size + 64] {
+        *byte = 0xff;
+    }
+    fs::write(&path, &bytes).unwrap();
+
+    let result = SqliteStore::open(&path, context_key(1));
+    assert!(
+        matches!(result, Err(StoreError::DamagedSetAside)),
+        "{result:?}"
+    );
+    assert_eq!(fs::read(set_aside(dir.path(), "")).unwrap(), bytes);
+    assert!(SqliteStore::open(&path, context_key(1)).is_ok());
+}
+
+/// Logs left without their database, as when setting a damaged one aside was cut short, would
+/// be read into a new database; they are set aside before it is made.
+#[test]
+fn logs_without_their_database_are_moved_aside_before_a_new_one_is_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    fs::write(&wal, b"log").unwrap();
+
+    let store = SqliteStore::open(&path, context_key(1)).unwrap();
+    assert!(store.read(|repos| repos.accounts()).unwrap().is_empty());
+    assert_eq!(fs::read(set_aside(dir.path(), "-wal")).unwrap(), b"log");
+}
+
+#[test]
+fn a_healthy_database_is_opened_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    drop(SqliteStore::open(&path, context_key(1)).unwrap());
+    drop(SqliteStore::open(&path, context_key(1)).unwrap());
+    assert!(
+        database_files(dir.path())
+            .iter()
+            .all(|name| !name.contains("damaged")),
+        "{:?}",
+        database_files(dir.path())
+    );
+}

@@ -297,7 +297,9 @@ impl EpicWallet {
 
     /// Opens the wallet in `config.data_dir`. Any password that opens the vault opens it, also
     /// one shorter than `create` accepts today. Fails with `WrongPassword`, `WalletNotFound`
-    /// when `store` holds no vault, `ForeignWallet` and `WalletBusy`.
+    /// when `store` holds no vault, `ForeignWallet` and `WalletBusy`, and with
+    /// `DamagedDatabase` when the database was damaged and has just been set aside: open again
+    /// to rebuild it, then `scan`.
     ///
     /// Every attempt is counted in `store` as `lepic.pin-failures`, and waits, as
     /// [`EpicWallet::open_with_pin`] describes; a right password clears the count. Attempts of
@@ -380,7 +382,7 @@ impl EpicWallet {
     /// further failure, up to an hour. Attempts of one runtime run one at a time.
     ///
     /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a store without the
-    /// PIN key `SecretStore`.
+    /// PIN key `SecretStore`; otherwise it fails as [`EpicWallet::open`] does.
     pub async fn open_with_pin(
         runtime: &LepicRuntime,
         config: WalletConfig,

@@ -6124,6 +6124,7 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             28 => crate::api::error::WalletErrorKind::InvoiceNotFound,
             29 => crate::api::error::WalletErrorKind::AmountMismatch,
             30 => crate::api::error::WalletErrorKind::NotDelivered,
+            31 => crate::api::error::WalletErrorKind::DamagedDatabase,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -7484,6 +7485,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::InvoiceNotFound => 28.into_dart(),
             Self::AmountMismatch => 29.into_dart(),
             Self::NotDelivered => 30.into_dart(),
+            Self::DamagedDatabase => 31.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -8509,6 +8511,7 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::InvoiceNotFound => 28,
                 crate::api::error::WalletErrorKind::AmountMismatch => 29,
                 crate::api::error::WalletErrorKind::NotDelivered => 30,
+                crate::api::error::WalletErrorKind::DamagedDatabase => 31,
                 _ => {
                     unimplemented!("");
                 }

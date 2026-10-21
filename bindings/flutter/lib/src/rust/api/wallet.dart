@@ -12,7 +12,7 @@ import 'runtime.dart';
 import 'secret_store.dart';
 import 'types.dart';
 
-// These functions are ignored because they are not marked as `pub`: `boundary`, `create_pin_wallet`, `run`
+// These functions are ignored because they are not marked as `pub`: `boundary`, `create_pin_wallet`, `new_password`, `run`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`
 
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
@@ -112,7 +112,7 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// the old text stops opening. While a change is pending a wrong PIN costs two key
   /// derivations, and still counts as one failure.
   ///
-  /// Fails with `InvalidArgument` when `new_pin` has fewer than four characters, before any
+  /// Fails with `InvalidArgument` when `new_pin` has fewer than six characters, before any
   /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
   Future<String> changePin({
     required String sealedPassword,
@@ -138,7 +138,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// generated, whose phrase [`EpicWallet::mnemonic`] returns for the backup screen. Returns
   /// the open wallet.
   ///
-  /// Fails with `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
+  /// Fails with `InvalidArgument` when `password` has fewer than eight characters, before
+  /// anything is written, `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
   /// `ForeignWallet` when the directory holds another wallet's database, `WalletBusy` when a
   /// wallet on the directory is open, and `SecretStore` when the vault could not be written.
   static Future<EpicWallet> create({
@@ -174,7 +175,7 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// app stops before storing it, the wallet cannot be opened by PIN; delete it with
   /// [`delete_wallet`] and create it again (a restored wallet from its phrase).
   ///
-  /// Fails with `InvalidArgument` when `pin` has fewer than four characters, and otherwise
+  /// Fails with `InvalidArgument` when `pin` has fewer than six characters, and otherwise
   /// as `create` does.
   static Future<PinWallet> createWithPin({
     required LepicRuntime runtime,
@@ -319,7 +320,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// and open the wallet anew. Locking a locked wallet does nothing.
   void lock();
 
-  /// The recovery phrase, after checking `password` against the stored vault.
+  /// The recovery phrase, after checking `password` against the stored vault. Attempts are
+  /// counted and delayed as in [`EpicWallet::open`].
   Future<String> mnemonic({required String password});
 
   /// [`EpicWallet::mnemonic`] for a wallet from [`EpicWallet::create_with_pin`]: `pin` opens
@@ -330,8 +332,15 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required String sealedPassword,
   });
 
-  /// Opens the wallet in `config.data_dir`. Fails with `WrongPassword`, `WalletNotFound` when
-  /// `store` holds no vault, `ForeignWallet` and `WalletBusy`.
+  /// Opens the wallet in `config.data_dir`. Any password that opens the vault opens it, also
+  /// one shorter than `create` accepts today. Fails with `WrongPassword`, `WalletNotFound`
+  /// when `store` holds no vault, `ForeignWallet` and `WalletBusy`, and with
+  /// `DamagedDatabase` when the database was damaged and has just been set aside: open again
+  /// to rebuild it, then `scan`.
+  ///
+  /// Every attempt is counted in `store` as `lepic.pin-failures`, and waits, as
+  /// [`EpicWallet::open_with_pin`] describes; a right password clears the count. Attempts of
+  /// one runtime run one at a time.
   static Future<EpicWallet> open({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -360,7 +369,7 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// further failure, up to an hour. Attempts of one runtime run one at a time.
   ///
   /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a store without the
-  /// PIN key `SecretStore`.
+  /// PIN key `SecretStore`; otherwise it fails as [`EpicWallet::open`] does.
   static Future<EpicWallet> openWithPin({
     required LepicRuntime runtime,
     required WalletConfig config,

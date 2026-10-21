@@ -123,7 +123,14 @@ enum WalletErrorKind {
 
   /// The invoice or its payment is stored, but the relay did not take it. Deliver a payment
   /// again with `resend_invoice_payment`, or cancel either with `cancel_transaction`.
-  notDelivered;
+  notDelivered,
+
+  /// The wallet database was damaged. LEPIC renamed it, with its log files, to
+  /// `wallet.sqlite3.damaged-<unix seconds>` in the data directory and kept it. Opening the
+  /// wallet again rebuilds the database from the vault, as for a restore: run `scan` to the
+  /// end before sending or receiving. Transaction history, labels and messages are not in the
+  /// new database.
+  damagedDatabase;
 
   /// The stable number of this kind.
   Future<int> code() =>

@@ -47,7 +47,7 @@ impl fmt::Display for Record {
 /// A failure of the underlying database engine.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct DatabaseError(#[from] DatabaseSource);
+pub struct DatabaseError(#[from] pub(crate) DatabaseSource);
 
 #[cfg(feature = "sqlite")]
 type DatabaseSource = rusqlite::Error;
@@ -64,6 +64,10 @@ pub enum StoreError {
     SchemaTooNew { found: u32, supported: u32 },
     #[error("database did not switch to write-ahead logging")]
     WalUnavailable,
+    /// The database file was damaged. It was renamed, with its log files, to
+    /// `<name>.damaged-<unix seconds>` beside it and is kept; the next open starts a new one.
+    #[error("database file is damaged and was moved aside")]
+    DamagedSetAside,
     #[error("stored {record} has a malformed {field}")]
     Corrupt { record: Record, field: &'static str },
     #[error("{field} is outside the storable range")]

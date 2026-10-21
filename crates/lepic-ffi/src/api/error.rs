@@ -78,6 +78,12 @@ pub enum WalletErrorKind {
     /// The invoice or its payment is stored, but the relay did not take it. Deliver a payment
     /// again with `resend_invoice_payment`, or cancel either with `cancel_transaction`.
     NotDelivered,
+    /// The wallet database was damaged. LEPIC renamed it, with its log files, to
+    /// `wallet.sqlite3.damaged-<unix seconds>` in the data directory and kept it. Opening the
+    /// wallet again rebuilds the database from the vault, as for a restore: run `scan` to the
+    /// end before sending or receiving. Transaction history, labels and messages are not in the
+    /// new database.
+    DamagedDatabase,
 }
 
 impl WalletErrorKind {
@@ -115,6 +121,7 @@ impl WalletErrorKind {
             Self::InvoiceNotFound => 29,
             Self::AmountMismatch => 30,
             Self::NotDelivered => 31,
+            Self::DamagedDatabase => 37,
         }
     }
 }
@@ -172,6 +179,7 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         E::AlreadyOpen => WalletErrorKind::WalletBusy,
         E::NetworkMismatch { .. } | E::ForeignDatabase => WalletErrorKind::ForeignWallet,
         E::Mnemonic(_) => WalletErrorKind::InvalidMnemonic,
+        E::Store(lepic_store::StoreError::DamagedSetAside) => WalletErrorKind::DamagedDatabase,
         E::Store(_) => WalletErrorKind::Io,
         E::SecretVault(_) | E::SecretStore(_) => WalletErrorKind::SecretStore,
         // The node reported a chain position the wallet does not believe.
@@ -397,6 +405,7 @@ mod tests {
             (K::InvoiceNotFound, 29),
             (K::AmountMismatch, 30),
             (K::NotDelivered, 31),
+            (K::DamagedDatabase, 37),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");

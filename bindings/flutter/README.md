@@ -236,6 +236,7 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 29 | `invoiceNotFound` | No invoice with that slate id waits to be paid or declined: it was paid, declined, deleted by a sweep, or never arrived. |
 | 30 | `amountMismatch` | The invoice asks for another amount than the one the user typed. Nothing was paid. |
 | 31 | `notDelivered` | The invoice or its payment is stored, but the relay did not take it. Deliver a payment again with `resendInvoicePayment`, or cancel either with `cancelTransaction`. |
+| 37 | `damagedDatabase` | The wallet database was damaged. LEPIC renamed it, with its log files, to `wallet.sqlite3.damaged-<unix seconds>` in the data directory and kept it. Open the wallet again: the database is rebuilt from the vault as after a restore, so run `scan` to the end before sending or receiving. History, labels and messages are not in the new database. |
 
 Kinds 22 to 24 used to arrive as `other`. Kinds 25 and 26 are new with `sealAppData` and
 `openAppData`, 27 and 28 with `releaseTransaction`, 29 to 31 with the invoice calls. An

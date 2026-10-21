@@ -1003,3 +1003,28 @@ async fn a_failed_restore_keeps_the_database_that_was_there() {
     assert_eq!(kind(restored), WalletErrorKind::SecretStore);
     assert!(database_files(fixture.dir.path()).contains(&lepic_wallet::DATABASE_FILE.to_owned()));
 }
+
+/// A damaged database reaches the app as its own kind, once; it is kept beside the wallet and
+/// the next open rebuilds the wallet from its vault.
+#[tokio::test]
+async fn a_damaged_database_is_reported_once_and_then_rebuilt() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let sealed = created.sealed_password.clone();
+    drop(created);
+    let database = fixture.dir.path().join(lepic_wallet::DATABASE_FILE);
+    std::fs::write(&database, [0x5a; 8192]).unwrap();
+
+    let damaged = fixture.open_with_pin(&store, PIN, &sealed).await;
+    assert_eq!(kind(damaged), WalletErrorKind::DamagedDatabase);
+    assert_eq!(WalletErrorKind::DamagedDatabase.code(), 37);
+    assert!(
+        database_files(fixture.dir.path())
+            .iter()
+            .any(|name| name.contains(".damaged-"))
+    );
+
+    let wallet = fixture.open_with_pin(&store, PIN, &sealed).await.unwrap();
+    assert!(wallet.summary(false).await.is_ok());
+}
