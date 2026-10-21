@@ -23,7 +23,9 @@ use crate::pin::{PinGuard, PinPolicy};
 
 /// Sets up the library once per process: blinds the secp256k1 context before any wallet uses
 /// it, and installs a panic hook that reports where a panic happened but not its message.
-/// `RustLib.init()` calls it; the app never does. The hook covers every panic in the process.
+/// `RustLib.init()` calls it; the app never does. The hook covers every panic in the process
+/// and replaces any hook installed before, which is not called, since it might print the
+/// message.
 #[frb(init)]
 pub fn init_app() {
     guard_or("init_app", (), || {

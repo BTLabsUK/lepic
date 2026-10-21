@@ -102,6 +102,10 @@ pub(crate) fn end_stream<T: SseEncode>(sink: &StreamSink<T>, result: Result<(), 
 /// Replaces the process's panic hook with one that reports where a panic happened but not its
 /// payload, for the reason [`guard`] drops it. The default hook would print the payload to
 /// stderr, which the platform may keep in its logs. Installing it again changes nothing.
+///
+/// The hook installed before is dropped, not called: every hook receives the payload, and an
+/// earlier one, the default hook included, may print it. Code in the same process that needs
+/// its own hook installs it after `RustLib.init()` and must not print payloads either.
 pub(crate) fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         // Nothing is left to tell when stderr is closed.
