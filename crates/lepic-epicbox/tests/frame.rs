@@ -300,6 +300,9 @@ fn rejects_challenge_outside_the_relay_format() {
         r#"{"type":"Challenge","str":"{\"destination\":{}}"}"#,
         r#"{"type":"Challenge","str":""}"#,
         r#"{"type":"Challenge","str":"has space"}"#,
+        r#"{"type":"Challenge","str":"0436430c2b02624c2032570501212b03"}"#,
+        r#"{"type":"Challenge","str":"0436430c-2b02-624c-2032-570501212b03"}"#,
+        r#"{"type":"Challenge","str":"0436430C-2B02-624C-2032-570501212B03"}"#,
     ] {
         assert!(
             matches!(RelayFrame::from_json(text), Err(FrameError::Challenge)),
@@ -321,7 +324,10 @@ fn accepts_challenges_in_the_relay_format() {
     for challenge in [
         "7WUDtkSaKyGRUnQ22rE3QUXChV8DmA6NnunDYP4vheTpc",
         "Rk4pW7nZ2cT9sLb3XyQ6vH1mJ8dG5fUa",
+        "Rk4p_W7nZ2cT9sLb3-yQ6vH1mJ8dG5fU",
         "mock-challenge-1",
+        "0436430c2b02624c2032570501212b0g",
+        "0436430C2B02624C2032570501212B03",
     ] {
         let text = format!(r#"{{"type":"Challenge","str":"{challenge}"}}"#);
         assert_eq!(
@@ -337,10 +343,12 @@ fn accepts_challenges_in_the_relay_format() {
 
 #[test]
 fn refuses_to_sign_a_challenge_outside_the_relay_format() {
-    assert!(matches!(
-        ClientFrame::subscribe(&address(1, None), r#"{"str":"x"}"#, &secret(1)),
-        Err(FrameError::Challenge)
-    ));
+    for challenge in [r#"{"str":"x"}"#, "0436430c2b02624c2032570501212b03"] {
+        assert!(matches!(
+            ClientFrame::subscribe(&address(1, None), challenge, &secret(1)),
+            Err(FrameError::Challenge)
+        ));
+    }
 }
 
 #[test]
@@ -475,7 +483,7 @@ fn relay_frame() -> impl Strategy<Value = RelayFrame> {
         "[a-z]{1,8}".prop_map(RelayErrorKind::Other),
     ];
     prop_oneof![
-        "[A-Za-z0-9-]{1,64}".prop_map(|str| RelayFrame::Challenge { str }),
+        "[A-Za-z0-9_-]{1,31}".prop_map(|str| RelayFrame::Challenge { str }),
         Just(RelayFrame::Ok),
         (kind, wire_text()).prop_map(|(kind, description)| RelayFrame::Error { kind, description }),
         (

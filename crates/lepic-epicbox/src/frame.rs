@@ -15,14 +15,35 @@ pub const MAX_FRAME_LEN: usize = MAX_MESSAGE_LEN.saturating_add(64 * 1024);
 /// or a log.
 pub const MAX_FRAME_TYPE_LEN: usize = 64;
 
-/// The relay's challenges are short random tokens of letters and digits; the mock relay adds
-/// `-`. The address key signs a challenge, so nothing else, such as message text, is signed as
-/// one.
+/// The relay's challenges are short random tokens over letters, digits, `-` and `_`. The
+/// address key signs a challenge, so nothing else, such as message text, is signed as one.
 pub const MAX_CHALLENGE_LEN: usize = 64;
 
+/// The length of a transaction id written as 32 hex digits.
+const HEX_ID_LEN: usize = 32;
+
+/// The length of a transaction id written as a hyphenated UUID.
+const UUID_LEN: usize = 36;
+
 fn is_challenge(text: &str) -> bool {
-    let allowed = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-';
-    !text.is_empty() && text.len() <= MAX_CHALLENGE_LEN && text.bytes().all(allowed)
+    let allowed = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
+    !text.is_empty()
+        && text.len() <= MAX_CHALLENGE_LEN
+        && text.bytes().all(allowed)
+        && !looks_like_transaction_id(text)
+}
+
+/// A transaction id, as 32 lowercase hex digits or a UUID, is text the address key may sign for
+/// another purpose, so it is never signed as a challenge. A random relay token has this shape
+/// so rarely that refusing one costs at most a reconnect.
+fn looks_like_transaction_id(text: &str) -> bool {
+    let lower_hex = |byte: u8| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte);
+    let is_uuid = text.len() == UUID_LEN
+        && text.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        });
+    is_uuid || (text.len() == HEX_ID_LEN && text.bytes().all(lower_hex))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -44,7 +65,9 @@ pub enum FrameError {
     UnknownClientType { type_name: String },
     #[error("frame could not be signed")]
     Signature(#[source] CryptoError),
-    #[error("challenge is empty, longer than {MAX_CHALLENGE_LEN} bytes or not [A-Za-z0-9-]")]
+    #[error(
+        "challenge is empty, longer than {MAX_CHALLENGE_LEN} bytes, not [A-Za-z0-9_-] or a transaction id"
+    )]
     Challenge,
 }
 
