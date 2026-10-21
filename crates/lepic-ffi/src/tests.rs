@@ -782,3 +782,73 @@ async fn a_short_new_pin_is_refused_before_the_old_pin_is_counted() {
         Some("3")
     );
 }
+
+/// A password set on a new wallet needs eight characters; nothing is written before the check.
+#[tokio::test]
+async fn a_new_wallet_refuses_a_password_shorter_than_eight_characters() {
+    let fixture = Fixture::new();
+    let (file, file_password, _, _) = wallet_seed_vector();
+    for password in ["", "pw", "1234567"] {
+        let store = AppSecretStore::in_memory();
+        let created = EpicWallet::create(
+            &fixture.runtime,
+            fixture.config(),
+            &store,
+            None,
+            password.to_owned(),
+        )
+        .await;
+        assert_eq!(
+            kind(created),
+            WalletErrorKind::InvalidArgument,
+            "{password:?}"
+        );
+        let imported = EpicWallet::import_wallet_seed(
+            &fixture.runtime,
+            fixture.config(),
+            &store,
+            file.clone(),
+            file_password.clone(),
+            password.to_owned(),
+        )
+        .await;
+        assert_eq!(
+            kind(imported),
+            WalletErrorKind::InvalidArgument,
+            "{password:?}"
+        );
+        assert_eq!(store.read(VAULT_KEY).await.unwrap(), None, "{password:?}");
+    }
+    assert!(
+        !fixture
+            .dir
+            .path()
+            .join(lepic_wallet::DATABASE_FILE)
+            .exists()
+    );
+}
+
+/// A wallet whose password predates the minimum keeps opening and showing its phrase.
+#[tokio::test]
+async fn a_wallet_with_a_password_below_the_minimum_still_opens() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    {
+        let mut config = fixture.config();
+        let secret = crate::node::NodeSecret::take(&mut config);
+        let session =
+            crate::session::Session::new(&fixture.runtime.inner, &config, &secret, store.clone())
+                .unwrap();
+        session
+            .create(
+                SeedOrigin::Generate,
+                zeroize::Zeroizing::new("pw".to_owned()),
+            )
+            .await
+            .unwrap();
+    }
+    let wallet = EpicWallet::open(&fixture.runtime, fixture.config(), &store, "pw".to_owned())
+        .await
+        .unwrap();
+    assert!(wallet.mnemonic("pw".to_owned()).await.is_ok());
+}

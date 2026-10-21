@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::oneshot;
 
+use lepic_wallet::Password;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -28,6 +29,8 @@ pub enum SecretError {
     NotUtf8 { what: &'static str },
     #[error("the two passwords differ")]
     Mismatch,
+    #[error("a new wallet password needs at least {min} characters")]
+    TooShort { min: usize },
     #[error("a hidden prompt is not available here; pipe the {what} to standard input")]
     NoHiddenPrompt { what: &'static str },
     #[error("reading the {what} failed")]
@@ -65,16 +68,25 @@ impl SecretInput {
     }
 
     /// The wallet password: `LEPIC_PASSWORD`, which is removed from `env` once read, else the
-    /// prompt or a line of input. A new password is asked for twice at a terminal.
+    /// prompt or a line of input. A new password must have [`Password::MIN_NEW_LEN`] characters
+    /// and is asked for twice at a terminal.
     pub async fn wallet_password(
         &mut self,
         env: &mut Env,
         new: bool,
     ) -> Result<Zeroizing<String>, SecretError> {
+        let long_enough = |password: Zeroizing<String>| {
+            if new && !Password::is_long_enough_to_set(&password) {
+                return Err(SecretError::TooShort {
+                    min: Password::MIN_NEW_LEN,
+                });
+            }
+            Ok(password)
+        };
         if let Some(password) = env.take(PASSWORD_ENV) {
-            return Ok(password);
+            return long_enough(password);
         }
-        let password = self.read("wallet password", "Wallet password: ").await?;
+        let password = long_enough(self.read("wallet password", "Wallet password: ").await?)?;
         if new && self.terminal {
             let again = self
                 .read("wallet password", "Repeat the wallet password: ")
@@ -245,6 +257,35 @@ mod tests {
                 "from env"
             );
             assert_eq!(*input.read("next", "").await.unwrap(), "from stdin");
+        });
+    }
+
+    #[test]
+    fn a_new_password_shorter_than_the_minimum_is_refused_from_every_source() {
+        let short = "x".repeat(Password::MIN_NEW_LEN - 1);
+        let mut env = Env::new([(PASSWORD_ENV.to_owned(), short.clone())]);
+        let mut input = input(&format!("{short}\n"));
+        block_on(async {
+            assert!(matches!(
+                input.wallet_password(&mut env, true).await,
+                Err(SecretError::TooShort { .. })
+            ));
+            assert!(matches!(
+                input.wallet_password(&mut env, true).await,
+                Err(SecretError::TooShort { .. })
+            ));
+        });
+    }
+
+    /// The minimum applies to new passwords only, so a wallet whose password is shorter keeps
+    /// opening.
+    #[test]
+    fn an_existing_short_password_is_read_to_open_a_wallet() {
+        let mut env = Env::new([(PASSWORD_ENV.to_owned(), "pw".to_owned())]);
+        let mut input = input("pw\n");
+        block_on(async {
+            assert_eq!(*input.wallet_password(&mut env, false).await.unwrap(), "pw");
+            assert_eq!(*input.wallet_password(&mut env, false).await.unwrap(), "pw");
         });
     }
 

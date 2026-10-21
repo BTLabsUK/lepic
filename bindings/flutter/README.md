@@ -34,6 +34,10 @@ final wallet = await EpicWallet.create(
 );
 ```
 
+- A password set by `EpicWallet.create` or `EpicWallet.importWalletSeed` has at least eight
+  characters, or the call fails with `invalidArgument` before anything is written. `open` and
+  `mnemonic` take any password that opens the vault, so a wallet with a shorter password keeps
+  working.
 - `SecretStore` has the same three methods as the app's `secret_store.dart` interface, so the
   app's `PlatformSecretStore` can be passed to `lepicSecretStore` unchanged. LEPIC writes
   `lepic.vault`: the seed encrypted under the wallet password (Argon2id, XChaCha20-Poly1305). A

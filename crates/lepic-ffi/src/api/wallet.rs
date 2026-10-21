@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use flutter_rust_bridge::frb;
 use lepic_keychain::Seed;
+use lepic_wallet::Password;
 use zeroize::Zeroizing;
 
 use crate::inspect;
@@ -116,6 +117,22 @@ pub async fn node_tip(
         .await
 }
 
+/// `password` as the password of a new wallet: refused with `InvalidArgument` below
+/// [`Password::MIN_NEW_LEN`] characters.
+fn new_password(password: Zeroizing<String>) -> Result<Zeroizing<String>, WalletError> {
+    if Password::is_long_enough_to_set(&password) {
+        Ok(password)
+    } else {
+        Err(WalletError::new(
+            WalletErrorKind::InvalidArgument,
+            format!(
+                "password has fewer than {} characters",
+                Password::MIN_NEW_LEN
+            ),
+        ))
+    }
+}
+
 /// A wallet created by [`EpicWallet::create_with_pin`], and its wallet password sealed under the
 /// PIN and the PIN key in the app's store. Store `sealed_password`;
 /// [`EpicWallet::open_with_pin`] needs it. With the store's contents it allows guessing the
@@ -206,7 +223,8 @@ impl EpicWallet {
     /// generated, whose phrase [`EpicWallet::mnemonic`] returns for the backup screen. Returns
     /// the open wallet.
     ///
-    /// Fails with `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
+    /// Fails with `InvalidArgument` when `password` has fewer than eight characters, before
+    /// anything is written, `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
     /// `ForeignWallet` when the directory holds another wallet's database, `WalletBusy` when a
     /// wallet on the directory is open, and `SecretStore` when the vault could not be written.
     pub async fn create(
@@ -226,6 +244,7 @@ impl EpicWallet {
             .inner
             .boundary
             .run("create", async move {
+                let password = new_password(password)?;
                 let session = Session::new(&inner, &config, &node_secret, store)?;
                 session
                     .create(SeedOrigin::phrase(mnemonic), password)
@@ -266,6 +285,7 @@ impl EpicWallet {
             .inner
             .boundary
             .run("import_wallet_seed", async move {
+                let password = new_password(password)?;
                 let session = Session::new(&inner, &config, &node_secret, store)?;
                 session.create(origin, password).await?;
                 Ok(EpicWallet {
@@ -275,8 +295,9 @@ impl EpicWallet {
             .await
     }
 
-    /// Opens the wallet in `config.data_dir`. Fails with `WrongPassword`, `WalletNotFound` when
-    /// `store` holds no vault, `ForeignWallet` and `WalletBusy`.
+    /// Opens the wallet in `config.data_dir`. Any password that opens the vault opens it, also
+    /// one shorter than `create` accepts today. Fails with `WrongPassword`, `WalletNotFound`
+    /// when `store` holds no vault, `ForeignWallet` and `WalletBusy`.
     pub async fn open(
         runtime: &LepicRuntime,
         config: WalletConfig,
