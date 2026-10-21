@@ -19,10 +19,10 @@
 
 use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Tag};
-use hmac::{Hmac, Mac};
+use hkdf::Hkdf;
 use sha2::Sha256;
 use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::identifier::Identifier;
 use crate::keychain::{Keychain, KeychainError, SwitchCommitment};
@@ -45,8 +45,6 @@ pub const MAX_FILE_LEN: usize = MAX_PAYLOAD_LEN + OVERHEAD;
 
 const INFO_KEY: &[u8] = b"wfe-history-export-v1/key";
 const INFO_CHECK: &[u8] = b"wfe-history-export-v1/check";
-
-type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
@@ -184,37 +182,19 @@ impl FileKeys {
     fn derive(keychain: &Keychain, salt: &[u8; SALT_LEN]) -> Result<Self, AppDataError> {
         // epic-wallet's root secret: the master key, switched for amount zero.
         let root = keychain.derive_key(0, &Identifier::ROOT, SwitchCommitment::Regular)?;
-        let prk = hmac_sha256(salt, &[root.expose_bytes()])?;
-        let key = hmac_sha256(prk.as_slice(), &[INFO_KEY, &[1]])?;
-        let check_block = hmac_sha256(prk.as_slice(), &[INFO_CHECK, &[1]])?;
+        let hkdf = Hkdf::<Sha256>::new(Some(salt), root.expose_bytes());
+        let mut key = Zeroizing::new([0u8; 32]);
+        hkdf.expand(INFO_KEY, key.as_mut_slice())
+            .map_err(|_| AppDataError::Encryption)?;
         let mut check = [0u8; CHECK_LEN];
-        check.copy_from_slice(
-            check_block
-                .get(..CHECK_LEN)
-                .ok_or(AppDataError::Encryption)?,
-        );
+        hkdf.expand(INFO_CHECK, &mut check)
+            .map_err(|_| AppDataError::Encryption)?;
         Ok(Self { key, check })
     }
 
     fn cipher(&self) -> ChaCha20Poly1305 {
         ChaCha20Poly1305::new((&*self.key).into())
     }
-}
-
-/// One HMAC-SHA256 block. HKDF-SHA256 (RFC 5869) is an extract call keyed with the salt over
-/// the input key, then for an output of at most 32 bytes one expand call keyed with that
-/// result over `info || 0x01`.
-fn hmac_sha256(key: &[u8], data: &[&[u8]]) -> Result<Zeroizing<[u8; 32]>, AppDataError> {
-    let mut mac =
-        <HmacSha256 as KeyInit>::new_from_slice(key).map_err(|_| AppDataError::Encryption)?;
-    for part in data {
-        mac.update(part);
-    }
-    let mut digest = mac.finalize().into_bytes();
-    let mut output = Zeroizing::new([0u8; 32]);
-    output.copy_from_slice(&digest);
-    digest.as_mut_slice().zeroize();
-    Ok(output)
 }
 
 #[cfg(test)]
@@ -228,21 +208,41 @@ mod tests {
             .collect()
     }
 
-    /// RFC 5869 test case 1, truncated to one block, through the two calls `FileKeys` makes.
+    /// RFC 5869 appendix A, test cases 1 to 3: HKDF-SHA256 as `FileKeys` calls it, with a salt
+    /// (an empty one in case 3) and outputs longer than one block.
     #[test]
-    fn hmac_blocks_compose_to_rfc_5869_hkdf() {
-        let ikm = [0x0bu8; 22];
-        let salt = hex("000102030405060708090a0b0c");
-        let info = hex("f0f1f2f3f4f5f6f7f8f9");
-        let prk = hmac_sha256(&salt, &[&ikm]).unwrap();
-        assert_eq!(
-            prk.to_vec(),
-            hex("077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5")
-        );
-        let okm = hmac_sha256(prk.as_slice(), &[&info, &[1]]).unwrap();
-        assert_eq!(
-            okm.to_vec(),
-            hex("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf")
-        );
+    fn hkdf_sha256_matches_rfc_5869() {
+        let cases = [
+            (
+                vec![0x0bu8; 22],
+                hex("000102030405060708090a0b0c"),
+                hex("f0f1f2f3f4f5f6f7f8f9"),
+                "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf\
+                 34007208d5b887185865",
+            ),
+            (
+                (0x00u8..=0x4f).collect(),
+                (0x60u8..=0xaf).collect(),
+                (0xb0u8..=0xff).collect(),
+                "b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c\
+                 59045a99cac7827271cb41c65e590e09da3275600c2f09b8367793a9aca3db71\
+                 cc30c58179ec3e87c14c01d5c1f3434f1d87",
+            ),
+            (
+                vec![0x0bu8; 22],
+                Vec::new(),
+                Vec::new(),
+                "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d\
+                 9d201395faa4b61a96c8",
+            ),
+        ];
+        for (ikm, salt, info, okm) in cases {
+            let okm = hex(okm);
+            let mut output = vec![0u8; okm.len()];
+            Hkdf::<Sha256>::new(Some(&salt), &ikm)
+                .expand(&info, &mut output)
+                .unwrap();
+            assert_eq!(output, okm);
+        }
     }
 }

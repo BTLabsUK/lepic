@@ -13,6 +13,7 @@ bip39 = { workspace = true, features = ["zeroize"] }
 blake2 = { workspace = true, features = ["zeroize"] }
 chacha20poly1305 = { workspace = true, features = ["zeroize"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
+hkdf.workspace = true
 hmac = { workspace = true, features = ["zeroize"] }
 lepic-crypto.workspace = true
 lepic-primitives.workspace = true
