@@ -656,6 +656,47 @@ async fn messages_pushed_faster_than_consumed_are_bounded() {
 }
 
 #[tokio::test]
+async fn messages_pushed_faster_than_consumed_are_bounded_by_bytes() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = client(&relay, BOB).listen().unwrap();
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    let pushed: u64 = 12;
+    let message = sealed(ALICE, BOB, &"x".repeat(1536 * 1024));
+    for index in 0..pushed {
+        let frame = serde_json::json!({
+            "type": "Slate",
+            "from": address(ALICE).to_string(),
+            "str": message.str,
+            "signature": message.signature.to_der_hex(),
+            "challenge": "",
+            "epicboxmsgid": format!("large{index}"),
+            "ver": "3.0.0",
+        });
+        relay.broadcast(&frame.to_string());
+    }
+    relay.broadcast(r#"{"type":"Ok"}"#);
+    // Opening a message this large is slow in debug builds.
+    within(Duration::from_secs(120), async {
+        while bob.counters().seen < pushed {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut handed_out: u64 = 0;
+    let mut bytes = 0;
+    while let Some(envelope) = next(&bob).await {
+        handed_out += 1;
+        bytes += envelope.wire().len();
+    }
+    assert!(handed_out >= 1);
+    assert!(handed_out < pushed, "{handed_out} of {pushed} queued");
+    assert!(bytes <= 16 * 1024 * 1024, "{bytes} bytes queued");
+    assert_eq!(*bob.state().borrow(), ConnectionState::Subscribed);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn subscription_outside_a_runtime_is_an_error() {
     let relay = std::thread::spawn(|| {
         let relay = MockRelay::new(Network::Mainnet);

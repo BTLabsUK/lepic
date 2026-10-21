@@ -41,6 +41,11 @@ const REMEMBERED_ACKNOWLEDGEMENTS: usize = 4096;
 /// wallet consumes gets no acknowledgement, so it keeps the message for later.
 const MAX_READY: usize = 64;
 
+/// Bytes of received messages waiting to be handed out. A message is admitted while the queue
+/// is empty or its encrypted text still fits, so one message of the largest size always gets
+/// through and a phone never holds much more than this in decrypted messages.
+const MAX_READY_BYTES: usize = 16 * 1024 * 1024;
+
 /// Requests waiting for the connection. Acknowledgements the client sends on its own are dropped
 /// beyond this; the relay redelivers those messages and they are acknowledged then.
 const MAX_QUEUED_REQUESTS: usize = 64;
@@ -437,6 +442,8 @@ struct InboxState {
     expecting: bool,
     relay_version: Option<ProtocolVersion>,
     ready: VecDeque<(Delivery, Envelope)>,
+    /// The total length of the slates in `ready`.
+    ready_bytes: usize,
     rejected: VecDeque<Rejection>,
     /// Handed-out envelopes and rejections by token, with what acknowledging them means.
     handed_out: HashMap<AckToken, Delivery>,
@@ -453,6 +460,7 @@ impl InboxState {
             expecting: true,
             relay_version: None,
             ready: VecDeque::new(),
+            ready_bytes: 0,
             rejected: VecDeque::new(),
             handed_out: HashMap::new(),
             acknowledged: HashSet::new(),
@@ -463,6 +471,7 @@ impl InboxState {
 
     fn take_envelope(&mut self, mode: Mode) -> Option<Result<Option<Envelope>, ClientError>> {
         if let Some((delivery, envelope)) = self.ready.pop_front() {
+            self.ready_bytes = self.ready_bytes.saturating_sub(envelope.wire().len());
             self.handed_out
                 .insert(envelope.ack_token().clone(), delivery);
             return Some(Ok(Some(envelope)));
@@ -504,6 +513,7 @@ impl InboxState {
 
     fn push(&mut self, msg_id: Option<RelayMessageId>, reply_to: Destination, wire: WireSlate) {
         let delivery = self.delivery_for(msg_id);
+        self.ready_bytes = self.ready_bytes.saturating_add(wire.len());
         let envelope = Envelope::new(delivery.ack_token(), Some(reply_to), wire);
         self.ready.push_back((delivery, envelope));
     }
@@ -525,6 +535,14 @@ impl InboxState {
 
     fn waiting(&self) -> usize {
         self.ready.len().saturating_add(self.rejected.len())
+    }
+
+    /// Whether a message whose encrypted text is `sealed_len` bytes long fits. Its plaintext is
+    /// shorter than that, so the check needs no decryption.
+    fn has_room_for(&self, sealed_len: usize) -> bool {
+        self.waiting() < MAX_READY
+            && (self.ready.is_empty()
+                || self.ready_bytes.saturating_add(sealed_len) <= MAX_READY_BYTES)
     }
 
     fn record_acknowledged(&mut self, msg_id: &RelayMessageId) {
@@ -950,7 +968,7 @@ impl<'a> Session<'a> {
                     }
                     return;
                 }
-                if shared.lock().waiting() >= MAX_READY {
+                if !shared.lock().has_room_for(slate.str.len()) {
                     debug!(
                         msg_id = msg_id.as_ref().map_or("", RelayMessageId::as_str),
                         "epicbox delivery deferred"
