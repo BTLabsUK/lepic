@@ -274,6 +274,13 @@ const fn checkpoint(network: Network) -> ChainReference {
     }
 }
 
+/// The highest height a peer's slate may claim at `now`: the bound from the network's checkpoint
+/// alone. The wallet's own first stored tip does not bound it, since that tip may have come from
+/// a node that was still syncing, and a peer's height is compared with the real chain.
+pub(crate) fn peer_height_limit(network: Network, now: Timestamp) -> Height {
+    Height::new(checkpoint(network).bound(now))
+}
+
 /// The highest tip accepted at `now`: the lower of the bound from the network's checkpoint and
 /// the bound from the first confirmed tip. Nothing confirmed later raises it.
 pub(crate) fn plausible_limit(
@@ -319,17 +326,13 @@ pub(crate) fn check_kernel_height(
     Ok(())
 }
 
-/// Whether a peer's slate height is at most [`SLATE_LEAD_BLOCKS`] above `tip`.
-pub(crate) fn slate_height_near(height: Height, tip: Height) -> bool {
-    height.value() <= tip.value().saturating_add(SLATE_LEAD_BLOCKS)
-}
-
 /// The lowest height to look a kernel up from, for a slate created at `slate_height`, when
-/// looking up to `tip`. A slate height can come from the peer, which may be ahead of this
-/// wallet by [`SLATE_LEAD_BLOCKS`] or report a height the chain has not reached, so the lookup
-/// starts that many blocks lower and never above the tip. A node answers a lookup from above
-/// its tip, or from height zero, with an error rather than with no kernel, so the floor is
-/// kept between one and the tip.
+/// looking up to `tip`. A slate height can come from the peer, whose node may be ahead of this
+/// wallet's or which may report a height the chain has not reached, so the lookup starts
+/// [`SLATE_LEAD_BLOCKS`] lower and never above the tip. A height reported too high can only
+/// make a kernel check miss; a received output is still confirmed by looking up the output.
+/// A node answers a lookup from above its tip, or from height zero, with an error rather than
+/// with no kernel, so the floor is kept between one and the tip.
 pub(crate) fn kernel_floor(slate_height: Height, tip: Height) -> Height {
     let lowered = slate_height
         .checked_sub_blocks(SLATE_LEAD_BLOCKS)
@@ -386,8 +389,8 @@ where
     }
 
     /// Refuses a tip a stage is about to act on when it is not plausible for what the wallet
-    /// stored, with [`WalletError::Implausible`]. Returns the highest height the chain can
-    /// plausibly have reached now, which bounds heights a peer reports too.
+    /// stored, with [`WalletError::Implausible`]. Returns [`peer_height_limit`], which bounds the
+    /// heights a peer's slate may claim.
     pub(crate) async fn check_plausible_tip(
         &self,
         session: &Arc<Session<S::Store>>,
@@ -400,7 +403,7 @@ where
                 .read(|repos| Ok::<_, WalletError>(position(repos)?))?;
             let now = ports.clock.now();
             check_tip(config.network, &stored, tip, now)?;
-            Ok(plausible_limit(config.network, &stored, now))
+            Ok(peer_height_limit(config.network, now))
         })
         .await
     }
@@ -638,21 +641,19 @@ mod tests {
     }
 
     #[test]
-    fn slate_heights_may_lead_the_tip_by_a_few_blocks() {
-        let tip = Height::new(1_000);
-        assert!(slate_height_near(Height::ZERO, tip));
-        assert!(slate_height_near(
-            Height::new(1_000 + SLATE_LEAD_BLOCKS),
-            tip
-        ));
-        assert!(!slate_height_near(
-            Height::new(1_001 + SLATE_LEAD_BLOCKS),
-            tip
-        ));
-        assert!(slate_height_near(
-            Height::new(u64::MAX),
-            Height::new(u64::MAX)
-        ));
+    fn peer_heights_are_bounded_by_the_checkpoint_not_by_a_low_first_tip() {
+        let now = at(MAINNET_CHECKPOINT.seen_at + 10 * DAY);
+        let limit = peer_height_limit(Network::Mainnet, now);
+        assert_eq!(limit.value(), MAINNET_CHECKPOINT.bound(now));
+        assert!(limit > MAINNET_CHECKPOINT.height);
+        assert!(limit < Height::new(1_000_000_000_000));
+        // A first tip stored while a node was still syncing lowers the tip bound only.
+        let position = ChainPosition {
+            first: Some(ChainReference::new(Height::new(1_000_000), now)),
+            ..ChainPosition::default()
+        };
+        assert!(plausible_limit(Network::Mainnet, &position, now) < MAINNET_CHECKPOINT.height);
+        assert_eq!(peer_height_limit(Network::Mainnet, now), limit);
     }
 
     #[test]

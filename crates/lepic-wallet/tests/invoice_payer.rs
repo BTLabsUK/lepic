@@ -267,7 +267,7 @@ fn created_at(wire: &WireSlate, height: u64) -> WireSlate {
 fn refuses_an_invoice_created_above_the_tip_and_stores_nothing() {
     let invoice = Invoice::issued();
     let outputs = invoice.outputs();
-    let ahead = TIP + SLATE_LEAD_BLOCKS + 1;
+    let ahead = 1_000_000_000_000;
 
     let error = invoice
         .payer
@@ -277,8 +277,8 @@ fn refuses_an_invoice_created_above_the_tip_and_stores_nothing() {
     assert!(
         matches!(
             error,
-            InvoiceError::AheadOfTip { height, tip }
-                if height == Height::new(ahead) && tip == Height::new(TIP)
+            InvoiceError::AheadOfTip { height, limit }
+                if height == Height::new(ahead) && limit > Height::new(TIP)
         ),
         "{error:?}"
     );
@@ -293,12 +293,15 @@ fn refuses_an_invoice_created_above_the_tip_and_stores_nothing() {
 }
 
 #[test]
-fn pays_an_invoice_created_a_few_blocks_above_the_tip_at_its_own_height() {
+fn pays_an_invoice_created_above_a_lagging_node_tip_at_its_own_height() {
     let invoice = Invoice::issued();
 
     let i2 = invoice
         .payer
-        .pay(&created_at(&invoice.i1, TIP + SLATE_LEAD_BLOCKS), request())
+        .pay(
+            &created_at(&invoice.i1, TIP + 10 * SLATE_LEAD_BLOCKS),
+            request(),
+        )
         .unwrap()
         .slate;
 

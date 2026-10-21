@@ -510,7 +510,7 @@ mod tests {
             (
                 InvoiceError::AheadOfTip {
                     height: lepic_primitives::amount::Height::new(99),
-                    tip: lepic_primitives::amount::Height::new(4),
+                    limit: lepic_primitives::amount::Height::new(4),
                 },
                 WalletErrorKind::InvalidSlate,
             ),

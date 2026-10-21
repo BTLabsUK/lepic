@@ -57,7 +57,6 @@ pub use build::{
 };
 
 use crate::account::{AccountError, next_output_key};
-use crate::chain;
 use crate::error::WalletError;
 use crate::finalize::{Finalized, FinalizedSlate, PushFailure};
 use crate::ports::{SecretVault, StoreOpener};
@@ -129,9 +128,9 @@ pub enum InvoiceError {
     /// reached. `epic-wallet` issues invoices without a lock height.
     #[error("invoice kernel is locked until height {lock_height}, the chain tip is at {tip}")]
     LockedUntil { lock_height: Height, tip: Height },
-    /// The invoice's height is more than [`crate::chain::SLATE_LEAD_BLOCKS`] above the tip.
-    #[error("slate height {height} is ahead of the chain tip at {tip}")]
-    AheadOfTip { height: Height, tip: Height },
+    /// The invoice's height is above any the chain can have reached by now.
+    #[error("slate height {height} is above the highest plausible height {limit}")]
+    AheadOfTip { height: Height, limit: Height },
     #[error("{role} message signature does not verify")]
     MessageSignature {
         role: Role,
@@ -391,11 +390,12 @@ fn check_lock(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
     Ok(())
 }
 
-/// Refuses an invoice created at a height the chain is not near yet.
-fn check_height(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
+/// Refuses an invoice created at a height the chain cannot have reached yet. One above the
+/// node's tip is paid: the issuer's node may be ahead of this wallet's.
+fn check_height(slate: &Slate, limit: Height) -> Result<(), InvoiceError> {
     let height = slate.height();
-    if !chain::slate_height_near(height, tip) {
-        return Err(InvoiceError::AheadOfTip { height, tip });
+    if height > limit {
+        return Err(InvoiceError::AheadOfTip { height, limit });
     }
     Ok(())
 }
@@ -832,8 +832,8 @@ where
     /// for another amount than `request.amount`, [`InvoiceError::AlreadyPaid`] for an invoice
     /// this wallet paid before, [`InvoiceError::Expired`] when the tip has reached the
     /// invoice's TTL cutoff, [`InvoiceError::LockedUntil`] when its kernel lock height is above
-    /// the tip, [`InvoiceError::AheadOfTip`] when its height is more than
-    /// [`crate::chain::SLATE_LEAD_BLOCKS`] above the tip, a [`InvoiceError::Selection`] error, and a typed rejection for
+    /// the tip, [`InvoiceError::AheadOfTip`] when its height is above any the
+    /// chain can have reached by now, a [`InvoiceError::Selection`] error, and a typed rejection for
     /// any slate that is malformed, not an I1, or whose message does not verify. A payment with
     /// change fails with [`WalletError::RestoreScanRequired`] on a database rebuilt from the
     /// seed before a scan from genesis completed. Nothing is stored on failure.
@@ -892,10 +892,10 @@ where
             .await
             .map_err(InvoiceError::Node)?
             .height;
-        self.check_plausible_tip(&session, tip).await?;
+        let limit = self.check_plausible_tip(&session, tip).await?;
         check_ttl(&i1, tip)?;
         check_lock(&i1, tip)?;
-        check_height(&i1, tip)?;
+        check_height(&i1, limit)?;
         debug!(height = tip.value(), "slate checked");
 
         let paid = self
