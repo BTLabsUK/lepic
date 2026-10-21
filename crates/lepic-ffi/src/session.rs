@@ -294,8 +294,33 @@ impl Session {
         }
     }
 
-    /// Creates the wallet from `origin`'s seed.
+    /// Creates the wallet from `origin`'s seed. When it fails after making the database, the
+    /// database files are removed again, so a later create on the directory starts afresh; a
+    /// database that was there before is kept.
     pub(crate) async fn create(
+        &self,
+        origin: SeedOrigin,
+        password: Zeroizing<String>,
+    ) -> Result<(), WalletError> {
+        let database = self.data_dir.join(DATABASE_FILE);
+        let made_database = !tokio::fs::try_exists(&database)
+            .await
+            .map_err(|error| io("checking the wallet database", &error))?;
+        if let Err(error) = self.create_with_vault(origin, password).await {
+            if made_database {
+                // Closes the database before its files are removed.
+                self.engine.lock();
+                if let Err(removal) = remove_database(&self.data_dir).await {
+                    warn!(error = %removal, "wallet database not removed");
+                }
+            }
+            return Err(error);
+        }
+        self.seed_node_tip()
+    }
+
+    /// Creates the wallet and stores its vault; the wallet is locked when that store fails.
+    async fn create_with_vault(
         &self,
         origin: SeedOrigin,
         password: Zeroizing<String>,
@@ -324,7 +349,7 @@ impl Session {
             self.engine.lock();
             return Err(error);
         }
-        self.seed_node_tip()
+        Ok(())
     }
 
     pub(crate) async fn open(&self, password: Zeroizing<String>) -> Result<(), WalletError> {
@@ -1109,6 +1134,19 @@ pub(crate) async fn wallet_exists(store: &AppSecretStore) -> Result<bool, Wallet
     Ok(store.read(VAULT_KEY).await?.is_some())
 }
 
+/// Removes the wallet database in `data_dir` with its journal files, if there are any.
+async fn remove_database(data_dir: &Path) -> Result<(), WalletError> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let path = data_dir.join(format!("{DATABASE_FILE}{suffix}"));
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io("deleting the wallet database", &error)),
+        }
+    }
+    Ok(())
+}
+
 /// Deletes the wallet database in `config.data_dir` and the vault in `store`.
 pub(crate) async fn delete_wallet(
     runtime: &Arc<RuntimeInner>,
@@ -1116,14 +1154,7 @@ pub(crate) async fn delete_wallet(
     store: &AppSecretStore,
 ) -> Result<(), WalletError> {
     let claim = runtime.claim(Path::new(&config.data_dir))?;
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let path = claim.dir.join(format!("{DATABASE_FILE}{suffix}"));
-        match tokio::fs::remove_file(&path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(io("deleting the wallet database", &error)),
-        }
-    }
+    remove_database(&claim.dir).await?;
     store.delete(VAULT_KEY).await?;
     crate::pin::forget(store).await?;
     info!("wallet deleted");

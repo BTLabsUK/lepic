@@ -897,3 +897,109 @@ async fn wrong_passwords_are_counted_and_delayed_until_one_is_right() {
     let waited = tokio::time::timeout(std::time::Duration::from_secs(2), open(password)).await;
     assert!(waited.is_err(), "the attempt did not wait");
 }
+
+/// An app store that works, except that writing the vault fails.
+fn store_refusing_the_vault() -> AppSecretStore {
+    use crate::api::secret_store::SecretReply;
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+    let values: Arc<Mutex<BTreeMap<String, String>>> = Arc::default();
+    let (read, write, delete) = (values.clone(), values.clone(), values);
+    AppSecretStore::new(
+        move |key| {
+            let value = read.lock().unwrap().get(&key).cloned();
+            Box::pin(async move { SecretReply { ok: true, value } })
+        },
+        move |key, value| {
+            let ok = key != VAULT_KEY;
+            if ok {
+                write.lock().unwrap().insert(key, value);
+            }
+            Box::pin(async move { SecretReply { ok, value: None } })
+        },
+        move |key| {
+            delete.lock().unwrap().remove(&key);
+            Box::pin(async {
+                SecretReply {
+                    ok: true,
+                    value: None,
+                }
+            })
+        },
+    )
+    .unwrap()
+}
+
+fn database_files(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(lepic_wallet::DATABASE_FILE))
+        .collect();
+    names.sort();
+    names
+}
+
+/// A create whose vault could not be stored leaves no database behind, so creating again,
+/// with a new seed, works.
+#[tokio::test]
+async fn a_create_that_could_not_store_its_vault_can_be_retried() {
+    let fixture = Fixture::new();
+    let failing = store_refusing_the_vault();
+    let created = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &failing,
+        None,
+        "password".to_owned(),
+    )
+    .await;
+    assert_eq!(kind(created), WalletErrorKind::SecretStore);
+    assert_eq!(database_files(fixture.dir.path()), Vec::<String>::new());
+
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    assert!(
+        created
+            .wallet
+            .mnemonic_with_pin(PIN.to_owned(), created.sealed_password)
+            .await
+            .is_ok()
+    );
+}
+
+/// A database that existed before the create, such as the wallet's own on a restore, is kept
+/// when the vault cannot be stored.
+#[tokio::test]
+async fn a_failed_restore_keeps_the_database_that_was_there() {
+    let fixture = Fixture::new();
+    let phrase = Some(
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+         abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+         abandon art"
+            .to_owned(),
+    );
+    let first = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &AppSecretStore::in_memory(),
+        phrase.clone(),
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    drop(first);
+    let before = database_files(fixture.dir.path());
+    assert!(before.contains(&lepic_wallet::DATABASE_FILE.to_owned()));
+
+    let restored = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &store_refusing_the_vault(),
+        phrase,
+        "password".to_owned(),
+    )
+    .await;
+    assert_eq!(kind(restored), WalletErrorKind::SecretStore);
+    assert!(database_files(fixture.dir.path()).contains(&lepic_wallet::DATABASE_FILE.to_owned()));
+}
