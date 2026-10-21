@@ -852,3 +852,48 @@ async fn a_wallet_with_a_password_below_the_minimum_still_opens() {
         .unwrap();
     assert!(wallet.mnemonic("pw".to_owned()).await.is_ok());
 }
+
+/// Wrong wallet passwords are counted in the app's store and delayed as wrong PINs are.
+#[tokio::test]
+async fn wrong_passwords_are_counted_and_delayed_until_one_is_right() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let password = "correct horse";
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &store,
+        None,
+        password.to_owned(),
+    )
+    .await
+    .unwrap();
+    let wrong = wallet.mnemonic("wrong password".to_owned()).await;
+    assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
+    drop(wallet);
+    let open = |password: &str| {
+        EpicWallet::open(
+            &fixture.runtime,
+            fixture.config(),
+            &store,
+            password.to_owned(),
+        )
+    };
+    assert_eq!(
+        kind(open("wrong password").await),
+        WalletErrorKind::WrongPassword
+    );
+    assert_eq!(
+        store.read(FAILURES_KEY).await.unwrap().as_deref(),
+        Some("2")
+    );
+
+    let wallet = open(password).await.unwrap();
+    assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
+    drop(wallet);
+
+    // After the free failures the next attempt waits before the password is tried.
+    store.write(FAILURES_KEY, "3".to_owned()).await.unwrap();
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(2), open(password)).await;
+    assert!(waited.is_err(), "the attempt did not wait");
+}

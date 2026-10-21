@@ -37,12 +37,13 @@ final wallet = await EpicWallet.create(
 - A password set by `EpicWallet.create` or `EpicWallet.importWalletSeed` has at least eight
   characters, or the call fails with `invalidArgument` before anything is written. `open` and
   `mnemonic` take any password that opens the vault, so a wallet with a shorter password keeps
-  working.
+  working. Their attempts are counted in the store as `lepic.pin-failures` and wait exactly as
+  PIN attempts do (below); a right password clears the count.
 - `SecretStore` has the same three methods as the app's `secret_store.dart` interface, so the
   app's `PlatformSecretStore` can be passed to `lepicSecretStore` unchanged. LEPIC writes
-  `lepic.vault`: the seed encrypted under the wallet password (Argon2id, XChaCha20-Poly1305). A
-  PIN wallet adds `lepic.pin-key`, `lepic.pin-failures` and, while a PIN change is pending,
-  `lepic.pin-key-pending` (below). Store `lepic.pin-key-pending` exactly as `lepic.pin-key`, in
+  `lepic.vault`: the seed encrypted under the wallet password (Argon2id, XChaCha20-Poly1305), and
+  `lepic.pin-failures` after a failed password or PIN attempt. A PIN wallet adds `lepic.pin-key`
+  and, while a PIN change is pending, `lepic.pin-key-pending` (below). Store `lepic.pin-key-pending` exactly as `lepic.pin-key`, in
   the same keystore-backed storage: it is a PIN key too.
 - Use one store per wallet, for example by prefixing keys with a wallet id in the adapter. The
   keys above have fixed names, so wallets sharing a store would share one vault slot, one PIN key

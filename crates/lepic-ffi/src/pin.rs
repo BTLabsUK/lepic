@@ -4,7 +4,8 @@
 //! Sealed text is a `lepic-keychain` vault (Argon2id, XChaCha20-Poly1305) in base64. Its
 //! passphrase is the PIN together with a random key LEPIC keeps in the app's store, so the
 //! sealed text cannot be searched for the PIN without that store. Every PIN attempt is counted
-//! in the store, and attempts after a few failures wait longer each time.
+//! in the store, and attempts after a few failures wait longer each time. Wallet passwords the
+//! user types are counted and delayed the same way.
 //!
 //! A PIN change is two-phase. It writes a pending key beside the current one, so the old and
 //! the new sealed text both open until the app confirms it stored the new text; confirming
@@ -35,7 +36,7 @@ pub(crate) const KEY_KEY: &str = "lepic.pin-key";
 /// The key of the PIN key of a PIN change not confirmed yet, next to the current one.
 pub(crate) const PENDING_KEY_KEY: &str = "lepic.pin-key-pending";
 
-/// The key of the count of PIN failures since the last right PIN, in decimal.
+/// The key of the count of PIN or password failures since the last right one, in decimal.
 pub(crate) const FAILURES_KEY: &str = "lepic.pin-failures";
 
 /// The shortest PIN `create_with_pin` and `change_pin` accept, in characters. Unlocking does
@@ -445,30 +446,62 @@ pub(crate) async fn confirm_change(
     store.delete(PENDING_KEY_KEY).await
 }
 
+/// Tries a wallet password the user typed with `check`, counted and delayed as a PIN attempt
+/// of [`unlock`] is, in the same failure count: a wallet is unlocked either by PIN or by
+/// password, never both. `WrongPassword` and `SecretStore` keep the attempt counted, success
+/// clears the count, and any other failure restores it.
+pub(crate) async fn password_attempt<T, Fut>(
+    guard: &PinGuard,
+    store: &AppSecretStore,
+    check: impl FnOnce() -> Fut,
+) -> Result<T, WalletError>
+where
+    Fut: Future<Output = Result<T, WalletError>>,
+{
+    let _attempt = guard.attempts.lock().await;
+    counted(guard.policy, store, check).await
+}
+
 async fn attempt(
     policy: PinPolicy,
     store: &AppSecretStore,
     pin: Zeroizing<String>,
     sealed: String,
 ) -> Result<(Zeroizing<String>, OpenedBy), WalletError> {
+    counted(policy, store, || async move {
+        let key = PinKey::load(store).await?;
+        // Read now but reported only when the current key does not open the text, so a damaged
+        // pending key never stops the current text from opening.
+        let pending = PendingKey::load(store).await;
+        blocking(move || match open(&key, &pin, &sealed) {
+            Ok(password) => Ok((password, OpenedBy::Current)),
+            Err(error) if error.kind == WalletErrorKind::WrongPassword => match pending? {
+                Some(pending) => open(&pending.key, &pin, &sealed)
+                    .map(|password| (password, OpenedBy::Pending(pending))),
+                None => Err(error),
+            },
+            Err(error) => Err(error),
+        })
+        .await
+    })
+    .await
+}
+
+/// Runs `try_secret` as one attempt: counted before it runs, so stopping the app mid-attempt
+/// does not undo it, and after the wait the failures counted so far call for.
+async fn counted<T, Fut>(
+    policy: PinPolicy,
+    store: &AppSecretStore,
+    try_secret: impl FnOnce() -> Fut,
+) -> Result<T, WalletError>
+where
+    Fut: Future<Output = Result<T, WalletError>>,
+{
     let failures = read_failures(store).await?;
     write_failures(store, failures.saturating_add(1)).await?;
     tokio::time::sleep(policy.delay(failures)).await;
-    let key = PinKey::load(store).await?;
-    // Read now but reported only when the current key does not open the text, so a damaged
-    // pending key never stops the current text from opening.
-    let pending = PendingKey::load(store).await;
-    let opened = blocking(move || match open(&key, &pin, &sealed) {
-        Ok(password) => Ok((password, OpenedBy::Current)),
-        Err(error) if error.kind == WalletErrorKind::WrongPassword => match pending? {
-            Some(pending) => open(&pending.key, &pin, &sealed)
-                .map(|password| (password, OpenedBy::Pending(pending))),
-            None => Err(error),
-        },
-        Err(error) => Err(error),
-    })
-    .await;
-    match &opened {
+    let result = try_secret().await;
+    match &result {
         Err(error)
             if matches!(
                 error.kind,
@@ -477,7 +510,7 @@ async fn attempt(
         Ok(_) => write_failures(store, 0).await?,
         Err(_) => write_failures(store, failures).await?,
     }
-    opened
+    result
 }
 
 /// Removes the PIN keys and the failure count from `store`.

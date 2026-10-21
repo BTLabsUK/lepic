@@ -298,6 +298,10 @@ impl EpicWallet {
     /// Opens the wallet in `config.data_dir`. Any password that opens the vault opens it, also
     /// one shorter than `create` accepts today. Fails with `WrongPassword`, `WalletNotFound`
     /// when `store` holds no vault, `ForeignWallet` and `WalletBusy`.
+    ///
+    /// Every attempt is counted in `store` as `lepic.pin-failures`, and waits, as
+    /// [`EpicWallet::open_with_pin`] describes; a right password clears the count. Attempts of
+    /// one runtime run one at a time.
     pub async fn open(
         runtime: &LepicRuntime,
         config: WalletConfig,
@@ -313,8 +317,8 @@ impl EpicWallet {
             .inner
             .boundary
             .run("open", async move {
-                let session = Session::new(&inner, &config, &node_secret, store)?;
-                session.open(password).await?;
+                let session = Session::new(&inner, &config, &node_secret, store.clone())?;
+                pin::password_attempt(&inner.pin, &store, || session.open(password)).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
                 })
@@ -403,11 +407,17 @@ impl EpicWallet {
             .await
     }
 
-    /// The recovery phrase, after checking `password` against the stored vault.
+    /// The recovery phrase, after checking `password` against the stored vault. Attempts are
+    /// counted and delayed as in [`EpicWallet::open`].
     pub async fn mnemonic(&self, password: String) -> Result<String, WalletError> {
         let password = Zeroizing::new(password);
         self.run("mnemonic", |session| async move {
-            session.recovery_phrase(password).await
+            // A locked wallet refuses before the attempt is counted.
+            session.ensure_unlocked()?;
+            pin::password_attempt(&session.runtime().pin, session.store(), || {
+                session.recovery_phrase(password)
+            })
+            .await
         })
         .await
     }
