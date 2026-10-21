@@ -121,7 +121,7 @@ fn mutations() -> Vec<Mutation> {
             cases.push((
                 "kernel lock_height",
                 Box::new(move |slate| {
-                    shift(&mut slate["tx"]["body"]["kernels"][0]["lock_height"], delta)
+                    shift(&mut slate["tx"]["body"]["kernels"][0]["lock_height"], delta);
                 }),
             ));
         }
