@@ -44,6 +44,7 @@ use tracing::{Span, debug, info, instrument};
 use uuid::Uuid;
 
 use crate::account::{self, DEFAULT_ACCOUNT_LABEL};
+use crate::chain;
 use crate::error::WalletError;
 use crate::event::{AnsweredSlate, Event, ReceivedTransaction};
 use crate::lifecycle::Session;
@@ -96,6 +97,9 @@ pub enum ReceiveError {
     AlreadyReceived { slate_id: SlateId, tx_id: TxId },
     #[error("slate expired at height {cutoff}, the chain tip is at {tip}")]
     Expired { cutoff: Height, tip: Height },
+    /// The slate's height is more than [`crate::chain::SLATE_LEAD_BLOCKS`] above the tip.
+    #[error("slate height {height} is ahead of the chain tip at {tip}")]
+    AheadOfTip { height: Height, tip: Height },
     #[error("fee is below the minimum for the transaction")]
     FeeBelowMinimum { fee: Fee, minimum: Fee },
     #[error("minimum fee could not be computed")]
@@ -159,8 +163,10 @@ where
     /// [`WalletError::Locked`] when the wallet is locked, with [`ReceiveError::AlreadyReceived`]
     /// for another S1 under a slate id this wallet has received before or for a slate whose
     /// transaction was cancelled or expired, with [`ReceiveError::Expired`] when the
-    /// tip has reached the slate's TTL cutoff, and with a typed rejection for any slate that is
-    /// malformed, not an S1, pays nothing, or whose fee or messages do not check. Fails with
+    /// tip has reached the slate's TTL cutoff, with [`ReceiveError::AheadOfTip`] when its height
+    /// is more than [`crate::chain::SLATE_LEAD_BLOCKS`] above the tip, and with a typed
+    /// rejection for any slate that is malformed, not an S1, pays nothing, or whose fee or
+    /// messages do not check. Fails with
     /// [`WalletError::RestoreScanRequired`] inside [`ReceiveError::Wallet`] on a database rebuilt
     /// from the seed before a scan from genesis completed. Nothing is stored on failure.
     pub async fn receive(
@@ -213,6 +219,7 @@ where
             .height;
         self.check_plausible_tip(&session, tip).await?;
         check_ttl(&slate, tip)?;
+        check_height(&slate, tip)?;
         let context = self.encode_context(&slate).await?;
         debug!(height = tip.value(), "slate checked");
 
@@ -403,6 +410,15 @@ fn check_ttl(slate: &Slate, tip: Height) -> Result<(), ReceiveError> {
         Some(cutoff) if tip >= cutoff => Err(ReceiveError::Expired { cutoff, tip }),
         _ => Ok(()),
     }
+}
+
+/// Refuses a slate created at a height the chain is not near yet.
+fn check_height(slate: &Slate, tip: Height) -> Result<(), ReceiveError> {
+    let height = slate.height();
+    if !chain::slate_height_near(height, tip) {
+        return Err(ReceiveError::AheadOfTip { height, tip });
+    }
+    Ok(())
 }
 
 /// Participant messages are signed over their BLAKE2b-256 hash, with the signer's public

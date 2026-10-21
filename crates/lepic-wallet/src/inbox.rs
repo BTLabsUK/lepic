@@ -320,6 +320,7 @@ fn receive_is_permanent(error: &ReceiveError) -> bool {
         | ReceiveError::ZeroAmount
         | ReceiveError::AlreadyReceived { .. }
         | ReceiveError::Expired { .. }
+        | ReceiveError::AheadOfTip { .. }
         | ReceiveError::FeeBelowMinimum { .. }
         | ReceiveError::FeeOverflow
         | ReceiveError::MessageSignature { .. }

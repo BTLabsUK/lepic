@@ -19,6 +19,7 @@ use lepic_store::{
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::TransportId;
+use lepic_wallet::chain::SLATE_LEAD_BLOCKS;
 use lepic_wallet::event::{AnsweredSlate, ReceivedTransaction};
 use lepic_wallet::{Event, ReceiveError, WalletError};
 use receive_harness::*;
@@ -322,6 +323,64 @@ fn rejects_a_slate_whose_ttl_the_tip_has_reached() {
     }
     let receiver = Receiver::new(&mnemonic, cutoff - 1);
     receiver.receive(transport, &json(&s1), None).unwrap();
+}
+
+/// The JSON of `s1` with its height set to `height`, in the type the vector writes it in.
+fn s1_at_height(s1: &Value, height: u64) -> String {
+    let mut slate: Value = serde_json::from_str(&json(s1)).unwrap();
+    slate["height"] = match slate["height"] {
+        Value::String(_) => Value::String(height.to_string()),
+        _ => Value::from(height),
+    };
+    slate.to_string()
+}
+
+#[test]
+fn rejects_a_slate_created_far_above_the_tip_and_stores_nothing() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let tip = slate_height(&s1);
+    let receiver = Receiver::new(&receiver_mnemonic(&vector("send_file_plain_s2_v3")), tip);
+    let far = 1_000_000_000_000;
+
+    let error = receiver
+        .receive(transport, &s1_at_height(&s1, far), None)
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            ReceiveError::AheadOfTip { height, tip: seen }
+                if height == Height::new(far) && seen == Height::new(tip)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(receiver.transaction_count(), 0);
+}
+
+#[test]
+fn receives_a_slate_created_a_few_blocks_above_the_tip_and_refuses_one_more() {
+    let (s1, transport) = delivered_s1("send_file_plain");
+    let tip = slate_height(&s1);
+    let mnemonic = receiver_mnemonic(&vector("send_file_plain_s2_v3"));
+
+    let receiver = Receiver::new(&mnemonic, tip);
+    let error = receiver
+        .receive(
+            transport,
+            &s1_at_height(&s1, tip + SLATE_LEAD_BLOCKS + 1),
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, ReceiveError::AheadOfTip { .. }),
+        "{error:?}"
+    );
+
+    let receiver = Receiver::new(&mnemonic, tip);
+    receiver
+        .receive(transport, &s1_at_height(&s1, tip + SLATE_LEAD_BLOCKS), None)
+        .unwrap();
+    assert_eq!(receiver.transaction_count(), 1);
 }
 
 #[test]

@@ -275,6 +275,7 @@ fn receive_kind(error: &ReceiveError) -> ErrorKind {
         | ReceiveError::WrongStage { .. }
         | ReceiveError::AlreadyReceived { .. }
         | ReceiveError::Expired { .. }
+        | ReceiveError::AheadOfTip { .. }
         | ReceiveError::FeeBelowMinimum { .. }
         | ReceiveError::FeeOverflow
         | ReceiveError::MessageSignature { .. }

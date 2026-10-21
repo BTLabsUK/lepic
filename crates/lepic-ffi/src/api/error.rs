@@ -233,6 +233,7 @@ impl From<ReceiveError> for WalletError {
             ReceiveError::Decode(_)
             | ReceiveError::WrongStage { .. }
             | ReceiveError::AlreadyReceived { .. }
+            | ReceiveError::AheadOfTip { .. }
             | ReceiveError::FeeBelowMinimum { .. }
             | ReceiveError::MessageSignature { .. }
             | ReceiveError::ForeignProofAddress
