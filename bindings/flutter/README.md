@@ -129,6 +129,7 @@ app loads its current `epic_wallet_core` library.
 | Android arm64-v8a, armeabi-v7a, x86_64 | `native/<rust triple>/liblepic_ffi.so` | Linux or macOS, with the Android NDK and `cargo-ndk` |
 | iOS device and simulator, arm64 | `native/<rust triple>/liblepic_ffi.dylib` | macOS with Xcode |
 | Linux x86_64 | `native/x86_64-unknown-linux-gnu/liblepic_ffi.so` | Linux x86_64 |
+| Windows x86_64 | `native/x86_64-pc-windows-msvc/lepic_ffi.dll` | Windows x86_64 with Visual Studio Build Tools (C++) |
 
 Build them from the repository root before building the app:
 
@@ -162,7 +163,9 @@ its own `<rust triple>/` directory, so flatten or rename CI artifact layouts to 
   refuses a library that is not in it with that hash. Keep the file with the library when you
   move artifacts into a `native_dir`. It catches truncated, stale or mixed-up files; it is not a
   signature, so it does not stand in for trusting where the directory came from.
-- macOS and Windows builds get no bundled library. `flutter test` on Linux gets the Linux
+- The Windows library is built with MSVC and loads the Visual C++ runtime, as Flutter's Windows
+  runner does. A Windows app bundles it next to its executable.
+- macOS builds get no bundled library. `flutter test` on Linux gets the Linux
   library; see Develop.
 
 To switch the app from its own Rust crate: depend on this package by path or git, delete the

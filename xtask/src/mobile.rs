@@ -4,7 +4,8 @@
 //! `--package` builds the `lepic-ffi` shared library in release mode and copies it, with a
 //! `SHA256SUMS` manifest, to `bindings/flutter/native/<triple>/`, where the Dart package's build
 //! hook checks it and picks it up. Besides the mobile targets it builds the Linux desktop library,
-//! on a Linux host only, which links against that host's glibc.
+//! on a Linux host only, which links against that host's glibc, and the Windows desktop library,
+//! on a Windows host only, with the MSVC toolchain.
 //!
 //! `--emulator-test` builds the library with the scripted node (`mock`) for the attached Android
 //! device's ABI, puts it in the integration test app `bindings/flutter/emulator_test/native/`, and
@@ -61,6 +62,7 @@ const ANDROID_TARGETS: &[&str] = &[
 ];
 const APPLE_TARGETS: &[&str] = &["aarch64-apple-ios", "aarch64-apple-ios-sim"];
 const LINUX_TARGETS: &[&str] = &["x86_64-unknown-linux-gnu"];
+const WINDOWS_TARGETS: &[&str] = &["x86_64-pc-windows-msvc"];
 
 /// The only host `--host-test` runs on: `flutter test` runs the build hook for the host, and the
 /// hook bundles a library for this Linux target only.
@@ -143,6 +145,7 @@ fn default_package_targets(host_os: &str) -> Vec<String> {
     match host_os {
         "macos" => targets.extend(APPLE_TARGETS),
         "linux" => targets.extend(LINUX_TARGETS),
+        "windows" => targets.extend(WINDOWS_TARGETS),
         _ => {}
     }
     targets.into_iter().map(String::from).collect()
@@ -170,11 +173,23 @@ fn cargo_build_prefix(target: &str, host_os: &str) -> Result<Vec<String>> {
         }
         return Ok(["build", "--target", target].map(String::from).to_vec());
     }
+    if WINDOWS_TARGETS.contains(&target) {
+        // The library needs the MSVC linker and C compiler for its C dependencies.
+        if host_os != "windows" {
+            bail!("`{target}` builds only on Windows");
+        }
+        return Ok(["build", "--target", target].map(String::from).to_vec());
+    }
     bail!(
         "`{target}` is not a supported target, expected one of: {}",
-        [ANDROID_TARGETS, APPLE_TARGETS, LINUX_TARGETS]
-            .concat()
-            .join(", ")
+        [
+            ANDROID_TARGETS,
+            APPLE_TARGETS,
+            LINUX_TARGETS,
+            WINDOWS_TARGETS
+        ]
+        .concat()
+        .join(", ")
     )
 }
 
@@ -347,6 +362,8 @@ fn run_flutter(dir: &Path, args: &[&str]) -> Result<bool> {
 fn shared_library_name(target: &str) -> String {
     if APPLE_TARGETS.contains(&target) {
         format!("lib{FFI_LIBRARY_STEM}.dylib")
+    } else if WINDOWS_TARGETS.contains(&target) {
+        format!("{FFI_LIBRARY_STEM}.dll")
     } else {
         format!("lib{FFI_LIBRARY_STEM}.so")
     }
@@ -516,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn package_defaults_to_android_plus_ios_on_macos_and_linux_on_linux() {
+    fn package_defaults_to_android_plus_the_host_desktop_or_ios() {
         assert_eq!(
             default_package_targets("linux"),
             strings(&[ANDROID_TARGETS, LINUX_TARGETS].concat())
@@ -525,7 +542,10 @@ mod tests {
             default_package_targets("macos"),
             strings(&[ANDROID_TARGETS, APPLE_TARGETS].concat())
         );
-        assert_eq!(default_package_targets("windows"), strings(ANDROID_TARGETS));
+        assert_eq!(
+            default_package_targets("windows"),
+            strings(&[ANDROID_TARGETS, WINDOWS_TARGETS].concat())
+        );
     }
 
     #[test]
@@ -737,8 +757,19 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_targets() {
-        assert!(build_args("x86_64-pc-windows-msvc", false, "linux").is_err());
         assert!(package_args("aarch64-unknown-linux-gnu", "linux").is_err());
+        assert!(package_args("aarch64-pc-windows-msvc", "windows").is_err());
+    }
+
+    #[test]
+    fn package_builds_the_windows_library_natively_on_windows_only() {
+        let args = package_args("x86_64-pc-windows-msvc", "windows").unwrap();
+        assert_eq!(
+            args.get(..3),
+            Some(&strings(&["build", "--target", "x86_64-pc-windows-msvc"])[..])
+        );
+        assert!(package_args("x86_64-pc-windows-msvc", "linux").is_err());
+        assert!(build_args("x86_64-pc-windows-msvc", false, "macos").is_err());
     }
 
     #[test]
@@ -754,6 +785,10 @@ mod tests {
         assert_eq!(
             shared_library_name("x86_64-unknown-linux-gnu"),
             "liblepic_ffi.so"
+        );
+        assert_eq!(
+            shared_library_name("x86_64-pc-windows-msvc"),
+            "lepic_ffi.dll"
         );
     }
 

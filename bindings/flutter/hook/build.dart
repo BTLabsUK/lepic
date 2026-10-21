@@ -1,10 +1,10 @@
-// Bundles the prebuilt lepic-ffi library for the Android, iOS or Linux target being built, so an
-// app gets it by depending on this package. `cargo xtask mobile --package` puts the libraries in
-// `native/<rust target>/` next to a `SHA256SUMS` manifest, which is checked before bundling; the
-// `native_dir` user define points elsewhere.
+// Bundles the prebuilt lepic-ffi library for the Android, iOS, Linux or Windows target being
+// built, so an app gets it by depending on this package. `cargo xtask mobile --package` puts the
+// libraries in `native/<rust target>/` next to a `SHA256SUMS` manifest, which is checked before
+// bundling; the `native_dir` user define points elsewhere.
 //
 // `flutter test` on Linux runs this hook for the host too, so the package's own tests load the
-// library it bundles. macOS and Windows builds get no asset.
+// library it bundles. macOS builds get no asset.
 
 import 'dart:io';
 
@@ -100,7 +100,7 @@ void main(List<String> args) async {
 }
 
 /// The Rust target triple for a build, or null when this package bundles nothing for the target.
-/// Throws for an Android, iOS or Linux target LEPIC does not build.
+/// Throws for an Android, iOS, Linux or Windows target LEPIC does not build.
 String? rustTarget(CodeConfig code) {
   final arch = code.targetArchitecture;
   switch (code.targetOS) {
@@ -133,6 +133,13 @@ String? rustTarget(CodeConfig code) {
       return switch (arch) {
         Architecture.x64 => 'x86_64-unknown-linux-gnu',
         _ => throw UnsupportedError('package:lepic has no Linux $arch build.'),
+      };
+    case OS.windows:
+      return switch (arch) {
+        Architecture.x64 => 'x86_64-pc-windows-msvc',
+        _ => throw UnsupportedError(
+          'package:lepic has no Windows $arch build.',
+        ),
       };
     default:
       return null;
