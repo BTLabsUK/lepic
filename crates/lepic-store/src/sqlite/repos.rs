@@ -20,7 +20,8 @@ use crate::relay::{
 use crate::settings::SettingsRepository;
 use crate::slate::{SlateRepository, SlateStage, StoredSlate};
 use crate::transaction::{
-    StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId, TxState,
+    OpenReceipt, StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
+    TxState,
 };
 
 /// The repositories over one open SQLite transaction.
@@ -497,6 +498,28 @@ impl TransactionRepository for SqliteRepos<'_> {
             )
             .optional()?;
         Ok(address.flatten())
+    }
+
+    fn open_receipts(&self, transport: &str) -> Result<Vec<OpenReceipt>, StoreError> {
+        self.collect(
+            "SELECT t.id, t.counterparty FROM transactions t
+             WHERE t.direction = ?1 AND t.state = ?2 AND t.transport = ?3
+               AND EXISTS (SELECT 1 FROM slates s
+                           WHERE s.slate_id = t.slate_id AND s.stage = ?4)
+             ORDER BY t.id",
+            params![
+                TxDirection::Incoming.code(),
+                TxState::Received.code(),
+                transport,
+                SlateStage::Standard2.code()
+            ],
+            |row| {
+                Ok(OpenReceipt {
+                    id: TxId(decode_u32(row.get(0)?, Record::Transaction, "id")?),
+                    counterparty: row.get(1)?,
+                })
+            },
+        )
     }
 }
 

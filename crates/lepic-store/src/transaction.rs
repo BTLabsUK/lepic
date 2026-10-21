@@ -52,6 +52,14 @@ pub struct TransactionEntry {
     pub updated_at: Timestamp,
 }
 
+/// A payment received over a transport and answered with S2, which the sender has not yet
+/// finalized: an incoming entry in state `received` with a stored S2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenReceipt {
+    pub id: TxId,
+    pub counterparty: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredTransaction {
     pub id: TxId,
@@ -97,4 +105,8 @@ pub trait TransactionRepository {
     /// `None` when no address was recorded, as for a file exchange or an entry stored before
     /// addresses were.
     fn counterparty(&self, id: TxId) -> Result<Option<String>, StoreError>;
+
+    /// The open receipts that arrived over `transport`, oldest first. Issued invoices, which
+    /// are incoming entries in state `received` too, have no S2 and are not listed.
+    fn open_receipts(&self, transport: &str) -> Result<Vec<OpenReceipt>, StoreError>;
 }

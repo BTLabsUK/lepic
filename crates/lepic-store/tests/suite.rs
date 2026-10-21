@@ -15,10 +15,10 @@ use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_store::{
     AccountIndex, AccountRecord, ContextKey, InboxEntry, InboxStatus, InvoiceAddressIndex,
-    InvoiceCap, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER, OutboxEntry, OutboxId,
-    OutboxStatus, OutputStatus, ParticipantId, PeerCapability, PeerSupport, PendingInvoiceStatus,
-    PrivateContext, Record, Repositories, SlateStage, StoreError, TxDirection, TxId, TxState,
-    WalletStore,
+    InvoiceCap, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER, OpenReceipt, OutboxEntry,
+    OutboxId, OutboxStatus, OutputStatus, ParticipantId, PeerCapability, PeerSupport,
+    PendingInvoiceStatus, PrivateContext, Record, Repositories, SlateStage, StoreError,
+    TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use uuid::Uuid;
 
@@ -680,6 +680,55 @@ fn counterparty_is_recorded_and_survives_updates<B: Backend>() {
     );
 }
 
+fn open_receipts_lists_answered_incoming_payments_oldest_first<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let incoming = |slate_id: Uuid, transport: &str| TransactionEntry {
+        direction: TxDirection::Incoming,
+        state: TxState::Received,
+        transport: Some(transport.to_owned()),
+        ..transaction(DEFAULT, Some(slate_id))
+    };
+    let invoice = Uuid::from_bytes([0xc3; 16]);
+    let by_file = Uuid::from_bytes([0xd4; 16]);
+    let (first, second) = write(store, |repos| {
+        let first = repos.insert_transaction(&incoming(SLATE_A, "epicbox"))?;
+        repos.set_counterparty(first, "key-a@relay")?;
+        repos.insert_slate(&slate(SLATE_A, SlateStage::Standard2, b"s2"))?;
+        let second = repos.insert_transaction(&incoming(SLATE_B, "epicbox"))?;
+        repos.insert_slate(&slate(SLATE_B, SlateStage::Standard2, b"s2"))?;
+        repos.insert_transaction(&incoming(invoice, "epicbox"))?;
+        repos.insert_slate(&slate(invoice, SlateStage::Invoice1, b"i1"))?;
+        repos.insert_transaction(&incoming(by_file, "file"))?;
+        repos.insert_slate(&slate(by_file, SlateStage::Standard2, b"s2"))?;
+        Ok((first, second))
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.open_receipts("epicbox")).unwrap(),
+        vec![
+            OpenReceipt {
+                id: first,
+                counterparty: Some("key-a@relay".to_owned())
+            },
+            OpenReceipt {
+                id: second,
+                counterparty: None
+            },
+        ]
+    );
+    let mut finalized = incoming(SLATE_A, "epicbox");
+    finalized.state = TxState::Posted;
+    write(store, |repos| repos.update_transaction(first, &finalized)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.open_receipts("epicbox")).unwrap(),
+        vec![OpenReceipt {
+            id: second,
+            counterparty: None
+        }]
+    );
+}
+
 fn delete_transaction_removes_an_unlinked_entry_only<B: Backend>() {
     let backend = with_default_account::<B>();
     let store = backend.store();
@@ -1129,6 +1178,7 @@ for_each_backend!(
     fee_and_amount_extremes_round_trip,
     confirmed_height_is_recorded_and_survives_updates,
     counterparty_is_recorded_and_survives_updates,
+    open_receipts_lists_answered_incoming_payments_oldest_first,
     delete_transaction_removes_an_unlinked_entry_only,
     pending_invoices_round_trip_oldest_first,
     rejects_a_second_invoice_with_the_same_slate_id,

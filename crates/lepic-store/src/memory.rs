@@ -23,7 +23,8 @@ use crate::settings::SettingsRepository;
 use crate::slate::{SlateRepository, SlateStage, StoredSlate};
 use crate::store::{Repositories, WalletStore};
 use crate::transaction::{
-    StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
+    OpenReceipt, StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
+    TxState,
 };
 
 type SlateKey = ([u8; 16], &'static str);
@@ -338,6 +339,28 @@ impl TransactionRepository for MemoryRepos<'_> {
 
     fn counterparty(&self, id: TxId) -> Result<Option<String>, StoreError> {
         Ok(self.state.counterparties.get(&id).cloned())
+    }
+
+    fn open_receipts(&self, transport: &str) -> Result<Vec<OpenReceipt>, StoreError> {
+        Ok(self
+            .state
+            .transactions
+            .iter()
+            .filter(|(_, entry)| {
+                entry.direction == TxDirection::Incoming
+                    && entry.state == TxState::Received
+                    && entry.transport.as_deref() == Some(transport)
+                    && entry.slate_id.is_some_and(|slate_id| {
+                        self.state
+                            .slates
+                            .contains_key(&slate_key(slate_id, SlateStage::Standard2))
+                    })
+            })
+            .map(|(id, _)| OpenReceipt {
+                id: *id,
+                counterparty: self.state.counterparties.get(id).cloned(),
+            })
+            .collect())
     }
 }
 
