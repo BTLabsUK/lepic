@@ -409,7 +409,10 @@ impl Session {
                 Ok::<_, WalletError>(phrase)
             })
             .await?;
-        Ok(phrase.as_str().to_owned())
+        // The binding encodes the returned text for Dart and drops it without wiping it, so it
+        // gets this buffer rather than a second copy.
+        let mut phrase = phrase;
+        Ok(std::mem::take(&mut *phrase))
     }
 
     /// Checks `password` against the stored vault: `WrongPassword` when it does not open it.

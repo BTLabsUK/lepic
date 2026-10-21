@@ -196,7 +196,15 @@ Not secret, and crossing both ways: the sealed password text, the encrypted vaul
 the PIN and the PIN key in the store, so whoever holds both the sealed text and the store's
 contents can guess the PIN offline, slowed only by Argon2id. Keep the store on the device: back it
 with the Android Keystore or the iOS Keychain (`ThisDeviceOnly`) and exclude it and the sealed text
-from backups. Dart strings cannot be wiped, so keep the phrase on screen only as long as needed.
+from backups.
+
+Every secret in the table crosses as a Dart `String`, in both directions. Rust copies what it
+receives into memory it wipes, and wipes its own copies of what it returns, but it cannot wipe the
+Dart string, nor the bridge's message buffer that carries the text across, which is freed without
+being wiped. A Dart string stays in memory until the garbage collector reuses it. Hold these
+strings only as long as the call needs them: pass a typed password, PIN or phrase straight from the
+text field to the call and clear the field afterwards, and keep the phrase from `mnemonic` on
+screen only as long as needed, without copying it into other state.
 
 ## Errors
 
