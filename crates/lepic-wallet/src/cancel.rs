@@ -5,6 +5,7 @@
 //! already holds. Such a transaction stays watched after the cancel, so a refresh confirms it
 //! and restores its outputs if the peer still completes it.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use jiff::Timestamp;
@@ -130,11 +131,17 @@ pub(crate) async fn pool_holds<N: NodeApi>(
     node: &N,
     excess: &Commitment,
 ) -> Result<bool, NodeError> {
+    Ok(pool_kernels(node).await?.contains(excess))
+}
+
+/// The kernel excesses of every transaction in the node's transaction pool.
+pub(crate) async fn pool_kernels<N: NodeApi>(node: &N) -> Result<BTreeSet<Commitment>, NodeError> {
     let pool = node.get_unconfirmed_transactions().await?;
     Ok(pool
         .iter()
         .flat_map(|transaction| &transaction.kernels)
-        .any(|kernel| kernel.excess == *excess))
+        .map(|kernel| kernel.excess)
+        .collect())
 }
 
 /// The state a cancel starts from, and the kernel to look up before it is cancelled, of a

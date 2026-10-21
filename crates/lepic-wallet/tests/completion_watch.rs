@@ -715,6 +715,15 @@ fn stored_copy(store: &MemoryStore, tx_id: TxId, stage: SlateStage, height: u64)
         .unwrap()
 }
 
+fn pool_requests(payment: &Payment) -> usize {
+    payment
+        .node()
+        .calls()
+        .iter()
+        .filter(|method| *method == "get_unconfirmed_transactions")
+        .count()
+}
+
 #[test]
 fn a_receive_stored_with_a_height_above_the_tip_can_be_cancelled() {
     let payment = Payment::answered(None);
@@ -769,5 +778,24 @@ fn a_kernel_lookup_the_node_refuses_keeps_the_payment_open_until_a_later_refresh
     );
 
     payment.receiver.refresh();
+    assert_eq!(payment.receiver.state(payment.receive_tx), TxState::Expired);
+}
+
+#[test]
+fn payments_due_to_expire_ask_the_node_pool_once_per_refresh() {
+    let payment = Payment::answered(Some(TTL_BLOCKS)).finalized();
+    let copy = stored_copy(
+        &payment.receiver.store,
+        payment.receive_tx,
+        SlateStage::Standard2,
+        TIP,
+    );
+    payment.chain_reaches(TIP + TTL_BLOCKS);
+    let before = pool_requests(&payment);
+
+    payment.receiver.refresh();
+
+    assert_eq!(pool_requests(&payment) - before, 1);
+    assert_eq!(payment.receiver.state(copy), TxState::Expired);
     assert_eq!(payment.receiver.state(payment.receive_tx), TxState::Expired);
 }

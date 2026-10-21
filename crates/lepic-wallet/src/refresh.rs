@@ -33,7 +33,7 @@ use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::cancel::{drop_holdings, pool_holds};
+use crate::cancel::{drop_holdings, pool_kernels};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
@@ -389,8 +389,8 @@ where
 
     /// The transactions due to expire whose kernel, if one is known, neither the node's pool
     /// nor its chain up to the tip holds: the peer may have completed one that it does hold.
-    /// The pool is asked first, so a transaction that leaves it for a block between the two
-    /// lookups is found on chain. A transaction whose lookup fails counts as held
+    /// The pool is asked once, before the chain, so a transaction that leaves it for a block
+    /// between the lookups is found on chain. A transaction whose lookup fails counts as held
     /// and is decided by a later refresh.
     async fn not_held(
         &self,
@@ -398,15 +398,20 @@ where
         tip: &mut RefreshTip,
     ) -> Result<BTreeSet<TxId>, RefreshError> {
         let node = &self.ports().node;
+        let mut pool = None;
         let mut cleared = BTreeSet::new();
         for &(tx_id, kernel) in candidates {
             if let Some((excess, min_height)) = kernel {
-                match unless_refused(tx_id, pool_holds(node, &excess).await)? {
-                    Some(true) => {
+                let pool = match &mut pool {
+                    Some(pool) => pool,
+                    None => pool.insert(unless_refused(tx_id, pool_kernels(node).await)?),
+                };
+                match pool {
+                    Some(pool) if pool.contains(&excess) => {
                         debug!(tx_id = %tx_id, "kernel found in the node pool");
                         continue;
                     }
-                    Some(false) => {}
+                    Some(_) => {}
                     None => continue,
                 }
                 let floor = chain::kernel_floor(min_height, tip.height);
