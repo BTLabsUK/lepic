@@ -309,7 +309,7 @@ impl EpicWallet {
     /// app stops before storing it, the wallet cannot be opened by PIN; delete it with
     /// [`delete_wallet`] and create it again (a restored wallet from its phrase).
     ///
-    /// Fails with `InvalidArgument` when `pin` has fewer than four characters, and otherwise
+    /// Fails with `InvalidArgument` when `pin` has fewer than six characters, and otherwise
     /// as `create` does.
     pub async fn create_with_pin(
         runtime: &LepicRuntime,
@@ -432,7 +432,7 @@ impl EpicWallet {
     /// the old text stops opening. While a change is pending a wrong PIN costs two key
     /// derivations, and still counts as one failure.
     ///
-    /// Fails with `InvalidArgument` when `new_pin` has fewer than four characters, before any
+    /// Fails with `InvalidArgument` when `new_pin` has fewer than six characters, before any
     /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
     pub async fn change_pin(
         &self,

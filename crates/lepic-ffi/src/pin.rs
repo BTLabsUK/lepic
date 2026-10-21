@@ -38,8 +38,9 @@ pub(crate) const PENDING_KEY_KEY: &str = "lepic.pin-key-pending";
 /// The key of the count of PIN failures since the last right PIN, in decimal.
 pub(crate) const FAILURES_KEY: &str = "lepic.pin-failures";
 
-/// The shortest PIN `create_with_pin` accepts, in characters.
-pub(crate) const MIN_PIN_LEN: usize = 4;
+/// The shortest PIN `create_with_pin` and `change_pin` accept, in characters. Unlocking does
+/// not check it, so text sealed under a shorter PIN of an earlier version keeps opening.
+pub(crate) const MIN_PIN_LEN: usize = 6;
 
 const KEY_LEN: usize = 32;
 
@@ -513,31 +514,46 @@ mod tests {
         assert_eq!(password.len(), 64);
         assert!(password.bytes().all(|b| b.is_ascii_hexdigit()));
         let key = PinKey::generate().unwrap();
-        let sealed = seal(&key, "1234", &password, cheap()).unwrap();
+        let sealed = seal(&key, "123456", &password, cheap()).unwrap();
         assert!(!sealed.contains(password.as_str()));
-        assert_eq!(*open(&key, "1234", &sealed).unwrap(), *password);
+        assert_eq!(*open(&key, "123456", &sealed).unwrap(), *password);
         assert_eq!(
-            open(&key, "0000", &sealed).unwrap_err().kind,
+            open(&key, "000000", &sealed).unwrap_err().kind,
             WalletErrorKind::WrongPassword
         );
         let other_key = PinKey::generate().unwrap();
         assert_eq!(
-            open(&other_key, "1234", &sealed).unwrap_err().kind,
+            open(&other_key, "123456", &sealed).unwrap_err().kind,
             WalletErrorKind::WrongPassword
         );
         assert_eq!(
-            open(&key, "1234", "damaged").unwrap_err().kind,
+            open(&key, "123456", "damaged").unwrap_err().kind,
             WalletErrorKind::InvalidArgument
         );
     }
 
     #[test]
-    fn new_pin_needs_four_characters() {
+    fn new_pin_needs_six_characters() {
         assert!(NewPin::new(pin("")).is_err());
-        assert!(NewPin::new(pin("123")).is_err());
-        assert!(NewPin::new(pin("1234")).is_ok());
-        // Characters, not bytes: three two-byte characters are still too short.
-        assert!(NewPin::new(pin("äöü")).is_err());
+        assert!(NewPin::new(pin("1234")).is_err());
+        assert!(NewPin::new(pin("12345")).is_err());
+        assert!(NewPin::new(pin("123456")).is_ok());
+        // Characters, not bytes: five two-byte characters are still too short.
+        assert!(NewPin::new(pin("äöüäö")).is_err());
+    }
+
+    /// Text sealed under a PIN shorter than today's floor, as an earlier version allowed, keeps
+    /// opening with that PIN.
+    #[tokio::test]
+    async fn a_pin_below_the_floor_still_unlocks_text_sealed_under_it() {
+        let store = AppSecretStore::in_memory();
+        let guard = PinGuard::new(PinPolicy::DEFAULT);
+        let password = generate_password().unwrap();
+        let key = PinKey::generate().unwrap();
+        let sealed = seal(&key, "1234", &password, cheap()).unwrap();
+        key.store(&store, KEY_KEY).await.unwrap();
+        let opened = unlock(&guard, &store, pin("1234"), sealed).await.unwrap();
+        assert_eq!(*opened, *password);
     }
 
     #[test]
@@ -558,7 +574,7 @@ mod tests {
         let password = generate_password().unwrap();
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("1234")).unwrap(),
+            NewPin::new(pin("123456")).unwrap(),
             password.clone(),
             cheap(),
         )
@@ -567,7 +583,7 @@ mod tests {
         for _ in 0..3 {
             let started = tokio::time::Instant::now();
             assert!(
-                unlock(&guard, &store, pin("0000"), sealed.clone())
+                unlock(&guard, &store, pin("000000"), sealed.clone())
                     .await
                     .is_err()
             );
@@ -575,21 +591,21 @@ mod tests {
         }
         let started = tokio::time::Instant::now();
         assert!(
-            unlock(&guard, &store, pin("0000"), sealed.clone())
+            unlock(&guard, &store, pin("000000"), sealed.clone())
                 .await
                 .is_err()
         );
         assert_eq!(started.elapsed(), Duration::from_secs(30));
 
         let started = tokio::time::Instant::now();
-        let opened = unlock(&guard, &store, pin("1234"), sealed.clone())
+        let opened = unlock(&guard, &store, pin("123456"), sealed.clone())
             .await
             .unwrap();
         assert_eq!(started.elapsed(), Duration::from_secs(60));
         assert_eq!(*opened, *password);
 
         let started = tokio::time::Instant::now();
-        assert!(unlock(&guard, &store, pin("1234"), sealed).await.is_ok());
+        assert!(unlock(&guard, &store, pin("123456"), sealed).await.is_ok());
         assert_eq!(started.elapsed(), Duration::ZERO);
     }
 
@@ -599,13 +615,18 @@ mod tests {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
         let password = generate_password().unwrap();
-        let sealed = seal_new(&store, NewPin::new(pin("1234")).unwrap(), password, cheap())
-            .await
-            .unwrap();
+        let sealed = seal_new(
+            &store,
+            NewPin::new(pin("123456")).unwrap(),
+            password,
+            cheap(),
+        )
+        .await
+        .unwrap();
         store.write(FAILURES_KEY, "3".to_owned()).await.unwrap();
 
         let started = tokio::time::Instant::now();
-        let attempt = || unlock(&guard, &store, pin("0000"), sealed.clone());
+        let attempt = || unlock(&guard, &store, pin("000000"), sealed.clone());
         let (first, second, third) = tokio::join!(attempt(), attempt(), attempt());
         for result in [first, second, third] {
             assert_eq!(result.unwrap_err().kind, WalletErrorKind::WrongPassword);
@@ -638,14 +659,14 @@ mod tests {
         let guard = PinGuard::new(PinPolicy::DEFAULT);
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("1234")).unwrap(),
+            NewPin::new(pin("123456")).unwrap(),
             generate_password().unwrap(),
             cheap(),
         )
         .await
         .unwrap();
         store.delete(KEY_KEY).await.unwrap();
-        let opened = unlock(&guard, &store, pin("1234"), sealed).await;
+        let opened = unlock(&guard, &store, pin("123456"), sealed).await;
         assert_eq!(opened.unwrap_err().kind, WalletErrorKind::SecretStore);
         assert_eq!(read_failures(&store).await.unwrap(), 1);
     }
@@ -657,7 +678,7 @@ mod tests {
         let guard = PinGuard::new(PinPolicy::DEFAULT);
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("1234")).unwrap(),
+            NewPin::new(pin("123456")).unwrap(),
             generate_password().unwrap(),
             cheap(),
         )
@@ -669,7 +690,7 @@ mod tests {
             read_failures(&store).await.unwrap()
         };
         let (opened, counted) =
-            tokio::join!(unlock(&guard, &store, pin("0000"), sealed), during_wait);
+            tokio::join!(unlock(&guard, &store, pin("000000"), sealed), during_wait);
         assert_eq!(counted, 4);
         assert_eq!(opened.unwrap_err().kind, WalletErrorKind::WrongPassword);
         assert_eq!(read_failures(&store).await.unwrap(), 4);
@@ -684,7 +705,7 @@ mod tests {
         let password = generate_password().unwrap();
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("1234")).unwrap(),
+            NewPin::new(pin("123456")).unwrap(),
             password.clone(),
             cheap(),
         )
@@ -697,7 +718,7 @@ mod tests {
         let unsealable = Zeroizing::new("x".repeat(lepic_keychain::vault::MAX_SECRET_LEN + 1));
         let failed = seal_new(
             &store,
-            NewPin::new(pin("9876")).unwrap(),
+            NewPin::new(pin("987654")).unwrap(),
             unsealable,
             cheap(),
         )
@@ -706,7 +727,7 @@ mod tests {
         assert_eq!(store.read(KEY_KEY).await.unwrap(), old_key);
         assert_eq!(read_failures(&store).await.unwrap(), 2);
 
-        let opened = unlock(&guard, &store, pin("1234"), sealed).await.unwrap();
+        let opened = unlock(&guard, &store, pin("123456"), sealed).await.unwrap();
         assert_eq!(*opened, *password);
     }
 
@@ -716,16 +737,16 @@ mod tests {
     async fn a_change_from_the_pending_pair_keeps_that_pair_opening() {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
-        let (_, first) = new_wallet(&store, "1111").await;
-        let second = change_pin(&guard, &store, "1111", &first, "2222")
+        let (_, first) = new_wallet(&store, "111111").await;
+        let second = change_pin(&guard, &store, "111111", &first, "222222")
             .await
             .unwrap();
         // The app stored `second` and dropped `first`, then changed again and stopped before
         // it stored the third text.
-        change_pin(&guard, &store, "2222", &second, "3333")
+        change_pin(&guard, &store, "222222", &second, "333333")
             .await
             .unwrap();
-        assert!(opens(&guard, &store, "2222", &second).await);
+        assert!(opens(&guard, &store, "222222", &second).await);
     }
 
     /// An app that stopped before it stored the new text still holds the old one; confirming
@@ -734,8 +755,8 @@ mod tests {
     async fn a_confirmation_for_text_the_app_never_stored_keeps_the_old_text_opening() {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
-        let (_, old) = new_wallet(&store, "1111").await;
-        let new = change_pin(&guard, &store, "1111", &old, "2222")
+        let (_, old) = new_wallet(&store, "111111").await;
+        let new = change_pin(&guard, &store, "111111", &old, "222222")
             .await
             .unwrap();
         let confirmed = confirm_change(&guard, &store, &old).await;
@@ -743,17 +764,17 @@ mod tests {
             confirmed.unwrap_err().kind,
             WalletErrorKind::InvalidArgument
         );
-        assert!(opens(&guard, &store, "1111", &old).await);
-        assert!(opens(&guard, &store, "2222", &new).await);
+        assert!(opens(&guard, &store, "111111", &old).await);
+        assert!(opens(&guard, &store, "222222", &new).await);
         // Text the app stored with a line break is the same text.
         confirm_change(&guard, &store, &format!("{new}\n"))
             .await
             .unwrap();
-        assert!(!opens(&guard, &store, "1111", &old).await);
-        assert!(opens(&guard, &store, "2222", &new).await);
+        assert!(!opens(&guard, &store, "111111", &old).await);
+        assert!(opens(&guard, &store, "222222", &new).await);
         // Nothing is pending any more.
         confirm_change(&guard, &store, &old).await.unwrap();
-        assert!(opens(&guard, &store, "2222", &new).await);
+        assert!(opens(&guard, &store, "222222", &new).await);
     }
 
     #[tokio::test]
@@ -807,42 +828,42 @@ mod tests {
     async fn a_change_from_the_old_pair_replaces_the_pending_key() {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
-        let (_, first) = new_wallet(&store, "1111").await;
-        let second = change_pin(&guard, &store, "1111", &first, "2222")
+        let (_, first) = new_wallet(&store, "111111").await;
+        let second = change_pin(&guard, &store, "111111", &first, "222222")
             .await
             .unwrap();
         // The app never stored `second` and changes again from the pair it holds.
-        let third = change_pin(&guard, &store, "1111", &first, "3333")
+        let third = change_pin(&guard, &store, "111111", &first, "333333")
             .await
             .unwrap();
-        assert!(opens(&guard, &store, "1111", &first).await);
-        assert!(!opens(&guard, &store, "2222", &second).await);
-        assert!(opens(&guard, &store, "3333", &third).await);
+        assert!(opens(&guard, &store, "111111", &first).await);
+        assert!(!opens(&guard, &store, "222222", &second).await);
+        assert!(opens(&guard, &store, "333333", &third).await);
 
         confirm_change(&guard, &store, &third).await.unwrap();
-        assert!(!opens(&guard, &store, "1111", &first).await);
-        assert!(opens(&guard, &store, "3333", &third).await);
+        assert!(!opens(&guard, &store, "111111", &first).await);
+        assert!(opens(&guard, &store, "333333", &third).await);
     }
 
     #[tokio::test]
     async fn a_change_from_the_pending_pair_promotes_it_before_replacing_it() {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
-        let (_, first) = new_wallet(&store, "1111").await;
-        let second = change_pin(&guard, &store, "1111", &first, "2222")
+        let (_, first) = new_wallet(&store, "111111").await;
+        let second = change_pin(&guard, &store, "111111", &first, "222222")
             .await
             .unwrap();
         // The app stored `second` in place of `first`, so `first` is gone.
-        let third = change_pin(&guard, &store, "2222", &second, "3333")
+        let third = change_pin(&guard, &store, "222222", &second, "333333")
             .await
             .unwrap();
-        assert!(!opens(&guard, &store, "1111", &first).await);
-        assert!(opens(&guard, &store, "2222", &second).await);
-        assert!(opens(&guard, &store, "3333", &third).await);
+        assert!(!opens(&guard, &store, "111111", &first).await);
+        assert!(opens(&guard, &store, "222222", &second).await);
+        assert!(opens(&guard, &store, "333333", &third).await);
 
         confirm_change(&guard, &store, &third).await.unwrap();
-        assert!(!opens(&guard, &store, "2222", &second).await);
-        assert!(opens(&guard, &store, "3333", &third).await);
+        assert!(!opens(&guard, &store, "222222", &second).await);
+        assert!(opens(&guard, &store, "333333", &third).await);
     }
 
     /// A change the vault check refuses stores no pending key.
@@ -850,10 +871,10 @@ mod tests {
     async fn a_refused_change_leaves_nothing_pending() {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
-        let (_, sealed) = new_wallet(&store, "1111").await;
+        let (_, sealed) = new_wallet(&store, "111111").await;
         let refuse = |_| async { Err(WalletError::new(WalletErrorKind::WrongPassword, "refused")) };
-        let new = NewPin::new(pin("2222")).unwrap();
-        let changed = change(&guard, &store, pin("1111"), sealed, new, cheap(), refuse).await;
+        let new = NewPin::new(pin("222222")).unwrap();
+        let changed = change(&guard, &store, pin("111111"), sealed, new, cheap(), refuse).await;
         assert_eq!(changed.unwrap_err().kind, WalletErrorKind::WrongPassword);
         assert_eq!(store.read(PENDING_KEY_KEY).await.unwrap(), None);
     }
@@ -863,8 +884,8 @@ mod tests {
     async fn a_damaged_pending_key_leaves_the_current_text_working() {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
-        let (password, old) = new_wallet(&store, "1111").await;
-        let new = change_pin(&guard, &store, "1111", &old, "2222")
+        let (password, old) = new_wallet(&store, "111111").await;
+        let new = change_pin(&guard, &store, "111111", &old, "222222")
             .await
             .unwrap();
         store
@@ -873,10 +894,10 @@ mod tests {
             .unwrap();
         let key = store.read(KEY_KEY).await.unwrap();
 
-        let opened = unlock(&guard, &store, pin("2222"), new.clone()).await;
+        let opened = unlock(&guard, &store, pin("222222"), new.clone()).await;
         assert_eq!(opened.unwrap_err().kind, WalletErrorKind::SecretStore);
         assert_eq!(read_failures(&store).await.unwrap(), 1);
-        let opened = unlock(&guard, &store, pin("1111"), old).await.unwrap();
+        let opened = unlock(&guard, &store, pin("111111"), old).await.unwrap();
         assert_eq!(*opened, *password);
 
         let confirmed = confirm_change(&guard, &store, &new).await;
@@ -896,7 +917,7 @@ mod tests {
             )
             .await
             .unwrap();
-        new_wallet(&store, "1111").await;
+        new_wallet(&store, "111111").await;
         assert_eq!(store.read(PENDING_KEY_KEY).await.unwrap(), None);
     }
 
@@ -904,8 +925,8 @@ mod tests {
     async fn forget_removes_a_pending_key() {
         let store = AppSecretStore::in_memory();
         let guard = PinGuard::new(PinPolicy::DEFAULT);
-        let (_, sealed) = new_wallet(&store, "1111").await;
-        change_pin(&guard, &store, "1111", &sealed, "2222")
+        let (_, sealed) = new_wallet(&store, "111111").await;
+        change_pin(&guard, &store, "111111", &sealed, "222222")
             .await
             .unwrap();
         forget(&store).await.unwrap();

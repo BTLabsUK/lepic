@@ -46,8 +46,9 @@ final wallet = await EpicWallet.create(
   for one wallet would delay attempts for another.
 - For PIN unlock use `EpicWallet.createWithPin` and `EpicWallet.openWithPin`: LEPIC generates the
   wallet password, seals it under the PIN together with a random key it writes into the store as
-  `lepic.pin-key`, and returns only the sealed text, which the app stores. PINs have at least four
-  characters. Every attempt is counted in the store as `lepic.pin-failures`. The first three
+  `lepic.pin-key`, and returns only the sealed text, which the app stores. A new PIN, in
+  `createWithPin`, `importWalletSeedWithPin` and `changePin`, has at least six characters; a
+  shorter PIN set by an earlier version still opens its sealed text. Every attempt is counted in the store as `lepic.pin-failures`. The first three
   attempts never wait; after the third failure each attempt first waits 30 s, twice as long after
   each further failure, up to an hour. A right PIN clears the count.
 - Store the sealed text before showing the recovery phrase or receiving funds. If the app stops

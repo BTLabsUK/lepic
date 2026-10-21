@@ -11,7 +11,7 @@ use crate::api::wallet::{EpicWallet, PinWallet, delete_wallet};
 use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
 
-const PIN: &str = "4711";
+const PIN: &str = "471100";
 
 /// Store keys next to `lepic.vault`; apps may see them in their store.
 const PIN_KEY: &str = "lepic.pin-key";
@@ -79,7 +79,7 @@ fn kind<T>(result: Result<T, WalletError>) -> WalletErrorKind {
 #[tokio::test]
 async fn create_with_pin_rejects_a_short_pin() {
     let fixture = Fixture::new();
-    for pin in ["", "1", "123"] {
+    for pin in ["", "1", "123", "12345"] {
         let store = AppSecretStore::in_memory();
         let created = EpicWallet::create_with_pin(
             &fixture.runtime,
@@ -120,11 +120,11 @@ async fn wrong_pins_are_counted_in_the_app_store_until_one_is_right() {
     let sealed = created.sealed_password.clone();
     let wrong = created
         .wallet
-        .mnemonic_with_pin("0000".to_owned(), sealed.clone())
+        .mnemonic_with_pin("000000".to_owned(), sealed.clone())
         .await;
     assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
     drop(created);
-    let wrong = fixture.open_with_pin(&store, "0000", &sealed).await;
+    let wrong = fixture.open_with_pin(&store, "000000", &sealed).await;
     assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
     assert_eq!(
         store.read(FAILURES_KEY).await.unwrap().as_deref(),
@@ -151,11 +151,11 @@ async fn delete_wallet_removes_the_pin_entries() {
     let sealed = created.sealed_password.clone();
     let pending = created
         .wallet
-        .change_pin(sealed.clone(), PIN.to_owned(), "2468".to_owned())
+        .change_pin(sealed.clone(), PIN.to_owned(), "246802".to_owned())
         .await;
     assert!(pending.is_ok());
     drop(created);
-    let wrong = fixture.open_with_pin(&store, "0000", &sealed).await;
+    let wrong = fixture.open_with_pin(&store, "000000", &sealed).await;
     assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
 
     delete_wallet(&fixture.runtime, fixture.config(), &store)
@@ -186,7 +186,7 @@ async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
     let phrase = wallet.mnemonic_with_pin(PIN.to_owned(), sealed.clone());
     assert_eq!(kind(phrase.await), WalletErrorKind::Locked);
     // Refused before the PIN was tried, so it costs no attempt.
-    let phrase = wallet.mnemonic_with_pin("0000".to_owned(), sealed.clone());
+    let phrase = wallet.mnemonic_with_pin("000000".to_owned(), sealed.clone());
     assert_eq!(kind(phrase.await), WalletErrorKind::Locked);
     assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
     assert_eq!(
@@ -351,7 +351,7 @@ async fn create_with_pin_keeps_the_key_of_a_wallet_in_the_store() {
         ..fixture.config()
     };
     let again =
-        EpicWallet::create_with_pin(&fixture.runtime, config, &store, None, "9876".to_owned());
+        EpicWallet::create_with_pin(&fixture.runtime, config, &store, None, "987654".to_owned());
     assert_eq!(kind(again.await), WalletErrorKind::WalletAlreadyExists);
     assert_eq!(store.read(PIN_KEY).await.unwrap(), key);
     assert!(fixture.open_with_pin(&store, PIN, &sealed).await.is_ok());
@@ -379,7 +379,7 @@ async fn a_second_runtime_cannot_open_a_directory_in_use() {
         &other,
         fixture.config(),
         &store,
-        "0000".to_owned(),
+        "000000".to_owned(),
         created.sealed_password.clone(),
     )
     .await;
@@ -669,7 +669,7 @@ async fn a_pin_change_opens_both_pairs_until_it_is_confirmed() {
     assert_eq!(kind(short), WalletErrorKind::InvalidArgument);
     assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
     let wrong = wallet
-        .change_pin(old_sealed.clone(), "0000".to_owned(), "2468".to_owned())
+        .change_pin(old_sealed.clone(), "000000".to_owned(), "246802".to_owned())
         .await;
     assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
     assert_eq!(
@@ -678,12 +678,12 @@ async fn a_pin_change_opens_both_pairs_until_it_is_confirmed() {
     );
 
     let new_sealed = wallet
-        .change_pin(old_sealed.clone(), PIN.to_owned(), "2468".to_owned())
+        .change_pin(old_sealed.clone(), PIN.to_owned(), "246802".to_owned())
         .await
         .unwrap();
     assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
     let phrase = wallet
-        .mnemonic_with_pin("2468".to_owned(), new_sealed.clone())
+        .mnemonic_with_pin("246802".to_owned(), new_sealed.clone())
         .await
         .unwrap();
     assert_eq!(
@@ -707,18 +707,18 @@ async fn a_pin_change_opens_both_pairs_until_it_is_confirmed() {
     for (pin, sealed) in [
         (PIN, &old_sealed),
         (PIN, &new_sealed),
-        ("2468", &old_sealed),
+        ("246802", &old_sealed),
     ] {
         let opened = fixture.open_with_pin(&store, pin, sealed).await;
         assert_eq!(kind(opened), WalletErrorKind::WrongPassword, "{pin}");
     }
     let opened = fixture
-        .open_with_pin(&store, "2468", &new_sealed)
+        .open_with_pin(&store, "246802", &new_sealed)
         .await
         .unwrap();
     assert_eq!(
         opened
-            .mnemonic_with_pin("2468".to_owned(), new_sealed)
+            .mnemonic_with_pin("246802".to_owned(), new_sealed)
             .await
             .unwrap(),
         phrase
@@ -769,7 +769,11 @@ async fn a_short_new_pin_is_refused_before_the_old_pin_is_counted() {
     let started = std::time::Instant::now();
     let changed = created
         .wallet
-        .change_pin(created.sealed_password, "0000".to_owned(), "123".to_owned())
+        .change_pin(
+            created.sealed_password,
+            "000000".to_owned(),
+            "123".to_owned(),
+        )
         .await;
     assert_eq!(kind(changed), WalletErrorKind::InvalidArgument);
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
