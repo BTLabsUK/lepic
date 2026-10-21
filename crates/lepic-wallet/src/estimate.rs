@@ -9,7 +9,7 @@ use crate::account::AccountError;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::selection::{self, Selection, SelectionError, SelectionOptions, SelectionRequest};
-use crate::send::SendError;
+use crate::send::{SendError, spendable_here};
 use crate::wallet::Wallet;
 
 type Choose = fn(&[OutputRecord], &SelectionRequest) -> Result<Selection, SelectionError>;
@@ -74,7 +74,8 @@ where
                             AccountError::UnknownAccount(options.account),
                         )));
                     }
-                    let outputs = repos.outputs(options.account, None)?;
+                    let outputs =
+                        spendable_here(&session.keychain, repos.outputs(options.account, None)?);
                     Ok(choose(&outputs, &options.request(amount, tip, base_fee))?)
                 }))
             })

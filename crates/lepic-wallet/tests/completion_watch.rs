@@ -1,7 +1,8 @@
 //! A transaction the peer can still complete without this wallet: a received payment once its
 //! S2 exists, or a finalized send. Cancelling or expiring one first asks the node whether it
 //! already holds the kernel, and afterwards keeps it watched, so a later refresh confirms it
-//! and restores its outputs if the peer completes it after all.
+//! and restores its outputs if the peer completes it after all. Also: an output restored with
+//! another switch commitment counts in the balance but is never spent.
 
 // Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers
 // that clippy does not treat as test code.
@@ -19,7 +20,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
-use lepic_keychain::{Keychain, Seed};
+use lepic_crypto::Commitment;
+use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_node::mock::{ChainOutput, MockFailure};
 use lepic_node::{LocatedKernel, Propagation, RejectionKind};
 use lepic_primitives::amount::{Amount, Height};
@@ -30,14 +32,15 @@ use lepic_primitives::ser::ProtocolVersion;
 use lepic_primitives::tx::{Transaction, TransactionBody};
 use lepic_slate::codec::WireSlate;
 use lepic_store::{
-    AccountRecord, MemoryStore, OutputRecord, OutputStatus, StoreError, TxId, TxState, WalletStore,
+    AccountRecord, KeyId, MemoryStore, OutputRecord, OutputStatus, StoreError, TxId, TxState,
+    WalletStore,
 };
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::refresh::{RefreshOutcome, UNFINALIZED_RECEIVE_BLOCKS};
 use lepic_wallet::release::RELEASED_WATCH_BLOCKS;
-use lepic_wallet::selection::SelectionStrategy;
-use lepic_wallet::send::{Delivery, SendRequest};
+use lepic_wallet::selection::{SelectionOptions, SelectionStrategy};
+use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{Clock, Ports, ReceiveRequest, StoreOpener, Wallet, WalletError};
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
 use support::{Harness, LOOPBACK, MemoryStores, TestVault, TestWallet, fixed_time, password};
@@ -572,6 +575,87 @@ fn a_receive_with_no_ttl_is_not_expired_after_the_window_while_the_node_pool_hol
         payment.receiver.state(payment.receive_tx),
         TxState::Received
     );
+}
+
+/// An unspent output of the sender's whose commitment uses no switch commitment, as a restore
+/// stores one it rewinds.
+fn odd_switch_output(keychain: &Keychain, child: u32, value: u64) -> OutputRecord {
+    let id = Identifier::new(3, [0, 0, child, 0]).unwrap();
+    let commitment: Commitment = keychain.commit(value, &id, SwitchCommitment::None).unwrap();
+    OutputRecord {
+        id: lepic_primitives::output::OutputIdentifier::new(OutputFeatures::Plain, commitment),
+        key_id: KeyId(id.to_bytes()),
+        ..output(keychain, child, value, OutputFeatures::Plain)
+    }
+}
+
+#[test]
+fn an_output_with_another_switch_commitment_counts_but_is_never_spent() {
+    const ODD: u64 = 50_000_000;
+    let payment = Payment::answered(None);
+    let sender = &payment.sender;
+    sender.cancel(payment.send_tx).unwrap();
+    let odd = odd_switch_output(&sender.keychain, 30, ODD);
+    sender.store.write(|repos| repos.put_output(&odd)).unwrap();
+    let before = sender.wallet.balance(ACCOUNT).unwrap();
+    assert_eq!(before.total, Amount::new(FUNDING + ODD), "it still counts");
+
+    // "Use all": the largest send is paid from the funding output alone.
+    let options = SelectionOptions {
+        minimum_confirmations: 1,
+        strategy: SelectionStrategy::Smallest,
+        ..SelectionOptions::new(ACCOUNT)
+    };
+    let max = sender
+        .harness
+        .block_on(sender.wallet.estimate_max(options))
+        .unwrap();
+    assert!(max.inputs.iter().all(|input| input.id != odd.id), "{max:?}");
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(ACCOUNT, max.amount)
+            },
+            Delivery::Deliver {
+                transport: LOOPBACK,
+                to: Destination::new(PEER.to_owned()),
+            },
+        ))
+        .unwrap();
+    assert_eq!(sent.fee, max.fee);
+
+    // A send it alone could pay does not select it either.
+    let error = sender
+        .harness
+        .block_on(sender.wallet.send(
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(ACCOUNT, Amount::new(ODD / 2))
+            },
+            Delivery::Deliver {
+                transport: LOOPBACK,
+                to: Destination::new(PEER.to_owned()),
+            },
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::Selection(lepic_wallet::selection::SelectionError::NotEnoughFunds { .. })
+        ),
+        "{error:?}"
+    );
+    let stored = sender
+        .outputs()
+        .into_iter()
+        .find(|output| output.id == odd.id)
+        .unwrap();
+    assert_eq!(stored.status, OutputStatus::Unspent);
+    assert_eq!(stored.tx, None);
 }
 
 #[test]

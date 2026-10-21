@@ -61,7 +61,9 @@ use crate::error::WalletError;
 use crate::finalize::{Finalized, FinalizedSlate, PushFailure};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
-use crate::send::{ChangeOutput, Delivery, SendRequest, block_header_version, record_counterparty};
+use crate::send::{
+    ChangeOutput, Delivery, SendRequest, block_header_version, record_counterparty, spendable_here,
+};
 use crate::state::{StateChange, apply_transition, state_name};
 use crate::wallet::Wallet;
 use build::{IssuerContext, final_transaction, verify_message};
@@ -524,7 +526,7 @@ fn pay_stored(
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
     let selection = selection::select(
-        &repos.outputs(request.account, None)?,
+        &spendable_here(env.keychain, repos.outputs(request.account, None)?),
         &SelectionRequest {
             account: request.account,
             amount: i1.amount(),

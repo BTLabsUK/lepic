@@ -53,7 +53,7 @@ use lepic_transport::transport::{Destination, Location, Transport, TransportId};
 use rand_core::CryptoRng;
 use thiserror::Error;
 use tracing::field::Empty;
-use tracing::{Span, info, instrument, warn};
+use tracing::{Span, debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::account::{self, AccountError, next_output_key};
@@ -567,6 +567,34 @@ impl SendEnvironment<'_> {
     }
 }
 
+/// `outputs` without the unspent ones this wallet cannot spend: those whose stored commitment
+/// is not the one their key and value derive with the regular switch commitment, the only one
+/// a transaction here spends with. A restore stores every output whose proof rewinds, so one
+/// created with another switch commitment still counts in the balance; selecting it would only
+/// build a transaction that fails.
+pub(crate) fn spendable_here(keychain: &Keychain, outputs: Vec<OutputRecord>) -> Vec<OutputRecord> {
+    outputs
+        .into_iter()
+        .filter(|output| {
+            if output.status != OutputStatus::Unspent {
+                return true;
+            }
+            let derived = Identifier::from_bytes(&output.key_id.0)
+                .ok()
+                .and_then(|key_id| {
+                    keychain
+                        .commit(output.amount.value(), &key_id, SwitchCommitment::Regular)
+                        .ok()
+                });
+            let spendable = derived == Some(output.id.commitment);
+            if !spendable {
+                debug!(height = %output.height, "output not derived for spending skipped");
+            }
+            spendable
+        })
+        .collect()
+}
+
 /// Selects, builds, encodes and stores an S1 in the caller's store transaction. Every failure
 /// aborts that transaction, so nothing is stored unless the transport can carry the slate.
 fn create_s1(
@@ -582,7 +610,7 @@ fn create_s1(
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
     let base_fee = env.base_fee();
-    let outputs = repos.outputs(request.account, None)?;
+    let outputs = spendable_here(keychain, repos.outputs(request.account, None)?);
     let selection = selection::select(
         &outputs,
         &request
