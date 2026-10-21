@@ -365,3 +365,49 @@ fn a_drain_gives_up_an_unanswered_reply_once_its_message_waited_the_hold_bound()
     assert_eq!(incoming(&world, TxState::Received), 2);
     assert_eq!(undelivered_replies(&mut events), 1);
 }
+
+fn drain(world: &World) -> InboxSummary {
+    world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap()
+}
+
+fn arrived_at(world: &World, msg_id: &str, arrived: jiff::Timestamp) {
+    world
+        .receiver
+        .store()
+        .write(|repos| {
+            repos.put_inbox(&InboxEntry {
+                msg_id: msg_id.to_owned(),
+                status: InboxStatus::Received,
+                received_at: arrived,
+                updated_at: arrived,
+            })
+        })
+        .unwrap();
+}
+
+#[test]
+fn a_held_message_that_first_arrived_after_the_wallet_clock_is_at_its_hold_bound() {
+    let world = quick_receiver();
+    world.relay.set_unroutable(&sender_address(1));
+    let msg_id = post_from(&world, 1, &s1_numbered(1));
+    assert_eq!(drain(&world).held, 1);
+    // The clock moved back since the message arrived.
+    let arrived = support::fixed_time()
+        .checked_add(Duration::from_secs(60 * 60))
+        .unwrap();
+    arrived_at(&world, &msg_id, arrived);
+
+    let settled = drain(&world);
+
+    assert_eq!(
+        settled,
+        InboxSummary {
+            repeated: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(incoming(&world, TxState::Received), 1);
+}

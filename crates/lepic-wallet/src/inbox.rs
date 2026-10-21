@@ -1287,12 +1287,15 @@ where
     }
 
     /// Whether the message `msg_id`, on its try `attempt`, reached the hold bound: this is try
-    /// [`MAX_HOLD_ATTEMPTS`], or it first arrived [`HOLD_PATIENCE`] or longer ago. A message
-    /// without a relay id cannot be told from a new one, so it is not held at all.
+    /// [`MAX_HOLD_ATTEMPTS`], or it first arrived [`HOLD_PATIENCE`] or longer ago, or after the
+    /// wallet clock's now, which only a clock set back explains.
     async fn hold_exhausted(&self, msg_id: Option<&str>, attempt: u32) -> Result<bool, Hold> {
         if attempt >= MAX_HOLD_ATTEMPTS {
             return Ok(true);
         }
+        // A relay gives every message a relay id on a subscription of protocol version 2.0.0 or
+        // later, and marks one it sends without an id as handled as it sends it: that one is
+        // never delivered again, so holding it gains nothing.
         let Some(msg_id) = msg_id.map(str::to_owned) else {
             return Ok(true);
         };
@@ -1303,6 +1306,7 @@ where
             .await?
             .map(|entry| entry.received_at);
         Ok(match (first_seen, now.checked_sub(HOLD_PATIENCE)) {
+            (Some(first_seen), _) if first_seen > now => true,
             (Some(first_seen), Ok(held_from)) => first_seen <= held_from,
             _ => false,
         })
