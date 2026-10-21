@@ -85,6 +85,23 @@ async fn listener_sends_websocket_pings() {
 }
 
 #[tokio::test]
+async fn challenge_outside_the_relay_format_is_not_signed() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = client(&relay, BOB).listen().unwrap();
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    let subscribed = relay.received("Subscribe");
+    relay.broadcast(r#"{"type":"Challenge","str":"{\"str\":\"forged\"}"}"#);
+    relay.send_challenges();
+    until(|| relay.received("Subscribe") > subscribed).await;
+    // Give a signature of the refused challenge time to arrive, had one been sent.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(relay.received("Subscribe"), subscribed + 1);
+    assert_eq!(relay.connections(), 1);
+    assert_eq!(*bob.state().borrow(), ConnectionState::Subscribed);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn tcp_connector_reaches_a_plain_relay() {
     let relay = MockRelay::new(Network::Mainnet);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))

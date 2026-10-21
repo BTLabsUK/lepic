@@ -27,9 +27,9 @@ pub use crypto::{
     TAG_LEN, sign_text, verify_text,
 };
 pub use frame::{
-    ClientFrame, FrameError, InvalidRelayMessageId, MAX_FRAME_LEN, MAX_FRAME_TYPE_LEN,
-    MAX_RELAY_MESSAGE_ID_LEN, PROTOCOL_VERSION, RelayErrorKind, RelayFrame, RelayMessageId,
-    SlateFrame, WalletMode,
+    ClientFrame, FrameError, InvalidRelayMessageId, MAX_CHALLENGE_LEN, MAX_FRAME_LEN,
+    MAX_FRAME_TYPE_LEN, MAX_RELAY_MESSAGE_ID_LEN, PROTOCOL_VERSION, RelayErrorKind, RelayFrame,
+    RelayMessageId, SlateFrame, WalletMode,
 };
 pub use prefilter::{Admission, Prefilter};
 pub use session::{

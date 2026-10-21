@@ -15,6 +15,16 @@ pub const MAX_FRAME_LEN: usize = MAX_MESSAGE_LEN.saturating_add(64 * 1024);
 /// or a log.
 pub const MAX_FRAME_TYPE_LEN: usize = 64;
 
+/// The relay's challenges are short random tokens of letters and digits; the mock relay adds
+/// `-`. The address key signs a challenge, so nothing else, such as message text, is signed as
+/// one.
+pub const MAX_CHALLENGE_LEN: usize = 64;
+
+fn is_challenge(text: &str) -> bool {
+    let allowed = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-';
+    !text.is_empty() && text.len() <= MAX_CHALLENGE_LEN && text.bytes().all(allowed)
+}
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FrameError {
@@ -34,6 +44,8 @@ pub enum FrameError {
     UnknownClientType { type_name: String },
     #[error("frame could not be signed")]
     Signature(#[source] CryptoError),
+    #[error("challenge is empty, longer than {MAX_CHALLENGE_LEN} bytes or not [A-Za-z0-9-]")]
+    Challenge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +103,9 @@ impl ClientFrame {
         challenge: &str,
         key: &SecretKey,
     ) -> Result<Self, FrameError> {
+        if !is_challenge(challenge) {
+            return Err(FrameError::Challenge);
+        }
         Ok(Self::Subscribe {
             address: own.key_text(),
             ver: PROTOCOL_VERSION.to_owned(),
@@ -313,9 +328,13 @@ impl RelayFrame {
         }
         let type_name = probe_type(text)?;
         Ok(match type_name.as_str() {
-            "Challenge" => Self::Challenge {
-                str: fields::<TextFields>(text, type_name)?.str,
-            },
+            "Challenge" => {
+                let challenge = fields::<TextFields>(text, type_name)?.str;
+                if !is_challenge(&challenge) {
+                    return Err(FrameError::Challenge);
+                }
+                Self::Challenge { str: challenge }
+            }
             // The probe has read the whole frame, and `Ok` has no fields.
             "Ok" => Self::Ok,
             "Error" => {

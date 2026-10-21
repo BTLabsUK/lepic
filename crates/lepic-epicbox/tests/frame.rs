@@ -10,9 +10,9 @@
 use lepic_crypto::EcdsaSignature;
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::{
-    ClientFrame, Domain, EpicboxAddress, FrameError, MAX_FRAME_LEN, MAX_FRAME_TYPE_LEN,
-    MAX_RELAY_MESSAGE_ID_LEN, Network, Nonce, PROTOCOL_VERSION, RelayErrorKind, RelayFrame,
-    RelayMessageId, Salt, SignedMessage, SlateFrame, WalletMode, verify_text,
+    ClientFrame, Domain, EpicboxAddress, FrameError, MAX_CHALLENGE_LEN, MAX_FRAME_LEN,
+    MAX_FRAME_TYPE_LEN, MAX_RELAY_MESSAGE_ID_LEN, Network, Nonce, PROTOCOL_VERSION, RelayErrorKind,
+    RelayFrame, RelayMessageId, Salt, SignedMessage, SlateFrame, WalletMode, verify_text,
 };
 use proptest::prelude::*;
 
@@ -295,6 +295,55 @@ fn rejects_known_type_with_missing_fields() {
 }
 
 #[test]
+fn rejects_challenge_outside_the_relay_format() {
+    for text in [
+        r#"{"type":"Challenge","str":"{\"destination\":{}}"}"#,
+        r#"{"type":"Challenge","str":""}"#,
+        r#"{"type":"Challenge","str":"has space"}"#,
+    ] {
+        assert!(
+            matches!(RelayFrame::from_json(text), Err(FrameError::Challenge)),
+            "{text}"
+        );
+    }
+    let long = format!(
+        r#"{{"type":"Challenge","str":"{}"}}"#,
+        "a".repeat(MAX_CHALLENGE_LEN + 1)
+    );
+    assert!(matches!(
+        RelayFrame::from_json(&long),
+        Err(FrameError::Challenge)
+    ));
+}
+
+#[test]
+fn accepts_challenges_in_the_relay_format() {
+    for challenge in [
+        "7WUDtkSaKyGRUnQ22rE3QUXChV8DmA6NnunDYP4vheTpc",
+        "Rk4pW7nZ2cT9sLb3XyQ6vH1mJ8dG5fUa",
+        "mock-challenge-1",
+    ] {
+        let text = format!(r#"{{"type":"Challenge","str":"{challenge}"}}"#);
+        assert_eq!(
+            RelayFrame::from_json(&text).unwrap(),
+            RelayFrame::Challenge {
+                str: challenge.to_owned()
+            }
+        );
+    }
+    let longest = "a".repeat(MAX_CHALLENGE_LEN);
+    assert!(ClientFrame::subscribe(&address(1, None), &longest, &secret(1)).is_ok());
+}
+
+#[test]
+fn refuses_to_sign_a_challenge_outside_the_relay_format() {
+    assert!(matches!(
+        ClientFrame::subscribe(&address(1, None), r#"{"str":"x"}"#, &secret(1)),
+        Err(FrameError::Challenge)
+    ));
+}
+
+#[test]
 fn rejects_known_type_with_mistyped_fields() {
     assert!(matches!(
         RelayFrame::from_json(r#"{"type":"Challenge","str":7}"#),
@@ -426,7 +475,7 @@ fn relay_frame() -> impl Strategy<Value = RelayFrame> {
         "[a-z]{1,8}".prop_map(RelayErrorKind::Other),
     ];
     prop_oneof![
-        wire_text().prop_map(|str| RelayFrame::Challenge { str }),
+        "[A-Za-z0-9-]{1,64}".prop_map(|str| RelayFrame::Challenge { str }),
         Just(RelayFrame::Ok),
         (kind, wire_text()).prop_map(|(kind, description)| RelayFrame::Error { kind, description }),
         (
