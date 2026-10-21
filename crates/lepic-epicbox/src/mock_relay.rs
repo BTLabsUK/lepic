@@ -118,6 +118,8 @@ struct RelayState {
     listeners: HashMap<String, u64>,
     messages: Vec<Stored>,
     refusing: bool,
+    /// Keys of addresses whose posts are answered `InvalidRequest`.
+    unroutable: HashSet<String>,
     stalling: bool,
     stalled: Vec<DuplexStream>,
     unanswered: HashSet<Unanswered>,
@@ -142,6 +144,7 @@ impl MockRelay {
                     listeners: HashMap::new(),
                     messages: Vec::new(),
                     refusing: false,
+                    unroutable: HashSet::new(),
                     stalling: false,
                     stalled: Vec::new(),
                     unanswered: HashSet::new(),
@@ -177,6 +180,14 @@ impl MockRelay {
     /// Refuses new connections, as an unreachable relay does.
     pub fn set_refusing(&self, refusing: bool) {
         self.update(|state| state.refusing = refusing);
+    }
+
+    /// Answers posts to `address` with `InvalidRequest`, as the relay does when it cannot
+    /// forward a message to the address's domain.
+    pub fn set_unroutable(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.unroutable.insert(address.key_text());
+        });
     }
 
     /// Accepts new connections but never answers on them, as a relay stuck mid-handshake does.
@@ -708,13 +719,20 @@ impl RelayState {
     fn post_slate(&mut self, id: u64, network: Network, message: &Value) {
         let from = text_field(message, "from");
         let to = text_field(message, "to");
-        let (Ok(sender), Ok(_)) = (
+        let (Ok(sender), Ok(recipient)) = (
             EpicboxAddress::parse(from, network),
             EpicboxAddress::parse(to, network),
         ) else {
             self.send(id, error("InvalidRequest", "Wrong address format."));
             return;
         };
+        if self.unroutable.contains(&recipient.key_text()) {
+            self.send(
+                id,
+                error("InvalidRequest", "Error forward slate to foreign epicbox."),
+            );
+            return;
+        }
         let str = text_field(message, "str");
         let signature = text_field(message, "signature");
         if !signed_by(&sender.key_text(), network, str, signature) {
