@@ -45,6 +45,10 @@ pub const TIP_STEP_BLOCKS: u64 = 60;
 /// Blocks a second tip asked for within one refresh may lead the first by.
 pub const TIP_AGREEMENT_BLOCKS: u64 = 3;
 
+/// Blocks a peer's slate height may lead this wallet's tip by, for a peer whose node has seen
+/// a few blocks more. A slate further ahead is refused.
+pub const SLATE_LEAD_BLOCKS: u64 = 10;
+
 /// Timestamp of the mainnet and floonet genesis blocks of Epic node v4.0.4, 2019-08-09
 /// 17:04:38 UTC.
 const GENESIS_SECONDS: i64 = 1_565_370_278;
@@ -313,6 +317,19 @@ pub(crate) fn check_kernel_height(
         return Err(ImplausibleNodeData::KernelOutOfRange { height, min, tip });
     }
     Ok(())
+}
+
+/// The lowest height to look a kernel up from, for a slate created at `slate_height`, when
+/// looking up to `tip`. A slate height can come from the peer, which may be ahead of this
+/// wallet by [`SLATE_LEAD_BLOCKS`] or report a height the chain has not reached, so the lookup
+/// starts that many blocks lower and never above the tip. A node answers a lookup from above
+/// its tip, or from height zero, with an error rather than with no kernel, so the floor is
+/// kept between one and the tip.
+pub(crate) fn kernel_floor(slate_height: Height, tip: Height) -> Height {
+    let lowered = slate_height
+        .checked_sub_blocks(SLATE_LEAD_BLOCKS)
+        .unwrap_or(Height::ZERO);
+    lowered.min(tip).max(Height::new(1))
 }
 
 /// An output MMR index is at most the positions every block up to and including the tip can
@@ -611,6 +628,16 @@ mod tests {
         assert!(check_kernel_height(Height::new(5), Height::new(5), tip).is_ok());
         assert!(check_kernel_height(Height::new(4), Height::new(5), tip).is_err());
         assert!(check_kernel_height(Height::new(11), Height::new(5), tip).is_err());
+    }
+
+    #[test]
+    fn kernel_floor_stays_between_one_and_the_tip() {
+        let tip = Height::new(1_000);
+        let lead = SLATE_LEAD_BLOCKS;
+        assert_eq!(kernel_floor(Height::new(500), tip), Height::new(500 - lead));
+        assert_eq!(kernel_floor(Height::new(u64::MAX), tip), tip);
+        assert_eq!(kernel_floor(Height::ZERO, tip), Height::new(1));
+        assert_eq!(kernel_floor(Height::new(lead), tip), Height::new(1));
     }
 
     #[test]

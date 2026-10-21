@@ -32,8 +32,8 @@ use lepic_primitives::ser::ProtocolVersion;
 use lepic_primitives::tx::{Transaction, TransactionBody};
 use lepic_slate::codec::WireSlate;
 use lepic_store::{
-    AccountRecord, KeyId, MemoryStore, OutputRecord, OutputStatus, StoreError, TxId, TxState,
-    WalletStore,
+    AccountRecord, KeyId, MemoryStore, OutputRecord, OutputStatus, SlateStage, StoreError,
+    StoredSlate, TxId, TxState, WalletStore,
 };
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::finalize::FinalizeError;
@@ -43,7 +43,9 @@ use lepic_wallet::selection::{SelectionOptions, SelectionStrategy};
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{Clock, Ports, ReceiveRequest, StoreOpener, Wallet, WalletError};
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
+use serde_json::Value;
 use support::{Harness, LOOPBACK, MemoryStores, TestVault, TestWallet, fixed_time, password};
+use uuid::Uuid;
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -673,4 +675,99 @@ fn a_pooled_transaction_with_another_kernel_does_not_stop_a_cancel() {
         payment.receiver.state(payment.receive_tx),
         TxState::Cancelled
     );
+}
+
+/// A slate height far above any chain, which a wallet that did not check the peer's height
+/// may have stored.
+const FAR_HEIGHT: u64 = 1_000_000_000_000;
+
+/// `bytes`, a stored slate's JSON, under the slate id `id` and with its height set to `height`.
+fn slate_moved(bytes: &[u8], id: Uuid, height: u64) -> Vec<u8> {
+    let mut slate: Value = serde_json::from_slice(bytes).unwrap();
+    slate["id"] = Value::String(id.to_string());
+    slate["height"] = match slate["height"] {
+        Value::String(_) => Value::String(height.to_string()),
+        _ => Value::from(height),
+    };
+    slate.to_string().into_bytes()
+}
+
+/// Stores a copy of the transaction `tx_id` and its slate at `stage` under a new slate id, with
+/// the slate's height set to `height`, as a database written before slate heights were checked
+/// may hold one. The copy holds no outputs.
+fn stored_copy(store: &MemoryStore, tx_id: TxId, stage: SlateStage, height: u64) -> TxId {
+    let id = Uuid::from_u128(u128::from(height) + 7);
+    store
+        .write(|repos| {
+            let mut entry = repos.transaction(tx_id)?.unwrap();
+            let slate = repos.slate(entry.slate_id.unwrap(), stage)?.unwrap();
+            entry.slate_id = Some(id);
+            entry.amount_credited = Amount::ZERO;
+            let copy = repos.insert_transaction(&entry)?;
+            repos.insert_slate(&StoredSlate {
+                slate_id: id,
+                stage,
+                codec: slate.codec,
+                bytes: slate_moved(&slate.bytes, id, height),
+            })?;
+            Ok::<_, StoreError>(copy)
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_receive_stored_with_a_height_above_the_tip_can_be_cancelled() {
+    let payment = Payment::answered(None);
+    let copy = stored_copy(
+        &payment.receiver.store,
+        payment.receive_tx,
+        SlateStage::Standard2,
+        FAR_HEIGHT,
+    );
+
+    payment.receiver.cancel(copy).unwrap();
+
+    assert_eq!(payment.receiver.state(copy), TxState::Cancelled);
+}
+
+#[test]
+fn a_receive_stored_with_a_height_above_the_tip_expires_without_stopping_refresh() {
+    let payment = Payment::answered(None).finalized();
+    let copy = stored_copy(
+        &payment.receiver.store,
+        payment.receive_tx,
+        SlateStage::Standard2,
+        FAR_HEIGHT,
+    );
+    payment.receiver.refresh();
+    let window_end = payment.tip() + UNFINALIZED_RECEIVE_BLOCKS;
+
+    payment.receiver_follows_to(window_end);
+
+    assert_eq!(payment.receiver.state(copy), TxState::Expired);
+    assert_eq!(payment.receiver.state(payment.receive_tx), TxState::Expired);
+    // The payment the copy was made from is still watched and restored when mined.
+    let mined = window_end + 1;
+    payment.mined_at(mined);
+    payment.chain_reaches(mined);
+    payment.receiver.refresh();
+    payment.assert_receive_restored(mined);
+}
+
+#[test]
+fn a_kernel_lookup_the_node_refuses_keeps_the_payment_open_until_a_later_refresh() {
+    let payment = Payment::answered(Some(TTL_BLOCKS)).finalized();
+    payment.chain_reaches(TIP + TTL_BLOCKS);
+    payment
+        .node()
+        .fail_next("get_kernel", MockFailure::Rejected(RejectionKind::Internal));
+
+    payment.receiver.refresh();
+    assert_eq!(
+        payment.receiver.state(payment.receive_tx),
+        TxState::Received
+    );
+
+    payment.receiver.refresh();
+    assert_eq!(payment.receiver.state(payment.receive_tx), TxState::Expired);
 }

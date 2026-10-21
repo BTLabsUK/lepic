@@ -90,6 +90,12 @@ impl ChainState {
         };
         let min = params.get(1).and_then(Value::as_u64).map(Height::new);
         let max = params.get(2).and_then(Value::as_u64).map(Height::new);
+        // The node reads the header below `min`, and answers a height it has no header for
+        // with an internal error, not with `NotFound`.
+        let tip = self.tip.height.value();
+        if min.is_some_and(|min| min.value() == 0 || min.value() > tip.saturating_add(1)) {
+            return Answer::Rejected(json!({"Internal": "header not found"}));
+        }
         let found = self.kernels.iter().find(|located| {
             located.kernel.excess.to_hex().eq_ignore_ascii_case(excess)
                 && min.is_none_or(|min| located.height >= min)

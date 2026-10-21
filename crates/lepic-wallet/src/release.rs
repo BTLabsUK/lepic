@@ -32,7 +32,7 @@ use crate::chain;
 use crate::error::WalletError;
 use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::refresh::{RefreshError, balance_height, final_kernel, legacy_codecs};
+use crate::refresh::{RefreshError, balance_height, final_kernel, legacy_codecs, unless_refused};
 use crate::state::{StateChange, apply_transition, confirm_released, state_name};
 use crate::wallet::Wallet;
 
@@ -496,14 +496,18 @@ where
             if until < send.min_height {
                 continue;
             }
-            let kernel = self
+            let floor = chain::kernel_floor(send.min_height, until);
+            let answer = self
                 .ports()
                 .node
-                .get_kernel(&send.excess, Some(send.min_height), Some(until))
-                .await?;
+                .get_kernel(&send.excess, Some(floor), Some(until))
+                .await;
+            let Some(kernel) = unless_refused(tx_id, answer)? else {
+                continue;
+            };
             match kernel {
                 Some(kernel) => {
-                    chain::check_kernel_height(kernel.height, send.min_height, until)?;
+                    chain::check_kernel_height(kernel.height, floor, until)?;
                     debug!(tx_id = %tx_id, height = %kernel.height, "released send found on chain");
                     mined.push((tx_id, account, send, kernel.height));
                 }

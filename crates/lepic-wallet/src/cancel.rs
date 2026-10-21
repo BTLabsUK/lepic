@@ -18,6 +18,7 @@ use lepic_store::{
 };
 use tracing::{debug, info, instrument};
 
+use crate::chain;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{forget_receive_seen, legacy_codecs, pending_kernel};
@@ -89,8 +90,9 @@ where
             }
             let tip = node.get_tip().await.map_err(WalletError::Node)?.height;
             self.check_plausible_tip(&session, tip).await?;
+            let floor = chain::kernel_floor(min_height, tip);
             let kernel = node
-                .get_kernel(&excess, Some(min_height), Some(tip))
+                .get_kernel(&excess, Some(floor), Some(tip))
                 .await
                 .map_err(WalletError::Node)?;
             if let Some(kernel) = kernel {
@@ -99,7 +101,7 @@ where
             }
             watch = Some(Watch {
                 excess,
-                min_height,
+                min_height: floor,
                 ended_at: tip,
             });
         }

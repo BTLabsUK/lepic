@@ -230,13 +230,17 @@ where
         let mut kernel_confirmed = Vec::new();
         let mut kernel_missing = BTreeSet::new();
         for lookup in lookups {
-            let kernel = node
-                .get_kernel(&lookup.excess, Some(lookup.min_height), Some(tip.height))
-                .await?;
+            let floor = chain::kernel_floor(lookup.min_height, tip.height);
+            let answer = node
+                .get_kernel(&lookup.excess, Some(floor), Some(tip.height))
+                .await;
+            let Some(kernel) = unless_refused(lookup.tx_id, answer)? else {
+                continue;
+            };
             match kernel {
                 Some(kernel) => {
                     self.cover(&mut tip, kernel.height).await?;
-                    chain::check_kernel_height(kernel.height, lookup.min_height, tip.height)?;
+                    chain::check_kernel_height(kernel.height, floor, tip.height)?;
                     kernel_confirmed.push((lookup.tx_id, kernel.height));
                 }
                 None => {
@@ -350,14 +354,18 @@ where
                 absent.push(tx_id);
                 continue;
             }
-            let kernel = self
+            let floor = chain::kernel_floor(check.min_height, tip);
+            let answer = self
                 .ports()
                 .node
-                .get_kernel(&check.excess, Some(check.min_height), Some(tip))
-                .await?;
+                .get_kernel(&check.excess, Some(floor), Some(tip))
+                .await;
+            let Some(kernel) = unless_refused(tx_id, answer)? else {
+                continue;
+            };
             match kernel {
                 Some(kernel) => {
-                    chain::check_kernel_height(kernel.height, check.min_height, tip)?;
+                    chain::check_kernel_height(kernel.height, floor, tip)?;
                     confirmed.push((tx_id, kernel.height));
                 }
                 None => absent.push(tx_id),
@@ -382,7 +390,8 @@ where
     /// The transactions due to expire whose kernel, if one is known, neither the node's pool
     /// nor its chain up to the tip holds: the peer may have completed one that it does hold.
     /// The pool is asked first, so a transaction that leaves it for a block between the two
-    /// lookups is found on chain.
+    /// lookups is found on chain. A transaction whose lookup fails counts as held
+    /// and is decided by a later refresh.
     async fn not_held(
         &self,
         candidates: &[(TxId, Option<KernelAt>)],
@@ -392,18 +401,27 @@ where
         let mut cleared = BTreeSet::new();
         for &(tx_id, kernel) in candidates {
             if let Some((excess, min_height)) = kernel {
-                if pool_holds(node, &excess).await? {
-                    debug!(tx_id = %tx_id, "kernel found in the node pool");
-                    continue;
+                match unless_refused(tx_id, pool_holds(node, &excess).await)? {
+                    Some(true) => {
+                        debug!(tx_id = %tx_id, "kernel found in the node pool");
+                        continue;
+                    }
+                    Some(false) => {}
+                    None => continue,
                 }
-                if let Some(kernel) = node
-                    .get_kernel(&excess, Some(min_height), Some(tip.height))
-                    .await?
-                {
-                    self.cover(tip, kernel.height).await?;
-                    chain::check_kernel_height(kernel.height, min_height, tip.height)?;
-                    debug!(tx_id = %tx_id, height = %kernel.height, "kernel found on chain");
-                    continue;
+                let floor = chain::kernel_floor(min_height, tip.height);
+                let answer = node
+                    .get_kernel(&excess, Some(floor), Some(tip.height))
+                    .await;
+                match unless_refused(tx_id, answer)? {
+                    Some(Some(kernel)) => {
+                        self.cover(tip, kernel.height).await?;
+                        chain::check_kernel_height(kernel.height, floor, tip.height)?;
+                        debug!(tx_id = %tx_id, height = %kernel.height, "kernel found on chain");
+                        continue;
+                    }
+                    Some(None) => {}
+                    None => continue,
                 }
             }
             cleared.insert(tx_id);
@@ -688,6 +706,23 @@ fn confirm_all(
     Ok(changes)
 }
 
+/// The node's answer to a lookup for one transaction, or `None` when the node refused that
+/// lookup, which is then left to a later refresh rather than failing this one. Any other
+/// failure still fails the refresh.
+pub(crate) fn unless_refused<T>(
+    tx_id: TxId,
+    answer: Result<T, NodeError>,
+) -> Result<Option<T>, NodeError> {
+    match answer {
+        Ok(answer) => Ok(Some(answer)),
+        Err(error @ NodeError::Rejected { .. }) => {
+            warn!(tx_id = %tx_id, error = %ErrorChain(&error), "kernel lookup refused");
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// The height a release check counts at, the highest confirmed tip but not above `tip`, and
 /// the sends due for a check there. A tip held as pending does not count, so one implausible
 /// answer cannot make a send releasable.
@@ -919,7 +954,8 @@ fn expire_all(
             continue;
         }
         if let Some((excess, min_height)) = kernel {
-            record_watch(repos, stored.id, excess, min_height, tip)?;
+            let floor = chain::kernel_floor(min_height, tip);
+            record_watch(repos, stored.id, excess, floor, tip)?;
         }
         changes.extend(expire(repos, &stored, now)?);
     }
