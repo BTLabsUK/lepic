@@ -23,7 +23,7 @@ use jiff::{SignedDuration, Timestamp};
 use lepic_crypto::Commitment;
 use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_node::mock::{ChainOutput, MockFailure};
-use lepic_node::{LocatedKernel, Propagation, RejectionKind};
+use lepic_node::{LocatedKernel, NodeError, Propagation, RejectionKind};
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::crypto_ser::BlindingFactor;
 use lepic_primitives::output::OutputFeatures;
@@ -798,4 +798,62 @@ fn payments_due_to_expire_ask_the_node_pool_once_per_refresh() {
     assert_eq!(pool_requests(&payment) - before, 1);
     assert_eq!(payment.receiver.state(copy), TxState::Expired);
     assert_eq!(payment.receiver.state(payment.receive_tx), TxState::Expired);
+}
+
+#[test]
+fn a_receiver_cancel_after_answering_is_refused_while_the_node_tip_is_implausible() {
+    let payment = Payment::answered(None);
+    payment
+        .node()
+        .update_chain(|chain| chain.tip.height = Height::new(FAR_HEIGHT));
+
+    let error = payment.receiver.cancel(payment.receive_tx).unwrap_err();
+
+    // Whichever layer refuses the tip, the node client or the wallet, nothing is cancelled.
+    assert!(
+        matches!(
+            error,
+            WalletError::Implausible(_) | WalletError::Node(NodeError::ImplausibleTip { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        payment.receiver.state(payment.receive_tx),
+        TxState::Received
+    );
+    assert_eq!(payment.receiver.outputs(), vec![payment.received.clone()]);
+}
+
+#[test]
+fn a_late_payment_takes_over_the_output_a_scan_restored_first() {
+    let payment = Payment::answered(None);
+    payment.receiver.cancel(payment.receive_tx).unwrap();
+    let payment = payment.finalized();
+    payment.mined_at(TIP + 1);
+    payment.chain_reaches(TIP + 1);
+    let entries = |side: &Side| {
+        side.store
+            .read(|repos| repos.transactions(ACCOUNT))
+            .unwrap()
+            .len()
+    };
+    let before = entries(&payment.receiver);
+    support::complete_restore_scan(&payment.receiver.harness.runtime, &payment.receiver.wallet);
+    let restored = payment.receiver.outputs();
+    assert_eq!(restored.len(), 1, "the scan restores the output");
+    assert_ne!(restored[0].tx, Some(payment.receive_tx));
+    assert_eq!(
+        entries(&payment.receiver),
+        before + 1,
+        "under an entry of its own"
+    );
+
+    payment.receiver.refresh();
+
+    payment.assert_receive_restored(TIP + 1);
+    assert_eq!(
+        entries(&payment.receiver),
+        before,
+        "the restored entry is dropped"
+    );
 }

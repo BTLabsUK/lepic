@@ -345,3 +345,74 @@ fn a_payment_stored_with_a_height_above_the_tip_can_be_cancelled() {
     let state = invoice.payer.read(|repos| repos.transaction(copy));
     assert_eq!(state.unwrap().state, TxState::Cancelled);
 }
+
+const TTL_BLOCKS: u64 = 10;
+
+/// The invoice paid with a TTL, and the I2 the issuer finalized and posted; the node records
+/// the post but neither pools nor mines it.
+fn paid_with_ttl() -> (Invoice, TxId, Vec<OutputRecord>) {
+    let invoice = Invoice::issued();
+    let i2 = invoice
+        .payer
+        .pay(
+            &invoice.i1,
+            PayRequest {
+                ttl_blocks: Some(TTL_BLOCKS),
+                ..request()
+            },
+        )
+        .unwrap()
+        .reply;
+    let (tx_id, _) = invoice.payment().unwrap();
+    let change = invoice.change();
+    assert_eq!(change.len(), 1);
+    invoice.issuer.finalize(&i2).unwrap();
+    (invoice, tx_id, change)
+}
+
+#[test]
+fn a_payment_past_its_ttl_is_not_expired_while_the_node_pool_holds_the_issuers_post() {
+    let (invoice, tx_id, change) = paid_with_ttl();
+    let posted = invoice.posted();
+    invoice.node.update_chain(|chain| {
+        chain.pool.push(posted);
+        chain.tip.height = Height::new(TIP + TTL_BLOCKS);
+    });
+
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+
+    assert_eq!(invoice.payment(), Some((tx_id, TxState::Sent)));
+    assert_eq!(invoice.change(), change);
+}
+
+#[test]
+fn a_payment_expired_at_its_ttl_is_watched_and_restored_when_the_issuer_posts_later() {
+    let (invoice, tx_id, change_before) = paid_with_ttl();
+    invoice
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + TTL_BLOCKS));
+
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+    assert_eq!(invoice.payment(), Some((tx_id, TxState::Expired)));
+    assert!(invoice.change().is_empty(), "the expiry drops the change");
+
+    // The issuer's post reaches another node, which mines it.
+    invoice.mined_at(TIP + TTL_BLOCKS + 1);
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+
+    assert_eq!(invoice.payment(), Some((tx_id, TxState::Confirmed)));
+    let change = invoice.change();
+    assert_eq!(change.len(), 1, "{change:?}");
+    assert_eq!(change[0].id, change_before[0].id);
+    assert_eq!(change[0].status, OutputStatus::Unspent);
+    assert_eq!(change[0].height, Height::new(TIP + TTL_BLOCKS + 1));
+}
