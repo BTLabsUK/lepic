@@ -17,12 +17,22 @@ mod support;
 #[path = "inbox/world.rs"]
 mod world;
 
-use lepic_crypto::{PublicKey, SecretKey};
+use lepic_crypto::{Commitment, PublicKey, RangeProof, SecretKey, Signature};
 use lepic_epicbox::{Domain, EpicboxAddress, Network as RelayNetwork, Nonce, Salt, SignedMessage};
+use lepic_node::LocatedKernel;
+use lepic_node::mock::{ChainOutput, MockFailure};
 use lepic_primitives::amount::Height;
+use lepic_primitives::committed::sum_commitments;
+use lepic_primitives::crypto_ser::BlindingFactor;
+use lepic_primitives::kernel::TxKernel;
+use lepic_primitives::tx::{Transaction, TransactionBody};
+use lepic_slate::codec::{MediaType, WireSlate};
 use std::time::Duration;
 
-use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxDirection, TxState, WalletStore};
+use lepic_store::{
+    AccountIndex, InboxEntry, InboxStatus, OutputRecord, OutputStatus, SlateStage, TxDirection,
+    TxId, TxState, WalletStore,
+};
 use lepic_wallet::Event;
 use lepic_wallet::inbox::{
     InboxSummary, ListenHandle, MAX_OPEN_RECEIPTS, MAX_OPEN_RECEIPTS_PER_SENDER,
@@ -191,7 +201,7 @@ fn a_drain_refreshes_the_tip_once_and_refuses_an_s1_expired_at_its_stale_tip() {
 #[test]
 fn open_receipts_from_one_sender_key_are_capped() {
     let world = World::new();
-    let sent = 1_000;
+    let sent = 100;
     for n in 0..sent {
         post_from(&world, 1, &s1_numbered(n));
     }
@@ -223,7 +233,7 @@ fn open_receipts_from_one_sender_key_are_capped() {
 #[test]
 fn open_receipts_over_all_senders_are_capped_by_cancelling_the_oldest() {
     let world = World::new();
-    let sent = 1_000;
+    let sent = u32::try_from(MAX_OPEN_RECEIPTS).unwrap() + 20;
     for n in 0..sent {
         post_from(&world, n, &s1_numbered(n));
     }
@@ -366,10 +376,144 @@ fn a_drain_gives_up_an_unanswered_reply_once_its_message_waited_the_hold_bound()
     assert_eq!(undelivered_replies(&mut events), 1);
 }
 
+/// The receiver's open receipts, oldest first, with the slate id each answers.
+fn open_receipts(world: &World) -> Vec<TxId> {
+    world
+        .receiver
+        .store()
+        .read(|repos| repos.open_receipts("epicbox"))
+        .unwrap()
+        .into_iter()
+        .map(|receipt| receipt.id)
+        .collect()
+}
+
+fn state_of(world: &World, tx_id: TxId) -> TxState {
+    world
+        .receiver
+        .store()
+        .read(|repos| repos.transaction(tx_id))
+        .unwrap()
+        .unwrap()
+        .state
+}
+
+fn receiver_outputs(world: &World) -> Vec<OutputRecord> {
+    world
+        .receiver
+        .store()
+        .read(|repos| repos.outputs(AccountIndex(0), None))
+        .unwrap()
+}
+
+/// The kernel the sender of the receipt `tx_id` would post: the S2 kernel with the excess the
+/// finalized transaction carries.
+fn receipt_kernel(world: &World, tx_id: TxId) -> (TxKernel, Height) {
+    let stored = world
+        .receiver
+        .store()
+        .read(|repos| {
+            let slate_id = repos.transaction(tx_id)?.unwrap().slate_id.unwrap();
+            repos.slate(slate_id, SlateStage::Standard2)
+        })
+        .unwrap()
+        .unwrap();
+    let slate = send_support::legacy_codecs()
+        .decode(&WireSlate::binary(MediaType::JSON, stored.bytes))
+        .unwrap();
+    let body =
+        TransactionBody::from_parts(slate.inputs().to_vec(), slate.outputs().to_vec(), vec![]);
+    let total = sum_commitments(&body, slate.fee().value()).unwrap();
+    let excess = if slate.offset().is_zero() {
+        total
+    } else {
+        let offset = Commitment::commit(0, &slate.offset().to_secret_key().unwrap()).unwrap();
+        Commitment::sum(&[total], &[offset]).unwrap()
+    };
+    // The wallet does not check kernel signatures it looks up, so any signature does.
+    let signature = Signature::from_compact(&[1; 64]).unwrap();
+    (
+        TxKernel::new(slate.kernel_features(), excess, signature),
+        slate.height(),
+    )
+}
+
+/// The world's chain tip.
+const WORLD_TIP: u64 = 10;
+
+/// The output the receiver stored for the receipt `tx_id`.
+fn receipt_output(world: &World, tx_id: TxId) -> OutputRecord {
+    let mut outputs = world
+        .receiver
+        .store()
+        .read(|repos| repos.outputs_of_transaction(tx_id))
+        .unwrap();
+    assert_eq!(outputs.len(), 1);
+    outputs.remove(0)
+}
+
+/// The kernel of the receipt `tx_id` is on chain at the tip, and `output` too.
+fn mine(world: &World, tx_id: TxId, mmr_index: u64, output: Option<OutputRecord>) {
+    let (kernel, _) = receipt_kernel(world, tx_id);
+    world.receiver.harness.node.update_chain(|chain| {
+        chain.kernels.push(LocatedKernel {
+            kernel,
+            height: Height::new(WORLD_TIP),
+            mmr_index,
+        });
+        if let Some(output) = output {
+            chain.outputs.push(ChainOutput {
+                commitment: output.id.commitment,
+                features: output.id.features,
+                // `get_outputs` answers do not carry proofs, so any proof bytes do.
+                proof: RangeProof::from_bytes(&[1; 64]).unwrap(),
+                height: Height::new(WORLD_TIP),
+                mmr_index,
+                spent: false,
+            });
+        }
+    });
+}
+
+/// The node's pool holds the transaction that completes the receipt `tx_id`.
+fn pool(world: &World, tx_id: TxId) {
+    let (kernel, _) = receipt_kernel(world, tx_id);
+    let pooled = Transaction::new(
+        BlindingFactor::zero(),
+        TransactionBody::new(Vec::new(), Vec::new(), vec![kernel]),
+    );
+    world
+        .receiver
+        .harness
+        .node
+        .update_chain(|chain| chain.pool.push(pooled));
+}
+
+/// Fills the open receipts to the cap with one payment from each of senders `0..cap`.
+fn fill_to_cap(world: &World) {
+    let cap = u32::try_from(MAX_OPEN_RECEIPTS).unwrap();
+    for n in 0..cap {
+        post_from(world, n, &s1_numbered(n));
+    }
+    let summary = world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+    assert_eq!(summary.received, cap);
+    assert_eq!(open_receipts(world).len(), MAX_OPEN_RECEIPTS);
+}
+
 fn drain(world: &World) -> InboxSummary {
     world
         .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
         .unwrap()
+}
+
+/// Backdates the arrival of `msg_id` to the hold bound, as if it had waited that long.
+fn waited_the_hold_bound(world: &World, msg_id: &str) {
+    let arrived = support::fixed_time()
+        .checked_sub(Duration::from_secs(3 * 60))
+        .unwrap();
+    arrived_at(world, msg_id, arrived);
 }
 
 fn arrived_at(world: &World, msg_id: &str, arrived: jiff::Timestamp) {
@@ -385,6 +529,177 @@ fn arrived_at(world: &World, msg_id: &str, arrived: jiff::Timestamp) {
             })
         })
         .unwrap();
+}
+
+#[test]
+fn at_the_open_receipt_cap_receipts_already_mined_are_confirmed_not_cancelled() {
+    let world = World::new();
+    fill_to_cap(&world);
+    for (index, tx_id) in open_receipts(&world).into_iter().enumerate() {
+        let output = receipt_output(&world, tx_id);
+        mine(&world, tx_id, 10 + index as u64, Some(output));
+    }
+    post_from(&world, 1_000, &s1_numbered(1_000));
+
+    let summary = drain(&world);
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            received: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(incoming(&world, TxState::Cancelled), 0);
+    assert_eq!(incoming(&world, TxState::Confirmed), MAX_OPEN_RECEIPTS);
+    assert_eq!(incoming(&world, TxState::Received), 1);
+    assert_eq!(receiver_outputs(&world).len(), MAX_OPEN_RECEIPTS + 1);
+}
+
+#[test]
+fn at_the_open_receipt_cap_a_receipt_the_node_pool_holds_is_skipped_for_the_next() {
+    let world = World::new();
+    fill_to_cap(&world);
+    let open = open_receipts(&world);
+    pool(&world, open[0]);
+    let evicted = receipt_output(&world, open[1]);
+    post_from(&world, 1_000, &s1_numbered(1_000));
+
+    let summary = drain(&world);
+
+    assert_eq!(summary.received, 1);
+    assert_eq!(state_of(&world, open[0]), TxState::Received);
+    assert_eq!(state_of(&world, open[1]), TxState::Cancelled);
+    assert_eq!(incoming(&world, TxState::Received), MAX_OPEN_RECEIPTS);
+
+    // The cancelled receipt stays watched: once its sender's transaction is mined, a refresh
+    // confirms it and restores its output.
+    mine(&world, open[1], 10, Some(evicted));
+    world.block_on(world.receiver_wallet.refresh()).unwrap();
+    assert_eq!(state_of(&world, open[1]), TxState::Confirmed);
+    let restored = world
+        .receiver
+        .store()
+        .read(|repos| repos.outputs_of_transaction(open[1]))
+        .unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].status, OutputStatus::Unspent);
+}
+
+#[test]
+fn at_the_open_receipt_cap_a_new_s1_is_refused_when_no_receipt_can_be_cancelled() {
+    let world = World::new();
+    fill_to_cap(&world);
+    // The kernels are on chain, but their outputs are not yet, so no refresh confirms them.
+    for (index, tx_id) in open_receipts(&world).into_iter().enumerate() {
+        mine(&world, tx_id, 10 + index as u64, None);
+    }
+    let msg_id = post_from(&world, 1_000, &s1_numbered(1_000));
+
+    let summary = drain(&world);
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(
+        world.receiver.inbox(&msg_id).unwrap().status,
+        InboxStatus::Rejected
+    );
+    assert_eq!(incoming(&world, TxState::Received), MAX_OPEN_RECEIPTS);
+    assert_eq!(world.receiver.transactions(), MAX_OPEN_RECEIPTS);
+    assert_eq!(receiver_outputs(&world).len(), MAX_OPEN_RECEIPTS);
+}
+
+#[test]
+fn at_the_open_receipt_cap_an_unreachable_node_holds_the_new_s1_only_to_the_hold_bound() {
+    let world = World::new();
+    fill_to_cap(&world);
+    let msg_id = post_from(&world, 1_000, &s1_numbered(1_000));
+    let node = &world.receiver.harness.node;
+
+    node.fail_next("get_unconfirmed_transactions", MockFailure::Unreachable);
+    let held = drain(&world);
+
+    assert_eq!(
+        held,
+        InboxSummary {
+            held: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 1);
+    assert_eq!(world.receiver.transactions(), MAX_OPEN_RECEIPTS);
+
+    waited_the_hold_bound(&world, &msg_id);
+    node.fail_next("get_unconfirmed_transactions", MockFailure::Unreachable);
+    let refused = drain(&world);
+
+    assert_eq!(
+        refused,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(world.receiver.transactions(), MAX_OPEN_RECEIPTS);
+    assert_eq!(incoming(&world, TxState::Received), MAX_OPEN_RECEIPTS);
+    assert_eq!(receiver_outputs(&world).len(), MAX_OPEN_RECEIPTS);
+}
+
+#[test]
+fn at_the_open_receipt_cap_the_sender_key_with_the_most_open_receipts_gives_one_up_first() {
+    let world = World::new();
+    let busy = 5_000;
+    let per_sender = u32::try_from(MAX_OPEN_RECEIPTS_PER_SENDER).unwrap();
+    let others = u32::try_from(MAX_OPEN_RECEIPTS).unwrap() - per_sender;
+    for n in 0..others {
+        post_from(&world, n, &s1_numbered(n));
+    }
+    for n in others..others + per_sender {
+        post_from(&world, busy, &s1_numbered(n));
+    }
+    assert_eq!(drain(&world).received, others + per_sender);
+    let open = open_receipts(&world);
+    post_from(&world, 1_000, &s1_numbered(1_000));
+
+    assert_eq!(drain(&world).received, 1);
+
+    assert_eq!(state_of(&world, open[0]), TxState::Received);
+    let busiest_oldest = open[usize::try_from(others).unwrap()];
+    assert_eq!(state_of(&world, busiest_oldest), TxState::Cancelled);
+    assert_eq!(incoming(&world, TxState::Cancelled), 1);
+}
+
+#[test]
+fn a_redelivered_s1_whose_slate_is_known_is_answered_again_at_the_open_receipt_caps() {
+    let world = World::new();
+    let per_sender = u32::try_from(MAX_OPEN_RECEIPTS_PER_SENDER).unwrap();
+    let senders = u32::try_from(MAX_OPEN_RECEIPTS).unwrap() / per_sender;
+    for n in 0..senders * per_sender {
+        post_from(&world, n / per_sender, &s1_numbered(n));
+    }
+    assert_eq!(drain(&world).received, senders * per_sender);
+    let replies = world.relay.pending(&sender_address(0));
+    post_from(&world, 0, &s1_numbered(0));
+
+    let summary = drain(&world);
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            repeated: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&sender_address(0)), replies + 1);
+    assert_eq!(incoming(&world, TxState::Cancelled), 0);
+    assert_eq!(incoming(&world, TxState::Received), MAX_OPEN_RECEIPTS);
 }
 
 #[test]
@@ -410,4 +725,65 @@ fn a_held_message_that_first_arrived_after_the_wallet_clock_is_at_its_hold_bound
     );
     assert_eq!(world.relay.pending(&world.receiver_address), 0);
     assert_eq!(incoming(&world, TxState::Received), 1);
+}
+
+/// The vector S1 with a tip further past its cutoff than one refresh may confirm, so the
+/// node's tip alone says it expired.
+fn s1_expired_by_the_tip_alone(world: &World) -> String {
+    let (s1, cutoff) = vector_s1();
+    let msg_id = post_from(world, 1, &s1);
+    world.receiver.harness.node.update_chain(|chain| {
+        chain.tip.height = Height::new(cutoff + lepic_wallet::chain::TIP_STEP_BLOCKS + 1);
+    });
+    msg_id
+}
+
+fn tip_requests(world: &World) -> usize {
+    world
+        .receiver
+        .harness
+        .node
+        .calls()
+        .iter()
+        .filter(|method| *method == "get_tip")
+        .count()
+}
+
+#[test]
+fn an_s1_expired_by_the_tip_alone_is_refused_at_the_hold_bound() {
+    let world = World::new();
+    let msg_id = s1_expired_by_the_tip_alone(&world);
+
+    assert_eq!(drain(&world).held, 1);
+    waited_the_hold_bound(&world, &msg_id);
+    let refused = drain(&world);
+
+    assert_eq!(
+        refused,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(world.receiver.transactions(), 0);
+}
+
+#[test]
+fn an_s1_expired_by_the_tip_alone_refreshes_the_tip_at_most_once_a_minute() {
+    let world = World::new();
+    s1_expired_by_the_tip_alone(&world);
+    let before = tip_requests(&world);
+    assert_eq!(drain(&world).held, 1);
+    let first = tip_requests(&world) - before;
+
+    // The wallet clock has not moved, so no refresh is due.
+    assert_eq!(drain(&world).held, 1);
+    let second = tip_requests(&world) - before - first;
+
+    assert!(second < first, "first drain {first}, second drain {second}");
+    let refreshes = first - second;
+    assert_eq!(drain(&world).held, 1);
+    assert_eq!(tip_requests(&world) - before - first - second, second);
+    assert!(refreshes >= 1);
 }

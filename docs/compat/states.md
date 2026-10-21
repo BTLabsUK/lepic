@@ -31,7 +31,7 @@ own state (`lepic-wallet`'s `state` module).
 | incoming `confirmed` | `TxReceivedMempool` | true | the same, for an invoice issuer whose posted transaction was seen in the mempool; the refresh rewrites only outgoing types |
 | incoming `confirmed` | `ConfirmedCoinbase` | true | a refresh confirming a coinbase output, or a restore finding one; no slate |
 | incoming `confirmed` | `TxReceived`, no slate id | true | a restore finding an output with no entry |
-| incoming `cancelled` | `TxReceivedCancelled` | false | the owner's cancel |
+| incoming `cancelled` | `TxReceivedCancelled` | false | the owner's cancel, or, for a payment received over Epicbox and answered with S2, the inbox making room at its cap of open receipts, which cancels as the owner's cancel does |
 | incoming `expired` | `TxReceivedCancelled` | false | a refresh at or past the TTL cutoff height, or, for a received payment with no TTL, 10,080 blocks after a refresh first saw it; in both cases once the node holds no kernel the sender could have completed |
 
 Upstream marks an expired transaction cancelled; LEPIC keeps `expired` apart so the user can tell the
@@ -99,7 +99,12 @@ I2 or S2, which hold every input, output and the final offset.
 
 - The owner's cancel of one first asks the node's pool, then its chain up to a plausible tip,
   for that kernel, and refuses while either holds it. Upstream's `cancel_tx` checks neither.
-  As upstream does, the receiver may cancel an unconfirmed incoming payment.
+  As upstream does, the receiver may cancel an unconfirmed incoming payment. The Epicbox inbox
+  cancels one the same way when it holds as many open receipts as it keeps and a new payment
+  arrives: it refreshes first, at most once a minute, so payments already mined are confirmed
+  instead; it then cancels a receipt of the sender with the most open receipts, oldest first,
+  and keeps any whose kernel the node's pool or chain holds. When none can be cancelled, the
+  new payment is not received.
 - A refresh that would expire one, at its TTL cutoff or by the no-TTL window, asks the same
   first, and leaves it open while either holds the kernel.
 - A cancel or expiry that goes ahead keeps the transaction watched exactly as a release does:
