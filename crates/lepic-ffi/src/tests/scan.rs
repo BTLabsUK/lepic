@@ -62,6 +62,7 @@ async fn a_restore_scan_reports_the_outputs_it_restored() {
         &secret,
         AppSecretStore::in_memory(),
     )
+    .await
     .unwrap();
     restored
         .create(SeedOrigin::Phrase(Zeroizing::new(phrase)), password())

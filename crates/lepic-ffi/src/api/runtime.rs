@@ -229,27 +229,47 @@ fn app_log_message(message: &str) -> &str {
 
 impl RuntimeInner {
     /// Marks `data_dir` as in use until the returned claim is dropped. Fails with
-    /// [`WalletErrorKind::WalletBusy`] when it already is, in this runtime or any other.
-    pub(crate) fn claim(self: &Arc<Self>, data_dir: &Path) -> Result<DirClaim, WalletError> {
+    /// [`WalletErrorKind::WalletBusy`] when it still is after [`CLAIM_RETRIES`] more tries,
+    /// in this runtime or any other: a wallet just locked on it may be a moment away from
+    /// releasing it.
+    pub(crate) async fn claim(self: &Arc<Self>, data_dir: &Path) -> Result<DirClaim, WalletError> {
         let dir = std::fs::canonicalize(data_dir).map_err(|error| {
             WalletError::new(
                 WalletErrorKind::Io,
                 format!("wallet directory is not usable: {error}"),
             )
         })?;
+        let mut tries_left = CLAIM_RETRIES;
+        loop {
+            match self.try_claim(&dir) {
+                Err(error) if error.kind == WalletErrorKind::WalletBusy && tries_left > 0 => {
+                    tries_left = tries_left.saturating_sub(1);
+                    tokio::time::sleep(CLAIM_RETRY_WAIT).await;
+                }
+                claimed => return claimed,
+            }
+        }
+    }
+
+    fn try_claim(self: &Arc<Self>, dir: &Path) -> Result<DirClaim, WalletError> {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        if open.contains(&dir) {
+        if open.contains(dir) {
             return Err(busy());
         }
-        let lock = lock_dir(&dir)?;
-        open.insert(dir.clone());
+        let lock = lock_dir(dir)?;
+        open.insert(dir.to_path_buf());
         Ok(DirClaim {
             runtime: Arc::clone(self),
-            dir,
+            dir: dir.to_path_buf(),
             _lock: lock,
         })
     }
 }
+
+/// How often a busy directory is tried again, and how long apart: about 50 ms in all, the
+/// time a wallet just locked on it needs to close its database.
+const CLAIM_RETRIES: u32 = 5;
+const CLAIM_RETRY_WAIT: std::time::Duration = std::time::Duration::from_millis(10);
 
 fn busy() -> WalletError {
     WalletError::new(
@@ -260,7 +280,9 @@ fn busy() -> WalletError {
 
 /// An exclusive OS lock on `LOCK_FILE` in `dir`, so other runtimes and processes cannot open
 /// the directory's database at the same time. Released when the file is closed. A symbolic link
-/// in place of the lock file is refused rather than followed, as the CLI refuses it.
+/// in place of the lock file is refused rather than followed, as the CLI refuses it. The file
+/// is opened close-on-exec, as the standard library opens every file, so a child process the
+/// app starts does not inherit the lock.
 fn lock_dir(dir: &Path) -> Result<std::fs::File, WalletError> {
     let mut options = std::fs::File::options();
     options.create(true).truncate(false).write(true);
@@ -306,9 +328,151 @@ impl Drop for DirClaim {
     }
 }
 
+/// A session's claim on its directory. The session holds it from its first check until it
+/// is dropped, except that after the session is locked on purpose the claim goes as soon as
+/// the database opened under it closes: at the lock when nothing runs, else when the last
+/// call still running ends. A new open on the directory then needs no dispose of the old
+/// handle first.
+pub(crate) struct ClaimHolder {
+    claim: Mutex<Option<DirClaim>>,
+    release_on_close: std::sync::atomic::AtomicBool,
+}
+
+impl ClaimHolder {
+    pub(crate) fn new(claim: DirClaim) -> Arc<Self> {
+        Arc::new(Self {
+            claim: Mutex::new(Some(claim)),
+            release_on_close: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    /// From now on the claim goes with the database. Call it before the wallet locks, so a
+    /// database that closes at the lock releases it.
+    pub(crate) fn release_when_closed(&self) {
+        self.release_on_close
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn database_closed(&self) {
+        if self
+            .release_on_close
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.claim
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_held(&self) -> bool {
+        self.claim
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+}
+
+/// The engine's store opener for a session: the SQLite store, which tells the session's
+/// [`ClaimHolder`] when it closes.
+pub(crate) struct ClaimedStores(pub(crate) Arc<ClaimHolder>);
+
+impl lepic_wallet::StoreOpener for ClaimedStores {
+    type Store = ClaimedStore;
+
+    fn open(
+        &self,
+        data_dir: &Path,
+        key: lepic_store::ContextKey,
+    ) -> Result<ClaimedStore, lepic_store::StoreError> {
+        Ok(ClaimedStore {
+            inner: lepic_wallet::SqliteStores.open(data_dir, key)?,
+            holder: Arc::clone(&self.0),
+        })
+    }
+}
+
+pub(crate) struct ClaimedStore {
+    inner: lepic_store::SqliteStore,
+    holder: Arc<ClaimHolder>,
+}
+
+impl Drop for ClaimedStore {
+    fn drop(&mut self) {
+        self.holder.database_closed();
+    }
+}
+
+impl lepic_store::WalletStore for ClaimedStore {
+    fn read<R, E>(
+        &self,
+        operation: impl FnOnce(&dyn lepic_store::Repositories) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<lepic_store::StoreError>,
+    {
+        self.inner.read(operation)
+    }
+
+    fn write<R, E>(
+        &self,
+        operation: impl FnOnce(&mut dyn lepic_store::Repositories) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<lepic_store::StoreError>,
+    {
+        self.inner.write(operation)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The lock file's descriptor is close-on-exec, read from its open-file description.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_directory_lock_is_not_inherited_by_child_processes() {
+        use std::os::fd::AsRawFd as _;
+
+        const O_CLOEXEC: u32 = 0o2000000;
+        let dir = tempfile::tempdir().unwrap();
+        let file = lock_dir(dir.path()).unwrap();
+        let info =
+            std::fs::read_to_string(format!("/proc/self/fdinfo/{}", file.as_raw_fd())).unwrap();
+        let flags = info
+            .lines()
+            .find_map(|line| line.strip_prefix("flags:"))
+            .map(|flags| u32::from_str_radix(flags.trim(), 8).unwrap())
+            .unwrap();
+        assert_eq!(flags & O_CLOEXEC, O_CLOEXEC, "{info}");
+    }
+
+    #[tokio::test]
+    async fn a_directory_released_within_the_retries_is_claimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = crate::api::testing::MockChain::new(1)
+            .unwrap()
+            .runtime(LogLevel::Warn)
+            .unwrap();
+        let other = crate::api::testing::MockChain::new(1)
+            .unwrap()
+            .runtime(LogLevel::Warn)
+            .unwrap();
+        let held = other.inner.claim(dir.path()).await.unwrap();
+        let busy = runtime.inner.claim(dir.path()).await.map(drop);
+        assert_eq!(busy.unwrap_err().kind, WalletErrorKind::WalletBusy);
+
+        let releasing = std::thread::spawn(move || {
+            std::thread::sleep(CLAIM_RETRY_WAIT * 2);
+            drop(held);
+        });
+        let claimed = runtime.inner.claim(dir.path()).await;
+
+        releasing.join().unwrap();
+        assert!(claimed.is_ok());
+    }
 
     #[test]
     fn app_log_messages_are_cut_at_a_character_boundary() {

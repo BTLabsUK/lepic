@@ -175,7 +175,7 @@ impl EpicWallet {
     ) {
         let sink = events.clone();
         let started = self
-            .run("start_tor", |session| async move {
+            .run_until_stopped("start_tor", |session| async move {
                 // A closed stream only means the app stopped listening.
                 let report = Arc::new(move |event| drop(sink.add(event)));
                 session.start_tor(tor_binary, lib_dir, report).await

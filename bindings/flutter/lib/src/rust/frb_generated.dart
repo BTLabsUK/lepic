@@ -10012,9 +10012,11 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
       RustLib.instance.api.crateApiWalletEpicWalletListenerRunning(that: this);
 
   /// Locks the wallet now, for example when the app goes to the background: stops the
-  /// listener and any scan and wipes the root key. Every later call on this handle fails with
-  /// `Locked`; calls already running finish first. To use the wallet again, drop this handle
-  /// and open the wallet anew. Locking a locked wallet does nothing.
+  /// listener and any scan, wipes the root key and ends the calls still running, which fail
+  /// with `Cancelled`; a store write under way is finished first. Every later call on this
+  /// handle fails with `Locked`. The wallet directory is released as soon as the database
+  /// closes, at once when nothing was running, so the wallet can be opened anew on a fresh
+  /// handle right away; drop this one. Locking a locked wallet does nothing.
   void lock() => RustLib.instance.api.crateApiWalletEpicWalletLock(that: this);
 
   /// The recovery phrase, after checking `password` against the stored vault. Attempts are

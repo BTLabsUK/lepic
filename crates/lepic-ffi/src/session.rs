@@ -40,7 +40,7 @@ use lepic_wallet::selection::{
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{
     Clock, DATABASE_FILE, Event, NodeEndpoint, Password, Ports, ReceiveRequest, SessionState,
-    SharedRng, SqliteStores, Wallet, WalletName, WordCount,
+    SharedRng, Wallet, WalletName, WordCount,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -50,7 +50,7 @@ use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 use crate::api::error::{WalletError, WalletErrorKind};
-use crate::api::runtime::{DirClaim, RuntimeInner};
+use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
@@ -59,6 +59,7 @@ use crate::api::types::{
     SentTx, Slate, SlateMessage, TransactionDetails, TransportState, TxOrigin, TxStatus,
     WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
+use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
 use crate::vault_port::{
@@ -76,7 +77,7 @@ pub(crate) use http::HttpReport;
 pub(crate) use tor::TorReport;
 mod invoice;
 
-type EngineWallet = Wallet<Node, SqliteStores, AppVault>;
+type EngineWallet = Wallet<Node, ClaimedStores, AppVault>;
 
 /// Matches the name `lepic-wallet` stores the seed under in the wallet's vault.
 const SEED_SECRET: &str = "wallet/seed";
@@ -179,7 +180,10 @@ pub(crate) struct Session {
     tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
     scan: Mutex<Option<ScanCancel>>,
     balance: Mutex<Option<Balance>>,
-    claim: DirClaim,
+    runtime: Arc<RuntimeInner>,
+    claim: Arc<ClaimHolder>,
+    /// The calls running on the handle, ended by [`Session::lock`].
+    pub(crate) in_flight: Arc<InFlight>,
 }
 
 impl Drop for Session {
@@ -284,7 +288,7 @@ fn epicbox_transport(
 
 impl Session {
     /// A locked wallet on `config.data_dir`, which must exist and not be open anywhere.
-    pub(crate) fn new(
+    pub(crate) async fn new(
         runtime: &Arc<RuntimeInner>,
         config: &WalletConfig,
         node_secret: &NodeSecret,
@@ -292,7 +296,9 @@ impl Session {
     ) -> Result<Self, WalletError> {
         let network = config.chain.network();
         let data_dir = PathBuf::from(&config.data_dir);
-        let claim = runtime.claim(&data_dir)?;
+        let claim = runtime.claim(&data_dir).await?;
+        let data_dir = claim.dir.clone();
+        let claim = ClaimHolder::new(claim);
         let node = runtime.nodes.client(config, node_secret)?;
         let epicbox = epicbox_transport(runtime, config, network)?;
         let mut transports = TransportRegistry::new();
@@ -319,7 +325,7 @@ impl Session {
         let engine_config = lepic_wallet::WalletConfig {
             name: WalletName::new(WALLET_NAME).map_err(|error| invalid(error.to_string()))?,
             network,
-            data_dir: claim.dir.clone(),
+            data_dir: data_dir.clone(),
             node: NodeEndpoint::parse(&config.node_url)
                 .map_err(|_| invalid("node url is not an http or https url with a host"))?,
             transports: ids,
@@ -327,7 +333,7 @@ impl Session {
         let vault = VaultBytes::default();
         let ports = Ports {
             node,
-            stores: SqliteStores,
+            stores: ClaimedStores(Arc::clone(&claim)),
             secrets: AppVault::new(vault.clone(), runtime.kdf),
             transports,
             clock: Arc::new(SystemClock),
@@ -338,7 +344,7 @@ impl Session {
         Ok(Self {
             engine,
             network,
-            data_dir: claim.dir.clone(),
+            data_dir,
             store,
             vault,
             epicbox,
@@ -353,20 +359,30 @@ impl Session {
             tor_timings: Mutex::default(),
             scan: Mutex::default(),
             balance: Mutex::default(),
+            runtime: Arc::clone(runtime),
             claim,
+            in_flight: Arc::default(),
         })
     }
 
     pub(crate) fn runtime(&self) -> &Arc<RuntimeInner> {
-        &self.claim.runtime
+        &self.runtime
+    }
+
+    #[cfg(test)]
+    pub(crate) fn holds_directory(&self) -> bool {
+        self.claim.is_held()
     }
 
     pub(crate) fn store(&self) -> &AppSecretStore {
         &self.store
     }
 
-    /// Stops tor, the listeners and any scan, forgets the cached balance and the relay identity, and
-    /// drops the root key. Operations already running finish with the keys they started with.
+    /// Stops tor, the listeners and any scan, forgets the cached balance and the relay
+    /// identity, drops the root key and ends the calls still running, which fail with
+    /// `Cancelled` at their next await; a store write under way runs to its end. The
+    /// directory is released as soon as the database closes: now, or when the last such call
+    /// has ended.
     pub(crate) fn lock(&self) {
         if let Some(listener) = lock(&self.listener).take() {
             listener.stop();
@@ -378,11 +394,15 @@ impl Session {
         if let Some(epicbox) = &self.epicbox {
             epicbox.detach();
         }
+        // Before the engine locks, so a database that closes at the lock releases the
+        // directory.
+        self.claim.release_when_closed();
         self.engine.lock();
         // After the engine locks, so a start that saw it unlocked is in its slot. Tor stops
         // before the listeners it forwards to.
         self.stop_tor();
         self.stop_http_listener();
+        self.in_flight.abort_all();
     }
 
     pub(crate) fn ensure_unlocked(&self) -> Result<(), WalletError> {
@@ -1589,7 +1609,7 @@ pub(crate) async fn delete_wallet(
     config: &WalletConfig,
     store: &AppSecretStore,
 ) -> Result<(), WalletError> {
-    let claim = runtime.claim(Path::new(&config.data_dir))?;
+    let claim = runtime.claim(Path::new(&config.data_dir)).await?;
     remove_database(&claim.dir).await?;
     store.delete(VAULT_KEY).await?;
     store.delete(VAULT_NEXT_KEY).await?;
@@ -1921,6 +1941,7 @@ mod tests {
                 &secret,
                 AppSecretStore::in_memory(),
             )
+            .await
             .unwrap();
             session
                 .create(SeedOrigin::Generate, Zeroizing::new("password".to_owned()))

@@ -209,6 +209,58 @@ async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
     assert!(reopened.summary(true).await.is_ok());
 }
 
+/// The app locks on going to the background and opens anew on coming back, with a sync that
+/// may still be waiting on a node that does not answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lock_then_open_at_once_never_gets_wallet_busy() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let sealed = created.sealed_password.clone();
+    let wallet = created.wallet;
+    fixture.chain.set_node_stalled(true);
+    let syncing = tokio::spawn({
+        let handle = EpicWallet::of_session(std::sync::Arc::clone(wallet.session()));
+        async move { handle.summary(true).await }
+    });
+    assert!(eventually(|| fixture.chain.stalled_node_calls() >= 1).await);
+    assert_eq!(wallet.session().in_flight.len(), 1);
+
+    wallet.lock();
+    drop(wallet);
+    let reopened = fixture.open_with_pin(&store, PIN, &sealed).await;
+
+    assert!(reopened.is_ok(), "{:?}", reopened.err());
+    let synced = tokio::time::timeout(std::time::Duration::from_secs(5), syncing)
+        .await
+        .expect("the stalled sync ended at the lock")
+        .unwrap();
+    assert_eq!(kind(synced), WalletErrorKind::Cancelled);
+    fixture.chain.set_node_stalled(false);
+}
+
+/// A lock releases the directory without a dispose of the handle first; the handle itself
+/// keeps refusing every call with `Locked`.
+#[tokio::test]
+async fn a_locked_handle_no_longer_holds_its_directory() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let wallet = created.wallet;
+    assert!(wallet.session().holds_directory());
+
+    wallet.lock();
+
+    assert!(!wallet.session().holds_directory());
+    let reopened = fixture
+        .open_with_pin(&store, PIN, &created.sealed_password)
+        .await
+        .unwrap();
+    assert!(reopened.summary(false).await.is_ok());
+    assert_eq!(kind(wallet.summary(false).await), WalletErrorKind::Locked);
+    assert_eq!(wallet.session().in_flight.len(), 0);
+}
+
 /// Without the stored reference the client would take any first tip of the session as its
 /// reference.
 #[tokio::test]
@@ -230,6 +282,7 @@ async fn an_opened_wallet_bounds_the_first_node_tip_by_the_tip_it_confirmed() {
             &secret(),
             store.clone(),
         )
+        .await
         .unwrap();
         session
             .create(SeedOrigin::Generate, password())
@@ -242,6 +295,7 @@ async fn an_opened_wallet_bounds_the_first_node_tip_by_the_tip_it_confirmed() {
 
     let session =
         crate::session::Session::new(&fixture.runtime.inner, &fixture.config(), &secret(), store)
+            .await
             .unwrap();
     session.open(password()).await.unwrap();
     fixture.chain.set_height(20 + 100_000);
@@ -295,6 +349,7 @@ async fn lock_stops_the_listener_and_closes_its_relay_connection() {
             &secret,
             AppSecretStore::in_memory(),
         )
+        .await
         .unwrap(),
     );
     session
@@ -886,6 +941,7 @@ async fn a_wallet_with_a_password_below_the_minimum_still_opens() {
         let secret = crate::node::NodeSecret::take(&mut config);
         let session =
             crate::session::Session::new(&fixture.runtime.inner, &config, &secret, store.clone())
+                .await
                 .unwrap();
         session
             .create(

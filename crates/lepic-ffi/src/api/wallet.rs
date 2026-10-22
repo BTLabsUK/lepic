@@ -191,7 +191,7 @@ async fn create_pin_wallet(
         .boundary
         .run(operation, async move {
             let pin = pin::NewPin::new(pin)?;
-            let session = Session::new(&inner, &config, &node_secret, store.clone())?;
+            let session = Session::new(&inner, &config, &node_secret, store.clone()).await?;
             // Checked before the PIN key is written, so it never replaces another wallet's
             // key.
             if session::wallet_exists(&store).await? {
@@ -229,11 +229,35 @@ impl EpicWallet {
         Self { session }
     }
 
+    #[cfg(test)]
+    pub(crate) fn session(&self) -> &Arc<Session> {
+        &self.session
+    }
+
     pub(super) fn boundary(&self) -> Boundary {
         self.session.runtime().boundary.clone()
     }
 
     pub(super) async fn run<T, F, Fut>(
+        &self,
+        operation: &'static str,
+        work: F,
+    ) -> Result<T, WalletError>
+    where
+        T: Send + 'static,
+        F: FnOnce(Arc<Session>) -> Fut,
+        Fut: Future<Output = Result<T, WalletError>> + Send + 'static,
+    {
+        let session = Arc::clone(&self.session);
+        let in_flight = Arc::clone(&self.session.in_flight);
+        self.boundary()
+            .run_tracked(operation, work(session), &in_flight)
+            .await
+    }
+
+    /// [`EpicWallet::run`] for a call [`EpicWallet::lock`] ends in its own way, so it is not
+    /// cut off before it reports that it stopped.
+    pub(super) async fn run_until_stopped<T, F, Fut>(
         &self,
         operation: &'static str,
         work: F,
@@ -274,7 +298,7 @@ impl EpicWallet {
             .boundary
             .run("create", async move {
                 let password = new_password(password)?;
-                let session = Session::new(&inner, &config, &node_secret, store)?;
+                let session = Session::new(&inner, &config, &node_secret, store).await?;
                 session
                     .create(SeedOrigin::phrase(mnemonic), password)
                     .await?;
@@ -315,7 +339,7 @@ impl EpicWallet {
             .boundary
             .run("import_wallet_seed", async move {
                 let password = new_password(password)?;
-                let session = Session::new(&inner, &config, &node_secret, store)?;
+                let session = Session::new(&inner, &config, &node_secret, store).await?;
                 session.create(origin, password).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
@@ -348,7 +372,7 @@ impl EpicWallet {
             .inner
             .boundary
             .run("open", async move {
-                let session = Session::new(&inner, &config, &node_secret, store.clone())?;
+                let session = Session::new(&inner, &config, &node_secret, store.clone()).await?;
                 pin::password_attempt(&inner.pin, &store, || session.open(password)).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
@@ -428,7 +452,7 @@ impl EpicWallet {
             .inner
             .boundary
             .run("open_with_pin", async move {
-                let session = Session::new(&inner, &config, &node_secret, store.clone())?;
+                let session = Session::new(&inner, &config, &node_secret, store.clone()).await?;
                 let password = pin::unlock(&inner.pin, &store, pin, sealed_password).await?;
                 session.open(password).await?;
                 Ok(EpicWallet {
@@ -829,9 +853,11 @@ impl EpicWallet {
     }
 
     /// Locks the wallet now, for example when the app goes to the background: stops the
-    /// listener and any scan and wipes the root key. Every later call on this handle fails with
-    /// `Locked`; calls already running finish first. To use the wallet again, drop this handle
-    /// and open the wallet anew. Locking a locked wallet does nothing.
+    /// listener and any scan, wipes the root key and ends the calls still running, which fail
+    /// with `Cancelled`; a store write under way is finished first. Every later call on this
+    /// handle fails with `Locked`. The wallet directory is released as soon as the database
+    /// closes, at once when nothing was running, so the wallet can be opened anew on a fresh
+    /// handle right away; drop this one. Locking a locked wallet does nothing.
     #[frb(sync)]
     pub fn lock(&self) {
         self.boundary().guard_or("lock", (), || self.session.lock());

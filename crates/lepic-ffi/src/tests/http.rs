@@ -37,7 +37,7 @@ pub(super) fn password() -> Zeroizing<String> {
     Zeroizing::new("password".to_owned())
 }
 
-fn session(runtime: &LepicRuntime, dir: &tempfile::TempDir) -> Arc<Session> {
+async fn session(runtime: &LepicRuntime, dir: &tempfile::TempDir) -> Arc<Session> {
     let mut config = WalletConfig {
         data_dir: dir.path().to_string_lossy().into_owned(),
         chain: Chain::Floonet,
@@ -54,6 +54,7 @@ fn session(runtime: &LepicRuntime, dir: &tempfile::TempDir) -> Arc<Session> {
             &secret,
             AppSecretStore::in_memory(),
         )
+        .await
         .unwrap(),
     )
 }
@@ -63,7 +64,7 @@ pub(super) async fn funded_pair() -> Pair {
     let chain = MockChain::new(1).unwrap();
     let runtime = chain.runtime(LogLevel::Warn).unwrap();
     let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
-    let alice = session(&runtime, &dirs[0]);
+    let alice = session(&runtime, &dirs[0]).await;
     alice
         .create(SeedOrigin::Generate, password())
         .await
@@ -72,7 +73,7 @@ pub(super) async fn funded_pair() -> Pair {
     chain.fund(phrase, Chain::Floonet, 10 * EPIC, 0).unwrap();
     chain.set_height(20);
     alice.scan_to_tip().await;
-    let bob = session(&runtime, &dirs[1]);
+    let bob = session(&runtime, &dirs[1]).await;
     bob.create(SeedOrigin::Generate, password()).await.unwrap();
     bob.scan_to_tip().await;
     Pair {

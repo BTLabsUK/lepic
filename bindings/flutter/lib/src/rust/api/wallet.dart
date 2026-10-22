@@ -14,7 +14,7 @@ import 'secret_store.dart';
 import 'tor.dart';
 import 'types.dart';
 
-// These functions are ignored because they are not marked as `pub`: `boundary`, `create_pin_wallet`, `new_password`, `run`, `split_shape`
+// These functions are ignored because they are not marked as `pub`: `boundary`, `create_pin_wallet`, `new_password`, `run_until_stopped`, `run`, `split_shape`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`
 
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
@@ -405,9 +405,11 @@ abstract class EpicWallet implements RustOpaqueInterface {
   bool listenerRunning();
 
   /// Locks the wallet now, for example when the app goes to the background: stops the
-  /// listener and any scan and wipes the root key. Every later call on this handle fails with
-  /// `Locked`; calls already running finish first. To use the wallet again, drop this handle
-  /// and open the wallet anew. Locking a locked wallet does nothing.
+  /// listener and any scan, wipes the root key and ends the calls still running, which fail
+  /// with `Cancelled`; a store write under way is finished first. Every later call on this
+  /// handle fails with `Locked`. The wallet directory is released as soon as the database
+  /// closes, at once when nothing was running, so the wallet can be opened anew on a fresh
+  /// handle right away; drop this one. Locking a locked wallet does nothing.
   void lock();
 
   /// The recovery phrase, after checking `password` against the stored vault. Attempts are

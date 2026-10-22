@@ -103,10 +103,12 @@ final wallet = await EpicWallet.create(
   other value becomes `[redacted]`. Messages are kept as they are, including the app's own lines
   from `logMessage`, so redact those before logging them.
 - `EpicWallet.lock()` locks a wallet at once, for example when the app goes to the background:
-  it stops the listener and any scan and wipes the keys, and every later call on that handle
-  fails with `locked`. Calls already running finish first. To use the wallet again, `dispose()`
-  the handle and open it anew. `dispose()` alone also locks, but only once calls still running
-  on the handle finish.
+  it stops the listener and any scan, wipes the keys and ends the calls still running, which
+  fail with `cancelled` (a store write under way is finished first); every later call on that
+  handle fails with `locked`. The wallet directory is released as soon as the database closes,
+  at once when nothing was running, so the wallet can be opened anew on a fresh handle right
+  away, before or after the old one is disposed. `dispose()` alone also locks, but only once
+  calls still running on the handle finish, and releases the directory then.
 - `deleteWallet` needs no password or PIN, so a user who forgot both can delete the wallet and
   restore it from the recovery phrase. Confirm with the user before calling it.
 - A wallet directory is open in one runtime at a time, across processes too; LEPIC holds an OS

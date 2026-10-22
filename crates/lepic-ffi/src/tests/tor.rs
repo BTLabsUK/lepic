@@ -663,6 +663,7 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
         &secret,
         AppSecretStore::in_memory(),
     )
+    .await
     .unwrap();
     session
         .create(
