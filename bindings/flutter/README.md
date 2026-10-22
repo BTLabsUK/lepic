@@ -299,7 +299,7 @@ posts the transaction in one call (ADR 0017):
 ```dart
 final sent = await wallet.sendHttp(
   amount: BigInt.from(150000000),
-  minimumConfirmations: BigInt.from(10),
+  minimumConfirmations: BigInt.from(3), // what the summary counts as spendable
   url: 'https://wallet.example.org',
   allowPlainHttp: false,
 );
@@ -367,7 +367,7 @@ wallet.startTor(torBinary: torPath, libDir: torLibDir).listen((event) {
 });
 final sent = await wallet.sendTor(
   amount: BigInt.from(150000000),
-  minimumConfirmations: BigInt.from(10),
+  minimumConfirmations: BigInt.from(3), // what the summary counts as spendable
   onion: 'http://<56 characters>.onion',
 );
 ```
@@ -492,7 +492,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `EpicWallet::create(config, mnemonic, password)` | `EpicWallet::create(runtime, config, store, mnemonic, password)`, or `EpicWallet::create_with_pin(runtime, config, store, mnemonic, pin) -> PinWallet` | Same semantics. The PIN form returns the wallet and `sealed_password`. |
 | `EpicWallet::open(config, password)` | `EpicWallet::open(runtime, config, store, password)`, or `EpicWallet::open_with_pin(runtime, config, store, pin, sealed_password)` | Same. |
 | `mnemonic(password)` | `mnemonic(password)`, or `mnemonic_with_pin(pin, sealed_password)` | Same check against the stored vault. |
-| `summary(refresh, minimum_confirmations)` | `summary(refresh)` | Balances use the engine's 10 confirmations, as `epic-wallet info`. `refresh: false` answers from the store without the node, also on a handle that never refreshed. |
+| `summary(refresh, minimum_confirmations)` | `summary(refresh)` | Balances count an output spendable after 3 confirmations, as the Epic GUI wallet does (`epic-wallet info` counts 10); `WalletSummary.minimumConfirmations` carries the number, so sends and estimates can pass it. `refresh: false` answers from the store without the node, also on a handle that never refreshed. |
 | `refresh(minimum_confirmations, progress)` | `refresh()` stream | First event 0 %, last 100 % with `summary`. |
 | `scan(start_height, progress)` | `scan(start_height)` stream | `ScanProgress` adds `height` and `target_height`. New: `cancel_scan()`. |
 | `transactions(refresh)` | `transactions()`, `transaction(tx_id)` | From the store alone, newest first; refresh first with `summary(refresh: true)`. `TransactionDetails` carries the slate id, kernel excess, confirmed height and time, counterparty, amounts, fee, status, creation time and TTL cutoff, and for a finalized or posted send whether and from which height it can be released. `messages` lists each party's message whose signature verifies, as a `SlateMessage` with `role` (`sender` or `receiver` of the money) and `text`, from the latest stage the wallet stored: a send shows its own, a receive the sender's and its own, a finalized send both. A transaction restored by a scan has none. `flow` is `payment` or `invoice`, from the slate stages stored: with `direction`, an incoming payment was received and an outgoing one sent, an incoming invoice was issued by this wallet and an outgoing one paid by it. |
@@ -610,7 +610,7 @@ run on this host, until it is stopped; stopping removes the chain and the wallet
 
 A wallet on this chain uses the printed values: `nodeUrl` http://127.0.0.1:43413, `nodeApiSecret`
 the contents of the secret file, `epicboxDomain` `localhost` and `epicboxPort` 3423. Funds become
-spendable after 10 confirmations, about a minute. The funder's first coinbase matures a few blocks
+spendable after 3 confirmations, well under a minute. The funder's first coinbase matures a few blocks
 after the chain starts, so `fund` waits for it.
 
 `test/interop_test.dart` does this end to end: it creates a wallet, is funded 10 EPIC by the
