@@ -22,7 +22,7 @@ lepic-slate.workspace = true
 lepic-transport.workspace = true
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
-sha2.workspace = true
+sha2 = { workspace = true, features = ["zeroize"] }
 sha3.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }

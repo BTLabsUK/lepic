@@ -198,7 +198,7 @@ impl SocksProxy for FixedSocks {
 
 enum Request {
     Publish {
-        key: Zeroizing<[u8; 64]>,
+        key: Box<Zeroizing<[u8; 64]>>,
         expected: OnionAddress,
         listener_port: u16,
         reply: oneshot::Sender<Result<(), TorFailure>>,

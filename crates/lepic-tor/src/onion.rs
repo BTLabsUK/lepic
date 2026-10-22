@@ -145,10 +145,11 @@ pub fn public_key_of_seed(seed: &[u8; 32]) -> [u8; 32] {
 /// The 64-byte expanded secret key tor's `ADD_ONION ED25519-V3:` takes: SHA-512 of the seed
 /// with the scalar half clamped, as RFC 8032 key generation does. Tor derives the public key
 /// from this, so passing the seed itself, or the seed followed by the public key, publishes a
-/// different onion than the wallet's.
-pub fn expanded_secret(seed: &[u8; 32]) -> Zeroizing<[u8; 64]> {
+/// different onion than the wallet's. The key is on the heap, so moving it leaves no copy
+/// behind, and is wiped when dropped.
+pub fn expanded_secret(seed: &[u8; 32]) -> Box<Zeroizing<[u8; 64]>> {
     let mut hash = Sha512::digest(seed);
-    let mut expanded = Zeroizing::new([0u8; 64]);
+    let mut expanded = Box::new(Zeroizing::new([0u8; 64]));
     expanded.copy_from_slice(&hash);
     hash.as_mut_slice().zeroize();
     if let Some(first) = expanded.first_mut() {

@@ -31,6 +31,8 @@ pub const MAX_REPLY_LINES: usize = 512;
 const MAX_DATA_LEN: usize = 256 * 1024;
 const EVENT_QUEUE: usize = 256;
 const COOKIE_LEN: usize = 32;
+/// Padded base64 of the 64-byte expanded key.
+const ENCODED_KEY_LEN: usize = 88;
 const ASYNC_CODE: u16 = 650;
 
 /// Why a control-port exchange failed.
@@ -505,11 +507,19 @@ impl ControlConnection {
         if target_port == 0 {
             return Err(ControlError::InvalidArgument);
         }
-        let mut encoded = Zeroizing::new(String::with_capacity(88));
-        STANDARD.encode_string(expanded_key, &mut encoded);
+        // Straight into a buffer that is wiped: `encode_string` goes through a stack buffer
+        // that is not.
+        let mut encoded = Zeroizing::new([0u8; ENCODED_KEY_LEN]);
+        let written = STANDARD
+            .encode_slice(expanded_key, &mut *encoded)
+            .map_err(|_| ControlError::InvalidArgument)?;
+        let encoded = encoded
+            .get(..written)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .ok_or(ControlError::InvalidArgument)?;
         let mut line = Zeroizing::new(String::with_capacity(160));
         line.push_str("ADD_ONION ED25519-V3:");
-        line.push_str(&encoded);
+        line.push_str(encoded);
         line.push_str(" Flags=DiscardPK Port=80,127.0.0.1:");
         line.push_str(&target_port.to_string());
         let reply = self.command(&line).await?;
