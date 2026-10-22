@@ -561,7 +561,8 @@ impl EpicWallet {
     ///
     /// Asks the node for block times and for the kernels of unfinished transactions; a node
     /// that cannot be reached leaves those undone. Fails with `Locked` on a locked wallet and
-    /// `Io` when the copy cannot be made in the wallet's folder.
+    /// `Io` when the import folder cannot be made in the wallet's folder. A copy that cannot be
+    /// written there, for example on a full disk, is reported as status `unreadable`.
     pub async fn import_legacy_history(
         &self,
         source_dir: String,

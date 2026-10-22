@@ -245,10 +245,12 @@ fn adopt_restored_change(
             let Some(entry) = repos.transaction(linked)? else {
                 return Ok(());
             };
+            // An entry imported from an old wallet's history is kept with its record.
             let restore_entry = entry.direction == TxDirection::Incoming
                 && entry.slate_id.is_none()
                 && entry.amount_debited == Amount::ZERO
-                && entry.amount_credited == output.amount;
+                && entry.amount_credited == output.amount
+                && repos.imported_transaction(linked)?.is_none();
             if !restore_entry {
                 return Ok(());
             }

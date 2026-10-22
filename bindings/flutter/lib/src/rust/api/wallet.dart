@@ -263,7 +263,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   ///
   /// Asks the node for block times and for the kernels of unfinished transactions; a node
   /// that cannot be reached leaves those undone. Fails with `Locked` on a locked wallet and
-  /// `Io` when the copy cannot be made in the wallet's folder.
+  /// `Io` when the import folder cannot be made in the wallet's folder. A copy that cannot be
+  /// written there, for example on a full disk, is reported as status `unreadable`.
   Future<LegacyImport> importLegacyHistory({required String sourceDir});
 
   /// [`EpicWallet::create`] from an `epic-wallet` `wallet.seed` instead of a phrase:

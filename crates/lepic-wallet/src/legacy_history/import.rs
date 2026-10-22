@@ -21,7 +21,7 @@ use lepic_store::{
 use tracing::{debug, info, instrument, warn};
 
 use crate::account::{AccountLabel, FIRST_HARDENED};
-use crate::epicbox_invoice::display_message;
+use crate::epicbox_invoice::{HIDDEN_FORMATTING, display_message};
 use crate::error::WalletError;
 use crate::lifecycle;
 use crate::ports::{SecretVault, StoreOpener};
@@ -38,6 +38,12 @@ const IMPORTED_SETTING: &str = "legacy_history.source";
 
 /// The most open imported transactions whose kernel is looked up on the node in one import.
 const MAX_KERNEL_LOOKUPS: usize = 200;
+
+/// How far past the highest key of a reproduced output the old wallet's key counter is believed.
+const COUNTER_SLACK: u32 = 1_000;
+
+/// The most accounts an import writes to.
+const MAX_ACCOUNTS: usize = 1_000;
 
 /// The longest counterparty address kept from the old log.
 const MAX_COUNTERPARTY_LEN: usize = 512;
@@ -177,8 +183,13 @@ where
                 .await?
         };
         let mut found = Vec::new();
-        for (tx_id, excess) in pending {
-            match self.ports().node.get_kernel(&excess, None, None).await {
+        for (tx_id, excess, min_height) in pending {
+            match self
+                .ports()
+                .node
+                .get_kernel(&excess, min_height, None)
+                .await
+            {
                 Ok(Some(located)) => found.push((tx_id, located.height)),
                 Ok(None) => {}
                 Err(error) => {
@@ -296,6 +307,15 @@ fn plan_import(keychain: &Keychain, history: &LegacyHistory) -> ImportPlan {
     plan
 }
 
+const fn imported_priority(status: ImportedOutputStatus) -> u8 {
+    match status {
+        ImportedOutputStatus::Unspent | ImportedOutputStatus::Locked => 0,
+        ImportedOutputStatus::Unconfirmed => 1,
+        ImportedOutputStatus::Spent => 2,
+        ImportedOutputStatus::Deleted => 3,
+    }
+}
+
 const fn output_priority(status: LegacyOutputStatus) -> u8 {
     match status {
         LegacyOutputStatus::Unspent | LegacyOutputStatus::Locked => 0,
@@ -331,8 +351,16 @@ fn store_import(
         }
         Some(_) => return Ok(LegacyImportOutcome::empty(LegacyImportStatus::OtherHistory)),
         None => {
-            if plan.foreign > 0 && plan.ours.is_empty() {
-                return Ok(LegacyImportOutcome::empty(LegacyImportStatus::OtherWallet));
+            // Only outputs the seed reproduces prove the history is this wallet's; one with
+            // nothing to prove it is not imported, so it cannot rename accounts, move key
+            // counters or block the real history.
+            if plan.ours.is_empty() {
+                let status = if history.transactions.is_empty() && history.outputs.is_empty() {
+                    LegacyImportStatus::NoHistory
+                } else {
+                    LegacyImportStatus::OtherWallet
+                };
+                return Ok(LegacyImportOutcome::empty(status));
             }
             import_records(repos, history, plan, &mut outcome)?;
             repos.put_setting(IMPORTED_SETTING, &fingerprint)?;
@@ -356,17 +384,21 @@ fn import_records(
         .saturating_add(skipped.accounts)
         .saturating_add(skipped.counters)
         .saturating_add(plan.foreign);
-    outcome.accounts_named = name_accounts(repos, history, &mut outcome.skipped)?;
-    advance_children(repos, history, plan)?;
+    let allowed = allowed_accounts(repos, history, plan)?;
+    outcome.accounts_named = name_accounts(repos, history, &allowed, &mut outcome.skipped)?;
+    advance_children(repos, history, plan, &allowed)?;
 
     let mut by_source: BTreeMap<(AccountIndex, u32), TxId> = BTreeMap::new();
     let heights = confirmation_heights(history, plan);
     for entry in &history.transactions {
-        let Some(account) = account_of(&entry.parent_key_id) else {
+        let Some(account) = account_of(&entry.parent_key_id).filter(|a| allowed.contains(a)) else {
             outcome.skipped = outcome.skipped.saturating_add(1);
             continue;
         };
-        ensure_account(repos, account)?;
+        if !ensure_account(repos, account)? {
+            outcome.skipped = outcome.skipped.saturating_add(1);
+            continue;
+        }
         match import_entry(repos, entry, account, heights.get(&(account, entry.id)))? {
             Some(tx_id) => {
                 by_source.insert((account, entry.id), tx_id);
@@ -389,6 +421,12 @@ fn import_records(
         let Some(tx) = by_source.get(&(account, log_id)) else {
             continue;
         };
+        // Upstream may hold one commitment twice; the copy nearest the chain is kept.
+        if let Some(stored) = repos.imported_output(&commitment)?
+            && imported_priority(stored.status) <= output_priority(output.status)
+        {
+            continue;
+        }
         repos.put_imported_output(&ImportedOutput {
             commitment,
             tx: *tx,
@@ -459,7 +497,11 @@ fn import_entry(
         // its record only.
         Err(StoreError::Duplicate { .. }) => {
             entry.slate_id = None;
-            repos.insert_transaction(&entry)?
+            match repos.insert_transaction(&entry) {
+                Ok(tx_id) => tx_id,
+                Err(StoreError::OutOfRange { .. }) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            }
         }
         Err(StoreError::OutOfRange { .. }) => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -570,7 +612,9 @@ fn counterparty(source: &LegacyTxLogEntry) -> Option<&str> {
     (!address.is_empty()
         && address != RESTORE_COUNTERPARTY
         && address.len() <= MAX_COUNTERPARTY_LEN
-        && !address.chars().any(char::is_control))
+        && !address
+            .chars()
+            .any(|c| c.is_control() || HIDDEN_FORMATTING.contains(&c)))
     .then_some(address)
 }
 
@@ -634,29 +678,63 @@ fn child_of(key: &KeyId) -> Option<(AccountIndex, u32)> {
     }
 }
 
-fn ensure_account(repos: &mut dyn Repositories, index: AccountIndex) -> Result<(), WalletError> {
+/// Adds the account under the label a scan would give it. False when no free label was found.
+fn ensure_account(repos: &mut dyn Repositories, index: AccountIndex) -> Result<bool, WalletError> {
     if repos.account(index)?.is_some() {
-        return Ok(());
+        return Ok(true);
     }
-    let label = free_label(repos, &format!("account_{}", index.0))?;
+    let Some(label) = free_label(repos, &format!("account_{}", index.0))? else {
+        return Ok(false);
+    };
     repos.put_account(&AccountRecord {
         index,
         label,
         next_child: 0,
     })?;
-    Ok(())
+    Ok(true)
+}
+
+/// The accounts an import may write to: those this wallet has, those the old wallet named, and
+/// those of outputs the seed reproduces. Hardened indices are never accounts here, and the
+/// count is bounded, so a forged log cannot make every refresh walk countless accounts.
+fn allowed_accounts(
+    repos: &dyn Repositories,
+    history: &LegacyHistory,
+    plan: &ImportPlan,
+) -> Result<BTreeSet<AccountIndex>, WalletError> {
+    let mut allowed: BTreeSet<AccountIndex> = repos
+        .accounts()?
+        .into_iter()
+        .map(|account| account.index)
+        .collect();
+    let named = history.accounts.iter().filter_map(|a| account_of(&a.path));
+    let verified = plan.ours.iter().filter_map(|index| {
+        history
+            .outputs
+            .get(*index)
+            .and_then(|output| account_of(&output.root_key_id))
+    });
+    for account in named.chain(verified) {
+        if account.0 < FIRST_HARDENED && allowed.len() < MAX_ACCOUNTS {
+            allowed.insert(account);
+        }
+    }
+    Ok(allowed)
 }
 
 /// Gives each account the old wallet's label, unless this wallet's user already named it.
 fn name_accounts(
     repos: &mut dyn Repositories,
     history: &LegacyHistory,
+    allowed: &BTreeSet<AccountIndex>,
     skipped: &mut u32,
 ) -> Result<u32, WalletError> {
     let mut named = 0_u32;
     for source in &history.accounts {
-        let (Some(index), Ok(label)) = (account_of(&source.path), AccountLabel::new(&source.label))
-        else {
+        let (Some(index), Ok(label)) = (
+            account_of(&source.path).filter(|index| allowed.contains(index)),
+            AccountLabel::new(&source.label),
+        ) else {
             *skipped = skipped.saturating_add(1);
             continue;
         };
@@ -672,7 +750,10 @@ fn name_accounts(
             }
             Some(_) => {}
             None => {
-                let label = free_label(repos, label)?;
+                let Some(label) = free_label(repos, label)? else {
+                    *skipped = skipped.saturating_add(1);
+                    continue;
+                };
                 repos.put_account(&AccountRecord {
                     index,
                     label,
@@ -693,46 +774,66 @@ fn is_generated_label(label: &str, index: AccountIndex) -> bool {
             .is_some_and(|rest| rest.parse::<u32>().is_ok())
 }
 
-fn free_label(repos: &dyn Repositories, wanted: &str) -> Result<String, WalletError> {
+fn free_label(repos: &dyn Repositories, wanted: &str) -> Result<Option<String>, WalletError> {
     if repos.account_by_label(wanted)?.is_none() {
-        return Ok(wanted.to_owned());
+        return Ok(Some(wanted.to_owned()));
     }
     for number in 2_u32..1_000 {
         let label = format!("{wanted} ({number})");
         if AccountLabel::new(&label).is_ok() && repos.account_by_label(&label)?.is_none() {
-            return Ok(label);
+            return Ok(Some(label));
         }
     }
-    Err(StoreError::LabelTaken.into())
+    Ok(None)
 }
 
 /// Moves each account's key counter past every key the old wallet used, spent ones included,
-/// so this wallet never hands out a key the old one already put on chain.
+/// so this wallet never hands out a key the old one already put on chain. Only keys of outputs
+/// the seed reproduces count; the old wallet's own counter is believed only up to
+/// [COUNTER_SLACK] past the highest of them, which leaves room for keys of cancelled outputs
+/// but not for a counter that would use up the account's keys.
 fn advance_children(
     repos: &mut dyn Repositories,
     history: &LegacyHistory,
     plan: &ImportPlan,
+    allowed: &BTreeSet<AccountIndex>,
 ) -> Result<(), WalletError> {
-    let mut next: BTreeMap<AccountIndex, u32> = BTreeMap::new();
-    for counter in &history.next_child {
-        if let Some(account) = account_of(&counter.parent) {
-            let value = next.entry(account).or_insert(0);
-            *value = (*value).max(counter.next_child.min(FIRST_HARDENED));
-        }
-    }
+    let mut highest: BTreeMap<AccountIndex, u32> = BTreeMap::new();
     for index in &plan.ours {
         let Some((account, child)) = history
             .outputs
             .get(*index)
             .and_then(|output| child_of(&output.key_id))
+            .filter(|(account, _)| allowed.contains(account))
         else {
             continue;
         };
-        let value = next.entry(account).or_insert(0);
-        *value = (*value).max(child.saturating_add(1));
+        let value = highest.entry(account).or_insert(child);
+        *value = (*value).max(child);
+    }
+    let mut next: BTreeMap<AccountIndex, u32> = highest
+        .iter()
+        .map(|(account, child)| (*account, child.saturating_add(1)))
+        .collect();
+    for counter in &history.next_child {
+        let Some(account) = account_of(&counter.parent) else {
+            continue;
+        };
+        let Some(child) = highest.get(&account) else {
+            continue;
+        };
+        let ceiling = child
+            .saturating_add(1)
+            .saturating_add(COUNTER_SLACK)
+            .min(FIRST_HARDENED);
+        if let Some(value) = next.get_mut(&account) {
+            *value = (*value).max(counter.next_child.min(ceiling));
+        }
     }
     for (account, child) in next {
-        ensure_account(repos, account)?;
+        if !ensure_account(repos, account)? {
+            continue;
+        }
         if let Some(mut record) = repos.account(account)?
             && child > record.next_child
         {
@@ -775,21 +876,23 @@ fn link_found_outputs(repos: &mut dyn Repositories, now: Timestamp) -> Result<u3
     Ok(linked)
 }
 
-fn open_imported_kernels(repos: &dyn Repositories) -> Result<Vec<(TxId, Commitment)>, WalletError> {
+fn open_imported_kernels(
+    repos: &dyn Repositories,
+) -> Result<Vec<(TxId, Commitment, Option<Height>)>, WalletError> {
     let mut open = Vec::new();
     for account in repos.accounts()? {
         for stored in repos.transactions(account.index)? {
             if is_final(stored.entry.state) {
                 continue;
             }
-            let Some(excess) = repos
+            let Some((excess, min_height)) = repos
                 .imported_transaction(stored.id)?
-                .and_then(|record| record.kernel_excess)
+                .and_then(|record| Some((record.kernel_excess?, record.kernel_lookup_min_height)))
             else {
                 continue;
             };
             if let Ok(excess) = Commitment::from_bytes(&excess) {
-                open.push((stored.id, excess));
+                open.push((stored.id, excess, min_height));
             }
             if open.len() >= MAX_KERNEL_LOOKUPS {
                 return Ok(open);
@@ -826,16 +929,47 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+const WORK_DIR_PREFIX: &str = "legacy-import-";
+
+/// Removes the work directories of imports that did not end, never following a link.
+fn sweep_stale(data_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(data_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(WORK_DIR_PREFIX))
+            && entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if stale && let Err(error) = std::fs::remove_dir_all(entry.path()) {
+            warn!(error = %error, "stale legacy import folder not removed");
+        }
+    }
+}
+
 /// A work directory for one import inside `data_dir`, removed when dropped.
 pub struct ImportWorkDir {
     path: PathBuf,
 }
 
 impl ImportWorkDir {
-    /// Creates `<data_dir>/legacy-import-<suffix>`, which must not exist yet.
+    /// Creates `<data_dir>/legacy-import-<suffix>`, readable by its owner only, after removing
+    /// what an import that was killed left there. `suffix` is a plain name.
     pub fn create(data_dir: &Path, suffix: &str) -> std::io::Result<Self> {
-        let path = data_dir.join(format!("legacy-import-{suffix}"));
-        std::fs::create_dir(&path)?;
+        if suffix.is_empty()
+            || !suffix
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        }
+        sweep_stale(data_dir);
+        let path = data_dir.join(format!("{WORK_DIR_PREFIX}{suffix}"));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&path)?;
         Ok(Self { path })
     }
 

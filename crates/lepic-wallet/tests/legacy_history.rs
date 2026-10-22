@@ -19,9 +19,10 @@ use std::path::Path;
 
 use jiff::Timestamp;
 use legacy_support::{
-    ADDRESS_PIZZA, ADDRESS_RENT, MNEMONIC, OTHER_MNEMONIC, OldWallet, SLATE_CREATED, SLATE_MISSING,
-    SLATE_PIZZA, SLATE_POSTED, SLATE_RECEIVED, SLATE_RECEIVED_CANCELLED, SLATE_SAVINGS, SLATE_SENT,
-    SLATE_SENT_CANCELLED, keychain, posted_excess, put_kernel, put_outputs, sent_excess, snapshot,
+    ADDRESS_PIZZA, ADDRESS_RENT, MNEMONIC, OTHER_MNEMONIC, OldTx, OldWallet, SLATE_CREATED,
+    SLATE_MISSING, SLATE_PIZZA, SLATE_POSTED, SLATE_RECEIVED, SLATE_RECEIVED_CANCELLED,
+    SLATE_SAVINGS, SLATE_SENT, SLATE_SENT_CANCELLED, keychain, posted_excess, put_kernel,
+    put_outputs, sent_excess, snapshot,
 };
 use lepic_keychain::Keychain;
 use lepic_node::mock::MockFailure;
@@ -595,6 +596,54 @@ fn key_counters_move_past_every_key_the_old_wallet_used() {
     // child 0, below its counter of 3.
     assert_eq!(world.next_child(DEFAULT), 8);
     assert_eq!(world.next_child(SAVINGS), 3);
+}
+
+#[test]
+fn an_old_counter_far_past_every_reproduced_key_is_believed_only_a_little() {
+    let mut old = OldWallet::standard(&keychain(MNEMONIC));
+    old.counters = vec![(0, u32::MAX), (1, 2_000_000_000)];
+    let world = World::new(&old, &[]);
+
+    world.import();
+
+    // At most 1000 keys past the highest reproduced key (child 7, and child 0 in savings).
+    assert_eq!(world.next_child(DEFAULT), 1_008);
+    assert_eq!(world.next_child(SAVINGS), 1_001);
+}
+
+#[test]
+fn a_history_with_no_output_to_prove_it_is_refused_and_stores_nothing() {
+    let world = World::new(&OldWallet::standard(&keychain(MNEMONIC)), &[]);
+    let other = keychain(OTHER_MNEMONIC);
+    let mut forged = OldWallet::standard(&other);
+    forged.outputs.clear();
+    forged.counters = vec![(0, u32::MAX)];
+    let folder = empty_dir();
+    forged.write(&other, folder.path());
+
+    let outcome = world.import_from(folder.path());
+
+    assert_eq!(outcome.status, LegacyImportStatus::OtherWallet);
+    assert!(world.txs(DEFAULT).is_empty());
+    assert_eq!(world.labels(), [(0, "default".to_owned())]);
+    assert_eq!(world.next_child(DEFAULT), 0);
+    assert_eq!(world.import().status, LegacyImportStatus::Imported);
+}
+
+#[test]
+fn entries_of_accounts_the_old_wallet_never_had_are_skipped() {
+    let mut old = OldWallet::standard(&keychain(MNEMONIC));
+    let mut stray = OldTx::new(7, 0, "TxReceived", "2024-03-05T10:00:00Z");
+    stray.slate = Some("7a7a7a7a-0000-4000-8000-000000000007");
+    stray.credited = 1;
+    old.txs.push(stray);
+    let world = World::new(&old, &[]);
+
+    let outcome = world.import();
+
+    assert_eq!(outcome.status, LegacyImportStatus::Imported);
+    assert_eq!(outcome.skipped, 1);
+    assert_eq!(world.labels().len(), 2, "default and savings only");
 }
 
 #[test]
