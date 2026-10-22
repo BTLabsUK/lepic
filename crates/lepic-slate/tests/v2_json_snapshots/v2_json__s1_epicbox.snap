@@ -4,7 +4,7 @@ expression: pretty(&encode(&slate))
 ---
 {
   "version_info": {
-    "version": 3,
+    "version": 2,
     "orig_version": 3,
     "block_header_version": 6
   },

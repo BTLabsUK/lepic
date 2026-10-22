@@ -22,7 +22,7 @@ use lepic_slate::origin::{LegacyHeader, WireOrigin};
 use lepic_slate::registry::CodecRegistry;
 use serde_json::Value;
 
-const UPSTREAM_WALLET: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
+const UPSTREAM_WALLET: &str = "845b3fcf4df12ed0139929c62157015447a9d063";
 
 fn vector_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/vectors/slates")
@@ -227,7 +227,7 @@ fn vector_named(name: &str) -> Value {
 }
 
 /// Covers every V2-shaped stage vector: the file method's 2/2/b files, the Epicbox payloads with
-/// header 3/3/b, and upstream's V2 conversions.
+/// header 2/3/b, and upstream's V2 conversions.
 #[test]
 fn v2_vectors_decode_and_encode_to_the_same_json() {
     let codec = v2_codec();
@@ -272,27 +272,27 @@ fn v2_vectors_decode_and_encode_to_the_same_json() {
         "{headers:?}"
     );
     assert!(
-        headers.get(&(3, 3)).is_some_and(|&count| count >= 39),
+        headers.get(&(2, 3)).is_some_and(|&count| count >= 39),
         "{headers:?}"
     );
     assert_eq!(headers.len(), 2, "{headers:?}");
 }
 
-/// Upstream starts every slate at header 3 and converts it to the V2 shape unchanged, which is
-/// what its Epicbox sender sends.
+/// Upstream starts every slate at header 3 and converts it to the V2 shape at version 2, which is
+/// what its Epicbox sender sends: header 2/3/b.
 #[test]
-fn new_v2_slates_get_header_three_at_the_context_block_header_version() {
+fn new_v2_slates_get_header_two_three_at_the_context_block_header_version() {
     let codec = v2_codec();
     let mut count = 0;
     for vector in stage_vectors().filter(|vector| {
         vector["expected"]["shape"] == "V2"
-            && vector["expected"]["header"]["version"] == 3
+            && vector["expected"]["header"]["orig_version"] == 3
             && matches!(text(&vector["inputs"]["stage"]), "S1" | "I1")
     }) {
         let name = text(&vector["name"]);
         let expected = &vector["expected"];
         let header = header(&expected["header"]);
-        assert_eq!(header.orig_version, 3, "{name}");
+        assert_eq!(header.version, 2, "{name}");
         let slate = codec
             .decode(&wire(text(&expected["json"])))
             .unwrap()
@@ -375,8 +375,9 @@ fn v3_shaped_vectors_are_not_v2() {
     assert!(count > 0);
 }
 
-/// Mutations upstream reads as V2 that LEPIC refuses, by the decode checks of
-/// `docs/compat/legacy-slates.md` and the header versions upstream writes.
+/// Mutations LEPIC refuses although an upstream parser may read them as V2, by the decode checks
+/// of `docs/compat/legacy-slates.md` and the header versions upstream writes. Upstream `v4.1.0`
+/// refuses the participant and offset cases too; `v4.0.2` read them.
 fn stricter_than_upstream_v2(name: &str) -> Option<DecodeError> {
     let version = |version| DecodeError::UnsupportedVersion {
         codec: LEGACY_V2_JSON,

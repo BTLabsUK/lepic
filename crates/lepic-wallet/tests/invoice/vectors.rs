@@ -307,7 +307,7 @@ fn invoice_vectors_come_from_the_pinned_upstream_over_the_file_method() {
                 assert_eq!(text(&vector["inputs"]["producer"]), producer, "{case}");
                 assert_eq!(
                     text(&vector["upstream"]["commit"]),
-                    "465d499f01aad7e570b6cc220d52c6bfcf6a9a44",
+                    "845b3fcf4df12ed0139929c62157015447a9d063",
                     "{case}"
                 );
                 assert_eq!(vector["expected"]["randomized"], Value::Array(Vec::new()));
@@ -321,7 +321,7 @@ fn invoice_vectors_come_from_the_pinned_upstream_over_the_file_method() {
 fn each_g03_invoice_is_reproduced_at_every_stage() {
     let cases = invoice_cases();
     assert_eq!(cases.len(), G03_INVOICE_CASES, "{cases:?}");
-    let mut dropped_ttl = 0;
+    let mut kept_ttl = 0;
     for case in &cases {
         let (issued, context) = issue(case);
         assert_eq!(issued.slate.stage(), Stage::I1, "{case}");
@@ -336,15 +336,14 @@ fn each_g03_invoice_is_reproduced_at_every_stage() {
         let reply = FilePolicy.encode_reply(&codecs(), &paid, &context).unwrap();
         assert_encodings(case, "i2", &paid, &reply);
 
-        // The file method reads by header version, and upstream's I2 header says 2 even when the
-        // payer wrote the V3 shape for its TTL, so the issuer finalizes without the TTL. LEPIC's
-        // own I2 says 3 and keeps it.
+        // The file method reads by header version. Upstream's V3-shaped I2 says 3, as LEPIC's
+        // does, so the issuer reads the payer's TTL and finalizes with it.
         let i2 = read_file(case, "i2");
         if paid.ttl_cutoff_height().is_some() {
-            assert_eq!(i2.ttl_cutoff_height(), None, "{case}");
+            assert_eq!(i2.ttl_cutoff_height(), paid.ttl_cutoff_height(), "{case}");
             let own = FilePolicy.decode(&codecs(), &reply).unwrap();
             assert_eq!(own.ttl_cutoff_height(), paid.ttl_cutoff_height(), "{case}");
-            dropped_ttl += 1;
+            kept_ttl += 1;
         }
         let finalized =
             build_i3(BASE_FEE, &issued, &i2).unwrap_or_else(|error| panic!("{case}: {error:?}"));
@@ -365,7 +364,7 @@ fn each_g03_invoice_is_reproduced_at_every_stage() {
             .unwrap();
         assert_encodings(case, "i3", &finalized.slate, &file);
     }
-    assert_eq!(dropped_ttl, 1);
+    assert_eq!(kept_ttl, 1);
 }
 
 fn node_at(height: u64) -> MockNode {

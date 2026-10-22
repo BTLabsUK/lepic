@@ -1,6 +1,6 @@
 # Legacy slate formats (V2 and V3 JSON)
 
-Derived from `epic-wallet` `v4.0.2`: `libwallet/src/slate.rs`, `libwallet/src/slate_versions/{mod,ser,v2,v3}.rs`,
+Derived from `epic-wallet` `v4.1.0` (ADR 0020; earlier `v4.0.2` behaviour is noted where it differs): `libwallet/src/slate.rs`, `libwallet/src/slate_versions/{mod,ser,v2,v3}.rs`,
 `impls/src/adapters/{file,epicbox,http}.rs`, `libwallet/src/api_impl/{owner,foreign}.rs`,
 `libwallet/src/internal/tx.rs`, `libwallet/src/tx_proof.rs`. The golden vectors in
 `testdata/vectors/slates/` (task G-03) settle every fact on this page; where they disagree with it, the
@@ -15,10 +15,13 @@ LEPIC must reproduce exactly the combinations upstream produces:
 - New slates are created with header `3/3/<b>`, where `<b>` is the block header version at the chain
   tip: 6 below the first header-version change (mainnet height 9,000,000, floonet 25,800), 7 at or
   above it. Floonet slates today carry `3/3/7` (vectors `*_header_7_*`).
-- Converting to the V2 shape copies the header unchanged. The Epicbox sender always converts to the
-  V2 shape, so Epicbox payloads carry the V2 shape with header `3/3/6`.
+- The header's `version` follows the shape: every V2-shaped slate upstream writes says 2, every
+  V3-shaped one says 3. `orig_version` and `block_header_version` are carried through. The Epicbox
+  sender always converts to the V2 shape, so Epicbox payloads carry the V2 shape with header
+  `2/3/6`. (`v4.0.2` copied the whole header on conversion and sent `3/3/6`; LEPIC still reads it.)
 - The file method forces `version` and `orig_version` to 2 when it writes the V2 shape.
-- The Epicbox receiver replies in the shape it received, with the header carried through.
+- The Epicbox receiver replies in the shape it received, with `orig_version` and
+  `block_header_version` carried through.
 
 Upstream has two parse paths:
 
@@ -31,9 +34,9 @@ LEPIC keeps the header as received (`WireOrigin`, ADR 0002) and follows each met
 
 - The file path dispatches on the header, as path 1 does: version 2 goes to the V2 codec with any
   `ttl_cutoff_height` and `payment_proof` keys ignored, version 3 to the V3 codec only, and any
-  other version is refused. A V3-shaped file with header version 2, which upstream writes in the
-  invoice flow (`invoice_file_ttl_i2_file`), is therefore read without its TTL and payment proof,
-  as upstream reads it.
+  other version is refused. A V3-shaped file with header version 2, which `v4.0.2` wrote in the
+  invoice flow, is therefore read without its TTL and payment proof, as upstream reads it.
+  `v4.1.0` writes that file with version 3 (`invoice_file_ttl_i2_file`), so its TTL is read.
 - The Epicbox path detects the shape structurally, as path 2 does, and ignores the header.
 
 The codecs themselves detect by shape; the file policy in `lepic-transport` does the header
@@ -76,12 +79,12 @@ V2 is V3 without the `ttl_cutoff_height` and `payment_proof` keys.
 
 ## Which shape each method uses
 
-What `epic-wallet` `v4.0.2` writes:
+What `epic-wallet` `v4.1.0` writes:
 
 | Method | New slate | Accepts | Reply |
 |---|---|---|---|
 | File | V2 shape with header `2/2/<b>`, unless the slate has a TTL or payment proof, then V3 with the slate's header; compact JSON | path 1 | same content rule as a new slate |
-| Epicbox | V2 shape, header unchanged (`3/3/<b>`) | path 2 | shape of the inbound slate |
+| Epicbox | V2 shape, header `2/3/<b>` (`v4.0.2`: `3/3/<b>`) | path 2 | shape of the inbound slate |
 | HTTP (not in LEPIC) | V3 if the peer lists V3, else V2 | path 1 | |
 
 What LEPIC writes (ADR 0015), next to upstream's choice:
@@ -89,13 +92,13 @@ What LEPIC writes (ADR 0015), next to upstream's choice:
 | Method | LEPIC new slate | LEPIC reply | Upstream |
 |---|---|---|---|
 | File | V3 shape, header `3/3/<b>` with the chain's `<b>`; compact JSON | V3 shape, header `3/3/<b>` with the received `<b>` | V2 unless TTL or payment proof |
-| Epicbox | V2 shape, header `3/3/<b>` | shape of the inbound slate, header echoed | same as LEPIC |
+| Epicbox | V2 shape, header `2/3/<b>` | shape of the inbound slate, `version` following the shape, the rest echoed | same as LEPIC |
 
 LEPIC's file output therefore differs in bytes from upstream's for slates without TTL or payment
 proof. `epic-wallet` reads it through path 1, which accepts header version 3 with the V3 shape. A
 reply always carries version 3, so a TTL or payment proof LEPIC adds to a slate received under a
-version 2 header is read by the peer, where upstream's own reply in that case
-(`invoice_file_ttl_i2_file`) loses it. The differential suite and the interop file scenarios show
+version 2 header is read by the peer, as upstream `v4.1.0`'s own reply in that case
+(`invoice_file_ttl_i2_file`) is; `v4.0.2`'s lost it. The differential suite and the interop file scenarios show
 `epic-wallet` receives, pays and finalizes every file LEPIC writes.
 
 File naming has no enforced extension. The CLI writes the receiver's reply to `<input>.response`.
@@ -123,11 +126,15 @@ it over Epicbox between LEPIC wallets, with I1 and I2 in the V3 shape and the LE
 ## Checks LEPIC performs on decode
 
 Exact hex lengths, valid curve points and signatures, range proof size within the Bulletproof maximum,
-`num_participants` equal to 2 (upstream accepts any value but only creates 2; see
+`num_participants` equal to 2 (upstream only creates 2, and `v4.1.0` refuses 0; see
 `malformed_num_participants_zero`), participant count not above `num_participants`, ids below `num_participants`,
 no duplicate ids, exactly one kernel, fees consistent between slate, kernel and transaction, fee not
 below the weight-based minimum, `version_info.version` 2 or 3 (upstream's Epicbox path accepts any
 version for the V2 shape; see `malformed_header_version_1` and `_4`), and no non-null
 `payment_proof` in a V2-shaped slate (the V2 codec refuses it rather than reading the slate
-without it; the file path removes the V3-only keys before a header-2 file reaches it). These are LEPIC's own rules and stricter than upstream's parse step.
+without it; the file path removes the V3-only keys before a header-2 file reaches it). Upstream
+`v4.1.0` also refuses a duplicate participant id, a zero participant count and an offset of the
+wrong length (`malformed_duplicate_participant_id`, `malformed_num_participants_zero`,
+`malformed_offset_too_short`), which `v4.0.2` read; the other checks are LEPIC's own and stricter
+than upstream's parse step.
 Any slate `epic-wallet` emits must still decode; the vectors prove it.

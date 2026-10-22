@@ -1,4 +1,4 @@
-//! The V2 JSON slate as `epic-wallet` `v4.0.2` reads and writes it (`docs/compat/legacy-slates.md`).
+//! The V2 JSON slate as `epic-wallet` `v4.1.0` reads and writes it (`docs/compat/legacy-slates.md`).
 //! It is the V3 shape without the `ttl_cutoff_height` and `payment_proof` keys, so a slate in it
 //! carries neither.
 
@@ -35,10 +35,12 @@ use crate::validate::{
 
 pub const LEGACY_V2_JSON: CodecId = CodecId::new("legacy-v2");
 
-/// The header of a slate this codec starts. Upstream creates every slate at version 3 and
-/// converts it to the V2 shape with the header unchanged, which is what its Epicbox sender
-/// sends; the file method overrides the header through the slate's origin.
+/// The `orig_version` of a slate this codec starts. Upstream creates every slate at version 3.
 const NEW_SLATE_VERSION: u16 = 3;
+
+/// The `version` every V2-shaped slate carries. Upstream `v4.1.0` sets it to 2 whenever it
+/// converts a slate to the V2 shape, and keeps `orig_version` and `block_header_version`.
+const V2_SHAPE_VERSION: u16 = 2;
 
 /// The V2 JSON codec. It refuses slates whose fee is below `base_fee` per unit of the final
 /// transaction's fee weight.
@@ -115,6 +117,10 @@ impl Codec for V2JsonCodec {
                 orig_version: NEW_SLATE_VERSION,
                 block_header_version: context.block_header_version,
             });
+        let header = LegacyHeader {
+            version: V2_SHAPE_VERSION,
+            ..header
+        };
         Ok(WireSlate::text(MediaType::JSON, write_slate(slate, header)))
     }
 }
@@ -225,8 +231,8 @@ impl SlateV2 {
     /// on a slate that is refused stays bounded by its size.
     fn into_slate(self) -> Result<Slate, DecodeError> {
         let header = self.version_info.ok_or(missing("version_info"))?.parse()?;
-        // Both values reach the V2 shape upstream: the file method writes 2, and the Epicbox
-        // sender keeps the 3 of the slate it converts.
+        // Both values reach the V2 shape: upstream `v4.1.0` writes 2, and `v4.0.2`'s Epicbox
+        // sender kept the 3 of the slate it converted.
         if !matches!(header.version, 2 | 3) {
             return Err(DecodeError::UnsupportedVersion {
                 codec: LEGACY_V2_JSON,

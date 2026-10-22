@@ -248,7 +248,7 @@ fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() 
         .unwrap();
     let (wire, _) = sender.received().unwrap();
     assert!(wire.as_text().unwrap().starts_with(
-        r#"{"version_info":{"version":3,"orig_version":3,"block_header_version":6},"#
+        r#"{"version_info":{"version":2,"orig_version":3,"block_header_version":6},"#
     ));
 }
 

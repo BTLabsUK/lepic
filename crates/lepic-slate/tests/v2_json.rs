@@ -196,7 +196,12 @@ mod header {
 
     #[test]
     fn keeps_the_file_header_and_the_epicbox_header() {
-        for (name, expected) in [(S1, header(2, 6)), (EPICBOX_S1, header(3, 6))] {
+        let epicbox = LegacyHeader {
+            version: 2,
+            orig_version: 3,
+            block_header_version: 6,
+        };
+        for (name, expected) in [(S1, header(2, 6)), (EPICBOX_S1, epicbox)] {
             let slate = decode(&vector_json(name)).unwrap();
             assert_eq!(
                 slate.origin(),
@@ -206,8 +211,9 @@ mod header {
         }
     }
 
+    /// The reply keeps `orig_version` and `block_header_version` and, being V2-shaped, says 2.
     #[test]
-    fn a_reply_echoes_the_received_header() {
+    fn a_reply_echoes_the_received_header_at_version_two() {
         let received = decode(&vector_json(EPICBOX_S1)).unwrap();
         let mut parts = decode(&vector_json(S2)).unwrap().into_parts();
         parts.origin = received.origin().copied();
@@ -217,8 +223,25 @@ mod header {
         };
         let encoded = codec().encode(&reply, &context).unwrap();
         assert!(encoded.as_text().unwrap().starts_with(
-            r#"{"version_info":{"version":3,"orig_version":3,"block_header_version":6},"#
+            r#"{"version_info":{"version":2,"orig_version":3,"block_header_version":6},"#
         ));
+    }
+
+    /// `v4.0.2` sent V2-shaped Epicbox slates with `version` 3; they still decode, and the
+    /// reply is written at version 2 as `v4.1.0` writes it.
+    #[test]
+    fn a_version_three_v2_slate_decodes_and_encodes_at_version_two() {
+        let slate =
+            decode_mutated(S1, |value| value["version_info"]["version"] = json!(3)).unwrap();
+        assert_eq!(
+            slate.origin().and_then(WireOrigin::legacy_header),
+            Some(LegacyHeader {
+                version: 3,
+                orig_version: 2,
+                block_header_version: 6,
+            })
+        );
+        assert_eq!(encode(&slate), vector_json(S1));
     }
 
     #[test]
@@ -658,11 +681,15 @@ proptest! {
         );
         let encoded = encode(&slate);
         let decoded = decode(&encoded).unwrap();
-        let expected_header = header.unwrap_or(LegacyHeader {
-            version: 3,
-            orig_version: 3,
-            block_header_version: CONTEXT.block_header_version,
-        });
+        // Every V2-shaped slate is written at version 2; the other two values are kept.
+        let expected_header = LegacyHeader {
+            version: 2,
+            ..header.unwrap_or(LegacyHeader {
+                version: 3,
+                orig_version: 3,
+                block_header_version: CONTEXT.block_header_version,
+            })
+        };
         prop_assert_eq!(
             &decoded,
             &slate.clone().with_origin(Some(WireOrigin::legacy(LEGACY_V2_JSON, expected_header)))

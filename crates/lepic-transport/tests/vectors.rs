@@ -24,7 +24,7 @@ use lepic_transport::file::{FilePolicy, FileTransport};
 use lepic_transport::transport::{Exchange, Location, Transport};
 use serde_json::Value;
 
-const UPSTREAM_WALLET: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
+const UPSTREAM_WALLET: &str = "845b3fcf4df12ed0139929c62157015447a9d063";
 
 /// `version` and `orig_version` of every file LEPIC writes (ADR 0015).
 const FILE_VERSION: u16 = 3;
@@ -259,12 +259,9 @@ fn a_version_two_file_with_a_repeated_key_is_refused_with_or_without_v3_only_key
 }
 
 /// Cases where LEPIC refuses a file upstream's parser accepts, because LEPIC's decode checks
-/// more than upstream's parse step (`docs/compat/legacy-slates.md`, checks on decode).
-const STRICTER_THAN_UPSTREAM: [&str; 3] = [
-    "malformed_duplicate_participant_id",
-    "malformed_num_participants_zero",
-    "malformed_offset_too_short",
-];
+/// more than upstream's parse step (`docs/compat/legacy-slates.md`, checks on decode). Upstream
+/// `v4.1.0` refuses every malformed vector LEPIC refuses, so the list is empty.
+const STRICTER_THAN_UPSTREAM: [&str; 0] = [];
 
 /// Each malformed file is accepted or refused as upstream's file method does, except the
 /// deliberately stricter cases. An accepted file is read with the codec upstream read it with,

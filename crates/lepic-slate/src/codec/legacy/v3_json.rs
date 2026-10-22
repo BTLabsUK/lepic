@@ -1,4 +1,4 @@
-//! The V3 JSON slate as `epic-wallet` `v4.0.2` reads and writes it (`docs/compat/legacy-slates.md`).
+//! The V3 JSON slate as `epic-wallet` `v4.1.0` reads and writes it (`docs/compat/legacy-slates.md`).
 
 use lepic_crypto::{Commitment, Signature};
 use lepic_primitives::amount::{Amount, Fee, Height};
@@ -32,6 +32,9 @@ pub const LEGACY_V3_JSON: CodecId = CodecId::new("legacy-v3");
 
 /// The header of a slate this codec starts, rather than one that answers a received slate.
 const NEW_SLATE_VERSION: u16 = 3;
+
+/// The `version` every V3-shaped slate carries.
+const V3_SHAPE_VERSION: u16 = 3;
 
 /// The V3 JSON codec. It refuses slates whose fee is below `base_fee` per unit of the final
 /// transaction's fee weight.
@@ -91,6 +94,12 @@ impl Codec for V3JsonCodec {
                 orig_version: NEW_SLATE_VERSION,
                 block_header_version: context.block_header_version,
             });
+        // Upstream `v4.1.0` writes `version` 3 on every V3-shaped slate, whatever header it
+        // read, and keeps `orig_version` and `block_header_version`.
+        let header = LegacyHeader {
+            version: V3_SHAPE_VERSION,
+            ..header
+        };
         Ok(WireSlate::text(MediaType::JSON, write_slate(slate, header)))
     }
 }

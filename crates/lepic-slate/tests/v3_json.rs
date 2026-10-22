@@ -936,11 +936,15 @@ proptest! {
         );
         let encoded = encode(&slate);
         let decoded = decode(&encoded).unwrap();
-        let expected_header = header.unwrap_or(LegacyHeader {
+        // Every V3-shaped slate is written at version 3; the other two values are kept.
+        let expected_header = LegacyHeader {
             version: 3,
-            orig_version: 3,
-            block_header_version: CONTEXT.block_header_version,
-        });
+            ..header.unwrap_or(LegacyHeader {
+                version: 3,
+                orig_version: 3,
+                block_header_version: CONTEXT.block_header_version,
+            })
+        };
         prop_assert_eq!(
             &decoded,
             &slate.clone().with_origin(Some(WireOrigin::legacy(LEGACY_V3_JSON, expected_header)))
