@@ -553,11 +553,13 @@ async fn supervise(
                 break exit_failure(&progress, running.last_problem(&detail));
             }
             () = sleep_until(deadline) => {
+                catch_dropped_upload(&running.control, &mut progress, running.started);
                 if let Some(failure) = overdue(&progress) {
                     break failure;
                 }
             }
         }
+        catch_dropped_upload(&running.control, &mut progress, running.started);
         let visible = progress.visible();
         state.send_if_modified(|current| {
             let changed = *current != visible;
@@ -638,6 +640,22 @@ fn on_event(
     None
 }
 
+/// Marks the onion as uploaded when its `HS_DESC UPLOADED` was dropped from a full event
+/// queue, so a lost event is not taken for a failed publish.
+fn catch_dropped_upload(control: &ControlConnection, progress: &mut Progress, started: Instant) {
+    if let Some(published) = &mut progress.published
+        && !published.uploaded
+        && control.upload_was_dropped(published.onion.service_id())
+    {
+        published.uploaded = true;
+        progress.publish_deadline = None;
+        info!(
+            elapsed_ms = elapsed_ms(started),
+            "onion published, its event was dropped"
+        );
+    }
+}
+
 fn next_deadline(progress: &Progress) -> Instant {
     if !progress.bootstrapped {
         return progress.stall_deadline.min(progress.bootstrap_deadline);
@@ -709,7 +727,8 @@ async fn add_onion(
             "tor published another onion",
         ));
     }
-    let uploaded = progress.recent_uploads.iter().any(|id| *id == service_id);
+    let uploaded = progress.recent_uploads.iter().any(|id| *id == service_id)
+        || running.control.upload_was_dropped(&service_id);
     progress.published = Some(Published {
         onion: expected,
         uploaded,
@@ -1039,6 +1058,48 @@ mod tests {
             uploaded: true,
         });
         assert_eq!(progress.visible(), TorState::Ready { onion });
+    }
+
+    #[tokio::test]
+    async fn an_upload_event_dropped_from_a_full_queue_still_publishes() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let onion = OnionAddress::from_public_key(&[1; 32]);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let service_id = onion.service_id().to_owned();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut lines = BufReader::new(read).lines();
+            let mut flood = "650 STATUS_CLIENT NOTICE CIRCUIT_ESTABLISHED\r\n".repeat(1024);
+            flood.push_str(&format!("650 HS_DESC UPLOADED {service_id} UNKNOWN $A\r\n"));
+            write.write_all(flood.as_bytes()).await.unwrap();
+            while let Ok(Some(_)) = lines.next_line().await {
+                write.write_all(b"250 OK\r\n").await.unwrap();
+            }
+        });
+        let (control, _events) = ControlConnection::connect(address, Duration::from_secs(5))
+            .await
+            .unwrap();
+        control.signal_shutdown().await.unwrap();
+        let now = Instant::now();
+        let mut progress = Progress {
+            progress: 100,
+            tag: "done".into(),
+            bootstrapped: true,
+            published: Some(Published {
+                onion: onion.clone(),
+                uploaded: false,
+            }),
+            recent_uploads: VecDeque::new(),
+            stall_deadline: now,
+            bootstrap_deadline: now,
+            publish_deadline: Some(now),
+        };
+        catch_dropped_upload(&control, &mut progress, now);
+        assert_eq!(progress.visible(), TorState::Ready { onion });
+        assert_eq!(overdue(&progress), None);
     }
 
     #[test]

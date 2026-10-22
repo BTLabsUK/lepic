@@ -6,6 +6,7 @@
 //! in order, so one command runs at a time. Tor is a local process the wallet started, but its
 //! replies are still bounded: line length, lines per reply and data block size.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
-use tracing::debug;
+use tracing::{debug, warn};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::onion::ONION_NAME_LEN;
@@ -33,6 +34,7 @@ pub const MAX_LINE_LEN: usize = 8 * 1024;
 pub const MAX_REPLY_LINES: usize = 512;
 const MAX_DATA_LEN: usize = 256 * 1024;
 const EVENT_QUEUE: usize = 256;
+const DROPPED_UPLOADS: usize = 8;
 const COOKIE_LEN: usize = 32;
 /// Padded base64 of the 64-byte expanded key.
 const ENCODED_KEY_LEN: usize = 88;
@@ -356,9 +358,13 @@ fn truncate(text: &str, max: usize) -> String {
 pub struct ControlConnection {
     commander: Mutex<Commander>,
     closed: Arc<AtomicBool>,
+    dropped_uploads: DroppedUploads,
     reader: JoinHandle<()>,
     timeout: Duration,
 }
+
+// The services of the last `HS_DESC UPLOADED` events dropped from a full queue.
+type DroppedUploads = Arc<std::sync::Mutex<VecDeque<String>>>;
 
 #[derive(Debug)]
 struct Commander {
@@ -390,16 +396,19 @@ impl ControlConnection {
         let (reply_tx, replies) = mpsc::channel(4);
         let (event_tx, events) = mpsc::channel(EVENT_QUEUE);
         let closed = Arc::new(AtomicBool::new(false));
+        let dropped_uploads = DroppedUploads::default();
         let reader = tokio::spawn(read_replies(
             BufReader::new(read),
             reply_tx,
             event_tx,
             closed.clone(),
+            dropped_uploads.clone(),
         ));
         Ok((
             Self {
                 commander: Mutex::new(Commander { writer, replies }),
                 closed,
+                dropped_uploads,
                 reader,
                 timeout,
             },
@@ -409,6 +418,16 @@ impl ControlConnection {
 
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
+    }
+
+    /// Whether an `HS_DESC UPLOADED` for `service_id` was dropped because the event receiver
+    /// was full, so the upload happened although no event for it arrived.
+    pub fn upload_was_dropped(&self, service_id: &str) -> bool {
+        self.dropped_uploads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|id| id == service_id)
     }
 
     /// Sends one command line and returns its reply; a reply other than 2xx is
@@ -661,9 +680,11 @@ async fn read_replies(
     replies: mpsc::Sender<Result<Reply, ControlError>>,
     events: mpsc::Sender<Event>,
     closed: Arc<AtomicBool>,
+    dropped_uploads: DroppedUploads,
 ) {
     let mut assembler = ReplyAssembler::default();
     let mut line = Vec::new();
+    let mut dropping = false;
     let failure = loop {
         let text = match read_line(&mut reader, &mut line).await {
             Ok(Some(text)) => text,
@@ -677,8 +698,29 @@ async fn read_replies(
         };
         if reply.is_event() {
             let event = parse_event(reply.lines.first().map(String::as_str).unwrap_or_default());
-            if events.try_send(event).is_err() {
-                debug!("tor event dropped");
+            match events.try_send(event) {
+                Ok(()) => dropping = false,
+                Err(mpsc::error::TrySendError::Full(event)) => {
+                    // Once per run of drops: the queue fills only when its reader stalls.
+                    if !dropping {
+                        warn!("tor events dropped, the event queue is full");
+                        dropping = true;
+                    }
+                    if let Event::HsDesc {
+                        action: HsDescAction::Uploaded,
+                        service_id,
+                    } = event
+                    {
+                        let mut dropped = dropped_uploads
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if dropped.len() >= DROPPED_UPLOADS {
+                            dropped.pop_front();
+                        }
+                        dropped.push_back(service_id);
+                    }
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {}
             }
         } else if replies.send(Ok(reply)).await.is_err() {
             break ControlError::Closed;
@@ -994,6 +1036,31 @@ mod tests {
             control.authenticate(&[7; 31]).await,
             Err(ControlError::InvalidArgument)
         ));
+    }
+
+    #[tokio::test]
+    async fn remembers_an_upload_dropped_from_a_full_queue() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut lines = BufReader::new(read).lines();
+            let mut flood = "650 STATUS_CLIENT NOTICE CIRCUIT_ESTABLISHED\r\n".repeat(EVENT_QUEUE);
+            flood.push_str(&format!("650 HS_DESC UPLOADED {SERVICE} UNKNOWN $A\r\n"));
+            write.write_all(flood.as_bytes()).await.unwrap();
+            while let Ok(Some(_)) = lines.next_line().await {
+                write.write_all(b"250 OK\r\n").await.unwrap();
+            }
+        });
+        let (control, events) = ControlConnection::connect(address, Duration::from_secs(5))
+            .await
+            .unwrap();
+        // Replies come after the events sent before them, so all were handled by now.
+        control.signal_shutdown().await.unwrap();
+        assert_eq!(events.len(), EVENT_QUEUE);
+        assert!(control.upload_was_dropped(SERVICE));
+        assert!(!control.upload_was_dropped(&SERVICE.replace('m', "n")));
     }
 
     #[tokio::test]
