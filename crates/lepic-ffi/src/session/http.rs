@@ -205,6 +205,9 @@ impl Session {
         let generation = self.http_starts.fetch_add(1, Ordering::Relaxed);
         {
             let mut slot = lock(&self.http_listener);
+            // Checked again under the slot lock: a lock that ran since stops only a listener
+            // it finds in the slot.
+            self.ensure_unlocked()?;
             let busy = match &*slot {
                 HttpListener::Idle => false,
                 HttpListener::Starting(_) => true,

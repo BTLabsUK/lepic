@@ -293,7 +293,6 @@ impl Session {
         if let Some(listener) = lock(&self.listener).take() {
             listener.stop();
         }
-        self.stop_http_listener();
         if let Some(scan) = lock(&self.scan).take() {
             scan.cancel();
         }
@@ -302,6 +301,8 @@ impl Session {
             epicbox.detach();
         }
         self.engine.lock();
+        // After the engine locks, so a listener start that saw it unlocked is in the slot.
+        self.stop_http_listener();
     }
 
     pub(crate) fn ensure_unlocked(&self) -> Result<(), WalletError> {
