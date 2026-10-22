@@ -1,10 +1,12 @@
 //! The listener: serves `check_version` and `receive_tx` at `/v2/foreign`, as
 //! `epic-wallet listen -m http` does, so any wallet that sends over HTTP can pay this one.
 //!
-//! Everything a caller sends is untrusted and its cost is bounded: connections at once, time
-//! to send the headers and the body, body size, and payments taken per minute. Only payments
-//! are served; invoices and the owner API are not.
+//! Everything a caller sends is untrusted and its cost is bounded: connections at once, in all
+//! and from one address, time to send the headers and the body and to take the answer, body
+//! size, requests per minute, and payments taken per minute. Only payments are served;
+//! invoices and the owner API are not.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -19,6 +21,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use lepic_slate::codec::WireSlate;
 use lepic_transport::transport::BoxFuture;
+use serde::Deserialize;
+use serde::de::IgnoredAny;
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
 use tracing::{debug, info, warn};
@@ -33,7 +37,7 @@ const ENDPOINT: &str = "/v2/foreign";
 pub enum Exposure {
     /// This computer only: `127.0.0.1`.
     LocalOnly,
-    /// Every network interface: `0.0.0.0`, for a port forwarded from the internet.
+    /// Every IPv4 network interface: `0.0.0.0`, for a port forwarded from the internet.
     Internet,
 }
 
@@ -60,12 +64,21 @@ pub struct ListenSettings {
     /// 0 picks a free port, for tests.
     pub port: u16,
     pub max_connections: usize,
+    /// Connections at once from one remote address.
+    pub max_connections_per_address: usize,
     /// For the request line and headers.
     pub header_timeout: Duration,
+    /// For the body, once the headers are in. A sender posts its slate in one go.
+    pub body_timeout: Duration,
     /// From the first byte of a request to the last byte of its answer, the wallet's work
     /// included.
     pub request_timeout: Duration,
-    /// `receive_tx` calls taken in any one minute; more are refused as busy.
+    /// For the caller to take the answer. A connection ends at the latest after
+    /// `header_timeout + request_timeout + answer_timeout`, whatever it is doing.
+    pub answer_timeout: Duration,
+    /// Requests of any kind taken in any one minute; more are answered `503`.
+    pub requests_per_minute: u32,
+    /// `receive_tx` calls carrying an S1 taken in any one minute; more are refused as busy.
     pub receives_per_minute: u32,
 }
 
@@ -75,10 +88,21 @@ impl ListenSettings {
             exposure,
             port,
             max_connections: 16,
+            max_connections_per_address: 4,
             header_timeout: Duration::from_secs(10),
+            body_timeout: Duration::from_secs(15),
             request_timeout: Duration::from_secs(60),
+            answer_timeout: Duration::from_secs(10),
+            requests_per_minute: 120,
             receives_per_minute: 30,
         }
+    }
+
+    /// The longest a connection is served.
+    fn connection_deadline(&self) -> Duration {
+        self.header_timeout
+            .saturating_add(self.request_timeout)
+            .saturating_add(self.answer_timeout)
     }
 }
 
@@ -178,7 +202,9 @@ pub async fn listen(
     let state = Arc::new(Served {
         handler,
         settings,
-        window: Mutex::new(Window::new()),
+        requests: Mutex::new(Window::new()),
+        receives: Mutex::new(Window::new()),
+        per_address: Mutex::new(HashMap::new()),
     });
     let task = tokio::spawn(accept_loop(listener, state, stopped));
     info!(
@@ -197,10 +223,61 @@ pub async fn listen(
 struct Served {
     handler: Arc<dyn ReceiveHandler>,
     settings: ListenSettings,
-    window: Mutex<Window>,
+    requests: Mutex<Window>,
+    receives: Mutex<Window>,
+    /// Open connections by remote address. Kept in memory only and never logged.
+    per_address: Mutex<HashMap<IpAddr, usize>>,
 }
 
-/// `receive_tx` calls counted in the current minute.
+impl Served {
+    fn take(window: &Mutex<Window>, limit: u32) -> bool {
+        window
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take(limit)
+    }
+
+    /// A share of the connections for `address`, or `None` when it holds its most.
+    fn admit(self: &Arc<Self>, address: IpAddr) -> Option<AddressShare> {
+        let mut open = self
+            .per_address
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let count = open.entry(address).or_default();
+        if *count >= self.settings.max_connections_per_address {
+            return None;
+        }
+        *count = count.saturating_add(1);
+        Some(AddressShare {
+            served: Arc::clone(self),
+            address,
+        })
+    }
+}
+
+/// One connection's share of its remote address's connections, given back on drop.
+struct AddressShare {
+    served: Arc<Served>,
+    address: IpAddr,
+}
+
+impl Drop for AddressShare {
+    fn drop(&mut self) {
+        let mut open = self
+            .served
+            .per_address
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = open.get_mut(&self.address) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                open.remove(&self.address);
+            }
+        }
+    }
+}
+
+/// Calls counted in the current minute.
 struct Window {
     started: Instant,
     taken: u32,
@@ -237,8 +314,8 @@ async fn accept_loop(
             accepted = listener.accept() => accepted,
             _ = stopped.wait_for(|stop| *stop) => break,
         };
-        let stream = match accepted {
-            Ok((stream, _)) => stream,
+        let (stream, remote) = match accepted {
+            Ok(accepted) => accepted,
             Err(error) => {
                 debug!(%error, "accept failed");
                 // Out of descriptors and similar: give the system a moment instead of spinning.
@@ -251,8 +328,13 @@ async fn accept_loop(
             debug!("connection limit reached");
             continue;
         };
+        let Some(share) = state.admit(remote.ip().to_canonical()) else {
+            debug!("connection limit of one address reached");
+            continue;
+        };
         let state = Arc::clone(&state);
         let header_timeout = state.settings.header_timeout;
+        let deadline = state.settings.connection_deadline();
         tokio::spawn(async move {
             let service = service_fn(move |request| {
                 let state = Arc::clone(&state);
@@ -263,9 +345,13 @@ async fn accept_loop(
                 .header_read_timeout(header_timeout)
                 .keep_alive(false)
                 .serve_connection(TokioIo::new(stream), service);
-            if let Err(error) = connection.await {
-                debug!(%error, "connection ended");
+            // A caller that stops reading its answer would otherwise hold the slot forever.
+            match tokio::time::timeout(deadline, connection).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => debug!(%error, "connection ended"),
+                Err(_) => debug!("connection timed out"),
             }
+            drop(share);
             drop(permit);
         });
     }
@@ -273,6 +359,10 @@ async fn accept_loop(
 }
 
 async fn answer(state: &Served, request: Request<Incoming>) -> Response<Full<Bytes>> {
+    if !Served::take(&state.requests, state.settings.requests_per_minute) {
+        debug!("request limit reached");
+        return status(StatusCode::SERVICE_UNAVAILABLE);
+    }
     if request.uri().path() != ENDPOINT {
         return status(StatusCode::NOT_FOUND);
     }
@@ -297,12 +387,14 @@ async fn serve(state: &Served, request: Request<Incoming>) -> Response<Full<Byte
     if declared.is_some_and(|length| length > u64::try_from(MAX_BODY_LEN).unwrap_or(u64::MAX)) {
         return status(StatusCode::PAYLOAD_TOO_LARGE);
     }
-    let body = match Limited::new(request.into_body(), MAX_BODY_LEN)
-        .collect()
-        .await
-    {
-        Ok(collected) => collected.to_bytes(),
-        Err(_) => return status(StatusCode::PAYLOAD_TOO_LARGE),
+    let collecting = Limited::new(request.into_body(), MAX_BODY_LEN).collect();
+    let body = match tokio::time::timeout(state.settings.body_timeout, collecting).await {
+        Ok(Ok(collected)) => collected.to_bytes(),
+        Ok(Err(_)) => return status(StatusCode::PAYLOAD_TOO_LARGE),
+        Err(_) => {
+            debug!("body timed out");
+            return status(StatusCode::REQUEST_TIMEOUT);
+        }
     };
     let request = match rpc::decode_request(&body) {
         Ok(request) => request,
@@ -311,11 +403,9 @@ async fn serve(state: &Served, request: Request<Incoming>) -> Response<Full<Byte
     match request.call {
         Call::CheckVersion => json(rpc::encode_version_response(&request.id)),
         Call::ReceiveTx(slate) => {
-            let allowed = state
-                .window
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take(state.settings.receives_per_minute);
+            // Only what could be a payment spends the payment budget.
+            let allowed = !looks_like_s1(&slate)
+                || Served::take(&state.receives, state.settings.receives_per_minute);
             if !allowed {
                 debug!("receive limit reached");
                 state.handler.refused(Refusal::Unavailable);
@@ -339,6 +429,24 @@ async fn serve(state: &Served, request: Request<Incoming>) -> Response<Full<Byte
             }
         }
     }
+}
+
+#[derive(Deserialize)]
+struct S1Shape {
+    #[serde(rename = "id")]
+    _id: IgnoredAny,
+    #[serde(rename = "amount")]
+    _amount: IgnoredAny,
+    #[serde(rename = "participant_data")]
+    _participant_data: IgnoredAny,
+}
+
+/// Whether `slate` is a JSON object with the fields every S1 carries, checked without decoding
+/// the slate.
+fn looks_like_s1(slate: &WireSlate) -> bool {
+    slate
+        .as_text()
+        .is_some_and(|text| serde_json::from_str::<S1Shape>(text).is_ok())
 }
 
 fn json(body: Vec<u8>) -> Response<Full<Bytes>> {

@@ -16,33 +16,56 @@ use lepic_transport::transport::{BoxFuture, Destination, Outbound};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-const S1: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"60000000000"}"#;
+const S1: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"60000000000","participant_data":[{"id":"0"}]}"#;
 const S2: &str =
     r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"60000000000","participant_data":[]}"#;
 
 struct Answering {
     calls: AtomicUsize,
+    refused: AtomicUsize,
     refuse: Option<Refusal>,
+    answer: String,
 }
 
 impl ReceiveHandler for Answering {
     fn receive(&self, slate: WireSlate) -> BoxFuture<'_, Result<WireSlate, Refusal>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
-            assert_eq!(slate.as_text(), Some(S1));
+            if slate.as_text() != Some(S1) {
+                return Err(Refusal::Rejected);
+            }
             match self.refuse {
                 Some(refusal) => Err(refusal),
-                None => Ok(WireSlate::text(MediaType::JSON, S2.to_owned())),
+                None => Ok(WireSlate::text(MediaType::JSON, self.answer.clone())),
             }
         })
+    }
+
+    fn refused(&self, _refusal: Refusal) {
+        self.refused.fetch_add(1, Ordering::SeqCst);
     }
 }
 
 fn handler(refuse: Option<Refusal>) -> Arc<Answering> {
+    answering(refuse, S2.to_owned())
+}
+
+fn answering(refuse: Option<Refusal>, answer: String) -> Arc<Answering> {
     Arc::new(Answering {
         calls: AtomicUsize::new(0),
+        refused: AtomicUsize::new(0),
         refuse,
+        answer,
     })
+}
+
+fn receive_tx_request(slate: &str) -> String {
+    let body =
+        format!(r#"{{"jsonrpc":"2.0","method":"receive_tx","id":1,"params":[{slate},null,null]}}"#);
+    format!(
+        "POST /v2/foreign HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    )
 }
 
 fn client() -> ForeignClient {
@@ -128,6 +151,42 @@ async fn takes_only_so_many_payments_a_minute() {
     let error = client().receive_tx(&url(port), &s1()).await.unwrap_err();
     assert!(matches!(error, ClientError::Rpc(RpcError::Refused)));
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(wallet.refused.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slate_that_is_not_an_s1_does_not_spend_the_payment_budget() {
+    let wallet = handler(None);
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.receives_per_minute = 1;
+    let listener = listen(settings, wallet.clone()).await.unwrap();
+    let port = listener.local_addr().port();
+    for slate in ["{}", r#"{"id":"a","amount":"1"}"#, "[]"] {
+        let answer = raw_exchange(port, receive_tx_request(slate).as_bytes()).await;
+        assert!(!answer.contains("wallet not ready"), "{answer}");
+    }
+    let reply = client().receive_tx(&url(port), &s1()).await.unwrap();
+    assert_eq!(reply.as_text(), Some(S2));
+    let error = client().receive_tx(&url(port), &s1()).await.unwrap_err();
+    assert!(matches!(error, ClientError::Rpc(RpcError::Refused)));
+    assert_eq!(wallet.refused.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn takes_only_so_many_requests_a_minute() {
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.requests_per_minute = 2;
+    let listener = listen(settings, handler(None)).await.unwrap();
+    let port = listener.local_addr().port();
+    for _ in 0..2 {
+        let answer = raw_exchange(port, receive_tx_request("{}").as_bytes()).await;
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    }
+    let error = client().check_version(&url(port)).await.unwrap_err();
+    assert!(
+        matches!(error, ClientError::Status { status: 503 }),
+        "{error:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -177,6 +236,121 @@ async fn a_slow_caller_is_dropped_after_the_header_timeout() {
     )
     .await;
     assert!(read.is_ok(), "the connection stayed open");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_body_sent_too_slowly_is_answered_408() {
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.body_timeout = std::time::Duration::from_millis(200);
+    let listener = listen(settings, handler(None)).await.unwrap();
+    let mut stream = TcpStream::connect(listener.local_addr()).await.unwrap();
+    stream
+        .write_all(b"POST /v2/foreign HTTP/1.1\r\nhost: x\r\ncontent-length: 100\r\n\r\n{")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read_to_end(&mut answer),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_oversized_chunked_body_is_answered_413() {
+    let listener = listen(ListenSettings::new(Exposure::LocalOnly, 0), handler(None))
+        .await
+        .unwrap();
+    let mut stream = TcpStream::connect(listener.local_addr()).await.unwrap();
+    let length = lepic_foreign::rpc::MAX_BODY_LEN + 1;
+    stream
+        .write_all(
+            format!("POST /v2/foreign HTTP/1.1\r\nhost: x\r\ntransfer-encoding: chunked\r\n\r\n{length:x}\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let (mut read, mut write) = stream.into_split();
+    let writing = tokio::spawn(async move {
+        let block = vec![b' '; 64 * 1024];
+        let mut left = length;
+        while left > 0 {
+            let size = left.min(block.len());
+            if write.write_all(&block[..size]).await.is_err() {
+                return;
+            }
+            left -= size;
+        }
+        let _ = write.write_all(b"\r\n0\r\n\r\n").await;
+    });
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        read.read_to_end(&mut answer),
+    )
+    .await
+    .unwrap();
+    writing.abort();
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_caller_that_never_takes_its_answer_is_dropped_and_frees_its_slot() {
+    let big = format!(
+        r#"{{"id":"0436430c-2b02-624c-2032-570501212b00","pad":"{}"}}"#,
+        "x".repeat(4 * 1024 * 1024)
+    );
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.max_connections = 1;
+    settings.header_timeout = std::time::Duration::from_millis(300);
+    settings.request_timeout = std::time::Duration::from_millis(300);
+    settings.answer_timeout = std::time::Duration::from_millis(300);
+    let listener = listen(settings, answering(None, big)).await.unwrap();
+    let port = listener.local_addr().port();
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_recv_buffer_size(4096).unwrap();
+    let mut stalled = socket.connect(listener.local_addr()).await.unwrap();
+    stalled
+        .write_all(receive_tx_request(S1).as_bytes())
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+    let version = client().check_version(&url(port)).await;
+    assert!(version.is_ok(), "the slot stayed taken: {version:?}");
+    drop(stalled);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_address_holds_only_its_share_of_the_connections() {
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.max_connections_per_address = 2;
+    let listener = listen(settings, handler(None)).await.unwrap();
+    let port = listener.local_addr().port();
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        let mut stream = TcpStream::connect(listener.local_addr()).await.unwrap();
+        stream
+            .write_all(b"POST /v2/foreign HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        held.push(stream);
+    }
+    // Accepted in order, so the held connections have their share before the next one.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let refused = client().check_version(&url(port)).await;
+    assert!(refused.is_err(), "{refused:?}");
+
+    drop(held);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    client().check_version(&url(port)).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
