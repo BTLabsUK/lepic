@@ -60,6 +60,12 @@ pub enum WalletError {
     UnknownTransaction(TxId),
     #[error("transaction state change rejected")]
     Transition(#[from] InvalidTransition),
+    /// The other entry of a send to the wallet itself is posted, so the chain may still spend
+    /// the inputs; neither entry is cancelled.
+    #[error(
+        "transaction {tx_id} cannot be cancelled while its self-send partner {partner} is posted"
+    )]
+    PartnerPosted { tx_id: TxId, partner: TxId },
     /// The node holds the transaction's kernel, so it can no longer be cancelled; the next
     /// refresh confirms it.
     #[error("transaction {0} is already on chain")]

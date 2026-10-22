@@ -264,6 +264,7 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         | WalletError::WalletSeedFile(_)
         | WalletError::Account(_)
         | WalletError::Transition(_)
+        | WalletError::PartnerPosted { .. }
         | WalletError::OnChain(_)
         | WalletError::InPool(_)
         | WalletError::NotReleasable { .. }

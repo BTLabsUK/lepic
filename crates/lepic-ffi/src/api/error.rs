@@ -205,7 +205,8 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         | E::WalletSeedFile(_)
         | E::Account(_)
         | E::UnknownTransaction(_)
-        | E::Transition(_) => WalletErrorKind::InvalidArgument,
+        | E::Transition(_)
+        | E::PartnerPosted { .. } => WalletErrorKind::InvalidArgument,
         E::WalletExists => WalletErrorKind::WalletAlreadyExists,
         E::NoWallet => WalletErrorKind::WalletNotFound,
         E::WrongPassword => WalletErrorKind::WrongPassword,

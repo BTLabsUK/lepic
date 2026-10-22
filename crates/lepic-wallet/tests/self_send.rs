@@ -31,7 +31,6 @@ use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::{SelectionError, SelectionOptions, SelfSendShape, SplitCount};
 use lepic_wallet::self_send::{SELF, SelfSendError};
 use lepic_wallet::send::SendError;
-use lepic_wallet::state::InvalidTransition;
 use send_support::{ACCOUNT, FUNDING, Sender, TIP};
 use support::{MovableClock, fixed_time, some_proof};
 
@@ -498,10 +497,8 @@ fn rejects_cancelling_the_incoming_entry_of_a_posted_self_send() {
     assert!(
         matches!(
             error,
-            WalletError::Transition(InvalidTransition {
-                from: TxState::Posted,
-                ..
-            })
+            WalletError::PartnerPosted { tx_id, partner }
+                if tx_id == failed.received_tx_id && partner == failed.tx_id
         ),
         "{error:?}"
     );

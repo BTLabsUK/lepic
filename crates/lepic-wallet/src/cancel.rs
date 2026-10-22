@@ -26,7 +26,7 @@ use crate::refresh::{forget_receive_seen, legacy_codecs, pending_kernel};
 use crate::release::record_watch;
 use crate::self_send::SELF;
 use crate::send::SENDER_CONTEXT;
-use crate::state::{InvalidTransition, StateChange, apply_transition, check_transition};
+use crate::state::{InvalidTransition, StateChange, apply_transition, check_transition, is_final};
 use crate::wallet::Wallet;
 
 /// The private context of the party that adds only an output, under the participant id
@@ -64,6 +64,8 @@ where
     ///
     /// Fails with [`WalletError::Locked`], [`WalletError::UnknownTransaction`],
     /// [`WalletError::Transition`] when the transaction is posted, confirmed or expired,
+    /// [`WalletError::PartnerPosted`] when the other entry of a send to the wallet itself is
+    /// posted,
     /// [`WalletError::OnChain`] when the node's chain holds the kernel, [`WalletError::InPool`]
     /// when the node's pool holds it, [`WalletError::Node`] or [`WalletError::Implausible`]
     /// when the node cannot be asked, and [`WalletError::ChangedDuringCancel`] when another
@@ -202,15 +204,7 @@ fn cancel_transaction(
         return Err(WalletError::ChangedDuringCancel(tx_id));
     }
     let partner = self_send_partner(repos, &entry)?;
-    if let Some(partner) = &partner
-        && partner.entry.state == TxState::Posted
-    {
-        return Err(InvalidTransition {
-            from: TxState::Posted,
-            to: TxState::Cancelled,
-        }
-        .into());
-    }
+    check_partner(tx_id, partner.as_ref())?;
     if let Some(watch) = watch {
         record_watch(repos, tx_id, watch.excess, watch.min_height, watch.ended_at)?;
     }
@@ -247,15 +241,36 @@ pub(crate) fn self_send_partner(
         }))
 }
 
+/// Refuses to end `tx_id` while its self-send partner is posted: the chain may still spend
+/// the inputs, so neither entry is cancelled. Check it before anything is written.
+pub(crate) fn check_partner(
+    tx_id: TxId,
+    partner: Option<&StoredTransaction>,
+) -> Result<(), WalletError> {
+    match partner {
+        Some(partner) if partner.entry.state == TxState::Posted => {
+            Err(WalletError::PartnerPosted {
+                tx_id,
+                partner: partner.id,
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Ends the other entry of a self-send with the one being cancelled: its outputs are dropped,
 /// its inputs unlocked and it moves to `cancelled`, watched under the same kernel when
-/// `watch` is given, so a late confirmation restores its outputs too.
+/// `watch` is given, so a late confirmation restores its outputs too. A partner that already
+/// ended, confirmed, cancelled or expired, is left as it is, as a scan leaves it.
 pub(crate) fn cancel_partner(
     repos: &mut dyn Repositories,
     partner: &StoredTransaction,
     watch: Option<(Commitment, Height, Height)>,
     now: Timestamp,
 ) -> Result<Option<StateChange>, WalletError> {
+    if is_final(partner.entry.state) {
+        return Ok(None);
+    }
     if let Some((excess, min_height, ended_at)) = watch {
         record_watch(repos, partner.id, excess, min_height, ended_at)?;
     }
@@ -336,6 +351,27 @@ mod tests {
         (store, tx_id)
     }
 
+    /// A send to the wallet itself: the outgoing entry in `state` and its incoming partner in
+    /// `partner_state`, both over [`SELF`] with the same slate.
+    fn self_send_with(state: TxState, partner_state: TxState) -> (MemoryStore, TxId, TxId) {
+        let (store, tx_id) = store_with(state);
+        let slate_id = uuid::Uuid::from_bytes([7; 16]);
+        let partner = store
+            .write(|repos| {
+                let mut entry = repos.transaction(tx_id)?.unwrap();
+                entry.slate_id = Some(slate_id);
+                entry.transport = Some(SELF.as_str().to_owned());
+                repos.update_transaction(tx_id, &entry)?;
+                repos.insert_transaction(&TransactionEntry {
+                    direction: TxDirection::Incoming,
+                    state: partner_state,
+                    ..entry
+                })
+            })
+            .unwrap();
+        (store, tx_id, partner)
+    }
+
     fn state(store: &MemoryStore, tx_id: TxId) -> TxState {
         store
             .read(|repos| repos.transaction(tx_id))
@@ -381,5 +417,42 @@ mod tests {
             .unwrap();
 
         assert_eq!(change, Vec::new());
+    }
+
+    #[test]
+    fn an_entry_whose_self_send_partner_already_ended_is_cancelled_alone() {
+        let (store, tx_id, partner) = self_send_with(TxState::Sent, TxState::Expired);
+
+        let changes = store
+            .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, None, at()))
+            .unwrap();
+
+        assert_eq!(
+            changes
+                .iter()
+                .map(|change| change.tx_id)
+                .collect::<Vec<_>>(),
+            vec![tx_id]
+        );
+        assert_eq!(state(&store, tx_id), TxState::Cancelled);
+        assert_eq!(state(&store, partner), TxState::Expired);
+    }
+
+    #[test]
+    fn refuses_an_entry_whose_self_send_partner_is_posted_naming_the_partner() {
+        let (store, tx_id, partner) = self_send_with(TxState::Received, TxState::Posted);
+
+        let result =
+            store.write(|repos| cancel_transaction(repos, tx_id, TxState::Received, None, at()));
+
+        assert!(
+            matches!(
+                result,
+                Err(WalletError::PartnerPosted { tx_id: id, partner: p }) if id == tx_id && p == partner
+            ),
+            "{result:?}"
+        );
+        assert_eq!(state(&store, tx_id), TxState::Received);
+        assert_eq!(state(&store, partner), TxState::Posted);
     }
 }
