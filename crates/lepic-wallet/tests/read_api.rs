@@ -382,8 +382,9 @@ fn transactions_are_listed_newest_first_with_counterparty_ttl_and_confirmation()
 fn a_refresh_whose_tip_is_held_reports_the_balance_that_balance_reads() {
     let sender = Sender::new();
     let funding = sender.outputs().remove(0);
+    // Two confirmations at the tip: one short of the three the balance counts as spendable.
     sender.harness.node.update_chain(|chain| {
-        chain.outputs.push(on_chain(&funding, 1));
+        chain.outputs.push(on_chain(&funding, TIP - 1));
     });
     sender.harness.block_on(sender.wallet.refresh()).unwrap();
     let confirmed = sender.wallet.balance(ACCOUNT).unwrap().height;

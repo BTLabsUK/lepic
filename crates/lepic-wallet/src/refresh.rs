@@ -47,9 +47,10 @@ use crate::release::{
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
 
-/// Confirmations an unspent output needs to count as spendable in the balance events, as
-/// `epic-wallet info` counts by default.
-pub const BALANCE_MINIMUM_CONFIRMATIONS: u64 = 10;
+/// Confirmations an unspent output needs to count as spendable in the balance events and in
+/// `summary()`: 3, as the Epic GUI wallet counts (decision D1). `epic-wallet info` counts 10 by
+/// default; the app reads this value from the summary, so balance and sends agree.
+pub const BALANCE_MINIMUM_CONFIRMATIONS: u64 = 3;
 
 /// Blocks after a refresh first saw a received payment with no TTL that its sender has not
 /// finalized, after which a refresh ends it: a week of blocks, as long as a released send is

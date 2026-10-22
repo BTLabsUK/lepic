@@ -324,7 +324,7 @@ fn confirms_a_send_once_its_change_is_on_chain_and_reports_the_balance() {
     };
     assert_eq!(balance.account, ACCOUNT);
     assert_eq!(balance.height, Height::new(TIP + 1));
-    // One confirmation is short of the ten the balance counts as spendable.
+    // One confirmation is short of the three the balance counts as spendable.
     assert_eq!(balance.awaiting_confirmation, change.amount);
     assert_eq!(balance.total, change.amount);
     assert_eq!(balance.spendable, Amount::ZERO);
@@ -509,8 +509,8 @@ fn reports_the_balance_in_every_category() {
         .unwrap();
     sender.harness.node.update_chain(|chain| {
         chain.outputs.push(on_chain(&immature, TIP_HEIGHT - 2, 2));
-        // Nine confirmations, one short of spendable.
-        chain.outputs.push(on_chain(&young, TIP_HEIGHT - 8, 3));
+        // Two confirmations, one short of spendable.
+        chain.outputs.push(on_chain(&young, TIP_HEIGHT - 1, 3));
         chain.outputs.push(on_chain(&locked, 2, 4));
         chain.tip.height = Height::new(TIP_HEIGHT);
     });
