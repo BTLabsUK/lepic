@@ -10,7 +10,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0002](0002-slate-domain-and-codecs.md) | One version-free slate model, one codec per wire format | accepted |
 | [0003](0003-transport-format-policy.md) | Transports declare the slate formats they speak | accepted, file row superseded by 0015 |
 | [0004](0004-epicbox-client.md) | Async Epicbox client with listen and drain modes, acknowledge after store | accepted |
-| [0005](0005-storage.md) | SQLite storage, platform keystore for secrets, legacy seed import | accepted |
+| [0005](0005-storage.md) | SQLite storage, platform keystore for secrets, legacy seed import | accepted, database-import bullet superseded by 0019 |
 | [0006](0006-tls-and-http.md) | rustls with ring, hyper for HTTP, tokio-tungstenite for websockets | accepted |
 | [0007](0007-mobile-bindings.md) | flutter_rust_bridge bindings for the existing Flutter frontend | accepted, secrets line superseded by 0014 |
 | [0008](0008-logging-and-errors.md) | tracing everywhere, host-installed subscribers, typed errors | accepted |
@@ -24,6 +24,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0016](0016-epicbox-notices.md) | LEPIC notices over Epicbox, sent only to proven peers | accepted |
 | [0017](0017-foreign-api-over-http.md) | The wallet foreign API over HTTP in its own crate | accepted |
 | [0018](0018-tor-on-desktop.md) | Tor on desktop through a bundled tor child process | accepted |
+| [0019](0019-import-epic-wallet-history.md) | Import the transaction history of an epic-wallet wallet, reconciled with the scan | accepted |
 
 Template:
 
