@@ -50,6 +50,9 @@ enum Answer {
     OtherServiceId,
     /// The right ServiceID, but descriptor uploads only for another onion.
     UploadsForOther,
+    /// As tor, but an onion added again gets no new upload, only one tor reported for the
+    /// earlier add, just before the reply.
+    NoUploadOnReadd,
 }
 
 #[derive(Clone, Copy)]
@@ -57,13 +60,28 @@ struct Script {
     bootstrap: Bootstrap,
     uploads: bool,
     answer: Answer,
+    /// Stops answering at `SIGNAL ACTIVE`, as a tor that hangs.
+    hangs_on_active: bool,
 }
 
 const HONEST: Script = Script {
     bootstrap: Bootstrap::Completes,
     uploads: true,
     answer: Answer::Honest,
+    hangs_on_active: false,
 };
+
+const ADD_FLAGS: &str = "Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=4 \
+    PoWDefensesEnabled=1 PoWQueueRate=2 PoWQueueBurst=10";
+
+fn add_onion_command(port: u16) -> String {
+    format!("ADD_ONION {ADD_FLAGS} Port=80,127.0.0.1:{port}")
+}
+
+/// The SOCKS port the fake reports after `toggles` times `DisableNetwork=0`.
+fn socks_after(toggles: u16) -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 39111 + toggles))
+}
 
 fn other_onion() -> String {
     OnionAddress::from_public_key(&[5; 32])
@@ -81,7 +99,7 @@ impl FakeTor {
     async fn start(script: Script) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let control = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let socks: SocketAddr = "127.0.0.1:39111".parse().unwrap();
+        let socks = socks_after(0);
         std::fs::write(dir.path().join("fake-cookie"), COOKIE).unwrap();
         std::fs::write(
             dir.path().join("fake-control"),
@@ -115,6 +133,8 @@ fn quick() -> TorTimings {
         command: Duration::from_secs(5),
         stall: Duration::from_secs(10),
         bootstrap: Duration::from_secs(20),
+        cold_stall: Duration::from_secs(10),
+        cold_bootstrap: Duration::from_secs(20),
         publish: Duration::from_secs(10),
         stop: Duration::from_millis(500),
         listener_check: Duration::from_millis(500),
@@ -140,6 +160,8 @@ async fn serve_control(
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     let mut nonces = None;
+    let mut added = Vec::new();
+    let mut socks = socks;
     while let Ok(Some(line)) = lines.next_line().await {
         let mut words = line.split(' ');
         let verb = words.next().unwrap_or_default();
@@ -181,6 +203,12 @@ async fn serve_control(
                 }
             }
             "TAKEOWNERSHIP" | "RESETCONF" | "SETEVENTS" | "DEL_ONION" => "250 OK\r\n".to_owned(),
+            "SETCONF" => {
+                if words.next() == Some("DisableNetwork=0") {
+                    socks.set_port(socks.port() + 1);
+                }
+                "250 OK\r\n".to_owned()
+            }
             "GETINFO" => match words.next() {
                 Some("net/listeners/socks") => {
                     format!("250-net/listeners/socks=\"{socks}\"\r\n250 OK\r\n")
@@ -208,24 +236,39 @@ async fn serve_control(
                 let derived = onion_tor_derives(key);
                 let id = match script.answer {
                     Answer::OtherServiceId => other_onion(),
-                    Answer::Honest | Answer::UploadsForOther => derived,
+                    Answer::Honest | Answer::UploadsForOther | Answer::NoUploadOnReadd => derived,
                 };
                 let uploaded = match script.answer {
                     Answer::UploadsForOther => other_onion(),
-                    Answer::Honest | Answer::OtherServiceId => id.clone(),
+                    Answer::Honest | Answer::OtherServiceId | Answer::NoUploadOnReadd => id.clone(),
                 };
-                let mut answer = format!("250-ServiceID={id}\r\n250 OK\r\n");
-                if script.uploads {
+                let readded = added.contains(&id);
+                added.push(id.clone());
+                let mut answer = String::new();
+                if readded && script.answer == Answer::NoUploadOnReadd {
+                    answer.push_str(&format!(
+                        "650 HS_DESC UPLOADED {uploaded} UNKNOWN $AAAA~relay\r\n"
+                    ));
+                }
+                answer.push_str(&format!("250-ServiceID={id}\r\n250 OK\r\n"));
+                if script.uploads && !(readded && script.answer == Answer::NoUploadOnReadd) {
                     answer.push_str(&format!(
                         "650 HS_DESC UPLOADED {uploaded} UNKNOWN $AAAA~relay\r\n"
                     ));
                 }
                 answer
             }
-            "SIGNAL" => {
-                write.write_all(b"250 OK\r\n").await.unwrap();
-                return;
-            }
+            "SIGNAL" => match words.next() {
+                Some("ACTIVE") if script.hangs_on_active => {
+                    std::future::pending::<()>().await;
+                    return;
+                }
+                Some("ACTIVE") => "250 OK\r\n".to_owned(),
+                _ => {
+                    write.write_all(b"250 OK\r\n").await.unwrap();
+                    return;
+                }
+            },
             _ => "510 Unrecognized command\r\n".to_owned(),
         };
         write.write_all(answer.as_bytes()).await.unwrap();
@@ -326,9 +369,7 @@ async fn bootstraps_publishes_the_wallet_onion_and_stops() {
             "SETEVENTS STATUS_CLIENT STATUS_GENERAL HS_DESC".to_owned(),
             "GETINFO net/listeners/socks".to_owned(),
             "GETINFO status/bootstrap-phase".to_owned(),
-            format!(
-                "ADD_ONION Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=4 Port=80,127.0.0.1:{listener_port}"
-            ),
+            add_onion_command(listener_port),
             format!("DEL_ONION {}", onion.service_id()),
             "SIGNAL SHUTDOWN".to_owned(),
         ]
@@ -345,6 +386,7 @@ async fn a_stalled_bootstrap_is_a_network_failure() {
     .await;
     let tor = TorProcess::start(fake.settings(TorTimings {
         stall: Duration::from_millis(300),
+        cold_stall: Duration::from_millis(300),
         ..quick()
     }));
     assert_eq!(wait_for_failure(&tor).await, FailureKind::Network);
@@ -468,6 +510,7 @@ async fn an_upload_for_another_onion_does_not_make_it_ready() {
         bootstrap: Bootstrap::Completes,
         uploads: true,
         answer: Answer::UploadsForOther,
+        ..HONEST
     })
     .await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -514,9 +557,7 @@ async fn republishing_removes_the_old_onion_first() {
         .map(String::as_str)
         .filter(|c| c.starts_with("ADD_ONION") || c.starts_with("DEL_ONION"))
         .collect();
-    let add = format!(
-        "ADD_ONION Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=4 Port=80,127.0.0.1:{port}"
-    );
+    let add = add_onion_command(port);
     assert_eq!(
         onion_commands,
         [
@@ -533,6 +574,7 @@ async fn another_service_id_is_a_keys_failure_that_keeps_sending() {
         bootstrap: Bootstrap::Completes,
         uploads: true,
         answer: Answer::OtherServiceId,
+        ..HONEST
     })
     .await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -550,4 +592,123 @@ async fn another_service_id_is_a_keys_failure_that_keeps_sending() {
     );
     assert_eq!(tor.state(), TorState::Bootstrapped);
     assert_eq!(tor.socks_address(), Some(fake.socks));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn adding_the_same_onion_again_waits_for_an_upload_after_the_add() {
+    let fake = FakeTor::start(Script {
+        answer: Answer::NoUploadOnReadd,
+        ..HONEST
+    })
+    .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let tor = TorProcess::start(fake.settings(TorTimings {
+        publish: Duration::from_millis(500),
+        ..quick()
+    }));
+    tor.wait_bootstrapped().await.unwrap();
+    tor.publish_onion(&SEED, port).await.unwrap();
+    let failure = tor.publish_onion(&SEED, port).await.unwrap_err();
+    assert_eq!(failure.kind, FailureKind::Publish);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refresh_wakes_tor_and_after_a_network_change_reconnects_it() {
+    let fake = FakeTor::start(HONEST).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.wait_bootstrapped().await.unwrap();
+    let onion = tor
+        .publish_onion(&SEED, listener.local_addr().unwrap().port())
+        .await
+        .unwrap();
+    let ready = TorState::Ready { onion };
+
+    tor.refresh(false).await.unwrap();
+    assert_eq!(fake.commands().last().unwrap(), "SIGNAL ACTIVE");
+    assert_eq!(tor.state(), ready);
+    assert_eq!(tor.socks_address(), Some(socks_after(0)));
+
+    let before = fake.commands().len();
+    tor.refresh(true).await.unwrap();
+    assert_eq!(
+        fake.commands()[before..],
+        [
+            "SETCONF DisableNetwork=1".to_owned(),
+            "SETCONF DisableNetwork=0".to_owned(),
+            "GETINFO net/listeners/socks".to_owned(),
+            "SIGNAL ACTIVE".to_owned(),
+        ]
+    );
+    assert_eq!(tor.state(), ready);
+    assert_eq!(tor.socks_address(), Some(socks_after(1)));
+    assert_eq!(tor.wait_bootstrapped().await.unwrap(), socks_after(1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tor_that_does_not_answer_a_refresh_is_ended() {
+    let fake = FakeTor::start(Script {
+        hangs_on_active: true,
+        ..HONEST
+    })
+    .await;
+    let tor = TorProcess::start(fake.settings(TorTimings {
+        command: Duration::from_millis(300),
+        ..quick()
+    }));
+    tor.wait_bootstrapped().await.unwrap();
+    let failure = tor.refresh(false).await.unwrap_err();
+    assert_eq!(failure.kind, FailureKind::Stopped);
+    assert_eq!(wait_for_failure(&tor).await, FailureKind::Stopped);
+    assert_eq!(tor.socks_address(), None);
+}
+
+/// A control port, as a tor an earlier run left, behind the files of `fake`'s tor directory.
+async fn leave_tor(fake: &FakeTor, cookie: [u8; 32]) -> Arc<Mutex<Vec<String>>> {
+    let left = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dir = fake.dir.path().join("tor");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("control.txt"),
+        format!("PORT={}\n", left.local_addr().unwrap()),
+    )
+    .unwrap();
+    std::fs::write(dir.join("control.cookie"), cookie).unwrap();
+    let commands = Arc::new(Mutex::new(Vec::new()));
+    tokio::spawn(serve_control(
+        left,
+        HONEST,
+        socks_after(0),
+        commands.clone(),
+    ));
+    commands
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_halts_the_tor_an_earlier_run_left() {
+    let fake = FakeTor::start(HONEST).await;
+    let left = leave_tor(&fake, COOKIE).await;
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.wait_bootstrapped().await.unwrap();
+    assert_eq!(
+        *left.lock().unwrap(),
+        [
+            "AUTHCHALLENGE SAFECOOKIE".to_owned(),
+            "AUTHENTICATE".to_owned(),
+            "SIGNAL HALT".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_port_that_does_not_know_the_left_cookie_is_not_halted() {
+    let fake = FakeTor::start(HONEST).await;
+    let left = leave_tor(&fake, [8; 32]).await;
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.wait_bootstrapped().await.unwrap();
+    assert_eq!(
+        *left.lock().unwrap(),
+        ["AUTHCHALLENGE SAFECOOKIE".to_owned()]
+    );
 }

@@ -5,8 +5,10 @@
 //! Tor is off until [`EpicWallet::start_tor`]. While it runs, the wallet listens on
 //! `127.0.0.1` on a port of its own, separate from [`EpicWallet::start_http_listener`], and
 //! tor forwards the onion's port 80 there. Locking or dropping the wallet stops tor, then
-//! that listener. Android and iOS cannot run the bundled tor binary: there `start_tor` starts
-//! nothing and reports `Failed` with [`TorFailureKind::Missing`], then `Stopped`.
+//! that listener. On Android the app passes the tor it ships as a native library
+//! (`<nativeLibraryDir>/libtor.so`) and calls [`EpicWallet::refresh_tor`] when it comes back
+//! to the foreground or the network changes. iOS cannot run a tor binary: there `start_tor`
+//! starts nothing and reports `Failed` with [`TorFailureKind::Missing`], then `Stopped`.
 
 use std::sync::Arc;
 
@@ -21,7 +23,7 @@ use crate::frb_generated::StreamSink;
 /// Why the wallet's tor is not working. None of them carries a key or the control cookie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorFailureKind {
-    /// No tor binary at the path given to `start_tor`, or none can run: Android and iOS.
+    /// No tor binary at the path given to `start_tor`, or none can run: iOS.
     Missing,
     /// Tor did not start, or its control port did not answer as expected.
     Start,
@@ -160,8 +162,10 @@ impl EpicWallet {
     /// runs or starts gets a stream that ends at once. On a locked wallet the stream ends with
     /// `Locked` as its error and no event. A call right after a stop or lock waits for the tor
     /// stopped last to be down, as both use the same files; when that takes over 30 seconds,
-    /// the stream gets `Failed` with `Start`, then `Stopped`. On Android and iOS nothing is
-    /// started: the stream gets `Failed` with `Missing`, then `Stopped`.
+    /// the stream gets `Failed` with `Start`, then `Stopped`. A tor that an earlier run of the
+    /// app left running on the wallet's files, as after the app was killed, is halted first.
+    /// The onion is the same on every start. On iOS nothing is started: the stream gets
+    /// `Failed` with `Missing`, then `Stopped`.
     pub async fn start_tor(
         &self,
         tor_binary: String,
@@ -185,6 +189,26 @@ impl EpicWallet {
     pub fn stop_tor(&self) {
         self.boundary()
             .guard_or("stop_tor", (), || self.session.stop_tor());
+    }
+
+    /// Tells the wallet's tor that the app is back: call it when the app returns to the
+    /// foreground and, with `network_changed`, when the device's network changed (Wi-Fi to
+    /// mobile data, or back online). Tor leaves its dormant state, and after a network change
+    /// it drops every connection, whose routes may be gone, and builds new ones: sends over
+    /// Tor in progress then fail, and the onion stays this wallet's and is republished by tor
+    /// itself, so `Ready` is not reported again. A bootstrap in progress gets its full time
+    /// again. Returns once tor has taken the commands, in at most about 15 seconds.
+    ///
+    /// Fails with `Locked` while the wallet is locked and with `TorNotRunning` when no tor
+    /// runs: start it with [`EpicWallet::start_tor`]. A tor that does not answer is ended:
+    /// the call fails with `TorNotRunning` and the stream of `start_tor` gets `Failed` with
+    /// `Stopped` (or `Start` before the bootstrap), then `Stopped`. While tor is still being
+    /// started there is nothing to refresh and the call succeeds.
+    pub async fn refresh_tor(&self, network_changed: bool) -> Result<(), WalletError> {
+        self.run("refresh_tor", |session| async move {
+            session.refresh_tor(network_changed).await
+        })
+        .await
     }
 
     #[frb(sync)]

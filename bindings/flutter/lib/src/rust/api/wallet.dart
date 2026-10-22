@@ -508,6 +508,21 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// error, after the first event.
   Stream<RefreshProgress> refresh();
 
+  /// Tells the wallet's tor that the app is back: call it when the app returns to the
+  /// foreground and, with `network_changed`, when the device's network changed (Wi-Fi to
+  /// mobile data, or back online). Tor leaves its dormant state, and after a network change
+  /// it drops every connection, whose routes may be gone, and builds new ones: sends over
+  /// Tor in progress then fail, and the onion stays this wallet's and is republished by tor
+  /// itself, so `Ready` is not reported again. A bootstrap in progress gets its full time
+  /// again. Returns once tor has taken the commands, in at most about 15 seconds.
+  ///
+  /// Fails with `Locked` while the wallet is locked and with `TorNotRunning` when no tor
+  /// runs: start it with [`EpicWallet::start_tor`]. A tor that does not answer is ended:
+  /// the call fails with `TorNotRunning` and the stream of `start_tor` gets `Failed` with
+  /// `Stopped` (or `Start` before the bootstrap), then `Stopped`. While tor is still being
+  /// started there is nothing to refresh and the call succeeds.
+  Future<void> refreshTor({required bool networkChanged});
+
   /// Releases a finalized or posted send the network never took, once
   /// `TransactionDetails.releasable` says so: the send is cancelled, its inputs are unlocked
   /// and its change is dropped. The node is asked once more first.
@@ -720,8 +735,10 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// runs or starts gets a stream that ends at once. On a locked wallet the stream ends with
   /// `Locked` as its error and no event. A call right after a stop or lock waits for the tor
   /// stopped last to be down, as both use the same files; when that takes over 30 seconds,
-  /// the stream gets `Failed` with `Start`, then `Stopped`. On Android and iOS nothing is
-  /// started: the stream gets `Failed` with `Missing`, then `Stopped`.
+  /// the stream gets `Failed` with `Start`, then `Stopped`. A tor that an earlier run of the
+  /// app left running on the wallet's files, as after the app was killed, is halted first.
+  /// The onion is the same on every start. On iOS nothing is started: the stream gets
+  /// `Failed` with `Missing`, then `Stopped`.
   Stream<TorEvent> startTor({required String torBinary, String? libDir});
 
   /// Stops the HTTP listener. Requests in progress finish; its stream ends with `Stopped`

@@ -327,10 +327,11 @@ wallet.startHttpListener(exposure: HttpExposure.localOnly, port: 3415).listen((e
 
 ## Direct transactions over Tor
 
-On desktop the wallet runs its own tor, from a `tor` binary the app bundles (the Tor Expert
-Bundle), and receives at its onion: its payment-proof address in onion form, the address
-`epic-wallet address` prints, which survives a restore from the phrase (ADR 0018). Android and
-iOS cannot run the binary: there `startTor` starts nothing, and its stream gets `failed` with
+On desktop and Android the wallet runs its own tor, from a `tor` binary the app bundles (the
+Tor Expert Bundle; on Android its `libTor.so`, shipped as the native library `libtor.so`), and
+receives at its onion: its payment-proof address in onion form, the address
+`epic-wallet address` prints, which survives a restore from the phrase (ADR 0018). iOS cannot
+run the binary: there `startTor` starts nothing, and its stream gets `failed` with
 `TorFailureKind.missing`, then `stopped`. Tor is off until the app starts it, per wallet:
 
 ```dart
@@ -354,7 +355,8 @@ final sent = await wallet.sendTor(
 ```
 
 - `libDir` goes on the library path for the libraries the bundle ships on Linux; pass null on
-  Windows. Tor keeps its files in `tor/` inside the wallet's data directory, never shared
+  Windows and Android. On Android pass `<nativeLibraryDir>/libtor.so` as `torBinary`: the
+  native library folder is the one place an app may run a file from. Tor keeps its files in `tor/` inside the wallet's data directory, never shared
   between wallets. Check the bundle's hashes before passing its path.
 - While tor runs, the wallet listens on `127.0.0.1` on a port of its own, separate from
   `startHttpListener`, and tor forwards the onion's port 80 there. Its payments arrive on the
@@ -366,7 +368,17 @@ final sent = await wallet.sendTor(
   `TorFailureKind.listener` or `keys` leaves tor running for sends, and `torStatus()` stays
   `bootstrapped` with that `failure`; any other failure is followed by `stopped`. `missing`
   means no binary at the path, `network` no progress connecting, `clock` a wrong system clock.
-  Restarting is the app's choice: call `startTor` again after `stopped`.
+  Restarting is the app's choice: call `startTor` again after `stopped`. A tor that an earlier
+  run of the app left on the wallet's files (the app was killed) is halted by the next
+  `startTor`, and the onion is the same on every start.
+- Call `refreshTor(networkChanged: false)` when the app comes back to the foreground and
+  `refreshTor(networkChanged: true)` when the device's network changed or came back. Tor
+  leaves its dormant state; after a network change it drops every connection and builds new
+  ones, so sends in progress fail and tor republishes the onion by itself (no new `ready`). It
+  throws `torNotRunning` when no tor runs (start one) and `locked` on a locked wallet; a tor
+  that does not answer is ended, the call throws `torNotRunning` and the stream gets `failed`
+  then `stopped`. Time a paused app spent frozen (Android's cached-app freezer) does not count
+  against tor's bootstrap and publish limits.
 - One tor runs per wallet: a second `startTor` gets a stream that ends at once. `stopTor`, `lock`
   and dropping the wallet stop tor, then its listener; the stream then ends with `stopped`.
   A `startTor` right after `stopTor` or `lock` waits for the tor stopped last to be down, as

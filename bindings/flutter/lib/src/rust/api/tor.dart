@@ -114,7 +114,7 @@ enum TorEventKind {
 
 /// Why the wallet's tor is not working. None of them carries a key or the control cookie.
 enum TorFailureKind {
-  /// No tor binary at the path given to `start_tor`, or none can run: Android and iOS.
+  /// No tor binary at the path given to `start_tor`, or none can run: iOS.
   missing,
 
   /// Tor did not start, or its control port did not answer as expected.

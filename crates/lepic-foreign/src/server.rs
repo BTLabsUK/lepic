@@ -5,6 +5,12 @@
 //! and from one address, time to send the headers and the body and to take the answer, body
 //! size, requests per minute, and payments taken per minute. Only payments are served;
 //! invoices and the owner API are not.
+//!
+//! The per-minute budgets cannot tell callers apart (behind an onion every caller is
+//! `127.0.0.1`), so they are shaped to keep one caller's junk from blocking another's
+//! payment: requests that are not payments cannot use up the room payments have, and a
+//! payment the wallet refuses as invalid gives its share of the payment budget back, up to the
+//! budget again each minute.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -76,9 +82,14 @@ pub struct ListenSettings {
     /// For the caller to take the answer. A connection ends at the latest after
     /// `header_timeout + request_timeout + answer_timeout`, whatever it is doing.
     pub answer_timeout: Duration,
-    /// Requests of any kind taken in any one minute; more are answered `503`.
+    /// Requests of any kind taken in any one minute; past it only as many more as
+    /// `receives_per_minute` are read, and served only if they are payments. The rest are
+    /// answered `503`.
     pub requests_per_minute: u32,
     /// `receive_tx` calls carrying an S1 taken in any one minute; more are refused as busy.
+    /// One the wallet refuses as [`Refusal::Rejected`] does not count, for as many such
+    /// refusals a minute: the wallet may refuse a slate only after costly checks, so at most
+    /// twice this many reach it in a minute.
     pub receives_per_minute: u32,
 }
 
@@ -203,6 +214,7 @@ pub async fn listen(
         handler,
         settings,
         requests: Mutex::new(Window::new()),
+        payments_only: Mutex::new(Window::new()),
         receives: Mutex::new(Window::new()),
         per_address: Mutex::new(HashMap::new()),
     });
@@ -224,6 +236,8 @@ struct Served {
     handler: Arc<dyn ReceiveHandler>,
     settings: ListenSettings,
     requests: Mutex<Window>,
+    /// Requests read once `requests` is spent, served only if they are payments.
+    payments_only: Mutex<Window>,
     receives: Mutex<Window>,
     /// Open connections by remote address. Kept in memory only and never logged.
     per_address: Mutex<HashMap<IpAddr, usize>>,
@@ -231,10 +245,33 @@ struct Served {
 
 impl Served {
     fn take(window: &Mutex<Window>, limit: u32) -> bool {
+        Self::take_slot(window, limit).is_some()
+    }
+
+    /// Takes one call from `window`; the slot can be given back while its minute lasts.
+    fn take_slot(window: &Mutex<Window>, limit: u32) -> Option<Slot> {
         window
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .take(limit)
+            .take_slot(limit)
+    }
+
+    fn give_back(window: &Mutex<Window>, slot: Slot, limit: u32) {
+        window
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .give_back(slot, limit);
+    }
+
+    /// What a new request may be, or `None` when it is over every budget.
+    fn admit_request(&self) -> Option<Admission> {
+        if Self::take(&self.requests, self.settings.requests_per_minute) {
+            Some(Admission::Any)
+        } else if Self::take(&self.payments_only, self.settings.receives_per_minute) {
+            Some(Admission::PaymentOnly)
+        } else {
+            None
+        }
     }
 
     /// A share of the connections for `address`, or `None` when it holds its most.
@@ -277,10 +314,24 @@ impl Drop for AddressShare {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    Any,
+    /// Read past the request budget: served only if it is a payment.
+    PaymentOnly,
+}
+
+/// One call taken from a [`Window`] in the minute that began at `minute`.
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    minute: Instant,
+}
+
 /// Calls counted in the current minute.
 struct Window {
     started: Instant,
     taken: u32,
+    given_back: u32,
 }
 
 impl Window {
@@ -288,18 +339,31 @@ impl Window {
         Self {
             started: Instant::now(),
             taken: 0,
+            given_back: 0,
         }
     }
 
-    fn take(&mut self, limit: u32) -> bool {
+    fn take_slot(&mut self, limit: u32) -> Option<Slot> {
         if self.started.elapsed() >= Duration::from_secs(60) {
             *self = Self::new();
         }
         if self.taken >= limit {
-            return false;
+            return None;
         }
         self.taken = self.taken.saturating_add(1);
-        true
+        Some(Slot {
+            minute: self.started,
+        })
+    }
+
+    /// Gives `slot` back unless `limit` slots were already given back this minute, so at most
+    /// twice the window's limit is taken in a minute. A slot of a minute that has ended is not
+    /// given back: the new minute never counted it.
+    fn give_back(&mut self, slot: Slot, limit: u32) {
+        if slot.minute == self.started && self.given_back < limit {
+            self.taken = self.taken.saturating_sub(1);
+            self.given_back = self.given_back.saturating_add(1);
+        }
     }
 }
 
@@ -359,17 +423,18 @@ async fn accept_loop(
 }
 
 async fn answer(state: &Served, request: Request<Incoming>) -> Response<Full<Bytes>> {
-    if !Served::take(&state.requests, state.settings.requests_per_minute) {
+    let Some(admission) = state.admit_request() else {
         debug!("request limit reached");
         return status(StatusCode::SERVICE_UNAVAILABLE);
-    }
+    };
     if request.uri().path() != ENDPOINT {
         return status(StatusCode::NOT_FOUND);
     }
     if request.method() != Method::POST {
         return status(StatusCode::METHOD_NOT_ALLOWED);
     }
-    match tokio::time::timeout(state.settings.request_timeout, serve(state, request)).await {
+    let serving = serve(state, admission, request);
+    match tokio::time::timeout(state.settings.request_timeout, serving).await {
         Ok(response) => response,
         Err(_) => {
             debug!("request timed out");
@@ -378,7 +443,11 @@ async fn answer(state: &Served, request: Request<Incoming>) -> Response<Full<Byt
     }
 }
 
-async fn serve(state: &Served, request: Request<Incoming>) -> Response<Full<Bytes>> {
+async fn serve(
+    state: &Served,
+    admission: Admission,
+    request: Request<Incoming>,
+) -> Response<Full<Bytes>> {
     let declared = request
         .headers()
         .get(CONTENT_LENGTH)
@@ -398,23 +467,42 @@ async fn serve(state: &Served, request: Request<Incoming>) -> Response<Full<Byte
     };
     let request = match rpc::decode_request(&body) {
         Ok(request) => request,
+        Err(_) if admission == Admission::PaymentOnly => {
+            return status(StatusCode::SERVICE_UNAVAILABLE);
+        }
         Err(unanswerable) => return json(rpc::encode_error_response(&unanswerable)),
     };
+    let payment = matches!(&request.call, Call::ReceiveTx(slate) if looks_like_s1(slate));
+    if admission == Admission::PaymentOnly && !payment {
+        debug!("request limit reached");
+        return status(StatusCode::SERVICE_UNAVAILABLE);
+    }
     match request.call {
         Call::CheckVersion => json(rpc::encode_version_response(&request.id)),
         Call::ReceiveTx(slate) => {
             // Only what could be a payment spends the payment budget.
-            let allowed = !looks_like_s1(&slate)
-                || Served::take(&state.receives, state.settings.receives_per_minute);
-            if !allowed {
-                debug!("receive limit reached");
-                state.handler.refused(Refusal::Unavailable);
-                return json(rpc::encode_refusal_response(
-                    &request.id,
-                    Refusal::Unavailable.reason(),
-                ));
+            let slot = if payment {
+                let slot = Served::take_slot(&state.receives, state.settings.receives_per_minute);
+                if slot.is_none() {
+                    debug!("receive limit reached");
+                    state.handler.refused(Refusal::Unavailable);
+                    return json(rpc::encode_refusal_response(
+                        &request.id,
+                        Refusal::Unavailable.reason(),
+                    ));
+                }
+                slot
+            } else {
+                None
+            };
+            let received = state.handler.receive(slate).await;
+            // A slate refused as invalid mostly cost a check, not a payment's work: junk does
+            // not use up the room of real payments. Some refusals come only after the wallet's
+            // costlier checks, so only so many a minute are given back.
+            if let (Err(Refusal::Rejected), Some(slot)) = (&received, slot) {
+                Served::give_back(&state.receives, slot, state.settings.receives_per_minute);
             }
-            match state.handler.receive(slate).await {
+            match received {
                 Ok(reply) => match rpc::encode_slate_response(&request.id, &reply) {
                     Ok(body) => json(body),
                     Err(error) => {

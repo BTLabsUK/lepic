@@ -47,6 +47,11 @@ const HASH_LEN: usize = 32;
 const SAFECOOKIE_SERVER_KEY: &[u8] = b"Tor safe cookie authentication server-to-controller hash";
 const SAFECOOKIE_CLIENT_KEY: &[u8] = b"Tor safe cookie authentication controller-to-server hash";
 const ASYNC_CODE: u16 = 650;
+/// Rendezvous requests tor takes from its proof-of-work queue per second, and at once: a
+/// phone answers a handful of payments a minute, not tor's defaults for large services
+/// (250 and 2500). Under a flood the senders that solved the hardest puzzles go first.
+pub const POW_QUEUE_RATE: u32 = 2;
+pub const POW_QUEUE_BURST: u32 = 10;
 
 /// Why a control-port exchange failed.
 #[derive(Debug, Error)]
@@ -356,6 +361,18 @@ fn truncate(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }
 
+/// Where a reply or event came in among everything tor sent on one connection. An event
+/// before a command's reply happened before tor carried out the command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Position(pub(crate) u64);
+
+/// An onion service tor added: its ServiceID and the position of the `ADD_ONION` reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedOnion {
+    pub service_id: String,
+    pub added_at: Position,
+}
+
 /// An authenticated or not yet authenticated control connection. Dropping it closes the
 /// connection, which ends tor once ownership was taken.
 #[derive(Debug)]
@@ -367,13 +384,13 @@ pub struct ControlConnection {
     timeout: Duration,
 }
 
-// The services of the last `HS_DESC UPLOADED` events dropped from a full queue.
-type DroppedUploads = Arc<std::sync::Mutex<VecDeque<String>>>;
+// The services and positions of the last `HS_DESC UPLOADED` events dropped from a full queue.
+type DroppedUploads = Arc<std::sync::Mutex<VecDeque<(String, Position)>>>;
 
 #[derive(Debug)]
 struct Commander {
     writer: OwnedWriteHalf,
-    replies: mpsc::Receiver<Result<Reply, ControlError>>,
+    replies: mpsc::Receiver<Result<(Position, Reply), ControlError>>,
 }
 
 impl Drop for ControlConnection {
@@ -388,7 +405,7 @@ impl ControlConnection {
     pub async fn connect(
         address: SocketAddr,
         timeout: Duration,
-    ) -> Result<(Self, mpsc::Receiver<Event>), ControlError> {
+    ) -> Result<(Self, mpsc::Receiver<(Position, Event)>), ControlError> {
         if !address.ip().is_loopback() {
             return Err(ControlError::InvalidArgument);
         }
@@ -424,19 +441,23 @@ impl ControlConnection {
         self.closed.load(Ordering::Acquire)
     }
 
-    /// Whether an `HS_DESC UPLOADED` for `service_id` was dropped because the event receiver
-    /// was full, so the upload happened although no event for it arrived.
-    pub fn upload_was_dropped(&self, service_id: &str) -> bool {
+    /// Whether an `HS_DESC UPLOADED` for `service_id` after `since` was dropped because the
+    /// event receiver was full, so the upload happened although no event for it arrived.
+    pub fn upload_was_dropped(&self, service_id: &str, since: Position) -> bool {
         self.dropped_uploads
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .any(|id| id == service_id)
+            .any(|(id, at)| id == service_id && *at > since)
     }
 
     /// Sends one command line and returns its reply; a reply other than 2xx is
     /// [`ControlError::Rejected`]. The line may hold a secret, so it is never logged.
     async fn command(&self, line: &str) -> Result<Reply, ControlError> {
+        self.positioned_command(line).await.map(|(_, reply)| reply)
+    }
+
+    async fn positioned_command(&self, line: &str) -> Result<(Position, Reply), ControlError> {
         if line.contains(['\r', '\n']) {
             return Err(ControlError::InvalidArgument);
         }
@@ -463,10 +484,10 @@ impl ControlConnection {
                 return Err(ControlError::Timeout);
             }
         }?;
-        if reply.is_success() {
+        if reply.1.is_success() {
             Ok(reply)
         } else {
-            Err(ControlError::Rejected { code: reply.code })
+            Err(ControlError::Rejected { code: reply.1.code })
         }
     }
 
@@ -561,13 +582,14 @@ impl ControlConnection {
 
     /// `ADD_ONION` with the 64-byte expanded key, port 80 to `127.0.0.1:<target_port>`.
     /// `DiscardPK` keeps tor from echoing the key; `MaxStreams` with `MaxStreamsCloseCircuit`
-    /// closes a circuit that opens more than [`MAX_STREAMS_PER_CIRCUIT`] streams at once.
-    /// Returns tor's ServiceID.
+    /// closes a circuit that opens more than [`MAX_STREAMS_PER_CIRCUIT`] streams at once; the
+    /// proof-of-work defence makes each new sender circuit cost a puzzle once the service is
+    /// flooded ([`POW_QUEUE_RATE`]). A tor built without the defence ignores it.
     pub async fn add_onion(
         &self,
         expanded_key: &[u8; 64],
         target_port: u16,
-    ) -> Result<String, ControlError> {
+    ) -> Result<AddedOnion, ControlError> {
         if target_port == 0 {
             return Err(ControlError::InvalidArgument);
         }
@@ -586,13 +608,20 @@ impl ControlConnection {
         line.push_str(encoded);
         line.push_str(" Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=");
         line.push_str(&MAX_STREAMS_PER_CIRCUIT.to_string());
+        line.push_str(" PoWDefensesEnabled=1 PoWQueueRate=");
+        line.push_str(&POW_QUEUE_RATE.to_string());
+        line.push_str(" PoWQueueBurst=");
+        line.push_str(&POW_QUEUE_BURST.to_string());
         line.push_str(" Port=80,127.0.0.1:");
         line.push_str(&target_port.to_string());
-        let reply = self.command(&line).await?;
+        let (added_at, reply) = self.positioned_command(&line).await?;
         reply
             .value("ServiceID")
             .filter(|id| is_service_id(id))
-            .map(str::to_owned)
+            .map(|id| AddedOnion {
+                service_id: id.to_owned(),
+                added_at,
+            })
             .ok_or(ControlError::Malformed)
     }
 
@@ -608,6 +637,29 @@ impl ControlConnection {
     /// `SIGNAL SHUTDOWN`: tor closes its listeners and exits.
     pub async fn signal_shutdown(&self) -> Result<(), ControlError> {
         self.command("SIGNAL SHUTDOWN").await.map(drop)
+    }
+
+    /// `SIGNAL HALT`: tor exits at once.
+    pub async fn signal_halt(&self) -> Result<(), ControlError> {
+        self.command("SIGNAL HALT").await.map(drop)
+    }
+
+    /// `SIGNAL ACTIVE`: tor leaves its dormant state, if it was in it, and builds circuits
+    /// again.
+    pub async fn signal_active(&self) -> Result<(), ControlError> {
+        self.command("SIGNAL ACTIVE").await.map(drop)
+    }
+
+    /// `SETCONF DisableNetwork`. Disabling closes every connection but the control ones, the
+    /// SOCKS listener included; enabling opens a new SOCKS listener, on another port when it
+    /// is `auto`.
+    pub async fn set_network_enabled(&self, enabled: bool) -> Result<(), ControlError> {
+        let line = if enabled {
+            "SETCONF DisableNetwork=0"
+        } else {
+            "SETCONF DisableNetwork=1"
+        };
+        self.command(line).await.map(drop)
     }
 }
 
@@ -685,14 +737,15 @@ fn hex_digit(nibble: u8) -> char {
 
 async fn read_replies(
     mut reader: BufReader<OwnedReadHalf>,
-    replies: mpsc::Sender<Result<Reply, ControlError>>,
-    events: mpsc::Sender<Event>,
+    replies: mpsc::Sender<Result<(Position, Reply), ControlError>>,
+    events: mpsc::Sender<(Position, Event)>,
     closed: Arc<AtomicBool>,
     dropped_uploads: DroppedUploads,
 ) {
     let mut assembler = ReplyAssembler::default();
     let mut line = Vec::new();
     let mut dropping = false;
+    let mut position = Position(0);
     let failure = loop {
         let text = match read_line(&mut reader, &mut line).await {
             Ok(Some(text)) => text,
@@ -704,11 +757,12 @@ async fn read_replies(
             Ok(None) => continue,
             Err(error) => break error,
         };
+        position = Position(position.0.saturating_add(1));
         if reply.is_event() {
             let event = parse_event(reply.lines.first().map(String::as_str).unwrap_or_default());
-            match events.try_send(event) {
+            match events.try_send((position, event)) {
                 Ok(()) => dropping = false,
-                Err(mpsc::error::TrySendError::Full(event)) => {
+                Err(mpsc::error::TrySendError::Full((_, event))) => {
                     // Once per run of drops: the queue fills only when its reader stalls.
                     if !dropping {
                         warn!("tor events dropped, the event queue is full");
@@ -725,12 +779,12 @@ async fn read_replies(
                         if dropped.len() >= DROPPED_UPLOADS {
                             dropped.pop_front();
                         }
-                        dropped.push_back(service_id);
+                        dropped.push_back((service_id, position));
                     }
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {}
             }
-        } else if replies.send(Ok(reply)).await.is_err() {
+        } else if replies.send(Ok((position, reply))).await.is_err() {
             break ControlError::Closed;
         }
     };
@@ -1067,8 +1121,10 @@ mod tests {
         // Replies come after the events sent before them, so all were handled by now.
         control.signal_shutdown().await.unwrap();
         assert_eq!(events.len(), EVENT_QUEUE);
-        assert!(control.upload_was_dropped(SERVICE));
-        assert!(!control.upload_was_dropped(&SERVICE.replace('m', "n")));
+        let uploaded_at = Position(u64::try_from(EVENT_QUEUE).unwrap() + 1);
+        assert!(control.upload_was_dropped(SERVICE, Position(0)));
+        assert!(!control.upload_was_dropped(SERVICE, uploaded_at));
+        assert!(!control.upload_was_dropped(&SERVICE.replace('m', "n"), Position(0)));
     }
 
     #[tokio::test]

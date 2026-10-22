@@ -113,6 +113,46 @@ fn state_event(state: &TorState) -> Option<TorEvent> {
     })
 }
 
+/// How far tor got, in the order the app hears of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Phase {
+    Starting,
+    Bootstrapped,
+    Publishing,
+    Ready,
+}
+
+const fn phase(state: &TorState) -> Option<Phase> {
+    match state {
+        TorState::Starting { .. } => Some(Phase::Starting),
+        TorState::Bootstrapped => Some(Phase::Bootstrapped),
+        TorState::Publishing => Some(Phase::Publishing),
+        TorState::Ready { .. } => Some(Phase::Ready),
+        _ => None,
+    }
+}
+
+/// The events for a new state of tor. The state is watched, so steps that follow each other
+/// quickly are seen as their last one; a phase passed that way is still reported, before the
+/// state's own event, so the app always hears `Bootstrapped` before `Publishing` and
+/// `Publishing` before `Ready`.
+fn state_events(reported: &mut Phase, state: &TorState) -> Vec<TorEvent> {
+    let mut events = Vec::new();
+    if let Some(now) = phase(state) {
+        for (passed, kind) in [
+            (Phase::Bootstrapped, TorEventKind::Bootstrapped),
+            (Phase::Publishing, TorEventKind::Publishing),
+        ] {
+            if *reported < passed && passed < now {
+                events.push(TorEvent::of(kind));
+            }
+        }
+        *reported = (*reported).max(now);
+    }
+    events.extend(state_event(state));
+    events
+}
+
 /// Payments the listener behind the onion handled, as tor events.
 fn listener_report(report: &TorReport) -> HttpReport {
     let report = Arc::clone(report);
@@ -178,9 +218,9 @@ impl Session {
     /// `report`.
     ///
     /// A start while the tor stopped last is still going down waits for it, as both use the
-    /// same data directory; one that waits too long reports `Failed` and `Stopped`. Android
-    /// and iOS run no tor: there `Failed` with [`TorFailureKind::Missing`] and `Stopped` are
-    /// reported at once.
+    /// same data directory; one that waits too long reports `Failed` and `Stopped`. iOS runs
+    /// no tor: there `Failed` with [`TorFailureKind::Missing`] and `Stopped` are reported at
+    /// once. Android runs the tor the app installs as a native library.
     pub(crate) async fn start_tor(
         self: &Arc<Self>,
         tor_binary: String,
@@ -188,7 +228,7 @@ impl Session {
         report: TorReport,
     ) -> Result<(), WalletError> {
         let key = self.engine.onion_key()?;
-        if cfg!(any(target_os = "android", target_os = "ios")) {
+        if cfg!(target_os = "ios") {
             report(failed(TorFailureKind::Missing));
             report(TorEvent::of(TorEventKind::Stopped));
             return Ok(());
@@ -362,6 +402,26 @@ impl Session {
         }
     }
 
+    /// Wakes the running tor after a pause and, when `network_changed`, has it build new
+    /// connections. Nothing to do while tor is still being started.
+    pub(crate) async fn refresh_tor(&self, network_changed: bool) -> Result<(), WalletError> {
+        self.ensure_unlocked()?;
+        let tor = {
+            let mut slot = lock(&self.tor_slot);
+            slot.settle();
+            match &*slot {
+                TorSlot::Running(run) => Arc::clone(&run.tor),
+                TorSlot::Starting(_) => return Ok(()),
+                TorSlot::Idle | TorSlot::Stopping(_) => return Err(tor_not_running()),
+            }
+        };
+        // A tor that failed the refresh has ended; its stream reports `Failed` and `Stopped`.
+        tor.refresh(network_changed).await.map_err(|failure| {
+            debug!(transport = "tor", error = %failure, "tor not refreshed");
+            tor_not_running()
+        })
+    }
+
     /// Where the `Sending` of a send goes, once tor can send; checked before anything is
     /// stored.
     fn tor_send_report(&self) -> Result<TorReport, WalletError> {
@@ -467,9 +527,10 @@ async fn drive(
 ) {
     let mut states = tor.subscribe();
     let forward = async {
+        let mut reported = Phase::Starting;
         loop {
             let state = states.borrow_and_update().clone();
-            if let Some(event) = state_event(&state) {
+            for event in state_events(&mut reported, &state) {
                 report(event);
             }
             if matches!(state, TorState::Failed(_) | TorState::Off) {
@@ -527,4 +588,49 @@ async fn shut_down(run: TorRun, down: watch::Sender<bool>) {
     info!(transport = "tor", "tor stopped");
     down.send_replace(true);
     report(TorEvent::of(TorEventKind::Stopped));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kinds(events: Vec<TorEvent>) -> Vec<TorEventKind> {
+        events.into_iter().map(|event| event.kind).collect()
+    }
+
+    #[test]
+    fn a_phase_merged_into_a_later_state_is_still_reported_in_order() {
+        let onion = OnionAddress::from_public_key(&[1; 32]);
+        let mut reported = Phase::Starting;
+        let starting = TorState::Starting {
+            progress: 10,
+            tag: String::new(),
+        };
+        assert_eq!(
+            kinds(state_events(&mut reported, &starting)),
+            [TorEventKind::Starting]
+        );
+        assert_eq!(
+            kinds(state_events(&mut reported, &TorState::Ready { onion })),
+            [
+                TorEventKind::Bootstrapped,
+                TorEventKind::Publishing,
+                TorEventKind::Ready
+            ]
+        );
+
+        let mut reported = Phase::Starting;
+        assert_eq!(
+            kinds(state_events(&mut reported, &TorState::Publishing)),
+            [TorEventKind::Bootstrapped, TorEventKind::Publishing]
+        );
+        let failure = lepic_tor::TorFailure {
+            kind: FailureKind::Stopped,
+            detail: String::new(),
+        };
+        assert_eq!(
+            kinds(state_events(&mut reported, &TorState::Failed(failure))),
+            [TorEventKind::Failed]
+        );
+    }
 }
