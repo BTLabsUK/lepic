@@ -359,9 +359,12 @@ Publishing the wallet's onion address.
 Listening for payments at gpuxiaswl37rjqfunltyo57h7ubqvmyf4yoyomyh6zs5btdbbzymfeid.onion over Tor. Ctrl-C stops.
 ```
 
-Tor forwards the onion's port 80 to a listener on `127.0.0.1` that nothing else reaches. Only
-payments are answered, never invoices, with the same caps as `http listen`. Ctrl-C stops tor and
-prints how many payments were received, repeated and refused.
+Tor forwards the onion's port 80 to a listener on `127.0.0.1`, at a port picked when it starts.
+Only payments are answered, never invoices, with the caps of `http listen` but one: tor connects
+every sender from `127.0.0.1`, so instead of a share per address, tor closes a sender's circuit
+that opens more than 4 connections at once. Receipts are recorded as `tor` and have their own
+open-receipt cap. Ctrl-C stops tor and prints how many payments were received, repeated and
+refused.
 
 To pay a wallet that receives over Tor, `lepic tor listen` or any wallet with a published onion:
 

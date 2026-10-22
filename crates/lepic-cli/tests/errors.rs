@@ -188,6 +188,19 @@ fn a_send_to_an_onion_needs_a_tor_binary_and_stores_nothing_without_one() {
             ],
             (3, "config"),
         ),
+        // Funds are checked before tor is started.
+        (
+            vec![
+                "tx",
+                "send",
+                "1000",
+                "--to",
+                onion.as_str(),
+                "--tor-binary",
+                missing,
+            ],
+            (8, "insufficient_funds"),
+        ),
         (vec!["tor", "listen"], (2, "usage")),
         (
             vec!["tor", "listen", "--tor-binary", missing],

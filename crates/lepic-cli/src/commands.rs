@@ -600,6 +600,14 @@ impl<H: Host> Run<'_, H> {
             message: args.message.message,
             ..SendRequest::new(account.index, amount)
         };
+        if transport == lepic_tor::TRANSPORT_ID {
+            // The checks the send makes before it stores anything, before tor takes its time
+            // to connect for a send that cannot be made.
+            opened
+                .wallet
+                .estimate_fee(request.amount, request.selection_options())
+                .await?;
+        }
         let tor = self.tor_for(transport, &args.tor, &opened).await?;
         let sending = async {
             let sent = opened.wallet.send(request, delivery).await?;
@@ -680,6 +688,7 @@ impl<H: Host> Run<'_, H> {
         let receiver = Arc::new(HttpReceiver {
             opened: Arc::clone(&opened),
             counts: Arc::clone(&counts),
+            transport: lepic_foreign::TRANSPORT_ID,
         });
         let handle =
             lepic_foreign::listen(ListenSettings::new(exposure, args.port), receiver).await?;
@@ -779,9 +788,9 @@ impl<H: Host> Run<'_, H> {
         let receiver = Arc::new(HttpReceiver {
             opened: Arc::clone(&opened),
             counts: Arc::clone(&counts),
+            transport: lepic_tor::TRANSPORT_ID,
         });
-        let handle =
-            lepic_foreign::listen(ListenSettings::new(Exposure::LocalOnly, 0), receiver).await?;
+        let handle = lepic_foreign::listen(lepic_tor::listen_settings(), receiver).await?;
         let tor = self.start_tor(&args.tor)?;
         let published = async {
             self.wait_for_tor(&tor).await?;
@@ -1258,10 +1267,12 @@ struct HttpCounts {
     refused: std::sync::atomic::AtomicU32,
 }
 
-/// The wallet behind `http listen`. Receipts reach the user as the wallet's events.
+/// The wallet behind `http listen` and `tor listen`, recording receipts as `transport`'s.
+/// Receipts reach the user as the wallet's events.
 struct HttpReceiver<N: NodeApi + 'static> {
     opened: Arc<Opened<N>>,
     counts: Arc<HttpCounts>,
+    transport: lepic_transport::transport::TransportId,
 }
 
 impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
@@ -1270,11 +1281,7 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
             let received = self
                 .opened
                 .wallet
-                .receive_unsolicited(
-                    lepic_foreign::TRANSPORT_ID,
-                    &slate,
-                    ReceiveRequest::default(),
-                )
+                .receive_unsolicited(self.transport, &slate, ReceiveRequest::default())
                 .await;
             match received {
                 Ok(received) => {
@@ -1290,8 +1297,9 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
                     self.counts.refused.fetch_add(1, Ordering::Relaxed);
                     let error = CliError::from(error);
                     tracing::debug!(
+                        transport = %self.transport,
                         error = %lepic_telemetry::ErrorChain(&error),
-                        "http payment refused"
+                        "payment refused"
                     );
                     // The sender may try again when nothing about the slate was wrong.
                     Err(match error.kind() {

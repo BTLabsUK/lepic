@@ -593,7 +593,7 @@ The onion address is the wallet's payment-proof address in onion form, the addre
     #[command(after_help = "\
 Runs the tor binary given with --tor-binary for this wallet, with its files in tor/ inside the
 data directory, and publishes the wallet's onion address. Payments reach the wallet foreign API
-on a listener on 127.0.0.1 that only tor forwards to; only payments are answered, never
+on a listener on 127.0.0.1, which tor forwards the onion to; only payments are answered, never
 invoices. The onion address is printed once others can reach it.")]
     Listen(TorListenArgs),
 }
