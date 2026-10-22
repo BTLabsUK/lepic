@@ -348,3 +348,38 @@ async fn the_listener_caps_open_receipts_and_still_answers_a_payment_received_be
     );
     assert_eq!(pair.bob.transactions().await.unwrap().len(), before);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_payment_over_the_listener_rate_is_reported_refused_as_unavailable() {
+    let pair = funded_pair().await;
+    let events = Events::default();
+    let port = listen(&pair.bob, &events).await;
+    let client = ForeignClient::new(ClientSettings::default(), webpki_tls_config().unwrap());
+    let to = ForeignUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
+    let budget = lepic_foreign::ListenSettings::new(lepic_foreign::Exposure::LocalOnly, 0)
+        .receives_per_minute;
+    for n in 0..=budget {
+        let slate = format!(r#"{{"id":"{n}","amount":"1","participant_data":[]}}"#);
+        let refused = client
+            .receive_tx(&to, &WireSlate::text(MediaType::JSON, slate))
+            .await;
+        assert!(refused.is_err());
+    }
+
+    let refusals: Vec<_> = events
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.kind == HttpListenerEventKind::Refused)
+        .map(|event| event.refusal)
+        .collect();
+    let (last, checked) = refusals.split_last().unwrap();
+    assert_eq!(*last, Some(crate::api::http::HttpRefusal::Unavailable));
+    assert_eq!(checked.len(), usize::try_from(budget).unwrap());
+    assert!(
+        checked
+            .iter()
+            .all(|refusal| *refusal == Some(crate::api::http::HttpRefusal::Rejected))
+    );
+}
