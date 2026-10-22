@@ -1411,14 +1411,14 @@ where
                 Err(
                     error @ (WalletError::InPool(_)
                     | WalletError::OnChain(_)
-                    | WalletError::Implausible(_)
                     | WalletError::ChangedDuringCancel(_)
                     | WalletError::Transition(_)
                     | WalletError::UnknownTransaction(_)),
                 ) => {
                     debug!(tx_id = %tx_id, error = %ErrorChain(&error), "open receipt kept");
                 }
-                Err(error @ WalletError::Node(_)) => {
+                // Either says nothing of this receipt, only that the node cannot be asked.
+                Err(error @ (WalletError::Node(_) | WalletError::Implausible(_))) => {
                     return if self.hold_exhausted(msg_id, attempt).await? {
                         Err(Refusal::OpenReceiptsUnchecked(error).into())
                     } else {

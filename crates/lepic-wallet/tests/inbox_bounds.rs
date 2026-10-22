@@ -811,3 +811,45 @@ fn a_held_message_that_first_arrived_less_than_a_minute_after_the_wallet_clock_s
     );
     assert_eq!(world.relay.pending(&world.receiver_address), 1);
 }
+
+#[test]
+fn at_the_open_receipt_cap_an_implausible_node_tip_holds_the_new_s1_only_to_the_hold_bound() {
+    let world = World::new();
+    // The wallet stores the tip it first saw, which bounds the tips it believes later.
+    world.block_on(world.receiver_wallet.refresh()).unwrap();
+    // The node client then accepts a tip a day of blocks above this one, while the wallet's
+    // bound is lower.
+    world.receiver.harness.node.update_chain(|chain| {
+        chain.tip.height = Height::new(30);
+    });
+    fill_to_cap(&world);
+    world.receiver.harness.node.update_chain(|chain| {
+        chain.tip.height = Height::new(WORLD_TIP + lepic_wallet::chain::TIP_SLACK_BLOCKS + 10);
+    });
+    let msg_id = post_from(&world, 1_000, &s1_numbered(1_000));
+
+    let held = drain(&world);
+
+    assert_eq!(
+        held,
+        InboxSummary {
+            held: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 1);
+
+    waited_the_hold_bound(&world, &msg_id);
+    let refused = drain(&world);
+
+    assert_eq!(
+        refused,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    assert_eq!(world.receiver.transactions(), MAX_OPEN_RECEIPTS);
+    assert_eq!(incoming(&world, TxState::Received), MAX_OPEN_RECEIPTS);
+}
