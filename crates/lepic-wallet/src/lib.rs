@@ -24,6 +24,7 @@ pub mod inbox;
 pub mod invoice;
 pub mod lifecycle;
 pub mod notice;
+mod onion_key;
 pub mod ports;
 mod process;
 mod receipt_cap;
@@ -42,6 +43,7 @@ pub use error::WalletError;
 pub use event::{Event, SessionState};
 pub use finalize::{FinalizeError, Finalized};
 pub use lifecycle::{Password, RecoveryPhrase, WordCount};
+pub use onion_key::OnionKey;
 pub use ports::{Clock, Ports, SecretVault, SecretVaultError, SharedRng, StoreOpener};
 #[cfg(feature = "sqlite")]
 pub use ports::{DATABASE_FILE, SqliteStores};

@@ -120,3 +120,60 @@ fn refresh_then_update_scan_ends_where_upstream_update_ended() {
         refresh_support::assert_scanned_like_upstream(&wallet, &vector, &name);
     }
 }
+
+/// `testdata/vectors/keys/address_keys_seed32.json`: the onion key of a wallet restored from
+/// the vector's seed is the address secret key of `m/0/0`, index 0, and its public key is the
+/// payment-proof key `epic-wallet` derives.
+#[test]
+fn the_onion_key_is_the_payment_proof_key_of_the_default_account() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/vectors/keys/address_keys_seed32.json");
+    let vector: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let case = vector["expected"]["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| {
+            case["parent_identifier"] == "0200000000000000000000000000000000" && case["index"] == 0
+        })
+        .unwrap();
+    let seed_hex = vector["inputs"]["seed"].as_str().unwrap();
+    let entropy = hex_bytes(seed_hex);
+    let phrase = lepic_keychain::Seed::from_entropy(&entropy)
+        .unwrap()
+        .to_mnemonic()
+        .unwrap();
+    let harness = support::Harness::new();
+    let wallet = harness.wallet();
+    assert!(matches!(
+        wallet.onion_key(),
+        Err(lepic_wallet::WalletError::Locked)
+    ));
+
+    harness
+        .block_on(wallet.restore(support::password("vector password"), &phrase))
+        .unwrap();
+    let key = wallet.onion_key().unwrap();
+
+    assert_eq!(
+        key.expose_seed().as_slice(),
+        hex_bytes(case["address_secret_key"].as_str().unwrap())
+    );
+    assert_eq!(
+        key.public_key().as_slice(),
+        hex_bytes(case["payment_proof_public_key"].as_str().unwrap())
+    );
+    assert_eq!(format!("{key:?}"), "OnionKey([redacted])");
+    wallet.lock();
+    assert!(matches!(
+        wallet.onion_key(),
+        Err(lepic_wallet::WalletError::Locked)
+    ));
+}
+
+fn hex_bytes(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+        .collect()
+}
