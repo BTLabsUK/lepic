@@ -81,7 +81,10 @@ pub struct TorSettings {
     pub tor_binary: PathBuf,
     /// Put on `LD_LIBRARY_PATH` on Linux, for the libraries the Tor Expert Bundle ships.
     pub lib_dir: Option<PathBuf>,
-    /// This wallet's tor directory, created with mode 0700. Never shared between wallets.
+    /// This wallet's tor directory, never shared between wallets. It holds the control cookie.
+    /// On Unix it is created with mode 0700. On Windows no permissions are set, so it must be
+    /// inside the user's profile (under `%APPDATA%` or `%LOCALAPPDATA%`), whose ACL keeps other
+    /// users out.
     pub data_dir: PathBuf,
     pub timings: TorTimings,
 }
@@ -188,13 +191,15 @@ pub trait SocksProxy: Send + Sync {
     fn socks_address(&self) -> Option<SocketAddr>;
 }
 
-/// A SOCKS proxy at a fixed address, for a tor the wallet does not run.
+/// A SOCKS proxy at a fixed address, for a tor the wallet does not run. Only a loopback
+/// address is used: SOCKS is plain text, so a proxy on another computer would see every onion
+/// and slate. Any other address gives no proxy, and sends fail as with tor off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedSocks(pub SocketAddr);
 
 impl SocksProxy for FixedSocks {
     fn socks_address(&self) -> Option<SocketAddr> {
-        Some(self.0)
+        self.0.ip().is_loopback().then_some(self.0)
     }
 }
 
@@ -324,7 +329,10 @@ impl TorProcess {
     }
 
     /// Removes the onion, asks tor to exit and kills it if it has not after
-    /// [`TorTimings::stop`]. Bounded by about three times that.
+    /// [`TorTimings::stop`]: bounded by about three times that once tor is running. While tor
+    /// is still starting, the stop waits for the start to end first, at most
+    /// [`TorTimings::control_file`] and eight [`TorTimings::command`] more. Dropping the
+    /// process instead kills tor at once.
     pub async fn stop(self) {
         let (reply, done) = oneshot::channel();
         if self.requests.send(Request::Stop { reply }).await.is_ok() {
@@ -1034,8 +1042,14 @@ mod tests {
     }
 
     #[test]
-    fn fixed_socks_always_answers() {
-        let address: SocketAddr = "127.0.0.1:9050".parse().unwrap();
-        assert_eq!(FixedSocks(address).socks_address(), Some(address));
+    fn fixed_socks_answers_only_on_loopback() {
+        for loopback in ["127.0.0.1:9050", "[::1]:9050"] {
+            let address: SocketAddr = loopback.parse().unwrap();
+            assert_eq!(FixedSocks(address).socks_address(), Some(address));
+        }
+        for remote in ["10.0.0.2:9050", "0.0.0.0:9050", "[2001:db8::1]:9050"] {
+            let address: SocketAddr = remote.parse().unwrap();
+            assert_eq!(FixedSocks(address).socks_address(), None, "{remote}");
+        }
     }
 }
