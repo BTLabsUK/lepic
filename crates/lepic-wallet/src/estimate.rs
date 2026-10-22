@@ -8,11 +8,11 @@ use tracing::{debug, instrument};
 use crate::account::AccountError;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::selection::{self, Selection, SelectionError, SelectionOptions, SelectionRequest};
+use crate::selection::{
+    self, Selection, SelectionError, SelectionOptions, SelectionRequest, SelfSendShape,
+};
 use crate::send::{SendError, spendable_here};
 use crate::wallet::Wallet;
-
-type Choose = fn(&[OutputRecord], &SelectionRequest) -> Result<Selection, SelectionError>;
 
 impl<N, S, V> Wallet<N, S, V>
 where
@@ -38,6 +38,21 @@ where
         self.estimate(options, amount, selection::select).await
     }
 
+    /// The inputs, outputs and fee of [`Wallet::self_send`] with `options` and `shape`, chosen
+    /// as it chooses them, with nothing locked, derived or stored. Fails as
+    /// [`Wallet::estimate_fee`] does.
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub async fn estimate_self_send(
+        &self,
+        options: SelectionOptions,
+        shape: SelfSendShape,
+    ) -> Result<Selection, SendError> {
+        self.estimate(options, Amount::ZERO, move |outputs, request| {
+            selection::select_self_send(outputs, request, shape)
+        })
+        .await
+    }
+
     /// The largest amount a send with `options` can pay now, with the inputs, change and fee
     /// of that send, as [`selection::select_max`] finds it. [`Wallet::send`] of the returned
     /// amount with the same options at the same tip charges the returned fee.
@@ -54,7 +69,9 @@ where
         &self,
         options: SelectionOptions,
         amount: Amount,
-        choose: Choose,
+        choose: impl Fn(&[OutputRecord], &SelectionRequest) -> Result<Selection, SelectionError>
+        + Send
+        + 'static,
     ) -> Result<Selection, SendError> {
         let session = self.session()?;
         let tip = self

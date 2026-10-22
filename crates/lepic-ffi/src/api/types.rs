@@ -432,6 +432,22 @@ pub struct FeeEstimate {
     pub change_outputs: u32,
 }
 
+/// A send to the wallet itself, from `EpicWallet::split_outputs` and
+/// `EpicWallet::consolidate_outputs`, finalized and posted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfSentTx {
+    /// The outgoing transaction: it spent the inputs and holds the change outputs.
+    pub tx_id: u32,
+    /// The incoming transaction: it holds the output of `amount`.
+    pub received_tx_id: u32,
+    pub amount: u64,
+    pub fee: u64,
+    /// How many outputs it spent.
+    pub input_count: u32,
+    /// How many outputs it made: the received one and the change.
+    pub output_count: u32,
+}
+
 /// How a send chooses the outputs it spends, as `epic-wallet send --selection_strategy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionStrategy {

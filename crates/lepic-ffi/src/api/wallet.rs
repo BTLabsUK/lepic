@@ -16,6 +16,7 @@ use std::sync::Arc;
 use flutter_rust_bridge::frb;
 use lepic_keychain::Seed;
 use lepic_wallet::Password;
+use lepic_wallet::selection::{SelfSendShape, SplitCount};
 use zeroize::Zeroizing;
 
 use crate::inspect;
@@ -26,8 +27,8 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, LegacyImport, ListenerEvent, ListenerEventKind,
-    NodeTip, ReceivedSlate, RefreshProgress, ScanProgress, SendOptions, SentTx, Slate, SlateInfo,
-    TransactionDetails, WalletConfig, WalletEvent, WalletOutput, WalletSummary,
+    NodeTip, ReceivedSlate, RefreshProgress, ScanProgress, SelfSentTx, SendOptions, SentTx, Slate,
+    SlateInfo, TransactionDetails, WalletConfig, WalletEvent, WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -115,6 +116,24 @@ pub async fn node_tip(
             session::node_tip(&inner, &config, &node_secret).await
         })
         .await
+}
+
+/// A split into `outputs` outputs: refused with `InvalidArgument` outside 2..=10.
+fn split_shape(outputs: u32) -> Result<SelfSendShape, WalletError> {
+    usize::try_from(outputs)
+        .ok()
+        .and_then(SplitCount::new)
+        .map(SelfSendShape::Split)
+        .ok_or_else(|| {
+            WalletError::new(
+                WalletErrorKind::InvalidArgument,
+                format!(
+                    "a split makes from {} to {} outputs",
+                    SplitCount::MIN,
+                    SplitCount::MAX
+                ),
+            )
+        })
 }
 
 /// `password` as the password of a new wallet: refused with `InvalidArgument` below
@@ -629,6 +648,76 @@ impl EpicWallet {
     ) -> Result<FeeEstimate, WalletError> {
         self.run("estimate_max", |session| async move {
             session.estimate_max(minimum_confirmations, options).await
+        })
+        .await
+    }
+
+    /// The fee and inputs of [`EpicWallet::split_outputs`] into `outputs` outputs now, with
+    /// nothing locked. Fails as that call does.
+    pub async fn estimate_split(
+        &self,
+        outputs: u32,
+        minimum_confirmations: u64,
+    ) -> Result<FeeEstimate, WalletError> {
+        self.run("estimate_split", |session| async move {
+            session
+                .estimate_self_send(split_shape(outputs)?, minimum_confirmations)
+                .await
+        })
+        .await
+    }
+
+    /// Splits the wallet's funds into `outputs` outputs of nearly equal value, from 2 to 10, so
+    /// that several sends can follow without waiting for each other's change: a normal network
+    /// transaction to the wallet itself, confirmed as any send, never through its Epicbox
+    /// address. It spends every output with `minimum_confirmations`, up to 500, so the whole
+    /// balance is locked until it confirms. It shows as two transactions over transport `self`,
+    /// a send holding the change outputs and a receive holding one output; the fee is that of
+    /// [`EpicWallet::estimate_split`] at the same tip.
+    ///
+    /// Fails with `InvalidArgument` for a count outside 2..=10, with `NotEnoughFunds` when the
+    /// spendable outputs cannot pay the fee and one base unit into each output, and otherwise
+    /// as [`EpicWallet::estimate_fee`], storing nothing. Fails with `NotPosted` when it was
+    /// stored but the node did not take it: post the send again with
+    /// [`EpicWallet::repost_transaction`] or cancel it with
+    /// [`EpicWallet::cancel_transaction`].
+    pub async fn split_outputs(
+        &self,
+        outputs: u32,
+        minimum_confirmations: u64,
+    ) -> Result<SelfSentTx, WalletError> {
+        self.run("split_outputs", |session| async move {
+            session
+                .self_send(split_shape(outputs)?, minimum_confirmations)
+                .await
+        })
+        .await
+    }
+
+    /// The fee and inputs of [`EpicWallet::consolidate_outputs`] now, with nothing locked.
+    /// Fails as that call does.
+    pub async fn estimate_consolidate(
+        &self,
+        minimum_confirmations: u64,
+    ) -> Result<FeeEstimate, WalletError> {
+        self.run("estimate_consolidate", |session| async move {
+            session
+                .estimate_self_send(SelfSendShape::Consolidate, minimum_confirmations)
+                .await
+        })
+        .await
+    }
+
+    /// Merges every output with `minimum_confirmations`, up to 500, into one, as
+    /// [`EpicWallet::split_outputs`] does with one output. Fails as that call does.
+    pub async fn consolidate_outputs(
+        &self,
+        minimum_confirmations: u64,
+    ) -> Result<SelfSentTx, WalletError> {
+        self.run("consolidate_outputs", |session| async move {
+            session
+                .self_send(SelfSendShape::Consolidate, minimum_confirmations)
+                .await
         })
         .await
     }

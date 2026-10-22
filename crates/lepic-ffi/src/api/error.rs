@@ -8,6 +8,7 @@ use lepic_wallet::invoice::InvoiceError;
 use lepic_wallet::refresh::RefreshError;
 use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
+use lepic_wallet::self_send::SelfSendError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{FinalizeError, ReceiveError};
 
@@ -277,6 +278,17 @@ impl From<ReceiveError> for WalletError {
             _ => WalletErrorKind::Other,
         };
         Self::chained(kind, &error)
+    }
+}
+
+impl From<SelfSendError> for WalletError {
+    fn from(error: SelfSendError) -> Self {
+        match error {
+            SelfSendError::Send(error) => error.into(),
+            SelfSendError::Receive(error) => error.into(),
+            SelfSendError::Finalize(error) => error.into(),
+            other => Self::chained(WalletErrorKind::Other, &other),
+        }
     }
 }
 

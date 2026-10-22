@@ -34,6 +34,7 @@ pub mod refresh;
 pub mod release;
 pub mod scan;
 pub mod selection;
+pub mod self_send;
 pub mod send;
 pub mod state;
 mod wallet;

@@ -15,6 +15,7 @@ mod http;
 mod outputs;
 mod scan;
 mod selection;
+mod self_send;
 #[cfg(unix)]
 mod tor;
 

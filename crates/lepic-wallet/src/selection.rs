@@ -221,6 +221,90 @@ pub fn select_max(
     best.map_or_else(|| at(1), Ok)
 }
 
+/// How many outputs a split makes: from [`SplitCount::MIN`] to [`SplitCount::MAX`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitCount(NonZeroUsize);
+
+impl SplitCount {
+    pub const MIN: usize = 2;
+    pub const MAX: usize = 10;
+
+    /// `None` outside [`SplitCount::MIN`]..=[`SplitCount::MAX`].
+    pub fn new(outputs: usize) -> Option<Self> {
+        (Self::MIN..=Self::MAX)
+            .contains(&outputs)
+            .then(|| NonZeroUsize::new(outputs).map(Self))
+            .flatten()
+    }
+
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+/// What a send to the wallet itself makes of the outputs it spends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfSendShape {
+    /// Outputs of nearly equal value.
+    Split(SplitCount),
+    /// One output.
+    Consolidate,
+}
+
+/// The selection of a send to the wallet itself: it spends what [`select_max`] spends under
+/// the request's account, confirmations and limit with strategy `All`, every eligible output up
+/// to the limit, and makes the outputs `shape` asks for. The request's amount, strategy and
+/// change outputs are ignored.
+///
+/// The amount is the one output a send pays. For a split into `n` it is the inputs' value less
+/// the fee of `n` outputs, divided by `n`, and the change is split into the other `n - 1`
+/// outputs, the last one also taking the remainder.
+///
+/// # Errors
+///
+/// What [`select_max`] returns, and [`SelectionError::NotEnoughFunds`] when the inputs cannot
+/// pay the fee and one base unit into each output.
+pub fn select_self_send(
+    outputs: &[OutputRecord],
+    request: &SelectionRequest,
+    shape: SelfSendShape,
+) -> Result<Selection, SelectionError> {
+    let every = SelectionRequest {
+        strategy: SelectionStrategy::All,
+        change_outputs: NonZeroUsize::MIN,
+        ..*request
+    };
+    let merged = select_max(outputs, &every)?;
+    let SelfSendShape::Split(count) = shape else {
+        return Ok(merged);
+    };
+    let parts = count.get();
+    let fee = tx_fee(merged.inputs.len(), parts, request.base_fee)?;
+    let parts_u64 = u64::try_from(parts).map_err(|_| ArithmeticError::Overflow)?;
+    let share = merged
+        .total
+        .value()
+        .checked_sub(fee.value())
+        .and_then(|left| left.checked_div(parts_u64))
+        .filter(|share| *share > 0)
+        .ok_or(SelectionError::NotEnoughFunds {
+            available: merged.total,
+            needed: fee.to_amount().checked_add(Amount::new(parts_u64))?,
+        })?;
+    let change_outputs = parts
+        .checked_sub(1)
+        .and_then(NonZeroUsize::new)
+        .ok_or(ArithmeticError::Overflow)?;
+    select(
+        outputs,
+        &SelectionRequest {
+            amount: Amount::new(share),
+            change_outputs,
+            ..every
+        },
+    )
+}
+
 /// Whether `output` may be spent at `tip`, by `epic-wallet`'s `OutputData::eligible_to_spend`.
 pub fn eligible_to_spend(output: &OutputRecord, tip: Height, minimum_confirmations: u64) -> bool {
     let is_coinbase = output.id.features == OutputFeatures::Coinbase;

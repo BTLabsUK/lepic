@@ -19,10 +19,10 @@ use lepic_primitives::hash::{Hashed, blake2b_256};
 use lepic_primitives::output::Output;
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::TransactionBody;
-use lepic_slate::codec::EncodeContext;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+use lepic_slate::codec::{Codec as _, EncodeContext};
 use lepic_slate::error::{DecodeError, RegistryError, SlateError};
 use lepic_slate::model::{
     Participant, ParticipantMessage, ProofSignature, Receipt, Slate, SlateId, SlateParts,
@@ -372,6 +372,54 @@ fn store_reply<N, S: StoreOpener, V>(
             account: response.account,
         })
     })
+}
+
+/// Receives `s1`, a slate this wallet built, into `account` in the caller's store
+/// transaction, as [`Wallet::receive`] stores a slate that came over `transport`, and returns
+/// the new incoming entry and the S2. The reply is stored as V3 since no transport carries it.
+#[allow(clippy::too_many_arguments)] // One store transaction's inputs; a struct would only rename them.
+pub(crate) fn receive_own<D>(
+    repos: &mut dyn Repositories,
+    session: &Session<D>,
+    network: Network,
+    account: AccountIndex,
+    s1: &Slate,
+    transport: TransportId,
+    context: EncodeContext,
+    rng: &mut (impl CryptoRng + ?Sized),
+    now: jiff::Timestamp,
+) -> Result<(TxId, Slate), ReceiveError> {
+    check_proposal(s1)?;
+    let label = repos
+        .account(account)?
+        .ok_or(WalletError::from(account::AccountError::UnknownAccount(
+            account,
+        )))?
+        .label;
+    let proposal = Proposal {
+        slate: s1.clone(),
+        transport,
+        network,
+        context,
+        counterparty: None,
+    };
+    let request = ReceiveRequest {
+        account: Some(label),
+        message: None,
+    };
+    let response = respond(repos, session, &proposal, &request, rng)?;
+    let reply = V3JsonCodec::new(network.params().default_base_fee())
+        .encode(&response.slate, &context)
+        .map_err(|error| ReceiveError::Encode(FormatError::Encode(error)))?;
+    let tx_id = store_response(
+        repos,
+        &response,
+        &reply,
+        LEGACY_V3_JSON.as_str(),
+        transport,
+        now,
+    )?;
+    Ok((tx_id, response.slate))
 }
 
 /// The codecs a legacy transport policy decodes and encodes with, at the network's base fee.

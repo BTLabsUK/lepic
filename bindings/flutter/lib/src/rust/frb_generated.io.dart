@@ -489,6 +489,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SelectionStrategy dco_decode_selection_strategy(dynamic raw);
 
   @protected
+  SelfSentTx dco_decode_self_sent_tx(dynamic raw);
+
+  @protected
   SendOptions dco_decode_send_options(dynamic raw);
 
   @protected
@@ -1068,6 +1071,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SelectionStrategy sse_decode_selection_strategy(SseDeserializer deserializer);
+
+  @protected
+  SelfSentTx sse_decode_self_sent_tx(SseDeserializer deserializer);
 
   @protected
   SendOptions sse_decode_send_options(SseDeserializer deserializer);
@@ -1776,6 +1782,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     SelectionStrategy self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_self_sent_tx(SelfSentTx self, SseSerializer serializer);
 
   @protected
   void sse_encode_send_options(SendOptions self, SseSerializer serializer);

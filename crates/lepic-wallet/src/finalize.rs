@@ -595,6 +595,36 @@ fn finalize_stored(
     })
 }
 
+/// A slate this wallet finalized from its own S2, by [`finalize_own`].
+pub(crate) struct FinalizedOwn {
+    pub(crate) tx_id: TxId,
+    pub(crate) finalized: FinalizedSlate,
+    pub(crate) change: Option<StateChange>,
+}
+
+/// Finalizes `s2`, the answer this wallet gave its own S1, in the caller's store transaction,
+/// as [`Wallet::finalize`] stores it.
+pub(crate) fn finalize_own(
+    repos: &mut dyn Repositories,
+    keychain: &Keychain,
+    network: Network,
+    tip: Height,
+    now: Timestamp,
+    s2: &Slate,
+) -> Result<FinalizedOwn, FinalizeError> {
+    let stored = finalize_stored(
+        repos,
+        keychain,
+        &FinalizeEnvironment { network, tip, now },
+        s2,
+    )?;
+    Ok(FinalizedOwn {
+        tx_id: stored.tx_id,
+        finalized: stored.finalized,
+        change: stored.change,
+    })
+}
+
 /// Why a push did not record the transaction as posted.
 pub(crate) enum PushFailure {
     /// The node refused or could not be reached, and does not hold the kernel.
@@ -765,7 +795,7 @@ where
     }
 
     /// [`Self::push_final`], with its failures as [`FinalizeError`].
-    async fn push(
+    pub(crate) async fn push(
         &self,
         tx_id: TxId,
         finalized: &FinalizedSlate,

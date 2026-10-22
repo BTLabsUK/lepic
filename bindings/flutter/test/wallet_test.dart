@@ -1041,6 +1041,43 @@ void main() {
     expect((await bob.transaction(txId: received.txId)).messages, [cut]);
   });
 
+  test('a split is mined into that many spendable outputs', () async {
+    final (alice, _, _) = await fundedPair('split');
+    final estimate = await alice.estimateSplit(
+      outputs: 3,
+      minimumConfirmations: BigInt.one,
+    );
+    expect(estimate.changeOutputs, 2);
+    await expectLater(
+      alice.splitOutputs(outputs: 11, minimumConfirmations: BigInt.one),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+
+    final sent = await alice.splitOutputs(
+      outputs: 3,
+      minimumConfirmations: BigInt.one,
+    );
+
+    expect(sent.fee, estimate.fee);
+    expect(sent.outputCount, 3);
+    chain.minePushed();
+    chain.setHeight(height: chain.height() + BigInt.from(10));
+    await alice.summary(refresh: true);
+    final unspent = (await alice.outputs())
+        .where((output) => output.status == OutputStatus.unspent)
+        .toList();
+    expect(unspent, hasLength(3));
+    expect(
+      unspent.fold(BigInt.zero, (sum, output) => sum + output.value),
+      BigInt.from(10 * epic) - sent.fee,
+    );
+    final consolidate = await alice.estimateConsolidate(
+      minimumConfirmations: BigInt.one,
+    );
+    expect(consolidate.inputCount, 3);
+    expect(consolidate.changeOutputs, 0);
+  });
+
   test('a send without a message shows none', () async {
     final (alice, _, _) = await fundedPair('message-none');
     final s1 = await alice.createSendSlate(

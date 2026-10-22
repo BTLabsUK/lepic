@@ -14,7 +14,7 @@ import 'secret_store.dart';
 import 'tor.dart';
 import 'types.dart';
 
-// These functions are ignored because they are not marked as `pub`: `boundary`, `create_pin_wallet`, `new_password`, `run`
+// These functions are ignored because they are not marked as `pub`: `boundary`, `create_pin_wallet`, `new_password`, `run`, `split_shape`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `drop`
 
 /// True when every word is in the English wordlist and the checksum matches. Case and extra
@@ -138,6 +138,10 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// pending.
   Future<void> confirmPinChange({required String sealedPassword});
 
+  /// Merges every output with `minimum_confirmations`, up to 500, into one, as
+  /// [`EpicWallet::split_outputs`] does with one output. Fails as that call does.
+  Future<SelfSentTx> consolidateOutputs({required BigInt minimumConfirmations});
+
   /// Creates a wallet in `config.data_dir` with its vault in `store`. With `mnemonic` it
   /// restores that seed (call [`EpicWallet::scan`] next); without it a fresh seed is
   /// generated, whose phrase [`EpicWallet::mnemonic`] returns for the backup screen. Returns
@@ -221,6 +225,12 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// the configuration names no relay.
   Future<String> epicboxAddress();
 
+  /// The fee and inputs of [`EpicWallet::consolidate_outputs`] now, with nothing locked.
+  /// Fails as that call does.
+  Future<FeeEstimate> estimateConsolidate({
+    required BigInt minimumConfirmations,
+  });
+
   /// The fee and inputs a send of `amount` with `minimum_confirmations` would take, chosen
   /// as [`EpicWallet::create_send_slate`], [`EpicWallet::send_file`] and
   /// [`EpicWallet::send_epicbox`] choose them, with nothing locked. Such a send at the same
@@ -248,6 +258,13 @@ abstract class EpicWallet implements RustOpaqueInterface {
   Future<FeeEstimate> estimateMax({
     required BigInt minimumConfirmations,
     SendOptions? options,
+  });
+
+  /// The fee and inputs of [`EpicWallet::split_outputs`] into `outputs` outputs now, with
+  /// nothing locked. Fails as that call does.
+  Future<FeeEstimate> estimateSplit({
+    required int outputs,
+    required BigInt minimumConfirmations,
   });
 
   /// Everything the wallet reports from now on: session, balance, transaction, sync and
@@ -649,6 +666,25 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// the previous invoice address are no longer read. Fails with `InvalidArgument` for 0,
   /// the payments address.
   Future<void> setInvoiceAddressIndex({required int index});
+
+  /// Splits the wallet's funds into `outputs` outputs of nearly equal value, from 2 to 10, so
+  /// that several sends can follow without waiting for each other's change: a normal network
+  /// transaction to the wallet itself, confirmed as any send, never through its Epicbox
+  /// address. It spends every output with `minimum_confirmations`, up to 500, so the whole
+  /// balance is locked until it confirms. It shows as two transactions over transport `self`,
+  /// a send holding the change outputs and a receive holding one output; the fee is that of
+  /// [`EpicWallet::estimate_split`] at the same tip.
+  ///
+  /// Fails with `InvalidArgument` for a count outside 2..=10, with `NotEnoughFunds` when the
+  /// spendable outputs cannot pay the fee and one base unit into each output, and otherwise
+  /// as [`EpicWallet::estimate_fee`], storing nothing. Fails with `NotPosted` when it was
+  /// stored but the node did not take it: post the send again with
+  /// [`EpicWallet::repost_transaction`] or cancel it with
+  /// [`EpicWallet::cancel_transaction`].
+  Future<SelfSentTx> splitOutputs({
+    required int outputs,
+    required BigInt minimumConfirmations,
+  });
 
   /// Starts the HTTP listener on `port` and streams what it does until
   /// [`EpicWallet::stop_http_listener`], [`EpicWallet::lock`] or the wallet is dropped. Port

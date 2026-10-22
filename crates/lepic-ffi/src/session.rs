@@ -34,7 +34,9 @@ use lepic_wallet::refresh::{
 use lepic_wallet::scan::{
     FoundDuring as EngineFoundDuring, ScanCancel, ScanOptions, ScanStart, ScanSummary,
 };
-use lepic_wallet::selection::{Selection, SelectionStrategy as EngineStrategy};
+use lepic_wallet::selection::{
+    Selection, SelectionOptions, SelectionStrategy as EngineStrategy, SelfSendShape,
+};
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{
     Clock, DATABASE_FILE, Event, NodeEndpoint, Password, Ports, ReceiveRequest, SessionState,
@@ -53,9 +55,9 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
     LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, OutputCategory, OutputStatus,
-    ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy, SendOptions, SentTx,
-    Slate, SlateMessage, TransactionDetails, TransportState, TxOrigin, TxStatus, WalletConfig,
-    WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+    ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy, SelfSentTx, SendOptions,
+    SentTx, Slate, SlateMessage, TransactionDetails, TransportState, TxOrigin, TxStatus,
+    WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -661,6 +663,50 @@ impl Session {
             Self::send_request_with(0, minimum_confirmations, None, options)?.selection_options();
         let selection = self.engine.estimate_max(options).await?;
         fee_estimate(&selection)
+    }
+
+    fn self_send_options(minimum_confirmations: u64) -> SelectionOptions {
+        Self::send_request(0, minimum_confirmations, None).selection_options()
+    }
+
+    pub(crate) async fn estimate_self_send(
+        &self,
+        shape: SelfSendShape,
+        minimum_confirmations: u64,
+    ) -> Result<FeeEstimate, WalletError> {
+        let selection = self
+            .engine
+            .estimate_self_send(Self::self_send_options(minimum_confirmations), shape)
+            .await?;
+        fee_estimate(&selection)
+    }
+
+    pub(crate) async fn self_send(
+        &self,
+        shape: SelfSendShape,
+        minimum_confirmations: u64,
+    ) -> Result<SelfSentTx, WalletError> {
+        let sent = self
+            .engine
+            .self_send(
+                Self::self_send_options(minimum_confirmations),
+                shape,
+                Propagation::Fluff,
+            )
+            .await?;
+        let out_of_range = || WalletError::new(WalletErrorKind::Other, "self-send out of range");
+        let selection = &sent.selection;
+        Ok(SelfSentTx {
+            tx_id: sent.tx_id.0,
+            received_tx_id: sent.received_tx_id.0,
+            amount: selection.amount.value(),
+            fee: selection.fee.value(),
+            input_count: u32::try_from(selection.inputs.len()).map_err(|_| out_of_range())?,
+            output_count: u32::try_from(selection.change.len())
+                .ok()
+                .and_then(|change| change.checked_add(1))
+                .ok_or_else(out_of_range)?,
+        })
     }
 
     pub(crate) async fn scan(
