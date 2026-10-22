@@ -8,6 +8,7 @@
 
 import 'api/diagnostics.dart';
 import 'api/error.dart';
+import 'api/http.dart';
 import 'api/runtime.dart';
 import 'api/secret_store.dart';
 import 'api/testing.dart';
@@ -180,6 +181,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<HttpListenerEvent>
+  dco_decode_StreamSink_http_listener_event_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<ListenerEvent> dco_decode_StreamSink_listener_event_Sse(
     dynamic raw,
   );
@@ -209,6 +214,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  HttpExposure dco_decode_box_autoadd_http_exposure(dynamic raw);
+
+  @protected
+  HttpListenerInfo dco_decode_box_autoadd_http_listener_info(dynamic raw);
+
+  @protected
+  HttpRefusal dco_decode_box_autoadd_http_refusal(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
@@ -219,6 +233,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TxStatus dco_decode_box_autoadd_tx_status(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_16(dynamic raw);
 
   @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
@@ -243,6 +260,27 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   FinalizedTx dco_decode_finalized_tx(dynamic raw);
+
+  @protected
+  HttpExposure dco_decode_http_exposure(dynamic raw);
+
+  @protected
+  HttpListenerEvent dco_decode_http_listener_event(dynamic raw);
+
+  @protected
+  HttpListenerEventKind dco_decode_http_listener_event_kind(dynamic raw);
+
+  @protected
+  HttpListenerInfo dco_decode_http_listener_info(dynamic raw);
+
+  @protected
+  HttpRefusal dco_decode_http_refusal(dynamic raw);
+
+  @protected
+  HttpResentTx dco_decode_http_resent_tx(dynamic raw);
+
+  @protected
+  HttpSentTx dco_decode_http_sent_tx(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -320,6 +358,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
+  HttpExposure? dco_decode_opt_box_autoadd_http_exposure(dynamic raw);
+
+  @protected
+  HttpListenerInfo? dco_decode_opt_box_autoadd_http_listener_info(dynamic raw);
+
+  @protected
+  HttpRefusal? dco_decode_opt_box_autoadd_http_refusal(dynamic raw);
+
+  @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
@@ -330,6 +377,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TxStatus? dco_decode_opt_box_autoadd_tx_status(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_16(dynamic raw);
 
   @protected
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
@@ -551,6 +601,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<HttpListenerEvent>
+  sse_decode_StreamSink_http_listener_event_Sse(SseDeserializer deserializer);
+
+  @protected
   RustStreamSink<ListenerEvent> sse_decode_StreamSink_listener_event_Sse(
     SseDeserializer deserializer,
   );
@@ -582,6 +636,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  HttpExposure sse_decode_box_autoadd_http_exposure(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HttpListenerInfo sse_decode_box_autoadd_http_listener_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HttpRefusal sse_decode_box_autoadd_http_refusal(SseDeserializer deserializer);
+
+  @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
@@ -596,6 +663,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TxStatus sse_decode_box_autoadd_tx_status(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_box_autoadd_u_16(SseDeserializer deserializer);
 
   @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
@@ -624,6 +694,31 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   FinalizedTx sse_decode_finalized_tx(SseDeserializer deserializer);
+
+  @protected
+  HttpExposure sse_decode_http_exposure(SseDeserializer deserializer);
+
+  @protected
+  HttpListenerEvent sse_decode_http_listener_event(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HttpListenerEventKind sse_decode_http_listener_event_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HttpListenerInfo sse_decode_http_listener_info(SseDeserializer deserializer);
+
+  @protected
+  HttpRefusal sse_decode_http_refusal(SseDeserializer deserializer);
+
+  @protected
+  HttpResentTx sse_decode_http_resent_tx(SseDeserializer deserializer);
+
+  @protected
+  HttpSentTx sse_decode_http_sent_tx(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -711,6 +806,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  HttpExposure? sse_decode_opt_box_autoadd_http_exposure(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HttpListenerInfo? sse_decode_opt_box_autoadd_http_listener_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HttpRefusal? sse_decode_opt_box_autoadd_http_refusal(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
@@ -725,6 +835,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TxStatus? sse_decode_opt_box_autoadd_tx_status(SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_16(SseDeserializer deserializer);
 
   @protected
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
@@ -984,6 +1097,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_http_listener_event_Sse(
+    RustStreamSink<HttpListenerEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_listener_event_Sse(
     RustStreamSink<ListenerEvent> self,
     SseSerializer serializer,
@@ -1020,6 +1139,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_http_exposure(
+    HttpExposure self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_http_listener_info(
+    HttpListenerInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_http_refusal(
+    HttpRefusal self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
     SseSerializer serializer,
@@ -1042,6 +1179,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     TxStatus self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_box_autoadd_u_16(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
@@ -1072,6 +1212,36 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_finalized_tx(FinalizedTx self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_http_exposure(HttpExposure self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_http_listener_event(
+    HttpListenerEvent self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_http_listener_event_kind(
+    HttpListenerEventKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_http_listener_info(
+    HttpListenerInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_http_refusal(HttpRefusal self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_http_resent_tx(HttpResentTx self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_http_sent_tx(HttpSentTx self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
@@ -1173,6 +1343,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_http_exposure(
+    HttpExposure? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_http_listener_info(
+    HttpListenerInfo? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_http_refusal(
+    HttpRefusal? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_i_64(
     PlatformInt64? self,
     SseSerializer serializer,
@@ -1195,6 +1383,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     TxStatus? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_16(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);

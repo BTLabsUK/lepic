@@ -8,6 +8,7 @@ import 'src/rust/api/secret_store.dart';
 
 export 'src/rust/api/diagnostics.dart';
 export 'src/rust/api/error.dart';
+export 'src/rust/api/http.dart';
 export 'src/rust/api/runtime.dart';
 export 'src/rust/api/secret_store.dart';
 export 'src/rust/api/testing.dart';

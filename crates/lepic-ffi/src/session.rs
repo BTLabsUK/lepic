@@ -2,6 +2,7 @@
 //! the app's secret store and Dart streams.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
@@ -50,6 +51,10 @@ use crate::node::{Node, NodeSecret, node_error};
 use crate::vault_port::{AppVault, SharedStorage, VAULT_KEY, VaultBytes, vault_error};
 
 mod app_data;
+mod http;
+
+#[cfg(test)]
+pub(crate) use http::HttpReport;
 mod invoice;
 
 type EngineWallet = Wallet<Node, SqliteStores, AppVault>;
@@ -100,6 +105,10 @@ pub(crate) struct Session {
     vault: VaultBytes,
     epicbox: Option<EpicboxTransport>,
     listener: Mutex<Option<ListenHandle>>,
+    /// Holds the answers of HTTP sends until they are finalized.
+    http: lepic_foreign::HttpTransport,
+    http_listener: Mutex<http::HttpListener>,
+    http_starts: AtomicU64,
     scan: Mutex<Option<ScanCancel>>,
     balance: Mutex<Option<Balance>>,
     claim: DirClaim,
@@ -229,6 +238,11 @@ impl Session {
                 .map_err(|error| invalid(error.to_string()))?;
             ids.push(TRANSPORT_ID);
         }
+        let http = http::http_transport()?;
+        transports
+            .register(Box::new(http.clone()))
+            .map_err(|error| invalid(error.to_string()))?;
+        ids.push(lepic_foreign::TRANSPORT_ID);
         let engine_config = lepic_wallet::WalletConfig {
             name: WalletName::new(WALLET_NAME).map_err(|error| invalid(error.to_string()))?,
             network,
@@ -256,6 +270,9 @@ impl Session {
             vault,
             epicbox,
             listener: Mutex::default(),
+            http,
+            http_listener: Mutex::default(),
+            http_starts: AtomicU64::new(0),
             scan: Mutex::default(),
             balance: Mutex::default(),
             claim,
@@ -270,12 +287,13 @@ impl Session {
         &self.store
     }
 
-    /// Stops the listener and any scan, forgets the cached balance and the relay identity, and
+    /// Stops the listeners and any scan, forgets the cached balance and the relay identity, and
     /// drops the root key. Operations already running finish with the keys they started with.
     pub(crate) fn lock(&self) {
         if let Some(listener) = lock(&self.listener).take() {
             listener.stop();
         }
+        self.stop_http_listener();
         if let Some(scan) = lock(&self.scan).take() {
             scan.cancel();
         }
@@ -382,6 +400,14 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn node(&self) -> &Node {
         &self.engine.ports().node
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn scan_to_tip(&self) {
+        self.engine
+            .scan(ScanOptions::update(self.network), &ScanCancel::new())
+            .await
+            .unwrap();
     }
 
     /// The recovery phrase, after checking `password` against the stored vault.

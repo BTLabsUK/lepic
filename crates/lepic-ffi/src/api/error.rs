@@ -84,6 +84,12 @@ pub enum WalletErrorKind {
     /// end before sending or receiving. Transaction history, labels and messages are not in the
     /// new database.
     DamagedDatabase,
+    /// The address of the other wallet is not an `http(s)://host[:port][/path]` URL, or names
+    /// a `.onion` host. Nothing was stored.
+    HttpUrlInvalid,
+    /// The address uses plain `http` to another computer, and the user did not agree to send
+    /// unencrypted. Nothing was stored; ask, then pass `allow_plain_http`, or use `https`.
+    PlainHttpNotAllowed,
 }
 
 impl WalletErrorKind {
@@ -122,6 +128,8 @@ impl WalletErrorKind {
             Self::AmountMismatch => 30,
             Self::NotDelivered => 31,
             Self::DamagedDatabase => 37,
+            Self::HttpUrlInvalid => 40,
+            Self::PlainHttpNotAllowed => 41,
         }
     }
 }
@@ -409,6 +417,8 @@ mod tests {
             (K::AmountMismatch, 30),
             (K::NotDelivered, 31),
             (K::DamagedDatabase, 37),
+            (K::HttpUrlInvalid, 40),
+            (K::PlainHttpNotAllowed, 41),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");

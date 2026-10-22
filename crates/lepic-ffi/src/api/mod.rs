@@ -4,6 +4,7 @@
 pub mod app_data;
 pub mod diagnostics;
 pub mod error;
+pub mod http;
 pub mod invoice;
 pub mod runtime;
 pub mod secret_store;

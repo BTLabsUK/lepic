@@ -130,7 +130,15 @@ enum WalletErrorKind {
   /// wallet again rebuilds the database from the vault, as for a restore: run `scan` to the
   /// end before sending or receiving. Transaction history, labels and messages are not in the
   /// new database.
-  damagedDatabase;
+  damagedDatabase,
+
+  /// The address of the other wallet is not an `http(s)://host[:port][/path]` URL, or names
+  /// a `.onion` host. Nothing was stored.
+  httpUrlInvalid,
+
+  /// The address uses plain `http` to another computer, and the user did not agree to send
+  /// unencrypted. Nothing was stored; ask, then pass `allow_plain_http`, or use `https`.
+  plainHttpNotAllowed;
 
   /// The stable number of this kind.
   Future<int> code() =>

@@ -147,7 +147,7 @@ pub struct PinWallet {
 /// running on it finish; [`EpicWallet::lock`] locks it at once.
 #[frb(opaque)]
 pub struct EpicWallet {
-    session: Arc<Session>,
+    pub(super) session: Arc<Session>,
 }
 
 /// Creates a wallet from `origin` whose generated password is sealed under `pin`.
@@ -195,12 +195,13 @@ async fn create_pin_wallet(
 impl Drop for EpicWallet {
     fn drop(&mut self) {
         self.session.stop_listener();
+        self.session.stop_http_listener();
         self.session.cancel_scan();
     }
 }
 
 impl EpicWallet {
-    fn boundary(&self) -> Boundary {
+    pub(super) fn boundary(&self) -> Boundary {
         self.session.runtime().boundary.clone()
     }
 

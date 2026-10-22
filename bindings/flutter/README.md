@@ -110,7 +110,7 @@ final wallet = await EpicWallet.create(
   with that `txId` instead of `received`. Show it as already answered and hand out the same
   reply. `events()` reports nothing for a repeat. A relay copy of a message already answered
   and acknowledged reports nothing.
-- The stream calls `refresh`, `scan`, `startListener`, `events` and `logs` report a failure as
+- The stream calls `refresh`, `scan`, `startListener`, `startHttpListener`, `events` and `logs` report a failure as
   the stream's error: the same `WalletError` the other calls throw, after which the stream ends.
   Listen with `onError`; no error from a stream call reaches the app's zone.
 - A panic inside LEPIC arrives as `WalletError` with kind `panic`; the runtime stays usable.
@@ -248,10 +248,66 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 30 | `amountMismatch` | The invoice asks for another amount than the one the user typed. Nothing was paid. |
 | 31 | `notDelivered` | The invoice or its payment is stored, but the relay did not take it. Deliver a payment again with `resendInvoicePayment`, or cancel either with `cancelTransaction`. |
 | 37 | `damagedDatabase` | The wallet database was damaged. LEPIC renamed it, with its log files, to `wallet.sqlite3.damaged-<unix seconds>` in the data directory and kept it. Open the wallet again: the database is rebuilt from the vault as after a restore, so run `scan` to the end before sending or receiving. History, labels and messages are not in the new database. |
+| 40 | `httpUrlInvalid` | The address given to `sendHttp` or `resendHttp` is not an `http(s)://host[:port][/path]` URL, or names a `.onion` host. Nothing was stored. |
+| 41 | `plainHttpNotAllowed` | The address uses plain `http` to another computer and `allowPlainHttp` was false. Nothing was stored. Ask the user, or use `https`. |
 
 Kinds 22 to 24 used to arrive as `other`. Kinds 25 and 26 are new with `sealAppData` and
-`openAppData`, 27 and 28 with `releaseTransaction`, 29 to 31 with the invoice calls. An
+`openAppData`, 27 and 28 with `releaseTransaction`, 29 to 31 with the invoice calls, 40 and
+41 with the HTTP calls. An
 exhaustive `switch` over `WalletErrorKind` must handle them.
+
+## Direct transactions over HTTP
+
+A wallet that runs `epic-wallet listen -m http`, or another LEPIC wallet's HTTP listener, answers
+a send in the same exchange, so `sendHttp` creates the send, delivers it, finalizes the answer and
+posts the transaction in one call (ADR 0017):
+
+```dart
+final sent = await wallet.sendHttp(
+  amount: BigInt.from(150000000),
+  minimumConfirmations: BigInt.from(10),
+  url: 'https://wallet.example.org',
+  allowPlainHttp: false,
+);
+if (!sent.posted) await wallet.repostTransaction(txId: sent.txId);
+```
+
+- A missing port is 3415 for `http` and 443 for `https`; `/v2/foreign` is appended. Plain `http`
+  goes only to this device unless `allowPlainHttp` is true: set it only after the user agreed
+  that the slate travels unencrypted. Otherwise the call throws `plainHttpNotAllowed`.
+- When the other wallet cannot be reached or refuses, `sendHttp` throws `transportFailed` and the
+  send stays stored as `sent` with its inputs locked. Deliver it again with
+  `resendHttp(txId, url, allowPlainHttp)`, to the same or another address, or cancel it. A
+  wallet that answered the slate before answers it again the same way, so a resend after a lost
+  answer is safe.
+- `posted` is false when the transaction was finalized but the node refused it; repost it.
+
+The wallet's own listener answers payments only, never invoices, and never starts by itself:
+
+```dart
+wallet.startHttpListener(exposure: HttpExposure.localOnly, port: 3415).listen((event) {
+  switch (event.kind) {
+    case HttpListenerEventKind.started: // event.port, event.exposure
+    case HttpListenerEventKind.received: // event.txId, event.amount, event.repeated
+    case HttpListenerEventKind.portInUse: // pick another port
+    default:
+  }
+});
+```
+
+- `localOnly` listens on `127.0.0.1`; `internet` on every interface, for a port the user forwards
+  from the router. Anyone who reaches the port can send the wallet payments, so offer `internet`
+  only on the user's explicit choice. Port 0 lets the system pick one.
+- The first event is `started`, `portInUse` or `bindFailed`; after a start the last one is
+  `stopped`, once the port is free. `refused` carries `HttpRefusal.rejected` for a slate refused
+  for good and `unavailable` when the wallet cannot take payments now, for example while its
+  node is unreachable. Events never name the sender or its address.
+- One listener runs per wallet: a second `startHttpListener` gets a stream that ends at once.
+  `stopHttpListener`, `lock` and dropping the wallet stop it; `httpListenerStatus()` returns the
+  running listener's port and exposure, or null. On a locked wallet the stream ends with
+  `locked` as its error.
+- Each request may take up to a minute. At most 16 connections are served at once, further ones
+  are closed, and payments beyond 30 a minute are refused to the sender as `unavailable`.
 
 ## Invoices over Epicbox
 

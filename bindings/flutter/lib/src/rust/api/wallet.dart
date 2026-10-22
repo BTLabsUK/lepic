@@ -5,6 +5,7 @@
 
 import '../frb_generated.dart';
 import 'error.dart';
+import 'http.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
@@ -242,6 +243,9 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// [`EpicWallet::finalize_and_post`] for the answer file at `path`.
   Future<FinalizedTx> finalizeFile({required String path});
 
+  /// The running HTTP listener, or `None`.
+  HttpListenerInfo? httpListenerStatus();
+
   /// [`EpicWallet::create`] from an `epic-wallet` `wallet.seed` instead of a phrase:
   /// `seed_file` is the file's text and `seed_password` the password it was written with.
   /// The wallet gets `password`, as `create` does; call [`EpicWallet::scan`] next. The file
@@ -450,6 +454,20 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Posts the stored final transaction of `tx_id` to the node again.
   Future<void> repostTransaction({required int txId});
 
+  /// Delivers the slate of send `tx_id` again, to the wallet listening at `url`, which may
+  /// be another address or method than the first attempt, then finalizes and posts as
+  /// [`EpicWallet::send_http`] does. Use it after a delivery failed. A wallet that answered
+  /// the slate before answers it again the same way.
+  ///
+  /// Fails with `HttpUrlInvalid` or `PlainHttpNotAllowed` for the URL, `InvalidArgument`
+  /// when `tx_id` is not a send waiting for its answer, and otherwise as
+  /// [`EpicWallet::send_http`].
+  Future<HttpResentTx> resendHttp({
+    required int txId,
+    required String url,
+    required bool allowPlainHttp,
+  });
+
   /// Delivers the stored payment `tx_id` of an invoice again, to the sender's allowed
   /// address, after [`EpicWallet::pay_invoice`] failed with `NotDelivered`. Fails with
   /// `InvalidArgument` for a transaction that is not an undelivered payment of an invoice,
@@ -493,11 +511,48 @@ abstract class EpicWallet implements RustOpaqueInterface {
     String? message,
   });
 
+  /// Sends `amount` to the wallet listening at `url`, `http(s)://host[:port][/path]`, then
+  /// finalizes its answer and posts the transaction. A missing port is 3415 for `http` and
+  /// 443 for `https`. `message` is sent as [`EpicWallet::create_send_slate`] sends it.
+  ///
+  /// Plain `http` to any host but this device needs `allow_plain_http`, set only after the
+  /// user agreed that the slate travels unencrypted.
+  ///
+  /// Fails, storing nothing, with `HttpUrlInvalid` or `PlainHttpNotAllowed` for the URL and
+  /// the errors of [`EpicWallet::estimate_fee`]. Fails with `TransportFailed` when the other
+  /// wallet could not be reached, refused, or answered with something else than a slate: the
+  /// send is then stored as sent with its inputs locked, so deliver it again with
+  /// [`EpicWallet::resend_http`] or cancel it with [`EpicWallet::cancel_transaction`]. Fails
+  /// with the errors of [`EpicWallet::finalize_and_post`] except `NotPosted` when the answer
+  /// could not be finalized; the send then stays sent, and a resend gets the same answer
+  /// again.
+  Future<HttpSentTx> sendHttp({
+    required BigInt amount,
+    required BigInt minimumConfirmations,
+    required String url,
+    required bool allowPlainHttp,
+    String? message,
+  });
+
   /// Sets the address index of the invoice address, for example to the one the app kept
   /// before the wallet was restored from its phrase, which does not record it. Messages to
   /// the previous invoice address are no longer read. Fails with `InvalidArgument` for 0,
   /// the payments address.
   Future<void> setInvoiceAddressIndex({required int index});
+
+  /// Starts the HTTP listener on `port` and streams what it does until
+  /// [`EpicWallet::stop_http_listener`], [`EpicWallet::lock`] or the wallet is dropped. Port
+  /// 0 lets the system pick one, which the `Started` event and
+  /// [`EpicWallet::http_listener_status`] report; `epic-wallet` listens on 3415.
+  ///
+  /// The first event is `Started`, `PortInUse` or `BindFailed`; after a start the last one
+  /// is `Stopped`. A wallet runs one HTTP listener: a call while one runs or starts gets a
+  /// stream that ends at once. On a locked wallet the stream ends with `Locked` as its error
+  /// and no event.
+  Stream<HttpListenerEvent> startHttpListener({
+    required HttpExposure exposure,
+    required int port,
+  });
 
   /// Starts the Epicbox listener, unless it runs already, and streams what it does until
   /// [`EpicWallet::stop_listener`]. The last event is `Stopped`; a listener that fails while
@@ -506,6 +561,10 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// [`WalletError`] as its error and no event. A second call while the listener runs gets
   /// a stream that ends at once.
   Stream<ListenerEvent> startListener();
+
+  /// Stops the HTTP listener. Requests in progress finish; its stream ends with `Stopped`
+  /// once the port is free.
+  void stopHttpListener();
 
   /// Stops the listener. Its stream ends with `Stopped` shortly after.
   void stopListener();

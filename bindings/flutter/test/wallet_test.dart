@@ -108,6 +108,8 @@ const errorCodes = {
   WalletErrorKind.amountMismatch: 30,
   WalletErrorKind.notDelivered: 31,
   WalletErrorKind.damagedDatabase: 37,
+  WalletErrorKind.httpUrlInvalid: 40,
+  WalletErrorKind.plainHttpNotAllowed: 41,
 };
 
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(
@@ -574,6 +576,55 @@ void main() {
     await scanToEnd(bob);
     return (alice, bob, phrase);
   }
+
+  test('a send over http is answered, finalized and posted', () async {
+    final (alice, bob, _) = await fundedPair('http');
+    final events = <HttpListenerEvent>[];
+    final started = Completer<int>();
+    final stopped = Completer<void>();
+    bob.startHttpListener(exposure: HttpExposure.localOnly, port: 0).listen((
+      event,
+    ) {
+      events.add(event);
+      if (event.kind == HttpListenerEventKind.started) {
+        started.complete(event.port!);
+      }
+      if (event.kind == HttpListenerEventKind.stopped) stopped.complete();
+    });
+    final port = await started.future;
+    expect(bob.httpListenerStatus()?.port, port);
+
+    final sent = await alice.sendHttp(
+      amount: BigInt.from(2 * epic),
+      minimumConfirmations: BigInt.one,
+      url: 'http://127.0.0.1:$port',
+      allowPlainHttp: false,
+    );
+
+    expect(sent.posted, isTrue);
+    expect(sent.amount, BigInt.from(2 * epic));
+    expect((await alice.transaction(txId: sent.txId)).status, TxStatus.posted);
+    final received = events.last;
+    expect(received.kind, HttpListenerEventKind.received);
+    expect(received.repeated, isFalse);
+    expect(
+      (await bob.transaction(txId: received.txId!)).status,
+      TxStatus.received,
+    );
+    await expectLater(
+      alice.sendHttp(
+        amount: BigInt.from(epic),
+        minimumConfirmations: BigInt.one,
+        url: 'http://203.0.113.7',
+        allowPlainHttp: false,
+      ),
+      throwsWalletError(WalletErrorKind.plainHttpNotAllowed),
+    );
+
+    bob.stopHttpListener();
+    await stopped.future;
+    expect(bob.httpListenerStatus(), isNull);
+  });
 
   test('history, fees and offline balance follow a send', () async {
     final (alice, bob, _) = await fundedPair('history');

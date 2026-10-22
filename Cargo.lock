@@ -1050,6 +1050,7 @@ dependencies = [
  "jiff",
  "lepic-epicbox",
  "lepic-ffi",
+ "lepic-foreign",
  "lepic-keychain",
  "lepic-node",
  "lepic-primitives",

@@ -21,6 +21,7 @@ flutter_rust_bridge = { workspace = true, features = ["anyhow", "dart-opaque", "
 getrandom = { workspace = true, features = ["std", "sys_rng"] }
 jiff = { workspace = true, features = ["std"] }
 lepic-epicbox.workspace = true
+lepic-foreign.workspace = true
 lepic-keychain.workspace = true
 lepic-node.workspace = true
 lepic-primitives.workspace = true

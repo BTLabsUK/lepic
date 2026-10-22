@@ -11,6 +11,8 @@ use crate::api::wallet::{EpicWallet, PinWallet, delete_wallet};
 use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
 
+mod http;
+
 const PIN: &str = "471100";
 
 /// Store keys next to `lepic.vault`; apps may see them in their store.
@@ -502,6 +504,7 @@ fn every_synchronous_api_function_runs_under_the_panic_guard() {
     let sources = [
         ("diagnostics.rs", include_str!("api/diagnostics.rs")),
         ("error.rs", include_str!("api/error.rs")),
+        ("http.rs", include_str!("api/http.rs")),
         ("runtime.rs", include_str!("api/runtime.rs")),
         ("secret_store.rs", include_str!("api/secret_store.rs")),
         ("testing.rs", include_str!("api/testing.rs")),
