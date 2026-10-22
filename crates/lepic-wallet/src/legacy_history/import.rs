@@ -206,7 +206,8 @@ where
         .await
     }
 
-    /// Dates the entries of outputs a scan found with no record by the time of their block.
+    /// Dates the entries of outputs a scan found with no record, and those the old wallet's own
+    /// restore made, by the time of their block.
     async fn date_found_entries(
         &self,
         session: &Arc<lifecycle::Session<S::Store>>,
@@ -434,12 +435,18 @@ fn import_entry(
     confirmed_height: Option<&Height>,
 ) -> Result<Option<TxId>, WalletError> {
     let (direction, kind) = direction_and_kind(source.kind);
+    let state = state_of(source);
+    // An open entry keeps no transport: the engine looks up open entries by transport, and
+    // this wallet cannot continue one the old wallet started.
+    let transport = is_final(state)
+        .then(|| counterparty(source).and_then(transport_of))
+        .flatten();
     let mut entry = TransactionEntry {
         account,
         direction,
-        state: state_of(source),
+        state,
         slate_id: source.slate_id,
-        transport: None,
+        transport: transport.map(str::to_owned),
         amount_credited: source.amount_credited,
         amount_debited: source.amount_debited,
         fee: source.fee,
@@ -460,14 +467,15 @@ fn import_entry(
     if let Some(height) = confirmed_height.filter(|_| entry.state == TxState::Confirmed) {
         repos.set_confirmed_height(tx_id, *height)?;
     }
-    if let Some(address) = counterparty(source) {
+    if let Some(address) = counterparty(source).filter(|address| !is_file_path(address)) {
         repos.set_counterparty(tx_id, address)?;
     }
     let record = ImportedTransaction {
         source_id: source.id,
         kind,
         slate_id: source.slate_id,
-        confirmed_at: source.confirmed_at,
+        // The old wallet's own restore saw the output only when it scanned; its block dates it.
+        confirmed_at: source.confirmed_at.filter(|_| !restored_by_source(source)),
         input_count: source.num_inputs,
         output_count: source.num_outputs,
         kernel_excess: source.kernel_excess,
@@ -524,6 +532,36 @@ fn state_of(source: &LegacyTxLogEntry) -> TxState {
             TxState::Sent
         }
     }
+}
+
+/// An entry the old wallet's own restore made: a receipt with no slate.
+fn restored_by_source(source: &LegacyTxLogEntry) -> bool {
+    source.kind == LegacyTxKind::TxReceived && source.slate_id.is_none()
+}
+
+/// The transport an old wallet's counterparty address implies, as the GUI tells them apart.
+fn transport_of(address: &str) -> Option<&'static str> {
+    let lower = address.to_ascii_lowercase();
+    if is_file_path(address) {
+        Some("file")
+    } else if lower.starts_with("http://") || lower.starts_with("https://") {
+        if lower.contains(".onion") {
+            Some("tor")
+        } else {
+            Some("http")
+        }
+    } else if address.contains('@') {
+        Some("epicbox")
+    } else {
+        None
+    }
+}
+
+/// `epic-wallet` records the file path as the counterparty of a file exchange.
+fn is_file_path(address: &str) -> bool {
+    address.starts_with('/')
+        || address.starts_with('\\')
+        || matches!(address.as_bytes().get(1..3), Some(b":\\" | b":/"))
 }
 
 fn counterparty(source: &LegacyTxLogEntry) -> Option<&str> {
@@ -760,12 +798,19 @@ fn open_imported_kernels(repos: &dyn Repositories) -> Result<Vec<(TxId, Commitme
     Ok(open)
 }
 
-/// The entries a scan stored for outputs with no record, with their confirming height.
+/// The entries a scan stored for outputs with no record, and those the old wallet's own restore
+/// made, with their confirming height.
 fn found_entries(repos: &dyn Repositories) -> Result<Vec<(TxId, Height)>, WalletError> {
     let mut found = Vec::new();
     for account in repos.accounts()? {
         for stored in repos.transactions(account.index)? {
-            if !is_found_entry(repos, stored.id, &stored.entry)? {
+            let restored_by_source = stored.entry.slate_id.is_none()
+                && repos
+                    .imported_transaction(stored.id)?
+                    .is_some_and(|record| {
+                        record.kind == ImportedKind::Received && record.slate_id.is_none()
+                    });
+            if !restored_by_source && !is_found_entry(repos, stored.id, &stored.entry)? {
                 continue;
             }
             if let Some(height) = repos.confirmed_height(stored.id)? {
@@ -836,6 +881,17 @@ mod tests {
         assert!(is_generated_label("account_2", AccountIndex(2)));
         assert!(!is_generated_label("savings", AccountIndex(2)));
         assert!(!is_generated_label("account_x", AccountIndex(2)));
+    }
+
+    #[test]
+    fn counterparty_addresses_imply_their_transport() {
+        assert_eq!(transport_of("esAbc@epicbox.epiccash.com"), Some("epicbox"));
+        assert_eq!(transport_of("https://wallet.example:3415"), Some("http"));
+        assert_eq!(transport_of("http://abc.onion"), Some("tor"));
+        assert_eq!(transport_of("C:\\Users\\a\\send.tx"), Some("file"));
+        assert_eq!(transport_of("/home/a/send.tx"), Some("file"));
+        assert_eq!(transport_of("esAbc"), None);
+        assert!(!is_file_path("esAbc@epicbox.epiccash.com"));
     }
 
     #[test]
