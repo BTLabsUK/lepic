@@ -4,13 +4,17 @@
 //! `Off → Starting → Bootstrapped → Publishing → Ready`, or `Failed` from any of them. Sending
 //! needs `Bootstrapped`; receiving needs `Ready`, the first upload of the onion's descriptor.
 //! Republishing is tor's own job. A failure ends the process; restarting is the host's choice.
+//!
+//! The host may be paused with tor (a phone's app freezer) and its network may change under
+//! tor: deadlines that pass while the host was paused are moved by the pause, and
+//! [`TorProcess::refresh`] wakes tor and, after a network change, has it drop every
+//! connection and build new ones.
 
-use std::collections::VecDeque;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use thiserror::Error;
@@ -24,7 +28,7 @@ use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 use crate::control::{
-    ControlConnection, ControlError, Event, HsDescAction, parse_control_file, read_cookie,
+    ControlConnection, ControlError, Event, HsDescAction, Position, parse_control_file, read_cookie,
 };
 use crate::onion::{OnionAddress, expanded_secret, public_key_of_seed};
 
@@ -35,10 +39,11 @@ const COOKIE_FILE: &str = "control.cookie";
 const DATA_DIR: &str = "data";
 const MAX_DETAIL_LEN: usize = 300;
 const MAX_LOG_LINE_LEN: usize = 1024;
-const RECENT_UPLOADS: usize = 8;
 const IDLE_WAKE: Duration = Duration::from_secs(24 * 3600);
 const LOG_DRAIN: Duration = Duration::from_secs(1);
 const CONTROL_FILE_POLL: Duration = Duration::from_millis(100);
+/// A deadline that fires this much later than set means the host was paused, not tor slow.
+const PAUSE_SLACK: Duration = Duration::from_secs(2);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -210,9 +215,27 @@ enum Request {
         listener_port: u16,
         reply: oneshot::Sender<Result<(), TorFailure>>,
     },
+    Refresh {
+        network_changed: bool,
+        reply: oneshot::Sender<Result<(), TorFailure>>,
+    },
     Stop {
         reply: oneshot::Sender<()>,
     },
+}
+
+/// The SOCKS address tor listens on now: it moves when tor's network is turned off and on.
+#[derive(Debug, Default)]
+struct SharedSocks(Mutex<Option<SocketAddr>>);
+
+impl SharedSocks {
+    fn get(&self) -> Option<SocketAddr> {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn set(&self, address: SocketAddr) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(address);
+    }
 }
 
 /// A running tor. Dropping it kills the process; [`TorProcess::stop`] shuts it down politely.
@@ -220,7 +243,7 @@ enum Request {
 pub struct TorProcess {
     requests: mpsc::Sender<Request>,
     state: watch::Receiver<TorState>,
-    socks: Arc<OnceLock<SocketAddr>>,
+    socks: Arc<SharedSocks>,
     supervisor: JoinHandle<()>,
 }
 
@@ -233,7 +256,7 @@ impl Drop for TorProcess {
 impl SocksProxy for TorProcess {
     fn socks_address(&self) -> Option<SocketAddr> {
         if self.state.borrow().can_send() {
-            self.socks.get().copied()
+            self.socks.get()
         } else {
             None
         }
@@ -249,7 +272,7 @@ impl TorProcess {
             tag: String::new(),
         });
         let (requests, requests_rx) = mpsc::channel(4);
-        let socks = Arc::new(OnceLock::new());
+        let socks = Arc::new(SharedSocks::default());
         let supervisor = tokio::spawn(supervise(settings, state_tx, requests_rx, socks.clone()));
         Self {
             requests,
@@ -277,7 +300,7 @@ impl TorProcess {
                 if current.can_send()
                     && let Some(socks) = self.socks.get()
                 {
-                    return Ok(*socks);
+                    return Ok(socks);
                 }
                 if let Some(failure) = ended(&current) {
                     return Err(failure);
@@ -326,6 +349,27 @@ impl TorProcess {
                 return Err(stopped());
             }
         }
+    }
+
+    /// Tells tor the host is back: from a pause, or with another network when
+    /// `network_changed`. Tor leaves its dormant state if it was in it; after a network change
+    /// it also closes every connection, whose routes may be gone, and builds new ones; sends in
+    /// progress fail, the onion stays added and tor publishes it again by itself, and the SOCKS
+    /// address may change. A bootstrap in progress gets its full stall time again.
+    ///
+    /// A tor that does not answer in time is ended: the error is the [`FailureKind::Stopped`]
+    /// (or, before the bootstrap, [`FailureKind::Start`]) failure the state shows too.
+    pub async fn refresh(&self, network_changed: bool) -> Result<(), TorFailure> {
+        let (reply, answer) = oneshot::channel();
+        let stopped = || TorFailure::new(FailureKind::Stopped, "tor stopped");
+        self.requests
+            .send(Request::Refresh {
+                network_changed,
+                reply,
+            })
+            .await
+            .map_err(|_| stopped())?;
+        answer.await.map_err(|_| stopped())?
     }
 
     /// Removes the onion, asks tor to exit and kills it if it has not after
@@ -423,7 +467,7 @@ pub fn tor_problem(line: &str) -> Option<String> {
 struct Running {
     child: Child,
     control: ControlConnection,
-    events: mpsc::Receiver<Event>,
+    events: mpsc::Receiver<(Position, Event)>,
     problem: Arc<Mutex<String>>,
     started: Instant,
 }
@@ -441,6 +485,8 @@ impl Running {
 
 struct Published {
     onion: OnionAddress,
+    /// Uploads tor reported before this, for an onion added earlier, do not count.
+    added_at: Position,
     uploaded: bool,
 }
 
@@ -449,7 +495,6 @@ struct Progress {
     tag: String,
     bootstrapped: bool,
     published: Option<Published>,
-    recent_uploads: VecDeque<String>,
     stall_deadline: Instant,
     bootstrap_deadline: Instant,
     publish_deadline: Option<Instant>,
@@ -473,6 +518,7 @@ impl Progress {
                 Some(Published {
                     onion,
                     uploaded: true,
+                    ..
                 }),
                 true,
             ) => TorState::Ready {
@@ -486,7 +532,7 @@ async fn supervise(
     settings: TorSettings,
     state: watch::Sender<TorState>,
     mut requests: mpsc::Receiver<Request>,
-    socks: Arc<OnceLock<SocketAddr>>,
+    socks: Arc<SharedSocks>,
 ) {
     let timings = settings.timings;
     let mut running = match launch(&settings, &socks).await {
@@ -505,7 +551,6 @@ async fn supervise(
         tag: String::new(),
         bootstrapped: false,
         published: None,
-        recent_uploads: VecDeque::new(),
         stall_deadline: after(now, timings.stall),
         bootstrap_deadline: after(running.started, timings.bootstrap),
         publish_deadline: None,
@@ -536,10 +581,27 @@ async fn supervise(
                     drop(key);
                     let _ = reply.send(result);
                 }
+                Some(Request::Refresh { network_changed, reply }) => {
+                    match refresh(&running, &mut progress, network_changed, timings, &socks).await {
+                        Ok(()) => {
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(error) => {
+                            let failure = exit_failure(
+                                &progress,
+                                format!("tor did not answer after a pause: {error}"),
+                            );
+                            let _ = reply.send(Err(failure.clone()));
+                            break failure;
+                        }
+                    }
+                }
             },
             event = running.events.recv() => match event {
-                Some(event) => {
-                    if let Some(failure) = on_event(&mut progress, event, timings, running.started) {
+                Some((position, event)) => {
+                    if let Some(failure) =
+                        on_event(&mut progress, position, event, timings, running.started)
+                    {
                         break failure;
                     }
                 }
@@ -553,6 +615,9 @@ async fn supervise(
                 break exit_failure(&progress, running.last_problem(&detail));
             }
             () = sleep_until(deadline) => {
+                if postpone_after_pause(&mut progress, deadline, Instant::now(), timings) {
+                    continue;
+                }
                 catch_dropped_upload(&running.control, &mut progress, running.started);
                 if let Some(failure) = overdue(&progress) {
                     break failure;
@@ -598,6 +663,7 @@ fn on_bootstrap(
 
 fn on_event(
     progress: &mut Progress,
+    position: Position,
     event: Event,
     timings: TorTimings,
     started: Instant,
@@ -616,21 +682,17 @@ fn on_event(
         Event::HsDesc {
             action: HsDescAction::Uploaded,
             service_id,
-        } => match &mut progress.published {
-            Some(published) if published.onion.service_id() == service_id => {
-                if !published.uploaded {
-                    published.uploaded = true;
-                    progress.publish_deadline = None;
-                    info!(elapsed_ms = elapsed_ms(started), "onion published");
-                }
+        } => {
+            if let Some(published) = &mut progress.published
+                && published.onion.service_id() == service_id
+                && position > published.added_at
+                && !published.uploaded
+            {
+                published.uploaded = true;
+                progress.publish_deadline = None;
+                info!(elapsed_ms = elapsed_ms(started), "onion published");
             }
-            _ => {
-                if progress.recent_uploads.len() >= RECENT_UPLOADS {
-                    progress.recent_uploads.pop_front();
-                }
-                progress.recent_uploads.push_back(service_id);
-            }
-        },
+        }
         Event::HsDesc {
             action: HsDescAction::Failed,
             ..
@@ -645,7 +707,7 @@ fn on_event(
 fn catch_dropped_upload(control: &ControlConnection, progress: &mut Progress, started: Instant) {
     if let Some(published) = &mut progress.published
         && !published.uploaded
-        && control.upload_was_dropped(published.onion.service_id())
+        && control.upload_was_dropped(published.onion.service_id(), published.added_at)
     {
         published.uploaded = true;
         progress.publish_deadline = None;
@@ -663,6 +725,32 @@ fn next_deadline(progress: &Progress) -> Instant {
     progress
         .publish_deadline
         .unwrap_or_else(|| after(Instant::now(), IDLE_WAKE))
+}
+
+/// Moves every deadline by how late `deadline` fired, when that is more than [`PAUSE_SLACK`]:
+/// the host was paused with tor, and that time passed without either running. When the pause
+/// began is unknown, so each moved deadline also leaves tor at least a stall time from `now`.
+/// Returns whether it moved them.
+fn postpone_after_pause(
+    progress: &mut Progress,
+    deadline: Instant,
+    now: Instant,
+    timings: TorTimings,
+) -> bool {
+    let late = now.saturating_duration_since(deadline);
+    if late <= PAUSE_SLACK {
+        return false;
+    }
+    let earliest = after(now, timings.stall);
+    let moved = |deadline: Instant| after(deadline, late).max(earliest);
+    progress.stall_deadline = moved(progress.stall_deadline);
+    progress.bootstrap_deadline = moved(progress.bootstrap_deadline);
+    progress.publish_deadline = progress.publish_deadline.map(moved);
+    info!(
+        paused_ms = u64::try_from(late.as_millis()).unwrap_or(u64::MAX),
+        "tor deadlines moved after a pause"
+    );
+    true
 }
 
 fn overdue(progress: &Progress) -> Option<TorFailure> {
@@ -715,28 +803,51 @@ async fn add_onion(
         progress.publish_deadline = None;
         let _ = running.control.del_onion(previous.onion.service_id()).await;
     }
-    let service_id = running
+    let added = running
         .control
         .add_onion(key, listener_port)
         .await
         .map_err(|error| TorFailure::new(FailureKind::Keys, format_args!("add onion: {error}")))?;
-    if service_id != expected.service_id() {
-        let _ = running.control.del_onion(&service_id).await;
+    if added.service_id != expected.service_id() {
+        let _ = running.control.del_onion(&added.service_id).await;
         return Err(TorFailure::new(
             FailureKind::Keys,
             "tor published another onion",
         ));
     }
-    let uploaded = progress.recent_uploads.iter().any(|id| *id == service_id)
-        || running.control.upload_was_dropped(&service_id);
+    // Events after the reply are still queued, so nothing can have counted as uploaded yet.
     progress.published = Some(Published {
         onion: expected,
-        uploaded,
+        added_at: added.added_at,
+        uploaded: false,
     });
-    if progress.bootstrapped && !uploaded {
+    if progress.bootstrapped {
         progress.publish_deadline = Some(after(Instant::now(), timings.publish));
     }
     debug!(transport = "tor", "onion service added");
+    Ok(())
+}
+
+/// `SIGNAL ACTIVE`, and after a network change `DisableNetwork` on and off and the new SOCKS
+/// address. An error leaves the connection closed or tor in a state the wallet did not ask
+/// for, so the caller ends tor.
+async fn refresh(
+    running: &Running,
+    progress: &mut Progress,
+    network_changed: bool,
+    timings: TorTimings,
+    socks: &SharedSocks,
+) -> Result<(), ControlError> {
+    if network_changed {
+        running.control.set_network_enabled(false).await?;
+        running.control.set_network_enabled(true).await?;
+        socks.set(running.control.socks_address().await?);
+    }
+    running.control.signal_active().await?;
+    if !progress.bootstrapped {
+        progress.stall_deadline = after(Instant::now(), timings.stall);
+    }
+    debug!(network_changed, "tor refreshed");
     Ok(())
 }
 
@@ -770,6 +881,9 @@ async fn fail(
             Request::Publish { reply, .. } => {
                 let _ = reply.send(Err(failure.clone()));
             }
+            Request::Refresh { reply, .. } => {
+                let _ = reply.send(Err(failure.clone()));
+            }
             Request::Stop { reply } => {
                 let _ = reply.send(());
                 return;
@@ -781,10 +895,7 @@ async fn fail(
 // The child, when there is one, is killed before the failure is shown.
 type LaunchError = (TorFailure, Option<Box<Child>>);
 
-async fn launch(
-    settings: &TorSettings,
-    socks: &OnceLock<SocketAddr>,
-) -> Result<Running, LaunchError> {
+async fn launch(settings: &TorSettings, socks: &SharedSocks) -> Result<Running, LaunchError> {
     let start_failure =
         |detail: &dyn fmt::Display| (TorFailure::new(FailureKind::Start, detail), None);
     match tokio::fs::metadata(&settings.tor_binary).await {
@@ -792,6 +903,7 @@ async fn launch(
         _ => return Err((TorFailure::new(FailureKind::Missing, "no tor binary"), None)),
     }
     let paths = TorPaths::new(&settings.data_dir);
+    halt_left_tor(&paths, settings.timings.command).await;
     prepare_files(&paths)
         .await
         .map_err(|error| start_failure(&format_args!("tor files: {}", error.kind())))?;
@@ -871,7 +983,7 @@ async fn launch(
             ));
         }
     };
-    let _ = socks.set(socks_address);
+    socks.set(socks_address);
     debug!(elapsed_ms = elapsed_ms(started), "tor control connected");
     Ok(Running {
         child,
@@ -880,6 +992,38 @@ async fn launch(
         problem,
         started,
     })
+}
+
+/// Halts a tor an earlier run left on these files: it would keep the data directory locked, and
+/// the new tor would exit. That happens when the host died before tor noticed, such as when it
+/// was killed while paused, or when a host restarted without stopping its tor. Only a tor that
+/// proves it knows the cookie the files hold is told anything; any failure leaves the new tor
+/// to wait for the lock as it does by itself.
+async fn halt_left_tor(paths: &TorPaths, wait: Duration) {
+    let Ok(text) = tokio::fs::read_to_string(&paths.control_file).await else {
+        return;
+    };
+    let Some(address) = parse_control_file(&text) else {
+        return;
+    };
+    let Ok(cookie) = read_cookie(&paths.cookie).await else {
+        return;
+    };
+    let halt = async {
+        let (control, mut events) = ControlConnection::connect(address, wait).await?;
+        control.authenticate(&*cookie).await?;
+        info!("halting the tor an earlier run left");
+        // Tor may close the connection before its answer is read.
+        let _ = control.signal_halt().await;
+        // The connection closes as tor exits.
+        while events.recv().await.is_some() {}
+        Ok::<_, ControlError>(())
+    };
+    match timeout(wait, halt).await {
+        Ok(Ok(())) => debug!("the tor an earlier run left has exited"),
+        Ok(Err(error)) => debug!(error = %error, "no tor of an earlier run answered"),
+        Err(_) => warn!("the tor an earlier run left did not exit in time"),
+    }
 }
 
 async fn drain_logs(handles: &mut [JoinHandle<()>]) {
@@ -918,7 +1062,14 @@ async fn connect_control(
     address: SocketAddr,
     paths: &TorPaths,
     command_timeout: Duration,
-) -> Result<(ControlConnection, mpsc::Receiver<Event>, SocketAddr), ControlError> {
+) -> Result<
+    (
+        ControlConnection,
+        mpsc::Receiver<(Position, Event)>,
+        SocketAddr,
+    ),
+    ControlError,
+> {
     let (control, events) = ControlConnection::connect(address, command_timeout).await?;
     let cookie = read_cookie(&paths.cookie).await?;
     control.authenticate(&*cookie).await?;
@@ -1032,7 +1183,6 @@ mod tests {
             tag: "loading_descriptors".into(),
             bootstrapped: false,
             published: None,
-            recent_uploads: VecDeque::new(),
             stall_deadline: now,
             bootstrap_deadline: now,
             publish_deadline: None,
@@ -1046,6 +1196,7 @@ mod tests {
         );
         progress.published = Some(Published {
             onion: onion.clone(),
+            added_at: Position(0),
             uploaded: false,
         });
         assert!(matches!(progress.visible(), TorState::Starting { .. }));
@@ -1055,9 +1206,87 @@ mod tests {
         assert_eq!(progress.visible(), TorState::Bootstrapped);
         progress.published = Some(Published {
             onion: onion.clone(),
+            added_at: Position(0),
             uploaded: true,
         });
         assert_eq!(progress.visible(), TorState::Ready { onion });
+    }
+
+    fn publishing(onion: &OnionAddress, added_at: Position, now: Instant) -> Progress {
+        Progress {
+            progress: 100,
+            tag: "done".into(),
+            bootstrapped: true,
+            published: Some(Published {
+                onion: onion.clone(),
+                added_at,
+                uploaded: false,
+            }),
+            stall_deadline: now,
+            bootstrap_deadline: now,
+            publish_deadline: Some(now),
+        }
+    }
+
+    #[test]
+    fn an_upload_from_before_the_onion_was_added_does_not_publish_it() {
+        let now = Instant::now();
+        let onion = OnionAddress::from_public_key(&[1; 32]);
+        let mut progress = publishing(&onion, Position(5), now);
+        let uploaded = |at| {
+            (
+                Position(at),
+                Event::HsDesc {
+                    action: HsDescAction::Uploaded,
+                    service_id: onion.service_id().to_owned(),
+                },
+            )
+        };
+        for at in [3, 5] {
+            let (position, event) = uploaded(at);
+            on_event(&mut progress, position, event, TorTimings::default(), now);
+            assert_eq!(progress.visible(), TorState::Publishing, "{at}");
+        }
+        let (position, event) = uploaded(6);
+        on_event(&mut progress, position, event, TorTimings::default(), now);
+        assert_eq!(progress.visible(), TorState::Ready { onion });
+    }
+
+    #[test]
+    fn deadlines_that_passed_during_a_pause_move_by_the_pause() {
+        let start = Instant::now();
+        let timings = TorTimings::default();
+        let mut progress = Progress {
+            progress: 40,
+            tag: "loading".into(),
+            bootstrapped: false,
+            published: None,
+            stall_deadline: start + timings.stall,
+            bootstrap_deadline: start + timings.bootstrap,
+            publish_deadline: None,
+        };
+        let deadline = next_deadline(&progress);
+        assert!(!postpone_after_pause(
+            &mut progress,
+            deadline,
+            deadline + Duration::from_millis(500),
+            timings
+        ));
+        let pause = Duration::from_secs(300);
+        let thawed = deadline + pause;
+        assert!(postpone_after_pause(
+            &mut progress,
+            deadline,
+            thawed,
+            timings
+        ));
+        assert_eq!(progress.stall_deadline, thawed + timings.stall);
+        assert_eq!(
+            progress.bootstrap_deadline,
+            start + timings.bootstrap + pause
+        );
+        assert_eq!(overdue(&progress), None);
+        assert!(next_deadline(&progress) >= thawed + timings.stall);
     }
 
     #[tokio::test]
@@ -1084,19 +1313,7 @@ mod tests {
             .unwrap();
         control.signal_shutdown().await.unwrap();
         let now = Instant::now();
-        let mut progress = Progress {
-            progress: 100,
-            tag: "done".into(),
-            bootstrapped: true,
-            published: Some(Published {
-                onion: onion.clone(),
-                uploaded: false,
-            }),
-            recent_uploads: VecDeque::new(),
-            stall_deadline: now,
-            bootstrap_deadline: now,
-            publish_deadline: Some(now),
-        };
+        let mut progress = publishing(&onion, Position(0), now);
         catch_dropped_upload(&control, &mut progress, now);
         assert_eq!(progress.visible(), TorState::Ready { onion });
         assert_eq!(overdue(&progress), None);
