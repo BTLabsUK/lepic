@@ -633,6 +633,11 @@ impl Session {
         delete_unconfirmed: bool,
         progress: impl Fn(ScanProgress),
     ) -> Result<(), WalletError> {
+        if delete_unconfirmed && start_height.is_some() {
+            return Err(invalid(
+                "a scan with delete_unconfirmed starts from the beginning of the chain",
+            ));
+        }
         let cancel = ScanCancel::new();
         *lock(&self.scan) = Some(cancel.clone());
         let options = ScanOptions {

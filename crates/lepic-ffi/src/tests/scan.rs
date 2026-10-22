@@ -143,3 +143,60 @@ async fn cancel_scan_ends_a_scan_waiting_on_the_node_and_the_next_one_completes(
     assert_eq!(result.found, 1);
     assert_eq!(alice.refresh().await.unwrap().spendable, 10 * EPIC);
 }
+
+/// Alice's send of 1 EPIC waits for an answer, its input locked, on a chain grown 280 blocks
+/// past it, more than a scan reaches back.
+async fn send_on_a_long_chain() -> (super::http::Pair, u32) {
+    let pair = funded_pair().await;
+    let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
+    pair.chain.set_height(300);
+    scan(&pair.alice, false).await;
+    (pair, slate.tx_id)
+}
+
+fn locked(session: &Session) -> Vec<u64> {
+    session
+        .outputs()
+        .unwrap()
+        .into_iter()
+        .filter(|output| output.status == crate::api::types::OutputStatus::Locked)
+        .map(|output| output.value)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plain_scan_of_a_long_chain_leaves_a_waiting_send_alone() {
+    let (pair, tx_id) = send_on_a_long_chain().await;
+
+    let result = scan(&pair.alice, false).await;
+
+    assert_eq!(result.start_height, 200, "100 blocks before the last scan");
+    assert_eq!(locked(&pair.alice), [10 * EPIC]);
+    let send = pair.alice.transaction(tx_id).await.unwrap();
+    assert_eq!(send.status, TxStatus::Sent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_repair_of_a_long_chain_frees_the_inputs_of_the_send_it_cancels() {
+    let (pair, tx_id) = send_on_a_long_chain().await;
+
+    let result = scan(&pair.alice, true).await;
+
+    assert_eq!(result.start_height, 0, "a repair scans the whole chain");
+    assert_eq!((result.unlocked, result.deleted), (1, 1));
+    assert!(locked(&pair.alice).is_empty());
+    let send = pair.alice.transaction(tx_id).await.unwrap();
+    assert_eq!(send.status, TxStatus::Cancelled);
+    let summary = pair.alice.refresh().await.unwrap();
+    assert_eq!((summary.spendable, summary.locked), (10 * EPIC, 0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_repair_from_a_start_height_is_refused() {
+    let pair = funded_pair().await;
+    let refused = pair
+        .alice
+        .scan(Some(5), true, Progress::default().report())
+        .await;
+    assert_eq!(refused.unwrap_err().kind, WalletErrorKind::InvalidArgument);
+}

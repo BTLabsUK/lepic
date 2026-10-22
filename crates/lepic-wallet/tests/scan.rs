@@ -49,6 +49,9 @@ enum Disturbance {
     Cancel(usize),
     /// The request never answers; [`DisturbedNode::hanging`] is notified when it starts.
     Hang(usize),
+    /// The request answers once [`DisturbedNode::resume`] is notified; `hanging` is notified
+    /// when it starts waiting.
+    Pause(usize),
 }
 
 /// The mock node's client, disturbed on one `get_unspent_outputs` call: it fails as an
@@ -58,6 +61,7 @@ struct DisturbedNode {
     disturbance: Disturbance,
     cancel: ScanCancel,
     hanging: Arc<Notify>,
+    resume: Arc<Notify>,
     unspent_calls: AtomicUsize,
 }
 
@@ -102,12 +106,18 @@ impl NodeApi for DisturbedNode {
         let call = self.unspent_calls.fetch_add(1, Ordering::SeqCst) + 1;
         let fail = matches!(self.disturbance, Disturbance::Fail(at) if at == call);
         let hang = matches!(self.disturbance, Disturbance::Hang(at) if at == call);
+        let pause = matches!(self.disturbance, Disturbance::Pause(at) if at == call);
         if matches!(self.disturbance, Disturbance::Cancel(at) if at == call) {
             self.cancel.cancel();
         }
         let answer = self.inner.get_unspent_outputs(start_index, end_index, max);
         let hanging = Arc::clone(&self.hanging);
+        let resume = Arc::clone(&self.resume);
         async move {
+            if pause {
+                hanging.notify_one();
+                resume.notified().await;
+            }
             if fail {
                 return Err(NodeError::Timeout);
             }
@@ -158,6 +168,16 @@ fn disturbed_wallet_notifying(
     cancel: &ScanCancel,
     hanging: &Arc<Notify>,
 ) -> DisturbedWallet {
+    disturbed_wallet_pausing(harness, disturbance, cancel, hanging, &Arc::default())
+}
+
+fn disturbed_wallet_pausing(
+    harness: &Harness,
+    disturbance: Disturbance,
+    cancel: &ScanCancel,
+    hanging: &Arc<Notify>,
+    resume: &Arc<Notify>,
+) -> DisturbedWallet {
     let Ports {
         node,
         stores,
@@ -172,6 +192,7 @@ fn disturbed_wallet_notifying(
         disturbance,
         cancel: cancel.clone(),
         hanging: Arc::clone(hanging),
+        resume: Arc::clone(resume),
         unspent_calls: AtomicUsize::new(0),
     };
     Wallet::new(
@@ -858,4 +879,95 @@ fn details_of_a_restored_output_show_its_height_and_no_kernel() {
         assert_eq!(details.confirmed_height, Some(output.height));
         assert_eq!(details.flow, TxFlow::Payment);
     }
+}
+
+#[test]
+fn a_repair_leaves_alone_what_a_send_or_receive_makes_while_it_runs() {
+    let (harness, wallet, vector) = scanned();
+    wallet.close();
+    let cancel = ScanCancel::new();
+    let (hanging, resume) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let repairing =
+        disturbed_wallet_pausing(&harness, Disturbance::Pause(2), &cancel, &hanging, &resume);
+    harness
+        .block_on(repairing.open(password(PASSWORD)))
+        .unwrap();
+    let mut started_with: Option<(TxId, TxId, OutputRecord)> = None;
+
+    let summary = harness
+        .block_on(async {
+            let made = async {
+                hanging.notified().await;
+                let sending = open_transaction(&harness, TxDirection::Outgoing, TxState::Sent);
+                let receiving =
+                    open_transaction(&harness, TxDirection::Incoming, TxState::Received);
+                let mut locked = output_by_child(&harness, 5);
+                locked.status = OutputStatus::Locked;
+                locked.tx = Some(sending);
+                set_output(&harness, &locked);
+                let unconfirmed = unconfirmed_output(&harness, &vector, receiving);
+                set_output(&harness, &unconfirmed);
+                started_with = Some((sending, receiving, unconfirmed));
+                resume.notify_one();
+            };
+            let (summary, ()) = tokio::join!(repairing.scan(small_page_repair(), &cancel), made);
+            summary
+        })
+        .unwrap();
+
+    let (sending, receiving, unconfirmed) = started_with.unwrap();
+    assert_eq!((summary.unlocked, summary.deleted), (0, 0));
+    assert_eq!(transaction_state(&harness, sending), TxState::Sent);
+    assert_eq!(transaction_state(&harness, receiving), TxState::Received);
+    assert_eq!(output_by_child(&harness, 5).status, OutputStatus::Locked);
+    assert!(
+        snapshot(&harness)
+            .outputs
+            .iter()
+            .any(|output| output.commitment() == unconfirmed.commitment()),
+        "the payment received during the scan is kept"
+    );
+}
+
+#[test]
+fn a_repair_cancels_a_send_as_a_cancel_does() {
+    let (harness, wallet, vector) = scanned();
+    let sending = open_transaction(&harness, TxDirection::Outgoing, TxState::Sent);
+    let mut input = output_by_child(&harness, 5);
+    input.status = OutputStatus::Locked;
+    input.tx = Some(sending);
+    set_output(&harness, &input);
+    // The send's change: unconfirmed, and not on chain.
+    let change = unconfirmed_output(&harness, &vector, sending);
+    set_output(&harness, &change);
+    let mut events = wallet.subscribe();
+
+    let summary = harness
+        .block_on(wallet.scan(
+            ScanOptions {
+                start: ScanStart::Height(Height::new(u64::MAX)),
+                ..small_page_repair()
+            },
+            &ScanCancel::new(),
+        ))
+        .unwrap();
+
+    assert_eq!(
+        summary.start_height,
+        Height::ZERO,
+        "a repair scans from genesis"
+    );
+    assert_eq!((summary.unlocked, summary.deleted), (1, 1));
+    assert_eq!(transaction_state(&harness, sending), TxState::Cancelled);
+    assert_eq!(output_by_child(&harness, 5).status, OutputStatus::Unspent);
+    assert!(
+        snapshot(&harness)
+            .outputs
+            .iter()
+            .all(|output| output.commitment() != change.commitment())
+    );
+    let cancelled = drain(&mut events).into_iter().filter(|event| {
+        matches!(event, Event::Transaction(state) if state.tx_id == sending && state.to == TxState::Cancelled)
+    });
+    assert_eq!(cancelled.count(), 1);
 }

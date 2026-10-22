@@ -548,16 +548,24 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// ends the stream with its [`WalletError`] as the stream's error; a cancelled scan ends it
   /// with `Cancelled`.
   ///
-  /// With `delete_unconfirmed` the scan also repairs what `epic-wallet scan
-  /// --delete_unconfirmed` repairs: every locked output found on chain is unlocked and every
-  /// unconfirmed output not found is deleted, and the transactions they belong to are
-  /// cancelled. That includes sends waiting for an answer and payments signed but not yet
-  /// confirmed, so a payment already on its way may then fail.
+  /// With `delete_unconfirmed` the scan also runs the repair of `epic-wallet scan
+  /// --delete_unconfirmed` and always starts from the beginning of the chain, so
+  /// `start_height` must be `None`. Every output locked by a transaction in progress that is
+  /// found unspent on chain is unlocked, and every output not on chain yet is deleted; the
+  /// transactions they belong to are cancelled as `cancel_transaction` cancels them. That
+  /// includes sends waiting for an answer and payments signed but not yet confirmed: a
+  /// payment already on its way may then fail. If one is still mined, its output is not lost,
+  /// but it stays hidden until the next scan finds it. The repair covers only the outputs
+  /// that were locked or unconfirmed when the scan started; sends and receives made while it
+  /// runs are left alone.
   ///
   /// Every page of outputs is stored as it is scanned, so a cancelled or failed scan leaves
   /// the wallet consistent, with what it found so far stored. The next scan with the same
   /// start and the same `delete_unconfirmed` resumes after the last stored page; the repair
   /// of unconfirmed outputs runs only when a scan completes.
+  ///
+  /// Fails with `InvalidArgument` for `delete_unconfirmed` with a `start_height`, and with
+  /// `WalletBusy` while another scan of this wallet runs.
   Stream<ScanProgress> scan({
     BigInt? startHeight,
     required bool deleteUnconfirmed,

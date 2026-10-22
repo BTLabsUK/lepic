@@ -21,14 +21,15 @@ use lepic_primitives::hash::Hash;
 use lepic_primitives::output::OutputIdentifier;
 use lepic_primitives::params::Network;
 use lepic_store::{
-    AccountIndex, AccountRecord, KeyId, OutputRecord, OutputStatus, Repositories, StoreError,
-    TransactionEntry, TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, AccountRecord, CommitmentBytes, KeyId, OutputRecord, OutputStatus, Repositories,
+    StoreError, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
 
 use crate::account::FIRST_HARDENED;
+use crate::cancel::drop_holdings;
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Event, SyncProgress};
@@ -107,8 +108,10 @@ pub struct ScanOptions {
     pub start: ScanStart,
     /// Also unlock locked outputs found on chain and delete unconfirmed outputs not found,
     /// cancelling their transactions: the repair `epic-wallet scan --delete_unconfirmed` runs.
-    /// A scan resumes an interrupted one only when this setting matches, so a repair is never
-    /// skipped for pages an earlier plain scan stored.
+    /// It applies to the outputs that were locked or unconfirmed when the scan started, and
+    /// such a scan always starts from genesis, whatever `start` says, since an output mined
+    /// below the start would not be found. A scan resumes an interrupted one only when this
+    /// setting matches, so a repair is never skipped for pages an earlier plain scan stored.
     pub delete_unconfirmed: bool,
     /// Blocks a restored coinbase output stays locked after the block that mined it.
     pub coinbase_maturity: u64,
@@ -257,9 +260,11 @@ pub struct ScanSummary {
     pub restored: u64,
     /// Outputs stored as spent that were found unspent.
     pub revived: u64,
-    /// Locked outputs unlocked by a scan with `delete_unconfirmed`.
+    /// Locked outputs made spendable again: found on chain by a scan with
+    /// `delete_unconfirmed`, or inputs of a transaction the scan cancelled.
     pub unlocked: u64,
-    /// Unconfirmed outputs deleted by a scan with `delete_unconfirmed`.
+    /// Unconfirmed outputs deleted: not found by a scan with `delete_unconfirmed`, or the
+    /// change of a transaction the scan cancelled.
     pub deleted: u64,
 }
 
@@ -350,6 +355,14 @@ pub(crate) fn delete_found_entry(
     repos.delete_setting(&found_key(tx_id))
 }
 
+/// A page of the node's unspent outputs, with the checkpoint stored with it and the tip the
+/// scan runs to.
+struct Page {
+    outputs: Vec<UnspentOutput>,
+    checkpoint: Checkpoint,
+    tip: Height,
+}
+
 /// An output of this wallet found on chain.
 #[derive(Debug, Clone, Copy)]
 struct FoundOutput {
@@ -405,7 +418,8 @@ where
         let tip = until_cancelled(cancel, node.get_tip()).await?;
         let state = {
             let session = Arc::clone(&session);
-            self.blocking(move |_, _| Ok(session.store.read(|repos| scan_state(repos))))
+            let repairing = options.delete_unconfirmed;
+            self.blocking(move |_, _| Ok(session.store.read(|repos| scan_state(repos, repairing))))
                 .await??
         };
         chain::check_tip(
@@ -415,7 +429,13 @@ where
             self.ports().clock.now(),
         )?;
         let checkpoint = state.checkpoint;
-        let start_height = resolve_start(options.start, state.last_scanned.as_ref(), tip.height);
+        let repair = state.repair.map(Arc::new);
+        let start = if options.delete_unconfirmed {
+            ScanStart::Genesis
+        } else {
+            options.start
+        };
+        let start_height = resolve_start(start, state.last_scanned.as_ref(), tip.height);
         let mut summary = ScanSummary {
             start_height,
             end_height: tip.height,
@@ -482,10 +502,13 @@ where
             let outcome = self
                 .store_page(
                     Arc::clone(&session),
-                    page.outputs,
+                    Page {
+                        outputs: page.outputs,
+                        checkpoint,
+                        tip: tip.height,
+                    },
+                    repair.clone(),
                     options,
-                    checkpoint,
-                    tip.height,
                     cancel,
                 )
                 .await?;
@@ -512,7 +535,7 @@ where
             self.blocking(move |_, _| {
                 Ok(session
                     .store
-                    .write(|repos| finish(repos, options, start_height, &block, now)))
+                    .write(|repos| finish(repos, repair.as_deref(), start_height, &block, now)))
             })
             .await??
         };
@@ -575,12 +598,16 @@ where
     async fn store_page(
         &self,
         session: Arc<Session<S::Store>>,
-        outputs: Vec<UnspentOutput>,
+        page: Page,
+        repair: Option<Arc<Repair>>,
         options: ScanOptions,
-        checkpoint: Checkpoint,
-        tip: Height,
         cancel: &ScanCancel,
     ) -> Result<PageOutcome, ScanError> {
+        let Page {
+            outputs,
+            checkpoint,
+            tip,
+        } = page;
         let (found, spent, undated) = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
@@ -620,7 +647,7 @@ where
                     &found,
                     &revivable,
                     &block_times,
-                    options,
+                    repair.as_deref(),
                     checkpoint,
                     now,
                 )
@@ -680,9 +707,32 @@ struct ScanState {
     last_scanned: Option<ScannedBlock>,
     checkpoint: Option<Checkpoint>,
     position: ChainPosition,
+    repair: Option<Repair>,
 }
 
-fn scan_state(repos: &dyn Repositories) -> Result<ScanState, ScanError> {
+/// The outputs a `delete_unconfirmed` scan repairs: those locked or unconfirmed when it
+/// started, as `epic-wallet` reads them before it scans. Outputs a send or receive makes while
+/// the scan runs are left alone.
+#[derive(Debug, Default)]
+struct Repair {
+    locked: BTreeSet<CommitmentBytes>,
+    unconfirmed: BTreeSet<CommitmentBytes>,
+}
+
+fn repair_set(repos: &dyn Repositories) -> Result<Repair, StoreError> {
+    let mut repair = Repair::default();
+    for account in repos.accounts()? {
+        for output in repos.outputs(account.index, Some(OutputStatus::Locked))? {
+            repair.locked.insert(*output.commitment());
+        }
+        for output in repos.outputs(account.index, Some(OutputStatus::Unconfirmed))? {
+            repair.unconfirmed.insert(*output.commitment());
+        }
+    }
+    Ok(repair)
+}
+
+fn scan_state(repos: &dyn Repositories, repairing: bool) -> Result<ScanState, ScanError> {
     let checkpoint = match repos.setting(CHECKPOINT_SETTING)? {
         Some(text) => {
             let checkpoint = Checkpoint::decode(&text);
@@ -697,6 +747,7 @@ fn scan_state(repos: &dyn Repositories) -> Result<ScanState, ScanError> {
         last_scanned: last_scanned(repos)?,
         checkpoint,
         position: chain::position(repos)?,
+        repair: repairing.then(|| repair_set(repos)).transpose()?,
     })
 }
 
@@ -814,7 +865,7 @@ fn store_found(
     found: &[FoundOutput],
     revivable: &BTreeSet<Commitment>,
     block_times: &BTreeMap<Height, Timestamp>,
-    options: ScanOptions,
+    repair: Option<&Repair>,
     checkpoint: Checkpoint,
     now: Timestamp,
 ) -> Result<PageOutcome, ScanError> {
@@ -830,7 +881,7 @@ fn store_found(
         match repos.output(output.id.commitment.as_bytes())? {
             Some(stored) => {
                 let revivable = revivable.contains(&output.id.commitment);
-                reconcile(repos, stored, output, revivable, options, now, &mut outcome)?;
+                reconcile(repos, stored, output, revivable, repair, now, &mut outcome)?;
             }
             None => {
                 let block_time = block_times.get(&output.height).copied();
@@ -862,38 +913,44 @@ fn reconcile(
     mut stored: OutputRecord,
     found: &FoundOutput,
     revivable: bool,
-    options: ScanOptions,
+    repair: Option<&Repair>,
     now: Timestamp,
     outcome: &mut PageOutcome,
 ) -> Result<(), ScanError> {
-    let mut changed = stored.mmr_index != Some(found.mmr_index);
+    let changed = stored.mmr_index != Some(found.mmr_index);
     stored.mmr_index = Some(found.mmr_index);
-    match stored.status {
+    let repaired = |set: fn(&Repair) -> &BTreeSet<CommitmentBytes>| {
+        repair.is_some_and(|repair| set(repair).contains(stored.commitment()))
+    };
+    // The output is stored before its transaction is cancelled, which then leaves it alone.
+    let cancel = match stored.status {
         OutputStatus::Spent if !revivable => {
             debug!(height = %found.height, "output revival not confirmed");
+            false
         }
         OutputStatus::Spent => {
-            stored.status = OutputStatus::Unspent;
-            changed = true;
             outcome.revived = outcome.revived.saturating_add(1);
-            cancel_transaction(repos, stored.tx, now, &mut outcome.changes)?;
             debug!(height = %found.height, "output revived");
+            true
         }
-        OutputStatus::Locked if options.delete_unconfirmed => {
-            stored.status = OutputStatus::Unspent;
-            changed = true;
+        OutputStatus::Locked if repaired(|repair| &repair.locked) => {
             outcome.unlocked = outcome.unlocked.saturating_add(1);
-            cancel_transaction(repos, stored.tx, now, &mut outcome.changes)?;
+            true
         }
-        // A delete_unconfirmed repair deletes every unconfirmed output left at the end; one on
-        // chain is kept as unspent instead of being lost until the next scan.
-        OutputStatus::Unconfirmed if options.delete_unconfirmed => {
+        // The repair deletes the unconfirmed outputs it started with that are left at the end;
+        // one on chain is kept as unspent instead of being lost until the next scan.
+        OutputStatus::Unconfirmed if repaired(|repair| &repair.unconfirmed) => {
             stored.status = OutputStatus::Unspent;
-            changed = true;
+            repos.put_output(&stored)?;
+            return Ok(());
         }
-        OutputStatus::Unconfirmed | OutputStatus::Unspent | OutputStatus::Locked => {}
-    }
-    if changed {
+        OutputStatus::Unconfirmed | OutputStatus::Unspent | OutputStatus::Locked => false,
+    };
+    if cancel {
+        stored.status = OutputStatus::Unspent;
+        repos.put_output(&stored)?;
+        cancel_open(repos, stored.tx, now, outcome)?;
+    } else if changed {
         repos.put_output(&stored)?;
     }
     Ok(())
@@ -989,13 +1046,15 @@ fn advance_next_child(
     Ok(())
 }
 
-/// Cancels the open transaction an output belongs to. A confirmed, cancelled or expired one is
-/// left alone, as `epic-wallet` leaves every type but the open ones.
-fn cancel_transaction(
+/// Cancels the open transaction an output belongs to as a cancel by the user does: its
+/// unconfirmed outputs are deleted, the inputs it locked unlocked, and its private context and
+/// pending deliveries dropped. A confirmed, cancelled or expired one is left alone, as
+/// `epic-wallet` leaves every type but the open ones.
+fn cancel_open(
     repos: &mut dyn Repositories,
     tx: Option<TxId>,
     now: Timestamp,
-    changes: &mut Vec<StateChange>,
+    outcome: &mut PageOutcome,
 ) -> Result<(), ScanError> {
     let Some(tx_id) = tx else {
         return Ok(());
@@ -1006,8 +1065,16 @@ fn cancel_transaction(
     if is_final(entry.state) {
         return Ok(());
     }
+    for output in repos.outputs_of_transaction(tx_id)? {
+        match output.status {
+            OutputStatus::Unconfirmed => outcome.deleted = outcome.deleted.saturating_add(1),
+            OutputStatus::Locked => outcome.unlocked = outcome.unlocked.saturating_add(1),
+            OutputStatus::Unspent | OutputStatus::Spent => {}
+        }
+    }
+    drop_holdings(repos, tx_id, &entry)?;
     if let Some(change) = apply_transition(repos, tx_id, TxState::Cancelled, now)? {
-        changes.push(change);
+        outcome.changes.push(change);
     }
     Ok(())
 }
@@ -1016,19 +1083,28 @@ fn cancel_transaction(
 /// checkpoint. A scan from genesis has found every output key in use.
 fn finish(
     repos: &mut dyn Repositories,
-    options: ScanOptions,
+    repair: Option<&Repair>,
     start_height: Height,
     block: &ScannedBlock,
     now: Timestamp,
 ) -> Result<PageOutcome, ScanError> {
     let mut outcome = PageOutcome::default();
-    if options.delete_unconfirmed {
-        for account in repos.accounts()? {
-            for output in repos.outputs(account.index, Some(OutputStatus::Unconfirmed))? {
-                cancel_transaction(repos, output.tx, now, &mut outcome.changes)?;
-                repos.delete_output(output.commitment())?;
-                outcome.deleted = outcome.deleted.saturating_add(1);
-            }
+    for commitment in repair.iter().flat_map(|repair| &repair.unconfirmed) {
+        let unconfirmed = |repos: &dyn Repositories| {
+            Ok::<_, StoreError>(
+                repos
+                    .output(commitment)?
+                    .filter(|output| output.status == OutputStatus::Unconfirmed),
+            )
+        };
+        let Some(output) = unconfirmed(repos)? else {
+            continue;
+        };
+        cancel_open(repos, output.tx, now, &mut outcome)?;
+        // An output of a transaction no cancel applies to is deleted on its own.
+        if unconfirmed(repos)?.is_some() {
+            repos.delete_output(commitment)?;
+            outcome.deleted = outcome.deleted.saturating_add(1);
         }
     }
     repos.put_setting(LAST_SCANNED_SETTING, &block.encode())?;

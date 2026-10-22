@@ -812,12 +812,12 @@ class ScanResult {
   /// Stored as spent but found unspent; their transactions were cancelled.
   final BigInt revived;
 
-  /// Locked but found on chain, now spendable again; their transactions were cancelled.
-  /// Only with `delete_unconfirmed`.
+  /// Locked outputs made spendable again: found on chain by a scan with
+  /// `delete_unconfirmed`, or inputs of a transaction the scan cancelled.
   final BigInt unlocked;
 
-  /// Unconfirmed and not on chain, now deleted; their transactions were cancelled. Only with
-  /// `delete_unconfirmed`.
+  /// Outputs not on chain that were deleted: not found by a scan with
+  /// `delete_unconfirmed`, or the change of a transaction the scan cancelled.
   final BigInt deleted;
 
   const ScanResult({
