@@ -16,7 +16,7 @@ use lepic_keychain::{SecretStore as _, Seed, Vault};
 use lepic_node::{NodeApi as _, Propagation, webpki_tls_config};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::params::Network;
-use lepic_store::{AccountIndex, TxId, TxState};
+use lepic_store::{AccountIndex, OutputStatus as EngineOutputStatus, TxId, TxState};
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
@@ -27,7 +27,9 @@ use lepic_wallet::legacy_history::{
     ImportWorkDir, LegacyImportOutcome, LegacyImportStatus as EngineLegacyStatus,
     TxOrigin as EngineTxOrigin,
 };
-use lepic_wallet::refresh::{BALANCE_MINIMUM_CONFIRMATIONS, RefreshOutcome};
+use lepic_wallet::refresh::{
+    BALANCE_MINIMUM_CONFIRMATIONS, BalanceCategory, OutputDetails, RefreshOutcome,
+};
 use lepic_wallet::scan::{
     FoundDuring as EngineFoundDuring, ScanCancel, ScanOptions, ScanStart, ScanSummary,
 };
@@ -49,9 +51,10 @@ use crate::api::runtime::{DirClaim, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
-    LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, ReceivedSlate, ScanFound,
-    ScanProgress, ScanResult, SentTx, Slate, SlateMessage, TransactionDetails, TransportState,
-    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
+    LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, OutputCategory, OutputStatus,
+    ReceivedSlate, ScanFound, ScanProgress, ScanResult, SentTx, Slate, SlateMessage,
+    TransactionDetails, TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent,
+    WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -553,6 +556,11 @@ impl Session {
         Ok(summary(&self.engine.balance(DEFAULT_ACCOUNT)?, false))
     }
 
+    pub(crate) fn outputs(&self) -> Result<Vec<WalletOutput>, WalletError> {
+        let outputs = self.engine.outputs(DEFAULT_ACCOUNT)?;
+        Ok(outputs.iter().map(wallet_output).collect())
+    }
+
     pub(crate) async fn transactions(&self) -> Result<Vec<TransactionDetails>, WalletError> {
         let stored = self.engine.transactions(DEFAULT_ACCOUNT).await?;
         Ok(stored.iter().map(transaction_details).collect())
@@ -965,6 +973,33 @@ const fn scan_result(summary: &ScanSummary) -> ScanResult {
         revived: summary.revived,
         unlocked: summary.unlocked,
         deleted: summary.deleted,
+    }
+}
+
+fn wallet_output(details: &OutputDetails) -> WalletOutput {
+    let output = &details.output;
+    WalletOutput {
+        commitment: output.id.commitment.to_hex(),
+        value: output.amount.value(),
+        status: match output.status {
+            EngineOutputStatus::Unconfirmed => OutputStatus::Unconfirmed,
+            EngineOutputStatus::Unspent => OutputStatus::Unspent,
+            EngineOutputStatus::Locked => OutputStatus::Locked,
+            EngineOutputStatus::Spent => OutputStatus::Spent,
+        },
+        category: details.category.map(|category| match category {
+            BalanceCategory::Spendable => OutputCategory::Spendable,
+            BalanceCategory::AwaitingConfirmation => OutputCategory::AwaitingConfirmation,
+            BalanceCategory::AwaitingFinalization => OutputCategory::AwaitingFinalization,
+            BalanceCategory::Immature => OutputCategory::Immature,
+            BalanceCategory::Locked => OutputCategory::Locked,
+        }),
+        is_coinbase: output.id.features.is_coinbase(),
+        height: output.height.value(),
+        lock_height: output.lock_height.value(),
+        mmr_index: output.mmr_index,
+        confirmations: details.confirmations,
+        tx_id: output.tx.map(|tx| tx.0),
     }
 }
 

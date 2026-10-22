@@ -523,6 +523,35 @@ where
         })
     }
 
+    /// Every stored output of `account`, spent ones included, ordered by commitment, at the
+    /// height [`Wallet::balance`] uses, so the outputs of each category add up to the balance.
+    /// Reads only the store.
+    ///
+    /// Fails with [`WalletError::Locked`], or an [`crate::AccountError::UnknownAccount`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn outputs(&self, account: AccountIndex) -> Result<Vec<OutputDetails>, WalletError> {
+        let session = self.session()?;
+        session.store.read(|repos| {
+            if repos.account(account)?.is_none() {
+                return Err(crate::AccountError::UnknownAccount(account).into());
+            }
+            let height = balance_height(repos)?;
+            Ok(repos
+                .outputs(account, None)?
+                .into_iter()
+                .map(|output| OutputDetails {
+                    confirmations: if output.status == OutputStatus::Unconfirmed {
+                        0
+                    } else {
+                        confirmations(&output, height)
+                    },
+                    category: balance_category(&output, height),
+                    output,
+                })
+                .collect())
+        })
+    }
+
     fn record_changes(&self, summary: &mut RefreshSummary, changes: Vec<StateChange>) {
         for change in changes {
             match change.to {
@@ -1101,37 +1130,67 @@ fn balance(
         locked: Amount::ZERO,
     };
     for output in outputs {
-        let coinbase = output.id.features.is_coinbase();
-        match output.status {
-            OutputStatus::Unspent if coinbase && output.lock_height > height => {
-                balance.immature = balance.immature.checked_add(output.amount)?;
-                balance.total = balance.total.checked_add(output.amount)?;
-            }
-            OutputStatus::Unspent
-                if confirmations(output, height) < BALANCE_MINIMUM_CONFIRMATIONS =>
-            {
-                balance.awaiting_confirmation =
-                    balance.awaiting_confirmation.checked_add(output.amount)?;
-                balance.total = balance.total.checked_add(output.amount)?;
-            }
-            OutputStatus::Unspent => {
-                balance.spendable = balance.spendable.checked_add(output.amount)?;
-                balance.total = balance.total.checked_add(output.amount)?;
-            }
-            // Upstream ignores unconfirmed coinbase outputs, which a wallet that does not mine
-            // never has.
-            OutputStatus::Unconfirmed if !coinbase => {
-                balance.awaiting_finalization =
-                    balance.awaiting_finalization.checked_add(output.amount)?;
-            }
-            OutputStatus::Locked => {
-                balance.locked = balance.locked.checked_add(output.amount)?;
-                balance.total = balance.total.checked_add(output.amount)?;
-            }
-            OutputStatus::Unconfirmed | OutputStatus::Spent => {}
+        let Some(category) = balance_category(output, height) else {
+            continue;
+        };
+        let slot = match category {
+            BalanceCategory::Spendable => &mut balance.spendable,
+            BalanceCategory::AwaitingConfirmation => &mut balance.awaiting_confirmation,
+            BalanceCategory::AwaitingFinalization => &mut balance.awaiting_finalization,
+            BalanceCategory::Immature => &mut balance.immature,
+            BalanceCategory::Locked => &mut balance.locked,
+        };
+        *slot = slot.checked_add(output.amount)?;
+        if category != BalanceCategory::AwaitingFinalization {
+            balance.total = balance.total.checked_add(output.amount)?;
         }
     }
     Ok(balance)
+}
+
+/// Where an output counts in [`Balance`]. Every category but
+/// [`BalanceCategory::AwaitingFinalization`] also counts in its total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BalanceCategory {
+    Spendable,
+    /// Unspent, with fewer than [`BALANCE_MINIMUM_CONFIRMATIONS`].
+    AwaitingConfirmation,
+    /// Not yet on chain: the change or the received output of a transaction in progress.
+    AwaitingFinalization,
+    /// A coinbase output before its lock height.
+    Immature,
+    /// An input of a send in progress.
+    Locked,
+}
+
+/// The category `output` counts in at `height`, as upstream's `retrieve_info` sorts it; `None`
+/// for a spent output and an unconfirmed coinbase output, which count nowhere.
+fn balance_category(output: &OutputRecord, height: Height) -> Option<BalanceCategory> {
+    let coinbase = output.id.features.is_coinbase();
+    match output.status {
+        OutputStatus::Unspent if coinbase && output.lock_height > height => {
+            Some(BalanceCategory::Immature)
+        }
+        OutputStatus::Unspent if confirmations(output, height) < BALANCE_MINIMUM_CONFIRMATIONS => {
+            Some(BalanceCategory::AwaitingConfirmation)
+        }
+        OutputStatus::Unspent => Some(BalanceCategory::Spendable),
+        // Upstream ignores unconfirmed coinbase outputs, which a wallet that does not mine
+        // never has.
+        OutputStatus::Unconfirmed if !coinbase => Some(BalanceCategory::AwaitingFinalization),
+        OutputStatus::Locked => Some(BalanceCategory::Locked),
+        OutputStatus::Unconfirmed | OutputStatus::Spent => None,
+    }
+}
+
+/// A stored output with what [`Wallet::outputs`] adds to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputDetails {
+    pub output: OutputRecord,
+    /// At the height [`Wallet::balance`] is computed at. Zero for an unconfirmed output.
+    pub confirmations: u64,
+    /// Where it counts in [`Wallet::balance`]; `None` for a spent output.
+    pub category: Option<BalanceCategory>,
 }
 
 /// An output at height `n` has one confirmation at height `n`, none above the tip.

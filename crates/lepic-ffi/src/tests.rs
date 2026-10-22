@@ -12,6 +12,7 @@ use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
 
 mod http;
+mod outputs;
 mod scan;
 #[cfg(unix)]
 mod tor;

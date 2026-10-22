@@ -231,6 +231,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx dco_decode_box_autoadd_imported_tx(dynamic raw);
 
   @protected
+  OutputCategory dco_decode_box_autoadd_output_category(dynamic raw);
+
+  @protected
   ScanFound dco_decode_box_autoadd_scan_found(dynamic raw);
 
   @protected
@@ -369,6 +372,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<TransactionDetails> dco_decode_list_transaction_details(dynamic raw);
 
   @protected
+  List<WalletOutput> dco_decode_list_wallet_output(dynamic raw);
+
+  @protected
   ListenerEvent dco_decode_listener_event(dynamic raw);
 
   @protected
@@ -405,6 +411,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx? dco_decode_opt_box_autoadd_imported_tx(dynamic raw);
 
   @protected
+  OutputCategory? dco_decode_opt_box_autoadd_output_category(dynamic raw);
+
+  @protected
   ScanFound? dco_decode_opt_box_autoadd_scan_found(dynamic raw);
 
   @protected
@@ -436,6 +445,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WalletSummary? dco_decode_opt_box_autoadd_wallet_summary(dynamic raw);
+
+  @protected
+  OutputCategory dco_decode_output_category(dynamic raw);
+
+  @protected
+  OutputStatus dco_decode_output_status(dynamic raw);
 
   @protected
   PaidInvoice dco_decode_paid_invoice(dynamic raw);
@@ -550,6 +565,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WalletEventKind dco_decode_wallet_event_kind(dynamic raw);
+
+  @protected
+  WalletOutput dco_decode_wallet_output(dynamic raw);
 
   @protected
   WalletSummary dco_decode_wallet_summary(dynamic raw);
@@ -728,6 +746,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx sse_decode_box_autoadd_imported_tx(SseDeserializer deserializer);
 
   @protected
+  OutputCategory sse_decode_box_autoadd_output_category(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ScanFound sse_decode_box_autoadd_scan_found(SseDeserializer deserializer);
 
   @protected
@@ -890,6 +913,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<WalletOutput> sse_decode_list_wallet_output(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ListenerEvent sse_decode_listener_event(SseDeserializer deserializer);
 
   @protected
@@ -932,6 +960,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ImportedTx? sse_decode_opt_box_autoadd_imported_tx(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  OutputCategory? sse_decode_opt_box_autoadd_output_category(
     SseDeserializer deserializer,
   );
 
@@ -979,6 +1012,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WalletSummary? sse_decode_opt_box_autoadd_wallet_summary(
     SseDeserializer deserializer,
   );
+
+  @protected
+  OutputCategory sse_decode_output_category(SseDeserializer deserializer);
+
+  @protected
+  OutputStatus sse_decode_output_status(SseDeserializer deserializer);
 
   @protected
   PaidInvoice sse_decode_paid_invoice(SseDeserializer deserializer);
@@ -1095,6 +1134,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WalletEventKind sse_decode_wallet_event_kind(SseDeserializer deserializer);
+
+  @protected
+  WalletOutput sse_decode_wallet_output(SseDeserializer deserializer);
 
   @protected
   WalletSummary sse_decode_wallet_summary(SseDeserializer deserializer);
@@ -1326,6 +1368,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_output_category(
+    OutputCategory self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_scan_found(
     ScanFound self,
     SseSerializer serializer,
@@ -1524,6 +1572,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_wallet_output(
+    List<WalletOutput> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_listener_event(ListenerEvent self, SseSerializer serializer);
 
   @protected
@@ -1574,6 +1628,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_imported_tx(
     ImportedTx? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_output_category(
+    OutputCategory? self,
     SseSerializer serializer,
   );
 
@@ -1630,6 +1690,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     WalletSummary? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_output_category(
+    OutputCategory self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_output_status(OutputStatus self, SseSerializer serializer);
 
   @protected
   void sse_encode_paid_invoice(PaidInvoice self, SseSerializer serializer);
@@ -1765,6 +1834,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     WalletEventKind self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_wallet_output(WalletOutput self, SseSerializer serializer);
 
   @protected
   void sse_encode_wallet_summary(WalletSummary self, SseSerializer serializer);

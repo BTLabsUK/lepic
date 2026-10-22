@@ -111,6 +111,50 @@ pub struct FinalizedTx {
     pub slate_id: String,
 }
 
+/// An output of the wallet, from `EpicWallet::outputs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletOutput {
+    /// The Pedersen commitment, 66 lowercase hex characters: the output's id on chain.
+    pub commitment: String,
+    pub value: u64,
+    pub status: OutputStatus,
+    /// Where it counts in `WalletSummary`; `None` for a spent output.
+    pub category: Option<OutputCategory>,
+    /// A mining reward, spendable only from `lock_height`.
+    pub is_coinbase: bool,
+    /// The height it was mined at, or for an output not on chain yet, the tip it was made at.
+    pub height: u64,
+    /// The first height at which it may be spent.
+    pub lock_height: u64,
+    /// Its position in the chain's output set, once a scan or refresh found it there.
+    pub mmr_index: Option<u64>,
+    /// At `WalletSummary.last_confirmed_height`; zero while unconfirmed.
+    pub confirmations: u64,
+    /// The transaction that made the output or, once a send locks or spends it, that send.
+    pub tx_id: Option<u32>,
+}
+
+/// An output's state, as `epic-wallet outputs` shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStatus {
+    /// Not on chain yet: change or a received output of a transaction in progress.
+    Unconfirmed,
+    Unspent,
+    /// An input of a send that is not confirmed yet.
+    Locked,
+    Spent,
+}
+
+/// Where an output counts in `WalletSummary`. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputCategory {
+    Spendable,
+    AwaitingConfirmation,
+    AwaitingFinalization,
+    Immature,
+    Locked,
+}
+
 /// Where a transaction stands, as stored by the wallet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxStatus {

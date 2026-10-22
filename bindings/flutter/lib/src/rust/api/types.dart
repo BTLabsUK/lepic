@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `network`, `of`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Which Epic chain the wallet talks to.
 enum Chain { mainnet, floonet }
@@ -581,6 +581,26 @@ class NodeTip {
           runtimeType == other.runtimeType &&
           height == other.height &&
           nodeVersion == other.nodeVersion;
+}
+
+/// Where an output counts in `WalletSummary`. Values are only added, at the end.
+enum OutputCategory {
+  spendable,
+  awaitingConfirmation,
+  awaitingFinalization,
+  immature,
+  locked,
+}
+
+/// An output's state, as `epic-wallet outputs` shows it.
+enum OutputStatus {
+  /// Not on chain yet: change or a received output of a transaction in progress.
+  unconfirmed,
+  unspent,
+
+  /// An input of a send that is not confirmed yet.
+  locked,
+  spent,
 }
 
 /// A paid invoice, from `EpicWallet::pay_invoice`.
@@ -1336,6 +1356,77 @@ enum WalletEventKind {
   /// redelivered before its relay message was settled raises this again for the same
   /// `tx_id`; treat a repeat as the same bounce.
   invoiceBounced,
+}
+
+/// An output of the wallet, from `EpicWallet::outputs`.
+class WalletOutput {
+  /// The Pedersen commitment, 66 lowercase hex characters: the output's id on chain.
+  final String commitment;
+  final BigInt value;
+  final OutputStatus status;
+
+  /// Where it counts in `WalletSummary`; `None` for a spent output.
+  final OutputCategory? category;
+
+  /// A mining reward, spendable only from `lock_height`.
+  final bool isCoinbase;
+
+  /// The height it was mined at, or for an output not on chain yet, the tip it was made at.
+  final BigInt height;
+
+  /// The first height at which it may be spent.
+  final BigInt lockHeight;
+
+  /// Its position in the chain's output set, once a scan or refresh found it there.
+  final BigInt? mmrIndex;
+
+  /// At `WalletSummary.last_confirmed_height`; zero while unconfirmed.
+  final BigInt confirmations;
+
+  /// The transaction that made the output or, once a send locks or spends it, that send.
+  final int? txId;
+
+  const WalletOutput({
+    required this.commitment,
+    required this.value,
+    required this.status,
+    this.category,
+    required this.isCoinbase,
+    required this.height,
+    required this.lockHeight,
+    this.mmrIndex,
+    required this.confirmations,
+    this.txId,
+  });
+
+  @override
+  int get hashCode =>
+      commitment.hashCode ^
+      value.hashCode ^
+      status.hashCode ^
+      category.hashCode ^
+      isCoinbase.hashCode ^
+      height.hashCode ^
+      lockHeight.hashCode ^
+      mmrIndex.hashCode ^
+      confirmations.hashCode ^
+      txId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WalletOutput &&
+          runtimeType == other.runtimeType &&
+          commitment == other.commitment &&
+          value == other.value &&
+          status == other.status &&
+          category == other.category &&
+          isCoinbase == other.isCoinbase &&
+          height == other.height &&
+          lockHeight == other.lockHeight &&
+          mmrIndex == other.mmrIndex &&
+          confirmations == other.confirmations &&
+          txId == other.txId;
 }
 
 /// The balance of the default account, in the categories `epic-wallet info` reports.

@@ -19,7 +19,7 @@ use lepic_transport::file::{FILE, FileTransport};
 use lepic_transport::transport::{Destination, Location};
 use lepic_wallet::chain::TIP_STEP_BLOCKS;
 use lepic_wallet::event::Event;
-use lepic_wallet::refresh::RefreshOutcome;
+use lepic_wallet::refresh::{BalanceCategory, RefreshOutcome};
 use lepic_wallet::selection::{Selection, SelectionError, SelectionOptions, SelectionStrategy};
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{AccountError, WalletError};
@@ -455,4 +455,62 @@ fn an_estimate_leaves_out_what_minimum_confirmations_excludes_as_the_send_does()
 
 fn values(outputs: &[OutputRecord]) -> Vec<u64> {
     outputs.iter().map(|output| output.amount.value()).collect()
+}
+
+#[test]
+fn outputs_add_up_to_the_balance_in_each_category() {
+    let sender = funded_twice();
+    sender
+        .harness
+        .block_on(sender.wallet.send(
+            request(Amount::new(AMOUNT), SelectionStrategy::Smallest),
+            to_peer(),
+        ))
+        .unwrap();
+
+    let outputs = sender.wallet.outputs(ACCOUNT).unwrap();
+    let balance = sender.wallet.balance(ACCOUNT).unwrap();
+
+    let sum = |category| {
+        outputs
+            .iter()
+            .filter(|details| details.category == Some(category))
+            .map(|details| details.output.amount.value())
+            .sum::<u64>()
+    };
+    assert_eq!(sum(BalanceCategory::Spendable), balance.spendable.value());
+    assert_eq!(
+        sum(BalanceCategory::AwaitingConfirmation),
+        balance.awaiting_confirmation.value()
+    );
+    assert_eq!(
+        sum(BalanceCategory::AwaitingFinalization),
+        balance.awaiting_finalization.value()
+    );
+    assert_eq!(sum(BalanceCategory::Immature), balance.immature.value());
+    assert_eq!(sum(BalanceCategory::Locked), balance.locked.value());
+    let statuses: Vec<_> = outputs
+        .iter()
+        .map(|details| details.output.status)
+        .collect();
+    assert_eq!(statuses.len(), 3, "two funding outputs and the change");
+    assert!(statuses.contains(&OutputStatus::Locked));
+    assert!(statuses.contains(&OutputStatus::Unconfirmed));
+    for details in &outputs {
+        if details.output.status == OutputStatus::Unconfirmed {
+            assert_eq!(details.confirmations, 0);
+        } else {
+            assert_eq!(
+                details.confirmations,
+                (balance.height.value() + 1).saturating_sub(details.output.height.value()),
+                "none above the balance height"
+            );
+        }
+    }
+    assert!(matches!(
+        sender.wallet.outputs(AccountIndex(7)),
+        Err(WalletError::Account(AccountError::UnknownAccount(
+            AccountIndex(7)
+        )))
+    ));
 }

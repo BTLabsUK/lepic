@@ -290,6 +290,14 @@ void main() {
     expect(restoreResult.restored > BigInt.zero, isTrue);
     final restoredBalance = await restored.summary(refresh: true);
     expect(restoredBalance.total, aliceAfter.total);
+    final restoredOutputs = await restored.outputs();
+    expect(restoredOutputs, isNotEmpty);
+    expect(
+      restoredOutputs
+          .where((output) => output.status == OutputStatus.unspent)
+          .fold(BigInt.zero, (sum, output) => sum + output.value),
+      restoredBalance.total,
+    );
     final restoredHistory = await restored.transactions();
     expect(restoredHistory, isNotEmpty);
     expect(restoredHistory.every((tx) => tx.messages.isEmpty), isTrue);

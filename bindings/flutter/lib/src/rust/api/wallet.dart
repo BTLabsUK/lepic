@@ -419,6 +419,11 @@ abstract class EpicWallet implements RustOpaqueInterface {
     sealedPassword: sealedPassword,
   );
 
+  /// Every output of the default account, spent ones included, ordered by commitment, from
+  /// the store alone. The values of the outputs in each `category` add up to that part of
+  /// `summary(refresh: false)`; refresh first for the node's view.
+  Future<List<WalletOutput>> outputs();
+
   /// Pays the waiting invoice `slate_id` and delivers the payment over Epicbox to the
   /// sender's allowed address. `amount` is what the user typed: an invoice for any other
   /// amount is refused, as `epic-wallet pay` refuses it. Inputs need `minimum_confirmations`;

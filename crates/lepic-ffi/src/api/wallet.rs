@@ -27,7 +27,7 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, LegacyImport, ListenerEvent, ListenerEventKind,
     NodeTip, ReceivedSlate, RefreshProgress, ScanProgress, SentTx, Slate, SlateInfo,
-    TransactionDetails, WalletConfig, WalletEvent, WalletSummary,
+    TransactionDetails, WalletConfig, WalletEvent, WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -535,6 +535,14 @@ impl EpicWallet {
             }
         })
         .await
+    }
+
+    /// Every output of the default account, spent ones included, ordered by commitment, from
+    /// the store alone. The values of the outputs in each `category` add up to that part of
+    /// `summary(refresh: false)`; refresh first for the node's view.
+    pub async fn outputs(&self) -> Result<Vec<WalletOutput>, WalletError> {
+        self.run("outputs", |session| async move { session.outputs() })
+            .await
     }
 
     /// Every transaction of the default account, newest first, from the store alone.
