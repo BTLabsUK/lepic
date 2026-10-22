@@ -271,9 +271,9 @@ pub struct ScanSummary {
 /// Which scan stored an entry for an output it found with no record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundDuring {
-    /// The scan from genesis a restored or imported wallet needs before it hands out keys.
+    /// The scan from genesis a wallet rebuilt from its seed needs before it hands out keys.
     Restore,
-    /// Any other scan.
+    /// Any other scan, including the first one of a wallet made with a new seed.
     Rescan,
 }
 

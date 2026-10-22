@@ -102,11 +102,12 @@ class FinalizedTx {
 
 /// Which scan stored an entry for an output it found with no record.
 enum FoundDuring {
-  /// The scan a restored or imported wallet runs from genesis: a payment from before the
-  /// restore.
+  /// The first scan from the beginning of the chain after the wallet was created from a
+  /// recovery phrase or a `wallet.seed` file: an output the wallet held before that.
   restore,
 
-  /// A later scan, such as a rescan the user started.
+  /// Any other scan: a later rescan, or the first scan of a wallet created with a new seed.
+  /// The output may still be older than the scan.
   rescan,
 }
 

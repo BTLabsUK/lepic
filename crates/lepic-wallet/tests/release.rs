@@ -814,6 +814,12 @@ fn a_late_confirmation_takes_over_the_change_a_scan_restored_first() {
         sends + 1,
         "under an entry of its own"
     );
+    let found_key = format!("scan.found.{}", restored[0].tx.unwrap());
+    let found = |key: &str| releasing.store.read(|repos| repos.setting(key)).unwrap();
+    assert!(
+        found(&found_key).is_some(),
+        "the scan recorded how it found it"
+    );
 
     releasing.refresh();
 
@@ -825,6 +831,7 @@ fn a_late_confirmation_takes_over_the_change_a_scan_restored_first() {
     assert_eq!(change[0].status, OutputStatus::Unspent);
     let history = releasing.history();
     assert_eq!(history.len(), sends, "the restored entry is dropped");
+    assert_eq!(found(&found_key), None, "with what the scan recorded of it");
     let credited: u64 = history
         .iter()
         .map(|details| details.transaction.entry.amount_credited.value())

@@ -276,10 +276,11 @@ pub struct TransactionDetails {
 /// Which scan stored an entry for an output it found with no record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundDuring {
-    /// The scan a restored or imported wallet runs from genesis: a payment from before the
-    /// restore.
+    /// The first scan from the beginning of the chain after the wallet was created from a
+    /// recovery phrase or a `wallet.seed` file: an output the wallet held before that.
     Restore,
-    /// A later scan, such as a rescan the user started.
+    /// Any other scan: a later rescan, or the first scan of a wallet created with a new seed.
+    /// The output may still be older than the scan.
     Rescan,
 }
 
