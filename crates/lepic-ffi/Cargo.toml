@@ -27,6 +27,7 @@ lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-store.workspace = true
 lepic-telemetry.workspace = true
+lepic-tor.workspace = true
 lepic-transport.workspace = true
 lepic-wallet.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
@@ -36,6 +37,7 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+hmac.workspace = true
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 lepic-ffi = { path = ".", features = ["mock"] }
 serde_json = { workspace = true, features = ["std"] }

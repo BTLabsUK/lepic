@@ -12,6 +12,8 @@ use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
 
 mod http;
+#[cfg(unix)]
+mod tor;
 
 const PIN: &str = "471100";
 
@@ -508,6 +510,7 @@ fn every_synchronous_api_function_runs_under_the_panic_guard() {
         ("runtime.rs", include_str!("api/runtime.rs")),
         ("secret_store.rs", include_str!("api/secret_store.rs")),
         ("testing.rs", include_str!("api/testing.rs")),
+        ("tor.rs", include_str!("api/tor.rs")),
         ("types.rs", include_str!("api/types.rs")),
         ("wallet.rs", include_str!("api/wallet.rs")),
     ];

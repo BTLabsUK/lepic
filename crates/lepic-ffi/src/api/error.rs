@@ -90,6 +90,16 @@ pub enum WalletErrorKind {
     /// The address uses plain `http` to another computer, and the user did not agree to send
     /// unencrypted. Nothing was stored; ask, then pass `allow_plain_http`, or use `https`.
     PlainHttpNotAllowed,
+    /// The address given to a Tor send is not an onion v3 address, or has a typo. Nothing was
+    /// stored.
+    OnionAddressInvalid,
+    /// The wallet's tor is not running or not yet connected to the Tor network. Start it with
+    /// `start_tor` and wait for `Bootstrapped`. A send that failed with it before anything was
+    /// sent stored nothing; one whose tor stopped during the delivery is stored as sent.
+    TorNotRunning,
+    /// The other wallet is not online with Tor on, or could not be reached in time. The send
+    /// is stored as sent with its inputs locked: resend it later or cancel it.
+    OnionUnreachable,
 }
 
 impl WalletErrorKind {
@@ -130,6 +140,9 @@ impl WalletErrorKind {
             Self::DamagedDatabase => 37,
             Self::HttpUrlInvalid => 40,
             Self::PlainHttpNotAllowed => 41,
+            Self::OnionAddressInvalid => 42,
+            Self::TorNotRunning => 43,
+            Self::OnionUnreachable => 44,
         }
     }
 }
@@ -419,6 +432,9 @@ mod tests {
             (K::DamagedDatabase, 37),
             (K::HttpUrlInvalid, 40),
             (K::PlainHttpNotAllowed, 41),
+            (K::OnionAddressInvalid, 42),
+            (K::TorNotRunning, 43),
+            (K::OnionUnreachable, 44),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");

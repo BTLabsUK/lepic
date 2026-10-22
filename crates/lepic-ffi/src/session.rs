@@ -52,9 +52,12 @@ use crate::vault_port::{AppVault, SharedStorage, VAULT_KEY, VaultBytes, vault_er
 
 mod app_data;
 mod http;
+mod tor;
 
 #[cfg(test)]
 pub(crate) use http::HttpReport;
+#[cfg(test)]
+pub(crate) use tor::TorReport;
 mod invoice;
 
 type EngineWallet = Wallet<Node, SqliteStores, AppVault>;
@@ -109,6 +112,12 @@ pub(crate) struct Session {
     http: lepic_foreign::HttpTransport,
     http_listener: Mutex<http::HttpListener>,
     http_starts: AtomicU64,
+    /// Holds the answers of Tor sends until they are finalized.
+    tor: lepic_tor::TorTransport,
+    tor_slot: Mutex<tor::TorSlot>,
+    tor_starts: AtomicU64,
+    #[cfg(test)]
+    tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
     scan: Mutex<Option<ScanCancel>>,
     balance: Mutex<Option<Balance>>,
     claim: DirClaim,
@@ -243,6 +252,11 @@ impl Session {
             .register(Box::new(http.clone()))
             .map_err(|error| invalid(error.to_string()))?;
         ids.push(lepic_foreign::TRANSPORT_ID);
+        let tor = tor::tor_transport();
+        transports
+            .register(Box::new(tor.clone()))
+            .map_err(|error| invalid(error.to_string()))?;
+        ids.push(lepic_tor::TRANSPORT_ID);
         let engine_config = lepic_wallet::WalletConfig {
             name: WalletName::new(WALLET_NAME).map_err(|error| invalid(error.to_string()))?,
             network,
@@ -273,6 +287,11 @@ impl Session {
             http,
             http_listener: Mutex::default(),
             http_starts: AtomicU64::new(0),
+            tor,
+            tor_slot: Mutex::default(),
+            tor_starts: AtomicU64::new(0),
+            #[cfg(test)]
+            tor_timings: Mutex::default(),
             scan: Mutex::default(),
             balance: Mutex::default(),
             claim,
@@ -287,7 +306,7 @@ impl Session {
         &self.store
     }
 
-    /// Stops the listeners and any scan, forgets the cached balance and the relay identity, and
+    /// Stops tor, the listeners and any scan, forgets the cached balance and the relay identity, and
     /// drops the root key. Operations already running finish with the keys they started with.
     pub(crate) fn lock(&self) {
         if let Some(listener) = lock(&self.listener).take() {
@@ -301,7 +320,9 @@ impl Session {
             epicbox.detach();
         }
         self.engine.lock();
-        // After the engine locks, so a listener start that saw it unlocked is in the slot.
+        // After the engine locks, so a start that saw it unlocked is in its slot. Tor stops
+        // before the listeners it forwards to.
+        self.stop_tor();
         self.stop_http_listener();
     }
 

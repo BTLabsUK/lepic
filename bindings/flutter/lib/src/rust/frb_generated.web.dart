@@ -12,6 +12,7 @@ import 'api/http.dart';
 import 'api/runtime.dart';
 import 'api/secret_store.dart';
 import 'api/testing.dart';
+import 'api/tor.dart';
 import 'api/types.dart';
 import 'api/wallet.dart';
 
@@ -203,6 +204,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<TorEvent> dco_decode_StreamSink_tor_event_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<WalletEvent> dco_decode_StreamSink_wallet_event_Sse(
     dynamic raw,
   );
@@ -227,6 +231,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SessionState dco_decode_box_autoadd_session_state(dynamic raw);
+
+  @protected
+  TorFailureKind dco_decode_box_autoadd_tor_failure_kind(dynamic raw);
 
   @protected
   TransportState dco_decode_box_autoadd_transport_state(dynamic raw);
@@ -373,6 +380,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SessionState? dco_decode_opt_box_autoadd_session_state(dynamic raw);
 
   @protected
+  TorFailureKind? dco_decode_opt_box_autoadd_tor_failure_kind(dynamic raw);
+
+  @protected
   TransportState? dco_decode_opt_box_autoadd_transport_state(dynamic raw);
 
   @protected
@@ -434,6 +444,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SlateStage dco_decode_slate_stage(dynamic raw);
+
+  @protected
+  TorEvent dco_decode_tor_event(dynamic raw);
+
+  @protected
+  TorEventKind dco_decode_tor_event_kind(dynamic raw);
+
+  @protected
+  TorFailureKind dco_decode_tor_failure_kind(dynamic raw);
+
+  @protected
+  TorStatus dco_decode_tor_status(dynamic raw);
+
+  @protected
+  TorStatusKind dco_decode_tor_status_kind(dynamic raw);
 
   @protected
   TransactionDetails dco_decode_transaction_details(dynamic raw);
@@ -625,6 +650,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<TorEvent> sse_decode_StreamSink_tor_event_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RustStreamSink<WalletEvent> sse_decode_StreamSink_wallet_event_Sse(
     SseDeserializer deserializer,
   );
@@ -653,6 +683,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SessionState sse_decode_box_autoadd_session_state(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  TorFailureKind sse_decode_box_autoadd_tor_failure_kind(
     SseDeserializer deserializer,
   );
 
@@ -829,6 +864,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  TorFailureKind? sse_decode_opt_box_autoadd_tor_failure_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   TransportState? sse_decode_opt_box_autoadd_transport_state(
     SseDeserializer deserializer,
   );
@@ -894,6 +934,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SlateStage sse_decode_slate_stage(SseDeserializer deserializer);
+
+  @protected
+  TorEvent sse_decode_tor_event(SseDeserializer deserializer);
+
+  @protected
+  TorEventKind sse_decode_tor_event_kind(SseDeserializer deserializer);
+
+  @protected
+  TorFailureKind sse_decode_tor_failure_kind(SseDeserializer deserializer);
+
+  @protected
+  TorStatus sse_decode_tor_status(SseDeserializer deserializer);
+
+  @protected
+  TorStatusKind sse_decode_tor_status_kind(SseDeserializer deserializer);
 
   @protected
   TransactionDetails sse_decode_transaction_details(
@@ -1127,6 +1182,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_tor_event_Sse(
+    RustStreamSink<TorEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_wallet_event_Sse(
     RustStreamSink<WalletEvent> self,
     SseSerializer serializer,
@@ -1165,6 +1226,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_session_state(
     SessionState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_tor_failure_kind(
+    TorFailureKind self,
     SseSerializer serializer,
   );
 
@@ -1373,6 +1440,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_tor_failure_kind(
+    TorFailureKind? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_transport_state(
     TransportState? self,
     SseSerializer serializer,
@@ -1449,6 +1522,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_slate_stage(SlateStage self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_tor_event(TorEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_tor_event_kind(TorEventKind self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_tor_failure_kind(
+    TorFailureKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_tor_status(TorStatus self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_tor_status_kind(TorStatusKind self, SseSerializer serializer);
 
   @protected
   void sse_encode_transaction_details(

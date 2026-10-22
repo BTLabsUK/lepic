@@ -9,6 +9,7 @@ import 'api/http.dart';
 import 'api/runtime.dart';
 import 'api/secret_store.dart';
 import 'api/testing.dart';
+import 'api/tor.dart';
 import 'api/types.dart';
 import 'api/wallet.dart';
 
@@ -76,7 +77,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1671866040;
+  int get rustContentHash => 1300741680;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -240,6 +241,10 @@ abstract class RustLibApi extends BaseApi {
     required String sealedPassword,
   });
 
+  Future<String> crateApiWalletEpicWalletOnionAddress({
+    required EpicWallet that,
+  });
+
   Future<EpicWallet> crateApiWalletEpicWalletOpen({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -319,6 +324,12 @@ abstract class RustLibApi extends BaseApi {
     required int txId,
   });
 
+  Future<HttpResentTx> crateApiWalletEpicWalletResendTor({
+    required EpicWallet that,
+    required int txId,
+    required String onion,
+  });
+
   Future<String> crateApiWalletEpicWalletRotateInvoiceAddress({
     required EpicWallet that,
   });
@@ -358,6 +369,14 @@ abstract class RustLibApi extends BaseApi {
     String? message,
   });
 
+  Future<HttpSentTx> crateApiWalletEpicWalletSendTor({
+    required EpicWallet that,
+    required BigInt amount,
+    required BigInt minimumConfirmations,
+    required String onion,
+    String? message,
+  });
+
   Future<void> crateApiWalletEpicWalletSetInvoiceAddressIndex({
     required EpicWallet that,
     required int index,
@@ -373,9 +392,17 @@ abstract class RustLibApi extends BaseApi {
     required EpicWallet that,
   });
 
+  Stream<TorEvent> crateApiWalletEpicWalletStartTor({
+    required EpicWallet that,
+    required String torBinary,
+    String? libDir,
+  });
+
   void crateApiWalletEpicWalletStopHttpListener({required EpicWallet that});
 
   void crateApiWalletEpicWalletStopListener({required EpicWallet that});
+
+  void crateApiWalletEpicWalletStopTor({required EpicWallet that});
 
   Future<WalletSummary> crateApiWalletEpicWalletSummary({
     required EpicWallet that,
@@ -386,6 +413,8 @@ abstract class RustLibApi extends BaseApi {
     required EpicWallet that,
     BigInt? expirySecs,
   });
+
+  TorStatus crateApiWalletEpicWalletTorStatus({required EpicWallet that});
 
   Future<TransactionDetails> crateApiWalletEpicWalletTransaction({
     required EpicWallet that,
@@ -519,6 +548,8 @@ abstract class RustLibApi extends BaseApi {
   });
 
   bool crateApiWalletValidateMnemonic({required String phrase});
+
+  bool crateApiTorValidateOnionAddress({required String address});
 
   Future<int> crateApiErrorWalletErrorKindCode({required WalletErrorKind that});
 
@@ -1721,6 +1752,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiWalletEpicWalletOnionAddress({
+    required EpicWallet that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerEpicWallet(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 30,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiWalletEpicWalletOnionAddressConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletOnionAddressConstMeta =>
+      const TaskConstMeta(
+        debugName: "EpicWallet_onion_address",
+        argNames: ["that"],
+      );
+
+  @override
   Future<EpicWallet> crateApiWalletEpicWalletOpen({
     required LepicRuntime runtime,
     required WalletConfig config,
@@ -1744,7 +1811,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1783,7 +1850,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1830,7 +1897,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1875,7 +1942,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1919,7 +1986,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1957,7 +2024,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1995,7 +2062,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 36,
+            funcId: 37,
             port: port_,
           );
         },
@@ -2033,7 +2100,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 38,
             port: port_,
           );
         },
@@ -2072,7 +2139,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 38,
+              funcId: 39,
               port: port_,
             );
           },
@@ -2112,7 +2179,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 39,
+            funcId: 40,
             port: port_,
           );
         },
@@ -2150,7 +2217,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 40,
+            funcId: 41,
             port: port_,
           );
         },
@@ -2188,7 +2255,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 42,
             port: port_,
           );
         },
@@ -2230,7 +2297,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 43,
             port: port_,
           );
         },
@@ -2268,7 +2335,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 43,
+            funcId: 44,
             port: port_,
           );
         },
@@ -2290,6 +2357,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<HttpResentTx> crateApiWalletEpicWalletResendTor({
+    required EpicWallet that,
+    required int txId,
+    required String onion,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerEpicWallet(
+            that,
+            serializer,
+          );
+          sse_encode_u_32(txId, serializer);
+          sse_encode_String(onion, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 45,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_http_resent_tx,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiWalletEpicWalletResendTorConstMeta,
+        argValues: [that, txId, onion],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletResendTorConstMeta =>
+      const TaskConstMeta(
+        debugName: "EpicWallet_resend_tor",
+        argNames: ["that", "txId", "onion"],
+      );
+
+  @override
   Future<String> crateApiWalletEpicWalletRotateInvoiceAddress({
     required EpicWallet that,
   }) {
@@ -2304,7 +2411,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 44,
+            funcId: 46,
             port: port_,
           );
         },
@@ -2345,7 +2452,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 45,
+              funcId: 47,
               port: port_,
             );
           },
@@ -2385,7 +2492,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 48,
             port: port_,
           );
         },
@@ -2429,7 +2536,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 47,
+            funcId: 49,
             port: port_,
           );
         },
@@ -2479,7 +2586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 48,
+            funcId: 50,
             port: port_,
           );
         },
@@ -2525,7 +2632,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 49,
+            funcId: 51,
             port: port_,
           );
         },
@@ -2561,6 +2668,56 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<HttpSentTx> crateApiWalletEpicWalletSendTor({
+    required EpicWallet that,
+    required BigInt amount,
+    required BigInt minimumConfirmations,
+    required String onion,
+    String? message,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerEpicWallet(
+            that,
+            serializer,
+          );
+          sse_encode_u_64(amount, serializer);
+          sse_encode_u_64(minimumConfirmations, serializer);
+          sse_encode_String(onion, serializer);
+          sse_encode_opt_String(message, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 52,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_http_sent_tx,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+        constMeta: kCrateApiWalletEpicWalletSendTorConstMeta,
+        argValues: [that, amount, minimumConfirmations, onion, message],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletSendTorConstMeta =>
+      const TaskConstMeta(
+        debugName: "EpicWallet_send_tor",
+        argNames: [
+          "that",
+          "amount",
+          "minimumConfirmations",
+          "onion",
+          "message",
+        ],
+      );
+
+  @override
   Future<void> crateApiWalletEpicWalletSetInvoiceAddressIndex({
     required EpicWallet that,
     required int index,
@@ -2577,7 +2734,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 50,
+            funcId: 53,
             port: port_,
           );
         },
@@ -2620,7 +2777,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 51,
+              funcId: 54,
               port: port_,
             );
           },
@@ -2661,7 +2818,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 52,
+              funcId: 55,
               port: port_,
             );
           },
@@ -2685,6 +2842,51 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Stream<TorEvent> crateApiWalletEpicWalletStartTor({
+    required EpicWallet that,
+    required String torBinary,
+    String? libDir,
+  }) {
+    final events = RustStreamSink<TorEvent>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerEpicWallet(
+              that,
+              serializer,
+            );
+            sse_encode_String(torBinary, serializer);
+            sse_encode_opt_String(libDir, serializer);
+            sse_encode_StreamSink_tor_event_Sse(events, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 56,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: null,
+          ),
+          constMeta: kCrateApiWalletEpicWalletStartTorConstMeta,
+          argValues: [that, torBinary, libDir, events],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return events.stream;
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletStartTorConstMeta =>
+      const TaskConstMeta(
+        debugName: "EpicWallet_start_tor",
+        argNames: ["that", "torBinary", "libDir", "events"],
+      );
+
+  @override
   void crateApiWalletEpicWalletStopHttpListener({required EpicWallet that}) {
     return handler.executeSync(
       SyncTask(
@@ -2694,7 +2896,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 53)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 57)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2723,7 +2925,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 54)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 58)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2743,6 +2945,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  void crateApiWalletEpicWalletStopTor({required EpicWallet that}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerEpicWallet(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 59)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWalletEpicWalletStopTorConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletStopTorConstMeta =>
+      const TaskConstMeta(debugName: "EpicWallet_stop_tor", argNames: ["that"]);
+
+  @override
   Future<WalletSummary> crateApiWalletEpicWalletSummary({
     required EpicWallet that,
     required bool refresh,
@@ -2759,7 +2987,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 55,
+            funcId: 60,
             port: port_,
           );
         },
@@ -2797,7 +3025,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 56,
+            funcId: 61,
             port: port_,
           );
         },
@@ -2819,6 +3047,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  TorStatus crateApiWalletEpicWalletTorStatus({required EpicWallet that}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerEpicWallet(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 62)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_tor_status,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWalletEpicWalletTorStatusConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletEpicWalletTorStatusConstMeta =>
+      const TaskConstMeta(
+        debugName: "EpicWallet_tor_status",
+        argNames: ["that"],
+      );
+
+  @override
   Future<TransactionDetails> crateApiWalletEpicWalletTransaction({
     required EpicWallet that,
     required int txId,
@@ -2835,7 +3092,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 57,
+            funcId: 63,
             port: port_,
           );
         },
@@ -2871,7 +3128,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 58,
+            funcId: 64,
             port: port_,
           );
         },
@@ -2907,7 +3164,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 59,
+            funcId: 65,
             port: port_,
           );
         },
@@ -2946,7 +3203,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_log_level(level, serializer);
           sse_encode_String(tag, serializer);
           sse_encode_String(message, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 60)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -2983,7 +3240,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 61,
+              funcId: 67,
               port: port_,
             );
           },
@@ -3013,7 +3270,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_log_level(logLevel, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 62)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 68)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -3052,7 +3309,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 63,
+            funcId: 69,
             port: port_,
           );
         },
@@ -3083,7 +3340,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 64)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 70)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3122,7 +3379,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_chain(chain, serializer);
           sse_encode_u_64(amount, serializer);
           sse_encode_u_32(child, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 71)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3151,7 +3408,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 72)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_u_64,
@@ -3177,7 +3434,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 67)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 73)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3206,7 +3463,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 68)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 74)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3232,7 +3489,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_u_64(height, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 69)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 75)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -3259,7 +3516,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 70)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 76)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3288,7 +3545,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 71)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 77)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3317,7 +3574,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 72)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_u_32,
@@ -3350,7 +3607,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_log_level(logLevel, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 73)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 79)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -3389,7 +3646,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             relay,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 74)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 80)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -3423,7 +3680,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_u_64(height, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 75)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3456,7 +3713,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_bool(unreachable, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 76)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 82)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3482,7 +3739,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_chain(chain, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 77)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -3513,7 +3770,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(address, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 84)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_u_32,
@@ -3546,7 +3803,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_bool(refusing, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 79)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -3575,7 +3832,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 80)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 86)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -3608,7 +3865,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_list_prim_u_8_loose(seed, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 87)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -3648,7 +3905,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 82,
+            funcId: 88,
             port: port_,
           );
         },
@@ -3693,7 +3950,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 83,
+            funcId: 89,
             port: port_,
           );
         },
@@ -3736,7 +3993,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 84,
+            funcId: 90,
             port: port_,
           );
         },
@@ -3765,7 +4022,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 85,
+            funcId: 91,
             port: port_,
           );
         },
@@ -3797,7 +4054,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 86,
+            funcId: 92,
             port: port_,
           );
         },
@@ -3834,7 +4091,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 87,
+            funcId: 93,
             port: port_,
           );
         },
@@ -3865,7 +4122,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(address, serializer);
           sse_encode_chain(chain, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 88)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 94)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -3891,7 +4148,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(phrase, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 89)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 95)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -3908,6 +4165,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "validate_mnemonic", argNames: ["phrase"]);
 
   @override
+  bool crateApiTorValidateOnionAddress({required String address}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(address, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 96)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_bool,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTorValidateOnionAddressConstMeta,
+        argValues: [address],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTorValidateOnionAddressConstMeta =>
+      const TaskConstMeta(
+        debugName: "validate_onion_address",
+        argNames: ["address"],
+      );
+
+  @override
   Future<int> crateApiErrorWalletErrorKindCode({
     required WalletErrorKind that,
   }) {
@@ -3919,7 +4202,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 90,
+            funcId: 97,
             port: port_,
           );
         },
@@ -3960,7 +4243,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 91,
+            funcId: 98,
             port: port_,
           );
         },
@@ -4329,6 +4612,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<TorEvent> dco_decode_StreamSink_tor_event_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
   RustStreamSink<WalletEvent> dco_decode_StreamSink_wallet_event_Sse(
     dynamic raw,
   ) {
@@ -4376,6 +4665,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SessionState dco_decode_box_autoadd_session_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_session_state(raw);
+  }
+
+  @protected
+  TorFailureKind dco_decode_box_autoadd_tor_failure_kind(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_tor_failure_kind(raw);
   }
 
   @protected
@@ -4798,6 +5093,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  TorFailureKind? dco_decode_opt_box_autoadd_tor_failure_kind(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_tor_failure_kind(raw);
+  }
+
+  @protected
   TransportState? dco_decode_opt_box_autoadd_transport_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_transport_state(raw);
@@ -5000,6 +5301,56 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SlateStage dco_decode_slate_stage(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return SlateStage.values[raw as int];
+  }
+
+  @protected
+  TorEvent dco_decode_tor_event(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return TorEvent(
+      kind: dco_decode_tor_event_kind(arr[0]),
+      progress: dco_decode_opt_box_autoadd_u_8(arr[1]),
+      onion: dco_decode_opt_String(arr[2]),
+      failure: dco_decode_opt_box_autoadd_tor_failure_kind(arr[3]),
+      txId: dco_decode_opt_box_autoadd_u_32(arr[4]),
+      amount: dco_decode_opt_box_autoadd_u_64(arr[5]),
+      repeated: dco_decode_bool(arr[6]),
+      refusal: dco_decode_opt_box_autoadd_http_refusal(arr[7]),
+    );
+  }
+
+  @protected
+  TorEventKind dco_decode_tor_event_kind(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return TorEventKind.values[raw as int];
+  }
+
+  @protected
+  TorFailureKind dco_decode_tor_failure_kind(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return TorFailureKind.values[raw as int];
+  }
+
+  @protected
+  TorStatus dco_decode_tor_status(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return TorStatus(
+      kind: dco_decode_tor_status_kind(arr[0]),
+      progress: dco_decode_opt_box_autoadd_u_8(arr[1]),
+      onion: dco_decode_opt_String(arr[2]),
+      failure: dco_decode_opt_box_autoadd_tor_failure_kind(arr[3]),
+    );
+  }
+
+  @protected
+  TorStatusKind dco_decode_tor_status_kind(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return TorStatusKind.values[raw as int];
   }
 
   @protected
@@ -5445,6 +5796,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<TorEvent> sse_decode_StreamSink_tor_event_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
   RustStreamSink<WalletEvent> sse_decode_StreamSink_wallet_event_Sse(
     SseDeserializer deserializer,
   ) {
@@ -5501,6 +5860,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_session_state(deserializer));
+  }
+
+  @protected
+  TorFailureKind sse_decode_box_autoadd_tor_failure_kind(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_tor_failure_kind(deserializer));
   }
 
   @protected
@@ -6033,6 +6400,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  TorFailureKind? sse_decode_opt_box_autoadd_tor_failure_kind(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_tor_failure_kind(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   TransportState? sse_decode_opt_box_autoadd_transport_state(
     SseDeserializer deserializer,
   ) {
@@ -6271,6 +6651,65 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return SlateStage.values[inner];
+  }
+
+  @protected
+  TorEvent sse_decode_tor_event(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_tor_event_kind(deserializer);
+    var var_progress = sse_decode_opt_box_autoadd_u_8(deserializer);
+    var var_onion = sse_decode_opt_String(deserializer);
+    var var_failure = sse_decode_opt_box_autoadd_tor_failure_kind(deserializer);
+    var var_txId = sse_decode_opt_box_autoadd_u_32(deserializer);
+    var var_amount = sse_decode_opt_box_autoadd_u_64(deserializer);
+    var var_repeated = sse_decode_bool(deserializer);
+    var var_refusal = sse_decode_opt_box_autoadd_http_refusal(deserializer);
+    return TorEvent(
+      kind: var_kind,
+      progress: var_progress,
+      onion: var_onion,
+      failure: var_failure,
+      txId: var_txId,
+      amount: var_amount,
+      repeated: var_repeated,
+      refusal: var_refusal,
+    );
+  }
+
+  @protected
+  TorEventKind sse_decode_tor_event_kind(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return TorEventKind.values[inner];
+  }
+
+  @protected
+  TorFailureKind sse_decode_tor_failure_kind(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return TorFailureKind.values[inner];
+  }
+
+  @protected
+  TorStatus sse_decode_tor_status(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_tor_status_kind(deserializer);
+    var var_progress = sse_decode_opt_box_autoadd_u_8(deserializer);
+    var var_onion = sse_decode_opt_String(deserializer);
+    var var_failure = sse_decode_opt_box_autoadd_tor_failure_kind(deserializer);
+    return TorStatus(
+      kind: var_kind,
+      progress: var_progress,
+      onion: var_onion,
+      failure: var_failure,
+    );
+  }
+
+  @protected
+  TorStatusKind sse_decode_tor_status_kind(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return TorStatusKind.values[inner];
   }
 
   @protected
@@ -6858,6 +7297,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_tor_event_Sse(
+    RustStreamSink<TorEvent> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_tor_event,
+          decodeErrorData: sse_decode_wallet_error,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_StreamSink_wallet_event_Sse(
     RustStreamSink<WalletEvent> self,
     SseSerializer serializer,
@@ -6929,6 +7385,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_session_state(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_tor_failure_kind(
+    TorFailureKind self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_tor_failure_kind(self, serializer);
   }
 
   @protected
@@ -7384,6 +7849,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_tor_failure_kind(
+    TorFailureKind? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_tor_failure_kind(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_transport_state(
     TransportState? self,
     SseSerializer serializer,
@@ -7577,6 +8055,52 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_slate_stage(SlateStage self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_tor_event(TorEvent self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_tor_event_kind(self.kind, serializer);
+    sse_encode_opt_box_autoadd_u_8(self.progress, serializer);
+    sse_encode_opt_String(self.onion, serializer);
+    sse_encode_opt_box_autoadd_tor_failure_kind(self.failure, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.txId, serializer);
+    sse_encode_opt_box_autoadd_u_64(self.amount, serializer);
+    sse_encode_bool(self.repeated, serializer);
+    sse_encode_opt_box_autoadd_http_refusal(self.refusal, serializer);
+  }
+
+  @protected
+  void sse_encode_tor_event_kind(TorEventKind self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_tor_failure_kind(
+    TorFailureKind self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_tor_status(TorStatus self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_tor_status_kind(self.kind, serializer);
+    sse_encode_opt_box_autoadd_u_8(self.progress, serializer);
+    sse_encode_opt_String(self.onion, serializer);
+    sse_encode_opt_box_autoadd_tor_failure_kind(self.failure, serializer);
+  }
+
+  @protected
+  void sse_encode_tor_status_kind(
+    TorStatusKind self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
   }
@@ -8009,6 +8533,14 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
     sealedPassword: sealedPassword,
   );
 
+  /// The wallet's onion address, `<56 characters>.onion`: its payment-proof address in onion
+  /// form, which `epic-wallet address` prints too. It is known without tor running and stays
+  /// the same after a restore from the phrase.
+  ///
+  /// Fails with `Locked` while the wallet is locked.
+  Future<String> onionAddress() =>
+      RustLib.instance.api.crateApiWalletEpicWalletOnionAddress(that: this);
+
   /// Decrypts a file from [`EpicWallet::seal_app_data`], or a `.wfeh` backup the app wrote
   /// before it used LEPIC, and returns its payload.
   ///
@@ -8139,6 +8671,20 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   Future<void> resendInvoicePayment({required int txId}) => RustLib.instance.api
       .crateApiWalletEpicWalletResendInvoicePayment(that: this, txId: txId);
 
+  /// Delivers the slate of send `tx_id` again, to the wallet at `onion`, which may be
+  /// another address or method than the first attempt, then finalizes and posts as
+  /// [`EpicWallet::send_tor`] does.
+  ///
+  /// Fails with `OnionAddressInvalid` or `TorNotRunning` before anything is sent,
+  /// `InvalidArgument` when `tx_id` is not a send waiting for its answer, and otherwise as
+  /// [`EpicWallet::send_tor`].
+  Future<HttpResentTx> resendTor({required int txId, required String onion}) =>
+      RustLib.instance.api.crateApiWalletEpicWalletResendTor(
+        that: this,
+        txId: txId,
+        onion: onion,
+      );
+
   /// Moves the invoice address to the next index and returns it. The old address is
   /// abandoned: messages to it are no longer read, so give the new one to every service.
   Future<String> rotateInvoiceAddress() => RustLib.instance.api
@@ -8223,6 +8769,33 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
     message: message,
   );
 
+  /// Sends `amount` to the wallet at `onion` over the wallet's tor, then finalizes its
+  /// answer and posts the transaction, as [`EpicWallet::send_http`] does. `onion` is read as
+  /// [`validate_onion_address`] reads it; the other wallet is always reached at port 80.
+  /// Emits `Sending` on the tor stream; an onion that is not online takes up to about 150
+  /// seconds to fail.
+  ///
+  /// Fails, storing nothing, with `OnionAddressInvalid` for the address, `TorNotRunning`
+  /// when tor has not bootstrapped, and the errors of [`EpicWallet::estimate_fee`]. Fails
+  /// with `OnionUnreachable` when the other wallet is not online or could not be reached in
+  /// time, and with `TransportFailed` when it refused or the exchange broke: the send is then
+  /// stored as sent with its inputs locked, so deliver it again with
+  /// [`EpicWallet::resend_tor`] or [`EpicWallet::resend_http`], or cancel it. A tor that
+  /// stops during the send fails it the same way with `TorNotRunning`. Fails as
+  /// [`EpicWallet::send_http`] does when the answer could not be finalized.
+  Future<HttpSentTx> sendTor({
+    required BigInt amount,
+    required BigInt minimumConfirmations,
+    required String onion,
+    String? message,
+  }) => RustLib.instance.api.crateApiWalletEpicWalletSendTor(
+    that: this,
+    amount: amount,
+    minimumConfirmations: minimumConfirmations,
+    onion: onion,
+    message: message,
+  );
+
   /// Sets the address index of the invoice address, for example to the one the app kept
   /// before the wallet was restored from its phrase, which does not record it. Messages to
   /// the previous invoice address are no longer read. Fails with `InvalidArgument` for 0,
@@ -8259,6 +8832,22 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   Stream<ListenerEvent> startListener() =>
       RustLib.instance.api.crateApiWalletEpicWalletStartListener(that: this);
 
+  /// Starts the wallet's tor from the binary at `tor_binary`, with `lib_dir` on the library
+  /// path for the libraries the Tor Expert Bundle ships on Linux, and streams what it does
+  /// until [`EpicWallet::stop_tor`], [`EpicWallet::lock`] or the wallet is dropped. Tor keeps
+  /// its files in `tor` inside the wallet's data directory.
+  ///
+  /// The first event is `Starting`, or `Failed` with `Listener` when the wallet's listener
+  /// could not start; the last one is always `Stopped`. A wallet runs one tor: a call while one
+  /// runs or starts gets a stream that ends at once. On a locked wallet the stream ends with
+  /// `Locked` as its error and no event.
+  Stream<TorEvent> startTor({required String torBinary, String? libDir}) =>
+      RustLib.instance.api.crateApiWalletEpicWalletStartTor(
+        that: this,
+        torBinary: torBinary,
+        libDir: libDir,
+      );
+
   /// Stops the HTTP listener. Requests in progress finish; its stream ends with `Stopped`
   /// once the port is free.
   void stopHttpListener() =>
@@ -8267,6 +8856,11 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// Stops the listener. Its stream ends with `Stopped` shortly after.
   void stopListener() =>
       RustLib.instance.api.crateApiWalletEpicWalletStopListener(that: this);
+
+  /// Stops the wallet's tor, then its listener. The stream of `start_tor` ends with
+  /// `Stopped` once both are down. Sends over Tor in progress fail.
+  void stopTor() =>
+      RustLib.instance.api.crateApiWalletEpicWalletStopTor(that: this);
 
   /// The default account's balance. With `refresh` it first updates outputs and
   /// transactions from the node. Without, it answers from what the wallet stored at its last
@@ -8290,6 +8884,9 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
         that: this,
         expirySecs: expirySecs,
       );
+
+  TorStatus torStatus() =>
+      RustLib.instance.api.crateApiWalletEpicWalletTorStatus(that: this);
 
   /// The transaction `tx_id`, from the store alone. Fails with `InvalidArgument` when the
   /// wallet holds no such transaction.

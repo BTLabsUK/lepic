@@ -110,7 +110,7 @@ final wallet = await EpicWallet.create(
   with that `txId` instead of `received`. Show it as already answered and hand out the same
   reply. `events()` reports nothing for a repeat. A relay copy of a message already answered
   and acknowledged reports nothing.
-- The stream calls `refresh`, `scan`, `startListener`, `startHttpListener`, `events` and `logs` report a failure as
+- The stream calls `refresh`, `scan`, `startListener`, `startHttpListener`, `startTor`, `events` and `logs` report a failure as
   the stream's error: the same `WalletError` the other calls throw, after which the stream ends.
   Listen with `onError`; no error from a stream call reaches the app's zone.
 - A panic inside LEPIC arrives as `WalletError` with kind `panic`; the runtime stays usable.
@@ -250,10 +250,13 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 37 | `damagedDatabase` | The wallet database was damaged. LEPIC renamed it, with its log files, to `wallet.sqlite3.damaged-<unix seconds>` in the data directory and kept it. Open the wallet again: the database is rebuilt from the vault as after a restore, so run `scan` to the end before sending or receiving. History, labels and messages are not in the new database. |
 | 40 | `httpUrlInvalid` | The address given to `sendHttp` or `resendHttp` is not an `http(s)://host[:port][/path]` URL, or names a `.onion` host. Nothing was stored. |
 | 41 | `plainHttpNotAllowed` | The address uses plain `http` to another computer and `allowPlainHttp` was false. Nothing was stored. Ask the user, or use `https`. |
+| 42 | `onionAddressInvalid` | The address given to `sendTor` or `resendTor` is not an onion v3 address, or has a typo. Nothing was stored. |
+| 43 | `torNotRunning` | The wallet's tor is not running or not yet bootstrapped. Before the send nothing was stored; when tor stopped during the delivery the send is stored as `sent`. |
+| 44 | `onionUnreachable` | The other wallet is not online with Tor on, or was not reached in time. The send is stored as `sent` with its inputs locked: resend it later or cancel it. |
 
 Kinds 22 to 24 used to arrive as `other`. Kinds 25 and 26 are new with `sealAppData` and
 `openAppData`, 27 and 28 with `releaseTransaction`, 29 to 31 with the invoice calls, 40 and
-41 with the HTTP calls. An
+41 with the HTTP calls, 42 to 44 with the Tor calls. An
 exhaustive `switch` over `WalletErrorKind` must handle them.
 
 ## Direct transactions over HTTP
@@ -308,6 +311,55 @@ wallet.startHttpListener(exposure: HttpExposure.localOnly, port: 3415).listen((e
   `locked` as its error.
 - Each request may take up to a minute. At most 16 connections are served at once, further ones
   are closed, and payments beyond 30 a minute are refused to the sender as `unavailable`.
+
+## Direct transactions over Tor
+
+On desktop the wallet runs its own tor, from a `tor` binary the app bundles (the Tor Expert
+Bundle), and receives at its onion: its payment-proof address in onion form, the address
+`epic-wallet address` prints, which survives a restore from the phrase (ADR 0018). Android and
+iOS cannot run the binary. Tor is off until the app starts it, per wallet:
+
+```dart
+final onion = await wallet.onionAddress(); // known before tor runs
+wallet.startTor(torBinary: torPath, libDir: torLibDir).listen((event) {
+  switch (event.kind) {
+    case TorEventKind.starting: // event.progress, 0 to 100
+    case TorEventKind.bootstrapped: // sends work
+    case TorEventKind.ready: // event.onion: others can pay this wallet
+    case TorEventKind.failed: // event.failure
+    case TorEventKind.received: // event.txId, event.amount, event.repeated
+    case TorEventKind.stopped: // the last event
+    default:
+  }
+});
+final sent = await wallet.sendTor(
+  amount: BigInt.from(150000000),
+  minimumConfirmations: BigInt.from(10),
+  onion: 'http://<56 characters>.onion',
+);
+```
+
+- `libDir` goes on the library path for the libraries the bundle ships on Linux; pass null on
+  Windows. Tor keeps its files in `tor/` inside the wallet's data directory, never shared
+  between wallets. Check the bundle's hashes before passing its path.
+- While tor runs, the wallet listens on `127.0.0.1` on a port of its own, separate from
+  `startHttpListener`, and tor forwards the onion's port 80 there. Its payments arrive on the
+  tor stream as `received` and `refused`, as on the HTTP listener's stream.
+- The events go `starting`, `bootstrapped`, `publishing`, `ready`. `failed` with
+  `TorFailureKind.listener` or `keys` leaves tor running for sends, and `torStatus()` stays
+  `bootstrapped` with that `failure`; any other failure is followed by `stopped`. `missing`
+  means no binary at the path, `network` no progress connecting, `clock` a wrong system clock.
+  Restarting is the app's choice: call `startTor` again after `stopped`.
+- One tor runs per wallet: a second `startTor` gets a stream that ends at once. `stopTor`, `lock`
+  and dropping the wallet stop tor, then its listener; the stream then ends with `stopped`.
+  `torStatus()` reports `off`, `starting`, `bootstrapped`, `publishing` or `ready`.
+- `sendTor` needs `bootstrapped` or later, else it throws `torNotRunning` and stores nothing.
+  It reads the address as `validateOnionAddress` does: with or without `.onion`, `http://`, a
+  port or a path, which are dropped. It puts `sending` on the tor stream: reaching an onion that
+  is not online takes up to about 150 seconds before it throws `onionUnreachable`, so show
+  progress. The result is the `HttpSentTx` of `sendHttp`. A send that throws
+  `onionUnreachable`, `torNotRunning` after it started, or `transportFailed` is stored as `sent`:
+  deliver it again with `resendTor(txId, onion)` or `resendHttp`, or cancel it.
 
 ## Invoices over Epicbox
 
@@ -405,7 +457,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `create_send_slate(amount, minimum_confirmations)` | `create_send_slate(amount, minimum_confirmations, message)` | `Slate` adds `tx_id`. New file form: `send_file(amount, minimum_confirmations, path, message)`. The optional `message` is signed into the slate, as `epic-wallet send --message` does, after it is cut to its first 256 bytes on a character boundary. |
 | `receive_slate(slate_json)` | `receive_slate(slate_json)` | Returns `ReceivedSlate`: the fields of `Slate` plus `repeated`. A slate received before returns the answer stored then, with `repeated` set and the first call's `tx_id`; nothing is stored or signed again. New file form: `receive_file(path)`, writes `<path>.response`, for a repeat too. |
 | `finalize_and_post(slate_json)` | `finalize_and_post(slate_json)` | Returns `FinalizedTx`; a refused post fails with `notPosted`. New: `finalize_file(path)`. |
-| `send_http(amount, minimum_confirmations, url)` | not provided | LEPIC 1.0 speaks Epicbox and files only. |
+| `send_http(amount, minimum_confirmations, url)` | `send_http(amount, minimum_confirmations, url, allow_plain_http, message)` | Returns `HttpSentTx`, finalized and posted. Over Tor on desktop: `send_tor(amount, minimum_confirmations, onion, message)` after `start_tor`. |
 | `send_epicbox(amount, minimum_confirmations, address)` | `send_epicbox(amount, minimum_confirmations, address, message)` | Returns `SentTx`. `message` as for `create_send_slate`. Like `validate_epicbox_address`, refuses a bare key without `@<relay>` with `invalidArgument` and stores nothing. |
 | `start_listener(events)` | `start_listener()` stream | Kinds `connected`, `disconnected`, `received`, `repeated`, `finalized`, `error`, `stopped`, `invoiceBounced`. `repeated` carries the `tx_id` of a payment answered before whose slate arrived again; `invoiceBounced` the `tx_id` and `slate_id` of an issued invoice the payer sent back. New: `drain_epicbox()` for background work. |
 | `stop_listener()` | `stop_listener()` | Same. |

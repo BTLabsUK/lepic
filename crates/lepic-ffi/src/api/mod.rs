@@ -9,5 +9,6 @@ pub mod invoice;
 pub mod runtime;
 pub mod secret_store;
 pub mod testing;
+pub mod tor;
 pub mod types;
 pub mod wallet;

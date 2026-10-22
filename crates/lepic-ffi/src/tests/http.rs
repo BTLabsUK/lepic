@@ -17,23 +17,23 @@ use crate::api::testing::MockChain;
 use crate::api::types::{Chain, TxStatus, WalletConfig};
 use crate::session::{SeedOrigin, Session};
 
-const EPIC: u64 = 100_000_000;
+pub(super) const EPIC: u64 = 100_000_000;
 
-async fn sends(session: &Session) -> Vec<crate::api::types::TransactionDetails> {
+pub(super) async fn sends(session: &Session) -> Vec<crate::api::types::TransactionDetails> {
     let mut stored = session.transactions().await.unwrap();
     stored.retain(|tx| tx.direction == crate::api::types::TxDirection::Outgoing);
     stored
 }
 
-struct Pair {
-    chain: MockChain,
+pub(super) struct Pair {
+    pub(super) chain: MockChain,
     _runtime: LepicRuntime,
-    _dirs: [tempfile::TempDir; 2],
-    alice: Arc<Session>,
-    bob: Arc<Session>,
+    pub(super) dirs: [tempfile::TempDir; 2],
+    pub(super) alice: Arc<Session>,
+    pub(super) bob: Arc<Session>,
 }
 
-fn password() -> Zeroizing<String> {
+pub(super) fn password() -> Zeroizing<String> {
     Zeroizing::new("password".to_owned())
 }
 
@@ -59,7 +59,7 @@ fn session(runtime: &LepicRuntime, dir: &tempfile::TempDir) -> Arc<Session> {
 }
 
 /// Alice holds 10 EPIC; Bob holds nothing.
-async fn funded_pair() -> Pair {
+pub(super) async fn funded_pair() -> Pair {
     let chain = MockChain::new(1).unwrap();
     let runtime = chain.runtime(LogLevel::Warn).unwrap();
     let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
@@ -78,7 +78,7 @@ async fn funded_pair() -> Pair {
     Pair {
         chain,
         _runtime: runtime,
-        _dirs: dirs,
+        dirs,
         alice,
         bob,
     }

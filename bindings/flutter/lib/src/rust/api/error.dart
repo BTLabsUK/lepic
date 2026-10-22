@@ -138,7 +138,20 @@ enum WalletErrorKind {
 
   /// The address uses plain `http` to another computer, and the user did not agree to send
   /// unencrypted. Nothing was stored; ask, then pass `allow_plain_http`, or use `https`.
-  plainHttpNotAllowed;
+  plainHttpNotAllowed,
+
+  /// The address given to a Tor send is not an onion v3 address, or has a typo. Nothing was
+  /// stored.
+  onionAddressInvalid,
+
+  /// The wallet's tor is not running or not yet connected to the Tor network. Start it with
+  /// `start_tor` and wait for `Bootstrapped`. A send that failed with it before anything was
+  /// sent stored nothing; one whose tor stopped during the delivery is stored as sent.
+  torNotRunning,
+
+  /// The other wallet is not online with Tor on, or could not be reached in time. The send
+  /// is stored as sent with its inputs locked: resend it later or cancel it.
+  onionUnreachable;
 
   /// The stable number of this kind.
   Future<int> code() =>

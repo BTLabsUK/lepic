@@ -110,6 +110,9 @@ const errorCodes = {
   WalletErrorKind.damagedDatabase: 37,
   WalletErrorKind.httpUrlInvalid: 40,
   WalletErrorKind.plainHttpNotAllowed: 41,
+  WalletErrorKind.onionAddressInvalid: 42,
+  WalletErrorKind.torNotRunning: 43,
+  WalletErrorKind.onionUnreachable: 44,
 };
 
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(
@@ -624,6 +627,43 @@ void main() {
     bob.stopHttpListener();
     await stopped.future;
     expect(bob.httpListenerStatus(), isNull);
+  });
+
+  test('a tor send needs an onion and a running tor', () async {
+    final (alice, bob, _) = await fundedPair('tor');
+    final onion = await bob.onionAddress();
+
+    expect(onion, endsWith('.onion'));
+    expect(onion.length, 62);
+    expect(validateOnionAddress(address: 'http://$onion:80/'), isTrue);
+    expect(validateOnionAddress(address: 'wallet.example.org'), isFalse);
+    expect(alice.torStatus().kind, TorStatusKind.off);
+    await expectLater(
+      alice.sendTor(
+        amount: BigInt.from(epic),
+        minimumConfirmations: BigInt.one,
+        onion: onion,
+      ),
+      throwsWalletError(WalletErrorKind.torNotRunning),
+    );
+    await expectLater(
+      alice.sendTor(
+        amount: BigInt.from(epic),
+        minimumConfirmations: BigInt.one,
+        onion: 'wallet.example.org',
+      ),
+      throwsWalletError(WalletErrorKind.onionAddressInvalid),
+    );
+
+    final events = await alice
+        .startTor(torBinary: '/nonexistent/tor', libDir: null)
+        .toList();
+    expect(events.map((event) => event.kind), contains(TorEventKind.failed));
+    expect(
+      events.firstWhere((event) => event.kind == TorEventKind.failed).failure,
+      TorFailureKind.missing,
+    );
+    expect(events.last.kind, TorEventKind.stopped);
   });
 
   test('history, fees and offline balance follow a send', () async {

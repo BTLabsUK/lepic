@@ -11,6 +11,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'runtime.dart';
 import 'secret_store.dart';
+import 'tor.dart';
 import 'types.dart';
 
 // These functions are ignored because they are not marked as `pub`: `boundary`, `create_pin_wallet`, `new_password`, `run`
@@ -336,6 +337,13 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required String sealedPassword,
   });
 
+  /// The wallet's onion address, `<56 characters>.onion`: its payment-proof address in onion
+  /// form, which `epic-wallet address` prints too. It is known without tor running and stays
+  /// the same after a restore from the phrase.
+  ///
+  /// Fails with `Locked` while the wallet is locked.
+  Future<String> onionAddress();
+
   /// Opens the wallet in `config.data_dir`. Any password that opens the vault opens it, also
   /// one shorter than `create` accepts today. Fails with `WrongPassword`, `WalletNotFound`
   /// when `store` holds no vault, `ForeignWallet` and `WalletBusy`, and with
@@ -474,6 +482,15 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// and with `TransportFailed` when the relay fails again.
   Future<void> resendInvoicePayment({required int txId});
 
+  /// Delivers the slate of send `tx_id` again, to the wallet at `onion`, which may be
+  /// another address or method than the first attempt, then finalizes and posts as
+  /// [`EpicWallet::send_tor`] does.
+  ///
+  /// Fails with `OnionAddressInvalid` or `TorNotRunning` before anything is sent,
+  /// `InvalidArgument` when `tx_id` is not a send waiting for its answer, and otherwise as
+  /// [`EpicWallet::send_tor`].
+  Future<HttpResentTx> resendTor({required int txId, required String onion});
+
   /// Moves the invoice address to the next index and returns it. The old address is
   /// abandoned: messages to it are no longer read, so give the new one to every service.
   Future<String> rotateInvoiceAddress();
@@ -534,6 +551,27 @@ abstract class EpicWallet implements RustOpaqueInterface {
     String? message,
   });
 
+  /// Sends `amount` to the wallet at `onion` over the wallet's tor, then finalizes its
+  /// answer and posts the transaction, as [`EpicWallet::send_http`] does. `onion` is read as
+  /// [`validate_onion_address`] reads it; the other wallet is always reached at port 80.
+  /// Emits `Sending` on the tor stream; an onion that is not online takes up to about 150
+  /// seconds to fail.
+  ///
+  /// Fails, storing nothing, with `OnionAddressInvalid` for the address, `TorNotRunning`
+  /// when tor has not bootstrapped, and the errors of [`EpicWallet::estimate_fee`]. Fails
+  /// with `OnionUnreachable` when the other wallet is not online or could not be reached in
+  /// time, and with `TransportFailed` when it refused or the exchange broke: the send is then
+  /// stored as sent with its inputs locked, so deliver it again with
+  /// [`EpicWallet::resend_tor`] or [`EpicWallet::resend_http`], or cancel it. A tor that
+  /// stops during the send fails it the same way with `TorNotRunning`. Fails as
+  /// [`EpicWallet::send_http`] does when the answer could not be finalized.
+  Future<HttpSentTx> sendTor({
+    required BigInt amount,
+    required BigInt minimumConfirmations,
+    required String onion,
+    String? message,
+  });
+
   /// Sets the address index of the invoice address, for example to the one the app kept
   /// before the wallet was restored from its phrase, which does not record it. Messages to
   /// the previous invoice address are no longer read. Fails with `InvalidArgument` for 0,
@@ -562,12 +600,27 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// a stream that ends at once.
   Stream<ListenerEvent> startListener();
 
+  /// Starts the wallet's tor from the binary at `tor_binary`, with `lib_dir` on the library
+  /// path for the libraries the Tor Expert Bundle ships on Linux, and streams what it does
+  /// until [`EpicWallet::stop_tor`], [`EpicWallet::lock`] or the wallet is dropped. Tor keeps
+  /// its files in `tor` inside the wallet's data directory.
+  ///
+  /// The first event is `Starting`, or `Failed` with `Listener` when the wallet's listener
+  /// could not start; the last one is always `Stopped`. A wallet runs one tor: a call while one
+  /// runs or starts gets a stream that ends at once. On a locked wallet the stream ends with
+  /// `Locked` as its error and no event.
+  Stream<TorEvent> startTor({required String torBinary, String? libDir});
+
   /// Stops the HTTP listener. Requests in progress finish; its stream ends with `Stopped`
   /// once the port is free.
   void stopHttpListener();
 
   /// Stops the listener. Its stream ends with `Stopped` shortly after.
   void stopListener();
+
+  /// Stops the wallet's tor, then its listener. The stream of `start_tor` ends with
+  /// `Stopped` once both are down. Sends over Tor in progress fail.
+  void stopTor();
 
   /// The default account's balance. With `refresh` it first updates outputs and
   /// transactions from the node. Without, it answers from what the wallet stored at its last
@@ -586,6 +639,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// `InvalidArgument` for 0 or more than two days, `NodeUnreachable` when a payment past its
   /// time to live cannot be looked up, and as `cancel_transaction` does.
   Future<InvoiceSweep> sweepInvoices({BigInt? expirySecs});
+
+  TorStatus torStatus();
 
   /// The transaction `tx_id`, from the store alone. Fails with `InvalidArgument` when the
   /// wallet holds no such transaction.
