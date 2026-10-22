@@ -728,6 +728,29 @@ void main() {
       estimate.change,
       BigInt.from(10 * epic) - estimate.amount - estimate.fee,
     );
+    expect(estimate.locked, BigInt.from(10 * epic));
+    expect(estimate.changeOutputs, 1);
+    final split = await alice.estimateFee(
+      amount: BigInt.from(3 * epic),
+      minimumConfirmations: BigInt.one,
+      options: const SendOptions(
+        strategy: SelectionStrategy.all,
+        changeOutputs: 2,
+      ),
+    );
+    expect(split.changeOutputs, 2);
+    expect(split.fee > estimate.fee, isTrue);
+    await expectLater(
+      alice.estimateFee(
+        amount: BigInt.from(3 * epic),
+        minimumConfirmations: BigInt.one,
+        options: const SendOptions(
+          strategy: SelectionStrategy.smallest,
+          changeOutputs: 0,
+        ),
+      ),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
     await expectLater(
       alice.estimateFee(
         amount: BigInt.from(10 * epic),

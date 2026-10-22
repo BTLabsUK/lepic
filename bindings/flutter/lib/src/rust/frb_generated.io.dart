@@ -240,6 +240,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ScanResult dco_decode_box_autoadd_scan_result(dynamic raw);
 
   @protected
+  SendOptions dco_decode_box_autoadd_send_options(dynamic raw);
+
+  @protected
   SessionState dco_decode_box_autoadd_session_state(dynamic raw);
 
   @protected
@@ -420,6 +423,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ScanResult? dco_decode_opt_box_autoadd_scan_result(dynamic raw);
 
   @protected
+  SendOptions? dco_decode_opt_box_autoadd_send_options(dynamic raw);
+
+  @protected
   SessionState? dco_decode_opt_box_autoadd_session_state(dynamic raw);
 
   @protected
@@ -478,6 +484,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SecretReply dco_decode_secret_reply(dynamic raw);
+
+  @protected
+  SelectionStrategy dco_decode_selection_strategy(dynamic raw);
+
+  @protected
+  SendOptions dco_decode_send_options(dynamic raw);
 
   @protected
   SentTx dco_decode_sent_tx(dynamic raw);
@@ -757,6 +769,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ScanResult sse_decode_box_autoadd_scan_result(SseDeserializer deserializer);
 
   @protected
+  SendOptions sse_decode_box_autoadd_send_options(SseDeserializer deserializer);
+
+  @protected
   SessionState sse_decode_box_autoadd_session_state(
     SseDeserializer deserializer,
   );
@@ -979,6 +994,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  SendOptions? sse_decode_opt_box_autoadd_send_options(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SessionState? sse_decode_opt_box_autoadd_session_state(
     SseDeserializer deserializer,
   );
@@ -1045,6 +1065,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SecretReply sse_decode_secret_reply(SseDeserializer deserializer);
+
+  @protected
+  SelectionStrategy sse_decode_selection_strategy(SseDeserializer deserializer);
+
+  @protected
+  SendOptions sse_decode_send_options(SseDeserializer deserializer);
 
   @protected
   SentTx sse_decode_sent_tx(SseDeserializer deserializer);
@@ -1386,6 +1412,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_send_options(
+    SendOptions self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_session_state(
     SessionState self,
     SseSerializer serializer,
@@ -1650,6 +1682,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_send_options(
+    SendOptions? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_session_state(
     SessionState? self,
     SseSerializer serializer,
@@ -1732,6 +1770,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_secret_reply(SecretReply self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_selection_strategy(
+    SelectionStrategy self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_send_options(SendOptions self, SseSerializer serializer);
 
   @protected
   void sse_encode_sent_tx(SentTx self, SseSerializer serializer);

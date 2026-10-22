@@ -18,7 +18,7 @@ use super::{DEFAULT_ACCOUNT, Session, invalid, relay_address};
 use crate::api::error::WalletError;
 use crate::api::types::{
     IncomingInvoice, InvoiceReport, InvoiceSender, InvoiceSweep, IssuedInvoice, PaidInvoice,
-    PeerCapability,
+    PeerCapability, SendOptions,
 };
 
 /// `seconds` as the window after which unpaid invoices expire; `None` is the default day.
@@ -170,13 +170,17 @@ impl Session {
         amount: u64,
         minimum_confirmations: u64,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<PaidInvoice, WalletError> {
         let slate_id = self::slate_id(slate_id)?;
+        let defaults = Self::send_request_with(amount, minimum_confirmations, message, options)?;
         // The payment goes out from the payments address, where the issuer's answers arrive.
         self.engine.epicbox_attach(self.epicbox()?)?;
         let request = PayRequest {
             minimum_confirmations,
-            message,
+            strategy: defaults.strategy,
+            change_outputs: defaults.change_outputs,
+            message: defaults.message,
             ..PayRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
         };
         let paid = self.engine.pay_parked_invoice(slate_id, request).await?;

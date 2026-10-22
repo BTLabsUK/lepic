@@ -14,6 +14,7 @@ use crate::vault_port::VAULT_KEY;
 mod http;
 mod outputs;
 mod scan;
+mod selection;
 #[cfg(unix)]
 mod tor;
 
@@ -186,7 +187,7 @@ async fn a_locked_wallet_refuses_every_call_until_it_is_opened_again() {
     assert_eq!(kind(wallet.summary(false).await), WalletErrorKind::Locked);
     assert_eq!(kind(wallet.summary(true).await), WalletErrorKind::Locked);
     assert_eq!(
-        kind(wallet.create_send_slate(1, 1, None).await),
+        kind(wallet.create_send_slate(1, 1, None, None).await),
         WalletErrorKind::Locked
     );
     let phrase = wallet.mnemonic_with_pin(PIN.to_owned(), sealed.clone());
@@ -421,7 +422,7 @@ async fn summary_without_refresh_needs_no_node() {
         WalletErrorKind::NodeUnreachable
     );
     assert_eq!(
-        kind(wallet.estimate_fee(1, 1).await),
+        kind(wallet.estimate_fee(1, 1, None).await),
         WalletErrorKind::NodeUnreachable
     );
     assert!(wallet.transactions().await.unwrap().is_empty());
@@ -457,7 +458,7 @@ async fn send_epicbox_refuses_an_address_without_its_relay() {
     let key = address.split('@').next().unwrap().to_owned();
     for bare in [key.clone(), format!("epicbox://{key}")] {
         assert_eq!(
-            kind(wallet.send_epicbox(1, 1, bare.clone(), None).await),
+            kind(wallet.send_epicbox(1, 1, bare.clone(), None, None).await),
             WalletErrorKind::InvalidArgument,
             "{bare}"
         );

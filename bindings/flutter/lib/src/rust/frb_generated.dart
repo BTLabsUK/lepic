@@ -133,6 +133,7 @@ abstract class RustLibApi extends BaseApi {
     required BigInt amount,
     required BigInt minimumConfirmations,
     String? message,
+    SendOptions? options,
   });
 
   Future<PinWallet> crateApiWalletEpicWalletCreateWithPin({
@@ -164,11 +165,13 @@ abstract class RustLibApi extends BaseApi {
     required EpicWallet that,
     required BigInt amount,
     required BigInt minimumConfirmations,
+    SendOptions? options,
   });
 
   Future<FeeEstimate> crateApiWalletEpicWalletEstimateMax({
     required EpicWallet that,
     required BigInt minimumConfirmations,
+    SendOptions? options,
   });
 
   Stream<WalletEvent> crateApiWalletEpicWalletEvents({
@@ -280,6 +283,7 @@ abstract class RustLibApi extends BaseApi {
     required BigInt amount,
     required BigInt minimumConfirmations,
     String? message,
+    SendOptions? options,
   });
 
   Future<PeerCapability> crateApiWalletEpicWalletPeerCapability({
@@ -360,6 +364,7 @@ abstract class RustLibApi extends BaseApi {
     required BigInt minimumConfirmations,
     required String address,
     String? message,
+    SendOptions? options,
   });
 
   Future<SentTx> crateApiWalletEpicWalletSendFile({
@@ -368,6 +373,7 @@ abstract class RustLibApi extends BaseApi {
     required BigInt minimumConfirmations,
     required String path,
     String? message,
+    SendOptions? options,
   });
 
   Future<HttpSentTx> crateApiWalletEpicWalletSendHttp({
@@ -377,6 +383,7 @@ abstract class RustLibApi extends BaseApi {
     required String url,
     required bool allowPlainHttp,
     String? message,
+    SendOptions? options,
   });
 
   Future<HttpSentTx> crateApiWalletEpicWalletSendTor({
@@ -917,6 +924,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required BigInt amount,
     required BigInt minimumConfirmations,
     String? message,
+    SendOptions? options,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -929,6 +937,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_u_64(amount, serializer);
           sse_encode_u_64(minimumConfirmations, serializer);
           sse_encode_opt_String(message, serializer);
+          sse_encode_opt_box_autoadd_send_options(options, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -941,7 +950,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletCreateSendSlateConstMeta,
-        argValues: [that, amount, minimumConfirmations, message],
+        argValues: [that, amount, minimumConfirmations, message, options],
         apiImpl: this,
       ),
     );
@@ -950,7 +959,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWalletEpicWalletCreateSendSlateConstMeta =>
       const TaskConstMeta(
         debugName: "EpicWallet_create_send_slate",
-        argNames: ["that", "amount", "minimumConfirmations", "message"],
+        argNames: [
+          "that",
+          "amount",
+          "minimumConfirmations",
+          "message",
+          "options",
+        ],
       );
 
   @override
@@ -1151,6 +1166,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required EpicWallet that,
     required BigInt amount,
     required BigInt minimumConfirmations,
+    SendOptions? options,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1162,6 +1178,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_u_64(amount, serializer);
           sse_encode_u_64(minimumConfirmations, serializer);
+          sse_encode_opt_box_autoadd_send_options(options, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1174,7 +1191,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletEstimateFeeConstMeta,
-        argValues: [that, amount, minimumConfirmations],
+        argValues: [that, amount, minimumConfirmations, options],
         apiImpl: this,
       ),
     );
@@ -1183,13 +1200,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWalletEpicWalletEstimateFeeConstMeta =>
       const TaskConstMeta(
         debugName: "EpicWallet_estimate_fee",
-        argNames: ["that", "amount", "minimumConfirmations"],
+        argNames: ["that", "amount", "minimumConfirmations", "options"],
       );
 
   @override
   Future<FeeEstimate> crateApiWalletEpicWalletEstimateMax({
     required EpicWallet that,
     required BigInt minimumConfirmations,
+    SendOptions? options,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1200,6 +1218,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_u_64(minimumConfirmations, serializer);
+          sse_encode_opt_box_autoadd_send_options(options, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1212,7 +1231,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletEstimateMaxConstMeta,
-        argValues: [that, minimumConfirmations],
+        argValues: [that, minimumConfirmations, options],
         apiImpl: this,
       ),
     );
@@ -1221,7 +1240,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWalletEpicWalletEstimateMaxConstMeta =>
       const TaskConstMeta(
         debugName: "EpicWallet_estimate_max",
-        argNames: ["that", "minimumConfirmations"],
+        argNames: ["that", "minimumConfirmations", "options"],
       );
 
   @override
@@ -2014,6 +2033,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required BigInt amount,
     required BigInt minimumConfirmations,
     String? message,
+    SendOptions? options,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2027,6 +2047,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_u_64(amount, serializer);
           sse_encode_u_64(minimumConfirmations, serializer);
           sse_encode_opt_String(message, serializer);
+          sse_encode_opt_box_autoadd_send_options(options, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2039,7 +2060,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletPayInvoiceConstMeta,
-        argValues: [that, slateId, amount, minimumConfirmations, message],
+        argValues: [
+          that,
+          slateId,
+          amount,
+          minimumConfirmations,
+          message,
+          options,
+        ],
         apiImpl: this,
       ),
     );
@@ -2054,6 +2082,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "amount",
           "minimumConfirmations",
           "message",
+          "options",
         ],
       );
 
@@ -2610,6 +2639,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required BigInt minimumConfirmations,
     required String address,
     String? message,
+    SendOptions? options,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2623,6 +2653,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_u_64(minimumConfirmations, serializer);
           sse_encode_String(address, serializer);
           sse_encode_opt_String(message, serializer);
+          sse_encode_opt_box_autoadd_send_options(options, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2635,7 +2666,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletSendEpicboxConstMeta,
-        argValues: [that, amount, minimumConfirmations, address, message],
+        argValues: [
+          that,
+          amount,
+          minimumConfirmations,
+          address,
+          message,
+          options,
+        ],
         apiImpl: this,
       ),
     );
@@ -2650,6 +2688,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "minimumConfirmations",
           "address",
           "message",
+          "options",
         ],
       );
 
@@ -2660,6 +2699,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required BigInt minimumConfirmations,
     required String path,
     String? message,
+    SendOptions? options,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2673,6 +2713,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_u_64(minimumConfirmations, serializer);
           sse_encode_String(path, serializer);
           sse_encode_opt_String(message, serializer);
+          sse_encode_opt_box_autoadd_send_options(options, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2685,7 +2726,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletSendFileConstMeta,
-        argValues: [that, amount, minimumConfirmations, path, message],
+        argValues: [that, amount, minimumConfirmations, path, message, options],
         apiImpl: this,
       ),
     );
@@ -2694,7 +2735,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWalletEpicWalletSendFileConstMeta =>
       const TaskConstMeta(
         debugName: "EpicWallet_send_file",
-        argNames: ["that", "amount", "minimumConfirmations", "path", "message"],
+        argNames: [
+          "that",
+          "amount",
+          "minimumConfirmations",
+          "path",
+          "message",
+          "options",
+        ],
       );
 
   @override
@@ -2705,6 +2753,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String url,
     required bool allowPlainHttp,
     String? message,
+    SendOptions? options,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2719,6 +2768,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(url, serializer);
           sse_encode_bool(allowPlainHttp, serializer);
           sse_encode_opt_String(message, serializer);
+          sse_encode_opt_box_autoadd_send_options(options, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2738,6 +2788,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           url,
           allowPlainHttp,
           message,
+          options,
         ],
         apiImpl: this,
       ),
@@ -2754,6 +2805,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "url",
           "allowPlainHttp",
           "message",
+          "options",
         ],
       );
 
@@ -4842,6 +4894,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendOptions dco_decode_box_autoadd_send_options(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_send_options(raw);
+  }
+
+  @protected
   SessionState dco_decode_box_autoadd_session_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_session_state(raw);
@@ -4917,13 +4975,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   FeeEstimate dco_decode_fee_estimate(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return FeeEstimate(
       amount: dco_decode_u_64(arr[0]),
       fee: dco_decode_u_64(arr[1]),
       inputCount: dco_decode_u_32(arr[2]),
       change: dco_decode_u_64(arr[3]),
+      locked: dco_decode_u_64(arr[4]),
+      changeOutputs: dco_decode_u_32(arr[5]),
     );
   }
 
@@ -5354,6 +5414,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendOptions? dco_decode_opt_box_autoadd_send_options(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_send_options(raw);
+  }
+
+  @protected
   SessionState? dco_decode_opt_box_autoadd_session_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_session_state(raw);
@@ -5536,6 +5602,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return SecretReply(
       ok: dco_decode_bool(arr[0]),
       value: dco_decode_opt_String(arr[1]),
+    );
+  }
+
+  @protected
+  SelectionStrategy dco_decode_selection_strategy(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SelectionStrategy.values[raw as int];
+  }
+
+  @protected
+  SendOptions dco_decode_send_options(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SendOptions(
+      strategy: dco_decode_selection_strategy(arr[0]),
+      changeOutputs: dco_decode_u_32(arr[1]),
     );
   }
 
@@ -6220,6 +6304,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendOptions sse_decode_box_autoadd_send_options(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_send_options(deserializer));
+  }
+
+  @protected
   SessionState sse_decode_box_autoadd_session_state(
     SseDeserializer deserializer,
   ) {
@@ -6310,11 +6402,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_fee = sse_decode_u_64(deserializer);
     var var_inputCount = sse_decode_u_32(deserializer);
     var var_change = sse_decode_u_64(deserializer);
+    var var_locked = sse_decode_u_64(deserializer);
+    var var_changeOutputs = sse_decode_u_32(deserializer);
     return FeeEstimate(
       amount: var_amount,
       fee: var_fee,
       inputCount: var_inputCount,
       change: var_change,
+      locked: var_locked,
+      changeOutputs: var_changeOutputs,
     );
   }
 
@@ -6888,6 +6984,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendOptions? sse_decode_opt_box_autoadd_send_options(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_send_options(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   SessionState? sse_decode_opt_box_autoadd_session_state(
     SseDeserializer deserializer,
   ) {
@@ -7125,6 +7234,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_ok = sse_decode_bool(deserializer);
     var var_value = sse_decode_opt_String(deserializer);
     return SecretReply(ok: var_ok, value: var_value);
+  }
+
+  @protected
+  SelectionStrategy sse_decode_selection_strategy(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return SelectionStrategy.values[inner];
+  }
+
+  @protected
+  SendOptions sse_decode_send_options(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_strategy = sse_decode_selection_strategy(deserializer);
+    var var_changeOutputs = sse_decode_u_32(deserializer);
+    return SendOptions(
+      strategy: var_strategy,
+      changeOutputs: var_changeOutputs,
+    );
   }
 
   @protected
@@ -8003,6 +8132,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_send_options(
+    SendOptions self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_send_options(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_session_state(
     SessionState self,
     SseSerializer serializer,
@@ -8099,6 +8237,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_64(self.fee, serializer);
     sse_encode_u_32(self.inputCount, serializer);
     sse_encode_u_64(self.change, serializer);
+    sse_encode_u_64(self.locked, serializer);
+    sse_encode_u_32(self.changeOutputs, serializer);
   }
 
   @protected
@@ -8577,6 +8717,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_send_options(
+    SendOptions? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_send_options(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_session_state(
     SessionState? self,
     SseSerializer serializer,
@@ -8780,6 +8933,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_bool(self.ok, serializer);
     sse_encode_opt_String(self.value, serializer);
+  }
+
+  @protected
+  void sse_encode_selection_strategy(
+    SelectionStrategy self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_send_options(SendOptions self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_selection_strategy(self.strategy, serializer);
+    sse_encode_u_32(self.changeOutputs, serializer);
   }
 
   @protected
@@ -9190,15 +9359,20 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   ///
   /// `message` goes to the recipient signed with the slate, as `epic-wallet send --message`
   /// sends it. It is cut to its first 256 bytes, on a character boundary, before it is signed.
+  ///
+  /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+  /// change outputs outside 1..=10 fail with `InvalidArgument`.
   Future<Slate> createSendSlate({
     required BigInt amount,
     required BigInt minimumConfirmations,
     String? message,
+    SendOptions? options,
   }) => RustLib.instance.api.crateApiWalletEpicWalletCreateSendSlate(
     that: this,
     amount: amount,
     minimumConfirmations: minimumConfirmations,
     message: message,
+    options: options,
   );
 
   /// Declines the waiting invoice `slate_id`: it is never paid and leaves
@@ -9231,24 +9405,38 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// [`EpicWallet::send_epicbox`] choose them, with nothing locked. Such a send at the same
   /// chain tip, with no outputs changed in between, charges this fee. Asks the node for its
   /// tip. Fails as those sends do, for example with `NotEnoughFunds` or `NodeUnreachable`.
+  /// Pass the `options` the send will get.
+  ///
+  /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+  /// change outputs outside 1..=10 fail with `InvalidArgument`.
   Future<FeeEstimate> estimateFee({
     required BigInt amount,
     required BigInt minimumConfirmations,
+    SendOptions? options,
   }) => RustLib.instance.api.crateApiWalletEpicWalletEstimateFee(
     that: this,
     amount: amount,
     minimumConfirmations: minimumConfirmations,
+    options: options,
   );
 
   /// The largest amount a send with `minimum_confirmations` can pay now, with its fee and
   /// inputs. A send of that amount at the same chain tip, with no outputs changed in between,
   /// charges this fee. Fails with `NotEnoughFunds` when no amount can be paid, and otherwise
-  /// as [`EpicWallet::estimate_fee`].
-  Future<FeeEstimate> estimateMax({required BigInt minimumConfirmations}) =>
-      RustLib.instance.api.crateApiWalletEpicWalletEstimateMax(
-        that: this,
-        minimumConfirmations: minimumConfirmations,
-      );
+  /// as [`EpicWallet::estimate_fee`]. Sending everything takes `All`: with `Smallest`
+  /// the largest amount is the one the smallest outputs that cover it can pay, which is the
+  /// same total here but may differ past 500 outputs.
+  ///
+  /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+  /// change outputs outside 1..=10 fail with `InvalidArgument`.
+  Future<FeeEstimate> estimateMax({
+    required BigInt minimumConfirmations,
+    SendOptions? options,
+  }) => RustLib.instance.api.crateApiWalletEpicWalletEstimateMax(
+    that: this,
+    minimumConfirmations: minimumConfirmations,
+    options: options,
+  );
 
   /// Everything the wallet reports from now on: session, balance, transaction, sync and
   /// transport changes. The stream ends when the wallet is dropped. A failure to subscribe,
@@ -9390,7 +9578,8 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// Pays the waiting invoice `slate_id` and delivers the payment over Epicbox to the
   /// sender's allowed address. `amount` is what the user typed: an invoice for any other
   /// amount is refused, as `epic-wallet pay` refuses it. Inputs need `minimum_confirmations`;
-  /// `message` goes to the sender signed, as in [`EpicWallet::create_send_slate`].
+  /// `message` goes to the sender signed and `options` choose the inputs and change, as in
+  /// [`EpicWallet::create_send_slate`].
   ///
   /// Fails with `InvoiceNotFound` when no invoice with that id waits, `AmountMismatch`,
   /// `PaymentExpired`, `NotEnoughFunds`, `InvalidSlate`, `NodeUnreachable`, and with
@@ -9401,12 +9590,14 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
     required BigInt amount,
     required BigInt minimumConfirmations,
     String? message,
+    SendOptions? options,
   }) => RustLib.instance.api.crateApiWalletEpicWalletPayInvoice(
     that: this,
     slateId: slateId,
     amount: amount,
     minimumConfirmations: minimumConfirmations,
     message: message,
+    options: options,
   );
 
   /// What this wallet learned about the peer at `address`, `<key>@<relay>[:port]`, from
@@ -9562,18 +9753,20 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// Sends to `<address>@<relay>[:port]` over Epicbox. The listener or a drain finalizes and
   /// posts it when the answer arrives. Fails with `InvalidArgument`, storing nothing, for an
   /// address that [`validate_epicbox_address`] refuses, such as a key without `@<relay>`.
-  /// `message` is sent as [`EpicWallet::create_send_slate`] sends it.
+  /// `message` and `options` work as in [`EpicWallet::create_send_slate`].
   Future<SentTx> sendEpicbox({
     required BigInt amount,
     required BigInt minimumConfirmations,
     required String address,
     String? message,
+    SendOptions? options,
   }) => RustLib.instance.api.crateApiWalletEpicWalletSendEpicbox(
     that: this,
     amount: amount,
     minimumConfirmations: minimumConfirmations,
     address: address,
     message: message,
+    options: options,
   );
 
   /// [`EpicWallet::create_send_slate`] writing the slate to the file at `path`.
@@ -9582,12 +9775,14 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
     required BigInt minimumConfirmations,
     required String path,
     String? message,
+    SendOptions? options,
   }) => RustLib.instance.api.crateApiWalletEpicWalletSendFile(
     that: this,
     amount: amount,
     minimumConfirmations: minimumConfirmations,
     path: path,
     message: message,
+    options: options,
   );
 
   /// Sends `amount` to the wallet listening at `url`, `http(s)://host[:port][/path]`, then
@@ -9611,6 +9806,7 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
     required String url,
     required bool allowPlainHttp,
     String? message,
+    SendOptions? options,
   }) => RustLib.instance.api.crateApiWalletEpicWalletSendHttp(
     that: this,
     amount: amount,
@@ -9618,6 +9814,7 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
     url: url,
     allowPlainHttp: allowPlainHttp,
     message: message,
+    options: options,
   );
 
   /// Sends `amount` to the wallet at `onion` over the wallet's tor, then finalizes its

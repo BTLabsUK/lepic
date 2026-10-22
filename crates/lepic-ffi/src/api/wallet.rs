@@ -26,7 +26,7 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, LegacyImport, ListenerEvent, ListenerEventKind,
-    NodeTip, ReceivedSlate, RefreshProgress, ScanProgress, SentTx, Slate, SlateInfo,
+    NodeTip, ReceivedSlate, RefreshProgress, ScanProgress, SendOptions, SentTx, Slate, SlateInfo,
     TransactionDetails, WalletConfig, WalletEvent, WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
@@ -595,13 +595,20 @@ impl EpicWallet {
     /// [`EpicWallet::send_epicbox`] choose them, with nothing locked. Such a send at the same
     /// chain tip, with no outputs changed in between, charges this fee. Asks the node for its
     /// tip. Fails as those sends do, for example with `NotEnoughFunds` or `NodeUnreachable`.
+    /// Pass the `options` the send will get.
+    ///
+    /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+    /// change outputs outside 1..=10 fail with `InvalidArgument`.
     pub async fn estimate_fee(
         &self,
         amount: u64,
         minimum_confirmations: u64,
+        options: Option<SendOptions>,
     ) -> Result<FeeEstimate, WalletError> {
         self.run("estimate_fee", |session| async move {
-            session.estimate_fee(amount, minimum_confirmations).await
+            session
+                .estimate_fee(amount, minimum_confirmations, options)
+                .await
         })
         .await
     }
@@ -609,13 +616,19 @@ impl EpicWallet {
     /// The largest amount a send with `minimum_confirmations` can pay now, with its fee and
     /// inputs. A send of that amount at the same chain tip, with no outputs changed in between,
     /// charges this fee. Fails with `NotEnoughFunds` when no amount can be paid, and otherwise
-    /// as [`EpicWallet::estimate_fee`].
+    /// as [`EpicWallet::estimate_fee`]. Sending everything takes `All`: with `Smallest`
+    /// the largest amount is the one the smallest outputs that cover it can pay, which is the
+    /// same total here but may differ past 500 outputs.
+    ///
+    /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+    /// change outputs outside 1..=10 fail with `InvalidArgument`.
     pub async fn estimate_max(
         &self,
         minimum_confirmations: u64,
+        options: Option<SendOptions>,
     ) -> Result<FeeEstimate, WalletError> {
         self.run("estimate_max", |session| async move {
-            session.estimate_max(minimum_confirmations).await
+            session.estimate_max(minimum_confirmations, options).await
         })
         .await
     }
@@ -701,15 +714,19 @@ impl EpicWallet {
     ///
     /// `message` goes to the recipient signed with the slate, as `epic-wallet send --message`
     /// sends it. It is cut to its first 256 bytes, on a character boundary, before it is signed.
+    ///
+    /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+    /// change outputs outside 1..=10 fail with `InvalidArgument`.
     pub async fn create_send_slate(
         &self,
         amount: u64,
         minimum_confirmations: u64,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<Slate, WalletError> {
         self.run("create_send_slate", |session| async move {
             session
-                .create_send_slate(amount, minimum_confirmations, message)
+                .create_send_slate_with(amount, minimum_confirmations, message, options)
                 .await
         })
         .await
@@ -722,10 +739,17 @@ impl EpicWallet {
         minimum_confirmations: u64,
         path: String,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<SentTx, WalletError> {
         self.run("send_file", |session| async move {
             session
-                .send_file(amount, minimum_confirmations, PathBuf::from(path), message)
+                .send_file(
+                    amount,
+                    minimum_confirmations,
+                    PathBuf::from(path),
+                    message,
+                    options,
+                )
                 .await
         })
         .await
@@ -822,17 +846,18 @@ impl EpicWallet {
     /// Sends to `<address>@<relay>[:port]` over Epicbox. The listener or a drain finalizes and
     /// posts it when the answer arrives. Fails with `InvalidArgument`, storing nothing, for an
     /// address that [`validate_epicbox_address`] refuses, such as a key without `@<relay>`.
-    /// `message` is sent as [`EpicWallet::create_send_slate`] sends it.
+    /// `message` and `options` work as in [`EpicWallet::create_send_slate`].
     pub async fn send_epicbox(
         &self,
         amount: u64,
         minimum_confirmations: u64,
         address: String,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<SentTx, WalletError> {
         self.run("send_epicbox", |session| async move {
             session
-                .send_epicbox(amount, minimum_confirmations, address, message)
+                .send_epicbox(amount, minimum_confirmations, address, message, options)
                 .await
         })
         .await

@@ -423,6 +423,34 @@ pub struct FeeEstimate {
     pub input_count: u32,
     /// What comes back to the wallet as change.
     pub change: u64,
+    /// The value of the outputs the send spends, `amount + fee + change`: locked from the send
+    /// until it confirms.
+    pub locked: u64,
+    /// The outputs `change` comes back in; zero when there is no change.
+    pub change_outputs: u32,
+}
+
+/// How a send chooses the outputs it spends, as `epic-wallet send --selection_strategy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionStrategy {
+    /// The fewest of the smallest outputs that cover amount and fee, so the rest of the balance
+    /// stays spendable while the send confirms. The default, as in `epic-wallet send` and the
+    /// Epic GUI wallet.
+    Smallest,
+    /// Every spendable output, up to 500: the whole balance is locked until the send confirms,
+    /// and the wallet holds fewer, larger outputs afterwards. Suits sending everything.
+    All,
+}
+
+/// How a send chooses its inputs and change. A call given `None` uses `Smallest` with one
+/// change output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendOptions {
+    pub strategy: SelectionStrategy,
+    /// The outputs the change is split into, in equal parts with the remainder on the last,
+    /// from 1 to 10; each one adds to the fee. A send whose inputs cover amount and fee
+    /// exactly makes no change output.
+    pub change_outputs: u32,
 }
 
 /// How far a slate has progressed: `S` stages are a send, `I` stages an invoice.

@@ -493,6 +493,8 @@ fn wire__crate__api__wallet__EpicWallet_create_send_slate_impl(
             let api_amount = <u64>::sse_decode(&mut deserializer);
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
             let api_message = <Option<String>>::sse_decode(&mut deserializer);
+            let api_options =
+                <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -519,6 +521,7 @@ fn wire__crate__api__wallet__EpicWallet_create_send_slate_impl(
                             api_amount,
                             api_minimum_confirmations,
                             api_message,
+                            api_options,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -867,6 +870,8 @@ fn wire__crate__api__wallet__EpicWallet_estimate_fee_impl(
             >>::sse_decode(&mut deserializer);
             let api_amount = <u64>::sse_decode(&mut deserializer);
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
+            let api_options =
+                <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -892,6 +897,7 @@ fn wire__crate__api__wallet__EpicWallet_estimate_fee_impl(
                             &*api_that_guard,
                             api_amount,
                             api_minimum_confirmations,
+                            api_options,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -928,6 +934,8 @@ fn wire__crate__api__wallet__EpicWallet_estimate_max_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
             >>::sse_decode(&mut deserializer);
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
+            let api_options =
+                <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -952,6 +960,7 @@ fn wire__crate__api__wallet__EpicWallet_estimate_max_impl(
                         let output_ok = crate::api::wallet::EpicWallet::estimate_max(
                             &*api_that_guard,
                             api_minimum_confirmations,
+                            api_options,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -2226,6 +2235,8 @@ fn wire__crate__api__wallet__EpicWallet_pay_invoice_impl(
             let api_amount = <u64>::sse_decode(&mut deserializer);
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
             let api_message = <Option<String>>::sse_decode(&mut deserializer);
+            let api_options =
+                <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -2253,6 +2264,7 @@ fn wire__crate__api__wallet__EpicWallet_pay_invoice_impl(
                             api_amount,
                             api_minimum_confirmations,
                             api_message,
+                            api_options,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -3147,6 +3159,8 @@ fn wire__crate__api__wallet__EpicWallet_send_epicbox_impl(
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
             let api_address = <String>::sse_decode(&mut deserializer);
             let api_message = <Option<String>>::sse_decode(&mut deserializer);
+            let api_options =
+                <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -3174,6 +3188,7 @@ fn wire__crate__api__wallet__EpicWallet_send_epicbox_impl(
                             api_minimum_confirmations,
                             api_address,
                             api_message,
+                            api_options,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -3213,6 +3228,8 @@ fn wire__crate__api__wallet__EpicWallet_send_file_impl(
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
             let api_path = <String>::sse_decode(&mut deserializer);
             let api_message = <Option<String>>::sse_decode(&mut deserializer);
+            let api_options =
+                <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -3240,6 +3257,7 @@ fn wire__crate__api__wallet__EpicWallet_send_file_impl(
                             api_minimum_confirmations,
                             api_path,
                             api_message,
+                            api_options,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -3280,6 +3298,8 @@ fn wire__crate__api__wallet__EpicWallet_send_http_impl(
             let api_url = <String>::sse_decode(&mut deserializer);
             let api_allow_plain_http = <bool>::sse_decode(&mut deserializer);
             let api_message = <Option<String>>::sse_decode(&mut deserializer);
+            let api_options =
+                <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -3308,6 +3328,7 @@ fn wire__crate__api__wallet__EpicWallet_send_http_impl(
                             api_url,
                             api_allow_plain_http,
                             api_message,
+                            api_options,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -6190,11 +6211,15 @@ impl SseDecode for crate::api::types::FeeEstimate {
         let mut var_fee = <u64>::sse_decode(deserializer);
         let mut var_inputCount = <u32>::sse_decode(deserializer);
         let mut var_change = <u64>::sse_decode(deserializer);
+        let mut var_locked = <u64>::sse_decode(deserializer);
+        let mut var_changeOutputs = <u32>::sse_decode(deserializer);
         return crate::api::types::FeeEstimate {
             amount: var_amount,
             fee: var_fee,
             input_count: var_inputCount,
             change: var_change,
+            locked: var_locked,
+            change_outputs: var_changeOutputs,
         };
     }
 }
@@ -6847,6 +6872,17 @@ impl SseDecode for Option<crate::api::types::ScanResult> {
     }
 }
 
+impl SseDecode for Option<crate::api::types::SendOptions> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::types::SendOptions>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::types::SessionState> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -7112,6 +7148,30 @@ impl SseDecode for crate::api::secret_store::SecretReply {
         return crate::api::secret_store::SecretReply {
             ok: var_ok,
             value: var_value,
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::SelectionStrategy {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::types::SelectionStrategy::Smallest,
+            1 => crate::api::types::SelectionStrategy::All,
+            _ => unreachable!("Invalid variant for SelectionStrategy: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::SendOptions {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_strategy = <crate::api::types::SelectionStrategy>::sse_decode(deserializer);
+        let mut var_changeOutputs = <u32>::sse_decode(deserializer);
+        return crate::api::types::SendOptions {
+            strategy: var_strategy,
+            change_outputs: var_changeOutputs,
         };
     }
 }
@@ -8197,6 +8257,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::FeeEstimate {
             self.fee.into_into_dart().into_dart(),
             self.input_count.into_into_dart().into_dart(),
             self.change.into_into_dart().into_dart(),
+            self.locked.into_into_dart().into_dart(),
+            self.change_outputs.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -9031,6 +9093,48 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::secret_store::SecretReply>
     for crate::api::secret_store::SecretReply
 {
     fn into_into_dart(self) -> crate::api::secret_store::SecretReply {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::SelectionStrategy {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Smallest => 0.into_dart(),
+            Self::All => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::SelectionStrategy
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::SelectionStrategy>
+    for crate::api::types::SelectionStrategy
+{
+    fn into_into_dart(self) -> crate::api::types::SelectionStrategy {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::SendOptions {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.strategy.into_into_dart().into_dart(),
+            self.change_outputs.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::SendOptions
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::SendOptions>
+    for crate::api::types::SendOptions
+{
+    fn into_into_dart(self) -> crate::api::types::SendOptions {
         self
     }
 }
@@ -9903,6 +10007,8 @@ impl SseEncode for crate::api::types::FeeEstimate {
         <u64>::sse_encode(self.fee, serializer);
         <u32>::sse_encode(self.input_count, serializer);
         <u64>::sse_encode(self.change, serializer);
+        <u64>::sse_encode(self.locked, serializer);
+        <u32>::sse_encode(self.change_outputs, serializer);
     }
 }
 
@@ -10442,6 +10548,16 @@ impl SseEncode for Option<crate::api::types::ScanResult> {
     }
 }
 
+impl SseEncode for Option<crate::api::types::SendOptions> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::types::SendOptions>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::types::SessionState> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -10662,6 +10778,30 @@ impl SseEncode for crate::api::secret_store::SecretReply {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.ok, serializer);
         <Option<String>>::sse_encode(self.value, serializer);
+    }
+}
+
+impl SseEncode for crate::api::types::SelectionStrategy {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::types::SelectionStrategy::Smallest => 0,
+                crate::api::types::SelectionStrategy::All => 1,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::types::SendOptions {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::types::SelectionStrategy>::sse_encode(self.strategy, serializer);
+        <u32>::sse_encode(self.change_outputs, serializer);
     }
 }
 

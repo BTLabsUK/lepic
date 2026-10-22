@@ -166,10 +166,14 @@ abstract class EpicWallet implements RustOpaqueInterface {
   ///
   /// `message` goes to the recipient signed with the slate, as `epic-wallet send --message`
   /// sends it. It is cut to its first 256 bytes, on a character boundary, before it is signed.
+  ///
+  /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+  /// change outputs outside 1..=10 fail with `InvalidArgument`.
   Future<Slate> createSendSlate({
     required BigInt amount,
     required BigInt minimumConfirmations,
     String? message,
+    SendOptions? options,
   });
 
   /// [`EpicWallet::create`] with a wallet password LEPIC generates, seals under `pin` and
@@ -222,16 +226,29 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// [`EpicWallet::send_epicbox`] choose them, with nothing locked. Such a send at the same
   /// chain tip, with no outputs changed in between, charges this fee. Asks the node for its
   /// tip. Fails as those sends do, for example with `NotEnoughFunds` or `NodeUnreachable`.
+  /// Pass the `options` the send will get.
+  ///
+  /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+  /// change outputs outside 1..=10 fail with `InvalidArgument`.
   Future<FeeEstimate> estimateFee({
     required BigInt amount,
     required BigInt minimumConfirmations,
+    SendOptions? options,
   });
 
   /// The largest amount a send with `minimum_confirmations` can pay now, with its fee and
   /// inputs. A send of that amount at the same chain tip, with no outputs changed in between,
   /// charges this fee. Fails with `NotEnoughFunds` when no amount can be paid, and otherwise
-  /// as [`EpicWallet::estimate_fee`].
-  Future<FeeEstimate> estimateMax({required BigInt minimumConfirmations});
+  /// as [`EpicWallet::estimate_fee`]. Sending everything takes `All`: with `Smallest`
+  /// the largest amount is the one the smallest outputs that cover it can pay, which is the
+  /// same total here but may differ past 500 outputs.
+  ///
+  /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+  /// change outputs outside 1..=10 fail with `InvalidArgument`.
+  Future<FeeEstimate> estimateMax({
+    required BigInt minimumConfirmations,
+    SendOptions? options,
+  });
 
   /// Everything the wallet reports from now on: session, balance, transaction, sync and
   /// transport changes. The stream ends when the wallet is dropped. A failure to subscribe,
@@ -427,7 +444,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Pays the waiting invoice `slate_id` and delivers the payment over Epicbox to the
   /// sender's allowed address. `amount` is what the user typed: an invoice for any other
   /// amount is refused, as `epic-wallet pay` refuses it. Inputs need `minimum_confirmations`;
-  /// `message` goes to the sender signed, as in [`EpicWallet::create_send_slate`].
+  /// `message` goes to the sender signed and `options` choose the inputs and change, as in
+  /// [`EpicWallet::create_send_slate`].
   ///
   /// Fails with `InvoiceNotFound` when no invoice with that id waits, `AmountMismatch`,
   /// `PaymentExpired`, `NotEnoughFunds`, `InvalidSlate`, `NodeUnreachable`, and with
@@ -438,6 +456,7 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required BigInt amount,
     required BigInt minimumConfirmations,
     String? message,
+    SendOptions? options,
   });
 
   /// What this wallet learned about the peer at `address`, `<key>@<relay>[:port]`, from
@@ -554,12 +573,13 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Sends to `<address>@<relay>[:port]` over Epicbox. The listener or a drain finalizes and
   /// posts it when the answer arrives. Fails with `InvalidArgument`, storing nothing, for an
   /// address that [`validate_epicbox_address`] refuses, such as a key without `@<relay>`.
-  /// `message` is sent as [`EpicWallet::create_send_slate`] sends it.
+  /// `message` and `options` work as in [`EpicWallet::create_send_slate`].
   Future<SentTx> sendEpicbox({
     required BigInt amount,
     required BigInt minimumConfirmations,
     required String address,
     String? message,
+    SendOptions? options,
   });
 
   /// [`EpicWallet::create_send_slate`] writing the slate to the file at `path`.
@@ -568,6 +588,7 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required BigInt minimumConfirmations,
     required String path,
     String? message,
+    SendOptions? options,
   });
 
   /// Sends `amount` to the wallet listening at `url`, `http(s)://host[:port][/path]`, then
@@ -591,6 +612,7 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required String url,
     required bool allowPlainHttp,
     String? message,
+    SendOptions? options,
   });
 
   /// Sends `amount` to the wallet at `onion` over the wallet's tor, then finalizes its

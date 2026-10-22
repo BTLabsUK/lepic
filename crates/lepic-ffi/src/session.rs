@@ -1,6 +1,7 @@
 //! One open wallet: the engine over the binding's ports, and the glue between engine calls,
 //! the app's secret store and Dart streams.
 
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -33,7 +34,7 @@ use lepic_wallet::refresh::{
 use lepic_wallet::scan::{
     FoundDuring as EngineFoundDuring, ScanCancel, ScanOptions, ScanStart, ScanSummary,
 };
-use lepic_wallet::selection::Selection;
+use lepic_wallet::selection::{Selection, SelectionStrategy as EngineStrategy};
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{
     Clock, DATABASE_FILE, Event, NodeEndpoint, Password, Ports, ReceiveRequest, SessionState,
@@ -52,9 +53,9 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
     LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, OutputCategory, OutputStatus,
-    ReceivedSlate, ScanFound, ScanProgress, ScanResult, SentTx, Slate, SlateMessage,
-    TransactionDetails, TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent,
-    WalletEventKind, WalletOutput, WalletSummary,
+    ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy, SendOptions, SentTx,
+    Slate, SlateMessage, TransactionDetails, TransportState, TxOrigin, TxStatus, WalletConfig,
+    WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -79,6 +80,13 @@ const SEED_SECRET: &str = "wallet/seed";
 const WALLET_NAME: &str = "default";
 
 const DEFAULT_ACCOUNT: AccountIndex = AccountIndex(0);
+
+/// The strategy of a send given no options, as `epic-wallet send` and the Epic GUI wallet
+/// choose; the engine's own default, `All`, is that of `epic-wallet`'s owner API.
+const DEFAULT_STRATEGY: EngineStrategy = EngineStrategy::Smallest;
+
+/// The most change outputs a send may ask for; each one costs a range proof.
+const MAX_CHANGE_OUTPUTS: usize = 10;
 
 /// The longest slate text the file method imports, checked before the text is written to a
 /// scratch file.
@@ -597,8 +605,10 @@ impl Session {
         &self,
         amount: u64,
         minimum_confirmations: u64,
+        options: Option<SendOptions>,
     ) -> Result<FeeEstimate, WalletError> {
-        let options = Self::send_request(amount, minimum_confirmations, None).selection_options();
+        let options = Self::send_request_with(amount, minimum_confirmations, None, options)?
+            .selection_options();
         let selection = self
             .engine
             .estimate_fee(Amount::new(amount), options)
@@ -609,8 +619,10 @@ impl Session {
     pub(crate) async fn estimate_max(
         &self,
         minimum_confirmations: u64,
+        options: Option<SendOptions>,
     ) -> Result<FeeEstimate, WalletError> {
-        let options = Self::send_request(0, minimum_confirmations, None).selection_options();
+        let options =
+            Self::send_request_with(0, minimum_confirmations, None, options)?.selection_options();
         let selection = self.engine.estimate_max(options).await?;
         fee_estimate(&selection)
     }
@@ -661,6 +673,8 @@ impl Session {
         }
     }
 
+    /// A send with the binding's default selection, as [`Session::send_request_with`] without
+    /// options makes it.
     fn send_request(
         amount: u64,
         minimum_confirmations: u64,
@@ -669,8 +683,28 @@ impl Session {
         SendRequest {
             minimum_confirmations,
             message,
+            strategy: DEFAULT_STRATEGY,
             ..SendRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
         }
+    }
+
+    /// Fails with `InvalidArgument` for change outputs outside 1..=[`MAX_CHANGE_OUTPUTS`].
+    fn send_request_with(
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<SendRequest, WalletError> {
+        let request = Self::send_request(amount, minimum_confirmations, message);
+        let Some(options) = options else {
+            return Ok(request);
+        };
+        let (strategy, change_outputs) = selection_choice(options)?;
+        Ok(SendRequest {
+            strategy,
+            change_outputs,
+            ..request
+        })
     }
 
     pub(crate) async fn send_file(
@@ -679,11 +713,12 @@ impl Session {
         minimum_confirmations: u64,
         path: PathBuf,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<SentTx, WalletError> {
         let sent = self
             .engine
             .send(
-                Self::send_request(amount, minimum_confirmations, message),
+                Self::send_request_with(amount, minimum_confirmations, message, options)?,
                 Delivery::Export {
                     transport: FILE,
                     to: Location::File(path),
@@ -693,15 +728,33 @@ impl Session {
         Ok(sent_tx(&sent))
     }
 
+    #[cfg(test)]
     pub(crate) async fn create_send_slate(
         &self,
         amount: u64,
         minimum_confirmations: u64,
         message: Option<String>,
     ) -> Result<Slate, WalletError> {
+        self.create_send_slate_with(amount, minimum_confirmations, message, None)
+            .await
+    }
+
+    pub(crate) async fn create_send_slate_with(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<Slate, WalletError> {
         let scratch = ScratchFile::new(&self.data_dir)?;
         let sent = self
-            .send_file(amount, minimum_confirmations, scratch.path.clone(), message)
+            .send_file(
+                amount,
+                minimum_confirmations,
+                scratch.path.clone(),
+                message,
+                options,
+            )
             .await?;
         let json = scratch.read().await?;
         Ok(Slate {
@@ -810,7 +863,9 @@ impl Session {
         minimum_confirmations: u64,
         address: String,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<SentTx, WalletError> {
+        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
         let epicbox = self.epicbox()?;
         relay_address(&address, self.network)
             .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
@@ -818,7 +873,7 @@ impl Session {
         let sent = self
             .engine
             .send(
-                Self::send_request(amount, minimum_confirmations, message),
+                request,
                 Delivery::Deliver {
                     transport: TRANSPORT_ID,
                     to: Destination::new(address),
@@ -1089,6 +1144,27 @@ fn legacy_import(outcome: &LegacyImportOutcome) -> LegacyImport {
     }
 }
 
+/// The engine's strategy and change outputs for `options`. Fails with `InvalidArgument` for
+/// change outputs outside 1..=[`MAX_CHANGE_OUTPUTS`].
+pub(crate) fn selection_choice(
+    options: SendOptions,
+) -> Result<(EngineStrategy, NonZeroUsize), WalletError> {
+    let change_outputs = usize::try_from(options.change_outputs)
+        .ok()
+        .filter(|count| *count <= MAX_CHANGE_OUTPUTS)
+        .and_then(NonZeroUsize::new)
+        .ok_or_else(|| {
+            invalid(format!(
+                "change outputs must be from 1 to {MAX_CHANGE_OUTPUTS}"
+            ))
+        })?;
+    let strategy = match options.strategy {
+        SelectionStrategy::Smallest => EngineStrategy::Smallest,
+        SelectionStrategy::All => EngineStrategy::All,
+    };
+    Ok((strategy, change_outputs))
+}
+
 fn fee_estimate(selection: &Selection) -> Result<FeeEstimate, WalletError> {
     let out_of_range = || WalletError::new(WalletErrorKind::Other, "fee estimate out of range");
     let change = selection
@@ -1101,6 +1177,8 @@ fn fee_estimate(selection: &Selection) -> Result<FeeEstimate, WalletError> {
         fee: selection.fee.value(),
         input_count: u32::try_from(selection.inputs.len()).map_err(|_| out_of_range())?,
         change,
+        locked: selection.total.value(),
+        change_outputs: u32::try_from(selection.change.len()).map_err(|_| out_of_range())?,
     })
 }
 

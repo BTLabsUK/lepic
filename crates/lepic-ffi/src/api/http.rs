@@ -11,6 +11,7 @@ use std::sync::Arc;
 use flutter_rust_bridge::frb;
 
 use crate::api::error::WalletError;
+use crate::api::types::SendOptions;
 use crate::api::wallet::EpicWallet;
 use crate::boundary::end_stream;
 use crate::frb_generated::StreamSink;
@@ -138,15 +139,17 @@ impl EpicWallet {
         url: String,
         allow_plain_http: bool,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
         self.run("send_http", |session| async move {
             session
-                .send_http(
+                .send_http_with(
                     amount,
                     minimum_confirmations,
                     &url,
                     allow_plain_http,
                     message,
+                    options,
                 )
                 .await
         })

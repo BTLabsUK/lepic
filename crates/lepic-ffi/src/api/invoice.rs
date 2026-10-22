@@ -21,7 +21,7 @@
 use crate::api::error::WalletError;
 use crate::api::types::{
     IncomingInvoice, InvoiceReport, InvoiceSender, InvoiceSweep, IssuedInvoice, PaidInvoice,
-    PeerCapability,
+    PeerCapability, SendOptions,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -165,7 +165,8 @@ impl EpicWallet {
     /// Pays the waiting invoice `slate_id` and delivers the payment over Epicbox to the
     /// sender's allowed address. `amount` is what the user typed: an invoice for any other
     /// amount is refused, as `epic-wallet pay` refuses it. Inputs need `minimum_confirmations`;
-    /// `message` goes to the sender signed, as in [`EpicWallet::create_send_slate`].
+    /// `message` goes to the sender signed and `options` choose the inputs and change, as in
+    /// [`EpicWallet::create_send_slate`].
     ///
     /// Fails with `InvoiceNotFound` when no invoice with that id waits, `AmountMismatch`,
     /// `PaymentExpired`, `NotEnoughFunds`, `InvalidSlate`, `NodeUnreachable`, and with
@@ -177,10 +178,11 @@ impl EpicWallet {
         amount: u64,
         minimum_confirmations: u64,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<PaidInvoice, WalletError> {
         self.run("pay_invoice", |session| async move {
             session
-                .pay_invoice(&slate_id, amount, minimum_confirmations, message)
+                .pay_invoice(&slate_id, amount, minimum_confirmations, message, options)
                 .await
         })
         .await

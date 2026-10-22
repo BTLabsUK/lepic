@@ -23,6 +23,7 @@ use crate::api::http::{
     HttpExposure, HttpListenerEvent, HttpListenerEventKind, HttpListenerInfo, HttpRefusal,
     HttpResentTx, HttpSentTx,
 };
+use crate::api::types::SendOptions;
 
 /// Where the HTTP listener's events go.
 pub(crate) type HttpReport = Arc<dyn Fn(HttpListenerEvent) + Send + Sync>;
@@ -113,6 +114,7 @@ fn stopped(report: &HttpReport) {
 }
 
 impl Session {
+    #[cfg(test)]
     pub(crate) async fn send_http(
         &self,
         amount: u64,
@@ -121,14 +123,29 @@ impl Session {
         allow_plain_http: bool,
         message: Option<String>,
     ) -> Result<HttpSentTx, WalletError> {
+        self.send_http_with(
+            amount,
+            minimum_confirmations,
+            url,
+            allow_plain_http,
+            message,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_http_with(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        url: &str,
+        allow_plain_http: bool,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<HttpSentTx, WalletError> {
+        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
         let url = foreign_url(url, allow_plain_http)?;
-        let sent = self
-            .engine
-            .send(
-                Self::send_request(amount, minimum_confirmations, message),
-                delivery(&url),
-            )
-            .await?;
+        let sent = self.engine.send(request, delivery(&url)).await?;
         let slate_id = sent.slate_id.to_string();
         let posted = self.finalize_http_reply(&slate_id).await?;
         Ok(HttpSentTx {
