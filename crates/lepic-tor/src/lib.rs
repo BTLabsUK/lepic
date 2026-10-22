@@ -2,12 +2,14 @@
 //! `tor` binary the host bundles and runs as a child process per open wallet.
 
 pub mod control;
+pub mod listen;
 pub mod onion;
 pub mod process;
 pub mod socks;
 pub mod transport;
 
-pub use control::ControlError;
+pub use control::{ControlError, MAX_STREAMS_PER_CIRCUIT};
+pub use listen::listen_settings;
 pub use onion::{
     ONION_NAME_LEN, OnionAddress, OnionError, expanded_secret, onion_address, parse_onion,
     public_key_of_seed,

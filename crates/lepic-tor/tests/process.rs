@@ -326,7 +326,9 @@ async fn bootstraps_publishes_the_wallet_onion_and_stops() {
             "SETEVENTS STATUS_CLIENT STATUS_GENERAL HS_DESC".to_owned(),
             "GETINFO net/listeners/socks".to_owned(),
             "GETINFO status/bootstrap-phase".to_owned(),
-            format!("ADD_ONION Flags=DiscardPK Port=80,127.0.0.1:{listener_port}"),
+            format!(
+                "ADD_ONION Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=4 Port=80,127.0.0.1:{listener_port}"
+            ),
             format!("DEL_ONION {}", onion.service_id()),
             "SIGNAL SHUTDOWN".to_owned(),
         ]
@@ -512,7 +514,9 @@ async fn republishing_removes_the_old_onion_first() {
         .map(String::as_str)
         .filter(|c| c.starts_with("ADD_ONION") || c.starts_with("DEL_ONION"))
         .collect();
-    let add = format!("ADD_ONION Flags=DiscardPK Port=80,127.0.0.1:{port}");
+    let add = format!(
+        "ADD_ONION Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=4 Port=80,127.0.0.1:{port}"
+    );
     assert_eq!(
         onion_commands,
         [

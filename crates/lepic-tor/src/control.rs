@@ -39,6 +39,10 @@ const COOKIE_LEN: usize = 32;
 /// Padded base64 of the 64-byte expanded key.
 const ENCODED_KEY_LEN: usize = 88;
 const NONCE_LEN: usize = 32;
+/// Streams at once on one rendezvous circuit to the onion; tor closes a circuit that opens
+/// more. The listener behind the onion sees every sender as `127.0.0.1`, so this is the
+/// per-sender limit there.
+pub const MAX_STREAMS_PER_CIRCUIT: usize = 4;
 const HASH_LEN: usize = 32;
 const SAFECOOKIE_SERVER_KEY: &[u8] = b"Tor safe cookie authentication server-to-controller hash";
 const SAFECOOKIE_CLIENT_KEY: &[u8] = b"Tor safe cookie authentication controller-to-server hash";
@@ -556,7 +560,9 @@ impl ControlConnection {
     }
 
     /// `ADD_ONION` with the 64-byte expanded key, port 80 to `127.0.0.1:<target_port>`.
-    /// `DiscardPK` keeps tor from echoing the key. Returns tor's ServiceID.
+    /// `DiscardPK` keeps tor from echoing the key; `MaxStreams` with `MaxStreamsCloseCircuit`
+    /// closes a circuit that opens more than [`MAX_STREAMS_PER_CIRCUIT`] streams at once.
+    /// Returns tor's ServiceID.
     pub async fn add_onion(
         &self,
         expanded_key: &[u8; 64],
@@ -578,7 +584,9 @@ impl ControlConnection {
         let mut line = Zeroizing::new(String::with_capacity(160));
         line.push_str("ADD_ONION ED25519-V3:");
         line.push_str(encoded);
-        line.push_str(" Flags=DiscardPK Port=80,127.0.0.1:");
+        line.push_str(" Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=");
+        line.push_str(&MAX_STREAMS_PER_CIRCUIT.to_string());
+        line.push_str(" Port=80,127.0.0.1:");
         line.push_str(&target_port.to_string());
         let reply = self.command(&line).await?;
         reply
