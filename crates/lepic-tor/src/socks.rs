@@ -440,6 +440,34 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn a_domain_bound_address_is_read_to_its_end() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let credentials = SocksCredentials::random().unwrap();
+        let auth = encode_auth(&credentials).unwrap();
+        let connect = encode_connect("x.onion", 80).unwrap();
+        let proxy = tokio::spawn(async move {
+            let mut request = vec![0u8; 3 + auth.len() + connect.len()];
+            server.write_all(&[5, 2, 1, 0]).await.unwrap();
+            server
+                .write_all(&[5, 0, 0, 3, 4, b'h', b'o', b's', b't', 0, 80])
+                .await
+                .unwrap();
+            server.write_all(b"HTTP/1.1").await.unwrap();
+            server.read_exact(&mut request).await.unwrap();
+        });
+        let auth = encode_auth(&credentials).unwrap();
+        let connect = encode_connect("x.onion", 80).unwrap();
+        handshake(&mut client, &auth, &connect).await.unwrap();
+        let mut payload = [0u8; 8];
+        client.read_exact(&mut payload).await.unwrap();
+        assert_eq!(
+            &payload, b"HTTP/1.1",
+            "nothing of the reply is left in the stream"
+        );
+        proxy.await.unwrap();
+    }
+
     #[test]
     fn random_credentials_differ_and_stay_redacted() {
         let a = SocksCredentials::random().unwrap();
