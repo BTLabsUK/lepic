@@ -178,9 +178,9 @@ impl Session {
     /// `report`.
     ///
     /// A start while the tor stopped last is still going down waits for it, as both use the
-    /// same data directory; one that waits too long reports `Failed` and `Stopped`. Android
-    /// and iOS run no tor: there `Failed` with [`TorFailureKind::Missing`] and `Stopped` are
-    /// reported at once.
+    /// same data directory; one that waits too long reports `Failed` and `Stopped`. iOS runs
+    /// no tor: there `Failed` with [`TorFailureKind::Missing`] and `Stopped` are reported at
+    /// once. Android runs the tor the app installs as a native library.
     pub(crate) async fn start_tor(
         self: &Arc<Self>,
         tor_binary: String,
@@ -188,7 +188,7 @@ impl Session {
         report: TorReport,
     ) -> Result<(), WalletError> {
         let key = self.engine.onion_key()?;
-        if cfg!(any(target_os = "android", target_os = "ios")) {
+        if cfg!(target_os = "ios") {
             report(failed(TorFailureKind::Missing));
             report(TorEvent::of(TorEventKind::Stopped));
             return Ok(());
@@ -360,6 +360,26 @@ impl Session {
             },
             _ => off,
         }
+    }
+
+    /// Wakes the running tor after a pause and, when `network_changed`, has it build new
+    /// connections. Nothing to do while tor is still being started.
+    pub(crate) async fn refresh_tor(&self, network_changed: bool) -> Result<(), WalletError> {
+        self.ensure_unlocked()?;
+        let tor = {
+            let mut slot = lock(&self.tor_slot);
+            slot.settle();
+            match &*slot {
+                TorSlot::Running(run) => Arc::clone(&run.tor),
+                TorSlot::Starting(_) => return Ok(()),
+                TorSlot::Idle | TorSlot::Stopping(_) => return Err(tor_not_running()),
+            }
+        };
+        // A tor that failed the refresh has ended; its stream reports `Failed` and `Stopped`.
+        tor.refresh(network_changed).await.map_err(|failure| {
+            debug!(transport = "tor", error = %failure, "tor not refreshed");
+            tor_not_running()
+        })
     }
 
     /// Where the `Sending` of a send goes, once tor can send; checked before anything is

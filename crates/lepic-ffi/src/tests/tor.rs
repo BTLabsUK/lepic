@@ -192,7 +192,8 @@ async fn serve_control(
                     "515 Authentication failed\r\n".to_owned()
                 }
             }
-            "TAKEOWNERSHIP" | "RESETCONF" | "SETEVENTS" => "250 OK\r\n".to_owned(),
+            "TAKEOWNERSHIP" | "RESETCONF" | "SETEVENTS" | "SETCONF" => "250 OK\r\n".to_owned(),
+            "SIGNAL" if line == "SIGNAL ACTIVE" => "250 OK\r\n".to_owned(),
             "DEL_ONION" => {
                 onions.lock().unwrap().remove(words.next().unwrap());
                 "250 OK\r\n".to_owned()
@@ -419,6 +420,44 @@ async fn lock_stops_tor_and_then_its_listener() {
         .await;
     assert_eq!(kind(locked), WalletErrorKind::Locked);
     assert_eq!(kind(pair.bob.onion_address()), WalletErrorKind::Locked);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refresh_reaches_the_running_tor_and_keeps_the_onion() {
+    let (pair, network) = tor_pair().await;
+    assert_eq!(
+        kind(pair.bob.refresh_tor(false).await),
+        WalletErrorKind::TorNotRunning
+    );
+    let (events, commands) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+
+    pair.bob.refresh_tor(false).await.unwrap();
+    assert_eq!(
+        commands.lock().unwrap().last().map(String::as_str),
+        Some("SIGNAL ACTIVE")
+    );
+    pair.bob.refresh_tor(true).await.unwrap();
+    let commands = commands.lock().unwrap().clone();
+    assert_eq!(
+        commands[commands.len() - 4..],
+        [
+            "SETCONF DisableNetwork=1".to_owned(),
+            "SETCONF DisableNetwork=0".to_owned(),
+            "GETINFO net/listeners/socks".to_owned(),
+            "SIGNAL ACTIVE".to_owned(),
+        ]
+    );
+    let status = pair.bob.tor_status();
+    assert_eq!(status.kind, TorStatusKind::Ready);
+    assert_eq!(status.onion, Some(pair.bob.onion_address().unwrap()));
+    assert!(events.find(TorEventKind::Failed).is_none());
+
+    pair.bob.lock();
+    events.wait_for(TorEventKind::Stopped).await;
+    assert_eq!(
+        kind(pair.bob.refresh_tor(false).await),
+        WalletErrorKind::Locked
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
