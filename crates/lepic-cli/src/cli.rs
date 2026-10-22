@@ -297,7 +297,7 @@ pub struct SpendArgs {
     #[arg(long, value_name = "COUNT", default_value_t = 1)]
     pub change_outputs: usize,
     /// How inputs are chosen
-    #[arg(long, value_name = "STRATEGY", default_value = "all")]
+    #[arg(long, value_name = "STRATEGY", default_value = "smallest")]
     pub selection: SelectionArg,
     /// Blocks after which the other party must refuse the slate
     #[arg(long, value_name = "BLOCKS")]
@@ -339,9 +339,10 @@ pub struct DestinationArgs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SelectionArg {
-    /// Spend every eligible output, as epic-wallet does by default
+    /// Spend every eligible output, which locks the whole balance until the send confirms
     All,
-    /// Spend the fewest small outputs that cover the amount
+    /// Spend the fewest small outputs that cover the amount, as `epic-wallet send` does by
+    /// default
     Smallest,
 }
 

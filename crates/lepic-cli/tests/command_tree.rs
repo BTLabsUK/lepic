@@ -334,3 +334,12 @@ fn a_send_needs_the_confirmations_the_balance_counts_as_spendable_by_default() {
     );
     assert_eq!(args.spend.min_confirmations, 3);
 }
+
+#[test]
+fn a_send_spends_the_smallest_outputs_by_default() {
+    let cli = Cli::try_parse_from(["lepic", "tx", "send", "1", "--to", "peer@relay"]).unwrap();
+    let lepic_cli::cli::Command::Tx(lepic_cli::cli::TxCommand::Send(args)) = cli.command else {
+        panic!("not a send");
+    };
+    assert_eq!(args.spend.selection, lepic_cli::cli::SelectionArg::Smallest);
+}
