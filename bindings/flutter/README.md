@@ -42,7 +42,8 @@ final wallet = await EpicWallet.create(
 - `SecretStore` has the same three methods as the app's `secret_store.dart` interface, so the
   app's `PlatformSecretStore` can be passed to `lepicSecretStore` unchanged. LEPIC writes
   `lepic.vault`: the seed encrypted under the wallet password (Argon2id, XChaCha20-Poly1305), and
-  `lepic.pin-failures` after a failed password or PIN attempt. A PIN wallet adds `lepic.pin-key`
+  `lepic.pin-failures` after a failed password or PIN attempt, and `lepic.vault-next` while
+  `changePassword` runs (below). A PIN wallet adds `lepic.pin-key`
   and, while a PIN change is pending, `lepic.pin-key-pending` (below). Store `lepic.pin-key-pending` exactly as `lepic.pin-key`, in
   the same keystore-backed storage: it is a PIN key too.
 - Use one store per wallet, for example by prefixing keys with a wallet id in the adapter. The
@@ -78,6 +79,19 @@ final wallet = await EpicWallet.create(
   from the new pair, which the app stored, it makes that pair current and the old text stops
   opening. While a change is pending both pairs share the one failure count, and a wrong PIN
   costs two key derivations but counts as one failure.
+- `EpicWallet.changePassword(currentPassword, newPassword)` changes the password of a wallet
+  from `create` or `importWalletSeed`: the vault is encrypted anew under the new password
+  (Argon2id, fresh salt). The current password attempt is counted and delayed as in `open`;
+  a wrong one gives `wrongPassword` and changes nothing. A new password shorter than eight
+  characters gives `invalidArgument`, and a PIN wallet `unsupported` (use `changePin`), both
+  before any attempt is counted. LEPIC writes the new vault as `lepic.vault-next`, reads it
+  back, writes it over `lepic.vault` and deletes `lepic.vault-next` last, so the store always
+  holds a vault that opens: if the app stops part way, the old or the new password opens the
+  wallet, and the next `open` with the one that works drops or finishes the change. This
+  needs a `SecretStore` whose `write` has stored the value durably when its Future completes.
+  `secretStore` means the store failed or did not give back what was written; the old password
+  then still opens (or, if the store failed while replacing `lepic.vault`, either does until
+  the next `open`). Forget any password the app remembered for the wallet after a change.
 - `EpicWallet.importWalletSeed` and `EpicWallet.importWalletSeedWithPin` restore from the text of
   an `epic-wallet` `wallet.seed` (at most 4096 bytes) and its password, then work as `create` and
   `createWithPin` with a phrase: scan next. A wrong file password gives `wrongPassword`, text
@@ -192,7 +206,7 @@ this list.
 
 | Direction | Value | Calls |
 |---|---|---|
-| Dart to Rust | Wallet password the user types | `EpicWallet.create`, `EpicWallet.open`, `EpicWallet.mnemonic`, `EpicWallet.importWalletSeed` |
+| Dart to Rust | Wallet password the user types | `EpicWallet.create`, `EpicWallet.open`, `EpicWallet.mnemonic`, `EpicWallet.importWalletSeed`, `EpicWallet.changePassword` (current and new) |
 | Dart to Rust | PIN the user types | `EpicWallet.createWithPin`, `EpicWallet.openWithPin`, `EpicWallet.mnemonicWithPin`, `EpicWallet.importWalletSeedWithPin`, `EpicWallet.changePin` (old and new) |
 | Dart to Rust | Password of an `epic-wallet` `wallet.seed` the user imports | `EpicWallet.importWalletSeed`, `EpicWallet.importWalletSeedWithPin` |
 | Dart to Rust | Text of an `epic-wallet` `wallet.seed` the user imports (the encrypted seed) | `EpicWallet.importWalletSeed`, `EpicWallet.importWalletSeedWithPin` |

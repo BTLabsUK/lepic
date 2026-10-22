@@ -462,6 +462,29 @@ where
     counted(guard.policy, store, check).await
 }
 
+/// [`password_attempt`] with `check`, then `then` on what it returned, with no other attempt
+/// in between. Only `check` is the counted attempt: a failure of `then` neither counts nor
+/// clears a failure.
+pub(crate) async fn after_password_attempt<T, U, CheckFut, ThenFut>(
+    guard: &PinGuard,
+    store: &AppSecretStore,
+    check: impl FnOnce() -> CheckFut,
+    then: impl FnOnce(T) -> ThenFut,
+) -> Result<U, WalletError>
+where
+    CheckFut: Future<Output = Result<T, WalletError>>,
+    ThenFut: Future<Output = Result<U, WalletError>>,
+{
+    let _attempt = guard.attempts.lock().await;
+    let checked = counted(guard.policy, store, check).await?;
+    then(checked).await
+}
+
+/// Whether `store` holds the PIN key of a wallet from `create_with_pin`.
+pub(crate) async fn is_pin_wallet(store: &AppSecretStore) -> Result<bool, WalletError> {
+    Ok(store.read(KEY_KEY).await?.is_some())
+}
+
 async fn attempt(
     policy: PinPolicy,
     store: &AppSecretStore,

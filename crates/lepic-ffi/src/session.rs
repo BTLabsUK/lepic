@@ -61,7 +61,10 @@ use crate::api::types::{
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
-use crate::vault_port::{AppVault, SharedStorage, VAULT_KEY, VaultBytes, vault_error};
+use crate::vault_port::{
+    AppVault, SharedStorage, VAULT_KEY, VAULT_NEXT_KEY, VaultBytes, decode, vault_error,
+};
+use crate::{password as password_change, pin};
 
 mod app_data;
 mod http;
@@ -450,8 +453,90 @@ impl Session {
 
     pub(crate) async fn open(&self, password: Zeroizing<String>) -> Result<(), WalletError> {
         self.vault.load(&self.store).await?;
-        self.engine.open(self::password(password)).await?;
+        match self.store.read(VAULT_NEXT_KEY).await? {
+            None => self.engine.open(self::password(password)).await?,
+            Some(next) => self.open_settling_change(password, &next).await?,
+        }
         self.seed_node_tip()
+    }
+
+    /// Opens while `next` holds the vault of a password change that stopped before it ended. A
+    /// password that opens the stored vault drops the change; one that opens only `next`
+    /// finishes it, making `next` the stored vault.
+    async fn open_settling_change(
+        &self,
+        password: Zeroizing<String>,
+        next: &str,
+    ) -> Result<(), WalletError> {
+        let stored = self
+            .engine
+            .open(self::password(password.clone()))
+            .await
+            .map_err(WalletError::from);
+        let error = match stored {
+            Ok(()) => {
+                password_change::discard_next(&self.store).await;
+                info!("unfinished password change dropped");
+                return Ok(());
+            }
+            Err(error)
+                if matches!(
+                    error.kind,
+                    WalletErrorKind::WrongPassword
+                        | WalletErrorKind::SecretStore
+                        | WalletErrorKind::WalletNotFound
+                ) =>
+            {
+                error
+            }
+            Err(error) => return Err(error),
+        };
+        let Ok(bytes) = decode(next) else {
+            return Err(error);
+        };
+        self.vault.set(bytes);
+        if let Err(next_error) = self.engine.open(self::password(password)).await {
+            let next_error = WalletError::from(next_error);
+            return Err(if next_error.kind == WalletErrorKind::WrongPassword {
+                next_error
+            } else {
+                error
+            });
+        }
+        if let Err(error) = self.store.write(VAULT_KEY, next.to_owned()).await {
+            self.engine.lock();
+            return Err(error);
+        }
+        password_change::discard_next(&self.store).await;
+        info!("unfinished password change finished");
+        Ok(())
+    }
+
+    /// Re-encrypts the vault under `new` once `current` opened it, as [`password_change`]
+    /// describes. Refused with `Unsupported` for a PIN wallet, whose password the user never
+    /// sees, before any attempt is counted.
+    pub(crate) async fn change_password(
+        &self,
+        current: Zeroizing<String>,
+        new: Zeroizing<String>,
+    ) -> Result<(), WalletError> {
+        self.ensure_unlocked()?;
+        if pin::is_pin_wallet(&self.store).await? {
+            return Err(WalletError::new(
+                WalletErrorKind::Unsupported,
+                "a pin wallet changes its pin, not its password",
+            ));
+        }
+        let runtime = self.runtime();
+        pin::after_password_attempt(
+            &runtime.pin,
+            &self.store,
+            || password_change::open_stored(&self.store, current),
+            |vault| password_change::replace(&self.store, vault, new, runtime.kdf),
+        )
+        .await?;
+        info!("wallet password changed");
+        Ok(())
     }
 
     /// Starts the node client from the tip the wallet confirmed last, so the first tip a node
@@ -1472,9 +1557,9 @@ pub(crate) async fn node_tip(
     })
 }
 
-/// Whether the app's store holds a wallet vault.
+/// Whether the app's store holds a wallet vault, also one of an unfinished password change.
 pub(crate) async fn wallet_exists(store: &AppSecretStore) -> Result<bool, WalletError> {
-    Ok(store.read(VAULT_KEY).await?.is_some())
+    Ok(store.read(VAULT_KEY).await?.is_some() || store.read(VAULT_NEXT_KEY).await?.is_some())
 }
 
 /// Removes the wallet database in `data_dir` with its journal files, if there are any.
@@ -1499,6 +1584,7 @@ pub(crate) async fn delete_wallet(
     let claim = runtime.claim(Path::new(&config.data_dir))?;
     remove_database(&claim.dir).await?;
     store.delete(VAULT_KEY).await?;
+    store.delete(VAULT_NEXT_KEY).await?;
     crate::pin::forget(store).await?;
     info!("wallet deleted");
     Ok(())

@@ -102,6 +102,30 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// finalized transaction, and with `NodeUnreachable` when the node cannot be asked.
   Future<void> cancelTransaction({required int txId});
 
+  /// Changes the password of a wallet from [`EpicWallet::create`] or
+  /// [`EpicWallet::import_wallet_seed`]: the vault is encrypted anew under `new_password`
+  /// with Argon2id and a fresh salt. `current_password` must open the stored vault; that
+  /// attempt is counted and delayed as in [`EpicWallet::open`]. Afterwards only the new
+  /// password opens the wallet, also this handle's [`EpicWallet::mnemonic`].
+  ///
+  /// The new vault is written to the store as `lepic.vault-next` and read back before it
+  /// replaces `lepic.vault`, and `lepic.vault-next` is deleted last. If the app stops part way,
+  /// the wallet opens with the old or the new password, and the next [`EpicWallet::open`]
+  /// with the password that works drops or finishes the change. Use a store whose `write`
+  /// has stored the value durably when it completes.
+  ///
+  /// Fails with `InvalidArgument` when `new_password` has fewer than eight characters, and
+  /// `Unsupported` for a wallet from [`EpicWallet::create_with_pin`] (change its PIN with
+  /// [`EpicWallet::change_pin`]), both before any attempt is counted; with `WrongPassword`
+  /// when `current_password` does not open the vault, `Locked` on a locked wallet, and
+  /// `SecretStore` when the store fails or does not give back what was written: the old
+  /// password then still opens the wallet, or, if the store failed while replacing
+  /// `lepic.vault`, either password does until the next open settles it.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  });
+
   /// Changes the PIN of a wallet from [`EpicWallet::create_with_pin`] and returns the new
   /// sealed text, for the same wallet password under `new_pin` and a new PIN key. `old_pin`
   /// must open `sealed_password`; that attempt is counted and delayed as in

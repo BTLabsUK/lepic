@@ -20,6 +20,7 @@ mod log;
 #[cfg(feature = "mock")]
 mod mock;
 mod node;
+mod password;
 mod pin;
 mod session;
 #[cfg(test)]

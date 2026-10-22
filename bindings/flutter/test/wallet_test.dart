@@ -1200,6 +1200,55 @@ void main() {
     expect((await reopened.summary(refresh: true)).total, BigInt.zero);
   });
 
+  test('a changed password opens the wallet and the old one does not', () async {
+    final dir = walletDir('change-password');
+    final store = MemoryStore();
+    const newPassword = 'a new password';
+    final wallet = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
+      password: password,
+    );
+    await expectLater(
+      wallet.changePassword(
+        currentPassword: 'wrong password',
+        newPassword: newPassword,
+      ),
+      throwsWalletError(WalletErrorKind.wrongPassword),
+    );
+    await expectLater(
+      wallet.changePassword(currentPassword: password, newPassword: 'short'),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+    await wallet.changePassword(
+      currentPassword: password,
+      newPassword: newPassword,
+    );
+    expect(store.values.keys.toSet(), {'lepic.vault'});
+    wallet.dispose();
+
+    await expectLater(
+      EpicWallet.open(
+        runtime: runtime,
+        config: configFor(dir),
+        store: lepicSecretStore(store),
+        password: password,
+      ),
+      throwsWalletError(WalletErrorKind.wrongPassword),
+    );
+    final reopened = await EpicWallet.open(
+      runtime: runtime,
+      config: configFor(dir),
+      store: lepicSecretStore(store),
+      password: newPassword,
+    );
+    expect(
+      validateMnemonic(phrase: await reopened.mnemonic(password: newPassword)),
+      isTrue,
+    );
+  });
+
   test('pin unlock keeps the wallet password inside rust', () async {
     final dir = walletDir('pin');
     final store = MemoryStore();

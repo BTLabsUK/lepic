@@ -543,6 +543,42 @@ impl EpicWallet {
         .await
     }
 
+    /// Changes the password of a wallet from [`EpicWallet::create`] or
+    /// [`EpicWallet::import_wallet_seed`]: the vault is encrypted anew under `new_password`
+    /// with Argon2id and a fresh salt. `current_password` must open the stored vault; that
+    /// attempt is counted and delayed as in [`EpicWallet::open`]. Afterwards only the new
+    /// password opens the wallet, also this handle's [`EpicWallet::mnemonic`].
+    ///
+    /// The new vault is written to the store as `lepic.vault-next` and read back before it
+    /// replaces `lepic.vault`, and `lepic.vault-next` is deleted last. If the app stops part way,
+    /// the wallet opens with the old or the new password, and the next [`EpicWallet::open`]
+    /// with the password that works drops or finishes the change. Use a store whose `write`
+    /// has stored the value durably when it completes.
+    ///
+    /// Fails with `InvalidArgument` when `new_password` has fewer than eight characters, and
+    /// `Unsupported` for a wallet from [`EpicWallet::create_with_pin`] (change its PIN with
+    /// [`EpicWallet::change_pin`]), both before any attempt is counted; with `WrongPassword`
+    /// when `current_password` does not open the vault, `Locked` on a locked wallet, and
+    /// `SecretStore` when the store fails or does not give back what was written: the old
+    /// password then still opens the wallet, or, if the store failed while replacing
+    /// `lepic.vault`, either password does until the next open settles it.
+    pub async fn change_password(
+        &self,
+        current_password: String,
+        new_password: String,
+    ) -> Result<(), WalletError> {
+        let current_password = Zeroizing::new(current_password);
+        let new_password = Zeroizing::new(new_password);
+        self.run("change_password", |session| async move {
+            session.ensure_unlocked()?;
+            let new_password = self::new_password(new_password)?;
+            session
+                .change_password(current_password, new_password)
+                .await
+        })
+        .await
+    }
+
     /// The default account's balance. With `refresh` it first updates outputs and
     /// transactions from the node. Without, it answers from what the wallet stored at its last
     /// refresh or scan, without the node, also before the first refresh of this handle, with

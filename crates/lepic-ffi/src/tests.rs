@@ -14,6 +14,7 @@ use crate::vault_port::VAULT_KEY;
 mod http;
 mod node;
 mod outputs;
+mod password;
 mod scan;
 mod selection;
 mod self_send;
@@ -556,6 +557,7 @@ fn the_docs_name_every_key_lepic_writes_to_the_app_store() {
     let adr = include_str!("../../../docs/adr/0014-secrets-at-the-flutter-boundary.md");
     for key in [
         VAULT_KEY,
+        crate::vault_port::VAULT_NEXT_KEY,
         crate::pin::KEY_KEY,
         crate::pin::PENDING_KEY_KEY,
         crate::pin::FAILURES_KEY,

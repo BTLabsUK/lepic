@@ -19,6 +19,9 @@ use crate::api::secret_store::AppSecretStore;
 /// The key of the vault in the app's store.
 pub(crate) const VAULT_KEY: &str = "lepic.vault";
 
+/// The key of the vault a password change wrote and has not yet made the vault.
+pub(crate) const VAULT_NEXT_KEY: &str = "lepic.vault-next";
+
 #[derive(Default)]
 struct Bytes {
     stored: Option<Vec<u8>>,
@@ -49,6 +52,14 @@ impl VaultBytes {
         Ok(())
     }
 
+    /// Replaces the bytes with `stored`, as if the app's store held them.
+    pub(crate) fn set(&self, stored: Vec<u8>) {
+        *self.lock() = Bytes {
+            stored: Some(stored),
+            dirty: false,
+        };
+    }
+
     /// Writes the bytes to the app's store if the engine changed them.
     pub(crate) async fn flush(&self, store: &AppSecretStore) -> Result<(), WalletError> {
         let pending = {
@@ -66,7 +77,8 @@ impl VaultBytes {
     }
 }
 
-fn decode(text: &str) -> Result<Vec<u8>, WalletError> {
+/// The vault bytes in `text` as the app's store holds them.
+pub(crate) fn decode(text: &str) -> Result<Vec<u8>, WalletError> {
     let damaged = || WalletError::new(WalletErrorKind::SecretStore, "stored vault is damaged");
     // Base64 of the largest vault, rounded up, bounds the work before decoding.
     let max_text = MAX_VAULT_LEN.div_ceil(3).saturating_mul(4);
