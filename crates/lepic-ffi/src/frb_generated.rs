@@ -8125,6 +8125,7 @@ impl SseDecode for crate::api::types::WalletEventKind {
             10 => crate::api::types::WalletEventKind::InvoiceDeclined,
             11 => crate::api::types::WalletEventKind::InvoiceWithdrawn,
             12 => crate::api::types::WalletEventKind::InvoiceBounced,
+            13 => crate::api::types::WalletEventKind::SelfSend,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -10214,6 +10215,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::InvoiceDeclined => 10.into_dart(),
             Self::InvoiceWithdrawn => 11.into_dart(),
             Self::InvoiceBounced => 12.into_dart(),
+            Self::SelfSend => 13.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -11805,6 +11807,7 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::InvoiceDeclined => 10,
                 crate::api::types::WalletEventKind::InvoiceWithdrawn => 11,
                 crate::api::types::WalletEventKind::InvoiceBounced => 12,
+                crate::api::types::WalletEventKind::SelfSend => 13,
                 _ => {
                     unimplemented!("");
                 }

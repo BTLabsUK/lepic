@@ -792,6 +792,11 @@ pub enum WalletEventKind {
     /// redelivered before its relay message was settled raises this again for the same
     /// `tx_id`; treat a repeat as the same bounce.
     InvoiceBounced,
+    /// A split or consolidation was stored and finalized: `tx_id` names its outgoing
+    /// transaction, `account` and `amount` are set. Nothing was received from anyone, so
+    /// it is never a `Transaction` event with `to` `received`; the posting and confirmation
+    /// of both of its transactions follow as `Transaction`.
+    SelfSend,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its

@@ -1395,6 +1395,12 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             to: Some(TxStatus::Received),
             ..WalletEvent::of(WalletEventKind::Transaction)
         },
+        Event::SelfSent(stored) => WalletEvent {
+            tx_id: Some(stored.tx_id.0),
+            account: Some(stored.account.0),
+            amount: Some(stored.amount.value()),
+            ..WalletEvent::of(WalletEventKind::SelfSend)
+        },
         Event::Sync(sync) => WalletEvent {
             height: Some(sync.height.value()),
             target_height: Some(sync.target.value()),
@@ -1592,7 +1598,7 @@ pub(crate) async fn delete_wallet(
 
 #[cfg(test)]
 mod tests {
-    use lepic_wallet::event::{ReceivedTransaction, TransactionState};
+    use lepic_wallet::event::{ReceivedTransaction, SelfSentTransaction, TransactionState};
 
     use super::*;
 
@@ -1838,6 +1844,23 @@ mod tests {
         let event = listener_event(&received()).unwrap();
         assert_eq!(event.kind, ListenerEventKind::Received);
         assert_eq!(event.tx_id, Some(3));
+    }
+
+    #[test]
+    fn a_self_send_reaches_the_event_stream_as_its_own_kind_and_never_the_listener() {
+        let event = Event::SelfSent(SelfSentTransaction {
+            tx_id: TxId(7),
+            received_tx_id: TxId(8),
+            account: DEFAULT_ACCOUNT,
+            amount: Amount::new(50),
+        });
+        let streamed = wallet_event(&event).unwrap();
+        assert_eq!(streamed.kind, WalletEventKind::SelfSend);
+        assert_eq!(streamed.tx_id, Some(7));
+        assert_eq!(streamed.account, Some(DEFAULT_ACCOUNT.0));
+        assert_eq!(streamed.amount, Some(50));
+        assert_eq!(streamed.to, None);
+        assert!(listener_event(&event).is_none());
     }
 
     #[test]

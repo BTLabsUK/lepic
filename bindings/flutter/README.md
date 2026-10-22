@@ -113,7 +113,10 @@ final wallet = await EpicWallet.create(
   lock on `.lepic.lock` in it while a wallet is open.
 - `EpicWallet.events()` streams session, balance, transaction, sync and transport changes, and
   the invoice events `invoiceReceived`, `invoiceFinalized`, `invoiceExpired`, `invoicePosted`,
-  `invoiceDeclined`, `invoiceWithdrawn` and `invoiceBounced`, which set `slateId`.
+  `invoiceDeclined`, `invoiceWithdrawn` and `invoiceBounced`, which set `slateId`. A split or
+  consolidation raises `selfSend` with the `txId` of its outgoing transaction, `account` and
+  `amount`, never a `transaction` event with `to` `received`: nothing was received from
+  anyone, and the listener stream reports nothing for it.
   `WalletEventKind` and `ListenerEventKind` only gain values, at the end, and a value never
   changes meaning; an exhaustive `switch` over either must handle the new ones.
   `TransactionDetails` has the required fields `flow` and `origin` (and `imported`, nullable)
