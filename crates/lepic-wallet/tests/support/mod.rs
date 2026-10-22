@@ -4,7 +4,13 @@
 
 // Each test binary uses a different subset of these helpers, and test helpers may unwrap and
 // panic (docs/rules.md).
-#![allow(dead_code, clippy::unwrap_used, clippy::panic)]
+#![allow(
+    dead_code,
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -52,6 +58,45 @@ impl Clock for FixedClock {
     fn now(&self) -> Timestamp {
         self.0
     }
+}
+
+/// A clock the test moves forward, so a tip a day of blocks later is plausible.
+#[derive(Clone)]
+pub struct MovableClock(Arc<Mutex<Timestamp>>);
+
+impl MovableClock {
+    pub fn starting_at(now: Timestamp) -> Self {
+        Self(Arc::new(Mutex::new(now)))
+    }
+
+    pub fn advance(&self, by: jiff::SignedDuration) {
+        let mut now = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        *now = now.checked_add(by).unwrap();
+    }
+}
+
+impl Clock for MovableClock {
+    fn now(&self) -> Timestamp {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A range proof of the right size, for an output the mock chain serves to a scan.
+pub fn some_proof() -> lepic_crypto::RangeProof {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/vectors/primitives/tx_valid_plain_1_in_2_out.json");
+    let vector: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let hex = vector["expected"]["serialized_v2"].as_str().unwrap();
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+        .collect();
+    lepic_primitives::tx::Transaction::decode(&bytes, lepic_primitives::ser::ProtocolVersion::V2)
+        .unwrap()
+        .outputs()[0]
+        .proof
+        .clone()
 }
 
 /// Memory stores by data directory. Clones share the data, so a second wallet handle on the same

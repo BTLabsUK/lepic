@@ -27,7 +27,7 @@ use lepic_store::{
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
-use crate::cancel::{drop_holdings, pool_holds};
+use crate::cancel::{cancel_partner, drop_holdings, pool_holds, self_send_partner};
 use crate::chain;
 use crate::error::WalletError;
 use crate::lifecycle::Session;
@@ -446,7 +446,7 @@ where
             debug!(height = %kernel.height, "kernel found on chain");
             return Err(WalletError::OnChain(tx_id));
         }
-        let change = self
+        let changes = self
             .blocking(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
@@ -456,14 +456,25 @@ where
                     if entry.state != observed {
                         return Err(WalletError::ChangedDuringCancel(tx_id));
                     }
+                    let partner = self_send_partner(repos, &entry)?;
                     record_watch(repos, tx_id, check.excess, check.min_height, tip)?;
                     drop_holdings(repos, tx_id, &entry)?;
-                    apply_transition(repos, tx_id, TxState::Cancelled, now)
+                    let mut changes: Vec<StateChange> =
+                        apply_transition(repos, tx_id, TxState::Cancelled, now)?
+                            .into_iter()
+                            .collect();
+                    if let Some(partner) = partner {
+                        let watch = Some((check.excess, check.min_height, tip));
+                        changes.extend(cancel_partner(repos, &partner, watch, now)?);
+                    }
+                    Ok::<_, WalletError>(changes)
                 })
             })
             .await?;
-        if let Some(change) = change {
+        if !changes.is_empty() {
             info!(height = %tip, "transaction released");
+        }
+        for change in changes {
             self.emit(change.into());
         }
         Ok(())

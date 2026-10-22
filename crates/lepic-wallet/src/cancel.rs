@@ -24,6 +24,7 @@ use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{forget_receive_seen, legacy_codecs, pending_kernel};
 use crate::release::record_watch;
+use crate::self_send::SELF;
 use crate::send::SENDER_CONTEXT;
 use crate::state::{InvalidTransition, StateChange, apply_transition, check_transition};
 use crate::wallet::Wallet;
@@ -40,7 +41,9 @@ where
 {
     /// Cancels the transaction: drops its unconfirmed outputs, unlocks the inputs it locked,
     /// drops its private context and pending deliveries, and moves it to `cancelled`, all in
-    /// one store transaction. Cancelling a cancelled transaction changes nothing.
+    /// one store transaction. Either entry of a send to the wallet itself takes the other
+    /// along, so the inputs, the change and the output of the amount are released together.
+    /// Cancelling a cancelled transaction changes nothing.
     ///
     /// A slate already delivered is not recalled; if the peer still completes it, the
     /// transaction can no longer be finalized here. For an invoice issued over Epicbox, the
@@ -106,7 +109,7 @@ where
                 ended_at: tip,
             });
         }
-        let change = self
+        let changes = self
             .blocking(move |ports, _| {
                 let now = ports.clock.now();
                 session
@@ -114,13 +117,14 @@ where
                     .write(|repos| cancel_transaction(repos, tx_id, observed, watch, now))
             })
             .await?;
-        match change {
-            Some(change) => {
-                info!("transaction cancelled");
+        if changes.is_empty() {
+            debug!("transaction already cancelled");
+        } else {
+            info!("transaction cancelled");
+            for change in changes {
                 self.emit(change.into());
-                self.notify_withdrawn(tx_id).await;
             }
-            None => debug!("transaction already cancelled"),
+            self.notify_withdrawn(tx_id).await;
         }
         Ok(())
     }
@@ -177,7 +181,7 @@ fn cancel_transaction(
     observed: TxState,
     watch: Option<Watch>,
     now: Timestamp,
-) -> Result<Option<StateChange>, WalletError> {
+) -> Result<Vec<StateChange>, WalletError> {
     let entry = repos
         .transaction(tx_id)?
         .ok_or(WalletError::UnknownTransaction(tx_id))?;
@@ -192,16 +196,71 @@ fn cancel_transaction(
         .into());
     }
     if check_transition(tx_id, entry.state, TxState::Cancelled)?.is_none() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     if entry.state != observed {
         return Err(WalletError::ChangedDuringCancel(tx_id));
+    }
+    let partner = self_send_partner(repos, &entry)?;
+    if let Some(partner) = &partner
+        && partner.entry.state == TxState::Posted
+    {
+        return Err(InvalidTransition {
+            from: TxState::Posted,
+            to: TxState::Cancelled,
+        }
+        .into());
     }
     if let Some(watch) = watch {
         record_watch(repos, tx_id, watch.excess, watch.min_height, watch.ended_at)?;
     }
     drop_holdings(repos, tx_id, &entry)?;
-    apply_transition(repos, tx_id, TxState::Cancelled, now)
+    let mut changes: Vec<StateChange> = apply_transition(repos, tx_id, TxState::Cancelled, now)?
+        .into_iter()
+        .collect();
+    if let Some(partner) = partner {
+        let watch = watch.map(|watch| (watch.excess, watch.min_height, watch.ended_at));
+        changes.extend(cancel_partner(repos, &partner, watch, now)?);
+    }
+    Ok(changes)
+}
+
+/// The other entry of a send to the wallet itself: the one of the same slate over [`SELF`]
+/// in the other direction. The outgoing entry spent the inputs and holds the change, the
+/// incoming one holds the output of the amount, and the two end together. `None` for any
+/// other transaction.
+pub(crate) fn self_send_partner(
+    repos: &dyn Repositories,
+    entry: &TransactionEntry,
+) -> Result<Option<StoredTransaction>, WalletError> {
+    let is_self = entry.transport.as_deref() == Some(SELF.as_str());
+    let Some(slate_id) = entry.slate_id.filter(|_| is_self) else {
+        return Ok(None);
+    };
+    Ok(repos
+        .transactions(entry.account)?
+        .into_iter()
+        .find(|stored| {
+            stored.entry.direction != entry.direction
+                && stored.entry.slate_id == Some(slate_id)
+                && stored.entry.transport.as_deref() == Some(SELF.as_str())
+        }))
+}
+
+/// Ends the other entry of a self-send with the one being cancelled: its outputs are dropped,
+/// its inputs unlocked and it moves to `cancelled`, watched under the same kernel when
+/// `watch` is given, so a late confirmation restores its outputs too.
+pub(crate) fn cancel_partner(
+    repos: &mut dyn Repositories,
+    partner: &StoredTransaction,
+    watch: Option<(Commitment, Height, Height)>,
+    now: Timestamp,
+) -> Result<Option<StateChange>, WalletError> {
+    if let Some((excess, min_height, ended_at)) = watch {
+        record_watch(repos, partner.id, excess, min_height, ended_at)?;
+    }
+    drop_holdings(repos, partner.id, &partner.entry)?;
+    apply_transition(repos, partner.id, TxState::Cancelled, now)
 }
 
 /// What a transaction that ends unconfirmed gives up: its unconfirmed outputs are deleted, the
@@ -307,7 +366,10 @@ mod tests {
             .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, None, at()))
             .unwrap();
 
-        assert_eq!(change.map(|change| change.to), Some(TxState::Cancelled));
+        assert_eq!(
+            change.first().map(|change| change.to),
+            Some(TxState::Cancelled)
+        );
     }
 
     #[test]
@@ -318,6 +380,6 @@ mod tests {
             .write(|repos| cancel_transaction(repos, tx_id, TxState::Sent, None, at()))
             .unwrap();
 
-        assert_eq!(change, None);
+        assert_eq!(change, Vec::new());
     }
 }

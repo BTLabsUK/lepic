@@ -29,7 +29,7 @@ use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
 
 use crate::account::FIRST_HARDENED;
-use crate::cancel::drop_holdings;
+use crate::cancel::{drop_holdings, self_send_partner};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Event, SyncProgress};
@@ -1053,8 +1053,9 @@ fn advance_next_child(
 
 /// Cancels the open transaction an output belongs to as a cancel by the user does: its
 /// unconfirmed outputs are deleted, the inputs it locked unlocked, and its private context and
-/// pending deliveries dropped. A confirmed, cancelled or expired one is left alone, as
-/// `epic-wallet` leaves every type but the open ones.
+/// pending deliveries dropped. Either entry of a send to the wallet itself takes the other
+/// along. A confirmed, cancelled or expired one is left alone, as `epic-wallet` leaves every
+/// type but the open ones.
 fn cancel_open(
     repos: &mut dyn Repositories,
     tx: Option<TxId>,
@@ -1070,6 +1071,22 @@ fn cancel_open(
     if is_final(entry.state) {
         return Ok(());
     }
+    cancel_one(repos, tx_id, &entry, now, outcome)?;
+    if let Some(partner) = self_send_partner(repos, &entry)?
+        && !is_final(partner.entry.state)
+    {
+        cancel_one(repos, partner.id, &partner.entry, now, outcome)?;
+    }
+    Ok(())
+}
+
+fn cancel_one(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    entry: &TransactionEntry,
+    now: Timestamp,
+    outcome: &mut PageOutcome,
+) -> Result<(), ScanError> {
     for output in repos.outputs_of_transaction(tx_id)? {
         match output.status {
             OutputStatus::Unconfirmed => outcome.deleted = outcome.deleted.saturating_add(1),
@@ -1077,7 +1094,7 @@ fn cancel_open(
             OutputStatus::Unspent | OutputStatus::Spent => {}
         }
     }
-    drop_holdings(repos, tx_id, &entry)?;
+    drop_holdings(repos, tx_id, entry)?;
     if let Some(change) = apply_transition(repos, tx_id, TxState::Cancelled, now)? {
         outcome.changes.push(change);
     }

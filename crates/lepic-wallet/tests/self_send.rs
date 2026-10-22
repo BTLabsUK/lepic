@@ -13,12 +13,27 @@
 mod send_support;
 mod support;
 
+use std::sync::Arc;
+
+use jiff::SignedDuration;
 use lepic_node::Propagation;
-use lepic_store::{OutputStatus, TxDirection, TxState, WalletStore as _};
+use lepic_node::mock::{ChainOutput, MockFailure};
+use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::params::Network;
+use lepic_store::OutputStatus::{self, Locked, Unconfirmed, Unspent};
+use lepic_store::{TxDirection, TxId, TxState, WalletStore as _};
+use lepic_wallet::WalletError;
+use lepic_wallet::event::{Balance, Event, TransactionState};
+use lepic_wallet::finalize::{FinalizeError, Posted};
+use lepic_wallet::refresh::{RefreshOutcome, UNFINALIZED_RECEIVE_BLOCKS};
+use lepic_wallet::release::RELEASE_AFTER_BLOCKS;
+use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::{SelectionError, SelectionOptions, SelfSendShape, SplitCount};
 use lepic_wallet::self_send::{SELF, SelfSendError};
 use lepic_wallet::send::SendError;
-use send_support::{ACCOUNT, FUNDING, Sender};
+use lepic_wallet::state::InvalidTransition;
+use send_support::{ACCOUNT, FUNDING, Sender, TIP};
+use support::{MovableClock, fixed_time, some_proof};
 
 fn options() -> SelectionOptions {
     SelectionOptions {
@@ -172,4 +187,292 @@ fn a_split_the_funds_cannot_pay_stores_nothing() {
     );
     assert_eq!((sender.transactions(), sender.outputs()), before);
     assert!(sender.harness.node.pushed_transactions().is_empty());
+}
+
+/// A self-send the node did not take: stored finalized, its inputs locked, its outputs
+/// unconfirmed, with the funding output on the mock chain so a refresh keeps it.
+struct Failed {
+    sender: Sender,
+    clock: MovableClock,
+    tx_id: TxId,
+    received_tx_id: TxId,
+    before: Balance,
+}
+
+impl Failed {
+    fn split() -> Self {
+        Self::shaped(split(2), &[Locked, Unconfirmed, Unconfirmed])
+    }
+
+    /// A consolidation of the funding with a second output: no change, so only the incoming
+    /// entry holds an unconfirmed output.
+    fn consolidation() -> Self {
+        Self::shaped(SelfSendShape::Consolidate, &[Locked, Locked, Unconfirmed])
+    }
+
+    fn shaped(shape: SelfSendShape, statuses: &[OutputStatus]) -> Self {
+        let clock = MovableClock::starting_at(fixed_time());
+        let sender = Sender::with_clock(Arc::new(clock.clone()));
+        let funding = sender.outputs().remove(0);
+        sender.harness.node.update_chain(|chain| {
+            chain.outputs.push(ChainOutput {
+                commitment: funding.id.commitment,
+                features: funding.id.features,
+                proof: some_proof(),
+                height: Height::new(1),
+                mmr_index: 1,
+                spent: false,
+            });
+        });
+        if shape == SelfSendShape::Consolidate {
+            sender.fund(1, FUNDING);
+        }
+        let before = sender.wallet.balance(ACCOUNT).unwrap();
+        sender
+            .harness
+            .node
+            .fail_next("push_transaction", MockFailure::Unreachable);
+
+        let error = sender
+            .harness
+            .block_on(
+                sender
+                    .wallet
+                    .self_send(options(), shape, Propagation::Fluff),
+            )
+            .unwrap_err();
+
+        let SelfSendError::Finalize(FinalizeError::NotPosted { tx_id, .. }) = error else {
+            panic!("{error:?}");
+        };
+        let entries = sender.transactions();
+        let outgoing = entries.iter().find(|tx| tx.id == tx_id).unwrap();
+        assert_eq!(outgoing.entry.state, TxState::Finalized);
+        let received_tx_id = entries
+            .iter()
+            .find(|tx| tx.id != tx_id && tx.entry.slate_id == outgoing.entry.slate_id)
+            .unwrap()
+            .id;
+        let failed = Self {
+            sender,
+            clock,
+            tx_id,
+            received_tx_id,
+            before,
+        };
+        assert_eq!(failed.state(failed.received_tx_id), TxState::Received);
+        assert_eq!(failed.statuses(), statuses);
+        failed
+    }
+
+    fn state(&self, tx_id: TxId) -> TxState {
+        self.sender
+            .read(|repos| repos.transaction(tx_id))
+            .unwrap()
+            .state
+    }
+
+    /// The statuses of the stored outputs, funding first.
+    fn statuses(&self) -> Vec<OutputStatus> {
+        let mut outputs = self.sender.outputs();
+        outputs.sort_by_key(|output| output.status != Locked && output.status != Unspent);
+        outputs.into_iter().map(|output| output.status).collect()
+    }
+
+    /// Both entries ended `cancelled`, the inputs spendable again, the balance as before.
+    fn assert_ended(&self) {
+        assert_eq!(self.state(self.tx_id), TxState::Cancelled);
+        assert_eq!(self.state(self.received_tx_id), TxState::Cancelled);
+        assert!(self.statuses().iter().all(|status| *status == Unspent));
+        let balance = self.sender.wallet.balance(ACCOUNT).unwrap();
+        assert_eq!(balance.total, self.before.total);
+        assert_eq!(balance.locked, Amount::ZERO);
+    }
+
+    /// The node's tip moves to `height` a day of blocks at a time, a day and an hour later by
+    /// the clock, refreshing twice at each step: the first refresh after a jump holds the tip
+    /// as pending, the second confirms it.
+    fn chain_reaches(&self, height: u64) {
+        let mut at = TIP;
+        loop {
+            at = (at + 1_440).min(height);
+            self.clock.advance(SignedDuration::from_hours(25));
+            self.sender
+                .harness
+                .node
+                .update_chain(|chain| chain.tip.height = Height::new(at));
+            for _ in 0..2 {
+                let outcome = self
+                    .sender
+                    .harness
+                    .block_on(self.sender.wallet.refresh())
+                    .unwrap();
+                assert!(
+                    matches!(outcome, RefreshOutcome::Refreshed(_)),
+                    "{outcome:?}"
+                );
+            }
+            if at == height {
+                return;
+            }
+        }
+    }
+}
+
+/// The transactions the events report as cancelled, in id order.
+fn cancelled_by_events(events: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<TxId> {
+    let mut cancelled = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let Event::Transaction(TransactionState { tx_id, to, .. }) = event {
+            assert_eq!(to, TxState::Cancelled);
+            cancelled.push(tx_id);
+        }
+    }
+    cancelled.sort();
+    cancelled
+}
+
+#[test]
+fn cancel_of_a_self_send_the_node_did_not_take_ends_both_entries() {
+    let failed = Failed::split();
+    let mut events = failed.sender.wallet.subscribe();
+
+    failed
+        .sender
+        .harness
+        .block_on(failed.sender.wallet.cancel(failed.tx_id))
+        .unwrap();
+
+    failed.assert_ended();
+    let mut expected = vec![failed.tx_id, failed.received_tx_id];
+    expected.sort();
+    assert_eq!(cancelled_by_events(&mut events), expected);
+}
+
+#[test]
+fn release_of_a_self_send_the_node_did_not_take_ends_both_entries() {
+    let failed = Failed::split();
+    failed.chain_reaches(TIP + RELEASE_AFTER_BLOCKS);
+    assert!(
+        failed
+            .sender
+            .harness
+            .block_on(failed.sender.wallet.transaction_details(failed.tx_id))
+            .unwrap()
+            .releasable
+    );
+
+    failed
+        .sender
+        .harness
+        .block_on(failed.sender.wallet.release(failed.tx_id))
+        .unwrap();
+
+    failed.assert_ended();
+}
+
+#[test]
+fn a_self_send_the_node_did_not_take_is_posted_again() {
+    let failed = Failed::split();
+
+    let posted = failed
+        .sender
+        .harness
+        .block_on(failed.sender.wallet.post(failed.tx_id, Propagation::Fluff))
+        .unwrap();
+
+    assert_eq!(posted, Posted::Accepted);
+    assert_eq!(failed.state(failed.tx_id), TxState::Posted);
+    assert_eq!(failed.state(failed.received_tx_id), TxState::Received);
+    assert_eq!(failed.statuses(), vec![Locked, Unconfirmed, Unconfirmed]);
+    assert_eq!(failed.sender.harness.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn a_refresh_never_expires_the_incoming_entry_of_a_self_send_on_its_own() {
+    let failed = Failed::split();
+    // The first refresh records when the incoming entry was first seen.
+    failed.chain_reaches(TIP);
+
+    failed.chain_reaches(TIP + UNFINALIZED_RECEIVE_BLOCKS + 1);
+
+    assert_eq!(failed.state(failed.tx_id), TxState::Finalized);
+    assert_eq!(failed.state(failed.received_tx_id), TxState::Received);
+    assert_eq!(failed.statuses(), vec![Locked, Unconfirmed, Unconfirmed]);
+}
+
+fn repair_scan(failed: &Failed) -> (u64, u64) {
+    let summary = failed
+        .sender
+        .harness
+        .block_on(failed.sender.wallet.scan(
+            ScanOptions {
+                delete_unconfirmed: true,
+                ..ScanOptions::update(Network::Floonet)
+            },
+            &ScanCancel::new(),
+        ))
+        .unwrap();
+    (summary.unlocked, summary.deleted)
+}
+
+#[test]
+fn a_repair_scan_cancels_a_split_the_node_did_not_take_as_a_cancel_does() {
+    let failed = Failed::split();
+
+    assert_eq!(repair_scan(&failed), (1, 2));
+
+    failed.assert_ended();
+}
+
+#[test]
+fn a_repair_scan_cancels_a_consolidation_the_node_did_not_take_with_its_outgoing_entry() {
+    let failed = Failed::consolidation();
+
+    assert_eq!(repair_scan(&failed), (2, 1));
+
+    failed.assert_ended();
+}
+
+#[test]
+fn cancel_of_the_incoming_entry_of_a_self_send_ends_the_outgoing_one_too() {
+    let failed = Failed::consolidation();
+
+    failed
+        .sender
+        .harness
+        .block_on(failed.sender.wallet.cancel(failed.received_tx_id))
+        .unwrap();
+
+    failed.assert_ended();
+}
+
+#[test]
+fn rejects_cancelling_the_incoming_entry_of_a_posted_self_send() {
+    let failed = Failed::split();
+    failed
+        .sender
+        .harness
+        .block_on(failed.sender.wallet.post(failed.tx_id, Propagation::Fluff))
+        .unwrap();
+
+    let error = failed
+        .sender
+        .harness
+        .block_on(failed.sender.wallet.cancel(failed.received_tx_id))
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            WalletError::Transition(InvalidTransition {
+                from: TxState::Posted,
+                ..
+            })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(failed.state(failed.tx_id), TxState::Posted);
+    assert_eq!(failed.state(failed.received_tx_id), TxState::Received);
+    assert_eq!(failed.statuses(), vec![Locked, Unconfirmed, Unconfirmed]);
 }

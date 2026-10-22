@@ -44,6 +44,7 @@ use crate::ports::{SecretVault, StoreOpener};
 use crate::release::{
     RELEASED_WATCH_BLOCKS, ReleaseCheck, record_kernel_absent, record_watch, release_check,
 };
+use crate::self_send::SELF;
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
 
@@ -864,8 +865,10 @@ pub(crate) fn pending_kernel(
 /// since a refresh first saw it. A finalized or posted transaction is left out, as upstream
 /// leaves out what it has finalized: its kernel may reach the chain whatever the TTL says. So
 /// is the payment of an invoice over Epicbox, which the issuer may have posted:
-/// [`Wallet::sweep_invoices`] offers it to the user to cancel instead. Each comes with the
-/// kernel the peer may still complete it with, which is looked up before it ends.
+/// [`Wallet::sweep_invoices`] offers it to the user to cancel instead. So is the incoming
+/// entry of a send to the wallet itself: the wallet finalized it, and it ends with the
+/// outgoing entry. Each comes with the kernel the peer may still complete it with, which is
+/// looked up before it ends.
 fn expiring(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -875,6 +878,7 @@ fn expiring(
     for stored in open_transactions(repos)? {
         if matches!(stored.entry.state, TxState::Posted | TxState::Finalized)
             || epicbox_invoice_payment(repos, &stored)?.is_some()
+            || stored.entry.transport.as_deref() == Some(SELF.as_str())
         {
             continue;
         }

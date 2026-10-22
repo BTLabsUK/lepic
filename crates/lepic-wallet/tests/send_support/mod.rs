@@ -29,7 +29,7 @@ use lepic_transport::loopback::LoopbackTransport;
 use lepic_transport::policy::{Encoding, FormatPolicy};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Inbound, Transport};
-use lepic_wallet::{Ports, StoreOpener, Wallet, WalletConfig};
+use lepic_wallet::{Clock, Ports, StoreOpener, Wallet, WalletConfig};
 use uuid::Uuid;
 
 use crate::support::{
@@ -73,7 +73,16 @@ impl Sender {
 
     /// The funded sender whose loopback transport speaks `policy`.
     pub fn with_policy(policy: Arc<dyn FormatPolicy>) -> Self {
-        Self::build(|harness, peer| {
+        Self::with_policy_and_clock(policy, None)
+    }
+
+    /// The funded sender reading `clock`, for tests that move the chain days ahead.
+    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
+        Self::with_policy_and_clock(Arc::new(FilePolicy), Some(clock))
+    }
+
+    fn with_policy_and_clock(policy: Arc<dyn FormatPolicy>, clock: Option<Arc<dyn Clock>>) -> Self {
+        Self::build(clock, |harness, peer| {
             let (own, other) = LoopbackTransport::pair(
                 LOOPBACK,
                 policy,
@@ -89,7 +98,7 @@ impl Sender {
 
     /// The funded sender with extra transports next to the loopback one.
     pub fn with_transports(extra: Vec<Box<dyn Transport>>) -> Self {
-        Self::build(|harness, peer| {
+        Self::build(None, |harness, peer| {
             let mut registry = harness.transports();
             *peer = harness
                 .peer
@@ -106,6 +115,7 @@ impl Sender {
     }
 
     fn build(
+        clock: Option<Arc<dyn Clock>>,
         transports: impl FnOnce(
             &Harness,
             &mut Option<LoopbackTransport>,
@@ -114,10 +124,13 @@ impl Sender {
         let harness = Harness::new();
         let mut peer = None;
         let (config, registry) = transports(&harness, &mut peer);
-        let ports: Ports<_, MemoryStores, TestVault> = Ports {
+        let mut ports: Ports<_, MemoryStores, TestVault> = Ports {
             transports: registry,
             ..harness.ports(TestVault::default())
         };
+        if let Some(clock) = clock {
+            ports.clock = clock;
+        }
         let wallet = Wallet::new(config, ports).unwrap();
         harness
             .block_on(wallet.restore(password("sender"), SENDER_MNEMONIC))
