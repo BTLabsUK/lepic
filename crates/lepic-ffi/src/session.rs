@@ -92,6 +92,32 @@ const MAX_CHANGE_OUTPUTS: usize = 10;
 /// scratch file.
 const MAX_SLATE_TEXT_LEN: usize = lepic_transport::file::MAX_WIRE_SLATE_LEN;
 
+/// The running scan's cancel signal in the session's slot, cleared when the scan ends, also
+/// when its future is dropped.
+struct ScanSlot<'a>(&'a Mutex<Option<ScanCancel>>);
+
+impl<'a> ScanSlot<'a> {
+    /// Fails with `WalletBusy` while another scan of the session runs, so `cancel_scan` always
+    /// reaches the one running.
+    fn claim(slot: &'a Mutex<Option<ScanCancel>>, cancel: ScanCancel) -> Result<Self, WalletError> {
+        let mut running = lock(slot);
+        if running.is_some() {
+            return Err(WalletError::new(
+                WalletErrorKind::WalletBusy,
+                "a scan of this wallet is running",
+            ));
+        }
+        *running = Some(cancel);
+        Ok(Self(slot))
+    }
+}
+
+impl Drop for ScanSlot<'_> {
+    fn drop(&mut self) {
+        lock(self.0).take();
+    }
+}
+
 struct SystemClock;
 
 impl Clock for SystemClock {
@@ -639,7 +665,7 @@ impl Session {
             ));
         }
         let cancel = ScanCancel::new();
-        *lock(&self.scan) = Some(cancel.clone());
+        let _running = ScanSlot::claim(&self.scan, cancel.clone())?;
         let options = ScanOptions {
             start: start_height.map_or(ScanStart::LastScanned, |height| {
                 ScanStart::Height(Height::new(height))
@@ -662,7 +688,6 @@ impl Session {
                 },
             }
         };
-        lock(&self.scan).take();
         let summary = result?;
         info!(height = %summary.end_height, "scan reported");
         progress(ScanProgress {

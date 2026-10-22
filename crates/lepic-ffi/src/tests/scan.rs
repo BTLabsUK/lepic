@@ -200,3 +200,28 @@ async fn a_repair_from_a_start_height_is_refused() {
         .await;
     assert_eq!(refused.unwrap_err().kind, WalletErrorKind::InvalidArgument);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_scan_while_one_runs_is_refused_and_cancel_reaches_the_first() {
+    let pair = funded_pair().await;
+    let alice = Arc::clone(&pair.alice);
+    pair.chain.set_node_stalled(true);
+    let running = {
+        let alice = Arc::clone(&alice);
+        let report = Progress::default().report();
+        tokio::spawn(async move { alice.scan(None, false, report).await })
+    };
+    assert!(eventually(|| pair.chain.stalled_node_calls() > 0).await);
+
+    let second = alice.scan(None, false, Progress::default().report()).await;
+
+    assert_eq!(second.unwrap_err().kind, WalletErrorKind::WalletBusy);
+    alice.cancel_scan();
+    let first = tokio::time::timeout(Duration::from_secs(3), running)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.unwrap_err().kind, WalletErrorKind::Cancelled);
+    pair.chain.set_node_stalled(false);
+    assert_eq!(scan(&alice, false).await.found, 1, "the slot is free again");
+}
