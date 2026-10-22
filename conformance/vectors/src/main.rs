@@ -319,25 +319,50 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    // The pins of ADR 0009. Changing one is a deliberate pin bump: update the ADR, the lockfile and
+    // The pins of ADR 0020. Changing one is a deliberate pin bump: update the ADR, the lockfile and
     // the regenerated vectors together.
-    const NODE_COMMIT: &str = "9d022b1d521d3f705532e12ab77e0a429f6fde1f";
-    const WALLET_COMMIT: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
-    const SECP_COMMIT: &str = "42fcb29d4b635ea771d1984be0d11b0e64b15a93";
+    const NODE_COMMIT: &str = "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4";
+    const WALLET_COMMIT: &str = "845b3fcf4df12ed0139929c62157015447a9d063";
+    const SECP_COMMIT: &str = "1131a20920576413cd949e012a160561080324c1";
+    // The LEPIC crates the differential tests link bring the product workspace's own
+    // secp256k1-zkp pin, which may differ from the reference's. That copy is LEPIC's, not the
+    // reference's, so it is held to the product manifest instead of to ADR 0020.
+    const PRODUCT_MANIFEST: &str = include_str!("../../../Cargo.toml");
+    const SECP_REPO: &str = "https://github.com/EpicCash/rust-secp256k1-zkp";
+
+    /// The `rev` the product workspace pins secp256k1-zkp to.
+    fn product_secp_commit() -> Option<&'static str> {
+        PRODUCT_MANIFEST
+            .lines()
+            .find(|line| line.trim_start().starts_with("grin_secp256k1zkp"))?
+            .split("rev = \"")
+            .nth(1)?
+            .split('"')
+            .next()
+    }
+
+    /// The source of the secp256k1-zkp copy that `epic_util`, the reference's crypto boundary,
+    /// depends on.
+    fn reference_secp_source() -> Option<&'static str> {
+        LOCKFILE
+            .split("[[package]]")
+            .find(|block| {
+                block
+                    .lines()
+                    .any(|line| line.trim() == "name = \"epic_util\"")
+            })?
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("\"grin_secp256k1zkp "))
+    }
 
     #[test]
-    fn lockfile_resolves_to_adr_0009_commits() -> Result<(), Error> {
+    fn lockfile_resolves_to_adr_0020_commits() -> Result<(), Error> {
         let expected = [
             ("epic_core", "https://github.com/EpicCash/epic", NODE_COMMIT),
             (
                 "epic_wallet_libwallet",
                 "https://github.com/EpicCash/epic-wallet",
                 WALLET_COMMIT,
-            ),
-            (
-                "grin_secp256k1zkp",
-                "https://github.com/EpicCash/rust-secp256k1-zkp",
-                SECP_COMMIT,
             ),
         ];
         for (package, repo, commit) in expected {
@@ -346,26 +371,59 @@ mod tests {
             assert_eq!(upstream.commit, commit, "{package}");
         }
         assert_eq!(Pins::from_lockfile(LOCKFILE)?.node.commit, NODE_COMMIT);
+
+        // The reference resolves its secp256k1-zkp to the commit its own lockfile records.
+        let reference = reference_secp_source().ok_or(Error::MissingPin("grin_secp256k1zkp"))?;
+        let resolved = LOCKFILE
+            .split("[[package]]")
+            .filter(|block| {
+                block
+                    .lines()
+                    .any(|line| line.trim() == "name = \"grin_secp256k1zkp\"")
+            })
+            .filter_map(|block| {
+                block
+                    .lines()
+                    .find_map(|line| line.trim().strip_prefix("source = \"git+"))
+            })
+            .find(|source| {
+                reference
+                    .split_once('(')
+                    .and_then(|(_, rest)| rest.strip_prefix("git+"))
+                    .and_then(|rest| rest.strip_suffix(")\","))
+                    .is_some_and(|url| source.starts_with(&format!("{url}#")))
+            })
+            .ok_or(Error::MissingPin("grin_secp256k1zkp"))?;
+        assert!(
+            resolved.starts_with(SECP_REPO) && resolved.ends_with(&format!("#{SECP_COMMIT}\"")),
+            "{resolved}"
+        );
         Ok(())
     }
 
     #[test]
     fn every_upstream_crate_resolves_to_a_single_pinned_commit() {
-        let pinned = [
-            ("https://github.com/EpicCash/epic?", NODE_COMMIT),
-            ("https://github.com/EpicCash/epic-wallet?", WALLET_COMMIT),
+        let product_secp = product_secp_commit().unwrap_or("missing from the product manifest");
+        let pinned: [(&str, &[&str]); 3] = [
+            ("https://github.com/EpicCash/epic?", &[NODE_COMMIT]),
+            ("https://github.com/EpicCash/epic-wallet?", &[WALLET_COMMIT]),
             (
                 "https://github.com/EpicCash/rust-secp256k1-zkp?",
-                SECP_COMMIT,
+                &[SECP_COMMIT, product_secp],
             ),
         ];
         let sources = LOCKFILE
             .lines()
             .filter_map(|line| line.trim().strip_prefix("source = \"git+"));
         for source in sources {
-            for (repo, commit) in pinned {
+            for (repo, commits) in pinned {
                 if source.starts_with(repo) {
-                    assert!(source.ends_with(&format!("#{commit}\"")), "{source}");
+                    assert!(
+                        commits
+                            .iter()
+                            .any(|commit| source.ends_with(&format!("#{commit}\""))),
+                        "{source}"
+                    );
                 }
             }
         }

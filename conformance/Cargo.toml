@@ -10,18 +10,18 @@ edition = "2024"
 license = "Apache-2.0"
 publish = false
 
-# The reference crates are pinned by tag, spelled exactly as epic-wallet v4.0.2 spells its own
+# The reference crates are pinned by tag, spelled exactly as epic-wallet v4.1.0 spells its own
 # node dependencies, so Cargo unifies them into one copy. Cargo.lock records the commits, and a
 # test in the vectors crate checks them against ADR 0009.
 [workspace.dependencies]
-epic_api = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
-epic_chain = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
-epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
-epic_keychain = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
-epic_pool = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
-epic_util = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
-epic_wallet_libwallet = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }
-epic_wallet_impls = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.0.2" }
+epic_api = { git = "https://github.com/EpicCash/epic", tag = "v4.1.0" }
+epic_chain = { git = "https://github.com/EpicCash/epic", tag = "v4.1.0" }
+epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.1.0" }
+epic_keychain = { git = "https://github.com/EpicCash/epic", tag = "v4.1.0" }
+epic_pool = { git = "https://github.com/EpicCash/epic", tag = "v4.1.0" }
+epic_util = { git = "https://github.com/EpicCash/epic", tag = "v4.1.0" }
+epic_wallet_libwallet = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.1.0" }
+epic_wallet_impls = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.1.0" }
 # The LEPIC crates the differential tests run. The reference wallet bundles its own SQLite, which
 # cannot share a build with rusqlite's, so LEPIC's SQLite backend stays off here.
 lepic-keychain = { path = "../crates/lepic-keychain" }

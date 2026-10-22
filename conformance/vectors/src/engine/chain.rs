@@ -180,8 +180,10 @@ impl TestChain {
         let emitted_policy = global::get_emitted_policy(height);
         let policy = global::get_policies(emitted_policy)
             .ok_or(Failure::Story("no emission policy at this height"))?;
-        let algo = Deterministic::choose_algo(&policy, &prev.bottles);
-        block.header.bottles = next_block_bottles(algo, &prev.bottles);
+        let algo =
+            Deterministic::choose_algo(&policy, &prev.bottles).map_err(Failure::described)?;
+        block.header.bottles =
+            next_block_bottles(algo, &prev.bottles).map_err(Failure::described)?;
         let proof_seed = prev
             .height
             .checked_add(FORK_PROOF_OFFSET)

@@ -1,7 +1,7 @@
 //! Engine area: output selection, and the node responses of restore and refresh sessions on an
 //! upstream in-process test chain, with the wallet state upstream ends in.
 //!
-//! Every case drives an upstream `epic-wallet` v4.0.2 instance through its public API. Restore
+//! Every case drives an upstream `epic-wallet` v4.1.0 instance through its public API. Restore
 //! and refresh cases record each JSON-RPC exchange between upstream's `HTTPNodeClient` and the
 //! node's own foreign API handlers, then replay the recording into a second upstream wallet that
 //! starts from the same state and must reach the same end state.

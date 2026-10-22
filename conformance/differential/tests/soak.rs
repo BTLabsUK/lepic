@@ -1,5 +1,5 @@
 //! The randomized differential soak: seeded scenarios run against an upstream `epic-wallet`
-//! v4.0.2 peer, once with LEPIC as the subject and once with an upstream wallet in its place,
+//! v4.1.0 peer, once with LEPIC as the subject and once with an upstream wallet in its place,
 //! compared as `file_method.rs` compares its fixed cases. Half the standard-flow scenarios stop
 //! LEPIC at a persistence point of its send, receive or finalize, reopen it and let it retry.
 //!

@@ -396,9 +396,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.10.1"
+version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
@@ -1010,7 +1010,7 @@ dependencies = [
  "core_detect",
  "multiversion_no_op",
  "rustversion",
- "scopeguard 1.2.0",
+ "scopeguard",
  "simdutf8",
 ]
 
@@ -1048,8 +1048,8 @@ dependencies = [
 
 [[package]]
 name = "epic_api"
-version = "4.0.4"
-source = "git+https://github.com/EpicCash/epic?tag=v4.0.4#9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
 dependencies = [
  "bytes",
  "chrono",
@@ -1089,8 +1089,8 @@ dependencies = [
 
 [[package]]
 name = "epic_chain"
-version = "4.0.4"
-source = "git+https://github.com/EpicCash/epic?tag=v4.0.4#9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
 dependencies = [
  "bit-vec",
  "bitflags 2.9.4",
@@ -1112,8 +1112,8 @@ dependencies = [
 
 [[package]]
 name = "epic_core"
-version = "4.0.4"
-source = "git+https://github.com/EpicCash/epic?tag=v4.0.4#9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
 dependencies = [
  "blake2-rfc",
  "byteorder",
@@ -1144,8 +1144,8 @@ dependencies = [
 
 [[package]]
 name = "epic_keychain"
-version = "4.0.4"
-source = "git+https://github.com/EpicCash/epic?tag=v4.0.4#9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
 dependencies = [
  "blake2-rfc",
  "byteorder",
@@ -1168,8 +1168,8 @@ dependencies = [
 
 [[package]]
 name = "epic_p2p"
-version = "4.0.4"
-source = "git+https://github.com/EpicCash/epic?tag=v4.0.4#9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
 dependencies = [
  "bitflags 2.9.4",
  "blake2-rfc",
@@ -1183,6 +1183,7 @@ dependencies = [
  "epic_keychain",
  "epic_store",
  "epic_util",
+ "fs2",
  "log",
  "lru-cache",
  "net2",
@@ -1200,8 +1201,8 @@ dependencies = [
 
 [[package]]
 name = "epic_pool"
-version = "4.0.4"
-source = "git+https://github.com/EpicCash/epic?tag=v4.0.4#9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
 dependencies = [
  "blake2-rfc",
  "chrono",
@@ -1218,8 +1219,8 @@ dependencies = [
 
 [[package]]
 name = "epic_store"
-version = "4.0.4"
-source = "git+https://github.com/EpicCash/epic?tag=v4.0.4#9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
 dependencies = [
  "byteorder",
  "croaring",
@@ -1238,8 +1239,8 @@ dependencies = [
 
 [[package]]
 name = "epic_util"
-version = "4.0.4"
-source = "git+https://github.com/EpicCash/epic?tag=v4.0.4#9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
 dependencies = [
  "anyhow",
  "backtrace",
@@ -1250,7 +1251,7 @@ dependencies = [
  "lazy_static",
  "log",
  "log4rs",
- "parking_lot 0.6.4",
+ "parking_lot 0.12.5",
  "rand 0.9.2",
  "serde",
  "serde_derive",
@@ -1261,8 +1262,8 @@ dependencies = [
 
 [[package]]
 name = "epic_wallet_config"
-version = "4.0.2"
-source = "git+https://github.com/EpicCash/epic-wallet?tag=v4.0.2#465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic-wallet?tag=v4.1.0#845b3fcf4df12ed0139929c62157015447a9d063"
 dependencies = [
  "dirs 6.0.0",
  "epic_wallet_util",
@@ -1275,8 +1276,8 @@ dependencies = [
 
 [[package]]
 name = "epic_wallet_impls"
-version = "4.0.2"
-source = "git+https://github.com/EpicCash/epic-wallet?tag=v4.0.2#465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic-wallet?tag=v4.1.0#845b3fcf4df12ed0139929c62157015447a9d063"
 dependencies = [
  "base64 0.22.1",
  "bitvec",
@@ -1296,7 +1297,7 @@ dependencies = [
  "lazy_static",
  "log",
  "once_cell",
- "parking_lot 0.12.4",
+ "parking_lot 0.12.5",
  "rand 0.9.2",
  "regex",
  "reqwest",
@@ -1318,8 +1319,8 @@ dependencies = [
 
 [[package]]
 name = "epic_wallet_libwallet"
-version = "4.0.2"
-source = "git+https://github.com/EpicCash/epic-wallet?tag=v4.0.2#465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic-wallet?tag=v4.1.0#845b3fcf4df12ed0139929c62157015447a9d063"
 dependencies = [
  "aead 0.5.2",
  "blake2-rfc",
@@ -1351,8 +1352,8 @@ dependencies = [
 
 [[package]]
 name = "epic_wallet_util"
-version = "4.0.2"
-source = "git+https://github.com/EpicCash/epic-wallet?tag=v4.0.2#465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+version = "4.1.0"
+source = "git+https://github.com/EpicCash/epic-wallet?tag=v4.1.0#845b3fcf4df12ed0139929c62157015447a9d063"
 dependencies = [
  "dirs 6.0.0",
  "epic_api",
@@ -1479,6 +1480,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -1683,7 +1694,7 @@ checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
 [[package]]
 name = "grin_secp256k1zkp"
 version = "0.8.1"
-source = "git+https://github.com/EpicCash/rust-secp256k1-zkp?branch=master#42fcb29d4b635ea771d1984be0d11b0e64b15a93"
+source = "git+https://github.com/EpicCash/rust-secp256k1-zkp?branch=master#1131a20920576413cd949e012a160561080324c1"
 dependencies = [
  "arrayvec 0.7.6",
  "cc",
@@ -2489,31 +2500,20 @@ dependencies = [
 
 [[package]]
 name = "lock_api"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62ebf1391f6acad60e5c8b43706dde4582df75c06698ab44511d15016bc2442c"
-dependencies = [
- "owning_ref",
- "scopeguard 0.3.3",
-]
-
-[[package]]
-name = "lock_api"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed946d4529956a20f2d63ebe1b69996d5a2137c91913fe3ebbeff957f5bca7ff"
 dependencies = [
- "scopeguard 1.2.0",
+ "scopeguard",
 ]
 
 [[package]]
 name = "lock_api"
-version = "0.4.13"
+version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96936507f153605bddfcda068dd804796c84324ed2510809e5b2a624c81da765"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
- "autocfg 1.5.0",
- "scopeguard 1.2.0",
+ "scopeguard",
 ]
 
 [[package]]
@@ -2548,7 +2548,7 @@ dependencies = [
  "log",
  "log-mdc",
  "once_cell",
- "parking_lot 0.12.4",
+ "parking_lot 0.12.5",
  "rand 0.8.5",
  "serde",
  "serde-value",
@@ -2882,15 +2882,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "owning_ref"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ff55baddef9e4ad00f88b6c743a2a8062d4c6ade126c2a528644b8e444d52ce"
-dependencies = [
- "stable_deref_trait",
-]
-
-[[package]]
 name = "parity-codec"
 version = "3.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2898,16 +2889,6 @@ checksum = "2b9df1283109f542d8852cd6b30e9341acc2137481eb6157d2e62af68b0afec9"
 dependencies = [
  "arrayvec 0.4.12",
  "serde",
-]
-
-[[package]]
-name = "parking_lot"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0802bff09003b291ba756dc7e79313e51cc31667e94afbe847def490424cde5"
-dependencies = [
- "lock_api 0.1.5",
- "parking_lot_core 0.3.1",
 ]
 
 [[package]]
@@ -2923,25 +2904,12 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.12.4"
+version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70d58bf43669b5795d1576d0641cfb6fbb2057bf629506267a92807158584a13"
+checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api 0.4.13",
- "parking_lot_core 0.9.11",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad7f7e6ebdc79edff6fdcb87a55b620174f7a989e3eb31b65231f4af57f00b8c"
-dependencies = [
- "libc",
- "rand 0.5.6",
- "rustc_version 0.2.3",
- "smallvec 0.6.14",
- "winapi",
+ "lock_api 0.4.14",
+ "parking_lot_core 0.9.12",
 ]
 
 [[package]]
@@ -2962,15 +2930,15 @@ dependencies = [
 
 [[package]]
 name = "parking_lot_core"
-version = "0.9.11"
+version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc838d2a56b5b1a6c25f55575dfc605fabb63bb2365f6c2353ef9159aa69e4a5"
+checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if 1.0.1",
  "libc",
  "redox_syscall 0.5.13",
  "smallvec 1.15.1",
- "windows-targets 0.52.6",
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -3621,7 +3589,7 @@ dependencies = [
 [[package]]
 name = "randomx"
 version = "0.2.0"
-source = "git+https://github.com/EpicCash/randomx-rust.git?tag=v0.2.1#9a412a1588ae999484ab26d94f9b40449a856514"
+source = "git+https://github.com/EpicCash/randomx-rust?tag=v0.2.1.1#dd696033798da0d4079ddcba44f0bc21970cf783"
 dependencies = [
  "bindgen",
  "byteorder",
@@ -3934,12 +3902,6 @@ checksum = "1f29ebaa345f945cec9fbbc532eb307f0fdad8161f281b6369539c8d84876b3d"
 dependencies = [
  "windows-sys 0.59.0",
 ]
-
-[[package]]
-name = "scopeguard"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94258f53601af11e6a49f722422f6e3425c52b06245a5cf9bc09908b174f5e27"
 
 [[package]]
 name = "scopeguard"
@@ -4544,7 +4506,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot 0.12.4",
+ "parking_lot 0.12.5",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

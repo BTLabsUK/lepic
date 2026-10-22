@@ -1,5 +1,5 @@
 # The differential tests link the LEPIC crates next to the reference code, so this workspace uses
-# the product workspace toolchain. The reference code (epic v4.0.4 and epic-wallet v4.0.2, which
+# the product workspace toolchain. The reference code (epic v4.1.0 and epic-wallet v4.1.0, which
 # pin an older toolchain themselves) builds and passes its vector tests on it.
 [toolchain]
 channel = "1.99.0"
