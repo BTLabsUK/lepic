@@ -263,10 +263,13 @@ meaning. `message` is English for logs and bug reports and holds no secret; do n
 | 42 | `onionAddressInvalid` | The address given to `sendTor` or `resendTor` is not an onion v3 address, or has a typo. Nothing was stored. |
 | 43 | `torNotRunning` | The wallet's tor is not running or not yet bootstrapped. Before the send nothing was stored; when tor stopped during the delivery the send is stored as `sent`. |
 | 44 | `onionUnreachable` | The other wallet is not online with Tor on, or was not reached in time. The send is stored as `sent` with its inputs locked: resend it later or cancel it. |
+| 45 | `changeTooSmall` | The change has fewer base units than the change outputs asked for in `SendOptions`. Nothing was stored; ask for fewer change outputs. |
+| 46 | `tooHeavy` | The send would spend more inputs or make more outputs than a transaction may hold. Nothing was stored; send less, or consolidate first. |
 
 Kinds 22 to 24 used to arrive as `other`. Kinds 25 and 26 are new with `sealAppData` and
 `openAppData`, 27 and 28 with `releaseTransaction`, 29 to 31 with the invoice calls, 40 and
-41 with the HTTP calls, 42 to 44 with the Tor calls. An
+41 with the HTTP calls, 42 to 44 with the Tor calls, 45 and 46 with `SendOptions` (before, both
+arrived as `invalidArgument`). An
 exhaustive `switch` over `WalletErrorKind` must handle them.
 
 ## Direct transactions over HTTP
