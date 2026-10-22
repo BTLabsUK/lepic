@@ -160,7 +160,7 @@ fn stream(
 ) -> Result<Streamed, LegacyDbError> {
     let mut reader = File::open(source)?.take(limit.saturating_add(1));
     let mut writer = match copy {
-        Some(path) => Some(OpenOptions::new().write(true).create_new(true).open(path)?),
+        Some(path) => Some(private_options().open(path)?),
         None => None,
     };
     let mut own = Sha256::new();
@@ -193,6 +193,26 @@ fn stream(
         hash: own.finalize().into(),
         len,
     })
+}
+
+/// The copy holds the old wallet's private transaction keys too, so only its owner may read it.
+fn private_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+}
+
+/// Removes the copy and every file SQLite may have made beside it.
+pub(super) fn remove_copy(db: &Path) {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut name = OsString::from(db.as_os_str());
+        name.push(suffix);
+        if let Err(error) = remove_if_present(Path::new(&name)) {
+            tracing::warn!(error = %error, "legacy database copy not removed");
+        }
+    }
 }
 
 fn wal_path(db: &Path) -> PathBuf {

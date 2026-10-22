@@ -405,7 +405,23 @@ fn leaves_the_source_folder_byte_identical() {
         assert!(!shm.exists());
         assert!(!sqlite_sibling(&db, "-journal").exists());
         assert_eq!(sqlite_sibling(&db, "-wal").exists(), keep_wal);
+        assert_eq!(
+            fs::read_dir(work.path()).unwrap().count(),
+            0,
+            "the copy is removed once read"
+        );
     }
+}
+
+#[test]
+fn the_copy_is_removed_when_it_cannot_be_read() {
+    let source = tempfile::tempdir().unwrap();
+    let dir = source.path().join("wallet_data/db/sqlite");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("epic.db"), vec![7_u8; 4096]).unwrap();
+    let work = copy_dir();
+    assert!(read_copy(source.path(), work.path(), &LegacyLimits::default()).is_err());
+    assert_eq!(fs::read_dir(work.path()).unwrap().count(), 0);
 }
 
 #[test]

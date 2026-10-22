@@ -1142,6 +1142,7 @@ fn imported(source_id: u32) -> ImportedTransaction {
         input_count: 2,
         output_count: 1,
         kernel_excess: Some([8; 33]),
+        kernel_lookup_min_height: Some(Height::new(880)),
         ttl_cutoff_height: Some(Height::new(900)),
         messages: vec![
             ImportedMessage {
@@ -1187,6 +1188,7 @@ fn imported_transactions_round_trip_and_are_replaced<B: Backend>() {
 
     record.messages.truncate(1);
     record.kernel_excess = None;
+    record.kernel_lookup_min_height = None;
     record.confirmed_at = None;
     record.slate_id = None;
     write(store, |repos| repos.put_imported_transaction(tx, &record)).unwrap();

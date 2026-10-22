@@ -81,6 +81,8 @@ pub struct ImportedTransaction {
     pub input_count: u32,
     pub output_count: u32,
     pub kernel_excess: Option<CommitmentBytes>,
+    /// The height below which the kernel cannot be, as the old wallet recorded it.
+    pub kernel_lookup_min_height: Option<Height>,
     pub ttl_cutoff_height: Option<Height>,
     /// At most [`MAX_IMPORTED_MESSAGES`], in participant order.
     pub messages: Vec<ImportedMessage>,

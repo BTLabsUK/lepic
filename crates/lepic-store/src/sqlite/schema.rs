@@ -150,6 +150,7 @@ CREATE TABLE imported_transactions (
     input_count INTEGER NOT NULL,
     output_count INTEGER NOT NULL,
     kernel_excess BLOB,
+    kernel_lookup_min_height INTEGER,
     ttl_cutoff_height INTEGER,
     chain_check TEXT NOT NULL
 );

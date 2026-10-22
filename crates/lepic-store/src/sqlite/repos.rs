@@ -1037,7 +1037,8 @@ impl PeerRepository for SqliteRepos<'_> {
 }
 
 const IMPORTED_TRANSACTION_COLUMNS: &str = "source_id, kind, slate_id, confirmed_at, \
-    input_count, output_count, kernel_excess, ttl_cutoff_height, chain_check";
+    input_count, output_count, kernel_excess, ttl_cutoff_height, chain_check, \
+    kernel_lookup_min_height";
 
 const IMPORTED_OUTPUT_COLUMNS: &str = "commitment, tx_id, status, height, amount";
 
@@ -1052,14 +1053,15 @@ impl ImportedRepository for SqliteRepos<'_> {
         self.conn.execute(
             &format!(
                 "INSERT INTO imported_transactions (tx_id, {IMPORTED_TRANSACTION_COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT (tx_id) DO UPDATE SET
                      source_id = excluded.source_id, kind = excluded.kind,
                      slate_id = excluded.slate_id, confirmed_at = excluded.confirmed_at,
                      input_count = excluded.input_count, output_count = excluded.output_count,
                      kernel_excess = excluded.kernel_excess,
                      ttl_cutoff_height = excluded.ttl_cutoff_height,
-                     chain_check = excluded.chain_check"
+                     chain_check = excluded.chain_check,
+                     kernel_lookup_min_height = excluded.kernel_lookup_min_height"
             ),
             params![
                 i64::from(tx.0),
@@ -1074,6 +1076,9 @@ impl ImportedRepository for SqliteRepos<'_> {
                     .ttl_cutoff_height
                     .map(|height| u64_to_column(height.value())),
                 imported.check.code(),
+                imported
+                    .kernel_lookup_min_height
+                    .map(|height| u64_to_column(height.value())),
             ],
         )?;
         self.conn.execute(
@@ -1210,6 +1215,9 @@ fn decode_imported_transaction(row: &Row<'_>) -> Result<ImportedTransaction, Sto
             .map(|value| Height::new(u64_from_column(value))),
         messages: Vec::new(),
         check: decode_code(&check, ChainCheck::from_code, record, "chain check")?,
+        kernel_lookup_min_height: row
+            .get::<_, Option<i64>>(9)?
+            .map(|value| Height::new(u64_from_column(value))),
     })
 }
 

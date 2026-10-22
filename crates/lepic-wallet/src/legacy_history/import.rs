@@ -479,6 +479,7 @@ fn import_entry(
         input_count: source.num_inputs,
         output_count: source.num_outputs,
         kernel_excess: source.kernel_excess,
+        kernel_lookup_min_height: source.kernel_lookup_min_height,
         ttl_cutoff_height: source.ttl_cutoff_height,
         messages: verified_messages(&source.messages),
         check: ChainCheck::Unchecked,

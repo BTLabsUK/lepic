@@ -261,8 +261,8 @@ pub struct LegacyOutput {
 /// Copies the database of the wallet at `wallet_dir` (the folder holding `wallet_data`, or
 /// `wallet_data` itself) into `work_dir` and reads the copy.
 ///
-/// `work_dir` must be an empty directory the caller owns; the copy and the files SQLite adds
-/// beside it stay there. Nothing in the source folder is opened for writing, locked or opened by
+/// `work_dir` must be an empty directory the caller owns. The copy and the files SQLite adds
+/// beside it are removed before this returns, whether the read succeeded or not. Nothing in the source folder is opened for writing, locked or opened by
 /// SQLite. A source that changes during the copy is copied again, up to three attempts in all.
 pub fn read_copy(
     wallet_dir: &Path,
@@ -276,7 +276,9 @@ pub fn read_copy(
         LegacyDbLocation::Missing => return Err(LegacyDbError::NotFound),
     };
     let copied = copy::copy_stable(&source, work_dir, limits.max_db_bytes)?;
-    let history = reader::read(&copied.db, copied.fingerprint, limits)?;
+    let history = reader::read(&copied.db, copied.fingerprint, limits);
+    copy::remove_copy(&copied.db);
+    let history = history?;
     log_read(&history, started);
     Ok(history)
 }
