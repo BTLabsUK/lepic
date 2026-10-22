@@ -1,5 +1,5 @@
 # Local interop stack: the public Epicbox relay with its database, the reference node on a
-# test-mode chain, a stratum miner, two epic-wallet v4.0.2 wallets and lepic. Nothing here
+# test-mode chain, a stratum miner, two epic-wallet v4.1.0 wallets and lepic. Nothing here
 # reaches a public relay or node: the node's network is internal, and every other service shares
 # the node's network namespace, so all of them talk over 127.0.0.1 and listen on it alone.
 # Pulled images are pinned by digest, and no container runs as root. lepic sends the node secret

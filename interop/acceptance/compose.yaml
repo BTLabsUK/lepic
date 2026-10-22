@@ -1,5 +1,5 @@
 # CLI acceptance stack: the V-02 interop stack (relay, reference node on a test-mode chain,
-# stratum miner, two epic-wallet v4.0.2 wallets) without a lepic container. The lepic under test
+# stratum miner, two epic-wallet v4.1.0 wallets) without a lepic container. The lepic under test
 # is the binary installed on the host, which reaches the node API and the relay through
 # `gateway` on 127.0.0.1 only.
 #

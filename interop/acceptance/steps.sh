@@ -155,12 +155,12 @@ EOF
 step_node_status() {
     local status
     status="$(lepic node status)" || fail "node status failed" || return 1
-    jq -e '.node_version == "4.0.4" and .height > 0' <<<"${status}" >/dev/null ||
+    jq -e '.node_version == "4.1.0" and .height > 0' <<<"${status}" >/dev/null ||
         fail "unexpected node status: ${status}" || return 1
     local human
     human="$(lepic_env "${LEPIC_BIN}" node status 2>>"${RUN_LOG}")" || fail "human node status failed" || return 1
     grep -q '^Height ' <<<"${human}" || fail "human node status has no height: ${human}" || return 1
-    DETAIL="node 4.0.4 at height $(jq -r .height <<<"${status}") through 127.0.0.1:${NODE_PORT}"
+    DETAIL="node 4.1.0 at height $(jq -r .height <<<"${status}") through 127.0.0.1:${NODE_PORT}"
 }
 
 step_wallet_init() {

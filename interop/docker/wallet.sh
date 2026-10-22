@@ -1,5 +1,5 @@
 #!/bin/sh
-# Creates an epic-wallet v4.0.2 wallet on the usernet chain on first start, points it at the
+# Creates an epic-wallet v4.1.0 wallet on the usernet chain on first start, points it at the
 # local node and relay, then either serves the foreign API (the funder, which the node pays
 # coinbase rewards to) or idles so the scenarios can drive it with `ew`.
 #

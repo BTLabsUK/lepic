@@ -10,8 +10,8 @@ description = "Stratum miner for the local test-mode chain of the interop stack"
 [workspace]
 
 [dependencies]
-# Pinned exactly as the conformance workspace pins the reference node (ADR 0009).
-epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
-epic_util = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
+# Pinned exactly as the conformance workspace pins the reference node (ADR 0020).
+epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.1.0" }
+epic_util = { git = "https://github.com/EpicCash/epic", tag = "v4.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
