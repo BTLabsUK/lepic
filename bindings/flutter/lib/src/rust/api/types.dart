@@ -484,7 +484,8 @@ enum LegacyImportStatus {
   sourceBusy,
   tooLarge,
 
-  /// The history belongs to a wallet with another recovery phrase.
+  /// No output of the history is one this wallet's recovery phrase makes, so it cannot be
+  /// shown to be this wallet's: another wallet's, or one with no output to check.
   otherWallet,
 
   /// This wallet already holds a different imported history.

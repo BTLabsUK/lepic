@@ -173,7 +173,7 @@ amounts, fee, slate id, messages and kernel; `tx show` marks it `Origin imported
 and how the chain judged it. Funds and balances still come from the scan: an output the scan finds
 is linked to the old transaction that made it. The report's status says why nothing was imported:
 `no-history`, `old-format` (epic-wallet before 3.3), `unreadable`, `source-busy` (close the old
-wallet), `too-large`, `other-wallet` (another seed) or `other-history`. Running it again with the
+wallet), `too-large`, `other-wallet` (no output it holds is one this seed makes) or `other-history`. Running it again with the
 same folder reports `already-imported` and only links and dates what later scans found.
 
 ## Scan

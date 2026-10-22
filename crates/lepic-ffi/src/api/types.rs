@@ -322,7 +322,8 @@ pub enum LegacyImportStatus {
     /// The database kept changing while it was copied: close the old wallet and try again.
     SourceBusy,
     TooLarge,
-    /// The history belongs to a wallet with another recovery phrase.
+    /// No output of the history is one this wallet's recovery phrase makes, so it cannot be
+    /// shown to be this wallet's: another wallet's, or one with no output to check.
     OtherWallet,
     /// This wallet already holds a different imported history.
     OtherHistory,

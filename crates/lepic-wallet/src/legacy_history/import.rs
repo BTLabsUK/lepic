@@ -66,7 +66,8 @@ pub enum LegacyImportStatus {
     /// The database kept changing while it was copied: the old wallet is running.
     SourceBusy,
     TooLarge,
-    /// The history belongs to a wallet with another seed. Nothing was imported.
+    /// No output of the history is one this wallet's seed makes, so it cannot be shown to be
+    /// this wallet's. Nothing was imported.
     OtherWallet,
     /// This wallet already holds a different imported history. Nothing was imported.
     OtherHistory,
@@ -931,16 +932,26 @@ fn hex(bytes: &[u8]) -> String {
 
 const WORK_DIR_PREFIX: &str = "legacy-import-";
 
+/// A work directory younger than this may belong to an import still running.
+const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 /// Removes the work directories of imports that did not end, never following a link.
 fn sweep_stale(data_dir: &Path) {
     let Ok(entries) = std::fs::read_dir(data_dir) else {
         return;
     };
     for entry in entries.flatten() {
-        let stale = entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(WORK_DIR_PREFIX))
+        let old = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= STALE_AFTER);
+        let stale = old
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(WORK_DIR_PREFIX))
             && entry.file_type().is_ok_and(|kind| kind.is_dir());
         if stale && let Err(error) = std::fs::remove_dir_all(entry.path()) {
             warn!(error = %error, "stale legacy import folder not removed");
@@ -955,7 +966,7 @@ pub struct ImportWorkDir {
 
 impl ImportWorkDir {
     /// Creates `<data_dir>/legacy-import-<suffix>`, readable by its owner only, after removing
-    /// what an import that was killed left there. `suffix` is a plain name.
+    /// what an import killed over an hour ago left there. `suffix` is a plain name.
     pub fn create(data_dir: &Path, suffix: &str) -> std::io::Result<Self> {
         if suffix.is_empty()
             || !suffix
