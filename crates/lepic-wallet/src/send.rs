@@ -60,7 +60,7 @@ use crate::account::{self, AccountError, next_output_key};
 use crate::error::WalletError;
 use crate::inbox::relay_network;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::selection::{self, SelectionError, SelectionOptions, SelectionStrategy};
+use crate::selection::{self, Selection, SelectionError, SelectionOptions, SelectionStrategy};
 use crate::wallet::Wallet;
 
 /// The private context of the party that adds inputs, under the participant id `epic-wallet`
@@ -617,6 +617,72 @@ fn create_s1(
             .selection_options()
             .request(request.amount, tip, base_fee),
     )?;
+    let built = store_s1(
+        repos,
+        keychain,
+        &S1Storage {
+            network: env.network,
+            now: env.now,
+            tip,
+            transport: delivery.transport(),
+        },
+        request,
+        selection,
+        randomness,
+    )?;
+    let wire = encode_for_delivery(
+        env.transports,
+        delivery,
+        &built.slate,
+        base_fee,
+        &built.encode_context,
+    )?;
+    record_counterparty(repos, built.tx_id, delivery)?;
+    let slate_uuid = Uuid::from_bytes(*built.slate.id().as_bytes());
+    let outbox = enqueue_delivery(repos, delivery, slate_uuid, env.now)?;
+    Ok(StoredS1 {
+        tx_id: built.tx_id,
+        slate_id: built.slate.id(),
+        amount: built.plan_amount,
+        fee: built.plan_fee,
+        wire,
+        outbox,
+        bound_to: None,
+    })
+}
+
+/// What an S1 is stored with, apart from the request and its selection.
+pub(crate) struct S1Storage {
+    pub(crate) network: Network,
+    pub(crate) now: Timestamp,
+    /// The chain tip the slate is built at.
+    pub(crate) tip: Height,
+    /// Recorded on the transaction entry.
+    pub(crate) transport: TransportId,
+}
+
+/// An S1 stored by [`store_s1`].
+pub(crate) struct BuiltAndStored {
+    pub(crate) tx_id: TxId,
+    pub(crate) slate: Slate,
+    pub(crate) encode_context: EncodeContext,
+    plan_amount: Amount,
+    plan_fee: Fee,
+}
+
+/// Builds the S1 of `request` with the inputs and change of `selection` and stores it in the
+/// caller's store transaction: the outgoing entry, the inputs locked by it, the change as
+/// unconfirmed outputs, the sender's private context and the slate itself.
+pub(crate) fn store_s1(
+    repos: &mut dyn Repositories,
+    keychain: &Keychain,
+    storage: &S1Storage,
+    request: &SendRequest,
+    selection: Selection,
+    randomness: S1Randomness,
+) -> Result<BuiltAndStored, SendError> {
+    let tip = storage.tip;
+    let base_fee = storage.network.params().default_base_fee();
     let change = selection
         .change
         .iter()
@@ -645,15 +711,8 @@ fn create_s1(
     };
     let built = build_s1(keychain, &plan, randomness)?;
     let encode_context = EncodeContext {
-        block_header_version: block_header_version(env.network, tip),
+        block_header_version: block_header_version(storage.network, tip),
     };
-    let wire = encode_for_delivery(
-        env.transports,
-        delivery,
-        &built.slate,
-        base_fee,
-        &encode_context,
-    )?;
     // Stored as V3, which carries every field, with the header of a slate created here; a
     // later delivery re-encodes it for its transport.
     let stored = V3JsonCodec::new(base_fee)
@@ -670,14 +729,13 @@ fn create_s1(
         direction: TxDirection::Outgoing,
         state: TxState::Sent,
         slate_id: Some(slate_uuid),
-        transport: Some(delivery.transport().as_str().to_owned()),
+        transport: Some(storage.transport.as_str().to_owned()),
         amount_credited: total_change,
         amount_debited: selection.total,
         fee: Some(selection.fee),
-        created_at: env.now,
-        updated_at: env.now,
+        created_at: storage.now,
+        updated_at: storage.now,
     })?;
-    record_counterparty(repos, tx_id, delivery)?;
     for input in &plan.inputs {
         repos.put_output(&OutputRecord {
             status: OutputStatus::Locked,
@@ -710,15 +768,12 @@ fn create_s1(
         codec: LEGACY_V3_JSON.as_str().to_owned(),
         bytes: stored.as_bytes().to_vec(),
     })?;
-    let outbox = enqueue_delivery(repos, delivery, slate_uuid, env.now)?;
-    Ok(StoredS1 {
+    Ok(BuiltAndStored {
         tx_id,
-        slate_id,
-        amount: plan.amount,
-        fee: plan.fee,
-        wire,
-        outbox,
-        bound_to: None,
+        slate: built.slate,
+        encode_context,
+        plan_amount: plan.amount,
+        plan_fee: plan.fee,
     })
 }
 
