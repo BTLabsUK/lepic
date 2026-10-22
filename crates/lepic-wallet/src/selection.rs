@@ -124,6 +124,9 @@ pub enum SelectionError {
     ChangeTooSmall { change: Amount, outputs: usize },
     #[error("transaction with {inputs} inputs and {outputs} outputs exceeds the weight limit")]
     TooHeavy { inputs: usize, outputs: usize },
+    /// A consolidation needs at least two spendable outputs; `outputs` were.
+    #[error("{outputs} spendable outputs are too few to consolidate")]
+    NothingToConsolidate { outputs: usize },
     #[error("selection arithmetic failed")]
     Arithmetic(#[from] ArithmeticError),
 }
@@ -254,58 +257,77 @@ pub enum SelfSendShape {
     Consolidate,
 }
 
-/// The selection of a send to the wallet itself: it spends what [`select_max`] spends under
-/// the request's account, confirmations and limit with strategy `All`, every eligible output up
-/// to the limit, and makes the outputs `shape` asks for. The request's amount, strategy and
-/// change outputs are ignored.
+/// The selection of a send to the wallet itself: it spends the smallest eligible outputs
+/// under the request's account and confirmations, at most `request.max_outputs` of them, and
+/// makes the outputs `shape` asks for. The limit is firm here, unlike in [`select`]: a wallet
+/// with more spendable outputs than the limit spends the smallest ones and keeps the rest
+/// spendable, and a consolidation merges the rest on its next call. The request's amount,
+/// strategy and change outputs are ignored.
 ///
-/// The amount is the one output a send pays. For a split into `n` it is the inputs' value less
-/// the fee of `n` outputs, divided by `n`, and the change is split into the other `n - 1`
-/// outputs, the last one also taking the remainder.
+/// The amount is the one output a send pays. For a consolidation it is the inputs' value less
+/// the fee, with no change. For a split into `n` it is the inputs' value less the fee of `n`
+/// outputs, divided by `n`, and the change is split into the other `n - 1` outputs, the last
+/// one also taking the remainder.
 ///
 /// # Errors
 ///
-/// What [`select_max`] returns, and [`SelectionError::NotEnoughFunds`] when the inputs cannot
-/// pay the fee and one base unit into each output.
+/// - [`SelectionError::NothingToConsolidate`] when fewer than two outputs are eligible for a
+///   consolidation.
+/// - [`SelectionError::NotEnoughFunds`] when the inputs cannot pay the fee and one base unit
+///   into each output.
+/// - [`SelectionError::TooHeavy`] when the transaction would exceed the weight limit.
+/// - [`SelectionError::Arithmetic`] when a sum of values overflows.
 pub fn select_self_send(
     outputs: &[OutputRecord],
     request: &SelectionRequest,
     shape: SelfSendShape,
 ) -> Result<Selection, SelectionError> {
-    let every = SelectionRequest {
-        strategy: SelectionStrategy::All,
-        change_outputs: NonZeroUsize::MIN,
-        ..*request
+    let mut eligible = eligible(outputs, request);
+    // Stable, so equal values keep the order they were given in.
+    eligible.sort_by_key(|output| output.amount);
+    eligible.truncate(request.max_outputs.get());
+    let parts = match shape {
+        SelfSendShape::Consolidate if eligible.len() < 2 => {
+            return Err(SelectionError::NothingToConsolidate {
+                outputs: eligible.len(),
+            });
+        }
+        SelfSendShape::Consolidate => 1,
+        SelfSendShape::Split(count) => count.get(),
     };
-    let merged = select_max(outputs, &every)?;
-    let SelfSendShape::Split(count) = shape else {
-        return Ok(merged);
-    };
-    let parts = count.get();
-    let fee = tx_fee(merged.inputs.len(), parts, request.base_fee)?;
+    let total = sum(&eligible)?;
+    let weight = body(eligible.len(), parts)?.weight_as_block();
+    if weight > MAX_TX_WEIGHT {
+        return Err(SelectionError::TooHeavy {
+            inputs: eligible.len(),
+            outputs: parts,
+        });
+    }
+    let fee = tx_fee(eligible.len(), parts, request.base_fee)?;
     let parts_u64 = u64::try_from(parts).map_err(|_| ArithmeticError::Overflow)?;
-    let share = merged
-        .total
-        .value()
-        .checked_sub(fee.value())
-        .and_then(|left| left.checked_div(parts_u64))
+    let not_enough = SelectionError::NotEnoughFunds {
+        available: total,
+        needed: fee.to_amount().checked_add(Amount::new(parts_u64))?,
+    };
+    let left = total.value().checked_sub(fee.value()).ok_or(not_enough)?;
+    let share = left
+        .checked_div(parts_u64)
         .filter(|share| *share > 0)
-        .ok_or(SelectionError::NotEnoughFunds {
-            available: merged.total,
-            needed: fee.to_amount().checked_add(Amount::new(parts_u64))?,
-        })?;
-    let change_outputs = parts
-        .checked_sub(1)
-        .and_then(NonZeroUsize::new)
-        .ok_or(ArithmeticError::Overflow)?;
-    select(
-        outputs,
-        &SelectionRequest {
-            amount: Amount::new(share),
-            change_outputs,
-            ..every
-        },
-    )
+        .ok_or(not_enough)?;
+    let remainder = left.checked_rem(parts_u64).ok_or(not_enough)?;
+    let amount = Amount::new(share);
+    let change_parts = parts.checked_sub(1).ok_or(ArithmeticError::Overflow)?;
+    let mut change = vec![amount; change_parts];
+    if let Some(last) = change.last_mut() {
+        *last = last.checked_add(Amount::new(remainder))?;
+    }
+    Ok(Selection {
+        inputs: eligible.into_iter().cloned().collect(),
+        change,
+        amount,
+        fee,
+        total,
+    })
 }
 
 /// Whether `output` may be spent at `tip`, by `epic-wallet`'s `OutputData::eligible_to_spend`.

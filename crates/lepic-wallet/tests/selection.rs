@@ -18,8 +18,8 @@ use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::MAX_TX_WEIGHT;
 use lepic_store::{AccountIndex, KEY_ID_LEN, KeyId, OutputRecord, OutputStatus};
 use lepic_wallet::selection::{
-    SelectionError, SelectionRequest, SelectionStrategy, eligible_to_spend, estimate, select,
-    select_max,
+    Selection, SelectionError, SelectionRequest, SelectionStrategy, SelfSendShape, SplitCount,
+    eligible_to_spend, estimate, select, select_max, select_self_send,
 };
 
 const TIP: Height = Height::new(100);
@@ -408,4 +408,102 @@ fn sends_need_by_default_the_confirmations_the_balance_counts_as_spendable() {
         [lepic_wallet::refresh::BALANCE_MINIMUM_CONFIRMATIONS; 3]
     );
     assert_eq!(lepic_wallet::refresh::BALANCE_MINIMUM_CONFIRMATIONS, 3);
+}
+
+/// `count` unspent outputs of `value` each, more than one byte can number.
+fn many_unspent(count: usize, value: u64) -> Vec<OutputRecord> {
+    (0..count)
+        .map(|n| {
+            let n = u16::try_from(n).unwrap();
+            let mut record = output(0, value, OutputStatus::Unspent);
+            let blinding = {
+                let mut bytes = [1; 32];
+                bytes[..2].copy_from_slice(&n.to_be_bytes());
+                SecretKey::from_array(bytes).unwrap()
+            };
+            record.id = OutputIdentifier::new(
+                OutputFeatures::Plain,
+                Commitment::commit(value, &blinding).unwrap(),
+            );
+            record.key_id.0[11..13].copy_from_slice(&n.to_be_bytes());
+            record
+        })
+        .collect()
+}
+
+fn self_send(outputs: &[OutputRecord], shape: SelfSendShape) -> Result<Selection, SelectionError> {
+    select_self_send(outputs, &request(0), shape)
+}
+
+#[test]
+fn a_self_send_spends_at_most_the_output_limit_taking_the_smallest() {
+    let mut outputs = many_unspent(501, 1_000 * MILLI_EPIC);
+    outputs[7].amount = Amount::new(5_000 * MILLI_EPIC);
+    for shape in [
+        SelfSendShape::Consolidate,
+        SelfSendShape::Split(SplitCount::new(3).unwrap()),
+    ] {
+        let selection = self_send(&outputs, shape).unwrap();
+
+        assert_eq!(selection.inputs.len(), 500, "{shape:?}");
+        assert!(
+            selection
+                .inputs
+                .iter()
+                .all(|input| input.amount.value() == 1_000 * MILLI_EPIC),
+            "the largest output is left spendable"
+        );
+        assert_eq!(selection.total, Amount::new(500 * 1_000 * MILLI_EPIC));
+        let outputs = match shape {
+            SelfSendShape::Consolidate => 1,
+            SelfSendShape::Split(count) => count.get(),
+        };
+        // 500 inputs and `outputs` outputs weigh 4 * outputs + 1 - 500, floored at 1.
+        let weight = (4 * outputs as u64 + 1).saturating_sub(500).max(1);
+        assert_eq!(selection.fee, Fee::new(weight * MILLI_EPIC));
+        let made: u64 =
+            selection.amount.value() + selection.change.iter().map(|c| c.value()).sum::<u64>();
+        assert_eq!(made + selection.fee.value(), selection.total.value());
+        assert_eq!(selection.change.len(), outputs - 1);
+    }
+}
+
+#[test]
+fn refuses_to_consolidate_fewer_than_two_spendable_outputs() {
+    for outputs in [Vec::new(), unspent(&[100 * MILLI_EPIC])] {
+        assert_eq!(
+            self_send(&outputs, SelfSendShape::Consolidate),
+            Err(SelectionError::NothingToConsolidate {
+                outputs: outputs.len()
+            })
+        );
+    }
+    let two = unspent(&[100 * MILLI_EPIC, 100 * MILLI_EPIC]);
+    let selection = self_send(&two, SelfSendShape::Consolidate).unwrap();
+    assert_eq!(selection.inputs.len(), 2);
+    assert!(selection.change.is_empty());
+    // Two inputs and one output weigh 4 + 1 - 2 = 3.
+    assert_eq!(
+        selection.amount,
+        Amount::new(200 * MILLI_EPIC - 3 * MILLI_EPIC)
+    );
+}
+
+#[test]
+fn a_split_of_one_output_is_allowed_and_splits_it_evenly() {
+    let outputs = unspent(&[1_000 * MILLI_EPIC + 5]);
+    let selection = self_send(&outputs, SelfSendShape::Split(SplitCount::new(4).unwrap())).unwrap();
+
+    // One input and four outputs weigh 16 + 1 - 1 = 16.
+    let left = 1_000 * MILLI_EPIC + 5 - 16 * MILLI_EPIC;
+    let share = left / 4;
+    assert_eq!(selection.amount, Amount::new(share));
+    assert_eq!(
+        selection.change,
+        vec![
+            Amount::new(share),
+            Amount::new(share),
+            Amount::new(share + left % 4)
+        ]
+    );
 }
