@@ -11,6 +11,9 @@ use crate::account::{AccountIndex, AccountRecord, AccountRepository};
 use crate::context::{self, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 use crate::encoding::timestamp_to_column;
 use crate::error::{Record, StoreError};
+use crate::imported::{
+    self, ChainCheck, ImportedOutput, ImportedOutputStatus, ImportedRepository, ImportedTransaction,
+};
 use crate::invoice::{
     self, InvoiceAddressIndex, InvoiceRepository, PendingInvoice, PendingInvoiceStatus,
 };
@@ -45,6 +48,8 @@ struct State {
     allowed_peers: BTreeMap<String, AllowedPeer>,
     peer_capabilities: BTreeMap<String, PeerCapability>,
     invoice_address_index: Option<InvoiceAddressIndex>,
+    imported_transactions: BTreeMap<TxId, ImportedTransaction>,
+    imported_outputs: BTreeMap<CommitmentBytes, ImportedOutput>,
 }
 
 /// A pending invoice as the SQLite row holds it: its bytes sealed, the other fields in clear.
@@ -121,6 +126,14 @@ impl MemoryRepos<'_> {
             Ok(())
         } else {
             Err(StoreError::UnknownAccount(index))
+        }
+    }
+
+    fn require_transaction(&self, id: TxId) -> Result<(), StoreError> {
+        if self.state.transactions.contains_key(&id) {
+            Ok(())
+        } else {
+            Err(StoreError::UnknownTransaction(id))
         }
     }
 
@@ -285,6 +298,10 @@ impl TransactionRepository for MemoryRepos<'_> {
         self.state.transactions.remove(&id);
         self.state.confirmed_heights.remove(&id);
         self.state.counterparties.remove(&id);
+        self.state.imported_transactions.remove(&id);
+        self.state
+            .imported_outputs
+            .retain(|_, output| output.tx != id);
         Ok(())
     }
 
@@ -663,5 +680,67 @@ impl PeerRepository for MemoryRepos<'_> {
 
     fn peer_capability(&self, key: &str) -> Result<Option<PeerCapability>, StoreError> {
         Ok(self.state.peer_capabilities.get(key).cloned())
+    }
+}
+
+impl ImportedRepository for MemoryRepos<'_> {
+    fn put_imported_transaction(
+        &mut self,
+        tx: TxId,
+        imported: &ImportedTransaction,
+    ) -> Result<(), StoreError> {
+        self.require_transaction(tx)?;
+        imported::check_messages(&imported.messages)?;
+        if let Some(confirmed_at) = imported.confirmed_at {
+            timestamp_to_column(confirmed_at)?;
+        }
+        self.state
+            .imported_transactions
+            .insert(tx, imported.clone());
+        Ok(())
+    }
+
+    fn imported_transaction(&self, tx: TxId) -> Result<Option<ImportedTransaction>, StoreError> {
+        Ok(self.state.imported_transactions.get(&tx).cloned())
+    }
+
+    fn set_chain_check(&mut self, tx: TxId, check: ChainCheck) -> Result<(), StoreError> {
+        let imported =
+            self.state
+                .imported_transactions
+                .get_mut(&tx)
+                .ok_or(StoreError::NotFound {
+                    record: Record::ImportedTransaction,
+                })?;
+        imported.check = check;
+        Ok(())
+    }
+
+    fn put_imported_output(&mut self, output: &ImportedOutput) -> Result<(), StoreError> {
+        self.require_transaction(output.tx)?;
+        self.state
+            .imported_outputs
+            .insert(output.commitment, output.clone());
+        Ok(())
+    }
+
+    fn imported_output(
+        &self,
+        commitment: &CommitmentBytes,
+    ) -> Result<Option<ImportedOutput>, StoreError> {
+        Ok(self.state.imported_outputs.get(commitment).cloned())
+    }
+
+    fn imported_outputs(
+        &self,
+        status: ImportedOutputStatus,
+    ) -> Result<Vec<ImportedOutput>, StoreError> {
+        Ok(self
+            .state
+            .imported_outputs
+            .values()
+            .filter(|output| output.status == status)
+            .cloned()
+            .collect())
     }
 }

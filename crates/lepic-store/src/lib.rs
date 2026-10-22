@@ -7,6 +7,7 @@ mod account;
 mod context;
 mod encoding;
 mod error;
+mod imported;
 mod invoice;
 #[cfg(feature = "sqlite")]
 pub mod legacy;
@@ -24,6 +25,10 @@ mod transaction;
 pub use account::{AccountIndex, AccountRecord, AccountRepository};
 pub use context::{CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 pub use error::{DatabaseError, Record, StoreError};
+pub use imported::{
+    ChainCheck, ImportedKind, ImportedMessage, ImportedOutput, ImportedOutputStatus,
+    ImportedRepository, ImportedTransaction, MAX_IMPORTED_MESSAGE_BYTES, MAX_IMPORTED_MESSAGES,
+};
 pub use invoice::{
     InvoiceAddressIndex, InvoiceCap, InvoiceRepository, MAX_PARKED_INVOICES,
     MAX_PARKED_INVOICES_PER_SENDER, PendingInvoice, PendingInvoiceStatus,

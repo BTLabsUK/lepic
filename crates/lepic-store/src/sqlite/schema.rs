@@ -137,10 +137,46 @@ CREATE TABLE invoice_address (
 );
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
+/// Transactions imported from another wallet's history: what only the old wallet knew of each,
+/// its messages, and the outputs it recorded, which a scan links to the transaction that made
+/// them.
+const V5: &str = "
+CREATE TABLE imported_transactions (
+    tx_id INTEGER PRIMARY KEY REFERENCES transactions (id),
+    source_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    slate_id BLOB,
+    confirmed_at INTEGER,
+    input_count INTEGER NOT NULL,
+    output_count INTEGER NOT NULL,
+    kernel_excess BLOB,
+    ttl_cutoff_height INTEGER,
+    chain_check TEXT NOT NULL
+);
+
+CREATE TABLE imported_messages (
+    tx_id INTEGER NOT NULL REFERENCES imported_transactions (tx_id),
+    position INTEGER NOT NULL,
+    participant INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (tx_id, position)
+);
+
+CREATE TABLE imported_outputs (
+    commitment BLOB PRIMARY KEY,
+    tx_id INTEGER NOT NULL REFERENCES transactions (id),
+    status TEXT NOT NULL,
+    height INTEGER NOT NULL,
+    amount INTEGER NOT NULL
+);
+CREATE INDEX imported_outputs_status ON imported_outputs (status);
+CREATE INDEX imported_outputs_tx ON imported_outputs (tx_id);
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

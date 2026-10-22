@@ -124,6 +124,15 @@ fn check_v4_seed(store: &SqliteStore) {
     assert_eq!(index, InvoiceAddressIndex::new(3));
 }
 
+fn check_v5_seed(store: &SqliteStore) {
+    let imported = store
+        .read(|repos| repos.imported_transaction(TxId(1)))
+        .unwrap();
+    assert_eq!(imported, None);
+    let entry = store.read(|repos| repos.transaction(TxId(1))).unwrap();
+    assert_eq!(entry.map(|entry| entry.state), Some(TxState::Received));
+}
+
 const V1_SEED: &str = "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 4);
     INSERT INTO settings (key, value) VALUES ('network', 'floonet');
     INSERT INTO transactions (id, account, direction, state, amount_credited, amount_debited,
@@ -165,6 +174,14 @@ const UPGRADES: &[UpgradeCase] = &[
                VALUES ('key', 'no-invoices', 8);
                INSERT INTO invoice_address (id, idx) VALUES (1, 3);",
         check: check_v4_seed,
+    },
+    UpgradeCase {
+        from: 5,
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, amount_credited,
+                   amount_debited, created_at, updated_at)
+               VALUES (1, 0, 'incoming', 'received', 5, 0, 1, 1);",
+        check: check_v5_seed,
     },
 ];
 

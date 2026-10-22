@@ -9,6 +9,10 @@ use crate::account::{AccountIndex, AccountRecord, AccountRepository};
 use crate::context::{self, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 use crate::encoding::{timestamp_from_column, timestamp_to_column, u64_from_column, u64_to_column};
 use crate::error::{Record, StoreError};
+use crate::imported::{
+    self, ChainCheck, ImportedKind, ImportedMessage, ImportedOutput, ImportedOutputStatus,
+    ImportedRepository, ImportedTransaction,
+};
 use crate::invoice::{
     self, InvoiceAddressIndex, InvoiceRepository, PendingInvoice, PendingInvoiceStatus,
 };
@@ -417,6 +421,13 @@ impl TransactionRepository for SqliteRepos<'_> {
             return Err(StoreError::InUse {
                 record: Record::Transaction,
             });
+        }
+        for sql in [
+            "DELETE FROM imported_messages WHERE tx_id = ?1",
+            "DELETE FROM imported_transactions WHERE tx_id = ?1",
+            "DELETE FROM imported_outputs WHERE tx_id = ?1",
+        ] {
+            self.conn.execute(sql, [i64::from(id.0)])?;
         }
         let deleted = self
             .conn
@@ -1023,4 +1034,204 @@ impl PeerRepository for SqliteRepos<'_> {
             decode_peer_capability,
         )
     }
+}
+
+const IMPORTED_TRANSACTION_COLUMNS: &str = "source_id, kind, slate_id, confirmed_at, \
+    input_count, output_count, kernel_excess, ttl_cutoff_height, chain_check";
+
+const IMPORTED_OUTPUT_COLUMNS: &str = "commitment, tx_id, status, height, amount";
+
+impl ImportedRepository for SqliteRepos<'_> {
+    fn put_imported_transaction(
+        &mut self,
+        tx: TxId,
+        imported: &ImportedTransaction,
+    ) -> Result<(), StoreError> {
+        self.require_transaction(tx)?;
+        imported::check_messages(&imported.messages)?;
+        self.conn.execute(
+            &format!(
+                "INSERT INTO imported_transactions (tx_id, {IMPORTED_TRANSACTION_COLUMNS})
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT (tx_id) DO UPDATE SET
+                     source_id = excluded.source_id, kind = excluded.kind,
+                     slate_id = excluded.slate_id, confirmed_at = excluded.confirmed_at,
+                     input_count = excluded.input_count, output_count = excluded.output_count,
+                     kernel_excess = excluded.kernel_excess,
+                     ttl_cutoff_height = excluded.ttl_cutoff_height,
+                     chain_check = excluded.chain_check"
+            ),
+            params![
+                i64::from(tx.0),
+                i64::from(imported.source_id),
+                imported.kind.code(),
+                imported.slate_id.as_ref().map(|id| &id.as_bytes()[..]),
+                imported.confirmed_at.map(timestamp_to_column).transpose()?,
+                i64::from(imported.input_count),
+                i64::from(imported.output_count),
+                imported.kernel_excess.as_ref().map(|excess| &excess[..]),
+                imported
+                    .ttl_cutoff_height
+                    .map(|height| u64_to_column(height.value())),
+                imported.check.code(),
+            ],
+        )?;
+        self.conn.execute(
+            "DELETE FROM imported_messages WHERE tx_id = ?1",
+            [i64::from(tx.0)],
+        )?;
+        for (position, message) in imported.messages.iter().enumerate() {
+            let position = i64::try_from(position).map_err(|_| StoreError::OutOfRange {
+                field: "imported message",
+            })?;
+            self.conn.execute(
+                "INSERT INTO imported_messages (tx_id, position, participant, text)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    i64::from(tx.0),
+                    position,
+                    i64::from(message.participant),
+                    message.text,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn imported_transaction(&self, tx: TxId) -> Result<Option<ImportedTransaction>, StoreError> {
+        let Some(mut imported) = self.first(
+            &format!(
+                "SELECT {IMPORTED_TRANSACTION_COLUMNS} FROM imported_transactions
+                 WHERE tx_id = ?1"
+            ),
+            [i64::from(tx.0)],
+            decode_imported_transaction,
+        )?
+        else {
+            return Ok(None);
+        };
+        imported.messages = self.collect(
+            "SELECT participant, text FROM imported_messages WHERE tx_id = ?1
+             ORDER BY position",
+            [i64::from(tx.0)],
+            decode_imported_message,
+        )?;
+        Ok(Some(imported))
+    }
+
+    fn set_chain_check(&mut self, tx: TxId, check: ChainCheck) -> Result<(), StoreError> {
+        let updated = self.conn.execute(
+            "UPDATE imported_transactions SET chain_check = ?2 WHERE tx_id = ?1",
+            params![i64::from(tx.0), check.code()],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::NotFound {
+                record: Record::ImportedTransaction,
+            });
+        }
+        Ok(())
+    }
+
+    fn put_imported_output(&mut self, output: &ImportedOutput) -> Result<(), StoreError> {
+        self.require_transaction(output.tx)?;
+        self.conn.execute(
+            &format!(
+                "INSERT INTO imported_outputs ({IMPORTED_OUTPUT_COLUMNS})
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (commitment) DO UPDATE SET tx_id = excluded.tx_id,
+                     status = excluded.status, height = excluded.height,
+                     amount = excluded.amount"
+            ),
+            params![
+                &output.commitment[..],
+                i64::from(output.tx.0),
+                output.status.code(),
+                u64_to_column(output.height.value()),
+                u64_to_column(output.amount.value()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn imported_output(
+        &self,
+        commitment: &CommitmentBytes,
+    ) -> Result<Option<ImportedOutput>, StoreError> {
+        self.first(
+            &format!(
+                "SELECT {IMPORTED_OUTPUT_COLUMNS} FROM imported_outputs WHERE commitment = ?1"
+            ),
+            [&commitment[..]],
+            decode_imported_output,
+        )
+    }
+
+    fn imported_outputs(
+        &self,
+        status: ImportedOutputStatus,
+    ) -> Result<Vec<ImportedOutput>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {IMPORTED_OUTPUT_COLUMNS} FROM imported_outputs WHERE status = ?1
+                 ORDER BY commitment"
+            ),
+            [status.code()],
+            decode_imported_output,
+        )
+    }
+}
+
+fn decode_imported_transaction(row: &Row<'_>) -> Result<ImportedTransaction, StoreError> {
+    let record = Record::ImportedTransaction;
+    let kind: String = row.get(1)?;
+    let slate_id: Option<Vec<u8>> = row.get(2)?;
+    let kernel_excess: Option<Vec<u8>> = row.get(6)?;
+    let check: String = row.get(8)?;
+    Ok(ImportedTransaction {
+        source_id: decode_u32(row.get(0)?, record, "source id")?,
+        kind: decode_code(&kind, ImportedKind::from_code, record, "kind")?,
+        slate_id: slate_id
+            .map(|bytes| decode_uuid(&bytes, record))
+            .transpose()?,
+        confirmed_at: row
+            .get::<_, Option<i64>>(3)?
+            .map(|value| timestamp_from_column(value, record, "confirmed at"))
+            .transpose()?,
+        input_count: decode_u32(row.get(4)?, record, "input count")?,
+        output_count: decode_u32(row.get(5)?, record, "output count")?,
+        kernel_excess: kernel_excess
+            .map(|bytes| {
+                CommitmentBytes::try_from(bytes.as_slice())
+                    .map_err(|_| corrupt(record, "kernel excess"))
+            })
+            .transpose()?,
+        ttl_cutoff_height: row
+            .get::<_, Option<i64>>(7)?
+            .map(|value| Height::new(u64_from_column(value))),
+        messages: Vec::new(),
+        check: decode_code(&check, ChainCheck::from_code, record, "chain check")?,
+    })
+}
+
+fn decode_imported_message(row: &Row<'_>) -> Result<ImportedMessage, StoreError> {
+    let participant: i64 = row.get(0)?;
+    Ok(ImportedMessage {
+        participant: u8::try_from(participant)
+            .map_err(|_| corrupt(Record::ImportedTransaction, "message participant"))?,
+        text: row.get(1)?,
+    })
+}
+
+fn decode_imported_output(row: &Row<'_>) -> Result<ImportedOutput, StoreError> {
+    let record = Record::ImportedOutput;
+    let commitment: Vec<u8> = row.get(0)?;
+    let status: String = row.get(2)?;
+    Ok(ImportedOutput {
+        commitment: CommitmentBytes::try_from(commitment.as_slice())
+            .map_err(|_| corrupt(record, "commitment"))?,
+        tx: TxId(decode_u32(row.get(1)?, record, "transaction")?),
+        status: decode_code(&status, ImportedOutputStatus::from_code, record, "status")?,
+        height: Height::new(u64_from_column(row.get(3)?)),
+        amount: Amount::new(u64_from_column(row.get(4)?)),
+    })
 }

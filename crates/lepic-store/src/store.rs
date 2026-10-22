@@ -1,6 +1,7 @@
 use crate::account::AccountRepository;
 use crate::context::ContextRepository;
 use crate::error::StoreError;
+use crate::imported::ImportedRepository;
 use crate::invoice::InvoiceRepository;
 use crate::output::OutputRepository;
 use crate::peer::PeerRepository;
@@ -20,6 +21,7 @@ pub trait Repositories:
     + SettingsRepository
     + InvoiceRepository
     + PeerRepository
+    + ImportedRepository
 {
 }
 
@@ -33,6 +35,7 @@ impl<T> Repositories for T where
         + SettingsRepository
         + InvoiceRepository
         + PeerRepository
+        + ImportedRepository
 {
 }
 

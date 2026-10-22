@@ -14,11 +14,13 @@ use jiff::Timestamp;
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_store::{
-    AccountIndex, AccountRecord, ContextKey, InboxEntry, InboxStatus, InvoiceAddressIndex,
-    InvoiceCap, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER, OpenReceipt, OutboxEntry,
-    OutboxId, OutboxStatus, OutputStatus, ParticipantId, PeerCapability, PeerSupport,
-    PendingInvoiceStatus, PrivateContext, Record, Repositories, SlateStage, StoreError,
-    TransactionEntry, TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, AccountRecord, ChainCheck, ContextKey, ImportedKind, ImportedMessage,
+    ImportedOutput, ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus,
+    InvoiceAddressIndex, InvoiceCap, MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES,
+    MAX_PARKED_INVOICES_PER_SENDER, OpenReceipt, OutboxEntry, OutboxId, OutboxStatus, OutputStatus,
+    ParticipantId, PeerCapability, PeerSupport, PendingInvoiceStatus, PrivateContext, Record,
+    Repositories, SlateStage, StoreError, TransactionEntry, TxDirection, TxId, TxState,
+    WalletStore,
 };
 use uuid::Uuid;
 
@@ -1131,6 +1133,185 @@ fn peer_capability_is_replaced_by_later_evidence<B: Backend>() {
     assert_eq!(unknown, None);
 }
 
+fn imported(source_id: u32) -> ImportedTransaction {
+    ImportedTransaction {
+        source_id,
+        kind: ImportedKind::Sent,
+        slate_id: Some(SLATE_B),
+        confirmed_at: Some(Timestamp::from_second(1_700_000_000).unwrap()),
+        input_count: 2,
+        output_count: 1,
+        kernel_excess: Some([8; 33]),
+        ttl_cutoff_height: Some(Height::new(900)),
+        messages: vec![
+            ImportedMessage {
+                participant: 0,
+                text: "for coffee".to_owned(),
+            },
+            ImportedMessage {
+                participant: 1,
+                text: "thanks ☕".to_owned(),
+            },
+        ],
+        check: ChainCheck::Unchecked,
+    }
+}
+
+fn imported_output(n: u8, tx: TxId, status: ImportedOutputStatus) -> ImportedOutput {
+    ImportedOutput {
+        commitment: [n; 33],
+        tx,
+        status,
+        height: Height::new(u64::from(n) + 100),
+        amount: Amount::new(u64::from(n) * 1_000),
+    }
+}
+
+fn imported_transactions_round_trip_and_are_replaced<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let tx = write(store, |repos| {
+        repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_A)))
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.imported_transaction(tx)).unwrap(),
+        None
+    );
+    let mut record = imported(7);
+    write(store, |repos| repos.put_imported_transaction(tx, &record)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.imported_transaction(tx)).unwrap(),
+        Some(record.clone())
+    );
+
+    record.messages.truncate(1);
+    record.kernel_excess = None;
+    record.confirmed_at = None;
+    record.slate_id = None;
+    write(store, |repos| repos.put_imported_transaction(tx, &record)).unwrap();
+    write(store, |repos| {
+        repos.set_chain_check(tx, ChainCheck::OnChain)
+    })
+    .unwrap();
+    record.check = ChainCheck::OnChain;
+    assert_eq!(
+        read(store, |repos| repos.imported_transaction(tx)).unwrap(),
+        Some(record)
+    );
+}
+
+fn imported_records_need_their_transaction_and_bounded_messages<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let missing = TxId(41);
+    assert!(matches!(
+        write(store, |repos| repos.put_imported_transaction(missing, &imported(1))),
+        Err(StoreError::UnknownTransaction(id)) if id == missing
+    ));
+    assert!(matches!(
+        write(store, |repos| repos.put_imported_output(&imported_output(
+            1,
+            missing,
+            ImportedOutputStatus::Unspent
+        ))),
+        Err(StoreError::UnknownTransaction(id)) if id == missing
+    ));
+    assert!(matches!(
+        write(store, |repos| repos
+            .set_chain_check(missing, ChainCheck::OnChain)),
+        Err(StoreError::NotFound {
+            record: Record::ImportedTransaction
+        })
+    ));
+    let tx = write(store, |repos| {
+        repos.insert_transaction(&transaction(DEFAULT, None))
+    })
+    .unwrap();
+    let mut long = imported(1);
+    long.messages[0].text = "x".repeat(MAX_IMPORTED_MESSAGE_BYTES + 1);
+    assert!(matches!(
+        write(store, |repos| repos.put_imported_transaction(tx, &long)),
+        Err(StoreError::OutOfRange { .. })
+    ));
+    let mut many = imported(1);
+    many.messages.push(many.messages[0].clone());
+    assert!(matches!(
+        write(store, |repos| repos.put_imported_transaction(tx, &many)),
+        Err(StoreError::OutOfRange { .. })
+    ));
+}
+
+fn imported_outputs_are_found_by_commitment_and_status<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let tx = write(store, |repos| {
+        repos.insert_transaction(&transaction(DEFAULT, None))
+    })
+    .unwrap();
+    write(store, |repos| {
+        repos.put_imported_output(&imported_output(3, tx, ImportedOutputStatus::Unspent))?;
+        repos.put_imported_output(&imported_output(1, tx, ImportedOutputStatus::Unspent))?;
+        repos.put_imported_output(&imported_output(2, tx, ImportedOutputStatus::Spent))
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.imported_output(&[2; 33])).unwrap(),
+        Some(imported_output(2, tx, ImportedOutputStatus::Spent))
+    );
+    assert_eq!(
+        read(store, |repos| repos.imported_output(&[9; 33])).unwrap(),
+        None
+    );
+    let unspent = read(store, |repos| {
+        repos.imported_outputs(ImportedOutputStatus::Unspent)
+    })
+    .unwrap();
+    assert_eq!(
+        unspent,
+        vec![
+            imported_output(1, tx, ImportedOutputStatus::Unspent),
+            imported_output(3, tx, ImportedOutputStatus::Unspent),
+        ]
+    );
+    write(store, |repos| {
+        repos.put_imported_output(&imported_output(3, tx, ImportedOutputStatus::Locked))
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos
+            .imported_outputs(ImportedOutputStatus::Unspent))
+        .unwrap()
+        .len(),
+        1
+    );
+}
+
+fn deleting_a_transaction_removes_what_was_imported_with_it<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let tx = write(store, |repos| {
+        let tx = repos.insert_transaction(&transaction(DEFAULT, None))?;
+        repos.put_imported_transaction(tx, &imported(5))?;
+        repos.put_imported_output(&imported_output(4, tx, ImportedOutputStatus::Spent))?;
+        Ok(tx)
+    })
+    .unwrap();
+    write(store, |repos| repos.delete_transaction(tx)).unwrap();
+    let reused = write(store, |repos| {
+        repos.insert_transaction(&transaction(DEFAULT, None))
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.imported_transaction(reused)).unwrap(),
+        None
+    );
+    assert_eq!(
+        read(store, |repos| repos.imported_output(&[4; 33])).unwrap(),
+        None
+    );
+}
+
 macro_rules! shared_suite {
     ($backend:ty: $($test:ident),+ $(,)?) => {
         $(
@@ -1193,6 +1374,10 @@ for_each_backend!(
     invoice_address_index_is_unset_until_set_then_replaced,
     allowed_peers_are_replaced_by_key_listed_in_order_and_removed,
     peer_capability_is_replaced_by_later_evidence,
+    imported_transactions_round_trip_and_are_replaced,
+    imported_records_need_their_transaction_and_bounded_messages,
+    imported_outputs_are_found_by_commitment_and_status,
+    deleting_a_transaction_removes_what_was_imported_with_it,
 );
 
 #[test]

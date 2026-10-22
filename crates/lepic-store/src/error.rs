@@ -22,6 +22,8 @@ pub enum Record {
     AllowedPeer,
     PeerCapability,
     InvoiceAddress,
+    ImportedTransaction,
+    ImportedOutput,
 }
 
 impl fmt::Display for Record {
@@ -40,6 +42,8 @@ impl fmt::Display for Record {
             Self::AllowedPeer => "allowed peer",
             Self::PeerCapability => "peer capability",
             Self::InvoiceAddress => "invoice address",
+            Self::ImportedTransaction => "imported transaction",
+            Self::ImportedOutput => "imported output",
         })
     }
 }
