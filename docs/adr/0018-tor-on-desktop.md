@@ -107,6 +107,8 @@ the wallet key on disk, which this ADR rejects. What `ADD_ONION` does offer is u
 - The listener's per-minute budgets keep one sender's junk from blocking another's payment:
   requests that are not payments cannot use the room payments have (past the request budget,
   as many requests as the payment budget are still read, and served only if they are payments),
-  and a payment the wallet refuses as invalid gives its share of the payment budget back. The
+  and a payment the wallet refuses as invalid gives its share of the payment budget back, for
+  as many refusals a minute as the budget itself (some refusals come only after the wallet's
+  costlier checks, so at most twice the payment budget reaches the wallet in a minute). The
   budgets still bound all senders together; a flood of well-formed payments can still use them
   up, at the cost the proof of work puts on each circuit.

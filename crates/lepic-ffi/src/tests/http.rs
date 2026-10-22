@@ -358,8 +358,9 @@ async fn a_payment_over_the_listener_rate_is_reported_refused_as_unavailable() {
     let to = ForeignUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
     let budget = lepic_foreign::ListenSettings::new(lepic_foreign::Exposure::LocalOnly, 0)
         .receives_per_minute;
-    // Slates the wallet refuses as invalid leave the budget to real payments.
-    for n in 0..=budget {
+    // Slates the wallet refuses as invalid leave the budget to real payments, as many a
+    // minute as the budget.
+    for n in 0..budget {
         let junk = format!(r#"{{"id":"{n}","amount":"1","participant_data":[]}}"#);
         let refused = client
             .receive_tx(&to, &WireSlate::text(MediaType::JSON, junk))
@@ -388,7 +389,7 @@ async fn a_payment_over_the_listener_rate_is_reported_refused_as_unavailable() {
         .collect();
     let (last, checked) = refusals.split_last().unwrap();
     assert_eq!(*last, Some(crate::api::http::HttpRefusal::Unavailable));
-    assert_eq!(checked.len(), usize::try_from(budget + 1).unwrap());
+    assert_eq!(checked.len(), usize::try_from(budget).unwrap());
     assert!(
         checked
             .iter()

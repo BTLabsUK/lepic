@@ -9,7 +9,8 @@
 //! The per-minute budgets cannot tell callers apart (behind an onion every caller is
 //! `127.0.0.1`), so they are shaped to keep one caller's junk from blocking another's
 //! payment: requests that are not payments cannot use up the room payments have, and a
-//! payment the wallet refuses as invalid gives its share of the payment budget back.
+//! payment the wallet refuses as invalid gives its share of the payment budget back, up to the
+//! budget again each minute.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -86,7 +87,9 @@ pub struct ListenSettings {
     /// answered `503`.
     pub requests_per_minute: u32,
     /// `receive_tx` calls carrying an S1 taken in any one minute; more are refused as busy.
-    /// One the wallet refuses as [`Refusal::Rejected`] does not count.
+    /// One the wallet refuses as [`Refusal::Rejected`] does not count, for as many such
+    /// refusals a minute: the wallet may refuse a slate only after costly checks, so at most
+    /// twice this many reach it in a minute.
     pub receives_per_minute: u32,
 }
 
@@ -253,11 +256,11 @@ impl Served {
             .take_slot(limit)
     }
 
-    fn give_back(window: &Mutex<Window>, slot: Slot) {
+    fn give_back(window: &Mutex<Window>, slot: Slot, limit: u32) {
         window
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .give_back(slot);
+            .give_back(slot, limit);
     }
 
     /// What a new request may be, or `None` when it is over every budget.
@@ -328,6 +331,7 @@ struct Slot {
 struct Window {
     started: Instant,
     taken: u32,
+    given_back: u32,
 }
 
 impl Window {
@@ -335,6 +339,7 @@ impl Window {
         Self {
             started: Instant::now(),
             taken: 0,
+            given_back: 0,
         }
     }
 
@@ -351,10 +356,13 @@ impl Window {
         })
     }
 
-    /// A slot of a minute that has ended is not given back: the new minute never counted it.
-    fn give_back(&mut self, slot: Slot) {
-        if slot.minute == self.started {
+    /// Gives `slot` back unless `limit` slots were already given back this minute, so at most
+    /// twice the window's limit is taken in a minute. A slot of a minute that has ended is not
+    /// given back: the new minute never counted it.
+    fn give_back(&mut self, slot: Slot, limit: u32) {
+        if slot.minute == self.started && self.given_back < limit {
             self.taken = self.taken.saturating_sub(1);
+            self.given_back = self.given_back.saturating_add(1);
         }
     }
 }
@@ -488,10 +496,11 @@ async fn serve(
                 None
             };
             let received = state.handler.receive(slate).await;
-            // A slate refused as invalid cost a check, not a payment's work: junk does not
-            // use up the room of real payments.
+            // A slate refused as invalid mostly cost a check, not a payment's work: junk does
+            // not use up the room of real payments. Some refusals come only after the wallet's
+            // costlier checks, so only so many a minute are given back.
             if let (Err(Refusal::Rejected), Some(slot)) = (&received, slot) {
-                Served::give_back(&state.receives, slot);
+                Served::give_back(&state.receives, slot, state.settings.receives_per_minute);
             }
             match received {
                 Ok(reply) => match rpc::encode_slate_response(&request.id, &reply) {

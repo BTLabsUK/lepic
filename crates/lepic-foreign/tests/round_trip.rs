@@ -20,6 +20,8 @@ use tokio::net::TcpStream;
 const S1: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"60000000000","participant_data":[{"id":"0"}]}"#;
 const S2: &str =
     r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"60000000000","participant_data":[]}"#;
+/// Shaped like an S1, so it takes the payment budget, but refused by the wallet.
+const JUNK: &str = r#"{"id":"x","amount":"1","participant_data":[]}"#;
 
 struct Answering {
     calls: AtomicUsize,
@@ -271,16 +273,36 @@ async fn a_payment_refused_as_invalid_gives_its_budget_back() {
     settings.receives_per_minute = 1;
     let listener = listen(settings, wallet.clone()).await.unwrap();
     let port = listener.local_addr().port();
-    let junk = r#"{"id":"x","amount":"1","participant_data":[]}"#;
-    for _ in 0..3 {
-        let answer = raw_exchange(port, receive_tx_request(junk).as_bytes()).await;
-        assert!(answer.contains("slate refused"), "{answer}");
-    }
+    let answer = raw_exchange(port, receive_tx_request(JUNK).as_bytes()).await;
+    assert!(answer.contains("slate refused"), "{answer}");
     let reply = client().receive_tx(&url(port), &s1()).await.unwrap();
     assert_eq!(reply.as_text(), Some(S2));
     let error = client().receive_tx(&url(port), &s1()).await.unwrap_err();
     assert!(matches!(error, ClientError::Rpc(RpcError::Refused)));
     assert_eq!(wallet.refused.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_so_many_refused_payments_give_their_budget_back() {
+    let wallet = handler(None);
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.receives_per_minute = 2;
+    let listener = listen(settings, wallet.clone()).await.unwrap();
+    let port = listener.local_addr().port();
+    let mut refused = 0;
+    for _ in 0..10 {
+        let answer = raw_exchange(port, receive_tx_request(JUNK).as_bytes()).await;
+        if answer.contains("slate refused") {
+            refused += 1;
+        } else {
+            assert!(answer.contains("wallet not ready"), "{answer}");
+        }
+    }
+    // Two given back, then the two slots of the minute: the wallet saw twice the budget.
+    assert_eq!(refused, 4);
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 4);
+    let error = client().receive_tx(&url(port), &s1()).await.unwrap_err();
+    assert!(matches!(error, ClientError::Rpc(RpcError::Refused)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
