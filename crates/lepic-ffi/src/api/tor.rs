@@ -16,6 +16,7 @@ use flutter_rust_bridge::frb;
 
 use crate::api::error::WalletError;
 use crate::api::http::{HttpRefusal, HttpResentTx, HttpSentTx};
+use crate::api::types::SendOptions;
 use crate::api::wallet::EpicWallet;
 use crate::boundary::{end_stream, guard_or};
 use crate::frb_generated::StreamSink;
@@ -239,16 +240,20 @@ impl EpicWallet {
     /// [`EpicWallet::resend_tor`] or [`EpicWallet::resend_http`], or cancel it. A tor that
     /// stops during the send fails it the same way with `TorNotRunning`. Fails as
     /// [`EpicWallet::send_http`] does when the answer could not be finalized.
+    ///
+    /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+    /// change outputs outside 1..=10 fail with `InvalidArgument`.
     pub async fn send_tor(
         &self,
         amount: u64,
         minimum_confirmations: u64,
         onion: String,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
         self.run("send_tor", |session| async move {
             session
-                .send_tor(amount, minimum_confirmations, &onion, message)
+                .send_tor(amount, minimum_confirmations, &onion, message, options)
                 .await
         })
         .await

@@ -701,6 +701,18 @@ void main() {
       ),
       throwsWalletError(WalletErrorKind.onionAddressInvalid),
     );
+    await expectLater(
+      alice.sendTor(
+        amount: BigInt.from(epic),
+        minimumConfirmations: BigInt.one,
+        onion: onion,
+        options: const SendOptions(
+          strategy: SelectionStrategy.all,
+          changeOutputs: 11,
+        ),
+      ),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
 
     final events = await alice
         .startTor(torBinary: '/nonexistent/tor', libDir: null)

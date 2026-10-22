@@ -24,6 +24,7 @@ use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::http::{HttpListenerEvent, HttpListenerEventKind, HttpResentTx, HttpSentTx};
 use crate::api::tor::{TorEvent, TorEventKind, TorFailureKind, TorStatus, TorStatusKind};
+use crate::api::types::SendOptions;
 
 /// Where the tor events of a session go.
 pub(crate) type TorReport = Arc<dyn Fn(TorEvent) + Send + Sync>;
@@ -441,12 +442,13 @@ impl Session {
         minimum_confirmations: u64,
         to: &str,
         message: Option<String>,
+        options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
+        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
         let onion = onion(to)?;
         let report = self.tor_send_report()?;
         // The checks the send makes before it stores anything, so a send that cannot be
         // made reports no `Sending`.
-        let request = Self::send_request(amount, minimum_confirmations, message);
         self.engine
             .estimate_fee(request.amount, request.selection_options())
             .await?;

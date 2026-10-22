@@ -336,7 +336,7 @@ async fn a_tor_send_reaches_the_onion_of_the_other_wallet_and_is_finalized_and_p
 
     let sent = pair
         .alice
-        .send_tor(2 * EPIC, 1, &bob_onion, Some("over tor".to_owned()))
+        .send_tor(2 * EPIC, 1, &bob_onion, Some("over tor".to_owned()), None)
         .await
         .unwrap();
 
@@ -366,7 +366,7 @@ async fn a_send_to_an_onion_that_is_not_online_is_kept_for_a_resend() {
     start_tor(&network, &pair.alice, pair.dirs[0].path()).await;
     let bob_onion = pair.bob.onion_address().unwrap();
 
-    let unreachable = pair.alice.send_tor(EPIC, 1, &bob_onion, None).await;
+    let unreachable = pair.alice.send_tor(EPIC, 1, &bob_onion, None, None).await;
 
     assert_eq!(kind(unreachable), WalletErrorKind::OnionUnreachable);
     let stored = sends(&pair.alice).await;
@@ -392,12 +392,12 @@ async fn a_tor_send_needs_an_onion_and_a_running_tor_and_stores_nothing_without(
     let pair = funded_pair().await;
     let bob_onion = pair.bob.onion_address().unwrap();
 
-    let without_tor = pair.alice.send_tor(EPIC, 1, &bob_onion, None).await;
+    let without_tor = pair.alice.send_tor(EPIC, 1, &bob_onion, None, None).await;
     assert_eq!(kind(without_tor), WalletErrorKind::TorNotRunning);
     let mut typo = bob_onion.clone();
     typo.replace_range(..1, if typo.starts_with('a') { "b" } else { "a" });
     for invalid in ["", "wallet.example.org", typo.as_str()] {
-        let refused = pair.alice.send_tor(EPIC, 1, invalid, None).await;
+        let refused = pair.alice.send_tor(EPIC, 1, invalid, None, None).await;
         assert_eq!(
             kind(refused),
             WalletErrorKind::OnionAddressInvalid,
@@ -580,7 +580,7 @@ async fn the_onion_answers_more_senders_at_once_than_one_address_may_hold() {
 
     let sent = pair
         .alice
-        .send_tor(EPIC, 1, &bob_onion, None)
+        .send_tor(EPIC, 1, &bob_onion, None, None)
         .await
         .unwrap();
 
@@ -594,7 +594,10 @@ async fn a_send_the_wallet_cannot_pay_reports_no_sending() {
     let (events, _) = start_tor(&network, &pair.alice, pair.dirs[0].path()).await;
     let bob_onion = pair.bob.onion_address().unwrap();
 
-    let refused = pair.alice.send_tor(1000 * EPIC, 1, &bob_onion, None).await;
+    let refused = pair
+        .alice
+        .send_tor(1000 * EPIC, 1, &bob_onion, None, None)
+        .await;
 
     assert_eq!(kind(refused), WalletErrorKind::NotEnoughFunds);
     assert!(
@@ -739,7 +742,7 @@ async fn live_a_payment_over_the_tor_network_is_finalized_and_posted() {
     let onion = ready.onion.unwrap();
     // The descriptor reaches every directory a client may ask only some seconds after the
     // first upload, so the first sends may find no onion yet.
-    let mut posted = match pair.alice.send_tor(EPIC, 1, &onion, None).await {
+    let mut posted = match pair.alice.send_tor(EPIC, 1, &onion, None, None).await {
         Ok(sent) => Ok(sent.posted),
         Err(error) => Err(error),
     };

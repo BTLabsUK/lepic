@@ -419,6 +419,7 @@ abstract class RustLibApi extends BaseApi {
     required BigInt minimumConfirmations,
     required String onion,
     String? message,
+    SendOptions? options,
   });
 
   Future<void> crateApiWalletEpicWalletSetInvoiceAddressIndex({
@@ -3048,6 +3049,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required BigInt minimumConfirmations,
     required String onion,
     String? message,
+    SendOptions? options,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -3061,6 +3063,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_u_64(minimumConfirmations, serializer);
           sse_encode_String(onion, serializer);
           sse_encode_opt_String(message, serializer);
+          sse_encode_opt_box_autoadd_send_options(options, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -3073,7 +3076,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_wallet_error,
         ),
         constMeta: kCrateApiWalletEpicWalletSendTorConstMeta,
-        argValues: [that, amount, minimumConfirmations, onion, message],
+        argValues: [
+          that,
+          amount,
+          minimumConfirmations,
+          onion,
+          message,
+          options,
+        ],
         apiImpl: this,
       ),
     );
@@ -3088,6 +3098,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "minimumConfirmations",
           "onion",
           "message",
+          "options",
         ],
       );
 
@@ -10332,17 +10343,22 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// [`EpicWallet::resend_tor`] or [`EpicWallet::resend_http`], or cancel it. A tor that
   /// stops during the send fails it the same way with `TorNotRunning`. Fails as
   /// [`EpicWallet::send_http`] does when the answer could not be finalized.
+  ///
+  /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+  /// change outputs outside 1..=10 fail with `InvalidArgument`.
   Future<HttpSentTx> sendTor({
     required BigInt amount,
     required BigInt minimumConfirmations,
     required String onion,
     String? message,
+    SendOptions? options,
   }) => RustLib.instance.api.crateApiWalletEpicWalletSendTor(
     that: this,
     amount: amount,
     minimumConfirmations: minimumConfirmations,
     onion: onion,
     message: message,
+    options: options,
   );
 
   /// Sets the address index of the invoice address, for example to the one the app kept

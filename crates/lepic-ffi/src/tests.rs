@@ -470,6 +470,41 @@ async fn send_epicbox_refuses_an_address_without_its_relay() {
     assert_eq!(relay.connections(), 0);
 }
 
+/// The options are checked before the address and before tor is asked, as every other send
+/// checks them first.
+#[tokio::test]
+async fn send_tor_takes_the_send_options_of_the_other_sends() {
+    let fixture = Fixture::new();
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &AppSecretStore::in_memory(),
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    let too_many = crate::api::types::SendOptions {
+        strategy: crate::api::types::SelectionStrategy::All,
+        change_outputs: 11,
+    };
+
+    let sent = wallet
+        .send_tor(1, 1, "wallet.example.org".to_owned(), None, Some(too_many))
+        .await;
+
+    assert_eq!(kind(sent), WalletErrorKind::InvalidArgument);
+    assert_eq!(
+        kind(
+            wallet
+                .send_tor(1, 1, "wallet.example.org".to_owned(), None, None)
+                .await
+        ),
+        WalletErrorKind::OnionAddressInvalid
+    );
+    assert!(wallet.transactions().await.unwrap().is_empty());
+}
+
 #[test]
 fn inspect_slate_refuses_text_that_is_no_slate() {
     use crate::api::wallet::inspect_slate;

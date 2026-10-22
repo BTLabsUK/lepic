@@ -369,6 +369,7 @@ final sent = await wallet.sendTor(
   amount: BigInt.from(150000000),
   minimumConfirmations: BigInt.from(3), // what the summary counts as spendable
   onion: 'http://<56 characters>.onion',
+  // options: SendOptions(...) chooses the inputs and change, as for sendHttp.
 );
 ```
 
@@ -507,7 +508,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `create_send_slate(amount, minimum_confirmations)` | `create_send_slate(amount, minimum_confirmations, message)` | `Slate` adds `tx_id`. New file form: `send_file(amount, minimum_confirmations, path, message)`. The optional `message` is signed into the slate, as `epic-wallet send --message` does, after it is cut to its first 256 bytes on a character boundary. |
 | `receive_slate(slate_json)` | `receive_slate(slate_json)` | Returns `ReceivedSlate`: the fields of `Slate` plus `repeated`. A slate received before returns the answer stored then, with `repeated` set and the first call's `tx_id`; nothing is stored or signed again. New file form: `receive_file(path)`, writes `<path>.response`, for a repeat too. |
 | `finalize_and_post(slate_json)` | `finalize_and_post(slate_json)` | Returns `FinalizedTx`; a refused post fails with `notPosted`. New: `finalize_file(path)`. |
-| `send_http(amount, minimum_confirmations, url)` | `send_http(amount, minimum_confirmations, url, allow_plain_http, message)` | Returns `HttpSentTx`, finalized and posted. Over Tor on desktop: `send_tor(amount, minimum_confirmations, onion, message)` after `start_tor`. |
+| `send_http(amount, minimum_confirmations, url)` | `send_http(amount, minimum_confirmations, url, allow_plain_http, message)` | Returns `HttpSentTx`, finalized and posted. Over Tor: `send_tor(amount, minimum_confirmations, onion, message, options)` after `start_tor`. Both take the optional `SendOptions` of `create_send_slate`. |
 | `send_epicbox(amount, minimum_confirmations, address)` | `send_epicbox(amount, minimum_confirmations, address, message)` | Returns `SentTx`. `message` as for `create_send_slate`. Like `validate_epicbox_address`, refuses a bare key without `@<relay>` with `invalidArgument` and stores nothing. |
 | `start_listener(events)` | `start_listener()` stream | Kinds `connected`, `disconnected`, `received`, `repeated`, `finalized`, `error`, `stopped`, `invoiceBounced`. `repeated` carries the `tx_id` of a payment answered before whose slate arrived again; `invoiceBounced` the `tx_id` and `slate_id` of an issued invoice the payer sent back. New: `drain_epicbox()` for background work. |
 | `stop_listener()` | `stop_listener()` | Same. |

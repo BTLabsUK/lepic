@@ -697,11 +697,15 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// [`EpicWallet::resend_tor`] or [`EpicWallet::resend_http`], or cancel it. A tor that
   /// stops during the send fails it the same way with `TorNotRunning`. Fails as
   /// [`EpicWallet::send_http`] does when the answer could not be finalized.
+  ///
+  /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
+  /// change outputs outside 1..=10 fail with `InvalidArgument`.
   Future<HttpSentTx> sendTor({
     required BigInt amount,
     required BigInt minimumConfirmations,
     required String onion,
     String? message,
+    SendOptions? options,
   });
 
   /// Sets the address index of the invoice address, for example to the one the app kept

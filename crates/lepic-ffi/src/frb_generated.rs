@@ -3672,6 +3672,8 @@ fn wire__crate__api__wallet__EpicWallet_send_tor_impl(
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
             let api_onion = <String>::sse_decode(&mut deserializer);
             let api_message = <Option<String>>::sse_decode(&mut deserializer);
+            let api_options =
+                <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -3699,6 +3701,7 @@ fn wire__crate__api__wallet__EpicWallet_send_tor_impl(
                             api_minimum_confirmations,
                             api_onion,
                             api_message,
+                            api_options,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
