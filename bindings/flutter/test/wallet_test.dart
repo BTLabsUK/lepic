@@ -115,6 +115,7 @@ const errorCodes = {
   WalletErrorKind.onionUnreachable: 44,
   WalletErrorKind.changeTooSmall: 45,
   WalletErrorKind.tooHeavy: 46,
+  WalletErrorKind.nothingToConsolidate: 47,
 };
 
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(
