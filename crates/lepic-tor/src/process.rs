@@ -37,6 +37,8 @@ const DEFAULTS_TORRC: &str = "torrc-defaults";
 const CONTROL_FILE: &str = "control.txt";
 const COOKIE_FILE: &str = "control.cookie";
 const DATA_DIR: &str = "data";
+/// What tor keeps of the Tor network between starts; without it a start downloads it all.
+const CACHED_CONSENSUS: &str = "cached-microdesc-consensus";
 const MAX_DETAIL_LEN: usize = 300;
 const MAX_LOG_LINE_LEN: usize = 1024;
 const IDLE_WAKE: Duration = Duration::from_secs(24 * 3600);
@@ -48,6 +50,12 @@ const PAUSE_SLACK: Duration = Duration::from_secs(2);
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// How long each step may take.
+///
+/// A first start, or one after tor's files were cleared, has no cached consensus and
+/// downloads the whole directory, which on a slow or mobile network can sit on one phase
+/// longer than a start with a warm cache: it gets [`TorTimings::cold_stall`] and
+/// [`TorTimings::cold_bootstrap`] instead. A new phase counts as progress even when the
+/// percentage stays the same.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TorTimings {
     /// From the start until tor writes its control port file.
@@ -58,6 +66,10 @@ pub struct TorTimings {
     pub stall: Duration,
     /// No full bootstrap this long after the start is a network failure.
     pub bootstrap: Duration,
+    /// [`TorTimings::stall`] for a start without a cached consensus.
+    pub cold_stall: Duration,
+    /// [`TorTimings::bootstrap`] for a start without a cached consensus.
+    pub cold_bootstrap: Duration,
     /// Bootstrapped with the onion added, but no descriptor uploaded this long.
     pub publish: Duration,
     /// For the polite shutdown, and again for the exit after the kill.
@@ -73,6 +85,8 @@ impl Default for TorTimings {
             command: Duration::from_secs(15),
             stall: Duration::from_secs(60),
             bootstrap: Duration::from_secs(120),
+            cold_stall: Duration::from_secs(120),
+            cold_bootstrap: Duration::from_secs(240),
             publish: Duration::from_secs(180),
             stop: Duration::from_secs(5),
             listener_check: Duration::from_secs(3),
@@ -534,7 +548,7 @@ async fn supervise(
     mut requests: mpsc::Receiver<Request>,
     socks: Arc<SharedSocks>,
 ) {
-    let timings = settings.timings;
+    let timings = timings_for(settings.timings, &TorPaths::new(&settings.data_dir).data);
     let mut running = match launch(&settings, &socks).await {
         Ok(running) => running,
         Err((failure, child)) => {
@@ -644,7 +658,7 @@ fn on_bootstrap(
     timings: TorTimings,
     started: Instant,
 ) {
-    if phase.progress != progress.progress {
+    if phase.progress != progress.progress || phase.tag != progress.tag {
         progress.progress = phase.progress;
         progress.stall_deadline = after(Instant::now(), timings.stall);
     }
@@ -657,6 +671,19 @@ fn on_bootstrap(
         info!(elapsed_ms = elapsed_ms(started), "tor bootstrapped");
         if progress.published.is_some() {
             progress.publish_deadline = Some(after(Instant::now(), timings.publish));
+        }
+    }
+}
+
+/// The timings for a tor whose data directory is `data`, read before tor starts.
+fn timings_for(timings: TorTimings, data: &Path) -> TorTimings {
+    if data.join(CACHED_CONSENSUS).is_file() {
+        timings
+    } else {
+        TorTimings {
+            stall: timings.cold_stall,
+            bootstrap: timings.cold_bootstrap,
+            ..timings
         }
     }
 }
@@ -1250,6 +1277,52 @@ mod tests {
         let (position, event) = uploaded(6);
         on_event(&mut progress, position, event, TorTimings::default(), now);
         assert_eq!(progress.visible(), TorState::Ready { onion });
+    }
+
+    #[test]
+    fn a_new_bootstrap_phase_at_the_same_percent_is_progress() {
+        let past = Instant::now();
+        let mut progress = Progress {
+            progress: 10,
+            tag: "conn_done".into(),
+            bootstrapped: false,
+            published: None,
+            stall_deadline: past,
+            bootstrap_deadline: past + Duration::from_secs(600),
+            publish_deadline: None,
+        };
+        let phase = |tag: &str| crate::control::Bootstrap {
+            progress: 10,
+            tag: tag.into(),
+            warning: None,
+        };
+        on_bootstrap(
+            &mut progress,
+            phase("conn_done"),
+            TorTimings::default(),
+            past,
+        );
+        assert_eq!(progress.stall_deadline, past);
+        on_bootstrap(
+            &mut progress,
+            phase("handshake"),
+            TorTimings::default(),
+            past,
+        );
+        assert!(progress.stall_deadline > past + Duration::from_secs(30));
+        assert_eq!(overdue(&progress), None);
+    }
+
+    #[test]
+    fn a_first_start_without_a_cached_consensus_gets_longer_to_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let defaults = TorTimings::default();
+        let cold = timings_for(defaults, dir.path());
+        assert_eq!(cold.stall, defaults.cold_stall);
+        assert_eq!(cold.bootstrap, defaults.cold_bootstrap);
+        assert!(cold.stall > defaults.stall && cold.bootstrap > defaults.bootstrap);
+        std::fs::write(dir.path().join("cached-microdesc-consensus"), "x").unwrap();
+        assert_eq!(timings_for(defaults, dir.path()), defaults);
     }
 
     #[test]

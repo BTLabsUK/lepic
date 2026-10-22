@@ -41,6 +41,8 @@ fn quick() -> lepic_tor::TorTimings {
         command: Duration::from_secs(5),
         stall: Duration::from_secs(10),
         bootstrap: Duration::from_secs(20),
+        cold_stall: Duration::from_secs(10),
+        cold_bootstrap: Duration::from_secs(20),
         publish: Duration::from_secs(10),
         stop: Duration::from_secs(2),
         listener_check: Duration::from_secs(2),

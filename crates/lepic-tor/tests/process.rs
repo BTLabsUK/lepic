@@ -133,6 +133,8 @@ fn quick() -> TorTimings {
         command: Duration::from_secs(5),
         stall: Duration::from_secs(10),
         bootstrap: Duration::from_secs(20),
+        cold_stall: Duration::from_secs(10),
+        cold_bootstrap: Duration::from_secs(20),
         publish: Duration::from_secs(10),
         stop: Duration::from_millis(500),
         listener_check: Duration::from_millis(500),
@@ -384,6 +386,7 @@ async fn a_stalled_bootstrap_is_a_network_failure() {
     .await;
     let tor = TorProcess::start(fake.settings(TorTimings {
         stall: Duration::from_millis(300),
+        cold_stall: Duration::from_millis(300),
         ..quick()
     }));
     assert_eq!(wait_for_failure(&tor).await, FailureKind::Network);
