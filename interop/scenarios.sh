@@ -502,6 +502,9 @@ cancel_refused() {
 # transaction confirms on lepic again and its output comes back.
 scenario_cancel_unseen() {
     peer_listen_stop
+    # Earlier payments must be settled first, or one turning spendable while this scenario runs
+    # moves the balances it compares.
+    wait_until "nothing pending on lepic" 120 lepic_nothing_pending || fail "lepic still has pending funds" || return 1
     local last before
     last="$(lepic_last_tx_id)"
     before="$(lepic wallet info)" || fail "wallet info failed" || return 1
