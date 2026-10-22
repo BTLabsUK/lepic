@@ -449,6 +449,14 @@ mod tests {
     }
 
     #[test]
+    fn reaching_an_onion_may_take_75_seconds() {
+        assert_eq!(
+            OnionClientSettings::default().connect_timeout,
+            Duration::from_secs(75)
+        );
+    }
+
+    #[test]
     fn reads_the_slate_id_without_decoding() {
         let wire = |text: &str| WireSlate::text(lepic_slate::codec::MediaType::JSON, text.into());
         assert_eq!(

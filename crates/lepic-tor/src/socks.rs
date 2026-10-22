@@ -19,9 +19,10 @@ const ADDRESS_DOMAIN: u8 = 3;
 const ADDRESS_IPV6: u8 = 4;
 const CREDENTIAL_BYTES: usize = 16;
 
-/// How long reaching an onion may take. Tor itself gives up on an onion that is not there only
+/// How long reaching an onion may take: a first circuit to a fresh onion often needs most of a
+/// minute. The GUI wallet waits 72 s; tor itself gives up on an onion that is not there only
 /// after two minutes, too long for a person to wait.
-pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(75);
 
 /// A failure reply from the SOCKS server, standard or tor's extended ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -41,8 +41,9 @@ yet and no control port, and its onion-service support is newer than C tor's.
 - Sending opens a SOCKS5 stream to `<onion>:80` with the domain address type, so tor resolves
   the name, and fresh username and password credentials per send, so `IsolateSOCKSAuth` gives
   each send its own circuit. The foreign API exchange is the one `lepic-foreign` speaks
-  (`check_version`, then `receive_tx`), with the same body limits and format policy. The connect
-  timeout is well under tor's own two minutes.
+  (`check_version`, then `receive_tx`), with the same body limits and format policy. Reaching
+  the onion may take 75 s, close to the GUI wallet's 72 s and under tor's own two minutes; a
+  `check_version` that times out is tried once more on a new circuit.
 
 ## Consequences
 
