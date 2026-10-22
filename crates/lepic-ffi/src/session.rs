@@ -37,6 +37,7 @@ use lepic_wallet::scan::{
 use lepic_wallet::selection::{
     Selection, SelectionOptions, SelectionStrategy as EngineStrategy, SelfSendShape,
 };
+use lepic_wallet::self_send::SelfSent;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{
     Clock, DATABASE_FILE, Event, NodeEndpoint, Password, Ports, ReceiveRequest, SessionState,
@@ -804,19 +805,42 @@ impl Session {
                 Propagation::Fluff,
             )
             .await?;
-        let out_of_range = || WalletError::new(WalletErrorKind::Other, "self-send out of range");
-        let selection = &sent.selection;
-        Ok(SelfSentTx {
-            tx_id: sent.tx_id.0,
-            received_tx_id: sent.received_tx_id.0,
-            amount: selection.amount.value(),
-            fee: selection.fee.value(),
-            input_count: u32::try_from(selection.inputs.len()).map_err(|_| out_of_range())?,
-            output_count: u32::try_from(selection.change.len())
-                .ok()
-                .and_then(|change| change.checked_add(1))
-                .ok_or_else(out_of_range)?,
-        })
+        self_sent_tx(&sent)
+    }
+
+    pub(crate) async fn spend_outputs_to_self(
+        &self,
+        commitments: Vec<String>,
+        minimum_confirmations: u64,
+    ) -> Result<SelfSentTx, WalletError> {
+        // Matched against the stored outputs, so an unknown commitment is refused here and
+        // the engine checks that each one found may be spent.
+        let outputs = self.engine.outputs(DEFAULT_ACCOUNT)?;
+        let commitments = commitments
+            .iter()
+            .enumerate()
+            .map(|(position, hex)| {
+                let hex = hex.trim().to_ascii_lowercase();
+                outputs
+                    .iter()
+                    .find(|details| details.output.id.commitment.to_hex() == hex)
+                    .map(|details| details.output.id.commitment)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "commitment {position} is not an output of this wallet"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sent = self
+            .engine
+            .spend_outputs_to_self(
+                Self::self_send_options(minimum_confirmations),
+                commitments,
+                Propagation::Fluff,
+            )
+            .await?;
+        self_sent_tx(&sent)
     }
 
     pub(crate) async fn scan(
@@ -1253,6 +1277,22 @@ fn wallet_output(details: &OutputDetails) -> WalletOutput {
         confirmations: details.confirmations,
         tx_id: output.tx.map(|tx| tx.0),
     }
+}
+
+fn self_sent_tx(sent: &SelfSent) -> Result<SelfSentTx, WalletError> {
+    let out_of_range = || WalletError::new(WalletErrorKind::Other, "self-send out of range");
+    let selection = &sent.selection;
+    Ok(SelfSentTx {
+        tx_id: sent.tx_id.0,
+        received_tx_id: sent.received_tx_id.0,
+        amount: selection.amount.value(),
+        fee: selection.fee.value(),
+        input_count: u32::try_from(selection.inputs.len()).map_err(|_| out_of_range())?,
+        output_count: u32::try_from(selection.change.len())
+            .ok()
+            .and_then(|change| change.checked_add(1))
+            .ok_or_else(out_of_range)?,
+    })
 }
 
 fn sent_tx(sent: &SentSlate) -> SentTx {

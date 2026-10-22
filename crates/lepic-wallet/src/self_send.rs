@@ -5,10 +5,11 @@
 
 use std::num::NonZeroUsize;
 
+use lepic_crypto::Commitment;
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::EncodeContext;
-use lepic_store::{StoreError, TxId, WalletStore};
+use lepic_store::{OutputRecord, StoreError, TxId, WalletStore};
 use lepic_transport::transport::TransportId;
 use thiserror::Error;
 use tracing::field::Empty;
@@ -20,7 +21,10 @@ use crate::event::{Event, SelfSentTransaction};
 use crate::finalize::{FinalizeError, finalize_own};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::{ReceiveError, receive_own};
-use crate::selection::{self, Selection, SelectionOptions, SelectionStrategy, SelfSendShape};
+use crate::selection::{
+    self, Selection, SelectionError, SelectionOptions, SelectionRequest, SelectionStrategy,
+    SelfSendShape,
+};
 use crate::send::{
     S1Randomness, S1Storage, SendError, SendRequest, block_header_version, spendable_here, store_s1,
 };
@@ -91,6 +95,44 @@ where
         shape: SelfSendShape,
         propagation: Propagation,
     ) -> Result<SelfSent, SelfSendError> {
+        self.self_send_chosen(options, propagation, move |outputs, request| {
+            selection::select_self_send(outputs, request, shape)
+        })
+        .await
+    }
+
+    /// Spends exactly the outputs `commitments` names into one output of this wallet, as
+    /// [`Wallet::self_send`] does with [`SelfSendShape::Consolidate`], and posts it with
+    /// `propagation`. Nothing else is locked. A payment that was cancelled here, such as an
+    /// invoice payment whose I2 the issuer still holds, can no longer be mined once its inputs
+    /// are spent this way.
+    ///
+    /// Fails, storing nothing, with [`SelectionError::NoOutputsNamed`] or
+    /// [`SelectionError::NamedOutputUnavailable`] when an output named is unknown, not unspent
+    /// with `options.minimum_confirmations`, of another account or named twice, with
+    /// [`SelectionError::NotEnoughFunds`] when the fee takes their whole value, and otherwise as
+    /// [`Wallet::self_send`] does.
+    #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = Empty))]
+    pub async fn spend_outputs_to_self(
+        &self,
+        options: SelectionOptions,
+        commitments: Vec<Commitment>,
+        propagation: Propagation,
+    ) -> Result<SelfSent, SelfSendError> {
+        self.self_send_chosen(options, propagation, move |outputs, request| {
+            selection::select_named(outputs, request, &commitments)
+        })
+        .await
+    }
+
+    async fn self_send_chosen(
+        &self,
+        options: SelectionOptions,
+        propagation: Propagation,
+        choose: impl Fn(&[OutputRecord], &SelectionRequest) -> Result<Selection, SelectionError>
+        + Send
+        + 'static,
+    ) -> Result<SelfSent, SelfSendError> {
         let session = self.session()?;
         let tip = self
             .ports()
@@ -118,12 +160,8 @@ where
                     }
                     let outputs =
                         spendable_here(&session.keychain, repos.outputs(options.account, None)?);
-                    let chosen = selection::select_self_send(
-                        &outputs,
-                        &options.request(Amount::ZERO, tip, base_fee),
-                        shape,
-                    )
-                    .map_err(SendError::from)?;
+                    let chosen = choose(&outputs, &options.request(Amount::ZERO, tip, base_fee))
+                        .map_err(SendError::from)?;
                     let request = SendRequest {
                         minimum_confirmations: options.minimum_confirmations,
                         max_outputs: options.max_outputs,

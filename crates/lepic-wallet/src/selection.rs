@@ -7,6 +7,7 @@
 
 use std::num::NonZeroUsize;
 
+use lepic_crypto::Commitment;
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
 use lepic_primitives::fee::BodyCounts;
 use lepic_primitives::output::OutputFeatures;
@@ -127,6 +128,13 @@ pub enum SelectionError {
     /// A consolidation needs at least two spendable outputs; `outputs` were.
     #[error("{outputs} spendable outputs are too few to consolidate")]
     NothingToConsolidate { outputs: usize },
+    /// A spend of named outputs was given none.
+    #[error("no outputs were named")]
+    NoOutputsNamed,
+    /// The output at `position` of those named is not an unspent output of the account that
+    /// may be spent now, or was named twice.
+    #[error("named output {position} is not spendable")]
+    NamedOutputUnavailable { position: usize },
     #[error("selection arithmetic failed")]
     Arithmetic(#[from] ArithmeticError),
 }
@@ -325,6 +333,75 @@ pub fn select_self_send(
         inputs: eligible.into_iter().cloned().collect(),
         change,
         amount,
+        fee,
+        total,
+    })
+}
+
+/// The selection of a send to the wallet itself that spends exactly the outputs `named`, in
+/// one output of their value less the fee, with no change. Each must be an unspent output of
+/// the request's account that may be spent at the request's tip with its confirmations, named
+/// once. The request's amount, strategy, change outputs and output limit are ignored.
+///
+/// It makes a set of outputs final: once they are spent, nothing signed earlier with them, for
+/// example an invoice payment cancelled here, can be mined any more.
+///
+/// # Errors
+///
+/// - [`SelectionError::NoOutputsNamed`] when `named` is empty.
+/// - [`SelectionError::NamedOutputUnavailable`] for the first output named that is unknown,
+///   not unspent, of another account, not yet spendable, or named before.
+/// - [`SelectionError::NotEnoughFunds`] when their value does not pay the fee and one base unit.
+/// - [`SelectionError::TooHeavy`] when the transaction would exceed the weight limit.
+/// - [`SelectionError::Arithmetic`] when a sum of values overflows.
+pub fn select_named(
+    outputs: &[OutputRecord],
+    request: &SelectionRequest,
+    named: &[Commitment],
+) -> Result<Selection, SelectionError> {
+    if named.is_empty() {
+        return Err(SelectionError::NoOutputsNamed);
+    }
+    let eligible = eligible(outputs, request);
+    let mut inputs: Vec<&OutputRecord> = Vec::with_capacity(named.len());
+    for (position, commitment) in named.iter().enumerate() {
+        let found = eligible.iter().copied().find(|output| {
+            output.status == OutputStatus::Unspent && output.id.commitment == *commitment
+        });
+        match found {
+            Some(output)
+                if !inputs
+                    .iter()
+                    .any(|input| input.id.commitment == *commitment) =>
+            {
+                inputs.push(output);
+            }
+            _ => return Err(SelectionError::NamedOutputUnavailable { position }),
+        }
+    }
+    // Stable, so equal values keep the order they were named in.
+    inputs.sort_by_key(|output| output.amount);
+    let weight = body(inputs.len(), 1)?.weight_as_block();
+    if weight > MAX_TX_WEIGHT {
+        return Err(SelectionError::TooHeavy {
+            inputs: inputs.len(),
+            outputs: 1,
+        });
+    }
+    let total = sum(&inputs)?;
+    let fee = tx_fee(inputs.len(), 1, request.base_fee)?;
+    let amount = total
+        .value()
+        .checked_sub(fee.value())
+        .filter(|left| *left > 0)
+        .ok_or(SelectionError::NotEnoughFunds {
+            available: total,
+            needed: fee.to_amount().checked_add(Amount::new(1))?,
+        })?;
+    Ok(Selection {
+        inputs: inputs.into_iter().cloned().collect(),
+        change: Vec::new(),
+        amount: Amount::new(amount),
         fee,
         total,
     })

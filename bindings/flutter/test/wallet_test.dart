@@ -1094,6 +1094,47 @@ void main() {
     expect(consolidate.changeOutputs, 0);
   });
 
+  test('named outputs are spent to the wallet itself, nothing else', () async {
+    final (alice, _, _) = await fundedPair('spend-named');
+    await alice.splitOutputs(outputs: 3, minimumConfirmations: BigInt.one);
+    chain.minePushed();
+    chain.setHeight(height: chain.height() + BigInt.from(10));
+    await alice.summary(refresh: true);
+    final unspent = (await alice.outputs())
+        .where((output) => output.status == OutputStatus.unspent)
+        .toList();
+    expect(unspent, hasLength(3));
+    await expectLater(
+      alice.spendOutputsToSelf(
+        commitments: const [],
+        minimumConfirmations: BigInt.one,
+      ),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+    await expectLater(
+      alice.spendOutputsToSelf(
+        commitments: ['08${'00' * 32}'],
+        minimumConfirmations: BigInt.one,
+      ),
+      throwsWalletError(WalletErrorKind.invalidArgument),
+    );
+
+    final named = [unspent[0].commitment, unspent[1].commitment];
+    final sent = await alice.spendOutputsToSelf(
+      commitments: named,
+      minimumConfirmations: BigInt.one,
+    );
+
+    expect(sent.inputCount, 2);
+    expect(sent.outputCount, 1);
+    final after = await alice.outputs();
+    OutputStatus statusOf(String commitment) =>
+        after.singleWhere((output) => output.commitment == commitment).status;
+    expect(statusOf(named[0]), OutputStatus.locked);
+    expect(statusOf(named[1]), OutputStatus.locked);
+    expect(statusOf(unspent[2].commitment), OutputStatus.unspent);
+  });
+
   test('the node tip tells readiness and the tip time', () async {
     final config = configFor(walletDir('node-tip'));
     final old = await nodeTip(runtime: runtime, config: config);

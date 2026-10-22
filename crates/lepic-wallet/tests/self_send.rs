@@ -506,3 +506,163 @@ fn rejects_cancelling_the_incoming_entry_of_a_posted_self_send() {
     assert_eq!(failed.state(failed.received_tx_id), TxState::Received);
     assert_eq!(failed.statuses(), vec![Locked, Unconfirmed, Unconfirmed]);
 }
+
+fn commitment_of(sender: &Sender, value: u64) -> lepic_crypto::Commitment {
+    sender
+        .outputs()
+        .into_iter()
+        .find(|output| output.amount.value() == value && output.status == Unspent)
+        .unwrap()
+        .id
+        .commitment
+}
+
+fn spend_named(
+    sender: &Sender,
+    commitments: Vec<lepic_crypto::Commitment>,
+) -> Result<lepic_wallet::self_send::SelfSent, SelfSendError> {
+    sender.harness.block_on(sender.wallet.spend_outputs_to_self(
+        options(),
+        commitments,
+        Propagation::Fluff,
+    ))
+}
+
+#[test]
+fn spending_named_outputs_spends_exactly_those_into_one_output() {
+    let sender = Sender::new();
+    sender.fund(1, 2 * FUNDING);
+    sender.fund(2, 3 * FUNDING);
+    let funding = commitment_of(&sender, FUNDING);
+    let named = vec![
+        commitment_of(&sender, 3 * FUNDING),
+        commitment_of(&sender, 2 * FUNDING),
+    ];
+
+    let sent = spend_named(&sender, named.clone()).unwrap();
+
+    let spent: Vec<_> = sent
+        .selection
+        .inputs
+        .iter()
+        .map(|input| input.id.commitment)
+        .collect();
+    // In increasing value, the order the transaction adds them in.
+    assert_eq!(spent, vec![named[1], named[0]]);
+    assert!(sent.selection.change.is_empty());
+    let outputs = sender.outputs();
+    let status_of = |commitment: &lepic_crypto::Commitment| {
+        outputs
+            .iter()
+            .find(|output| output.id.commitment == *commitment)
+            .unwrap()
+            .status
+    };
+    assert_eq!(status_of(&named[0]), Locked);
+    assert_eq!(status_of(&named[1]), Locked);
+    assert_eq!(status_of(&funding), Unspent, "nothing else is locked");
+    let made: Vec<_> = outputs
+        .iter()
+        .filter(|output| output.status == Unconfirmed)
+        .collect();
+    assert_eq!(made.len(), 1);
+    assert_eq!(
+        made[0].amount.value(),
+        5 * FUNDING - sent.selection.fee.value()
+    );
+    assert_eq!(made[0].tx, Some(sent.received_tx_id));
+    let pushed = sender.harness.node.pushed_transactions();
+    assert_eq!(pushed.len(), 1);
+    pushed[0].validate().unwrap();
+    assert_eq!(pushed[0].inputs().len(), 2);
+    assert_eq!(pushed[0].outputs().len(), 1);
+}
+
+#[test]
+fn spending_one_named_output_is_allowed() {
+    let sender = Sender::new();
+    let funding = commitment_of(&sender, FUNDING);
+
+    let sent = spend_named(&sender, vec![funding]).unwrap();
+
+    assert_eq!(sent.selection.inputs.len(), 1);
+    assert_eq!(
+        sent.selection.amount.value(),
+        FUNDING - sent.selection.fee.value()
+    );
+}
+
+#[test]
+fn spending_named_outputs_refuses_what_cannot_be_spent_and_stores_nothing() {
+    let sender = Sender::new();
+    sender.fund(1, 2 * FUNDING);
+    sender.fund(2, 3);
+    let funding = commitment_of(&sender, FUNDING);
+    let second = commitment_of(&sender, 2 * FUNDING);
+    let dust = commitment_of(&sender, 3);
+    // An output that is not in the store any more.
+    sender.fund(3, 4 * FUNDING);
+    let gone = commitment_of(&sender, 4 * FUNDING);
+    let record = sender
+        .outputs()
+        .into_iter()
+        .find(|output| output.id.commitment == gone)
+        .unwrap();
+    sender
+        .store
+        .write(|repos| repos.delete_output(record.commitment()))
+        .unwrap();
+    let before = (sender.transactions(), sender.outputs());
+
+    let cases = [
+        (Vec::new(), "none"),
+        (vec![gone], "unknown"),
+        (vec![funding, funding], "twice"),
+        (vec![dust], "dust"),
+    ];
+    let errors: Vec<_> = cases
+        .into_iter()
+        .map(|(named, case)| (spend_named(&sender, named).unwrap_err(), case))
+        .collect();
+
+    let selection = |error: &SelfSendError| match error {
+        SelfSendError::Send(SendError::Selection(selection)) => *selection,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(selection(&errors[0].0), SelectionError::NoOutputsNamed);
+    assert_eq!(
+        selection(&errors[1].0),
+        SelectionError::NamedOutputUnavailable { position: 0 }
+    );
+    assert_eq!(
+        selection(&errors[2].0),
+        SelectionError::NamedOutputUnavailable { position: 1 }
+    );
+    assert!(
+        matches!(
+            selection(&errors[3].0),
+            SelectionError::NotEnoughFunds { .. }
+        ),
+        "{:?}",
+        errors[3]
+    );
+    assert_eq!((sender.transactions(), sender.outputs()), before);
+    assert!(sender.harness.node.pushed_transactions().is_empty());
+
+    // A locked output, an input of a send in progress, is not spendable either.
+    let mut record = sender
+        .outputs()
+        .into_iter()
+        .find(|output| output.id.commitment == second)
+        .unwrap();
+    record.status = Locked;
+    sender
+        .store
+        .write(|repos| repos.put_output(&record))
+        .unwrap();
+    let error = spend_named(&sender, vec![funding, second]).unwrap_err();
+    assert_eq!(
+        selection(&error),
+        SelectionError::NamedOutputUnavailable { position: 1 }
+    );
+}

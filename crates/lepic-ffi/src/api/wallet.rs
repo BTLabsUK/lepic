@@ -787,6 +787,29 @@ impl EpicWallet {
         .await
     }
 
+    /// Spends exactly the outputs `commitments` names, by `WalletOutput.commitment`, into one
+    /// output of this wallet, as [`EpicWallet::consolidate_outputs`] does, and locks nothing
+    /// else. Use it to make a cancelled payment final: once a payment is cancelled its inputs
+    /// are spendable here, but the other wallet may still hold a signed copy that spends them,
+    /// for example the issuer of an invoice that was paid, until they are spent elsewhere.
+    ///
+    /// Fails with `InvalidArgument` when `commitments` is empty, or names an output that is
+    /// unknown, not unspent with `minimum_confirmations`, or named twice; with `NotEnoughFunds`
+    /// when the fee takes their whole value; and otherwise as
+    /// [`EpicWallet::consolidate_outputs`] does, storing nothing.
+    pub async fn spend_outputs_to_self(
+        &self,
+        commitments: Vec<String>,
+        minimum_confirmations: u64,
+    ) -> Result<SelfSentTx, WalletError> {
+        self.run("spend_outputs_to_self", |session| async move {
+            session
+                .spend_outputs_to_self(commitments, minimum_confirmations)
+                .await
+        })
+        .await
+    }
+
     /// `summary(refresh: true)` as a stream: a first event at 0 percent, then one with
     /// `summary` set at 100. A failure ends the stream with its [`WalletError`] as the stream's
     /// error, after the first event.

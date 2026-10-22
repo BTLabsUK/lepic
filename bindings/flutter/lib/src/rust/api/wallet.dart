@@ -725,6 +725,21 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// the payments address.
   Future<void> setInvoiceAddressIndex({required int index});
 
+  /// Spends exactly the outputs `commitments` names, by `WalletOutput.commitment`, into one
+  /// output of this wallet, as [`EpicWallet::consolidate_outputs`] does, and locks nothing
+  /// else. Use it to make a cancelled payment final: once a payment is cancelled its inputs
+  /// are spendable here, but the other wallet may still hold a signed copy that spends them,
+  /// for example the issuer of an invoice that was paid, until they are spent elsewhere.
+  ///
+  /// Fails with `InvalidArgument` when `commitments` is empty, or names an output that is
+  /// unknown, not unspent with `minimum_confirmations`, or named twice; with `NotEnoughFunds`
+  /// when the fee takes their whole value; and otherwise as
+  /// [`EpicWallet::consolidate_outputs`] does, storing nothing.
+  Future<SelfSentTx> spendOutputsToSelf({
+    required List<String> commitments,
+    required BigInt minimumConfirmations,
+  });
+
   /// Splits the wallet's funds into `outputs` outputs of nearly equal value, from 2 to 10, so
   /// that several sends can follow without waiting for each other's change: a normal network
   /// transaction to the wallet itself, confirmed as any send, never through its Epicbox

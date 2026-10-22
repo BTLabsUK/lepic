@@ -122,8 +122,8 @@ final wallet = await EpicWallet.create(
   lock on `.lepic.lock` in it while a wallet is open.
 - `EpicWallet.events()` streams session, balance, transaction, sync and transport changes, and
   the invoice events `invoiceReceived`, `invoiceFinalized`, `invoiceExpired`, `invoicePosted`,
-  `invoiceDeclined`, `invoiceWithdrawn` and `invoiceBounced`, which set `slateId`. A split or
-  consolidation raises `selfSend` with the `txId` of its outgoing transaction, `account` and
+  `invoiceDeclined`, `invoiceWithdrawn` and `invoiceBounced`, which set `slateId`. A split,
+  consolidation or `spendOutputsToSelf` raises `selfSend` with the `txId` of its outgoing transaction, `account` and
   `amount`, never a `transaction` event with `to` `received`: nothing was received from
   anyone, and the listener stream reports nothing for it.
   `WalletEventKind` and `ListenerEventKind` only gain values, at the end, and a value never
@@ -131,6 +131,14 @@ final wallet = await EpicWallet.create(
   `TransactionDetails` has the required fields `flow` and `origin` (and `imported`, nullable)
   and `ListenerEvent` the required field `slateId`; code that builds them, such as a fake
   wallet, must pass them.
+- `spendOutputsToSelf(commitments, minimumConfirmations)` (new) spends exactly the
+  outputs named by `WalletOutput.commitment` into one output of this wallet, with the usual fee,
+  and locks nothing else; it returns a `SelfSentTx` as `consolidateOutputs` does. Use it to make
+  a cancelled payment final: the other wallet, for example the issuer of a paid invoice, may
+  still hold a signed copy spending those inputs until they are spent elsewhere. It fails with
+  `invalidArgument` when `commitments` is empty or names an output that is unknown, not
+  unspent with `minimumConfirmations`, or named twice, and with `notEnoughFunds` when the fee
+  takes their whole value; nothing is stored then.
 - `importLegacyHistory(sourceDir)` brings across the transaction history of the epic-wallet
   wallet (GUI or CLI) that a wallet was just made from, for example with `importWalletSeed`
   from that folder's `wallet.seed`. Call it once after the import, before or after the restore

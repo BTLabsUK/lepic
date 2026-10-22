@@ -526,6 +526,15 @@ mod tests {
         for (error, kind) in cases {
             assert_eq!(WalletError::from(SendError::Selection(error)).kind, kind);
         }
+        for error in [
+            SelectionError::NoOutputsNamed,
+            SelectionError::NamedOutputUnavailable { position: 2 },
+        ] {
+            assert_eq!(
+                WalletError::from(SendError::Selection(error)).kind,
+                WalletErrorKind::InvalidArgument
+            );
+        }
     }
 
     #[test]
