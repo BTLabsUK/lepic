@@ -28,9 +28,9 @@ yet and no control port, and its onion-service support is newer than C tor's.
   `tor` transport. `lepic-cli` and `lepic-ffi` depend on it; the engine does not.
 - The host bundles a `tor` binary (the Tor Expert Bundle the GUI pins) and passes its path.
   `lepic-tor` starts it per open wallet with a torrc in that wallet's directory: SOCKS and
-  control on `auto` ports, cookie authentication, `__OwningControllerProcess`, then
-  `TAKEOWNERSHIP`, so tor exits with the wallet process or its control connection. No shell is
-  involved.
+  control on `auto` ports, cookie authentication (`SAFECOOKIE`, so the cookie never crosses
+  the connection), `__OwningControllerProcess`, then `TAKEOWNERSHIP`, so tor exits with the
+  wallet process or its control connection. No shell is involved.
 - The onion's key is the payment-proof key: its seed is the wallet's address secret key for
   account `m/0/0`, index 0. `lepic-tor` expands it in memory (SHA-512, clamped) and passes it to
   `ADD_ONION` with `Flags=DiscardPK`, mapping port 80 to the HTTP listener on `127.0.0.1`

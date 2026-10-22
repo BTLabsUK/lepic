@@ -1,4 +1,4 @@
-//! A minimal client for tor's control port: cookie authentication, ownership, the SOCKS
+//! A minimal client for tor's control port: `SAFECOOKIE` authentication, ownership, the SOCKS
 //! address, bootstrap progress, the onion service and shutdown.
 //!
 //! Replies are `250 OK`, multi-line `250-key=value` … `250 OK`, data blocks `250+key=` … `.`,
@@ -7,20 +7,23 @@
 //! replies are still bounded: line length, lines per reply and data block size.
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::Sha256;
 use thiserror::Error;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tracing::debug;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::onion::ONION_NAME_LEN;
 
@@ -33,6 +36,10 @@ const EVENT_QUEUE: usize = 256;
 const COOKIE_LEN: usize = 32;
 /// Padded base64 of the 64-byte expanded key.
 const ENCODED_KEY_LEN: usize = 88;
+const NONCE_LEN: usize = 32;
+const HASH_LEN: usize = 32;
+const SAFECOOKIE_SERVER_KEY: &[u8] = b"Tor safe cookie authentication server-to-controller hash";
+const SAFECOOKIE_CLIENT_KEY: &[u8] = b"Tor safe cookie authentication controller-to-server hash";
 const ASYNC_CODE: u16 = 650;
 
 /// Why a control-port exchange failed.
@@ -57,6 +64,12 @@ pub enum ControlError {
     Rejected { code: u16 },
     #[error("the command or its argument is invalid")]
     InvalidArgument,
+    #[error("the control cookie is not 32 bytes")]
+    Cookie,
+    #[error("the control port did not prove it knows the cookie")]
+    ServerProof,
+    #[error("the system random generator failed")]
+    Randomness,
 }
 
 /// One complete reply: its status code and its lines without the status prefix. A data block
@@ -439,17 +452,43 @@ impl ControlConnection {
         self.reader.abort();
     }
 
-    /// `AUTHENTICATE` with the 32-byte cookie tor wrote to `CookieAuthFile`.
+    /// `SAFECOOKIE` authentication with the 32-byte cookie tor wrote to `CookieAuthFile`:
+    /// `AUTHCHALLENGE` with a fresh nonce, a check that the server's hash proves it knows the
+    /// cookie, then `AUTHENTICATE` with the client's hash. The cookie itself never crosses the
+    /// connection, so whatever listens on the port learns nothing it could replay.
     pub async fn authenticate(&self, cookie: &[u8]) -> Result<(), ControlError> {
         if cookie.len() != COOKIE_LEN {
             return Err(ControlError::InvalidArgument);
         }
-        let mut line = Zeroizing::new(String::with_capacity(13 + 2 * COOKIE_LEN));
+        let mut client_nonce = [0u8; NONCE_LEN];
+        getrandom::fill(&mut client_nonce).map_err(|_| ControlError::Randomness)?;
+        let mut challenge = String::with_capacity(25 + 2 * NONCE_LEN);
+        challenge.push_str("AUTHCHALLENGE SAFECOOKIE ");
+        push_hex(&mut challenge, &client_nonce);
+        let reply = self.command(&challenge).await?;
+        let pairs = reply
+            .lines
+            .first()
+            .and_then(|line| line.strip_prefix("AUTHCHALLENGE "))
+            .map(parse_keywords)
+            .ok_or(ControlError::Malformed)?;
+        let server_hash = keyword(&pairs, "SERVERHASH")
+            .and_then(decode_hex::<HASH_LEN>)
+            .ok_or(ControlError::Malformed)?;
+        let server_nonce = keyword(&pairs, "SERVERNONCE")
+            .and_then(decode_hex::<NONCE_LEN>)
+            .ok_or(ControlError::Malformed)?;
+        safecookie_mac(SAFECOOKIE_SERVER_KEY, cookie, &client_nonce, &server_nonce)?
+            .verify_slice(&server_hash)
+            .map_err(|_| ControlError::ServerProof)?;
+        let mut client_hash =
+            safecookie_mac(SAFECOOKIE_CLIENT_KEY, cookie, &client_nonce, &server_nonce)?
+                .finalize()
+                .into_bytes();
+        let mut line = Zeroizing::new(String::with_capacity(13 + 2 * HASH_LEN));
         line.push_str("AUTHENTICATE ");
-        for byte in cookie {
-            line.push(hex_digit(byte >> 4));
-            line.push(hex_digit(byte & 0x0f));
-        }
+        push_hex(&mut line, &client_hash);
+        client_hash.as_mut_slice().zeroize();
         self.command(&line).await.map(drop)
     }
 
@@ -543,6 +582,69 @@ impl ControlConnection {
     pub async fn signal_shutdown(&self) -> Result<(), ControlError> {
         self.command("SIGNAL SHUTDOWN").await.map(drop)
     }
+}
+
+/// HMAC-SHA256 of `cookie | client_nonce | server_nonce` under one of the two fixed keys of
+/// tor's control-spec.
+fn safecookie_mac(
+    key: &[u8],
+    cookie: &[u8],
+    client_nonce: &[u8; NONCE_LEN],
+    server_nonce: &[u8; NONCE_LEN],
+) -> Result<Hmac<Sha256>, ControlError> {
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key)
+        .map_err(|_| ControlError::InvalidArgument)?;
+    mac.update(cookie);
+    mac.update(client_nonce);
+    mac.update(server_nonce);
+    Ok(mac)
+}
+
+fn push_hex(out: &mut String, bytes: &[u8]) {
+    for byte in bytes {
+        out.push(hex_digit(byte >> 4));
+        out.push(hex_digit(byte & 0x0f));
+    }
+}
+
+/// Exactly `N` bytes of hex, either case.
+fn decode_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
+    if text.len() != N.checked_mul(2)? || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut out = [0u8; N];
+    let (pairs, _) = text.as_bytes().as_chunks::<2>();
+    for (byte, pair) in out.iter_mut().zip(pairs) {
+        let pair = std::str::from_utf8(pair).ok()?;
+        *byte = u8::from_str_radix(pair, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Reads tor's 32-byte control cookie, refusing a file of any other size before reading it.
+pub async fn read_cookie(path: &Path) -> Result<Zeroizing<[u8; COOKIE_LEN]>, ControlError> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(ControlError::Io)?;
+    let length = file.metadata().await.map_err(ControlError::Io)?.len();
+    if length != COOKIE_LEN as u64 {
+        return Err(ControlError::Cookie);
+    }
+    // One byte more than a cookie, so a file that grew since is still caught.
+    let mut buffer = Zeroizing::new([0u8; COOKIE_LEN + 1]);
+    let mut filled = 0;
+    while let Some(free) = buffer.get_mut(filled..).filter(|free| !free.is_empty()) {
+        match file.read(free).await.map_err(ControlError::Io)? {
+            0 => break,
+            read => filled = filled.saturating_add(read),
+        }
+    }
+    if filled != COOKIE_LEN {
+        return Err(ControlError::Cookie);
+    }
+    let mut cookie = Zeroizing::new([0u8; COOKIE_LEN]);
+    cookie.copy_from_slice(buffer.get(..COOKIE_LEN).ok_or(ControlError::Cookie)?);
+    Ok(cookie)
 }
 
 fn hex_digit(nibble: u8) -> char {
@@ -806,6 +908,92 @@ mod tests {
     fn hex_digits() {
         let text: String = (0..16).map(hex_digit).collect();
         assert_eq!(text, "0123456789abcdef");
+    }
+
+    #[test]
+    fn decodes_hex_of_one_length_only() {
+        assert_eq!(decode_hex::<2>("0aFf"), Some([0x0a, 0xff]));
+        assert_eq!(decode_hex::<2>("0aF"), None);
+        assert_eq!(decode_hex::<2>("0aFf00"), None);
+        assert_eq!(decode_hex::<2>("0g00"), None);
+        assert_eq!(decode_hex::<1>("+1"), None);
+    }
+
+    #[tokio::test]
+    async fn reads_only_a_cookie_of_32_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cookie");
+        std::fs::write(&path, [7; 32]).unwrap();
+        assert_eq!(*read_cookie(&path).await.unwrap(), [7; 32]);
+        for length in [0, 31, 33, 4096] {
+            std::fs::write(&path, vec![7; length]).unwrap();
+            assert!(
+                matches!(read_cookie(&path).await, Err(ControlError::Cookie)),
+                "{length}"
+            );
+        }
+        assert!(matches!(
+            read_cookie(&dir.path().join("missing")).await,
+            Err(ControlError::Io(_))
+        ));
+    }
+
+    /// A control port that answers `AUTHCHALLENGE` with `server_hash` and records every line.
+    async fn challenging_port(
+        server_hash: String,
+    ) -> (SocketAddr, Arc<std::sync::Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut lines = BufReader::new(read).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                recorded.lock().unwrap().push(line.clone());
+                let answer = if line.starts_with("AUTHCHALLENGE ") {
+                    format!(
+                        "250 AUTHCHALLENGE SERVERHASH={server_hash} SERVERNONCE={}\r\n",
+                        "03".repeat(NONCE_LEN)
+                    )
+                } else {
+                    "250 OK\r\n".to_owned()
+                };
+                write.write_all(answer.as_bytes()).await.unwrap();
+            }
+        });
+        (address, seen)
+    }
+
+    #[tokio::test]
+    async fn a_port_that_does_not_know_the_cookie_gets_no_answer() {
+        let (address, seen) = challenging_port("00".repeat(HASH_LEN)).await;
+        let (control, _events) = ControlConnection::connect(address, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(matches!(
+            control.authenticate(&[7; COOKIE_LEN]).await,
+            Err(ControlError::ServerProof)
+        ));
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        let nonce = seen[0].strip_prefix("AUTHCHALLENGE SAFECOOKIE ").unwrap();
+        assert!(decode_hex::<NONCE_LEN>(nonce).is_some());
+        assert!(!seen[0].contains(&"07".repeat(COOKIE_LEN)));
+
+        let (address, _) = challenging_port("zz".to_owned()).await;
+        let (control, _events) = ControlConnection::connect(address, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(matches!(
+            control.authenticate(&[7; COOKIE_LEN]).await,
+            Err(ControlError::Malformed)
+        ));
+        assert!(matches!(
+            control.authenticate(&[7; 31]).await,
+            Err(ControlError::InvalidArgument)
+        ));
     }
 
     #[tokio::test]

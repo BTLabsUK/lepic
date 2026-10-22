@@ -23,7 +23,9 @@ use tokio::time::{Instant, sleep, sleep_until, timeout};
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
-use crate::control::{ControlConnection, ControlError, Event, HsDescAction, parse_control_file};
+use crate::control::{
+    ControlConnection, ControlError, Event, HsDescAction, parse_control_file, read_cookie,
+};
 use crate::onion::{OnionAddress, expanded_secret, public_key_of_seed};
 
 const TORRC: &str = "torrc";
@@ -891,12 +893,8 @@ async fn connect_control(
     command_timeout: Duration,
 ) -> Result<(ControlConnection, mpsc::Receiver<Event>, SocketAddr), ControlError> {
     let (control, events) = ControlConnection::connect(address, command_timeout).await?;
-    let cookie = Zeroizing::new(
-        tokio::fs::read(&paths.cookie)
-            .await
-            .map_err(ControlError::Io)?,
-    );
-    control.authenticate(&cookie).await?;
+    let cookie = read_cookie(&paths.cookie).await?;
+    control.authenticate(&*cookie).await?;
     control.take_ownership().await?;
     control.follow_events().await?;
     let socks = control.socks_address().await?;
