@@ -1,6 +1,6 @@
 # 0009 Separate conformance workspace on public pins, golden vectors
 
-Status: accepted
+Status: accepted; superseded in part by 0020 (the version table)
 Date: 2026-10-02
 
 ## Context

@@ -14,7 +14,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0006](0006-tls-and-http.md) | rustls with ring, hyper for HTTP, tokio-tungstenite for websockets | accepted |
 | [0007](0007-mobile-bindings.md) | flutter_rust_bridge bindings for the existing Flutter frontend | accepted, secrets line superseded by 0014 |
 | [0008](0008-logging-and-errors.md) | tracing everywhere, host-installed subscribers, typed errors | accepted |
-| [0009](0009-conformance.md) | Separate conformance workspace on public pins, golden vectors | accepted |
+| [0009](0009-conformance.md) | Separate conformance workspace on public pins, golden vectors | accepted, version table superseded by 0020 |
 | [0010](0010-dependency-policy.md) | Latest stable crates and toolchain, banned list, update bots | accepted |
 | [0011](0011-no-global-state.md) | No process-global state; network and settings are parameters | accepted, `ChainParams` contents superseded by 0013 |
 | [0012](0012-native-slate-format.md) | A compact native slate format for LEPIC-to-LEPIC methods | proposed |
@@ -25,6 +25,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0017](0017-foreign-api-over-http.md) | The wallet foreign API over HTTP in its own crate | accepted |
 | [0018](0018-tor-on-desktop.md) | Tor on desktop through a bundled tor child process | accepted |
 | [0019](0019-import-epic-wallet-history.md) | Import the transaction history of an epic-wallet wallet, reconciled with the scan | accepted |
+| [0020](0020-reference-epic-wallet-4-1.md) | Reference wallet and node move to epic-wallet v4.1.0 | accepted |
 
 Template:
 
