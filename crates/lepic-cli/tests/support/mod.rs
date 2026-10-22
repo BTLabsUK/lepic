@@ -33,7 +33,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 /// The chain tip of the scripted node: far enough past the funding output for it to be
-/// spendable with the default ten confirmations.
+/// spendable with the default three confirmations.
 pub const TIP: u64 = 30;
 
 pub const SENDER_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon \

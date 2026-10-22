@@ -134,8 +134,8 @@ Account default (0)
   Locked                 0.00000000
 ```
 
-Awaiting confirmation is received but not yet buried under `--min-confirmations` blocks (10 by
-default); awaiting finalization is a receive the sender has not posted yet; locked is spent by a
+Awaiting confirmation is received but not yet buried under 3 blocks, as the Epic GUI wallet
+counts; awaiting finalization is a receive the sender has not posted yet; locked is spent by a
 transaction that is not confirmed yet, change included.
 
 ## Restore
@@ -258,9 +258,9 @@ Slate d4217e26-f23c-46f0-9944-84b406dd16a6.
 ```
 
 The inputs stay locked from the send until the transaction confirms or is cancelled. Options:
-`--min-confirmations` (10), `--selection all|smallest` (`all`, as `epic-wallet`, spends every
-eligible output and so locks all of them until it confirms; `smallest` spends as few as cover the
-amount), `--change-outputs`, `--ttl-blocks` (the receiver must refuse the slate after that many
+`--min-confirmations` (3, the confirmations the balance counts), `--selection all|smallest`
+(`smallest`, the default, spends as few as cover the amount; `all`, as `epic-wallet`, spends every
+eligible output and so locks all of them until it confirms), `--change-outputs`, `--ttl-blocks` (the receiver must refuse the slate after that many
 blocks), `-m, --message <TEXT>` (a message to the other party, signed with the slate; `tx
 receive`, `invoice issue` and `invoice pay` take it too), `--fluff` on finalize to skip the stem
 phase.
