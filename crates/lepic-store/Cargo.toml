@@ -13,19 +13,27 @@ getrandom = { workspace = true, features = ["std"] }
 jiff.workspace = true
 lepic-primitives.workspace = true
 rusqlite = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive", "std"], optional = true }
+serde_json = { workspace = true, features = ["std"], optional = true }
+sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
+tracing = { workspace = true, features = ["std"], optional = true }
 uuid.workspace = true
 zeroize = { workspace = true, features = ["alloc"] }
 
 [features]
 default = ["sqlite"]
-sqlite = ["dep:rusqlite"]
+sqlite = ["dep:rusqlite", "dep:serde", "dep:serde_json", "dep:sha2", "dep:tracing"]
 
 [dev-dependencies]
 tempfile.workspace = true
 
 [[test]]
 name = "sqlite"
+required-features = ["sqlite"]
+
+[[test]]
+name = "legacy"
 required-features = ["sqlite"]
 
 [[test]]

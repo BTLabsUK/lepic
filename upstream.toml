@@ -363,3 +363,18 @@ task = "T-04"
 upstream.repo = "https://github.com/EpicCash/epic-wallet"
 upstream.paths = ["api/src/foreign_rpc.rs", "impls/src/adapters/http.rs"]
 upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+
+# Legacy wallet database reader, epic-wallet v4.0.2 (layout unchanged from v3.3.2 to v4.1.0)
+
+[[module]]
+path = "crates/lepic-store/src/legacy"
+task = "I-01"
+upstream.repo = "https://github.com/EpicCash/epic-wallet"
+upstream.paths = [
+  "impls/src/backends/db.rs",
+  "impls/src/backends/lmdb.rs",
+  "impls/src/serialization.rs",
+  "libwallet/src/types.rs",
+  "libwallet/src/slate.rs",
+]
+upstream.commit = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"

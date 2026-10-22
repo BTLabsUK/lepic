@@ -8,6 +8,8 @@ mod context;
 mod encoding;
 mod error;
 mod invoice;
+#[cfg(feature = "sqlite")]
+pub mod legacy;
 mod memory;
 mod output;
 mod peer;

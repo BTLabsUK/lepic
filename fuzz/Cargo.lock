@@ -1104,7 +1104,11 @@ dependencies = [
  "jiff",
  "lepic-primitives",
  "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
+ "tracing",
  "uuid",
  "zeroize",
 ]
