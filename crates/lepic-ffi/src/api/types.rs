@@ -801,6 +801,13 @@ pub enum WalletEventKind {
     /// it is never a `Transaction` event with `to` `received`; the posting and confirmation
     /// of both of its transactions follow as `Transaction`.
     SelfSend,
+    /// An answer arrived over Epicbox for a slate this wallet does not know and was refused:
+    /// `slate_id`, `slate_stage` (`S2`, the answer to a send, or `I2`, the payment of an
+    /// invoice) and `sender` are set. Another install of the same wallet, on the same recovery
+    /// phrase, may have made that send or issued that invoice; it will never receive this
+    /// answer, so tell the user to finish it there or have the other side cancel and send
+    /// again. Nothing changed here.
+    UnknownSlate,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its
@@ -823,6 +830,10 @@ pub struct WalletEvent {
     pub amount: Option<u64>,
     /// Hex of the kernel excess, for `InvoicePosted`.
     pub kernel_excess: Option<String>,
+    /// The Epicbox address a message came from, for `UnknownSlate`.
+    pub sender: Option<String>,
+    /// The slate's stage, `S2` or `I2`, for `UnknownSlate`.
+    pub slate_stage: Option<String>,
 }
 
 impl WalletEvent {
@@ -843,6 +854,8 @@ impl WalletEvent {
             slate_id: None,
             amount: None,
             kernel_excess: None,
+            sender: None,
+            slate_stage: None,
         }
     }
 }

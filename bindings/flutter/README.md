@@ -126,6 +126,12 @@ final wallet = await EpicWallet.create(
   consolidation or `spendOutputsToSelf` raises `selfSend` with the `txId` of its outgoing transaction, `account` and
   `amount`, never a `transaction` event with `to` `received`: nothing was received from
   anyone, and the listener stream reports nothing for it.
+  An answer that arrives over Epicbox for a slate this wallet does not know, an `S2` for a
+  send or an `I2` paying an invoice, is refused as before and raises `unknownSlate` with
+  `slateId`, `slateStage` and `sender`, the address it came from. On one recovery phrase
+  installed twice, for example on a phone and a desktop, both share the payments address, and
+  whichever reads such an answer first refuses it for the other: tell the user to finish that
+  payment on the other device, or ask the other side to cancel and send again.
   `WalletEventKind` and `ListenerEventKind` only gain values, at the end, and a value never
   changes meaning; an exhaustive `switch` over either must handle the new ones.
   `TransactionDetails` has the required fields `flow` and `origin` (and `imported`, nullable)

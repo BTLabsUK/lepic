@@ -6283,8 +6283,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   WalletEvent dco_decode_wallet_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 15)
-      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
+    if (arr.length != 17)
+      throw Exception('unexpected arr length: expect 17 but see ${arr.length}');
     return WalletEvent(
       kind: dco_decode_wallet_event_kind(arr[0]),
       session: dco_decode_opt_box_autoadd_session_state(arr[1]),
@@ -6301,6 +6301,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       slateId: dco_decode_opt_String(arr[12]),
       amount: dco_decode_opt_box_autoadd_u_64(arr[13]),
       kernelExcess: dco_decode_opt_String(arr[14]),
+      sender: dco_decode_opt_String(arr[15]),
+      slateStage: dco_decode_opt_String(arr[16]),
     );
   }
 
@@ -8008,6 +8010,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_slateId = sse_decode_opt_String(deserializer);
     var var_amount = sse_decode_opt_box_autoadd_u_64(deserializer);
     var var_kernelExcess = sse_decode_opt_String(deserializer);
+    var var_sender = sse_decode_opt_String(deserializer);
+    var var_slateStage = sse_decode_opt_String(deserializer);
     return WalletEvent(
       kind: var_kind,
       session: var_session,
@@ -8024,6 +8028,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       slateId: var_slateId,
       amount: var_amount,
       kernelExcess: var_kernelExcess,
+      sender: var_sender,
+      slateStage: var_slateStage,
     );
   }
 
@@ -9666,6 +9672,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.slateId, serializer);
     sse_encode_opt_box_autoadd_u_64(self.amount, serializer);
     sse_encode_opt_String(self.kernelExcess, serializer);
+    sse_encode_opt_String(self.sender, serializer);
+    sse_encode_opt_String(self.slateStage, serializer);
   }
 
   @protected

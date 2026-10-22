@@ -8156,6 +8156,8 @@ impl SseDecode for crate::api::types::WalletEvent {
         let mut var_slateId = <Option<String>>::sse_decode(deserializer);
         let mut var_amount = <Option<u64>>::sse_decode(deserializer);
         let mut var_kernelExcess = <Option<String>>::sse_decode(deserializer);
+        let mut var_sender = <Option<String>>::sse_decode(deserializer);
+        let mut var_slateStage = <Option<String>>::sse_decode(deserializer);
         return crate::api::types::WalletEvent {
             kind: var_kind,
             session: var_session,
@@ -8172,6 +8174,8 @@ impl SseDecode for crate::api::types::WalletEvent {
             slate_id: var_slateId,
             amount: var_amount,
             kernel_excess: var_kernelExcess,
+            sender: var_sender,
+            slate_stage: var_slateStage,
         };
     }
 }
@@ -8195,6 +8199,7 @@ impl SseDecode for crate::api::types::WalletEventKind {
             11 => crate::api::types::WalletEventKind::InvoiceWithdrawn,
             12 => crate::api::types::WalletEventKind::InvoiceBounced,
             13 => crate::api::types::WalletEventKind::SelfSend,
+            14 => crate::api::types::WalletEventKind::UnknownSlate,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -10262,6 +10267,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEvent {
             self.slate_id.into_into_dart().into_dart(),
             self.amount.into_into_dart().into_dart(),
             self.kernel_excess.into_into_dart().into_dart(),
+            self.sender.into_into_dart().into_dart(),
+            self.slate_stage.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -10295,6 +10302,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::InvoiceWithdrawn => 11.into_dart(),
             Self::InvoiceBounced => 12.into_dart(),
             Self::SelfSend => 13.into_dart(),
+            Self::UnknownSlate => 14.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -11869,6 +11877,8 @@ impl SseEncode for crate::api::types::WalletEvent {
         <Option<String>>::sse_encode(self.slate_id, serializer);
         <Option<u64>>::sse_encode(self.amount, serializer);
         <Option<String>>::sse_encode(self.kernel_excess, serializer);
+        <Option<String>>::sse_encode(self.sender, serializer);
+        <Option<String>>::sse_encode(self.slate_stage, serializer);
     }
 }
 
@@ -11891,6 +11901,7 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::InvoiceWithdrawn => 11,
                 crate::api::types::WalletEventKind::InvoiceBounced => 12,
                 crate::api::types::WalletEventKind::SelfSend => 13,
+                crate::api::types::WalletEventKind::UnknownSlate => 14,
                 _ => {
                     unimplemented!("");
                 }

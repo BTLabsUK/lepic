@@ -6,6 +6,7 @@ use lepic_crypto::Commitment;
 use lepic_epicbox::EpicboxAddress;
 use lepic_primitives::amount::{Amount, Height};
 pub use lepic_slate::model::SlateId;
+use lepic_slate::stage::Stage;
 use lepic_store::{AccountIndex, TxId, TxState};
 use lepic_transport::transport::TransportId;
 
@@ -61,6 +62,12 @@ pub enum Event {
     /// issued until the host cancels it or it expires. A bounce redelivered before its relay
     /// message was settled raises this again for the same `tx_id`; treat it as the same bounce.
     InvoiceBounced(BouncedInvoice),
+    /// An S2 or an I2 arrived over Epicbox for a slate this wallet's store does not know, and
+    /// was refused for good, as before. Another install of the same wallet, on the same
+    /// recovery phrase and so the same payments address, may have sent the payment or issued
+    /// the invoice it answers; that install never receives it, and the payer's funds stay
+    /// locked until the payer cancels. The host should tell the user. Nothing changed here.
+    UnknownSlate(UnknownSlate),
 }
 
 /// Whether the root key is in memory.
@@ -168,6 +175,15 @@ pub struct WithdrawnInvoice {
     pub slate_id: SlateId,
     /// The payment still waiting for the issuer; `None` when the invoice was not paid.
     pub tx_id: Option<TxId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownSlate {
+    pub slate_id: SlateId,
+    /// [`Stage::S2`], the answer to a send, or [`Stage::I2`], the payment of an invoice.
+    pub stage: Stage,
+    /// The address the message came from, as the relay reported it.
+    pub sender: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

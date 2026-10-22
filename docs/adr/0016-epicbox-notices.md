@@ -71,6 +71,11 @@ depends on it arriving.
   proves a capability of the sending key and nothing about the slate.
 - New notice types are added under version 1 as new `type` values; peers that do not know them
   ignore them.
+- Amendment, W-26: an S2 or I2 for a slate the store does not know is still refused
+  for good and acknowledged, and now also raises `Event::UnknownSlate` with the slate id, its
+  stage and the sender's address. Two installs on one recovery phrase share the payments
+  address, so the install that did not make the send or issue the invoice may read the answer
+  first; the event lets its host say so. No notice is sent and nothing on the wire changes.
 
 ## Alternatives considered
 

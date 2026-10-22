@@ -1513,6 +1513,12 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             slate_id: Some(bounced.slate_id.to_string()),
             ..WalletEvent::of(WalletEventKind::InvoiceBounced)
         },
+        Event::UnknownSlate(unknown) => WalletEvent {
+            slate_id: Some(unknown.slate_id.to_string()),
+            sender: Some(unknown.sender.clone()),
+            slate_stage: Some(unknown.stage.as_str().to_owned()),
+            ..WalletEvent::of(WalletEventKind::UnknownSlate)
+        },
         _ => return None,
     })
 }
@@ -1905,6 +1911,29 @@ mod tests {
         assert_eq!(heard.kind, ListenerEventKind::InvoiceBounced);
         assert_eq!(heard.tx_id, Some(8));
         assert_eq!(heard.slate_id, Some(slate_id.to_string()));
+    }
+
+    #[test]
+    fn an_answer_for_an_unknown_slate_is_its_own_event_with_its_sender() {
+        use lepic_wallet::event::{SlateId, UnknownSlate};
+        let slate_id = SlateId::from_bytes([4; 16]);
+        let sender = "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@epicbox.epiccash.com";
+        for (stage, text) in [
+            (lepic_wallet::slate::Stage::S2, "S2"),
+            (lepic_wallet::slate::Stage::I2, "I2"),
+        ] {
+            let event = wallet_event(&Event::UnknownSlate(UnknownSlate {
+                slate_id,
+                stage,
+                sender: sender.to_owned(),
+            }))
+            .unwrap();
+            assert_eq!(event.kind, WalletEventKind::UnknownSlate);
+            assert_eq!(event.slate_id, Some(slate_id.to_string()));
+            assert_eq!(event.slate_stage.as_deref(), Some(text));
+            assert_eq!(event.sender.as_deref(), Some(sender));
+            assert_eq!(event.tx_id, None);
+        }
     }
 
     #[test]

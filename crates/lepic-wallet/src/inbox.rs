@@ -53,7 +53,10 @@ use uuid::Uuid;
 
 use crate::account;
 use crate::error::WalletError;
-use crate::event::{Event, FinalizedInvoice, TransportState, TransportStatus, UndeliveredReply};
+use crate::event::{
+    Event, FinalizedInvoice, SlateId, TransportState, TransportStatus, UndeliveredReply,
+    UnknownSlate,
+};
 use crate::finalize::FinalizeError;
 use crate::invoice::InvoiceError;
 use crate::notice::{self, Payload};
@@ -1057,7 +1060,7 @@ where
                 self.answer(msg_id, attempt, envelope, &slate, reply_to)
                     .await
             }
-            (Stage::S2, Mailbox::Payments) => self.complete(envelope, &slate).await,
+            (Stage::S2, Mailbox::Payments) => self.complete(envelope, &slate, reply_to).await,
             (Stage::I1, mailbox) => match self.bounced_invoice(&slate, reply_to).await? {
                 Some(bounced) => {
                     self.record_bounce(bounced).await?;
@@ -1122,11 +1125,26 @@ where
                     Err(Hold::Invoice(error).into())
                 }
             }
+            Err(error @ InvoiceError::UnknownSlate { .. }) => {
+                self.unknown_slate(payment.id(), Stage::I2, reply_to);
+                Err(Refusal::Invoice(error).into())
+            }
             Err(error) if invoice_finalize_is_permanent(&error) => {
                 Err(Refusal::Invoice(error).into())
             }
             Err(error) => Err(Hold::Invoice(error).into()),
         }
+    }
+
+    /// Tells the host that an answer for a slate this store does not know was refused: it may
+    /// belong to another install of the same wallet (ADR 0016).
+    fn unknown_slate(&self, slate_id: SlateId, stage: Stage, sender: &Destination) {
+        info!(slate_id = %slate_id, stage = stage.as_str(), "answer for an unknown slate refused");
+        self.emit(Event::UnknownSlate(UnknownSlate {
+            slate_id,
+            stage,
+            sender: sender.as_str().to_owned(),
+        }));
     }
 
     fn invoice_finalized(&self, tx_id: TxId, payment: &Slate, finalized_before: bool) -> Handled {
@@ -1214,7 +1232,12 @@ where
     /// settled: it waits in state `finalized` for [`Wallet::post`].
     /// An S2 finalized before, which arrives again when the receiver resent it, counts as
     /// repeated; finalizing it again posts only if the first post did not succeed.
-    async fn complete(&self, envelope: &Envelope, reply: &Slate) -> Result<Handled, Settlement> {
+    async fn complete(
+        &self,
+        envelope: &Envelope,
+        reply: &Slate,
+        reply_to: &Destination,
+    ) -> Result<Handled, Settlement> {
         let session = self.session().map_err(Hold::from)?;
         let slate_id = Uuid::from_bytes(*reply.id().as_bytes());
         let finalized_before = self
@@ -1249,6 +1272,10 @@ where
                 } else {
                     Err(Hold::Finalize(error).into())
                 }
+            }
+            Err(error @ FinalizeError::UnknownSlate { .. }) => {
+                self.unknown_slate(reply.id(), Stage::S2, reply_to);
+                Err(Refusal::Finalize(error).into())
             }
             Err(error) if finalize_is_permanent(&error) => Err(Refusal::Finalize(error).into()),
             Err(error) => Err(Hold::Finalize(error).into()),

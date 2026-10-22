@@ -1373,6 +1373,12 @@ class WalletEvent {
   /// Hex of the kernel excess, for `InvoicePosted`.
   final String? kernelExcess;
 
+  /// The Epicbox address a message came from, for `UnknownSlate`.
+  final String? sender;
+
+  /// The slate's stage, `S2` or `I2`, for `UnknownSlate`.
+  final String? slateStage;
+
   const WalletEvent({
     required this.kind,
     this.session,
@@ -1389,6 +1395,8 @@ class WalletEvent {
     this.slateId,
     this.amount,
     this.kernelExcess,
+    this.sender,
+    this.slateStage,
   });
 
   @override
@@ -1407,7 +1415,9 @@ class WalletEvent {
       missed.hashCode ^
       slateId.hashCode ^
       amount.hashCode ^
-      kernelExcess.hashCode;
+      kernelExcess.hashCode ^
+      sender.hashCode ^
+      slateStage.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1428,7 +1438,9 @@ class WalletEvent {
           missed == other.missed &&
           slateId == other.slateId &&
           amount == other.amount &&
-          kernelExcess == other.kernelExcess;
+          kernelExcess == other.kernelExcess &&
+          sender == other.sender &&
+          slateStage == other.slateStage;
 }
 
 enum WalletEventKind {
@@ -1489,6 +1501,14 @@ enum WalletEventKind {
   /// it is never a `Transaction` event with `to` `received`; the posting and confirmation
   /// of both of its transactions follow as `Transaction`.
   selfSend,
+
+  /// An answer arrived over Epicbox for a slate this wallet does not know and was refused:
+  /// `slate_id`, `slate_stage` (`S2`, the answer to a send, or `I2`, the payment of an
+  /// invoice) and `sender` are set. Another install of the same wallet, on the same recovery
+  /// phrase, may have made that send or issued that invoice; it will never receive this
+  /// answer, so tell the user to finish it there or have the other side cancel and send
+  /// again. Nothing changed here.
+  unknownSlate,
 }
 
 /// An output of the wallet, from `EpicWallet::outputs`.

@@ -1102,3 +1102,58 @@ fn a_cancelled_payment_has_exactly_its_inputs_spent_to_the_payer_itself() {
         .collect();
     assert_eq!(pushed_inputs, inputs);
 }
+
+#[test]
+fn a_payment_for_an_invoice_another_install_issued_is_refused_with_an_event() {
+    let world = World::new();
+    let twin = world.issuer_twin();
+    assert_eq!(
+        twin.address, world.issuer.address,
+        "one phrase, one payments address"
+    );
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+    let mut twin_events = twin.wallet.subscribe();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    let summary = world
+        .block_on(twin.wallet.epicbox_drain(&twin.epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    let unknown: Vec<_> = std::iter::from_fn(|| twin_events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::UnknownSlate(unknown) => Some(unknown),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(unknown.len(), 1, "{unknown:?}");
+    assert_eq!(unknown[0].slate_id, issued.slate_id);
+    assert_eq!(unknown[0].stage, Stage::I2);
+    assert_eq!(unknown[0].sender, world.payer.address.to_string());
+    // The refusal stands: the message is settled, so the issuing install never reads it.
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert!(world.node.pushed_transactions().is_empty());
+    let issuer_summary = world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+    assert_eq!(issuer_summary, InboxSummary::default());
+    assert!(
+        std::iter::from_fn(|| issuer_events.try_recv().ok())
+            .all(|event| !matches!(event, Event::UnknownSlate(_)))
+    );
+}

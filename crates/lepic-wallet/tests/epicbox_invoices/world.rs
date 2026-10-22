@@ -404,6 +404,19 @@ impl World {
         self.runtime.block_on(future)
     }
 
+    /// A second install of the issuer's wallet: the same phrase, so the same payments
+    /// address, with a store of its own that knows none of the issuer's slates.
+    pub fn issuer_twin(&self) -> Party {
+        Party::new(
+            ISSUER_MNEMONIC,
+            "issuer-twin",
+            3,
+            &self.node,
+            &self.relay,
+            &self.runtime,
+        )
+    }
+
     /// The issuer invoices the payer's invoice address over Epicbox.
     pub fn issue(&self, message: Option<&str>) -> IssuedInvoice {
         let to = self.payer.invoice_address();
