@@ -13,13 +13,13 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lepic_foreign::{Exposure, ListenSettings, ReceiveHandler, Refusal, listen};
+use lepic_foreign::{Exposure, ListenSettings, ReceiveHandler, Refusal, RpcError, listen};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_tor::{
     FixedSocks, OnionAddress, OnionClient, OnionClientSettings, OnionError, SendFailure,
     SocksError, SocksReply, TorSendError, TorTransport,
 };
-use lepic_transport::transport::{BoxFuture, Destination, Outbound};
+use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -317,4 +317,83 @@ async fn something_that_is_not_a_wallet_is_not_epic() {
         .await
         .unwrap_err();
     assert_eq!(error.class(), SendFailure::NotEpic, "{error:?}");
+}
+
+/// Answers every `receive_tx` with this slate, whatever was sent.
+struct AnsweringWith(&'static str);
+
+impl ReceiveHandler for AnsweringWith {
+    fn receive(&self, _slate: WireSlate) -> BoxFuture<'_, Result<WireSlate, Refusal>> {
+        Box::pin(async move { Ok(WireSlate::text(MediaType::JSON, self.0.to_owned())) })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_for_another_slate_is_refused_and_not_held() {
+    const OTHER_S1: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b01","amount":"1"}"#;
+    const FORGED_S2: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"1"}"#;
+    let honest = listen(
+        ListenSettings::new(Exposure::LocalOnly, 0),
+        Arc::new(Answering),
+    )
+    .await
+    .unwrap();
+    let socks = fake_socks(Behaviour::Forward(honest.local_addr())).await;
+    let transport = transport_through(socks.address, OnionClientSettings::default());
+    transport.send(&onion().to_string(), &s1()).await.unwrap();
+
+    let other = listen(
+        ListenSettings::new(Exposure::LocalOnly, 0),
+        Arc::new(AnsweringWith(FORGED_S2)),
+    )
+    .await
+    .unwrap();
+    let other_socks = fake_socks(Behaviour::Forward(other.local_addr())).await;
+    transport.attach(Arc::new(FixedSocks(other_socks.address)));
+    let error = transport
+        .send(
+            &onion().to_string(),
+            &WireSlate::text(MediaType::JSON, OTHER_S1.to_owned()),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, TorSendError::Rpc(RpcError::Malformed)),
+        "{error:?}"
+    );
+    assert_eq!(error.class(), SendFailure::NotEpic);
+    assert_eq!(
+        transport.take_reply("0436430c-2b02-624c-2032-570501212b01"),
+        None
+    );
+    let held = transport
+        .take_reply("0436430c-2b02-624c-2032-570501212b00")
+        .unwrap();
+    assert_eq!(held.as_text(), Some(S2), "the earlier answer survives");
+    honest.shutdown().await;
+    other.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_slate_without_an_id_is_not_sent() {
+    let socks = fake_socks(Behaviour::Fail(0)).await;
+    let transport = transport_through(socks.address, OnionClientSettings::default());
+    let error = transport
+        .send(
+            &onion().to_string(),
+            &WireSlate::text(MediaType::JSON, "[]".to_owned()),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, TorSendError::Rpc(RpcError::NotJson)),
+        "{error:?}"
+    );
+    assert_eq!(*socks.connections.lock().unwrap(), 0);
+}
+
+#[test]
+fn the_transport_hands_nothing_out_inbound() {
+    let transport = TorTransport::new(OnionClient::default());
+    assert!(Transport::inbound(&transport).is_none());
 }

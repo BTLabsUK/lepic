@@ -2,7 +2,9 @@
 //! then `receive_tx`) over a SOCKS stream to `<onion>:80`, through the wallet's own tor.
 //!
 //! As over HTTP, the receiver answers `receive_tx` with its S2 in the same exchange. The
-//! outbound side keeps that answer, keyed by slate id, until the caller finalizes it.
+//! outbound side keeps that answer, keyed by the id of the slate it answers, until the caller
+//! takes it with [`TorTransport::take_reply`] to finalize it. There is no inbound side:
+//! payments to this wallet reach the listener behind the onion.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -21,7 +23,7 @@ use lepic_slate::codec::WireSlate;
 use lepic_transport::error::TransportError;
 use lepic_transport::policy::FormatPolicy;
 use lepic_transport::transport::{
-    AckToken, BoxFuture, Destination, Envelope, Inbound, Outbound, Transport, TransportId,
+    BoxFuture, Destination, Inbound, Outbound, Transport, TransportId,
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -323,9 +325,12 @@ impl TorTransport {
         held.push_back(Held { slate_id, wire });
     }
 
-    /// `check_version`, then `receive_tx` on the same circuit; the S2 is held for the caller.
+    /// `check_version`, then `receive_tx` on the same circuit; the S2 is held for the caller
+    /// under the S1's slate id. An answer for another slate is refused as malformed and not
+    /// held.
     pub async fn send(&self, to: &str, wire: &WireSlate) -> Result<(), TorSendError> {
         let onion = OnionAddress::parse(to)?;
+        let slate_id = slate_id_of(wire).ok_or(TorSendError::Rpc(RpcError::NotJson))?;
         let proxy = self.socks_address().ok_or(TorSendError::NotRunning)?;
         let mut credentials = SocksCredentials::random()?;
         let version = match self.client.check_version(proxy, &onion, &credentials).await {
@@ -350,7 +355,9 @@ impl TorTransport {
             .client
             .receive_tx(proxy, &onion, &credentials, wire)
             .await?;
-        let slate_id = slate_id_of(&reply).ok_or(TorSendError::Rpc(RpcError::Malformed))?;
+        if !slate_id_of(&reply).is_some_and(|answered| answered.eq_ignore_ascii_case(&slate_id)) {
+            return Err(TorSendError::Rpc(RpcError::Malformed));
+        }
         debug!(transport = "tor", %slate_id, "answer received");
         self.hold(slate_id, reply);
         Ok(())
@@ -386,28 +393,6 @@ impl Outbound for TorTransport {
     }
 }
 
-impl Inbound for TorTransport {
-    /// Held answers, oldest first. Acknowledging is a no-op: an answer leaves the queue when
-    /// it is handed out.
-    fn next_envelope(&self) -> BoxFuture<'_, Result<Option<Envelope>, TransportError>> {
-        Box::pin(async move {
-            let next = self
-                .held
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .pop_front();
-            Ok(next.map(|reply| Envelope::new(AckToken::new(reply.slate_id), None, reply.wire)))
-        })
-    }
-
-    fn acknowledge<'a>(
-        &'a self,
-        _token: &'a AckToken,
-    ) -> BoxFuture<'a, Result<(), TransportError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
 impl Transport for TorTransport {
     fn id(&self) -> TransportId {
         TRANSPORT_ID
@@ -423,7 +408,7 @@ impl Transport for TorTransport {
     }
 
     fn inbound(&self) -> Option<&dyn Inbound> {
-        Some(self)
+        None
     }
 }
 
