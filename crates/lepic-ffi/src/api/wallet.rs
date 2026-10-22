@@ -638,14 +638,32 @@ impl EpicWallet {
 
     /// Scans the chain for this wallet's outputs from `start_height`, or, by default, from
     /// shortly before the last completed scan (the whole chain after a restore), streaming
-    /// progress until an event with `finished`. A failure ends the stream with its
-    /// [`WalletError`] as the stream's error; a cancelled scan ends it with `Cancelled` and
-    /// resumes where it stopped next time.
-    pub async fn scan(&self, start_height: Option<u64>, progress: StreamSink<ScanProgress>) {
+    /// progress until an event with `finished`, which carries its `result`. A failure
+    /// ends the stream with its [`WalletError`] as the stream's error; a cancelled scan ends it
+    /// with `Cancelled`.
+    ///
+    /// With `delete_unconfirmed` the scan also repairs what `epic-wallet scan
+    /// --delete_unconfirmed` repairs: every locked output found on chain is unlocked and every
+    /// unconfirmed output not found is deleted, and the transactions they belong to are
+    /// cancelled. That includes sends waiting for an answer and payments signed but not yet
+    /// confirmed, so a payment already on its way may then fail.
+    ///
+    /// Every page of outputs is stored as it is scanned, so a cancelled or failed scan leaves
+    /// the wallet consistent, with what it found so far stored. The next scan with the same
+    /// start and the same `delete_unconfirmed` resumes after the last stored page; the repair
+    /// of unconfirmed outputs runs only when a scan completes.
+    pub async fn scan(
+        &self,
+        start_height: Option<u64>,
+        delete_unconfirmed: bool,
+        progress: StreamSink<ScanProgress>,
+    ) {
         let sink = progress.clone();
         let result = self
             .run("scan", |session| async move {
-                session.scan(start_height, &progress).await
+                // A closed stream only means nobody is listening.
+                let report = |event| drop(progress.add(event));
+                session.scan(start_height, delete_unconfirmed, report).await
             })
             .await;
         end_stream(&sink, result);
@@ -660,7 +678,10 @@ impl EpicWallet {
         self.boundary().guard_or("lock", (), || self.session.lock());
     }
 
-    /// Stops a running scan at its next page.
+    /// Stops a running scan: a node request in flight is abandoned at once and a page being
+    /// stored is finished first, so the scan's stream ends with `Cancelled` within about the
+    /// time one page takes to identify. Does nothing when no scan runs; a scan started later
+    /// is not affected.
     #[frb(sync)]
     pub fn cancel_scan(&self) {
         self.boundary()

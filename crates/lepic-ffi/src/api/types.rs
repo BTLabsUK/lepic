@@ -426,6 +426,30 @@ pub struct ScanProgress {
     pub message: String,
     /// Set on the last event of a scan that completed.
     pub finished: bool,
+    /// What the scan did, on the last event of a scan that completed only.
+    pub result: Option<ScanResult>,
+}
+
+/// What a completed `EpicWallet::scan` did. Counts are outputs of this wallet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanResult {
+    pub start_height: u64,
+    pub end_height: u64,
+    /// The scan continued one that was cancelled or failed instead of starting over; the
+    /// counts cover only the part scanned this time.
+    pub resumed: bool,
+    /// Found on chain, whether stored before or not.
+    pub found: u64,
+    /// Found on chain but not stored, now stored with a received transaction each.
+    pub restored: u64,
+    /// Stored as spent but found unspent; their transactions were cancelled.
+    pub revived: u64,
+    /// Locked but found on chain, now spendable again; their transactions were cancelled.
+    /// Only with `delete_unconfirmed`.
+    pub unlocked: u64,
+    /// Unconfirmed and not on chain, now deleted; their transactions were cancelled. Only with
+    /// `delete_unconfirmed`.
+    pub deleted: u64,
 }
 
 /// Progress of `EpicWallet::refresh`. Only the last event of a successful refresh has `summary`.

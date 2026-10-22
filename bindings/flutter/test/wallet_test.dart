@@ -122,7 +122,7 @@ Matcher throwsWalletError(WalletErrorKind kind) => throwsA(
 );
 
 Future<void> scanToEnd(EpicWallet wallet) async {
-  final events = await wallet.scan().toList();
+  final events = await wallet.scan(deleteUnconfirmed: false).toList();
   expect(events.last.finished, isTrue);
 }
 
@@ -283,7 +283,11 @@ void main() {
       mnemonic: phrase,
       password: 'another password',
     );
-    await scanToEnd(restored);
+    final restoreScan = await restored.scan(deleteUnconfirmed: false).toList();
+    final restoreResult = restoreScan.last.result!;
+    expect(restoreResult.startHeight, BigInt.zero);
+    expect(restoreResult.restored, restoreResult.found);
+    expect(restoreResult.restored > BigInt.zero, isTrue);
     final restoredBalance = await restored.summary(refresh: true);
     expect(restoredBalance.total, aliceAfter.total);
     final restoredHistory = await restored.transactions();
@@ -426,10 +430,37 @@ void main() {
       password: password,
     );
     chain.setNodeUnreachable(unreachable: true);
-    final outcome = await collect(wallet.scan);
+    final outcome = await collect(() => wallet.scan(deleteUnconfirmed: false));
     expect(outcome.errors, [isWalletError(WalletErrorKind.nodeUnreachable)]);
     expect(outcome.zoneErrors, isEmpty);
     expect(outcome.events, isEmpty);
+  });
+
+  test('a cancelled scan ends its stream with cancelled', () async {
+    final wallet = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(walletDir('scan-cancelled')),
+      store: lepicSecretStore(MemoryStore()),
+      password: password,
+    );
+    final stalledBefore = chain.stalledNodeCalls();
+    chain.setNodeStalled(stalled: true);
+    try {
+      final outcome = collect(() => wallet.scan(deleteUnconfirmed: true));
+      while (chain.stalledNodeCalls() == stalledBefore) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      wallet.cancelScan();
+      final ended = await outcome.timeout(const Duration(seconds: 5));
+      expect(ended.errors, [isWalletError(WalletErrorKind.cancelled)]);
+      expect(ended.zoneErrors, isEmpty);
+    } finally {
+      chain.setNodeStalled(stalled: false);
+    }
+    final events = await wallet.scan(deleteUnconfirmed: true).toList();
+    expect(events.last.finished, isTrue);
+    expect(events.last.result, isNotNull);
+    expect(events.where((event) => event.result != null), hasLength(1));
   });
 
   test('a listener without a relay ends its stream with the error', () async {

@@ -2,7 +2,8 @@
 //! `crate::api::testing`.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{Identifier, Keychain, ProofBuilder, SwitchCommitment};
@@ -17,11 +18,16 @@ use lepic_primitives::params::Network;
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::node::{Node, NodeBackend};
 
+/// How often a request to a stalled node checks whether the node answers again.
+const STALL_POLL: Duration = Duration::from_millis(10);
+
 #[derive(Clone)]
 pub(crate) struct MockBackend {
     node: MockNode,
     panic_next: Arc<AtomicBool>,
     unreachable: Arc<AtomicBool>,
+    stalled: Arc<AtomicBool>,
+    stalled_calls: Arc<AtomicU64>,
     lose_post_reply: Arc<AtomicBool>,
 }
 
@@ -42,6 +48,8 @@ impl MockBackend {
             node: MockNode::from_chain(chain),
             panic_next: Arc::default(),
             unreachable: Arc::default(),
+            stalled: Arc::default(),
+            stalled_calls: Arc::default(),
             lose_post_reply: Arc::default(),
         })
     }
@@ -72,6 +80,12 @@ impl MockBackend {
                 std::io::ErrorKind::ConnectionRefused,
             ))));
         }
+        if self.stalled.load(Ordering::SeqCst) {
+            self.stalled_calls.fetch_add(1, Ordering::SeqCst);
+            while self.stalled.load(Ordering::SeqCst) {
+                tokio::time::sleep(STALL_POLL).await;
+            }
+        }
         let is_post = contains(&body, b"push_transaction");
         let reply = self.node.post(endpoint, body).await;
         if is_post && self.lose_post_reply.swap(false, Ordering::SeqCst) {
@@ -92,6 +106,15 @@ impl MockBackend {
 
     pub(crate) fn set_unreachable(&self, unreachable: bool) {
         self.unreachable.store(unreachable, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_stalled(&self, stalled: bool) {
+        self.stalled.store(stalled, Ordering::SeqCst);
+    }
+
+    /// Node requests that waited on a stalled node, counted when they start waiting.
+    pub(crate) fn stalled_calls(&self) -> u64 {
+        self.stalled_calls.load(Ordering::SeqCst)
     }
 
     pub(crate) fn lose_next_post_reply(&self) {

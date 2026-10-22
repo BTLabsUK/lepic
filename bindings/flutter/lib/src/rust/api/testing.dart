@@ -61,8 +61,15 @@ abstract class MockChain implements RustOpaqueInterface {
 
   void setHeight({required BigInt height});
 
+  /// While `stalled`, every node request waits without an answer, as a node that hangs.
+  /// Requests that waited get their answer once it is cleared.
+  void setNodeStalled({required bool stalled});
+
   /// While `unreachable`, every node request fails as if the node refused the connection.
   void setNodeUnreachable({required bool unreachable});
+
+  /// Node requests that waited on a stalled node so far.
+  BigInt stalledNodeCalls();
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MockRelay>>

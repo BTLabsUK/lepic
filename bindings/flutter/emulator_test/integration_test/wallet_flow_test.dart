@@ -38,7 +38,7 @@ WalletConfig configFor(Directory dir) => WalletConfig(
 );
 
 Future<void> scanToEnd(EpicWallet wallet) async {
-  final events = await wallet.scan().toList();
+  final events = await wallet.scan(deleteUnconfirmed: false).toList();
   expect(events.last.finished, isTrue);
 }
 

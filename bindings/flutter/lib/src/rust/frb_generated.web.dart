@@ -233,6 +233,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx dco_decode_box_autoadd_imported_tx(dynamic raw);
 
   @protected
+  ScanResult dco_decode_box_autoadd_scan_result(dynamic raw);
+
+  @protected
   SessionState dco_decode_box_autoadd_session_state(dynamic raw);
 
   @protected
@@ -398,6 +401,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx? dco_decode_opt_box_autoadd_imported_tx(dynamic raw);
 
   @protected
+  ScanResult? dco_decode_opt_box_autoadd_scan_result(dynamic raw);
+
+  @protected
   SessionState? dco_decode_opt_box_autoadd_session_state(dynamic raw);
 
   @protected
@@ -441,6 +447,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ScanProgress dco_decode_scan_progress(dynamic raw);
+
+  @protected
+  ScanResult dco_decode_scan_result(dynamic raw);
 
   @protected
   SecretReply dco_decode_secret_reply(dynamic raw);
@@ -709,6 +718,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx sse_decode_box_autoadd_imported_tx(SseDeserializer deserializer);
 
   @protected
+  ScanResult sse_decode_box_autoadd_scan_result(SseDeserializer deserializer);
+
+  @protected
   SessionState sse_decode_box_autoadd_session_state(
     SseDeserializer deserializer,
   );
@@ -908,6 +920,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ScanResult? sse_decode_opt_box_autoadd_scan_result(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SessionState? sse_decode_opt_box_autoadd_session_state(
     SseDeserializer deserializer,
   );
@@ -959,6 +976,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ScanProgress sse_decode_scan_progress(SseDeserializer deserializer);
+
+  @protected
+  ScanResult sse_decode_scan_result(SseDeserializer deserializer);
 
   @protected
   SecretReply sse_decode_secret_reply(SseDeserializer deserializer);
@@ -1282,6 +1302,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_scan_result(
+    ScanResult self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_session_state(
     SessionState self,
     SseSerializer serializer,
@@ -1519,6 +1545,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_scan_result(
+    ScanResult? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_session_state(
     SessionState? self,
     SseSerializer serializer,
@@ -1583,6 +1615,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_scan_progress(ScanProgress self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_scan_result(ScanResult self, SseSerializer serializer);
 
   @protected
   void sse_encode_secret_reply(SecretReply self, SseSerializer serializer);

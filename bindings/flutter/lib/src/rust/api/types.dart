@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `network`, `of`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Which Epic chain the wallet talks to.
 enum Chain { mainnet, floonet }
@@ -693,12 +693,16 @@ class ScanProgress {
   /// Set on the last event of a scan that completed.
   final bool finished;
 
+  /// What the scan did, on the last event of a scan that completed only.
+  final ScanResult? result;
+
   const ScanProgress({
     this.percent,
     required this.height,
     required this.targetHeight,
     required this.message,
     required this.finished,
+    this.result,
   });
 
   @override
@@ -707,7 +711,8 @@ class ScanProgress {
       height.hashCode ^
       targetHeight.hashCode ^
       message.hashCode ^
-      finished.hashCode;
+      finished.hashCode ^
+      result.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -718,7 +723,71 @@ class ScanProgress {
           height == other.height &&
           targetHeight == other.targetHeight &&
           message == other.message &&
-          finished == other.finished;
+          finished == other.finished &&
+          result == other.result;
+}
+
+/// What a completed `EpicWallet::scan` did. Counts are outputs of this wallet.
+class ScanResult {
+  final BigInt startHeight;
+  final BigInt endHeight;
+
+  /// The scan continued one that was cancelled or failed instead of starting over; the
+  /// counts cover only the part scanned this time.
+  final bool resumed;
+
+  /// Found on chain, whether stored before or not.
+  final BigInt found;
+
+  /// Found on chain but not stored, now stored with a received transaction each.
+  final BigInt restored;
+
+  /// Stored as spent but found unspent; their transactions were cancelled.
+  final BigInt revived;
+
+  /// Locked but found on chain, now spendable again; their transactions were cancelled.
+  /// Only with `delete_unconfirmed`.
+  final BigInt unlocked;
+
+  /// Unconfirmed and not on chain, now deleted; their transactions were cancelled. Only with
+  /// `delete_unconfirmed`.
+  final BigInt deleted;
+
+  const ScanResult({
+    required this.startHeight,
+    required this.endHeight,
+    required this.resumed,
+    required this.found,
+    required this.restored,
+    required this.revived,
+    required this.unlocked,
+    required this.deleted,
+  });
+
+  @override
+  int get hashCode =>
+      startHeight.hashCode ^
+      endHeight.hashCode ^
+      resumed.hashCode ^
+      found.hashCode ^
+      restored.hashCode ^
+      revived.hashCode ^
+      unlocked.hashCode ^
+      deleted.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ScanResult &&
+          runtimeType == other.runtimeType &&
+          startHeight == other.startHeight &&
+          endHeight == other.endHeight &&
+          resumed == other.resumed &&
+          found == other.found &&
+          restored == other.restored &&
+          revived == other.revived &&
+          unlocked == other.unlocked &&
+          deleted == other.deleted;
 }
 
 /// A send that was stored and handed to its transport.

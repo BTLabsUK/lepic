@@ -86,7 +86,10 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required String label,
   });
 
-  /// Stops a running scan at its next page.
+  /// Stops a running scan: a node request in flight is abandoned at once and a page being
+  /// stored is finished first, so the scan's stream ends with `Cancelled` within about the
+  /// time one page takes to identify. Does nothing when no scan runs; a scan started later
+  /// is not affected.
   void cancelScan();
 
   /// Cancels a transaction that was not posted and unlocks its outputs. Cancelling an
@@ -517,10 +520,24 @@ abstract class EpicWallet implements RustOpaqueInterface {
 
   /// Scans the chain for this wallet's outputs from `start_height`, or, by default, from
   /// shortly before the last completed scan (the whole chain after a restore), streaming
-  /// progress until an event with `finished`. A failure ends the stream with its
-  /// [`WalletError`] as the stream's error; a cancelled scan ends it with `Cancelled` and
-  /// resumes where it stopped next time.
-  Stream<ScanProgress> scan({BigInt? startHeight});
+  /// progress until an event with `finished`, which carries its `result`. A failure
+  /// ends the stream with its [`WalletError`] as the stream's error; a cancelled scan ends it
+  /// with `Cancelled`.
+  ///
+  /// With `delete_unconfirmed` the scan also repairs what `epic-wallet scan
+  /// --delete_unconfirmed` repairs: every locked output found on chain is unlocked and every
+  /// unconfirmed output not found is deleted, and the transactions they belong to are
+  /// cancelled. That includes sends waiting for an answer and payments signed but not yet
+  /// confirmed, so a payment already on its way may then fail.
+  ///
+  /// Every page of outputs is stored as it is scanned, so a cancelled or failed scan leaves
+  /// the wallet consistent, with what it found so far stored. The next scan with the same
+  /// start and the same `delete_unconfirmed` resumes after the last stored page; the repair
+  /// of unconfirmed outputs runs only when a scan completes.
+  Stream<ScanProgress> scan({
+    BigInt? startHeight,
+    required bool deleteUnconfirmed,
+  });
 
   /// Encrypts `payload` as a `WFEH` version 1 file, the format of the app's `.wfeh` history
   /// backups. Every call draws a fresh salt and nonce, so two files of one payload differ.

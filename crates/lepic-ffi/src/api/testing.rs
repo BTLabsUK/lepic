@@ -201,6 +201,33 @@ impl MockChain {
         });
     }
 
+    /// While `stalled`, every node request waits without an answer, as a node that hangs.
+    /// Requests that waited get their answer once it is cleared.
+    #[frb(sync)]
+    pub fn set_node_stalled(&self, stalled: bool) {
+        guard_or("mock_chain_set_node_stalled", (), || {
+            #[cfg(feature = "mock")]
+            self.backend.set_stalled(stalled);
+            #[cfg(not(feature = "mock"))]
+            let _ = stalled;
+        });
+    }
+
+    /// Node requests that waited on a stalled node so far.
+    #[frb(sync)]
+    pub fn stalled_node_calls(&self) -> u64 {
+        guard_or("mock_chain_stalled_node_calls", 0, || {
+            #[cfg(feature = "mock")]
+            {
+                self.backend.stalled_calls()
+            }
+            #[cfg(not(feature = "mock"))]
+            {
+                0
+            }
+        })
+    }
+
     /// While `unreachable`, every node request fails as if the node refused the connection.
     #[frb(sync)]
     pub fn set_node_unreachable(&self, unreachable: bool) {

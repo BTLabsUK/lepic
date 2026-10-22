@@ -43,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1000140985;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1894963564;
 
 // Section: executor
 
@@ -2959,6 +2959,7 @@ fn wire__crate__api__wallet__EpicWallet_scan_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
             >>::sse_decode(&mut deserializer);
             let api_start_height = <Option<u64>>::sse_decode(&mut deserializer);
+            let api_delete_unconfirmed = <bool>::sse_decode(&mut deserializer);
             let api_progress = <StreamSink<
                 crate::api::types::ScanProgress,
                 flutter_rust_bridge::for_generated::SseCodec,
@@ -2988,6 +2989,7 @@ fn wire__crate__api__wallet__EpicWallet_scan_impl(
                             crate::api::wallet::EpicWallet::scan(
                                 &*api_that_guard,
                                 api_start_height,
+                                api_delete_unconfirmed,
                                 api_progress,
                             )
                             .await;
@@ -4838,6 +4840,55 @@ fn wire__crate__api__testing__MockChain_set_height_impl(
         },
     )
 }
+fn wire__crate__api__testing__MockChain_set_node_stalled_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MockChain_set_node_stalled",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MockChain>,
+            >>::sse_decode(&mut deserializer);
+            let api_stalled = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = Ok::<_, ()>({
+                    crate::api::testing::MockChain::set_node_stalled(&*api_that_guard, api_stalled);
+                })?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__testing__MockChain_set_node_unreachable_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -4885,6 +4936,54 @@ fn wire__crate__api__testing__MockChain_set_node_unreachable_impl(
                         api_unreachable,
                     );
                 })?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__testing__MockChain_stalled_node_calls_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MockChain_stalled_node_calls",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MockChain>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = Ok::<_, ()>(crate::api::testing::MockChain::stalled_node_calls(
+                    &*api_that_guard,
+                ))?;
                 std::result::Result::Ok(output_ok)
             })())
         },
@@ -6633,6 +6732,17 @@ impl SseDecode for Option<crate::api::types::ImportedTx> {
     }
 }
 
+impl SseDecode for Option<crate::api::types::ScanResult> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::types::ScanResult>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::types::SessionState> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -6813,12 +6923,38 @@ impl SseDecode for crate::api::types::ScanProgress {
         let mut var_targetHeight = <u64>::sse_decode(deserializer);
         let mut var_message = <String>::sse_decode(deserializer);
         let mut var_finished = <bool>::sse_decode(deserializer);
+        let mut var_result = <Option<crate::api::types::ScanResult>>::sse_decode(deserializer);
         return crate::api::types::ScanProgress {
             percent: var_percent,
             height: var_height,
             target_height: var_targetHeight,
             message: var_message,
             finished: var_finished,
+            result: var_result,
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::ScanResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_startHeight = <u64>::sse_decode(deserializer);
+        let mut var_endHeight = <u64>::sse_decode(deserializer);
+        let mut var_resumed = <bool>::sse_decode(deserializer);
+        let mut var_found = <u64>::sse_decode(deserializer);
+        let mut var_restored = <u64>::sse_decode(deserializer);
+        let mut var_revived = <u64>::sse_decode(deserializer);
+        let mut var_unlocked = <u64>::sse_decode(deserializer);
+        let mut var_deleted = <u64>::sse_decode(deserializer);
+        return crate::api::types::ScanResult {
+            start_height: var_startHeight,
+            end_height: var_endHeight,
+            resumed: var_resumed,
+            found: var_found,
+            restored: var_restored,
+            revived: var_revived,
+            unlocked: var_unlocked,
+            deleted: var_deleted,
         };
     }
 }
@@ -7651,21 +7787,21 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        89 => wire__crate__api__testing__MockStockPeer_return_messages_impl(
+        91 => wire__crate__api__testing__MockStockPeer_return_messages_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        90 => wire__crate__api__testing__MockStockPeer_send_impl(port, ptr, rust_vec_len, data_len),
-        91 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
-        92 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
-        94 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
-        98 => {
+        92 => wire__crate__api__testing__MockStockPeer_send_impl(port, ptr, rust_vec_len, data_len),
+        93 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
+        95 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
+        96 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
+        100 => {
             wire__crate__api__error__wallet_error_kind_code_impl(port, ptr, rust_vec_len, data_len)
         }
-        99 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
+        101 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -7723,19 +7859,27 @@ fn pde_ffi_dispatcher_sync_impl(
             data_len,
         ),
         82 => wire__crate__api__testing__MockChain_set_height_impl(ptr, rust_vec_len, data_len),
-        83 => wire__crate__api__testing__MockChain_set_node_unreachable_impl(
+        83 => {
+            wire__crate__api__testing__MockChain_set_node_stalled_impl(ptr, rust_vec_len, data_len)
+        }
+        84 => wire__crate__api__testing__MockChain_set_node_unreachable_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        84 => wire__crate__api__testing__MockRelay_new_impl(ptr, rust_vec_len, data_len),
-        85 => wire__crate__api__testing__MockRelay_pending_impl(ptr, rust_vec_len, data_len),
-        86 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
-        87 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
-        88 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
-        95 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
-        96 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
-        97 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__testing__MockChain_stalled_node_calls_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        86 => wire__crate__api__testing__MockRelay_new_impl(ptr, rust_vec_len, data_len),
+        87 => wire__crate__api__testing__MockRelay_pending_impl(ptr, rust_vec_len, data_len),
+        88 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
+        89 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
+        90 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
+        97 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
+        98 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
+        99 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -8566,6 +8710,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ScanProgress {
             self.target_height.into_into_dart().into_dart(),
             self.message.into_into_dart().into_dart(),
             self.finished.into_into_dart().into_dart(),
+            self.result.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -8578,6 +8723,30 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ScanProgress>
     for crate::api::types::ScanProgress
 {
     fn into_into_dart(self) -> crate::api::types::ScanProgress {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::ScanResult {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.start_height.into_into_dart().into_dart(),
+            self.end_height.into_into_dart().into_dart(),
+            self.resumed.into_into_dart().into_dart(),
+            self.found.into_into_dart().into_dart(),
+            self.restored.into_into_dart().into_dart(),
+            self.revived.into_into_dart().into_dart(),
+            self.unlocked.into_into_dart().into_dart(),
+            self.deleted.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::ScanResult {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ScanResult>
+    for crate::api::types::ScanResult
+{
+    fn into_into_dart(self) -> crate::api::types::ScanResult {
         self
     }
 }
@@ -9924,6 +10093,16 @@ impl SseEncode for Option<crate::api::types::ImportedTx> {
     }
 }
 
+impl SseEncode for Option<crate::api::types::ScanResult> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::types::ScanResult>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::types::SessionState> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -10076,6 +10255,21 @@ impl SseEncode for crate::api::types::ScanProgress {
         <u64>::sse_encode(self.target_height, serializer);
         <String>::sse_encode(self.message, serializer);
         <bool>::sse_encode(self.finished, serializer);
+        <Option<crate::api::types::ScanResult>>::sse_encode(self.result, serializer);
+    }
+}
+
+impl SseEncode for crate::api::types::ScanResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u64>::sse_encode(self.start_height, serializer);
+        <u64>::sse_encode(self.end_height, serializer);
+        <bool>::sse_encode(self.resumed, serializer);
+        <u64>::sse_encode(self.found, serializer);
+        <u64>::sse_encode(self.restored, serializer);
+        <u64>::sse_encode(self.revived, serializer);
+        <u64>::sse_encode(self.unlocked, serializer);
+        <u64>::sse_encode(self.deleted, serializer);
     }
 }
 

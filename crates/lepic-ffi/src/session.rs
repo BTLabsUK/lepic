@@ -28,7 +28,7 @@ use lepic_wallet::legacy_history::{
     TxOrigin as EngineTxOrigin,
 };
 use lepic_wallet::refresh::{BALANCE_MINIMUM_CONFIRMATIONS, RefreshOutcome};
-use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
+use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
 use lepic_wallet::selection::Selection;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{
@@ -47,8 +47,8 @@ use crate::api::runtime::{DirClaim, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, ImportedTx, InboxReport, LegacyImport, LegacyImportStatus,
-    ListenerEvent, ListenerEventKind, NodeTip, ReceivedSlate, ScanProgress, SentTx, Slate,
-    SlateMessage, TransactionDetails, TransportState, TxOrigin, TxStatus, WalletConfig,
+    ListenerEvent, ListenerEventKind, NodeTip, ReceivedSlate, ScanProgress, ScanResult, SentTx,
+    Slate, SlateMessage, TransactionDetails, TransportState, TxOrigin, TxStatus, WalletConfig,
     WalletEvent, WalletEventKind, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
@@ -608,16 +608,17 @@ impl Session {
     pub(crate) async fn scan(
         &self,
         start_height: Option<u64>,
-        progress: &StreamSink<ScanProgress>,
+        delete_unconfirmed: bool,
+        progress: impl Fn(ScanProgress),
     ) -> Result<(), WalletError> {
         let cancel = ScanCancel::new();
         *lock(&self.scan) = Some(cancel.clone());
-        let options = match start_height {
-            Some(height) => ScanOptions {
-                start: ScanStart::Height(Height::new(height)),
-                ..ScanOptions::update(self.network)
-            },
-            None => ScanOptions::update(self.network),
+        let options = ScanOptions {
+            start: start_height.map_or(ScanStart::LastScanned, |height| {
+                ScanStart::Height(Height::new(height))
+            }),
+            delete_unconfirmed,
+            ..ScanOptions::update(self.network)
         };
         let mut events = self.engine.subscribe();
         let scan = self.engine.scan(options, &cancel);
@@ -627,7 +628,7 @@ impl Session {
                 result = &mut scan => break result,
                 event = events.recv() => match event {
                     Ok(Event::Sync(sync)) => {
-                        let _ = progress.add(scan_progress(sync.height.value(), sync.target.value(), false));
+                        progress(scan_progress(sync.height.value(), sync.target.value(), false));
                     }
                     Ok(_) | Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => break (&mut scan).await,
@@ -637,12 +638,10 @@ impl Session {
         lock(&self.scan).take();
         let summary = result?;
         info!(height = %summary.end_height, "scan reported");
-        // A closed stream only means nobody is listening.
-        let _ = progress.add(scan_progress(
-            summary.end_height.value(),
-            summary.end_height.value(),
-            true,
-        ));
+        progress(ScanProgress {
+            result: Some(scan_result(&summary)),
+            ..scan_progress(summary.end_height.value(), summary.end_height.value(), true)
+        });
         Ok(())
     }
 
@@ -950,6 +949,20 @@ fn scan_progress(height: u64, target_height: u64, finished: bool) -> ScanProgres
         }
         .to_owned(),
         finished,
+        result: None,
+    }
+}
+
+const fn scan_result(summary: &ScanSummary) -> ScanResult {
+    ScanResult {
+        start_height: summary.start_height.value(),
+        end_height: summary.end_height.value(),
+        resumed: summary.resumed,
+        found: summary.found,
+        restored: summary.restored,
+        revived: summary.revived,
+        unlocked: summary.unlocked,
+        deleted: summary.deleted,
     }
 }
 
