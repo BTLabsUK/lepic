@@ -21,6 +21,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-transport` | Transport traits, transport registry, format policy, the file transport. | disk |
 | `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, relay client and its transport. | network |
 | `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client and the `http` transport, the listener. | network |
+| `lepic-tor` | Tor on desktop (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5, the `tor` transport. | network, child process |
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. | through ports |
 | `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stderr, files |
 | `lepic-cli` | The `lepic` binary. | all |
@@ -46,10 +47,11 @@ lepic-store       -> lepic-primitives
 lepic-transport   -> lepic-slate
 lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto
 lepic-foreign     -> lepic-transport, lepic-slate
+lepic-tor         -> lepic-foreign, lepic-transport, lepic-slate
 lepic-wallet      -> all crates above
 lepic-telemetry   -> (external only)
-lepic-cli         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
-lepic-ffi         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-cli         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-ffi         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
 ```
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a
@@ -65,7 +67,7 @@ The engine depends on traits, not implementations:
 |---|---|
 | `NodeApi` | `lepic-node`, and a mock node in tests |
 | `StoreOpener` (opens the `WalletStore` after unlock, keyed from the seed) | `lepic_wallet::SqliteStores` over `lepic-store`, the CLI's `CliStores`, in-memory stores in tests |
-| `Transport` (outbound and inbound) | `lepic-transport::file`, `lepic-epicbox`, `lepic-foreign`, and a loopback in tests |
+| `Transport` (outbound and inbound) | `lepic-transport::file`, `lepic-epicbox`, `lepic-foreign`, `lepic-tor`, and a loopback in tests |
 | `SecretVault` (`exists`, `create`, `unlock` with a password, yielding a `lepic_keychain::SecretStore`) | the CLI's `FileVault` over a `lepic-keychain` vault file on desktop, `lepic-ffi`'s `AppVault` over the platform keystore on mobile, a fast vault in tests |
 | `Clock`, `Rng` | real implementations in `lepic-cli` and `lepic-ffi`, fixed ones in tests |
 
