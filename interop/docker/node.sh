@@ -21,7 +21,9 @@ if [ ! -f "${config}" ]; then
     epic --usernet server config >/dev/null
     set_key api_http_addr '"127.0.0.1:23413"'
     set_key api_secret_path "\"${dir}/.api_secret\""
-    set_key foreign_api_secret_path "\"${dir}/.foreign_api_secret\""
+    # epic-wallet v4.1.0 sends no credentials to the foreign API, so it stays open, as on a node
+    # with the default config, where no foreign secret file exists. This path is never written.
+    set_key foreign_api_secret_path "\"${dir}/.foreign_api_secret_unset\""
     # Every service shares this network namespace, so the p2p listener needs only loopback too.
     set_key host '"127.0.0.1"'
     set_key skip_pow_validation false
@@ -41,8 +43,9 @@ if [ ! -f "${config}" ]; then
     set_key file_log_level '"INFO"'
 fi
 
-# The node enables basic auth on an API only when its secret file exists. epic-wallet sends one
-# secret to both the owner API (sync status) and the foreign API, so both files hold the same one.
+# The node enables basic auth on an API only when its secret file exists, so only the owner API
+# has one. The wallets and lepic read the owner secret from `.foreign_api_secret`, a copy kept
+# under the path the scenarios already use; epic-wallet v4.1.0 sends it to owner calls only.
 if [ ! -s "${dir}/.api_secret" ]; then
     head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' >"${dir}/.api_secret"
 fi
