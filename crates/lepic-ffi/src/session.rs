@@ -23,6 +23,10 @@ use lepic_transport::transport::{Destination, Exchange as _, Location};
 use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
 use lepic_wallet::event::{Balance, TransportState as EngineTransportState};
 use lepic_wallet::inbox::ListenHandle;
+use lepic_wallet::legacy_history::{
+    ImportWorkDir, LegacyImportOutcome, LegacyImportStatus as EngineLegacyStatus,
+    TxOrigin as EngineTxOrigin,
+};
 use lepic_wallet::refresh::{BALANCE_MINIMUM_CONFIRMATIONS, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
 use lepic_wallet::selection::Selection;
@@ -42,9 +46,10 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::{DirClaim, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    FeeEstimate, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip,
-    ReceivedSlate, ScanProgress, SentTx, Slate, SlateMessage, TransactionDetails, TransportState,
-    TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
+    FeeEstimate, FinalizedTx, ImportedTx, InboxReport, LegacyImport, LegacyImportStatus,
+    ListenerEvent, ListenerEventKind, NodeTip, ReceivedSlate, ScanProgress, SentTx, Slate,
+    SlateMessage, TransactionDetails, TransportState, TxOrigin, TxStatus, WalletConfig,
+    WalletEvent, WalletEventKind, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -551,6 +556,23 @@ impl Session {
         Ok(stored.iter().map(transaction_details).collect())
     }
 
+    pub(crate) async fn import_legacy_history(
+        &self,
+        source_dir: &str,
+    ) -> Result<LegacyImport, WalletError> {
+        let mut suffix = [0u8; 8];
+        getrandom::fill(&mut suffix)
+            .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
+        let suffix: String = suffix.iter().map(|byte| format!("{byte:02x}")).collect();
+        let work = ImportWorkDir::create(&self.data_dir, &suffix)
+            .map_err(|error| io("creating the import folder", &error))?;
+        let outcome = self
+            .engine
+            .import_legacy_history(Path::new(source_dir), work.path())
+            .await?;
+        Ok(legacy_import(&outcome))
+    }
+
     pub(crate) async fn transaction(&self, tx_id: u32) -> Result<TransactionDetails, WalletError> {
         let stored = self.engine.transaction_details(TxId(tx_id)).await?;
         if stored.transaction.entry.account != DEFAULT_ACCOUNT {
@@ -972,6 +994,41 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             })
             .collect(),
         flow: details.flow.into(),
+        origin: match details.origin {
+            EngineTxOrigin::Wallet => TxOrigin::Wallet,
+            EngineTxOrigin::Imported => TxOrigin::Imported,
+            EngineTxOrigin::FoundByScan => TxOrigin::FoundByScan,
+        },
+        imported: details.imported.as_ref().map(|imported| ImportedTx {
+            source_id: imported.source_id,
+            kind: imported.kind.into(),
+            input_count: imported.input_count,
+            output_count: imported.output_count,
+            check: imported.check.into(),
+        }),
+    }
+}
+
+fn legacy_import(outcome: &LegacyImportOutcome) -> LegacyImport {
+    LegacyImport {
+        status: match outcome.status {
+            EngineLegacyStatus::Imported => LegacyImportStatus::Imported,
+            EngineLegacyStatus::AlreadyImported => LegacyImportStatus::AlreadyImported,
+            EngineLegacyStatus::NoHistory => LegacyImportStatus::NoHistory,
+            EngineLegacyStatus::OldFormat => LegacyImportStatus::OldFormat,
+            EngineLegacyStatus::Unreadable => LegacyImportStatus::Unreadable,
+            EngineLegacyStatus::SourceBusy => LegacyImportStatus::SourceBusy,
+            EngineLegacyStatus::TooLarge => LegacyImportStatus::TooLarge,
+            EngineLegacyStatus::OtherWallet => LegacyImportStatus::OtherWallet,
+            EngineLegacyStatus::OtherHistory => LegacyImportStatus::OtherHistory,
+        },
+        transactions: outcome.transactions,
+        outputs: outcome.outputs,
+        accounts_named: outcome.accounts_named,
+        linked: outcome.linked,
+        skipped: outcome.skipped,
+        confirmed_by_kernel: outcome.confirmed_by_kernel,
+        dated: outcome.dated,
     }
 }
 
@@ -1299,8 +1356,14 @@ mod tests {
                 text: "got it".to_owned(),
             }],
             flow: lepic_wallet::details::TxFlow::Invoice,
-            origin: lepic_wallet::legacy_history::TxOrigin::Wallet,
-            imported: None,
+            origin: EngineTxOrigin::Imported,
+            imported: Some(lepic_wallet::details::ImportedDetails {
+                source_id: 31,
+                kind: lepic_store::ImportedKind::SentCancelled,
+                input_count: 2,
+                output_count: 1,
+                check: lepic_store::ChainCheck::CancelledButOnChain,
+            }),
         };
 
         assert_eq!(
@@ -1327,6 +1390,14 @@ mod tests {
                     text: "got it".to_owned(),
                 }],
                 flow: crate::api::types::TxFlow::Invoice,
+                origin: TxOrigin::Imported,
+                imported: Some(ImportedTx {
+                    source_id: 31,
+                    kind: crate::api::types::ImportedTxKind::SentCancelled,
+                    input_count: 2,
+                    output_count: 1,
+                    check: crate::api::types::ChainCheck::CancelledButOnChain,
+                }),
             }
         );
         let hex = excess.to_hex();

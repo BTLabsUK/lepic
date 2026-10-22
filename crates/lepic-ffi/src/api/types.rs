@@ -219,6 +219,131 @@ pub struct TransactionDetails {
     pub messages: Vec<SlateMessage>,
     /// Whether it is a payment or an invoice, from the slate stages the wallet stored.
     pub flow: TxFlow,
+    /// Made by this wallet, imported from an old wallet's history, or an output a scan found
+    /// with no record of who sent it.
+    pub origin: TxOrigin,
+    /// What the old wallet recorded of an imported transaction. `None` for any other.
+    pub imported: Option<ImportedTx>,
+}
+
+/// Where a transaction in the list came from. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxOrigin {
+    Wallet,
+    /// Imported by `EpicWallet::import_legacy_history`. Its `created_at_ms` and
+    /// `confirmed_at_ms` are the old wallet's.
+    Imported,
+    /// An output a scan found that no record explains. `created_at_ms` is the time of its
+    /// block when the node told it, else the time of the scan.
+    FoundByScan,
+}
+
+/// The type the old wallet's log gave an imported transaction. Values are only added, at the
+/// end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportedTxKind {
+    Coinbase,
+    Received,
+    Sent,
+    ReceivedCancelled,
+    SentCancelled,
+    SentMempool,
+    ReceivedMempool,
+    SentCreated,
+}
+
+impl From<lepic_store::ImportedKind> for ImportedTxKind {
+    fn from(kind: lepic_store::ImportedKind) -> Self {
+        use lepic_store::ImportedKind as Kind;
+        match kind {
+            Kind::Coinbase => Self::Coinbase,
+            Kind::Received => Self::Received,
+            Kind::Sent => Self::Sent,
+            Kind::ReceivedCancelled => Self::ReceivedCancelled,
+            Kind::SentCancelled => Self::SentCancelled,
+            Kind::SentMempool => Self::SentMempool,
+            Kind::ReceivedMempool => Self::ReceivedMempool,
+            Kind::SentCreated => Self::SentCreated,
+        }
+    }
+}
+
+/// How the chain scan judged an imported transaction. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainCheck {
+    /// Nothing on chain confirmed or contradicted it yet.
+    Unchecked,
+    /// A scan found an output it created, or the node holds its kernel.
+    OnChain,
+    /// The old wallet had it cancelled, but a scan found an output it created: the chain has
+    /// it, and the funds count.
+    CancelledButOnChain,
+    /// The old wallet held an output of it as unspent that a full scan did not find, for
+    /// example because another copy of the wallet spent it. The balance does not count it.
+    UnspentNotOnChain,
+}
+
+impl From<lepic_store::ChainCheck> for ChainCheck {
+    fn from(check: lepic_store::ChainCheck) -> Self {
+        match check {
+            lepic_store::ChainCheck::Unchecked => Self::Unchecked,
+            lepic_store::ChainCheck::OnChain => Self::OnChain,
+            lepic_store::ChainCheck::CancelledButOnChain => Self::CancelledButOnChain,
+            lepic_store::ChainCheck::UnspentNotOnChain => Self::UnspentNotOnChain,
+        }
+    }
+}
+
+/// What the old wallet recorded of an imported transaction beyond the common fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedTx {
+    /// The old wallet's own transaction id, as its list showed it.
+    pub source_id: u32,
+    pub kind: ImportedTxKind,
+    pub input_count: u32,
+    pub output_count: u32,
+    pub check: ChainCheck,
+}
+
+/// Why `EpicWallet::import_legacy_history` imported nothing, or that it did. Values are only
+/// added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyImportStatus {
+    Imported,
+    /// This history was imported before; links and dates were brought up to date.
+    AlreadyImported,
+    /// The folder holds no wallet database.
+    NoHistory,
+    /// The wallet was made by an epic-wallet older than 3.3 (GUI 5.3 or older), whose
+    /// database is not read. The scan restores its funds.
+    OldFormat,
+    /// The database is encrypted, damaged or not an epic-wallet database.
+    Unreadable,
+    /// The database kept changing while it was copied: close the old wallet and try again.
+    SourceBusy,
+    TooLarge,
+    /// The history belongs to a wallet with another recovery phrase.
+    OtherWallet,
+    /// This wallet already holds a different imported history.
+    OtherHistory,
+}
+
+/// What `EpicWallet::import_legacy_history` did. Counts are of records, not of money.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyImport {
+    pub status: LegacyImportStatus,
+    pub transactions: u32,
+    pub outputs: u32,
+    pub accounts_named: u32,
+    /// Outputs a scan had already found, now shown under the imported transaction.
+    pub linked: u32,
+    /// Records of the old wallet left out: unreadable, of another seed, or outside the
+    /// wallet's accounts.
+    pub skipped: u32,
+    /// Unfinished imported transactions the node showed on chain, now confirmed.
+    pub confirmed_by_kernel: u32,
+    /// Outputs found by a scan with no record, now dated by their block.
+    pub dated: u32,
 }
 
 /// What a send would take and pay, from `EpicWallet::estimate_fee` and

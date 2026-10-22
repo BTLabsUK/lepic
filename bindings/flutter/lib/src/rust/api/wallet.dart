@@ -247,6 +247,25 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// The running HTTP listener, or `None`.
   HttpListenerInfo? httpListenerStatus();
 
+  /// Imports the transaction history of an epic-wallet wallet (the GUI's or the CLI's) whose
+  /// folder is `source_dir`: the folder holding `wallet_data`, or `wallet_data` itself. The
+  /// wallet must have been made from the same recovery phrase, for example by
+  /// [`EpicWallet::import_wallet_seed`] from that folder's `wallet.seed`. Call it once after
+  /// the import, before or after the restore scan; calling it again with the same folder
+  /// only links what a later scan found and dates it.
+  ///
+  /// Nothing in `source_dir` is written, locked or moved: the database is copied into this
+  /// wallet's folder, read from the copy, and the copy is removed. Imported transactions
+  /// keep their dates, types, amounts, fees, slate ids, messages and kernel, and show
+  /// `origin` `Imported`. Balances still come from the scan alone. A history that cannot be
+  /// imported (none there, too old a wallet, a damaged or encrypted database, another
+  /// recovery phrase) is reported in `status`, not as an error; the scan restores the funds.
+  ///
+  /// Asks the node for block times and for the kernels of unfinished transactions; a node
+  /// that cannot be reached leaves those undone. Fails with `Locked` on a locked wallet and
+  /// `Io` when the copy cannot be made in the wallet's folder.
+  Future<LegacyImport> importLegacyHistory({required String sourceDir});
+
   /// [`EpicWallet::create`] from an `epic-wallet` `wallet.seed` instead of a phrase:
   /// `seed_file` is the file's text and `seed_password` the password it was written with.
   /// The wallet gets `password`, as `create` does; call [`EpicWallet::scan`] next. The file

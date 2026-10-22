@@ -230,6 +230,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
+  ImportedTx dco_decode_box_autoadd_imported_tx(dynamic raw);
+
+  @protected
   SessionState dco_decode_box_autoadd_session_state(dynamic raw);
 
   @protected
@@ -261,6 +264,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Chain dco_decode_chain(dynamic raw);
+
+  @protected
+  ChainCheck dco_decode_chain_check(dynamic raw);
 
   @protected
   FeeEstimate dco_decode_fee_estimate(dynamic raw);
@@ -296,6 +302,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
+  ImportedTx dco_decode_imported_tx(dynamic raw);
+
+  @protected
+  ImportedTxKind dco_decode_imported_tx_kind(dynamic raw);
+
+  @protected
   InboxReport dco_decode_inbox_report(dynamic raw);
 
   @protected
@@ -315,6 +327,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   IssuedInvoice dco_decode_issued_invoice(dynamic raw);
+
+  @protected
+  LegacyImport dco_decode_legacy_import(dynamic raw);
+
+  @protected
+  LegacyImportStatus dco_decode_legacy_import_status(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
@@ -375,6 +393,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  ImportedTx? dco_decode_opt_box_autoadd_imported_tx(dynamic raw);
 
   @protected
   SessionState? dco_decode_opt_box_autoadd_session_state(dynamic raw);
@@ -471,6 +492,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TxFlow dco_decode_tx_flow(dynamic raw);
+
+  @protected
+  TxOrigin dco_decode_tx_origin(dynamic raw);
 
   @protected
   TxStatus dco_decode_tx_status(dynamic raw);
@@ -682,6 +706,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  ImportedTx sse_decode_box_autoadd_imported_tx(SseDeserializer deserializer);
+
+  @protected
   SessionState sse_decode_box_autoadd_session_state(
     SseDeserializer deserializer,
   );
@@ -725,6 +752,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Chain sse_decode_chain(SseDeserializer deserializer);
 
   @protected
+  ChainCheck sse_decode_chain_check(SseDeserializer deserializer);
+
+  @protected
   FeeEstimate sse_decode_fee_estimate(SseDeserializer deserializer);
 
   @protected
@@ -762,6 +792,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
+  ImportedTx sse_decode_imported_tx(SseDeserializer deserializer);
+
+  @protected
+  ImportedTxKind sse_decode_imported_tx_kind(SseDeserializer deserializer);
+
+  @protected
   InboxReport sse_decode_inbox_report(SseDeserializer deserializer);
 
   @protected
@@ -781,6 +817,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   IssuedInvoice sse_decode_issued_invoice(SseDeserializer deserializer);
+
+  @protected
+  LegacyImport sse_decode_legacy_import(SseDeserializer deserializer);
+
+  @protected
+  LegacyImportStatus sse_decode_legacy_import_status(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
@@ -857,6 +901,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  ImportedTx? sse_decode_opt_box_autoadd_imported_tx(
+    SseDeserializer deserializer,
+  );
 
   @protected
   SessionState? sse_decode_opt_box_autoadd_session_state(
@@ -963,6 +1012,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TxFlow sse_decode_tx_flow(SseDeserializer deserializer);
+
+  @protected
+  TxOrigin sse_decode_tx_origin(SseDeserializer deserializer);
 
   @protected
   TxStatus sse_decode_tx_status(SseDeserializer deserializer);
@@ -1224,6 +1276,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_imported_tx(
+    ImportedTx self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_session_state(
     SessionState self,
     SseSerializer serializer,
@@ -1275,6 +1333,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_chain(Chain self, SseSerializer serializer);
 
   @protected
+  void sse_encode_chain_check(ChainCheck self, SseSerializer serializer);
+
+  @protected
   void sse_encode_fee_estimate(FeeEstimate self, SseSerializer serializer);
 
   @protected
@@ -1317,6 +1378,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
+  void sse_encode_imported_tx(ImportedTx self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_imported_tx_kind(
+    ImportedTxKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_inbox_report(InboxReport self, SseSerializer serializer);
 
   @protected
@@ -1339,6 +1409,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_issued_invoice(IssuedInvoice self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_legacy_import(LegacyImport self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_legacy_import_status(
+    LegacyImportStatus self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
@@ -1430,6 +1509,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_i_64(
     PlatformInt64? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_imported_tx(
+    ImportedTx? self,
     SseSerializer serializer,
   );
 
@@ -1558,6 +1643,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_tx_flow(TxFlow self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_tx_origin(TxOrigin self, SseSerializer serializer);
 
   @protected
   void sse_encode_tx_status(TxStatus self, SseSerializer serializer);

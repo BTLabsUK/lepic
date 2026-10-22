@@ -25,9 +25,9 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    Chain, FeeEstimate, FinalizedTx, InboxReport, ListenerEvent, ListenerEventKind, NodeTip,
-    ReceivedSlate, RefreshProgress, ScanProgress, SentTx, Slate, SlateInfo, TransactionDetails,
-    WalletConfig, WalletEvent, WalletSummary,
+    Chain, FeeEstimate, FinalizedTx, InboxReport, LegacyImport, ListenerEvent, ListenerEventKind,
+    NodeTip, ReceivedSlate, RefreshProgress, ScanProgress, SentTx, Slate, SlateInfo,
+    TransactionDetails, WalletConfig, WalletEvent, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -541,6 +541,33 @@ impl EpicWallet {
     pub async fn transactions(&self) -> Result<Vec<TransactionDetails>, WalletError> {
         self.run("transactions", |session| async move {
             session.transactions().await
+        })
+        .await
+    }
+
+    /// Imports the transaction history of an epic-wallet wallet (the GUI's or the CLI's) whose
+    /// folder is `source_dir`: the folder holding `wallet_data`, or `wallet_data` itself. The
+    /// wallet must have been made from the same recovery phrase, for example by
+    /// [`EpicWallet::import_wallet_seed`] from that folder's `wallet.seed`. Call it once after
+    /// the import, before or after the restore scan; calling it again with the same folder
+    /// only links what a later scan found and dates it.
+    ///
+    /// Nothing in `source_dir` is written, locked or moved: the database is copied into this
+    /// wallet's folder, read from the copy, and the copy is removed. Imported transactions
+    /// keep their dates, types, amounts, fees, slate ids, messages and kernel, and show
+    /// `origin` `Imported`. Balances still come from the scan alone. A history that cannot be
+    /// imported (none there, too old a wallet, a damaged or encrypted database, another
+    /// recovery phrase) is reported in `status`, not as an error; the scan restores the funds.
+    ///
+    /// Asks the node for block times and for the kernels of unfinished transactions; a node
+    /// that cannot be reached leaves those undone. Fails with `Locked` on a locked wallet and
+    /// `Io` when the copy cannot be made in the wallet's folder.
+    pub async fn import_legacy_history(
+        &self,
+        source_dir: String,
+    ) -> Result<LegacyImport, WalletError> {
+        self.run("import_legacy_history", |session| async move {
+            session.import_legacy_history(&source_dir).await
         })
         .await
     }

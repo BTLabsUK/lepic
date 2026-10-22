@@ -102,8 +102,18 @@ final wallet = await EpicWallet.create(
   `invoiceDeclined`, `invoiceWithdrawn` and `invoiceBounced`, which set `slateId`.
   `WalletEventKind` and `ListenerEventKind` only gain values, at the end, and a value never
   changes meaning; an exhaustive `switch` over either must handle the new ones.
-  `TransactionDetails` has the required field `flow` and `ListenerEvent` the required field
-  `slateId`; code that builds them, such as a fake wallet, must pass them.
+  `TransactionDetails` has the required fields `flow` and `origin` (and `imported`, nullable)
+  and `ListenerEvent` the required field `slateId`; code that builds them, such as a fake
+  wallet, must pass them.
+- `importLegacyHistory(sourceDir)` brings across the transaction history of the epic-wallet
+  wallet (GUI or CLI) that a wallet was just made from, for example with `importWalletSeed`
+  from that folder's `wallet.seed`. Call it once after the import, before or after the restore
+  scan. Nothing in `sourceDir` is written. Imported transactions show `origin` `imported`
+  with their original dates, types, fees, slate ids, messages and kernel, and `imported` gives
+  the old wallet's id, its type and `check`, how the chain scan judged it. Outputs a scan found
+  with no record show `origin` `foundByScan`, dated by their block. A history that cannot be
+  imported is a `LegacyImport.status` (`noHistory`, `oldFormat`, `unreadable`, `sourceBusy`,
+  `tooLarge`, `otherWallet`, `otherHistory`), not an error: the wallet keeps the scan's history.
 - A slate received a second time, as text, as a file or through the listener, is not a second
   payment. `receiveSlate` and `receiveFile` return `ReceivedSlate.repeated` set, with the
   `txId` and the reply text of the first receive, and the listener reports kind `repeated`
@@ -478,7 +488,7 @@ the secret store, which the earlier binding kept in process-wide state.
 | `read_log_tail(max_bytes)` | `LepicRuntime::export_support_bundle()` | The whole ring, redacted, with a short header. |
 | `redact_text(text)` | not provided | The ring redacts by field, not free text; redact the app's own text in Dart. |
 | `generate_wallet_password()` | not provided (ADR 0014) | `create_with_pin` generates the password inside Rust. |
-| `seal_password(pin, password)` | not provided (ADR 0014) | `create_with_pin` returns the sealed text. Text sealed by the earlier binding does not open here; users moving from the earlier core restore from their phrase or their `wallet.seed` anyway, since LEPIC imports no `epic-wallet` database, and get new sealed text from `create_with_pin` or `import_wallet_seed_with_pin`. |
+| `seal_password(pin, password)` | not provided (ADR 0014) | `create_with_pin` returns the sealed text. Text sealed by the earlier binding does not open here; users moving from the earlier core restore from their phrase or their `wallet.seed` anyway, LEPIC imports an `epic-wallet` wallet's history but never its keys, and get new sealed text from `create_with_pin` or `import_wallet_seed_with_pin`. |
 | `open_password(pin, sealed)` | not provided (ADR 0014) | `open_with_pin(.., pin, sealed_password)` opens the wallet; wrong PIN gives `wrongPassword`, damaged text `invalidArgument`. |
 
 Types: `WalletConfig` keeps its fields; `Chain` has no `usernet`. `WalletError` and

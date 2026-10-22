@@ -8,10 +8,27 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `network`, `of`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Which Epic chain the wallet talks to.
 enum Chain { mainnet, floonet }
+
+/// How the chain scan judged an imported transaction. Values are only added, at the end.
+enum ChainCheck {
+  /// Nothing on chain confirmed or contradicted it yet.
+  unchecked,
+
+  /// A scan found an output it created, or the node holds its kernel.
+  onChain,
+
+  /// The old wallet had it cancelled, but a scan found an output it created: the chain has
+  /// it, and the funds count.
+  cancelledButOnChain,
+
+  /// The old wallet held an output of it as unspent that a full scan did not find, for
+  /// example because another copy of the wallet spent it. The balance does not count it.
+  unspentNotOnChain,
+}
 
 /// What a send would take and pay, from `EpicWallet::estimate_fee` and
 /// `EpicWallet::estimate_max`. Nothing is locked.
@@ -65,6 +82,56 @@ class FinalizedTx {
           runtimeType == other.runtimeType &&
           txId == other.txId &&
           slateId == other.slateId;
+}
+
+/// What the old wallet recorded of an imported transaction beyond the common fields.
+class ImportedTx {
+  /// The old wallet's own transaction id, as its list showed it.
+  final int sourceId;
+  final ImportedTxKind kind;
+  final int inputCount;
+  final int outputCount;
+  final ChainCheck check;
+
+  const ImportedTx({
+    required this.sourceId,
+    required this.kind,
+    required this.inputCount,
+    required this.outputCount,
+    required this.check,
+  });
+
+  @override
+  int get hashCode =>
+      sourceId.hashCode ^
+      kind.hashCode ^
+      inputCount.hashCode ^
+      outputCount.hashCode ^
+      check.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ImportedTx &&
+          runtimeType == other.runtimeType &&
+          sourceId == other.sourceId &&
+          kind == other.kind &&
+          inputCount == other.inputCount &&
+          outputCount == other.outputCount &&
+          check == other.check;
+}
+
+/// The type the old wallet's log gave an imported transaction. Values are only added, at the
+/// end.
+enum ImportedTxKind {
+  coinbase,
+  received,
+  sent,
+  receivedCancelled,
+  sentCancelled,
+  sentMempool,
+  receivedMempool,
+  sentCreated,
 }
 
 /// What one Epicbox drain did.
@@ -336,6 +403,92 @@ class IssuedInvoice {
           txId == other.txId &&
           slateId == other.slateId &&
           amount == other.amount;
+}
+
+/// What `EpicWallet::import_legacy_history` did. Counts are of records, not of money.
+class LegacyImport {
+  final LegacyImportStatus status;
+  final int transactions;
+  final int outputs;
+  final int accountsNamed;
+
+  /// Outputs a scan had already found, now shown under the imported transaction.
+  final int linked;
+
+  /// Records of the old wallet left out: unreadable, of another seed, or outside the
+  /// wallet's accounts.
+  final int skipped;
+
+  /// Unfinished imported transactions the node showed on chain, now confirmed.
+  final int confirmedByKernel;
+
+  /// Outputs found by a scan with no record, now dated by their block.
+  final int dated;
+
+  const LegacyImport({
+    required this.status,
+    required this.transactions,
+    required this.outputs,
+    required this.accountsNamed,
+    required this.linked,
+    required this.skipped,
+    required this.confirmedByKernel,
+    required this.dated,
+  });
+
+  @override
+  int get hashCode =>
+      status.hashCode ^
+      transactions.hashCode ^
+      outputs.hashCode ^
+      accountsNamed.hashCode ^
+      linked.hashCode ^
+      skipped.hashCode ^
+      confirmedByKernel.hashCode ^
+      dated.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LegacyImport &&
+          runtimeType == other.runtimeType &&
+          status == other.status &&
+          transactions == other.transactions &&
+          outputs == other.outputs &&
+          accountsNamed == other.accountsNamed &&
+          linked == other.linked &&
+          skipped == other.skipped &&
+          confirmedByKernel == other.confirmedByKernel &&
+          dated == other.dated;
+}
+
+/// Why `EpicWallet::import_legacy_history` imported nothing, or that it did. Values are only
+/// added, at the end.
+enum LegacyImportStatus {
+  imported,
+
+  /// This history was imported before; links and dates were brought up to date.
+  alreadyImported,
+
+  /// The folder holds no wallet database.
+  noHistory,
+
+  /// The wallet was made by an epic-wallet older than 3.3 (GUI 5.3 or older), whose
+  /// database is not read. The scan restores its funds.
+  oldFormat,
+
+  /// The database is encrypted, damaged or not an epic-wallet database.
+  unreadable,
+
+  /// The database kept changing while it was copied: close the old wallet and try again.
+  sourceBusy,
+  tooLarge,
+
+  /// The history belongs to a wallet with another recovery phrase.
+  otherWallet,
+
+  /// This wallet already holds a different imported history.
+  otherHistory,
 }
 
 class ListenerEvent {
@@ -763,6 +916,13 @@ class TransactionDetails {
   /// Whether it is a payment or an invoice, from the slate stages the wallet stored.
   final TxFlow flow;
 
+  /// Made by this wallet, imported from an old wallet's history, or an output a scan found
+  /// with no record of who sent it.
+  final TxOrigin origin;
+
+  /// What the old wallet recorded of an imported transaction. `None` for any other.
+  final ImportedTx? imported;
+
   const TransactionDetails({
     required this.txId,
     required this.direction,
@@ -782,6 +942,8 @@ class TransactionDetails {
     required this.releasable,
     required this.messages,
     required this.flow,
+    required this.origin,
+    this.imported,
   });
 
   @override
@@ -803,7 +965,9 @@ class TransactionDetails {
       releasableFrom.hashCode ^
       releasable.hashCode ^
       messages.hashCode ^
-      flow.hashCode;
+      flow.hashCode ^
+      origin.hashCode ^
+      imported.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -827,7 +991,9 @@ class TransactionDetails {
           releasableFrom == other.releasableFrom &&
           releasable == other.releasable &&
           messages == other.messages &&
-          flow == other.flow;
+          flow == other.flow &&
+          origin == other.origin &&
+          imported == other.imported;
 }
 
 enum TransportState { connecting, connected, disconnected, stopped }
@@ -850,6 +1016,19 @@ enum TxFlow {
 
   /// The receiver started it with an invoice.
   invoice,
+}
+
+/// Where a transaction in the list came from. Values are only added, at the end.
+enum TxOrigin {
+  wallet,
+
+  /// Imported by `EpicWallet::import_legacy_history`. Its `created_at_ms` and
+  /// `confirmed_at_ms` are the old wallet's.
+  imported,
+
+  /// An output a scan found that no record explains. `created_at_ms` is the time of its
+  /// block when the node told it, else the time of the scan.
+  foundByScan,
 }
 
 /// Where a transaction stands, as stored by the wallet.
