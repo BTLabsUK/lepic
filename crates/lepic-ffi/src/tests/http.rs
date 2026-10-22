@@ -15,6 +15,7 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
 use crate::api::types::{Chain, TxStatus, WalletConfig};
+use crate::api::wallet::EpicWallet;
 use crate::session::{SeedOrigin, Session};
 
 pub(super) const EPIC: u64 = 100_000_000;
@@ -38,6 +39,16 @@ pub(super) fn password() -> Zeroizing<String> {
 }
 
 async fn session(runtime: &LepicRuntime, dir: &tempfile::TempDir) -> Arc<Session> {
+    session_on(runtime, dir, AppSecretStore::in_memory()).await
+}
+
+/// A session on `dir` with the app store `store`: a fresh handle on a wallet when `store` is
+/// the one the wallet was created with.
+async fn session_on(
+    runtime: &LepicRuntime,
+    dir: &tempfile::TempDir,
+    store: AppSecretStore,
+) -> Arc<Session> {
     let mut config = WalletConfig {
         data_dir: dir.path().to_string_lossy().into_owned(),
         chain: Chain::Floonet,
@@ -48,15 +59,17 @@ async fn session(runtime: &LepicRuntime, dir: &tempfile::TempDir) -> Arc<Session
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     Arc::new(
-        Session::new(
-            &runtime.inner,
-            &config,
-            &secret,
-            AppSecretStore::in_memory(),
-        )
-        .await
-        .unwrap(),
+        Session::new(&runtime.inner, &config, &secret, store)
+            .await
+            .unwrap(),
     )
+}
+
+/// Opens a fresh handle on Alice's wallet, as the app does after a lock.
+async fn reopen_alice(pair: &Pair) -> Arc<Session> {
+    let fresh = session_on(&pair._runtime, &pair.dirs[0], pair.alice.store().clone()).await;
+    fresh.open(password()).await.unwrap();
+    fresh
 }
 
 /// Alice holds 10 EPIC; Bob holds nothing.
@@ -130,6 +143,27 @@ fn url(port: u16) -> String {
 fn closed_port() -> u16 {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     socket.local_addr().unwrap().port()
+}
+
+/// A loopback port that accepts connections and never answers, as a receiving wallet that
+/// hangs. It answers nothing until the returned guard is dropped.
+fn stalled_port() -> (u16, std::sync::mpsc::Sender<()>) {
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let (guard, released) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        socket.set_nonblocking(true).unwrap();
+        while released
+            .recv_timeout(std::time::Duration::from_millis(10))
+            .is_err()
+        {
+            if let Ok((stream, _)) = socket.accept() {
+                held.push(stream);
+            }
+        }
+    });
+    (port, guard)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -396,4 +430,84 @@ async fn a_payment_over_the_listener_rate_is_reported_refused_as_unavailable() {
             .iter()
             .all(|refusal| *refusal == Some(crate::api::http::HttpRefusal::Rejected))
     );
+}
+
+/// The app locks while a store write runs, on a phone one that takes well over the moment a
+/// claim used to wait, and opens anew at once: the open waits for the write, which finishes,
+/// and sees what it wrote.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lock_during_a_slow_store_write_leaves_its_result_to_the_next_open() {
+    let pair = funded_pair().await;
+    let undelivered = pair
+        .alice
+        .send_http(EPIC, 1, &url(closed_port()), false, None)
+        .await;
+    assert_eq!(kind(undelivered), WalletErrorKind::TransportFailed);
+    let [sent] = sends(&pair.alice).await.try_into().unwrap();
+    let claim = Arc::clone(pair.alice.directory_claim());
+    let writes_before = claim.writes_begun();
+    claim.delay_writes(std::time::Duration::from_millis(300));
+    let handle = EpicWallet::of_session(Arc::clone(&pair.alice));
+    let cancelling = tokio::spawn({
+        let handle = EpicWallet::of_session(Arc::clone(&pair.alice));
+        async move { handle.cancel_transaction(sent.tx_id).await }
+    });
+    assert!(eventually(|| claim.writes_begun() > writes_before).await);
+
+    handle.lock();
+    let reopened = reopen_alice(&pair).await;
+
+    let cancelled = tokio::time::timeout(std::time::Duration::from_secs(5), cancelling)
+        .await
+        .expect("the cancel ended at the lock")
+        .unwrap();
+    assert_eq!(kind(cancelled), WalletErrorKind::Cancelled);
+    let stored = reopened.transaction(sent.tx_id).await.unwrap();
+    assert_eq!(stored.status, TxStatus::Cancelled);
+}
+
+/// The app locks while a send waits on the receiving wallet: the send is stored and its
+/// delivery ends, so a fresh handle finds it waiting for its answer and delivers it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lock_during_an_http_delivery_leaves_a_resendable_send_to_a_fresh_handle() {
+    let pair = funded_pair().await;
+    let (stalled, _receiver) = stalled_port();
+    let handle = EpicWallet::of_session(Arc::clone(&pair.alice));
+    let sending = tokio::spawn({
+        let handle = EpicWallet::of_session(Arc::clone(&pair.alice));
+        async move {
+            handle
+                .send_http(EPIC, 1, url(stalled), false, None, None)
+                .await
+        }
+    });
+    assert!(eventually(|| handle.session().in_flight.len() == 1).await);
+    let stored = sends(&pair.alice).await;
+    let [sent] = stored.as_slice() else {
+        panic!("{stored:?}");
+    };
+    assert_eq!(sent.status, TxStatus::Sent);
+
+    handle.lock();
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), sending)
+        .await
+        .expect("the send ended at the lock")
+        .unwrap();
+    assert_eq!(kind(ended), WalletErrorKind::Cancelled);
+    let reopened = reopen_alice(&pair).await;
+
+    let [waiting] = sends(&reopened).await.try_into().unwrap();
+    assert_eq!(
+        (waiting.tx_id, waiting.status),
+        (sent.tx_id, TxStatus::Sent)
+    );
+    let events = Events::default();
+    let port = listen(&pair.bob, &events).await;
+    let resent = reopened
+        .resend_http(sent.tx_id, &url(port), false)
+        .await
+        .unwrap();
+    assert!(resent.posted);
+    assert_eq!(pair.chain.pushed_count(), 1);
+    assert_eq!(events.last().kind, HttpListenerEventKind::Received);
 }

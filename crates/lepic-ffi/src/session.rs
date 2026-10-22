@@ -374,6 +374,11 @@ impl Session {
         self.claim.is_held()
     }
 
+    #[cfg(test)]
+    pub(crate) fn directory_claim(&self) -> &Arc<ClaimHolder> {
+        &self.claim
+    }
+
     pub(crate) fn store(&self) -> &AppSecretStore {
         &self.store
     }

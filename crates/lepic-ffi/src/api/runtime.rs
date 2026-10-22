@@ -57,6 +57,9 @@ pub(crate) struct RuntimeInner {
     pub(crate) kdf: KdfParams,
     pub(crate) pin: PinGuard,
     open: Mutex<BTreeSet<PathBuf>>,
+    /// Signalled whenever a claim in this runtime is released, so a claim waiting on the
+    /// directory tries again at once.
+    released: tokio::sync::Notify,
     /// The in-process relay Epicbox connections go to in tests.
     #[cfg(feature = "mock")]
     pub(crate) relay: Option<Arc<dyn lepic_epicbox::Connector>>,
@@ -117,6 +120,7 @@ impl LepicRuntime {
                 kdf,
                 pin: PinGuard::new(pin),
                 open: Mutex::default(),
+                released: tokio::sync::Notify::new(),
                 #[cfg(feature = "mock")]
                 relay: None,
             }),
@@ -228,10 +232,12 @@ fn app_log_message(message: &str) -> &str {
 }
 
 impl RuntimeInner {
-    /// Marks `data_dir` as in use until the returned claim is dropped. Fails with
-    /// [`WalletErrorKind::WalletBusy`] when it still is after [`CLAIM_RETRIES`] more tries,
-    /// in this runtime or any other: a wallet just locked on it may be a moment away from
-    /// releasing it.
+    /// Marks `data_dir` as in use until the returned claim is dropped. A directory in use, in
+    /// this runtime or any other, is waited for up to [`CLAIM_WAIT`]: a wallet just locked on
+    /// it releases it once the call still running on it has finished its store write. A
+    /// release in this runtime wakes the wait at once; one elsewhere is seen at the next try,
+    /// every [`CLAIM_RETRY_WAIT`]. Fails with [`WalletErrorKind::WalletBusy`] when the
+    /// directory is still in use after the wait.
     pub(crate) async fn claim(self: &Arc<Self>, data_dir: &Path) -> Result<DirClaim, WalletError> {
         let dir = std::fs::canonicalize(data_dir).map_err(|error| {
             WalletError::new(
@@ -239,12 +245,24 @@ impl RuntimeInner {
                 format!("wallet directory is not usable: {error}"),
             )
         })?;
-        let mut tries_left = CLAIM_RETRIES;
+        let deadline = tokio::time::Instant::now().checked_add(CLAIM_WAIT);
         loop {
+            // Listening before the try, so a release between the try and the wait is not
+            // missed.
+            let released = self.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
             match self.try_claim(&dir) {
-                Err(error) if error.kind == WalletErrorKind::WalletBusy && tries_left > 0 => {
-                    tries_left = tries_left.saturating_sub(1);
-                    tokio::time::sleep(CLAIM_RETRY_WAIT).await;
+                Err(error) if error.kind == WalletErrorKind::WalletBusy => {
+                    let now = tokio::time::Instant::now();
+                    let Some(deadline) = deadline.filter(|deadline| *deadline > now) else {
+                        return Err(error);
+                    };
+                    let wait = deadline
+                        .saturating_duration_since(now)
+                        .min(CLAIM_RETRY_WAIT);
+                    // Timing out only means a release elsewhere is looked for.
+                    drop(tokio::time::timeout(wait, released).await);
                 }
                 claimed => return claimed,
             }
@@ -266,10 +284,11 @@ impl RuntimeInner {
     }
 }
 
-/// How often a busy directory is tried again, and how long apart: about 50 ms in all, the
-/// time a wallet just locked on it needs to close its database.
-const CLAIM_RETRIES: u32 = 5;
-const CLAIM_RETRY_WAIT: std::time::Duration = std::time::Duration::from_millis(10);
+/// How long a busy directory is waited for, long enough for a wallet just locked on it to
+/// finish the store write under way on a slow phone, and how often a release in another
+/// runtime or process is looked for meanwhile.
+const CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+const CLAIM_RETRY_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
 
 fn busy() -> WalletError {
     WalletError::new(
@@ -325,6 +344,7 @@ impl Drop for DirClaim {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.dir);
+        self.runtime.released.notify_waiters();
     }
 }
 
@@ -336,6 +356,11 @@ impl Drop for DirClaim {
 pub(crate) struct ClaimHolder {
     claim: Mutex<Option<DirClaim>>,
     release_on_close: std::sync::atomic::AtomicBool,
+    /// How long every store write is stretched in tests, as a slow phone stretches it.
+    #[cfg(test)]
+    write_delay: Mutex<Option<std::time::Duration>>,
+    #[cfg(test)]
+    writes_begun: std::sync::atomic::AtomicU32,
 }
 
 impl ClaimHolder {
@@ -343,7 +368,39 @@ impl ClaimHolder {
         Arc::new(Self {
             claim: Mutex::new(Some(claim)),
             release_on_close: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            write_delay: Mutex::default(),
+            #[cfg(test)]
+            writes_begun: std::sync::atomic::AtomicU32::new(0),
         })
+    }
+
+    /// Stretches every store write from now on by `delay`, on the blocking thread that runs it.
+    #[cfg(test)]
+    pub(crate) fn delay_writes(&self, delay: std::time::Duration) {
+        *self
+            .write_delay
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(delay);
+    }
+
+    /// Store writes begun so far, counted before any delay.
+    #[cfg(test)]
+    pub(crate) fn writes_begun(&self) -> u32 {
+        self.writes_begun.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    fn write_begins(&self) {
+        self.writes_begun
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let delay = *self
+            .write_delay
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(delay) = delay {
+            std::thread::sleep(delay);
+        }
     }
 
     /// From now on the claim goes with the database. Call it before the wallet locks, so a
@@ -394,7 +451,7 @@ impl lepic_wallet::StoreOpener for ClaimedStores {
 }
 
 /// A store that tells its session's [`ClaimHolder`] when it closes. Fields drop in order:
-/// the store closes its database before `_closed` reports it, so the directory is never
+/// the store closes its database before `closed` reports it, so the directory is never
 /// released while the database is still open.
 pub(crate) struct ClaimedStore<S = lepic_store::SqliteStore> {
     inner: S,
@@ -436,6 +493,8 @@ impl<S: lepic_store::WalletStore> lepic_store::WalletStore for ClaimedStore<S> {
     where
         E: From<lepic_store::StoreError>,
     {
+        #[cfg(test)]
+        self._closed.0.write_begins();
         self.inner.write(operation)
     }
 }
@@ -463,36 +522,69 @@ mod tests {
         assert_eq!(flags & O_CLOEXEC, O_CLOEXEC, "{info}");
     }
 
-    #[tokio::test]
-    async fn a_directory_released_within_the_retries_is_claimed() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = crate::api::testing::MockChain::new(1)
-            .unwrap()
-            .runtime(LogLevel::Warn)
-            .unwrap();
-        let other = crate::api::testing::MockChain::new(1)
-            .unwrap()
-            .runtime(LogLevel::Warn)
-            .unwrap();
-        let held = other.inner.claim(dir.path()).await.unwrap();
-        let busy = runtime.inner.claim(dir.path()).await.map(drop);
-        assert_eq!(busy.unwrap_err().kind, WalletErrorKind::WalletBusy);
-
-        let releasing = std::thread::spawn(move || {
-            std::thread::sleep(CLAIM_RETRY_WAIT * 2);
-            drop(held);
-        });
-        let claimed = runtime.inner.claim(dir.path()).await;
-
-        releasing.join().unwrap();
-        assert!(claimed.is_ok());
-    }
-
     fn new_runtime() -> LepicRuntime {
         crate::api::testing::MockChain::new(1)
             .unwrap()
             .runtime(LogLevel::Warn)
             .unwrap()
+    }
+
+    /// A directory another runtime releases well after the old 50 ms of retries, as a
+    /// wallet locked during a slow store write releases it, is claimed once it is free. Time
+    /// is paused, so the waits take no real time and the elapsed time is exact.
+    #[tokio::test(start_paused = true)]
+    async fn a_directory_released_elsewhere_within_the_wait_is_claimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = new_runtime();
+        let other = new_runtime();
+        let held = other.inner.claim(dir.path()).await.unwrap();
+        let release_after = std::time::Duration::from_millis(307);
+        let releasing = tokio::spawn(async move {
+            tokio::time::sleep(release_after).await;
+            drop(held);
+        });
+
+        let started = tokio::time::Instant::now();
+        let claimed = runtime.inner.claim(dir.path()).await;
+
+        releasing.await.unwrap();
+        assert!(claimed.is_ok(), "{:?}", claimed.err());
+        let waited = started.elapsed();
+        assert!(waited >= release_after, "{waited:?}");
+        assert!(waited <= release_after + CLAIM_RETRY_WAIT, "{waited:?}");
+    }
+
+    /// A release in the same runtime wakes the wait at once, without a retry interval.
+    #[tokio::test(start_paused = true)]
+    async fn a_directory_released_in_the_same_runtime_is_claimed_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = new_runtime();
+        let held = runtime.inner.claim(dir.path()).await.unwrap();
+        let release_after = std::time::Duration::from_millis(107);
+        let releasing = tokio::spawn(async move {
+            tokio::time::sleep(release_after).await;
+            drop(held);
+        });
+
+        let started = tokio::time::Instant::now();
+        let claimed = runtime.inner.claim(dir.path()).await;
+
+        releasing.await.unwrap();
+        assert!(claimed.is_ok(), "{:?}", claimed.err());
+        assert_eq!(started.elapsed(), release_after);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_directory_still_in_use_after_the_wait_is_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = new_runtime();
+        let _held = runtime.inner.claim(dir.path()).await.unwrap();
+
+        let started = tokio::time::Instant::now();
+        let busy = runtime.inner.claim(dir.path()).await.map(drop);
+
+        assert_eq!(busy.unwrap_err().kind, WalletErrorKind::WalletBusy);
+        assert_eq!(started.elapsed(), CLAIM_WAIT);
     }
 
     /// A store that records, as it closes, whether the directory is still claimed.
