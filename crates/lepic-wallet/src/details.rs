@@ -23,6 +23,7 @@ use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
 use crate::refresh::{final_kernel, legacy_codecs, stored_slate, ttl_cutoff};
 use crate::release::release_check;
+use crate::scan::{ScanFound, scan_found};
 use crate::wallet::Wallet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +65,9 @@ pub struct TransactionDetails {
     pub origin: TxOrigin,
     /// For an imported transaction, what only the old wallet knew. `None` for any other.
     pub imported: Option<ImportedDetails>,
+    /// For an entry a scan stored for an output it found with no record, which scan it was and
+    /// how it is dated. `None` for any other, and for one stored before this was recorded.
+    pub found: Option<ScanFound>,
 }
 
 /// What an imported transaction carries beyond its log entry.
@@ -210,9 +214,14 @@ fn details(
         }
     }
     let origin = legacy_history::origin(repos, tx_id, &transaction.entry)?;
+    let found = match origin {
+        TxOrigin::FoundByScan => scan_found(repos, tx_id)?,
+        TxOrigin::Wallet | TxOrigin::Imported => None,
+    };
     let release = release_check(repos, codecs, &transaction)?.ok();
     Ok(TransactionDetails {
         origin,
+        found,
         imported: record.map(|record| ImportedDetails {
             source_id: record.source_id,
             kind: record.kind,

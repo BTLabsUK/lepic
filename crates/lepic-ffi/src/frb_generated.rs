@@ -6155,6 +6155,18 @@ impl SseDecode for crate::api::types::FinalizedTx {
     }
 }
 
+impl SseDecode for crate::api::types::FoundDuring {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::types::FoundDuring::Restore,
+            1 => crate::api::types::FoundDuring::Rescan,
+            _ => unreachable!("Invalid variant for FoundDuring: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for crate::api::http::HttpExposure {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -6732,6 +6744,17 @@ impl SseDecode for Option<crate::api::types::ImportedTx> {
     }
 }
 
+impl SseDecode for Option<crate::api::types::ScanFound> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::types::ScanFound>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::types::ScanResult> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -6911,6 +6934,18 @@ impl SseDecode for crate::api::types::RefreshProgress {
             percent: var_percent,
             message: var_message,
             summary: var_summary,
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::ScanFound {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_during = <crate::api::types::FoundDuring>::sse_decode(deserializer);
+        let mut var_datedByBlock = <bool>::sse_decode(deserializer);
+        return crate::api::types::ScanFound {
+            during: var_during,
+            dated_by_block: var_datedByBlock,
         };
     }
 }
@@ -7191,6 +7226,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_flow = <crate::api::types::TxFlow>::sse_decode(deserializer);
         let mut var_origin = <crate::api::types::TxOrigin>::sse_decode(deserializer);
         let mut var_imported = <Option<crate::api::types::ImportedTx>>::sse_decode(deserializer);
+        let mut var_found = <Option<crate::api::types::ScanFound>>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
             direction: var_direction,
@@ -7212,6 +7248,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             flow: var_flow,
             origin: var_origin,
             imported: var_imported,
+            found: var_found,
         };
     }
 }
@@ -8057,6 +8094,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::FinalizedTx>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::FoundDuring {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Restore => 0.into_dart(),
+            Self::Rescan => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::FoundDuring
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::FoundDuring>
+    for crate::api::types::FoundDuring
+{
+    fn into_into_dart(self) -> crate::api::types::FoundDuring {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::http::HttpExposure {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
@@ -8702,6 +8760,24 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::RefreshProgress>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::ScanFound {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.during.into_into_dart().into_dart(),
+            self.dated_by_block.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::ScanFound {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ScanFound>
+    for crate::api::types::ScanFound
+{
+    fn into_into_dart(self) -> crate::api::types::ScanFound {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::ScanProgress {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -9052,6 +9128,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
             self.flow.into_into_dart().into_dart(),
             self.origin.into_into_dart().into_dart(),
             self.imported.into_into_dart().into_dart(),
+            self.found.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -9621,6 +9698,22 @@ impl SseEncode for crate::api::types::FinalizedTx {
     }
 }
 
+impl SseEncode for crate::api::types::FoundDuring {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::types::FoundDuring::Restore => 0,
+                crate::api::types::FoundDuring::Rescan => 1,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
 impl SseEncode for crate::api::http::HttpExposure {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -10093,6 +10186,16 @@ impl SseEncode for Option<crate::api::types::ImportedTx> {
     }
 }
 
+impl SseEncode for Option<crate::api::types::ScanFound> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::types::ScanFound>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::types::ScanResult> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -10244,6 +10347,14 @@ impl SseEncode for crate::api::types::RefreshProgress {
         <u8>::sse_encode(self.percent, serializer);
         <String>::sse_encode(self.message, serializer);
         <Option<crate::api::types::WalletSummary>>::sse_encode(self.summary, serializer);
+    }
+}
+
+impl SseEncode for crate::api::types::ScanFound {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::types::FoundDuring>::sse_encode(self.during, serializer);
+        <bool>::sse_encode(self.dated_by_block, serializer);
     }
 }
 
@@ -10485,6 +10596,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <crate::api::types::TxFlow>::sse_encode(self.flow, serializer);
         <crate::api::types::TxOrigin>::sse_encode(self.origin, serializer);
         <Option<crate::api::types::ImportedTx>>::sse_encode(self.imported, serializer);
+        <Option<crate::api::types::ScanFound>>::sse_encode(self.found, serializer);
     }
 }
 

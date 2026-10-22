@@ -293,6 +293,12 @@ void main() {
     final restoredHistory = await restored.transactions();
     expect(restoredHistory, isNotEmpty);
     expect(restoredHistory.every((tx) => tx.messages.isEmpty), isTrue);
+    expect(
+      restoredHistory.map((tx) => tx.found),
+      everyElement(
+        const ScanFound(during: FoundDuring.restore, datedByBlock: true),
+      ),
+    );
 
     // The original directory opens again with the stored vault, and only with its password.
     await expectLater(

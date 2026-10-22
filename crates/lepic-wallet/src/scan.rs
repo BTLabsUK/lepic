@@ -54,6 +54,9 @@ const CHECKPOINT_SETTING: &str = "scan.checkpoint";
 /// chain.
 const GENESIS_SCANNED_SETTING: &str = "scan.genesis_completed";
 
+/// Prefix of the setting that records, per entry, how a scan stored it.
+const FOUND_PREFIX: &str = "scan.found.";
+
 /// Label prefix `epic-wallet` gives an account that a restore finds outputs of.
 const RESTORED_ACCOUNT_LABEL: &str = "account";
 
@@ -258,6 +261,93 @@ pub struct ScanSummary {
     pub unlocked: u64,
     /// Unconfirmed outputs deleted by a scan with `delete_unconfirmed`.
     pub deleted: u64,
+}
+
+/// Which scan stored an entry for an output it found with no record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoundDuring {
+    /// The scan from genesis a restored or imported wallet needs before it hands out keys.
+    Restore,
+    /// Any other scan.
+    Rescan,
+}
+
+/// How a scan stored an entry for an output it found with no record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanFound {
+    pub during: FoundDuring,
+    /// The entry is dated by the output's block; false when the block's header could not be
+    /// fetched and the time of the scan was used instead.
+    pub dated_by_block: bool,
+}
+
+impl ScanFound {
+    const fn encode(self) -> &'static str {
+        match (self.during, self.dated_by_block) {
+            (FoundDuring::Restore, true) => "restore block",
+            (FoundDuring::Restore, false) => "restore scan",
+            (FoundDuring::Rescan, true) => "rescan block",
+            (FoundDuring::Rescan, false) => "rescan scan",
+        }
+    }
+
+    fn decode(text: &str) -> Option<Self> {
+        let (during, dated) = text.split_once(' ')?;
+        Some(Self {
+            during: match during {
+                "restore" => FoundDuring::Restore,
+                "rescan" => FoundDuring::Rescan,
+                _ => return None,
+            },
+            dated_by_block: match dated {
+                "block" => true,
+                "scan" => false,
+                _ => return None,
+            },
+        })
+    }
+}
+
+fn found_key(tx_id: TxId) -> String {
+    format!("{FOUND_PREFIX}{tx_id}")
+}
+
+/// How a scan stored the entry `tx_id`. `None` for an entry no scan stored, and for one stored
+/// before this was recorded.
+pub(crate) fn scan_found(
+    repos: &dyn Repositories,
+    tx_id: TxId,
+) -> Result<Option<ScanFound>, StoreError> {
+    Ok(repos
+        .setting(&found_key(tx_id))?
+        .and_then(|text| ScanFound::decode(&text)))
+}
+
+/// Records that the entry `tx_id` a scan stored is now dated by its output's block.
+pub(crate) fn record_dated_by_block(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+) -> Result<(), StoreError> {
+    if let Some(found) = scan_found(repos, tx_id)?
+        && !found.dated_by_block
+    {
+        let dated = ScanFound {
+            dated_by_block: true,
+            ..found
+        };
+        repos.put_setting(&found_key(tx_id), dated.encode())?;
+    }
+    Ok(())
+}
+
+/// Removes the entry `tx_id` and what a scan recorded about it. Fails as
+/// [`lepic_store::TransactionRepository::delete_transaction`] does.
+pub(crate) fn delete_found_entry(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+) -> Result<(), StoreError> {
+    repos.delete_transaction(tx_id)?;
+    repos.delete_setting(&found_key(tx_id))
 }
 
 /// An output of this wallet found on chain.
@@ -730,6 +820,11 @@ fn store_found(
 ) -> Result<PageOutcome, ScanError> {
     let mut outcome = PageOutcome::default();
     let mut highest_child: BTreeMap<AccountIndex, u32> = BTreeMap::new();
+    let during = if lifecycle::restore_scan_pending(repos)? {
+        FoundDuring::Restore
+    } else {
+        FoundDuring::Rescan
+    };
     for output in found {
         outcome.found = outcome.found.saturating_add(1);
         match repos.output(output.id.commitment.as_bytes())? {
@@ -738,8 +833,12 @@ fn store_found(
                 reconcile(repos, stored, output, revivable, options, now, &mut outcome)?;
             }
             None => {
-                let created_at = block_times.get(&output.height).copied().unwrap_or(now);
-                restore_missing(repos, output, created_at, now)?;
+                let block_time = block_times.get(&output.height).copied();
+                let found = ScanFound {
+                    during,
+                    dated_by_block: block_time.is_some(),
+                };
+                restore_missing(repos, output, block_time.unwrap_or(now), found, now)?;
                 outcome.restored = outcome.restored.saturating_add(1);
                 debug!(height = %output.height, "output restored");
                 if let Some(child) = output.child {
@@ -801,11 +900,13 @@ fn reconcile(
 }
 
 /// Stores an output the store did not hold. One an imported entry created is linked to it;
-/// any other gets a confirmed incoming entry of its own, dated `created_at`.
+/// any other gets a confirmed incoming entry of its own, dated `created_at`, with `found`
+/// recorded for it.
 fn restore_missing(
     repos: &mut dyn Repositories,
     output: &FoundOutput,
     created_at: Timestamp,
+    found: ScanFound,
     now: Timestamp,
 ) -> Result<(), ScanError> {
     ensure_account(repos, output.account)?;
@@ -832,6 +933,7 @@ fn restore_missing(
                 updated_at: created_at,
             })?;
             repos.set_confirmed_height(tx, output.height)?;
+            repos.put_setting(&found_key(tx), found.encode())?;
             tx
         }
     };
@@ -944,6 +1046,28 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_found_round_trips_and_rejects_malformed_text() {
+        for during in [FoundDuring::Restore, FoundDuring::Rescan] {
+            for dated_by_block in [false, true] {
+                let found = ScanFound {
+                    during,
+                    dated_by_block,
+                };
+                assert_eq!(ScanFound::decode(found.encode()), Some(found));
+            }
+        }
+        for text in [
+            "",
+            "restore",
+            "restore block x",
+            "found block",
+            "rescan time",
+        ] {
+            assert_eq!(ScanFound::decode(text), None, "{text}");
+        }
+    }
 
     #[test]
     fn scanned_block_round_trips_and_rejects_malformed_text() {

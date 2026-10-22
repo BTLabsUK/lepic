@@ -33,6 +33,7 @@ use lepic_transport::transport::Destination;
 use lepic_wallet::StoreOpener;
 use lepic_wallet::details::{SlateMessage, TransactionDetails};
 use lepic_wallet::legacy_history::{LegacyImportOutcome, LegacyImportStatus, TxOrigin};
+use lepic_wallet::scan::{FoundDuring, ScanFound};
 use support::{Harness, TestWallet, fixed_time, password};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -342,6 +343,14 @@ fn import_after_the_scan_moves_outputs_to_imported_entries_and_dates_the_rest_by
         Amount::new(3_000_000)
     );
     assert_eq!(found[0].transaction.entry.created_at, world.block_time(70));
+    for linked in before
+        .iter()
+        .filter(|d| d.transaction.id != found[0].transaction.id)
+    {
+        let key = format!("scan.found.{}", linked.transaction.id);
+        let record = lepic_store::WalletStore::read(&world.store(), |repos| repos.setting(&key));
+        assert_eq!(record.unwrap(), None, "removed with its entry");
+    }
     let sent = world.tx(DEFAULT, SLATE_SENT);
     assert_eq!(sent.origin, TxOrigin::Imported);
     assert_eq!(
@@ -755,7 +764,47 @@ fn an_output_a_scan_restores_is_dated_by_its_block_and_marked_found() {
             world.block_time(height)
         );
         assert_ne!(details.transaction.entry.created_at, fixed_time());
+        assert_eq!(
+            details.found,
+            Some(ScanFound {
+                during: FoundDuring::Restore,
+                dated_by_block: true,
+            })
+        );
     }
+}
+
+#[test]
+fn an_output_a_later_scan_finds_is_marked_found_by_a_rescan() {
+    let world = World::new(
+        &OldWallet {
+            accounts: Vec::new(),
+            counters: Vec::new(),
+            txs: Vec::new(),
+            outputs: Vec::new(),
+        },
+        &[(0, 1, 40_000_000, 20)],
+    );
+    world.scan();
+    put_outputs(&world.harness.node, &world.keychain, &[UNKNOWN]);
+
+    world.scan();
+
+    let default = world.txs(DEFAULT);
+    let during: Vec<_> = default
+        .iter()
+        .map(|details| details.found.map(|found| found.during))
+        .collect();
+    assert_eq!(
+        during,
+        [Some(FoundDuring::Rescan), Some(FoundDuring::Restore)],
+        "newest first"
+    );
+    assert!(
+        default
+            .iter()
+            .all(|details| details.found.unwrap().dated_by_block)
+    );
 }
 
 #[test]
@@ -782,4 +831,11 @@ fn an_output_whose_block_header_is_unavailable_is_dated_by_the_scan_time() {
     assert_eq!(default.len(), 1);
     assert_eq!(default[0].origin, TxOrigin::FoundByScan);
     assert_eq!(default[0].transaction.entry.created_at, fixed_time());
+    assert_eq!(
+        default[0].found,
+        Some(ScanFound {
+            during: FoundDuring::Restore,
+            dated_by_block: false,
+        })
+    );
 }

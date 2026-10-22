@@ -266,7 +266,7 @@ fn adopt_restored_change(
         && repos.outputs_of_transaction(restored)?.is_empty()
     {
         debug!(tx_id = %tx_id, "restored entry merged into the released send");
-        repos.delete_transaction(restored)?;
+        crate::scan::delete_found_entry(repos, restored)?;
     }
     Ok(())
 }

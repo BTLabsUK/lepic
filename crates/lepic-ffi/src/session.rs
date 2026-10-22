@@ -28,7 +28,9 @@ use lepic_wallet::legacy_history::{
     TxOrigin as EngineTxOrigin,
 };
 use lepic_wallet::refresh::{BALANCE_MINIMUM_CONFIRMATIONS, RefreshOutcome};
-use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
+use lepic_wallet::scan::{
+    FoundDuring as EngineFoundDuring, ScanCancel, ScanOptions, ScanStart, ScanSummary,
+};
 use lepic_wallet::selection::Selection;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{
@@ -46,10 +48,10 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::{DirClaim, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    FeeEstimate, FinalizedTx, ImportedTx, InboxReport, LegacyImport, LegacyImportStatus,
-    ListenerEvent, ListenerEventKind, NodeTip, ReceivedSlate, ScanProgress, ScanResult, SentTx,
-    Slate, SlateMessage, TransactionDetails, TransportState, TxOrigin, TxStatus, WalletConfig,
-    WalletEvent, WalletEventKind, WalletSummary,
+    FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
+    LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, ReceivedSlate, ScanFound,
+    ScanProgress, ScanResult, SentTx, Slate, SlateMessage, TransactionDetails, TransportState,
+    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletSummary,
 };
 use crate::frb_generated::StreamSink;
 use crate::node::{Node, NodeSecret, node_error};
@@ -1019,6 +1021,13 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             output_count: imported.output_count,
             check: imported.check.into(),
         }),
+        found: details.found.map(|found| ScanFound {
+            during: match found.during {
+                EngineFoundDuring::Restore => FoundDuring::Restore,
+                EngineFoundDuring::Rescan => FoundDuring::Rescan,
+            },
+            dated_by_block: found.dated_by_block,
+        }),
     }
 }
 
@@ -1377,6 +1386,10 @@ mod tests {
                 output_count: 1,
                 check: lepic_store::ChainCheck::CancelledButOnChain,
             }),
+            found: Some(lepic_wallet::scan::ScanFound {
+                during: EngineFoundDuring::Restore,
+                dated_by_block: true,
+            }),
         };
 
         assert_eq!(
@@ -1410,6 +1423,10 @@ mod tests {
                     input_count: 2,
                     output_count: 1,
                     check: crate::api::types::ChainCheck::CancelledButOnChain,
+                }),
+                found: Some(ScanFound {
+                    during: FoundDuring::Restore,
+                    dated_by_block: true,
                 }),
             }
         );

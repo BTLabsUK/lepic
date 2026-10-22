@@ -251,6 +251,7 @@ where
                         repos.update_transaction(tx_id, &entry)?;
                         dated = dated.saturating_add(1);
                     }
+                    crate::scan::record_dated_by_block(repos, tx_id)?;
                 }
                 Ok(dated)
             })
@@ -970,7 +971,7 @@ fn link_found_outputs(repos: &mut dyn Repositories, now: Timestamp) -> Result<u3
             output.tx = Some(target);
             repos.put_output(&output)?;
             if repos.outputs_of_transaction(found_tx)?.is_empty() {
-                repos.delete_transaction(found_tx)?;
+                crate::scan::delete_found_entry(repos, found_tx)?;
             }
             linked = linked.saturating_add(1);
         }

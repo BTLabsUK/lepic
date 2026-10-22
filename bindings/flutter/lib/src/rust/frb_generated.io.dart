@@ -231,6 +231,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx dco_decode_box_autoadd_imported_tx(dynamic raw);
 
   @protected
+  ScanFound dco_decode_box_autoadd_scan_found(dynamic raw);
+
+  @protected
   ScanResult dco_decode_box_autoadd_scan_result(dynamic raw);
 
   @protected
@@ -274,6 +277,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   FinalizedTx dco_decode_finalized_tx(dynamic raw);
+
+  @protected
+  FoundDuring dco_decode_found_during(dynamic raw);
 
   @protected
   HttpExposure dco_decode_http_exposure(dynamic raw);
@@ -399,6 +405,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx? dco_decode_opt_box_autoadd_imported_tx(dynamic raw);
 
   @protected
+  ScanFound? dco_decode_opt_box_autoadd_scan_found(dynamic raw);
+
+  @protected
   ScanResult? dco_decode_opt_box_autoadd_scan_result(dynamic raw);
 
   @protected
@@ -442,6 +451,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RefreshProgress dco_decode_refresh_progress(dynamic raw);
+
+  @protected
+  ScanFound dco_decode_scan_found(dynamic raw);
 
   @protected
   ScanProgress dco_decode_scan_progress(dynamic raw);
@@ -716,6 +728,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImportedTx sse_decode_box_autoadd_imported_tx(SseDeserializer deserializer);
 
   @protected
+  ScanFound sse_decode_box_autoadd_scan_found(SseDeserializer deserializer);
+
+  @protected
   ScanResult sse_decode_box_autoadd_scan_result(SseDeserializer deserializer);
 
   @protected
@@ -769,6 +784,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   FinalizedTx sse_decode_finalized_tx(SseDeserializer deserializer);
+
+  @protected
+  FoundDuring sse_decode_found_during(SseDeserializer deserializer);
 
   @protected
   HttpExposure sse_decode_http_exposure(SseDeserializer deserializer);
@@ -918,6 +936,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ScanFound? sse_decode_opt_box_autoadd_scan_found(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ScanResult? sse_decode_opt_box_autoadd_scan_result(
     SseDeserializer deserializer,
   );
@@ -971,6 +994,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RefreshProgress sse_decode_refresh_progress(SseDeserializer deserializer);
+
+  @protected
+  ScanFound sse_decode_scan_found(SseDeserializer deserializer);
 
   @protected
   ScanProgress sse_decode_scan_progress(SseDeserializer deserializer);
@@ -1300,6 +1326,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_scan_found(
+    ScanFound self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_scan_result(
     ScanResult self,
     SseSerializer serializer,
@@ -1364,6 +1396,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_finalized_tx(FinalizedTx self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_found_during(FoundDuring self, SseSerializer serializer);
 
   @protected
   void sse_encode_http_exposure(HttpExposure self, SseSerializer serializer);
@@ -1543,6 +1578,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_scan_found(
+    ScanFound? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_scan_result(
     ScanResult? self,
     SseSerializer serializer,
@@ -1610,6 +1651,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     RefreshProgress self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_scan_found(ScanFound self, SseSerializer serializer);
 
   @protected
   void sse_encode_scan_progress(ScanProgress self, SseSerializer serializer);

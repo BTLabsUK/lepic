@@ -224,6 +224,27 @@ pub struct TransactionDetails {
     pub origin: TxOrigin,
     /// What the old wallet recorded of an imported transaction. `None` for any other.
     pub imported: Option<ImportedTx>,
+    /// For origin `FoundByScan`: which scan found it and how it is dated. `None` for any other
+    /// origin, and for an entry a scan stored before LEPIC recorded this.
+    pub found: Option<ScanFound>,
+}
+
+/// Which scan stored an entry for an output it found with no record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoundDuring {
+    /// The scan a restored or imported wallet runs from genesis: a payment from before the
+    /// restore.
+    Restore,
+    /// A later scan, such as a rescan the user started.
+    Rescan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanFound {
+    pub during: FoundDuring,
+    /// `created_at_ms` is the time of the output's block. False when the node did not give
+    /// the block's header and the time of the scan was used.
+    pub dated_by_block: bool,
 }
 
 /// Where a transaction in the list came from. Values are only added, at the end.

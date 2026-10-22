@@ -4783,6 +4783,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ScanFound dco_decode_box_autoadd_scan_found(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_scan_found(raw);
+  }
+
+  @protected
   ScanResult dco_decode_box_autoadd_scan_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_scan_result(raw);
@@ -4884,6 +4890,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       txId: dco_decode_u_32(arr[0]),
       slateId: dco_decode_String(arr[1]),
     );
+  }
+
+  @protected
+  FoundDuring dco_decode_found_during(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return FoundDuring.values[raw as int];
   }
 
   @protected
@@ -5271,6 +5283,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ScanFound? dco_decode_opt_box_autoadd_scan_found(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_scan_found(raw);
+  }
+
+  @protected
   ScanResult? dco_decode_opt_box_autoadd_scan_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_scan_result(raw);
@@ -5389,6 +5407,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       percent: dco_decode_u_8(arr[0]),
       message: dco_decode_String(arr[1]),
       summary: dco_decode_opt_box_autoadd_wallet_summary(arr[2]),
+    );
+  }
+
+  @protected
+  ScanFound dco_decode_scan_found(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return ScanFound(
+      during: dco_decode_found_during(arr[0]),
+      datedByBlock: dco_decode_bool(arr[1]),
     );
   }
 
@@ -5566,8 +5596,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TransactionDetails dco_decode_transaction_details(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 20)
-      throw Exception('unexpected arr length: expect 20 but see ${arr.length}');
+    if (arr.length != 21)
+      throw Exception('unexpected arr length: expect 21 but see ${arr.length}');
     return TransactionDetails(
       txId: dco_decode_u_32(arr[0]),
       direction: dco_decode_tx_direction(arr[1]),
@@ -5589,6 +5619,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       flow: dco_decode_tx_flow(arr[17]),
       origin: dco_decode_tx_origin(arr[18]),
       imported: dco_decode_opt_box_autoadd_imported_tx(arr[19]),
+      found: dco_decode_opt_box_autoadd_scan_found(arr[20]),
     );
   }
 
@@ -6078,6 +6109,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ScanFound sse_decode_box_autoadd_scan_found(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_scan_found(deserializer));
+  }
+
+  @protected
   ScanResult sse_decode_box_autoadd_scan_result(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_scan_result(deserializer));
@@ -6188,6 +6225,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_txId = sse_decode_u_32(deserializer);
     var var_slateId = sse_decode_String(deserializer);
     return FinalizedTx(txId: var_txId, slateId: var_slateId);
+  }
+
+  @protected
+  FoundDuring sse_decode_found_during(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return FoundDuring.values[inner];
   }
 
   @protected
@@ -6692,6 +6736,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ScanFound? sse_decode_opt_box_autoadd_scan_found(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_scan_found(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   ScanResult? sse_decode_opt_box_autoadd_scan_result(
     SseDeserializer deserializer,
   ) {
@@ -6870,6 +6927,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       message: var_message,
       summary: var_summary,
     );
+  }
+
+  @protected
+  ScanFound sse_decode_scan_found(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_during = sse_decode_found_during(deserializer);
+    var var_datedByBlock = sse_decode_bool(deserializer);
+    return ScanFound(during: var_during, datedByBlock: var_datedByBlock);
   }
 
   @protected
@@ -7080,6 +7145,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_flow = sse_decode_tx_flow(deserializer);
     var var_origin = sse_decode_tx_origin(deserializer);
     var var_imported = sse_decode_opt_box_autoadd_imported_tx(deserializer);
+    var var_found = sse_decode_opt_box_autoadd_scan_found(deserializer);
     return TransactionDetails(
       txId: var_txId,
       direction: var_direction,
@@ -7101,6 +7167,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       flow: var_flow,
       origin: var_origin,
       imported: var_imported,
+      found: var_found,
     );
   }
 
@@ -7742,6 +7809,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_scan_found(
+    ScanFound self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_scan_found(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_scan_result(
     ScanResult self,
     SseSerializer serializer,
@@ -7854,6 +7930,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self.txId, serializer);
     sse_encode_String(self.slateId, serializer);
+  }
+
+  @protected
+  void sse_encode_found_during(FoundDuring self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
   }
 
   @protected
@@ -8268,6 +8350,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_scan_found(
+    ScanFound? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_scan_found(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_scan_result(
     ScanResult? self,
     SseSerializer serializer,
@@ -8434,6 +8529,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_scan_found(ScanFound self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_found_during(self.during, serializer);
+    sse_encode_bool(self.datedByBlock, serializer);
+  }
+
+  @protected
   void sse_encode_scan_progress(ScanProgress self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_opt_box_autoadd_u_8(self.percent, serializer);
@@ -8590,6 +8692,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_tx_flow(self.flow, serializer);
     sse_encode_tx_origin(self.origin, serializer);
     sse_encode_opt_box_autoadd_imported_tx(self.imported, serializer);
+    sse_encode_opt_box_autoadd_scan_found(self.found, serializer);
   }
 
   @protected
