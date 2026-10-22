@@ -24,7 +24,15 @@ use crate::api::tor::{TorEvent, TorEventKind, TorFailureKind, TorStatusKind};
 use crate::api::types::{Chain, TxStatus, WalletConfig};
 use crate::session::{SeedOrigin, Session, TorReport};
 
-const COOKIE: [u8; 32] = [7; 32];
+/// A cookie no other fake tor in this test run has: a start halts a tor that knows the cookie
+/// its files hold, and a port a stopped fake used may serve another test's fake by now.
+fn fresh_cookie() -> [u8; 32] {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let mut cookie = [7; 32];
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    cookie[..8].copy_from_slice(&n.to_le_bytes());
+    cookie
+}
 const SERVER_KEY: &[u8] = b"Tor safe cookie authentication server-to-controller hash";
 const CLIENT_KEY: &[u8] = b"Tor safe cookie authentication controller-to-server hash";
 
@@ -77,7 +85,8 @@ impl FakeNetwork {
     /// port, publishing the onion `onion` as that wallet's. Returns the commands it receives.
     async fn prepare(&self, wallet_dir: &Path, onion: &str) -> Arc<Mutex<Vec<String>>> {
         let control = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        std::fs::write(wallet_dir.join("fake-cookie"), COOKIE).unwrap();
+        let cookie = fresh_cookie();
+        std::fs::write(wallet_dir.join("fake-cookie"), cookie).unwrap();
         std::fs::write(
             wallet_dir.join("fake-control"),
             format!("PORT={}\n", control.local_addr().unwrap()),
@@ -86,6 +95,7 @@ impl FakeNetwork {
         let commands = Arc::new(Mutex::new(Vec::new()));
         tokio::spawn(serve_control(
             control,
+            cookie,
             self.socks,
             Arc::clone(&self.onions),
             onion.trim_end_matches(".onion").to_owned(),
@@ -152,6 +162,7 @@ async fn serve_socks(mut stream: TcpStream, onions: Onions) {
 /// descriptor uploads at once. `SIGNAL SHUTDOWN` makes the fake tor exit.
 async fn serve_control(
     listener: TcpListener,
+    cookie: [u8; 32],
     socks: SocketAddr,
     onions: Onions,
     service_id: String,
@@ -175,7 +186,7 @@ async fn serve_control(
                 assert_eq!(words.next(), Some("SAFECOOKIE"));
                 let client_nonce = unhex(words.next().unwrap());
                 let server_nonce = vec![3u8; 32];
-                let server_hash = safecookie(SERVER_KEY, &client_nonce, &server_nonce);
+                let server_hash = safecookie(&cookie, SERVER_KEY, &client_nonce, &server_nonce);
                 let answer = format!(
                     "250 AUTHCHALLENGE SERVERHASH={} SERVERNONCE={}\r\n",
                     hex(&server_hash),
@@ -187,7 +198,7 @@ async fn serve_control(
             "AUTHENTICATE" => {
                 let expected = nonces
                     .take()
-                    .map(|(client, server)| hex(&safecookie(CLIENT_KEY, &client, &server)));
+                    .map(|(client, server)| hex(&safecookie(&cookie, CLIENT_KEY, &client, &server)));
                 if expected.is_some() && words.next() == expected.as_deref() {
                     "250 OK\r\n".to_owned()
                 } else {
@@ -246,9 +257,9 @@ fn unhex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-fn safecookie(key: &[u8], client_nonce: &[u8], server_nonce: &[u8]) -> Vec<u8> {
+fn safecookie(cookie: &[u8], key: &[u8], client_nonce: &[u8], server_nonce: &[u8]) -> Vec<u8> {
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key).unwrap();
-    mac.update(&COOKIE);
+    mac.update(cookie);
     mac.update(client_nonce);
     mac.update(server_nonce);
     mac.finalize().into_bytes().to_vec()
