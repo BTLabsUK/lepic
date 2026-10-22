@@ -339,6 +339,7 @@ async fn a_tor_send_reaches_the_onion_of_the_other_wallet_and_is_finalized_and_p
     let bob_tx = pair.bob.transaction(received.tx_id.unwrap()).await.unwrap();
     assert_eq!(bob_tx.status, TxStatus::Received);
     assert_eq!(bob_tx.slate_id, Some(sent.slate_id));
+    assert_eq!(bob_tx.transport.as_deref(), Some("tor"));
     let kinds = bob_events.kinds();
     assert_eq!(kinds.first(), Some(&TorEventKind::Starting));
     assert!(kinds.contains(&TorEventKind::Bootstrapped));
@@ -434,9 +435,122 @@ async fn stop_tor_frees_the_slot_for_a_new_start_and_a_wallet_runs_one_tor() {
     pair.bob.stop_tor();
     events.wait_for(TorEventKind::Stopped).await;
     assert_eq!(pair.bob.tor_status().kind, TorStatusKind::Off);
-    std::fs::remove_file(pair.dirs[1].path().join("stop-now")).unwrap();
 
     start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_right_after_a_stop_waits_for_the_stopped_tor_to_be_down() {
+    let (pair, network) = tor_pair().await;
+    let (first, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+    let onion = pair.bob.onion_address().unwrap();
+    // What the next fake tor copies; the running one copied its own already.
+    network.prepare(pair.dirs[1].path(), &onion).await;
+
+    pair.bob.stop_tor();
+    let second = Events::default();
+    pair.bob
+        .start_tor(fake_tor(), None, second.report())
+        .await
+        .unwrap();
+
+    assert!(
+        first.find(TorEventKind::Stopped).is_some(),
+        "{:?}",
+        first.kinds()
+    );
+    let ready = second.wait_for(TorEventKind::Ready).await;
+    assert_eq!(ready.onion, Some(onion));
+    assert!(
+        second.find(TorEventKind::Failed).is_none(),
+        "{:?}",
+        second.kinds()
+    );
+    assert_eq!(pair.bob.tor_status().kind, TorStatusKind::Ready);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tor_ending_after_it_bootstrapped_is_reported_and_frees_the_slot() {
+    let (pair, network) = tor_pair().await;
+    let (events, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+    let onion = pair.bob.onion_address().unwrap();
+    let port = network.listener_port(&onion).unwrap();
+
+    // The fake tor exits as tor would on its own.
+    std::fs::write(pair.dirs[1].path().join("stop-now"), b"").unwrap();
+
+    events.wait_for(TorEventKind::Stopped).await;
+    let kinds = events.kinds();
+    let failed = events.find(TorEventKind::Failed).unwrap();
+    assert_eq!(failed.failure, Some(TorFailureKind::Stopped));
+    assert_eq!(
+        kinds[kinds.len() - 2..],
+        [TorEventKind::Failed, TorEventKind::Stopped]
+    );
+    assert!(eventually(|| pair.bob.tor_status().kind == TorStatusKind::Off).await);
+    std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+
+    start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_the_wallet_stops_its_tor() {
+    let (pair, network) = tor_pair().await;
+    let (events, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+
+    drop(crate::api::wallet::EpicWallet::of_session(Arc::clone(
+        &pair.bob,
+    )));
+
+    events.wait_for(TorEventKind::Stopped).await;
+    assert_eq!(pair.bob.tor_status().kind, TorStatusKind::Off);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_onion_answers_more_senders_at_once_than_one_address_may_hold() {
+    let (pair, network) = tor_pair().await;
+    start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+    start_tor(&network, &pair.alice, pair.dirs[0].path()).await;
+    let bob_onion = pair.bob.onion_address().unwrap();
+    let port = network.listener_port(&bob_onion).unwrap();
+    // Tor connects every sender from 127.0.0.1: these stand for other senders mid-request.
+    let mut held = Vec::new();
+    for _ in 0..=lepic_tor::MAX_STREAMS_PER_CIRCUIT {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(b"POST /v2/foreign HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        held.push(stream);
+    }
+    // Accepted in order, so the held connections count before the send's.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let sent = pair
+        .alice
+        .send_tor(EPIC, 1, &bob_onion, None)
+        .await
+        .unwrap();
+
+    assert!(sent.posted);
+    drop(held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_send_the_wallet_cannot_pay_reports_no_sending() {
+    let (pair, network) = tor_pair().await;
+    let (events, _) = start_tor(&network, &pair.alice, pair.dirs[0].path()).await;
+    let bob_onion = pair.bob.onion_address().unwrap();
+
+    let refused = pair.alice.send_tor(1000 * EPIC, 1, &bob_onion, None).await;
+
+    assert_eq!(kind(refused), WalletErrorKind::NotEnoughFunds);
+    assert!(
+        events.find(TorEventKind::Sending).is_none(),
+        "{:?}",
+        events.kinds()
+    );
+    assert!(sends(&pair.alice).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

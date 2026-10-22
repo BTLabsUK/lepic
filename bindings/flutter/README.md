@@ -317,7 +317,8 @@ wallet.startHttpListener(exposure: HttpExposure.localOnly, port: 3415).listen((e
 On desktop the wallet runs its own tor, from a `tor` binary the app bundles (the Tor Expert
 Bundle), and receives at its onion: its payment-proof address in onion form, the address
 `epic-wallet address` prints, which survives a restore from the phrase (ADR 0018). Android and
-iOS cannot run the binary. Tor is off until the app starts it, per wallet:
+iOS cannot run the binary: there `startTor` starts nothing, and its stream gets `failed` with
+`TorFailureKind.missing`, then `stopped`. Tor is off until the app starts it, per wallet:
 
 ```dart
 final onion = await wallet.onionAddress(); // known before tor runs
@@ -344,7 +345,10 @@ final sent = await wallet.sendTor(
   between wallets. Check the bundle's hashes before passing its path.
 - While tor runs, the wallet listens on `127.0.0.1` on a port of its own, separate from
   `startHttpListener`, and tor forwards the onion's port 80 there. Its payments arrive on the
-  tor stream as `received` and `refused`, as on the HTTP listener's stream.
+  tor stream as `received` and `refused`, as on the HTTP listener's stream, and are recorded with
+  transport `tor`, with open receipts capped apart from those over HTTP. Tor connects every
+  sender to that listener from `127.0.0.1`, so the listener does not limit connections per
+  address; tor closes a sender's circuit that opens more than 4 connections at once.
 - The events go `starting`, `bootstrapped`, `publishing`, `ready`. `failed` with
   `TorFailureKind.listener` or `keys` leaves tor running for sends, and `torStatus()` stays
   `bootstrapped` with that `failure`; any other failure is followed by `stopped`. `missing`
@@ -352,10 +356,13 @@ final sent = await wallet.sendTor(
   Restarting is the app's choice: call `startTor` again after `stopped`.
 - One tor runs per wallet: a second `startTor` gets a stream that ends at once. `stopTor`, `lock`
   and dropping the wallet stop tor, then its listener; the stream then ends with `stopped`.
-  `torStatus()` reports `off`, `starting`, `bootstrapped`, `publishing` or `ready`.
+  A `startTor` right after `stopTor` or `lock` waits for the tor stopped last to be down, as
+  both use the same files, and fails with `start`, then `stopped`, when that takes over 30
+  seconds. `torStatus()` reports `off`, `starting`, `bootstrapped`, `publishing` or `ready`.
 - `sendTor` needs `bootstrapped` or later, else it throws `torNotRunning` and stores nothing.
   It reads the address as `validateOnionAddress` does: with or without `.onion`, `http://`, a
-  port or a path, which are dropped. It puts `sending` on the tor stream: reaching an onion that
+  port or a path, which are dropped. Once the wallet has checked it can pay the amount and its
+  fee, it puts `sending` on the tor stream: reaching an onion that
   is not online takes up to about 150 seconds before it throws `onionUnreachable`, so show
   progress. The result is the `HttpSentTx` of `sendHttp`. A send that throws
   `onionUnreachable`, `torNotRunning` after it started, or `transportFailed` is stored as `sent`:

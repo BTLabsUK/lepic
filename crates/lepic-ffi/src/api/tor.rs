@@ -5,7 +5,8 @@
 //! Tor is off until [`EpicWallet::start_tor`]. While it runs, the wallet listens on
 //! `127.0.0.1` on a port of its own, separate from [`EpicWallet::start_http_listener`], and
 //! tor forwards the onion's port 80 there. Locking or dropping the wallet stops tor, then
-//! that listener. Android and iOS cannot run the bundled tor binary.
+//! that listener. Android and iOS cannot run the bundled tor binary: there `start_tor` starts
+//! nothing and reports `Failed` with [`TorFailureKind::Missing`], then `Stopped`.
 
 use std::sync::Arc;
 
@@ -20,7 +21,7 @@ use crate::frb_generated::StreamSink;
 /// Why the wallet's tor is not working. None of them carries a key or the control cookie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorFailureKind {
-    /// No tor binary at the path given to `start_tor`.
+    /// No tor binary at the path given to `start_tor`, or none can run: Android and iOS.
     Missing,
     /// Tor did not start, or its control port did not answer as expected.
     Start,
@@ -53,8 +54,10 @@ pub enum TorEventKind {
     /// Tor failed for the reason in `failure`. After `Listener` or `Keys` tor keeps running for
     /// sends, and the status stays `Bootstrapped`; after any other reason `Stopped` follows.
     Failed,
-    /// A send or resend over Tor started to reach the other wallet. Reaching an onion that is
-    /// not online takes up to about 150 seconds before the send fails.
+    /// A send or resend over Tor started to reach the other wallet, after the checks made
+    /// before anything is stored passed: for a send, that the wallet can pay the amount and
+    /// its fee. Reaching an onion that is not online takes up to about 150 seconds before the
+    /// send fails.
     Sending,
     /// Signed a payment that came in over Tor and answered it, as the HTTP listener's
     /// `Received`: `tx_id`, `amount`, `repeated`.
@@ -155,7 +158,10 @@ impl EpicWallet {
     /// The first event is `Starting`, or `Failed` with `Listener` when the wallet's listener
     /// could not start; the last one is always `Stopped`. A wallet runs one tor: a call while one
     /// runs or starts gets a stream that ends at once. On a locked wallet the stream ends with
-    /// `Locked` as its error and no event.
+    /// `Locked` as its error and no event. A call right after a stop or lock waits for the tor
+    /// stopped last to be down, as both use the same files; when that takes over 30 seconds,
+    /// the stream gets `Failed` with `Start`, then `Stopped`. On Android and iOS nothing is
+    /// started: the stream gets `Failed` with `Missing`, then `Stopped`.
     pub async fn start_tor(
         &self,
         tor_binary: String,
@@ -198,8 +204,8 @@ impl EpicWallet {
     /// Sends `amount` to the wallet at `onion` over the wallet's tor, then finalizes its
     /// answer and posts the transaction, as [`EpicWallet::send_http`] does. `onion` is read as
     /// [`validate_onion_address`] reads it; the other wallet is always reached at port 80.
-    /// Emits `Sending` on the tor stream; an onion that is not online takes up to about 150
-    /// seconds to fail.
+    /// Emits `Sending` on the tor stream once the wallet has checked it can pay; an onion that
+    /// is not online takes up to about 150 seconds to fail.
     ///
     /// Fails, storing nothing, with `OnionAddressInvalid` for the address, `TorNotRunning`
     /// when tor has not bootstrapped, and the errors of [`EpicWallet::estimate_fee`]. Fails

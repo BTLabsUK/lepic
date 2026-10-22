@@ -554,8 +554,8 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// Sends `amount` to the wallet at `onion` over the wallet's tor, then finalizes its
   /// answer and posts the transaction, as [`EpicWallet::send_http`] does. `onion` is read as
   /// [`validate_onion_address`] reads it; the other wallet is always reached at port 80.
-  /// Emits `Sending` on the tor stream; an onion that is not online takes up to about 150
-  /// seconds to fail.
+  /// Emits `Sending` on the tor stream once the wallet has checked it can pay; an onion that
+  /// is not online takes up to about 150 seconds to fail.
   ///
   /// Fails, storing nothing, with `OnionAddressInvalid` for the address, `TorNotRunning`
   /// when tor has not bootstrapped, and the errors of [`EpicWallet::estimate_fee`]. Fails
@@ -608,7 +608,10 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// The first event is `Starting`, or `Failed` with `Listener` when the wallet's listener
   /// could not start; the last one is always `Stopped`. A wallet runs one tor: a call while one
   /// runs or starts gets a stream that ends at once. On a locked wallet the stream ends with
-  /// `Locked` as its error and no event.
+  /// `Locked` as its error and no event. A call right after a stop or lock waits for the tor
+  /// stopped last to be down, as both use the same files; when that takes over 30 seconds,
+  /// the stream gets `Failed` with `Start`, then `Stopped`. On Android and iOS nothing is
+  /// started: the stream gets `Failed` with `Missing`, then `Stopped`.
   Stream<TorEvent> startTor({required String torBinary, String? libDir});
 
   /// Stops the HTTP listener. Requests in progress finish; its stream ends with `Stopped`

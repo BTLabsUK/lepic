@@ -95,8 +95,10 @@ enum TorEventKind {
   /// sends, and the status stays `Bootstrapped`; after any other reason `Stopped` follows.
   failed,
 
-  /// A send or resend over Tor started to reach the other wallet. Reaching an onion that is
-  /// not online takes up to about 150 seconds before the send fails.
+  /// A send or resend over Tor started to reach the other wallet, after the checks made
+  /// before anything is stored passed: for a send, that the wallet can pay the amount and
+  /// its fee. Reaching an onion that is not online takes up to about 150 seconds before the
+  /// send fails.
   sending,
 
   /// Signed a payment that came in over Tor and answered it, as the HTTP listener's
@@ -112,7 +114,7 @@ enum TorEventKind {
 
 /// Why the wallet's tor is not working. None of them carries a key or the control cookie.
 enum TorFailureKind {
-  /// No tor binary at the path given to `start_tor`.
+  /// No tor binary at the path given to `start_tor`, or none can run: Android and iOS.
   missing,
 
   /// Tor did not start, or its control port did not answer as expected.

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
-use lepic_foreign::{Exposure, ListenSettings, ListenerHandle};
+use lepic_foreign::ListenerHandle;
 use lepic_store::TxId;
 use lepic_tor::{
     FailureKind, OnionAddress, SendFailure, SocksProxy, TRANSPORT_ID, TorProcess, TorSendError,
@@ -15,6 +15,7 @@ use lepic_tor::{
 use lepic_transport::transport::Destination;
 use lepic_wallet::OnionKey;
 use lepic_wallet::send::{Delivery, SendError};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
@@ -30,6 +31,10 @@ pub(crate) type TorReport = Arc<dyn Fn(TorEvent) + Send + Sync>;
 /// The directory inside the wallet's data directory that holds its tor's files.
 const TOR_DIR: &str = "tor";
 
+/// How long a start waits for the tor that is stopping to be down: the tor it stops shares
+/// the data directory with the new one.
+const STOPPING_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The tor of a session.
 #[derive(Default)]
 pub(super) enum TorSlot {
@@ -38,6 +43,20 @@ pub(super) enum TorSlot {
     /// Starting; the number tells this start from a later one.
     Starting(u64),
     Running(Box<TorRun>),
+    /// Stopped, with tor and its listener going down; `true` once both are, or when the
+    /// task that stops them ended without saying so.
+    Stopping(watch::Receiver<bool>),
+}
+
+impl TorSlot {
+    /// Idle when it was stopping and that is done.
+    fn settle(&mut self) {
+        if let Self::Stopping(down) = self
+            && (*down.borrow() || down.has_changed().is_err())
+        {
+            *self = Self::Idle;
+        }
+    }
 }
 
 pub(super) struct TorRun {
@@ -157,6 +176,11 @@ impl Session {
 
     /// Starts tor and its listener unless tor runs or starts, and reports what they do to
     /// `report`.
+    ///
+    /// A start while the tor stopped last is still going down waits for it, as both use the
+    /// same data directory; one that waits too long reports `Failed` and `Stopped`. Android
+    /// and iOS run no tor: there `Failed` with [`TorFailureKind::Missing`] and `Stopped` are
+    /// reported at once.
     pub(crate) async fn start_tor(
         self: &Arc<Self>,
         tor_binary: String,
@@ -164,20 +188,39 @@ impl Session {
         report: TorReport,
     ) -> Result<(), WalletError> {
         let key = self.engine.onion_key()?;
+        if cfg!(any(target_os = "android", target_os = "ios")) {
+            report(failed(TorFailureKind::Missing));
+            report(TorEvent::of(TorEventKind::Stopped));
+            return Ok(());
+        }
         let generation = self.tor_starts.fetch_add(1, Ordering::Relaxed);
-        {
-            let mut slot = lock(&self.tor_slot);
-            // Checked again under the slot lock: a lock that ran since stops only a tor it
-            // finds in the slot.
-            self.ensure_unlocked()?;
-            if !matches!(&*slot, TorSlot::Idle) {
+        loop {
+            let mut down = {
+                let mut slot = lock(&self.tor_slot);
+                // Checked again under the slot lock: a lock that ran since stops only a tor
+                // it finds in the slot.
+                self.ensure_unlocked()?;
+                slot.settle();
+                match &*slot {
+                    TorSlot::Idle => {
+                        *slot = TorSlot::Starting(generation);
+                        break;
+                    }
+                    TorSlot::Stopping(down) => down.clone(),
+                    TorSlot::Starting(_) | TorSlot::Running(_) => return Ok(()),
+                }
+            };
+            // An error is a stopping task that ended without saying so: settled above.
+            let waited = tokio::time::timeout(STOPPING_WAIT, down.wait_for(|down| *down)).await;
+            if waited.is_err() {
+                debug!(transport = "tor", "the tor stopped last is not down yet");
+                report(failed(TorFailureKind::Start));
+                report(TorEvent::of(TorEventKind::Stopped));
                 return Ok(());
             }
-            *slot = TorSlot::Starting(generation);
         }
-        let receiver = self.http_receiver(listener_report(&report));
-        let listening =
-            lepic_foreign::listen(ListenSettings::new(Exposure::LocalOnly, 0), receiver).await;
+        let receiver = self.http_receiver(listener_report(&report), TRANSPORT_ID);
+        let listening = lepic_foreign::listen(lepic_tor::listen_settings(), receiver).await;
         let listener = match listening {
             Ok(listener) => listener,
             Err(error) => {
@@ -236,7 +279,8 @@ impl Session {
         Ok(())
     }
 
-    /// Stops tor, then its listener. `Stopped` is reported once both are down.
+    /// Stops tor, then its listener. `Stopped` is reported once both are down; until then the
+    /// slot is `Stopping`.
     pub(crate) fn stop_tor(&self) {
         self.stop_tor_of_start(None);
     }
@@ -262,11 +306,14 @@ impl Session {
         };
         // Under the slot lock, so a start that follows attaches after this detach.
         self.tor.detach();
+        let (down, down_receiver) = watch::channel(false);
+        *slot = TorSlot::Stopping(down_receiver);
         drop(slot);
         if let TorSlot::Running(run) = run {
-            // A runtime that is shutting down drops the task; tor is then killed with the
-            // process handle and the listener's socket closes with the runtime.
-            drop(self.runtime().boundary.handle.spawn(shut_down(*run)));
+            // A runtime that is shutting down drops the task, and with it `down`; tor is then
+            // killed with the process handle and the listener's socket closes with the
+            // runtime.
+            drop(self.runtime().boundary.handle.spawn(shut_down(*run, down)));
         }
     }
 
@@ -277,9 +324,10 @@ impl Session {
             onion: None,
             failure: None,
         };
-        let slot = lock(&self.tor_slot);
+        let mut slot = lock(&self.tor_slot);
+        slot.settle();
         let run = match &*slot {
-            TorSlot::Idle => return off,
+            TorSlot::Idle | TorSlot::Stopping(_) => return off,
             TorSlot::Starting(_) => {
                 return TorStatus {
                     kind: TorStatusKind::Starting,
@@ -314,8 +362,9 @@ impl Session {
         }
     }
 
-    /// Reports `Sending` and checks that tor can send, before anything is stored.
-    fn begin_tor_send(&self) -> Result<(), WalletError> {
+    /// Where the `Sending` of a send goes, once tor can send; checked before anything is
+    /// stored.
+    fn tor_send_report(&self) -> Result<TorReport, WalletError> {
         let slot = lock(&self.tor_slot);
         let TorSlot::Running(run) = &*slot else {
             return Err(tor_not_running());
@@ -323,8 +372,7 @@ impl Session {
         if run.tor.socks_address().is_none() {
             return Err(tor_not_running());
         }
-        (run.report)(TorEvent::of(TorEventKind::Sending));
-        Ok(())
+        Ok(Arc::clone(&run.report))
     }
 
     pub(crate) async fn send_tor(
@@ -335,13 +383,17 @@ impl Session {
         message: Option<String>,
     ) -> Result<HttpSentTx, WalletError> {
         let onion = onion(to)?;
-        self.begin_tor_send()?;
+        let report = self.tor_send_report()?;
+        // The checks the send makes before it stores anything, so a send that cannot be
+        // made reports no `Sending`.
+        let request = Self::send_request(amount, minimum_confirmations, message);
+        self.engine
+            .estimate_fee(request.amount, request.selection_options())
+            .await?;
+        report(TorEvent::of(TorEventKind::Sending));
         let sent = self
             .engine
-            .send(
-                Self::send_request(amount, minimum_confirmations, message),
-                delivery(&onion),
-            )
+            .send(request, delivery(&onion))
             .await
             .map_err(send_error)?;
         let slate_id = sent.slate_id.to_string();
@@ -373,7 +425,8 @@ impl Session {
                 ));
             }
         };
-        self.begin_tor_send()?;
+        let report = self.tor_send_report()?;
+        report(TorEvent::of(TorEventKind::Sending));
         self.engine
             .resend(TxId(tx_id), delivery(&onion))
             .await
@@ -459,7 +512,7 @@ async fn stop_tor_process(tor: Arc<TorProcess>) {
     }
 }
 
-async fn shut_down(run: TorRun) {
+async fn shut_down(run: TorRun, down: watch::Sender<bool>) {
     let TorRun {
         tor,
         listener,
@@ -472,5 +525,6 @@ async fn shut_down(run: TorRun) {
     stop_tor_process(tor).await;
     listener.shutdown().await;
     info!(transport = "tor", "tor stopped");
+    down.send_replace(true);
     report(TorEvent::of(TorEventKind::Stopped));
 }

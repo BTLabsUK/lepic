@@ -229,7 +229,7 @@ impl Session {
             }
             *slot = HttpListener::Starting(generation);
         }
-        let receiver = self.http_receiver(Arc::clone(&report));
+        let receiver = self.http_receiver(Arc::clone(&report), TRANSPORT_ID);
         let settings = ListenSettings::new(self::exposure(exposure), port);
         let listening = lepic_foreign::listen(settings, receiver).await;
         let handle = match listening {
@@ -280,10 +280,17 @@ impl Session {
     }
 
     /// What the HTTP listener hands each payment to.
-    pub(crate) fn http_receiver(self: &Arc<Self>, report: HttpReport) -> Arc<dyn ReceiveHandler> {
+    /// The wallet behind a listener of the foreign API, recording receipts as `transport`'s:
+    /// HTTP's, or Tor's for the listener behind the onion. Each has its own open receipts.
+    pub(crate) fn http_receiver(
+        self: &Arc<Self>,
+        report: HttpReport,
+        transport: TransportId,
+    ) -> Arc<dyn ReceiveHandler> {
         Arc::new(HttpReceiver {
             session: Arc::downgrade(self),
             report,
+            transport,
         })
     }
 
@@ -317,6 +324,7 @@ impl Session {
 struct HttpReceiver {
     session: Weak<Session>,
     report: HttpReport,
+    transport: TransportId,
 }
 
 impl ReceiveHandler for HttpReceiver {
@@ -326,11 +334,12 @@ impl ReceiveHandler for HttpReceiver {
                 return Err(Refusal::Unavailable);
             };
             let boundary = session.runtime().boundary.clone();
+            let transport = self.transport;
             let received = boundary
                 .run("http_receive", async move {
                     match session
                         .engine
-                        .receive_unsolicited(TRANSPORT_ID, &slate, ReceiveRequest::default())
+                        .receive_unsolicited(transport, &slate, ReceiveRequest::default())
                         .await
                     {
                         Err(ReceiveError::OpenReceipts(cause)) => Ok(Err(cause)),
@@ -341,8 +350,9 @@ impl ReceiveHandler for HttpReceiver {
             match received {
                 Ok(Err(cause)) => {
                     debug!(
+                        transport = %self.transport,
                         error = cause.as_ref().map(tracing::field::display),
-                        "http payment refused at the open receipt cap"
+                        "payment refused at the open receipt cap"
                     );
                     self.refused(Refusal::Unavailable);
                     Err(Refusal::Unavailable)
@@ -358,7 +368,7 @@ impl ReceiveHandler for HttpReceiver {
                 }
                 Err(error) => {
                     let refusal = refusal(error.kind);
-                    debug!(error = %error, "http payment refused");
+                    debug!(transport = %self.transport, error = %error, "payment refused");
                     self.refused(refusal);
                     Err(refusal)
                 }

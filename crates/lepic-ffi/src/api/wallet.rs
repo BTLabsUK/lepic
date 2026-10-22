@@ -195,12 +195,19 @@ async fn create_pin_wallet(
 impl Drop for EpicWallet {
     fn drop(&mut self) {
         self.session.stop_listener();
+        // Tor stops before the listeners it forwards to.
+        self.session.stop_tor();
         self.session.stop_http_listener();
         self.session.cancel_scan();
     }
 }
 
 impl EpicWallet {
+    #[cfg(test)]
+    pub(crate) const fn of_session(session: Arc<Session>) -> Self {
+        Self { session }
+    }
+
     pub(super) fn boundary(&self) -> Boundary {
         self.session.runtime().boundary.clone()
     }

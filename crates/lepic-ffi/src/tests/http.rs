@@ -296,7 +296,9 @@ fn numbered(slate: &str, slate_id: &str, n: u32) -> WireSlate {
 async fn the_listener_caps_open_receipts_and_still_answers_a_payment_received_before() {
     let pair = funded_pair().await;
     let events = Events::default();
-    let receiver = pair.bob.http_receiver(events.report());
+    let receiver = pair
+        .bob
+        .http_receiver(events.report(), lepic_foreign::TRANSPORT_ID);
     let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
     let slate_id = slate.slate_id.clone();
     let cap = u32::try_from(lepic_wallet::inbox::MAX_OPEN_RECEIPTS).unwrap();
