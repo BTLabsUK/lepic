@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use lepic_foreign::{Exposure, ListenSettings, ReceiveHandler, Refusal, listen};
 use lepic_slate::codec::{MediaType, WireSlate};
-use lepic_tor::socks::SocksCredentials;
+use lepic_tor::socks::{SocksCredentials, SocksReply};
 use lepic_tor::{
     OnionClient, OnionClientSettings, SendFailure, SocksError, TorProcess, TorSendError,
     TorSettings, TorTransport,
@@ -82,9 +82,12 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
             .check_version(socks, &onion, &SocksCredentials::random().unwrap())
             .await
         {
-            Err(TorSendError::Socks(SocksError::Timeout)) if attempt < 2 => {
+            // A descriptor just published may not have reached every directory yet.
+            Err(TorSendError::Socks(
+                error @ (SocksError::Timeout | SocksError::Refused(SocksReply::OnionNotFound)),
+            )) if attempt < 2 => {
                 eprintln!(
-                    "attempt {attempt} timed out after {:.1} s",
+                    "attempt {attempt} failed after {:.1} s: {error}",
                     asked.elapsed().as_secs_f64()
                 );
                 attempt += 1;
