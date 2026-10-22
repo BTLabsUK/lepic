@@ -11,13 +11,18 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+base64 = { workspace = true, features = ["alloc"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
 sha2.workspace = true
 sha3.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
 zeroize.workspace = true
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true, features = ["hazmat", "zeroize"] }
 proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }

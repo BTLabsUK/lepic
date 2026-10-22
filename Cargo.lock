@@ -1209,12 +1209,16 @@ dependencies = [
 name = "lepic-tor"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "ed25519-dalek",
  "proptest",
  "serde_json",
  "sha2",
  "sha3",
+ "tempfile",
  "thiserror",
+ "tokio",
+ "tracing",
  "zeroize",
 ]
 
