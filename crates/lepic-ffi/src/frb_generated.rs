@@ -8062,6 +8062,7 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             36 => crate::api::error::WalletErrorKind::OnionUnreachable,
             37 => crate::api::error::WalletErrorKind::ChangeTooSmall,
             38 => crate::api::error::WalletErrorKind::TooHeavy,
+            39 => crate::api::error::WalletErrorKind::NothingToConsolidate,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -10146,6 +10147,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::OnionUnreachable => 36.into_dart(),
             Self::ChangeTooSmall => 37.into_dart(),
             Self::TooHeavy => 38.into_dart(),
+            Self::NothingToConsolidate => 39.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -11754,6 +11756,7 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::OnionUnreachable => 36,
                 crate::api::error::WalletErrorKind::ChangeTooSmall => 37,
                 crate::api::error::WalletErrorKind::TooHeavy => 38,
+                crate::api::error::WalletErrorKind::NothingToConsolidate => 39,
                 _ => {
                     unimplemented!("");
                 }

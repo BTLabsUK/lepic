@@ -107,6 +107,9 @@ pub enum WalletErrorKind {
     /// The transaction would spend more inputs or make more outputs than a transaction may
     /// hold. Nothing was stored; send a smaller amount, or consolidate first.
     TooHeavy,
+    /// `consolidate_outputs` found fewer than two spendable outputs, so there is nothing to
+    /// merge. Nothing was stored.
+    NothingToConsolidate,
 }
 
 impl WalletErrorKind {
@@ -152,6 +155,7 @@ impl WalletErrorKind {
             Self::OnionUnreachable => 44,
             Self::ChangeTooSmall => 45,
             Self::TooHeavy => 46,
+            Self::NothingToConsolidate => 47,
         }
     }
 }
@@ -246,6 +250,9 @@ impl From<SendError> for WalletError {
                 WalletErrorKind::ChangeTooSmall
             }
             SendError::Selection(SelectionError::TooHeavy { .. }) => WalletErrorKind::TooHeavy,
+            SendError::Selection(SelectionError::NothingToConsolidate { .. }) => {
+                WalletErrorKind::NothingToConsolidate
+            }
             SendError::Selection(_)
             | SendError::NotResendable { .. }
             | SendError::PayeeMismatch { .. }
@@ -461,6 +468,7 @@ mod tests {
             (K::OnionUnreachable, 44),
             (K::ChangeTooSmall, 45),
             (K::TooHeavy, 46),
+            (K::NothingToConsolidate, 47),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -492,6 +500,10 @@ mod tests {
                     needed: Amount::new(2),
                 },
                 WalletErrorKind::NotEnoughFunds,
+            ),
+            (
+                SelectionError::NothingToConsolidate { outputs: 1 },
+                WalletErrorKind::NothingToConsolidate,
             ),
         ];
         for (error, kind) in cases {

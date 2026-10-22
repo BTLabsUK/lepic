@@ -159,7 +159,11 @@ enum WalletErrorKind {
 
   /// The transaction would spend more inputs or make more outputs than a transaction may
   /// hold. Nothing was stored; send a smaller amount, or consolidate first.
-  tooHeavy;
+  tooHeavy,
+
+  /// `consolidate_outputs` found fewer than two spendable outputs, so there is nothing to
+  /// merge. Nothing was stored.
+  nothingToConsolidate;
 
   /// The stable number of this kind.
   Future<int> code() =>

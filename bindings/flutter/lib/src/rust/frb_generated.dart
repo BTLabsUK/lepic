@@ -9797,8 +9797,10 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
         sealedPassword: sealedPassword,
       );
 
-  /// Merges every output with `minimum_confirmations`, up to 500, into one, as
-  /// [`EpicWallet::split_outputs`] does with one output. Fails as that call does.
+  /// Merges every output with `minimum_confirmations` into one, as
+  /// [`EpicWallet::split_outputs`] does with one output: with more than 500 spendable
+  /// outputs it merges the 500 smallest, and a later call merges the rest. Fails as that
+  /// call does, and with `NothingToConsolidate` when fewer than two outputs are spendable.
   Future<SelfSentTx> consolidateOutputs({
     required BigInt minimumConfirmations,
   }) => RustLib.instance.api.crateApiWalletEpicWalletConsolidateOutputs(
@@ -10355,10 +10357,11 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// Splits the wallet's funds into `outputs` outputs of nearly equal value, from 2 to 10, so
   /// that several sends can follow without waiting for each other's change: a normal network
   /// transaction to the wallet itself, confirmed as any send, never through its Epicbox
-  /// address. It spends every output with `minimum_confirmations`, up to 500, so the whole
-  /// balance is locked until it confirms. It shows as two transactions over transport `self`,
-  /// a send holding the change outputs and a receive holding one output; the fee is that of
-  /// [`EpicWallet::estimate_split`] at the same tip.
+  /// address. It spends every output with `minimum_confirmations`, so the whole balance is
+  /// locked until it confirms; a wallet with more than 500 spendable outputs spends the 500
+  /// smallest and keeps the rest spendable. It shows as two transactions over transport
+  /// `self`, a send holding the change outputs and a receive holding one output; the fee is
+  /// that of [`EpicWallet::estimate_split`] at the same tip.
   ///
   /// Fails with `InvalidArgument` for a count outside 2..=10, with `NotEnoughFunds` when the
   /// spendable outputs cannot pay the fee and one base unit into each output, and otherwise
