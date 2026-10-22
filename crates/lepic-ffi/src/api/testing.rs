@@ -201,6 +201,18 @@ impl MockChain {
         });
     }
 
+    /// What the node answers to `ready_for_txs`; `None` answers as a node before 4.1.0, which
+    /// does not know the method, as the chain does until this is called.
+    #[frb(sync)]
+    pub fn set_node_ready_for_txs(&self, ready: Option<bool>) {
+        guard_or("mock_chain_set_node_ready_for_txs", (), || {
+            #[cfg(feature = "mock")]
+            self.backend.set_ready_for_txs(ready);
+            #[cfg(not(feature = "mock"))]
+            let _ = ready;
+        });
+    }
+
     /// While `stalled`, every node request waits without an answer, as a node that hangs.
     /// Requests that waited get their answer once it is cleared.
     #[frb(sync)]

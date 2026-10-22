@@ -1452,9 +1452,23 @@ pub(crate) async fn node_tip(
         .get_version()
         .await
         .map_err(|error| node_error(&error))?;
+    // Both are extras of the answer: a node that fails them still gives its tip.
+    let ready_for_txs = node.ready_for_txs().await.unwrap_or_else(|error| {
+        debug!(error = %lepic_telemetry::ErrorChain(&error), "ready_for_txs unanswered");
+        None
+    });
+    let tip_time_ms = match node.get_header(tip.height).await {
+        Ok(header) => header.map(|header| header.timestamp.as_millisecond()),
+        Err(error) => {
+            debug!(error = %lepic_telemetry::ErrorChain(&error), "tip header unanswered");
+            None
+        }
+    };
     Ok(NodeTip {
         height: tip.height.value(),
         node_version: version.node_version,
+        ready_for_txs,
+        tip_time_ms,
     })
 }
 

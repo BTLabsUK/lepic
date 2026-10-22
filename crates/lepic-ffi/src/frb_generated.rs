@@ -43,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1358511441;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1752970934;
 
 // Section: executor
 
@@ -5161,6 +5161,58 @@ fn wire__crate__api__testing__MockChain_set_height_impl(
         },
     )
 }
+fn wire__crate__api__testing__MockChain_set_node_ready_for_txs_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MockChain_set_node_ready_for_txs",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MockChain>,
+            >>::sse_decode(&mut deserializer);
+            let api_ready = <Option<bool>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = Ok::<_, ()>({
+                    crate::api::testing::MockChain::set_node_ready_for_txs(
+                        &*api_that_guard,
+                        api_ready,
+                    );
+                })?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__testing__MockChain_set_node_stalled_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -7006,9 +7058,13 @@ impl SseDecode for crate::api::types::NodeTip {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_height = <u64>::sse_decode(deserializer);
         let mut var_nodeVersion = <String>::sse_decode(deserializer);
+        let mut var_readyForTxs = <Option<bool>>::sse_decode(deserializer);
+        let mut var_tipTimeMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::types::NodeTip {
             height: var_height,
             node_version: var_nodeVersion,
+            ready_for_txs: var_readyForTxs,
+            tip_time_ms: var_tipTimeMs,
         };
     }
 }
@@ -7018,6 +7074,17 @@ impl SseDecode for Option<String> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<String>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<bool> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<bool>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -8314,21 +8381,21 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        96 => wire__crate__api__testing__MockStockPeer_return_messages_impl(
+        97 => wire__crate__api__testing__MockStockPeer_return_messages_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        97 => wire__crate__api__testing__MockStockPeer_send_impl(port, ptr, rust_vec_len, data_len),
-        98 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
-        99 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
-        100 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
-        101 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
-        105 => {
+        98 => wire__crate__api__testing__MockStockPeer_send_impl(port, ptr, rust_vec_len, data_len),
+        99 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
+        100 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
+        101 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
+        102 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
+        106 => {
             wire__crate__api__error__wallet_error_kind_code_impl(port, ptr, rust_vec_len, data_len)
         }
-        106 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
+        107 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -8386,27 +8453,32 @@ fn pde_ffi_dispatcher_sync_impl(
             data_len,
         ),
         87 => wire__crate__api__testing__MockChain_set_height_impl(ptr, rust_vec_len, data_len),
-        88 => {
+        88 => wire__crate__api__testing__MockChain_set_node_ready_for_txs_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        89 => {
             wire__crate__api__testing__MockChain_set_node_stalled_impl(ptr, rust_vec_len, data_len)
         }
-        89 => wire__crate__api__testing__MockChain_set_node_unreachable_impl(
+        90 => wire__crate__api__testing__MockChain_set_node_unreachable_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        90 => wire__crate__api__testing__MockChain_stalled_node_calls_impl(
+        91 => wire__crate__api__testing__MockChain_stalled_node_calls_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        91 => wire__crate__api__testing__MockRelay_new_impl(ptr, rust_vec_len, data_len),
-        92 => wire__crate__api__testing__MockRelay_pending_impl(ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
-        94 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
-        95 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
-        102 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
-        103 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
-        104 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
+        92 => wire__crate__api__testing__MockRelay_new_impl(ptr, rust_vec_len, data_len),
+        93 => wire__crate__api__testing__MockRelay_pending_impl(ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
+        95 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
+        96 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
+        103 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
+        104 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
+        105 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -9133,6 +9205,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::NodeTip {
         [
             self.height.into_into_dart().into_dart(),
             self.node_version.into_into_dart().into_dart(),
+            self.ready_for_txs.into_into_dart().into_dart(),
+            self.tip_time_ms.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -10769,6 +10843,8 @@ impl SseEncode for crate::api::types::NodeTip {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <u64>::sse_encode(self.height, serializer);
         <String>::sse_encode(self.node_version, serializer);
+        <Option<bool>>::sse_encode(self.ready_for_txs, serializer);
+        <Option<i64>>::sse_encode(self.tip_time_ms, serializer);
     }
 }
 
@@ -10778,6 +10854,16 @@ impl SseEncode for Option<String> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <String>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<bool> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <bool>::sse_encode(value, serializer);
         }
     }
 }

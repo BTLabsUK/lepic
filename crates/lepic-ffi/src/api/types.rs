@@ -51,10 +51,18 @@ impl std::fmt::Debug for WalletConfig {
     }
 }
 
+/// What `node_tip` learns from a node's foreign API, which needs no API secret.
 #[derive(Debug, Clone)]
 pub struct NodeTip {
     pub height: u64,
     pub node_version: String,
+    /// Whether the node is synced and takes transactions, as epic-server 4.1.0 and later
+    /// answer. `None` from an older node, which does not know the question, or when the
+    /// question failed.
+    pub ready_for_txs: Option<bool>,
+    /// When the tip block was mined, in milliseconds since the Unix epoch, as its header
+    /// says. `None` when the header could not be fetched.
+    pub tip_time_ms: Option<i64>,
 }
 
 /// The balance of the default account, in the categories `epic-wallet info` reports.

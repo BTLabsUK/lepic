@@ -186,3 +186,21 @@ fn refuses_a_pool_kernel_whose_excess_is_not_a_curve_value() {
         "{error:?}"
     );
 }
+
+#[test]
+fn ready_for_txs_reads_the_flag_and_refuses_anything_else() {
+    let answer = |result: &str| format!(r#"{{"id":1,"jsonrpc":"2.0","result":{{"Ok":{result}}}}}"#);
+    assert!(
+        lepic_node::decode::ready_for_txs(answer(r#"{"ready_for_txs":true}"#).as_bytes()).unwrap()
+    );
+    assert!(
+        !lepic_node::decode::ready_for_txs(answer(r#"{"ready_for_txs":false}"#).as_bytes())
+            .unwrap()
+    );
+    for result in [r#"{}"#, r#"{"ready_for_txs":"yes"}"#, "true"] {
+        assert!(
+            lepic_node::decode::ready_for_txs(answer(result).as_bytes()).is_err(),
+            "{result}"
+        );
+    }
+}

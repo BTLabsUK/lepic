@@ -61,6 +61,10 @@ abstract class MockChain implements RustOpaqueInterface {
 
   void setHeight({required BigInt height});
 
+  /// What the node answers to `ready_for_txs`; `None` answers as a node before 4.1.0, which
+  /// does not know the method, as the chain does until this is called.
+  void setNodeReadyForTxs({bool? ready});
+
   /// While `stalled`, every node request waits without an answer, as a node that hangs.
   /// Requests that waited get their answer once it is cleared.
   void setNodeStalled({required bool stalled});

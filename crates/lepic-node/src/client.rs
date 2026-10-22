@@ -258,6 +258,24 @@ impl<T: RpcTransport> NodeClient<T> {
         }
     }
 
+    /// Whether the node is synced and takes transactions, as epic-server 4.1.0 and later
+    /// answer `ready_for_txs` without the API secret. `None` from a node that does not know
+    /// the method, as nodes before 4.1.0 answer.
+    pub async fn ready_for_txs(&self) -> Result<Option<bool>, NodeError> {
+        let answer = self
+            .call("ready_for_txs", &Value::Null, Idempotency::Read)
+            .await
+            .and_then(|body| decode::ready_for_txs(&body));
+        match answer {
+            Ok(ready) => Ok(Some(ready)),
+            Err(NodeError::Rpc {
+                code: METHOD_NOT_FOUND,
+                ..
+            }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     async fn get_outputs_chunk(
         &self,
         chunk: &[Commitment],
@@ -269,6 +287,9 @@ impl<T: RpcTransport> NodeClient<T> {
         decode::outputs(&body, &requested)
     }
 }
+
+/// The JSON-RPC 2.0 code for a method the server does not know.
+const METHOD_NOT_FOUND: i64 = -32601;
 
 // Span names must be literals; naming each span after its method keeps the method out of the
 // field vocabulary.
@@ -283,6 +304,7 @@ fn call_span(method: &str, node: &str) -> Span {
         "get_pmmr_indices" => info_span!("get_pmmr_indices", node),
         "push_transaction" => info_span!("push_transaction", node),
         "get_unconfirmed_transactions" => info_span!("get_unconfirmed_transactions", node),
+        "ready_for_txs" => info_span!("ready_for_txs", node),
         _ => info_span!("node_call", node),
     }
 }

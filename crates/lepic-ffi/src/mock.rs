@@ -108,6 +108,10 @@ impl MockBackend {
         self.unreachable.store(unreachable, Ordering::SeqCst);
     }
 
+    pub(crate) fn set_ready_for_txs(&self, ready: Option<bool>) {
+        self.node.update_chain(|chain| chain.ready_for_txs = ready);
+    }
+
     pub(crate) fn set_stalled(&self, stalled: bool) {
         self.stalled.store(stalled, Ordering::SeqCst);
     }

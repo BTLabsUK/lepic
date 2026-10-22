@@ -221,3 +221,27 @@ fn a_recorded_session_cannot_take_pushes_or_chain_updates() {
     assert!(recorded.pushed_transactions().is_empty());
     assert!(!recorded.update_chain(|_| {}));
 }
+
+#[test]
+fn ready_for_txs_is_unknown_from_a_node_without_the_method() {
+    let (mut chain, _) = chain();
+    let old = MockNode::from_chain(chain.clone());
+    assert_eq!(block_on(old.client().ready_for_txs()).unwrap(), None);
+    assert!(old.violations().is_empty());
+
+    for ready in [true, false] {
+        chain.ready_for_txs = Some(ready);
+        let node = MockNode::from_chain(chain.clone());
+        assert_eq!(
+            block_on(node.client().ready_for_txs()).unwrap(),
+            Some(ready)
+        );
+    }
+
+    let failing = MockNode::from_chain(chain);
+    failing.fail_next("ready_for_txs", MockFailure::Unreachable);
+    assert!(matches!(
+        block_on(failing.client().ready_for_txs()),
+        Err(NodeError::Connect(_))
+    ));
+}

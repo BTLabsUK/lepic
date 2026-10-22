@@ -1078,6 +1078,21 @@ void main() {
     expect(consolidate.changeOutputs, 0);
   });
 
+  test('the node tip tells readiness and the tip time', () async {
+    final config = configFor(walletDir('node-tip'));
+    final old = await nodeTip(runtime: runtime, config: config);
+    expect(old.readyForTxs, isNull);
+    expect(old.tipTimeMs, isNotNull);
+    chain.setNodeReadyForTxs(ready: true);
+    try {
+      final ready = await nodeTip(runtime: runtime, config: config);
+      expect(ready.readyForTxs, isTrue);
+      expect(ready.height, chain.height());
+    } finally {
+      chain.setNodeReadyForTxs();
+    }
+  });
+
   test('a send without a message shows none', () async {
     final (alice, _, _) = await fundedPair('message-none');
     final s1 = await alice.createSendSlate(

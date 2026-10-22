@@ -13,13 +13,18 @@ use crate::api::{
 use crate::error::{NodeError, RejectionKind};
 use crate::rpc::decode_response;
 use crate::wire::{
-    WireHeader, WireLocatedKernel, WireOutput, WireOutputListing, WirePoolEntry, WireTip,
-    WireVersion, validate_output_locations, validate_pool,
+    WireHeader, WireLocatedKernel, WireOutput, WireOutputListing, WirePoolEntry, WireReadyForTxs,
+    WireTip, WireVersion, validate_output_locations, validate_pool,
 };
 
 pub fn version(body: &[u8]) -> Result<NodeVersion, NodeError> {
     const METHOD: &str = "get_version";
     decode_response::<WireVersion>(METHOD, body)?.validate(METHOD)
+}
+
+/// Whether the node is synced and takes transactions, as `ready_for_txs` answers.
+pub fn ready_for_txs(body: &[u8]) -> Result<bool, NodeError> {
+    Ok(decode_response::<WireReadyForTxs>("ready_for_txs", body)?.ready_for_txs)
 }
 
 pub fn tip(body: &[u8]) -> Result<Tip, NodeError> {

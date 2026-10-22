@@ -45,6 +45,12 @@ impl WireVersion {
     }
 }
 
+/// The answer to `ready_for_txs`, epic-server 4.1.0 and later.
+#[derive(Debug, Deserialize)]
+pub(crate) struct WireReadyForTxs {
+    pub(crate) ready_for_txs: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct WireTip {
     height: u64,

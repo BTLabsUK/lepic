@@ -582,14 +582,33 @@ enum ListenerEventKind {
   invoiceBounced,
 }
 
+/// What `node_tip` learns from a node's foreign API, which needs no API secret.
 class NodeTip {
   final BigInt height;
   final String nodeVersion;
 
-  const NodeTip({required this.height, required this.nodeVersion});
+  /// Whether the node is synced and takes transactions, as epic-server 4.1.0 and later
+  /// answer. `None` from an older node, which does not know the question, or when the
+  /// question failed.
+  final bool? readyForTxs;
+
+  /// When the tip block was mined, in milliseconds since the Unix epoch, as its header
+  /// says. `None` when the header could not be fetched.
+  final PlatformInt64? tipTimeMs;
+
+  const NodeTip({
+    required this.height,
+    required this.nodeVersion,
+    this.readyForTxs,
+    this.tipTimeMs,
+  });
 
   @override
-  int get hashCode => height.hashCode ^ nodeVersion.hashCode;
+  int get hashCode =>
+      height.hashCode ^
+      nodeVersion.hashCode ^
+      readyForTxs.hashCode ^
+      tipTimeMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -597,7 +616,9 @@ class NodeTip {
       other is NodeTip &&
           runtimeType == other.runtimeType &&
           height == other.height &&
-          nodeVersion == other.nodeVersion;
+          nodeVersion == other.nodeVersion &&
+          readyForTxs == other.readyForTxs &&
+          tipTimeMs == other.tipTimeMs;
 }
 
 /// Where an output counts in `WalletSummary`. Values are only added, at the end.

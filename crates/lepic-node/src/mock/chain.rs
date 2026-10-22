@@ -51,6 +51,9 @@ pub struct ChainState {
     /// unless `header_times` says otherwise.
     pub genesis_time: Timestamp,
     pub header_times: BTreeMap<Height, Timestamp>,
+    /// The answer to `ready_for_txs`; `None` answers as a node before 4.1.0, which does not
+    /// know the method.
+    pub ready_for_txs: Option<bool>,
 }
 
 impl ChainState {
@@ -64,6 +67,7 @@ impl ChainState {
             genesis_time: Timestamp::from_second(DEFAULT_GENESIS_SECONDS)
                 .unwrap_or(Timestamp::UNIX_EPOCH),
             header_times: BTreeMap::new(),
+            ready_for_txs: None,
         }
     }
 
@@ -102,6 +106,13 @@ impl ChainState {
                 "total_difficulty": {},
             })),
             "get_header" => self.answer_header(params),
+            "ready_for_txs" => match self.ready_for_txs {
+                Some(ready) => Answer::Ok(json!({ "ready_for_txs": ready })),
+                None => Answer::Response(json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32601, "message": "Method not found"},
+                })),
+            },
             "get_kernel" => self.answer_kernel(params),
             "get_outputs" => self.answer_outputs(params),
             "get_unspent_outputs" => self.answer_unspent(params),

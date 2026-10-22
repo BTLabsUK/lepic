@@ -101,7 +101,9 @@ pub async fn delete_wallet(
         .await
 }
 
-/// The configured node's tip, without opening a wallet.
+/// The configured node's tip, version, readiness and tip block time, without opening a
+/// wallet. Fails with `NodeUnreachable` when the tip or version cannot be had; readiness and
+/// the block time are `None` when only they fail.
 pub async fn node_tip(
     runtime: &LepicRuntime,
     config: WalletConfig,
