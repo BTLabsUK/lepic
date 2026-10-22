@@ -112,6 +112,17 @@ the fees, so a lost or doubled effect fails the run.
 | epic-wallet sends over http | `lepic http listen --port 23510`; `epic-wallet send -m http`; the listener's report counts one received payment |
 | same S1 twice over http | one S1 posted twice to `lepic http listen`: identical S2, one transaction, report counts one received and one repeated |
 
+`SCENARIO_FILTER='import epic-wallet history' ./run.sh` runs the last scenario alone (`history.sh`,
+`history_compare.py`). It builds a history in a fresh `epic-wallet` wallet: receipts over Epicbox and
+by file with messages, a send with fee and change, a cancelled send and a cancelled receipt, an
+invoice each way, a second account and a send left unfinished. It copies the stopped wallet's folder
+and records `epic-wallet`'s own `export_tx`, `info` and `outputs`, then imports the copy into two
+`lepic` wallets (history before the scan, and scan before the history) and compares every
+transaction, the account labels and the balances. A second `import-history` must report
+`already-imported` and change nothing, the copy's file hashes must not change, and the folders of
+two other wallets must report `other-wallet` and store nothing. The report with both tables goes to
+`.work/history/<time>/report.md`.
+
 `lepic` writes every slate file in the V3 shape with header `3/3/<b>` (ADR 0015), while `epic-wallet`
 writes V2 unless the slate carries a TTL or payment proof. Each file scenario checks that the file
 `lepic` wrote is V3 at 3/3, with the TTL where one was asked for, and that a reply keeps the block

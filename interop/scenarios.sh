@@ -485,6 +485,9 @@ scenario_http_repeat() {
     DETAIL="S1 ${slate_id} delivered twice: same S2, one transaction"
 }
 
+# shellcheck source=history.sh
+source "${INTEROP_DIR}/history.sh"
+
 SCENARIOS=(
     "lepic sends to epic-wallet:scenario_lepic_sends"
     "epic-wallet sends to lepic:scenario_epic_wallet_sends"
@@ -499,4 +502,5 @@ SCENARIOS=(
     "lepic sends over http:scenario_http_lepic_sends"
     "epic-wallet sends over http:scenario_http_epic_wallet_sends"
     "same S1 twice over http:scenario_http_repeat"
+    "import epic-wallet history:scenario_import_history"
 )
