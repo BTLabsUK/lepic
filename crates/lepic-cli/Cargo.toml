@@ -25,6 +25,7 @@ lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-store.workspace = true
 lepic-telemetry.workspace = true
+lepic-tor.workspace = true
 lepic-transport.workspace = true
 lepic-wallet.workspace = true
 rand = { workspace = true, features = ["std", "std_rng", "sys_rng"] }

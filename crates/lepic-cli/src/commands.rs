@@ -21,6 +21,7 @@ use lepic_primitives::params::Network;
 use lepic_store::{
     OutboxStatus, Repositories, SlateStage, StoredTransaction, TxDirection, TxId, WalletStore,
 };
+use lepic_tor::{SocksProxy, TorProcess, TorSettings, TorState};
 use lepic_transport::error::TransportError;
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
@@ -55,7 +56,7 @@ use crate::cli::{
     AllowCommand, Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand,
     HttpListenArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, NodeCommand, PayArgs,
     PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs,
-    TxCommand, WalletCommand, WalletScanArgs, WordsArg,
+    TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
@@ -64,13 +65,16 @@ use crate::output::{
     EpicboxStatusReport, ExpiredReport, FinalizeReport, HttpListenReport, InboxReport, InfoReport,
     InitReport, InvoiceAddressReport, InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport,
     InvoicePayReport, MessageReport, NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport,
-    ReceiveReport, Report, ResendReport, RestoreReport, ScanReport, SendReport, TxListReport,
-    TxReport, TxStateReport, WalletScanReport,
+    ReceiveReport, Report, ResendReport, RestoreReport, ScanReport, SendReport, TorAddressReport,
+    TorListenReport, TxListReport, TxReport, TxStateReport, WalletScanReport,
 };
 use crate::progress::Progress;
 use crate::settings::{OutputFormat, Settings};
 use crate::stores::{CliStores, SharedStore};
 use crate::vault::{FileVault, VAULT_FILE};
+
+/// The directory inside the data directory that holds the wallet's tor files.
+const TOR_DIR: &str = "tor";
 
 /// Every CLI wallet has this name in logs; one data directory holds one wallet.
 const WALLET_NAME: &str = "default";
@@ -91,6 +95,8 @@ struct Opened<N: NodeApi + 'static> {
     epicbox: EpicboxTransport,
     /// Holds the answers of HTTP sends until they are finalized.
     http: lepic_foreign::HttpTransport,
+    /// Holds the answers of Tor sends until they are finalized.
+    tor: lepic_tor::TorTransport,
     /// Held until the command ends; `None` when the data directory does not exist.
     _lock: Option<std::fs::File>,
 }
@@ -163,6 +169,8 @@ impl<H: Host> Run<'_, H> {
             Command::Invoice(command) => self.invoice(command).await,
             Command::Epicbox(command) => self.epicbox(command).await,
             Command::Http(HttpCommand::Listen(args)) => self.http_listen(&args).await,
+            Command::Tor(TorCommand::Address) => self.tor_address().await,
+            Command::Tor(TorCommand::Listen(args)) => self.tor_listen(args).await,
             Command::Node(NodeCommand::Status) => self.node_status().await,
         }
     }
@@ -592,18 +600,22 @@ impl<H: Host> Run<'_, H> {
             message: args.message.message,
             ..SendRequest::new(account.index, amount)
         };
-        let sent = opened.wallet.send(request, delivery).await?;
-        let state = if transport == lepic_foreign::TRANSPORT_ID {
-            finalize_http_reply(
+        let tor = self.tor_for(transport, &args.tor, &opened).await?;
+        let sending = async {
+            let sent = opened.wallet.send(request, delivery).await?;
+            let state = finalize_direct_reply(
                 &opened,
+                transport,
                 sent.tx_id,
                 &sent.slate_id.to_string(),
                 args.fluff.fluff,
             )
-            .await?
-        } else {
-            "sent"
-        };
+            .await?;
+            Ok::<_, CliError>((sent, state))
+        }
+        .await;
+        stop_tor(&opened, tor).await;
+        let (sent, state) = sending?;
         Ok(Report::Send(SendReport {
             tx_id: sent.tx_id.0,
             slate_id: sent.slate_id.to_string(),
@@ -624,18 +636,30 @@ impl<H: Host> Run<'_, H> {
         }
         let transport = delivery.transport();
         let tx_id = TxId(args.tx.tx_id);
-        opened.wallet.resend(tx_id, delivery).await?;
-        let state = if transport == lepic_foreign::TRANSPORT_ID {
+        let tor = self.tor_for(transport, &args.tor, &opened).await?;
+        let resending = async {
+            opened.wallet.resend(tx_id, delivery).await?;
+            if !is_direct(transport) {
+                return Ok("sent");
+            }
             let details = opened.wallet.transaction_details(tx_id).await?;
             let slate_id = details
                 .transaction
                 .entry
                 .slate_id
                 .ok_or(CliError::HttpReplyLost { tx_id: tx_id.0 })?;
-            finalize_http_reply(&opened, tx_id, &slate_id.to_string(), args.fluff.fluff).await?
-        } else {
-            "sent"
-        };
+            finalize_direct_reply(
+                &opened,
+                transport,
+                tx_id,
+                &slate_id.to_string(),
+                args.fluff.fluff,
+            )
+            .await
+        }
+        .await;
+        stop_tor(&opened, tor).await;
+        let state = resending?;
         Ok(Report::Resend(ResendReport {
             tx_id: tx_id.0,
             transport: transport.to_string(),
@@ -681,6 +705,127 @@ impl<H: Host> Run<'_, H> {
         }))
     }
 
+    /// For a send over Tor, starts the wallet's tor from `binary`, waits until it can send and
+    /// attaches it to the wallet's tor transport.
+    async fn tor_for<N: NodeApi + 'static>(
+        &mut self,
+        transport: lepic_transport::transport::TransportId,
+        binary: &TorBinaryArgs,
+        opened: &Opened<N>,
+    ) -> Result<Option<Arc<TorProcess>>, CliError> {
+        if transport != lepic_tor::TRANSPORT_ID {
+            return Ok(None);
+        }
+        let tor = Arc::new(self.start_tor(binary)?);
+        self.wait_for_tor(&tor).await?;
+        opened.tor.attach(Arc::clone(&tor) as Arc<dyn SocksProxy>);
+        if self.settings.output == OutputFormat::Human {
+            self.show_line(
+                "Reaching the other wallet over Tor; one that is not online takes up to about two \
+                 and a half minutes to fail.",
+            );
+        }
+        Ok(Some(tor))
+    }
+
+    fn start_tor(&self, binary: &TorBinaryArgs) -> Result<TorProcess, CliError> {
+        let tor_binary = binary.tor_binary.clone().ok_or(CliError::TorBinaryNeeded)?;
+        let mut settings = TorSettings::new(tor_binary, self.settings.data_dir.join(TOR_DIR));
+        settings.lib_dir.clone_from(&binary.lib_dir);
+        Ok(TorProcess::start(settings))
+    }
+
+    /// Waits until `tor` can send, with its bootstrap progress on stderr for people.
+    async fn wait_for_tor(&mut self, tor: &TorProcess) -> Result<(), CliError> {
+        let human = self.settings.output == OutputFormat::Human;
+        let mut states = tor.subscribe();
+        let mut shown = None;
+        loop {
+            let state = states.borrow_and_update().clone();
+            match state {
+                TorState::Starting { progress, .. } => {
+                    if human && shown != Some(progress) {
+                        shown = Some(progress);
+                        self.show_line(&format!("Connecting to the Tor network: {progress}%"));
+                    }
+                }
+                state if state.can_send() => return Ok(()),
+                // Failed, or stopped: its error says which.
+                _ => return Ok(tor.wait_bootstrapped().await.map(drop)?),
+            }
+            if states.changed().await.is_err() {
+                return Ok(tor.wait_bootstrapped().await.map(drop)?);
+            }
+        }
+    }
+
+    async fn tor_address(&mut self) -> Result<Report, CliError> {
+        let opened = self.open().await?;
+        let key = opened.wallet.onion_key()?;
+        Ok(Report::TorAddress(TorAddressReport {
+            onion: lepic_tor::onion_address(key.public_key()),
+        }))
+    }
+
+    /// Publishes the wallet's onion and answers payments over Tor until interrupted.
+    async fn tor_listen(&mut self, args: TorListenArgs) -> Result<Report, CliError> {
+        if args.tor.tor_binary.is_none() {
+            return Err(CliError::TorBinaryNeeded);
+        }
+        let opened = Arc::new(self.open().await?);
+        let key = opened.wallet.onion_key()?;
+        let onion = lepic_tor::onion_address(key.public_key());
+        let counts = Arc::new(HttpCounts::default());
+        let receiver = Arc::new(HttpReceiver {
+            opened: Arc::clone(&opened),
+            counts: Arc::clone(&counts),
+        });
+        let handle =
+            lepic_foreign::listen(ListenSettings::new(Exposure::LocalOnly, 0), receiver).await?;
+        let tor = self.start_tor(&args.tor)?;
+        let published = async {
+            self.wait_for_tor(&tor).await?;
+            if self.settings.output == OutputFormat::Human {
+                self.show_line("Publishing the wallet's onion address.");
+            }
+            tor.publish_onion(key.expose_seed(), handle.local_addr().port())
+                .await?;
+            Ok::<_, CliError>(())
+        }
+        .await;
+        drop(key);
+        let ended = match published {
+            Ok(()) => {
+                if self.settings.output == OutputFormat::Human {
+                    self.show_line(&format!(
+                        "Listening for payments at {onion} over Tor. Ctrl-C stops."
+                    ));
+                }
+                let stop = tokio::sync::Notify::new();
+                let work = async {
+                    tokio::select! {
+                        () = stop.notified() => Ok(()),
+                        failure = tor_ended(&tor) => Err(CliError::Tor(failure)),
+                    }
+                };
+                self.until_interrupted(opened.wallet.subscribe(), work, || {
+                    stop.notify_one();
+                })
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        tor.stop().await;
+        handle.shutdown().await;
+        ended?;
+        Ok(Report::TorListen(TorListenReport {
+            onion,
+            received: counts.received.load(Ordering::Relaxed),
+            repeated: counts.repeated.load(Ordering::Relaxed),
+            refused: counts.refused.load(Ordering::Relaxed),
+        }))
+    }
+
     /// Where a first slate goes, and how the report names it. An address is parsed here,
     /// before the wallet stores anything: a send to an address that cannot be delivered to
     /// would leave a transaction behind with its inputs locked. An address with a scheme is a
@@ -692,6 +837,16 @@ impl<H: Host> Run<'_, H> {
         allow_plain_http: bool,
     ) -> Result<(Delivery, String), CliError> {
         match (destination.to, destination.to_file) {
+            (Some(address), _) if is_onion(&address) => {
+                let onion = lepic_tor::parse_onion(&address).map_err(CliError::OnionAddress)?;
+                Ok((
+                    Delivery::Deliver {
+                        transport: lepic_tor::TRANSPORT_ID,
+                        to: Destination::new(onion.host()),
+                    },
+                    onion.host(),
+                ))
+            }
             (Some(address), _) if address.contains("://") => {
                 let plain = if allow_plain_http {
                     PlainHttp::Allowed
@@ -980,11 +1135,13 @@ impl<H: Host> Run<'_, H> {
             relay_network(self.settings.network),
             self.host.relay_connector()?,
         );
+        let tor = lepic_tor::TorTransport::new(lepic_tor::OnionClient::default());
         let mut transports = TransportRegistry::new();
         for transport in [
             Box::new(FileTransport::new()) as Box<dyn lepic_transport::transport::Transport>,
             Box::new(epicbox.clone()),
             Box::new(http.clone()),
+            Box::new(tor.clone()),
         ] {
             transports.register(transport)?;
         }
@@ -1006,12 +1163,18 @@ impl<H: Host> Run<'_, H> {
             network: self.settings.network,
             data_dir: self.settings.data_dir.clone(),
             node: self.settings.node.clone(),
-            transports: vec![FILE, TRANSPORT_ID, lepic_foreign::TRANSPORT_ID],
+            transports: vec![
+                FILE,
+                TRANSPORT_ID,
+                lepic_foreign::TRANSPORT_ID,
+                lepic_tor::TRANSPORT_ID,
+            ],
         };
         Ok(Opened {
             wallet: Wallet::new(config, ports)?,
             epicbox,
             http,
+            tor,
             _lock: lock,
         })
     }
@@ -1043,23 +1206,48 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
     Ok(())
 }
 
-/// Finalizes the answer the HTTP transport kept for the send and posts it. Returns the state
-/// the send is reported in.
-async fn finalize_http_reply<N: NodeApi + 'static>(
+/// Whether a send over `transport` gets its answer in the same exchange.
+fn is_direct(transport: lepic_transport::transport::TransportId) -> bool {
+    transport == lepic_foreign::TRANSPORT_ID || transport == lepic_tor::TRANSPORT_ID
+}
+
+/// Whether the address the user gave names an onion, valid or not.
+fn is_onion(address: &str) -> bool {
+    lepic_tor::parse_onion(address).is_ok() || address.to_ascii_lowercase().contains(".onion")
+}
+
+/// Finalizes the answer a direct transport kept for the send and posts it. Returns the state
+/// the send is reported in: `sent` for a transport whose answer comes later.
+async fn finalize_direct_reply<N: NodeApi + 'static>(
     opened: &Opened<N>,
+    transport: lepic_transport::transport::TransportId,
     tx_id: TxId,
     slate_id: &str,
     fluff: bool,
 ) -> Result<&'static str, CliError> {
-    let reply = opened
-        .http
-        .take_reply(slate_id)
-        .ok_or(CliError::HttpReplyLost { tx_id: tx_id.0 })?;
+    let reply = if transport == lepic_foreign::TRANSPORT_ID {
+        opened.http.take_reply(slate_id)
+    } else if transport == lepic_tor::TRANSPORT_ID {
+        opened.tor.take_reply(slate_id)
+    } else {
+        return Ok("sent");
+    };
+    let reply = reply.ok_or(CliError::HttpReplyLost { tx_id: tx_id.0 })?;
     opened
         .wallet
-        .finalize(lepic_foreign::TRANSPORT_ID, &reply, propagation(fluff))
+        .finalize(transport, &reply, propagation(fluff))
         .await?;
     Ok("posted")
+}
+
+/// Detaches and stops the tor a send started.
+async fn stop_tor<N: NodeApi + 'static>(opened: &Opened<N>, tor: Option<Arc<TorProcess>>) {
+    let Some(tor) = tor else { return };
+    opened.tor.detach();
+    // Dropping the last handle kills tor at once instead.
+    if let Ok(tor) = Arc::try_unwrap(tor) {
+        tor.stop().await;
+    }
 }
 
 /// What `http listen` answered.
@@ -1578,6 +1766,23 @@ const fn stage_name(stage: SlateStage) -> &'static str {
         SlateStage::Invoice1 => "I1",
         SlateStage::Invoice2 => "I2",
         SlateStage::Invoice3 => "I3",
+    }
+}
+
+/// Waits until `tor` fails or stops on its own.
+async fn tor_ended(tor: &TorProcess) -> lepic_tor::TorFailure {
+    let mut states = tor.subscribe();
+    loop {
+        if let TorState::Failed(failure) = &*states.borrow_and_update() {
+            return failure.clone();
+        }
+        if states.changed().await.is_err() {
+            break;
+        }
+    }
+    match tor.wait_bootstrapped().await {
+        Err(failure) => failure,
+        Ok(_) => std::future::pending().await,
     }
 }
 

@@ -168,6 +168,12 @@ pub enum CliError {
     HttpListen(#[from] lepic_foreign::ListenError),
     #[error("the answer of transaction {tx_id} was not kept")]
     HttpReplyLost { tx_id: u32 },
+    #[error("onion address rejected")]
+    OnionAddress(#[source] lepic_tor::OnionError),
+    #[error("give --tor-binary to use tor")]
+    TorBinaryNeeded,
+    #[error("tor is not working")]
+    Tor(#[from] lepic_tor::TorFailure),
 }
 
 impl CliError {
@@ -190,7 +196,13 @@ impl CliError {
             | Self::StartAboveTip { .. }
             | Self::Address(_)
             | Self::HttpUrl(_)
-            | Self::InvoiceOverHttp => ErrorKind::Usage,
+            | Self::InvoiceOverHttp
+            | Self::OnionAddress(_)
+            | Self::TorBinaryNeeded => ErrorKind::Usage,
+            Self::Tor(failure) if failure.kind == lepic_tor::FailureKind::Missing => {
+                ErrorKind::Config
+            }
+            Self::Tor(_) => ErrorKind::Transport,
             Self::HttpListen(_) => ErrorKind::Transport,
             Self::HttpReplyLost { .. } => ErrorKind::Incomplete,
             Self::Wallet(error) => wallet_kind(error),

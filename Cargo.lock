@@ -1001,6 +1001,7 @@ dependencies = [
  "lepic-primitives",
  "lepic-store",
  "lepic-telemetry",
+ "lepic-tor",
  "lepic-transport",
  "lepic-wallet",
  "rand 0.10.3",

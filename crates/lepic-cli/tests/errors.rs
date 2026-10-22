@@ -107,6 +107,104 @@ fn an_http_address_is_refused_before_the_wallet_stores_anything() {
     assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
 }
 
+/// The onion of the payment-proof key of account `m/0/0`, as `epic-wallet address` derives it.
+fn onion_of(mnemonic: &str) -> String {
+    let keychain = lepic_keychain::Keychain::from_mnemonic(
+        mnemonic,
+        lepic_primitives::params::Network::Floonet,
+    )
+    .unwrap();
+    let parent = lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap();
+    let key = keychain.payment_proof_key(&parent, 0).unwrap();
+    lepic_tor::onion_address(&key.public_key())
+}
+
+#[test]
+fn tor_address_prints_the_onion_of_the_payment_proof_key() {
+    let host = TestHost::new();
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let outcome = wallet.run(&host, &["tor", "address"]);
+
+    assert_eq!(outcome.code, 0);
+    assert_eq!(text(&outcome.json(), "onion"), onion_of(SENDER_MNEMONIC));
+}
+
+#[test]
+fn a_send_to_an_onion_needs_a_tor_binary_and_stores_nothing_without_one() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let onion = onion_of(SENDER_MNEMONIC);
+    let mut typo = onion.clone();
+    typo.replace_range(..1, if typo.starts_with('a') { "b" } else { "a" });
+    let missing = wallet.path("no-tor-here");
+    let missing = missing.to_str().unwrap();
+
+    for (args, expected) in [
+        (
+            vec!["tx", "send", "1", "--to", onion.as_str()],
+            (2, "usage"),
+        ),
+        (
+            vec!["tx", "send", "1", "--to", &format!("http://{onion}/")],
+            (2, "usage"),
+        ),
+        (
+            vec![
+                "tx",
+                "send",
+                "1",
+                "--to",
+                typo.as_str(),
+                "--tor-binary",
+                missing,
+            ],
+            (2, "usage"),
+        ),
+        (
+            vec![
+                "tx",
+                "send",
+                "1",
+                "--to",
+                "wallet.onion",
+                "--tor-binary",
+                missing,
+            ],
+            (2, "usage"),
+        ),
+        (
+            vec![
+                "tx",
+                "send",
+                "1",
+                "--to",
+                onion.as_str(),
+                "--tor-binary",
+                missing,
+            ],
+            (3, "config"),
+        ),
+        (vec!["tor", "listen"], (2, "usage")),
+        (
+            vec!["tor", "listen", "--tor-binary", missing],
+            (3, "config"),
+        ),
+    ] {
+        let outcome = wallet.run(&host, &args);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            expected,
+            "{args:?}"
+        );
+    }
+    let listed = wallet.run(&host, &["tx", "list"]).json();
+    assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
+}
+
 #[test]
 fn an_invoice_to_any_address_with_a_scheme_is_refused_as_an_invoice_over_http() {
     let host = TestHost::new();

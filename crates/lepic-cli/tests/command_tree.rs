@@ -77,6 +77,8 @@ fn the_tree_has_every_planned_command() {
         "epicbox allow list",
         "epicbox invoice-address",
         "http listen",
+        "tor address",
+        "tor listen",
         "node status",
     ] {
         assert!(
@@ -121,6 +123,62 @@ fn a_send_takes_an_http_address_with_its_options() {
         panic!("not an http listen");
     };
     assert_eq!((args.port, args.internet), (0, true));
+}
+
+#[test]
+fn a_send_takes_an_onion_address_with_the_tor_binary() {
+    let onion = format!("{}.onion", "a".repeat(56));
+    let cli = Cli::try_parse_from([
+        "lepic",
+        "tx",
+        "send",
+        "1",
+        "--to",
+        onion.as_str(),
+        "--tor-binary",
+        "/opt/tor/tor",
+        "--lib-dir",
+        "/opt/tor",
+    ])
+    .unwrap();
+    let lepic_cli::cli::Command::Tx(lepic_cli::cli::TxCommand::Send(args)) = cli.command else {
+        panic!("not a send");
+    };
+    assert_eq!(args.destination.to.as_deref(), Some(onion.as_str()));
+    assert_eq!(
+        args.tor.tor_binary.as_deref(),
+        Some(std::path::Path::new("/opt/tor/tor"))
+    );
+    assert_eq!(
+        args.tor.lib_dir.as_deref(),
+        Some(std::path::Path::new("/opt/tor"))
+    );
+    assert!(
+        Cli::try_parse_from(["lepic", "tx", "send", "1", "--to", "x", "--lib-dir", "/opt"])
+            .is_err(),
+        "--lib-dir needs --tor-binary"
+    );
+
+    let cli =
+        Cli::try_parse_from(["lepic", "tor", "listen", "--tor-binary", "/opt/tor/tor"]).unwrap();
+    let lepic_cli::cli::Command::Tor(lepic_cli::cli::TorCommand::Listen(args)) = cli.command else {
+        panic!("not a tor listen");
+    };
+    assert_eq!(
+        args.tor.tor_binary.as_deref(),
+        Some(std::path::Path::new("/opt/tor/tor"))
+    );
+    assert!(args.tor.lib_dir.is_none());
+    let cli = Cli::try_parse_from(["lepic", "tor", "address"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        lepic_cli::cli::Command::Tor(lepic_cli::cli::TorCommand::Address)
+    ));
+    let cli = Cli::try_parse_from(["lepic", "tx", "resend", "1", "--to", onion.as_str()]).unwrap();
+    let lepic_cli::cli::Command::Tx(lepic_cli::cli::TxCommand::Resend(args)) = cli.command else {
+        panic!("not a resend");
+    };
+    assert!(args.tor.tor_binary.is_none());
 }
 
 #[test]

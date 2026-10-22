@@ -4,8 +4,8 @@
 
 `lepic` is a light Epic Cash wallet for the terminal. It keeps keys and history on your machine,
 asks an Epic node for chain data, and exchanges transactions with other wallets, `epic-wallet`
-included, through slate files, an Epicbox relay or straight over HTTP. It does not mine or store
-the chain.
+included, through slate files, an Epicbox relay or straight over HTTP or Tor. It does not mine or
+store the chain.
 
 ```
 cargo xtask install                   # build and install to ~/.local/bin/lepic
@@ -207,6 +207,8 @@ moves slates in one of three ways:
   slates, which carry the payment's TTL.
 - HTTP, straight to a wallet that listens for payments, which answers in the same exchange. Only
   payments travel this way, not invoices.
+- Tor, the same exchange as HTTP with a wallet that listens at its onion address, through a
+  `tor` the wallet runs for itself.
 
 ## Receive and send with slate files
 
@@ -333,6 +335,45 @@ and none already taken is cancelled. The listener
 also takes at most 30 payments a minute. `--port` picks another
 port; 0 lets the system choose. Each payment prints a line on stderr, and Ctrl-C prints how many
 were received, repeated and refused. Invoices are never answered over HTTP.
+
+## Direct over Tor
+
+Every wallet has an onion address: its payment-proof address in onion form, the one
+`epic-wallet address` prints too, so it survives a restore from the recovery phrase.
+
+```
+$ lepic tor address
+gpuxiaswl37rjqfunltyo57h7ubqvmyf4yoyomyh6zs5btdbbzymfeid.onion
+```
+
+`lepic` does not bundle tor. Give it the `tor` binary of the Tor Expert Bundle with
+`--tor-binary`, and on Linux the bundle's directory with `--lib-dir` for the libraries it ships.
+Each wallet runs its own tor, with its files in `tor/` inside the data directory.
+
+To take payments at the onion address:
+
+```
+$ lepic tor listen --tor-binary ~/tor/tor --lib-dir ~/tor
+Connecting to the Tor network: 95%
+Publishing the wallet's onion address.
+Listening for payments at gpuxiaswl37rjqfunltyo57h7ubqvmyf4yoyomyh6zs5btdbbzymfeid.onion over Tor. Ctrl-C stops.
+```
+
+Tor forwards the onion's port 80 to a listener on `127.0.0.1` that nothing else reaches. Only
+payments are answered, never invoices, with the same caps as `http listen`. Ctrl-C stops tor and
+prints how many payments were received, repeated and refused.
+
+To pay a wallet that receives over Tor, `lepic tor listen` or any wallet with a published onion:
+
+```
+$ lepic tx send 1.5 --to gpuxiaswl37rjqfunltyo57h7ubqvmyf4yoyomyh6zs5btdbbzymfeid.onion --tor-binary ~/tor/tor --lib-dir ~/tor
+```
+
+The address may carry `http://`, a port or a path; the other wallet is always reached at port 80.
+The send starts tor, waits until it is connected, sends, finalizes and posts, and stops tor. A
+wallet that is not online takes up to about two and a half minutes to fail; the send then exits
+with code 11 and the inputs stay locked, so `lepic tx resend <ID> --to <ONION> --tor-binary ...`
+tries again later, or `lepic tx cancel <ID>` gives up.
 
 ## Invoices
 
@@ -499,6 +540,8 @@ The data directory, `~/.lepic/<network>` unless `data_dir` says otherwise, holds
 
 - `wallet.vault`, the seed, encrypted with your password through Argon2;
 - `wallet.sqlite3`, outputs and transaction history, with private transaction data encrypted;
+- `tor/`, the files of the wallet's tor, once `tor listen` or a send over Tor ran: its state and
+  the cookie that authenticates to it, never the onion key;
 - `.lepic.lock`, which keeps two `lepic` commands, or `lepic` and a mobile app, from opening the
   wallet at once.
 
@@ -534,7 +577,7 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 | 7 | `rejected` | the slate or request was refused; nothing was stored |
 | 8 | `insufficient_funds` | not enough spendable funds |
 | 9 | `node` | the node could not be reached or answered badly |
-| 10 | `transport` | the slate file, the relay or the http listener failed |
+| 10 | `transport` | the slate file, the relay, the http listener or tor failed |
 | 11 | `incomplete` | stored, but not delivered or not posted; retry |
 | 12 | `interrupted` | stopped before it finished |
 
@@ -558,6 +601,10 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `http address rejected` (exit 2) | The `--to` URL is not `http(s)://host[:port][/path]`, or is plain `http` to another computer without `--allow-plain-http`. Nothing was stored. |
 | `invoices go over epicbox or through a slate file, not over http` (exit 2) | `invoice issue --to` was given an address with a scheme (`://`). |
 | `the http listener could not start` (exit 10) | Another program holds the port, or the port needs privileges; pick another with `--port`. |
+| `give --tor-binary to use tor` (exit 2) | `tor listen`, or a send to an onion address, needs the path of the tor binary. Nothing was stored. |
+| `onion address rejected` (exit 2) | The `--to` address names an onion that is not a valid onion v3 address, or has a typo. Nothing was stored. |
+| `tor is not working: tor failed (missing)` (exit 3) | No tor binary at the `--tor-binary` path. Nothing was stored. |
+| `tor is not working: tor failed (network)` (exit 10) | Tor could not connect to the Tor network: no internet, or a network that blocks Tor. `(clock)` means the computer's clock is wrong. |
 | `invoice amount differs from the approved amount` | The amount you typed is not the one in the invoice; nothing was paid. |
 | `invoice ... is not waiting to be paid` (exit 6) | The slate id is not a parked invoice: it was paid, declined or expired. `lepic invoice list` shows the ones waiting. |
 | `goes only to the allowed address of its invoice` (exit 7) | `tx resend` of an invoice payment names another key than the sender's allowed address; `epicbox allow list` shows it. |

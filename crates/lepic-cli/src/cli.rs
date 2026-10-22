@@ -111,6 +111,9 @@ pub enum Command {
     /// Take payments sent straight to this wallet over HTTP
     #[command(subcommand)]
     Http(HttpCommand),
+    /// Take payments at the wallet's onion address over Tor
+    #[command(subcommand)]
+    Tor(TorCommand),
     /// Query the node
     #[command(subcommand)]
     Node(NodeCommand),
@@ -236,7 +239,12 @@ const SEND_HTTP_HELP: &str = "\
 To an http(s):// address the wallet listening there, epic-wallet `listen -m http` or `lepic http
 listen`, answers at once, and the transaction is finalized and posted in the same command. A
 missing port is 3415 for http and 443 for https. Plain http goes only to this computer unless
---allow-plain-http is given, since the slate then travels unencrypted.";
+--allow-plain-http is given, since the slate then travels unencrypted.
+
+To an onion address, `<56 characters>.onion` with or without http://, the wallet's own tor is
+started from --tor-binary for the send and stopped after it, and the other wallet, `lepic tor
+listen` or any wallet receiving over Tor, answers at once. Reaching an onion that is not online
+takes up to about two and a half minutes before the send fails.";
 
 #[derive(Debug, Args)]
 pub struct SendArgs {
@@ -247,6 +255,8 @@ pub struct SendArgs {
     pub destination: DestinationArgs,
     #[command(flatten)]
     pub plain_http: PlainHttpArg,
+    #[command(flatten)]
+    pub tor: TorBinaryArgs,
     #[command(flatten)]
     pub fluff: FluffArg,
     #[command(flatten)]
@@ -283,6 +293,8 @@ pub struct ResendArgs {
     #[command(flatten)]
     pub plain_http: PlainHttpArg,
     #[command(flatten)]
+    pub tor: TorBinaryArgs,
+    #[command(flatten)]
     pub fluff: FluffArg,
 }
 
@@ -296,8 +308,8 @@ pub struct PlainHttpArg {
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
 pub struct DestinationArgs {
-    /// Epicbox address the slate goes to, or for a send the http(s):// address of a listening
-    /// wallet
+    /// Epicbox address the slate goes to, or for a send the http(s):// or onion address of a
+    /// listening wallet
     #[arg(long, value_name = "ADDRESS")]
     pub to: Option<String>,
     /// Write the slate to this file, as V3 slate JSON
@@ -557,6 +569,39 @@ pub struct HttpListenArgs {
     /// Listen on every network interface instead of this computer only
     #[arg(long)]
     pub internet: bool,
+}
+
+/// The tor binary the wallet runs for Tor.
+#[derive(Debug, Args)]
+pub struct TorBinaryArgs {
+    /// The tor binary to run, as the Tor Expert Bundle ships it
+    #[arg(long, value_name = "PATH")]
+    pub tor_binary: Option<PathBuf>,
+    /// Directory of the libraries the tor binary needs, put on the library path
+    #[arg(long, value_name = "DIR", requires = "tor_binary")]
+    pub lib_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TorCommand {
+    /// Show the wallet's onion address, which tor listen publishes
+    #[command(after_help = "\
+The onion address is the wallet's payment-proof address in onion form, the address epic-wallet
+`address` prints too, so it stays the same after a restore from the recovery phrase.")]
+    Address,
+    /// Answer payments sent to the wallet's onion address over Tor, until interrupted
+    #[command(after_help = "\
+Runs the tor binary given with --tor-binary for this wallet, with its files in tor/ inside the
+data directory, and publishes the wallet's onion address. Payments reach the wallet foreign API
+on a listener on 127.0.0.1 that only tor forwards to; only payments are answered, never
+invoices. The onion address is printed once others can reach it.")]
+    Listen(TorListenArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TorListenArgs {
+    #[command(flatten)]
+    pub tor: TorBinaryArgs,
 }
 
 #[derive(Debug, Subcommand)]

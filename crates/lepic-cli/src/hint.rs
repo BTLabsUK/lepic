@@ -63,7 +63,9 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
                 && !matches!(source, TransportError::File(_))
                 && !matches!(
                     source,
-                    TransportError::Backend { transport, .. } if *transport == lepic_foreign::TRANSPORT_ID
+                    TransportError::Backend { transport, .. }
+                        if *transport == lepic_foreign::TRANSPORT_ID
+                            || *transport == lepic_tor::TRANSPORT_ID
                 )
                 && settings.relay.port() != DEFAULT_PORT
             {
@@ -82,6 +84,14 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
                  <ADDRESS>` asks for it again, and the receiver answers the same way"
             ));
         }
+        CliError::TorBinaryNeeded => {
+            return Some(
+                "give --tor-binary with the path of the tor binary from the Tor Expert Bundle, \
+                 and --lib-dir with its library directory on Linux"
+                    .to_owned(),
+            );
+        }
+        CliError::Tor(failure) => return tor_hint(failure.kind).map(str::to_owned),
         CliError::HttpUrl(lepic_foreign::UrlError::PlainHttpNotAllowed) => {
             return Some(
                 "use https, or add --allow-plain-http to send this slate unencrypted".to_owned(),
@@ -215,6 +225,23 @@ fn selection_error(error: &CliError) -> Option<&SelectionError> {
     match error {
         CliError::Send(SendError::Selection(error))
         | CliError::Invoice(InvoiceError::Selection(error)) => Some(error),
+        _ => None,
+    }
+}
+
+fn tor_hint(kind: lepic_tor::FailureKind) -> Option<&'static str> {
+    use lepic_tor::FailureKind as K;
+    match kind {
+        K::Missing => Some("no tor binary at the --tor-binary path"),
+        K::Network => Some(
+            "tor could not connect to the Tor network; check the internet connection, or whether \
+             this network blocks Tor",
+        ),
+        K::Clock => Some("tor reports the computer's clock as wrong; correct it and try again"),
+        K::Start => Some(
+            "tor did not start; check that --tor-binary is a tor binary for this computer and \
+             --lib-dir holds its libraries",
+        ),
         _ => None,
     }
 }
