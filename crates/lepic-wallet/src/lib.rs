@@ -22,6 +22,7 @@ pub mod event;
 pub mod finalize;
 pub mod inbox;
 pub mod invoice;
+pub mod legacy_history;
 pub mod lifecycle;
 pub mod notice;
 mod onion_key;

@@ -32,6 +32,7 @@ use crate::account::FIRST_HARDENED;
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
 use crate::event::{Event, SyncProgress};
+use crate::legacy_history::{self, block_times};
 use crate::lifecycle::{self, Session};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::state::{StateChange, apply_transition, is_final};
@@ -49,6 +50,9 @@ pub const UPDATE_RESCAN_BLOCKS: u64 = 100;
 
 const LAST_SCANNED_SETTING: &str = "scan.last_scanned";
 const CHECKPOINT_SETTING: &str = "scan.checkpoint";
+/// Set once a scan from genesis completed: from then on an output no scan found is not on
+/// chain.
+const GENESIS_SCANNED_SETTING: &str = "scan.genesis_completed";
 
 /// Label prefix `epic-wallet` gives an account that a restore finds outputs of.
 const RESTORED_ACCOUNT_LABEL: &str = "account";
@@ -487,21 +491,29 @@ where
         tip: Height,
         cancel: &ScanCancel,
     ) -> Result<PageOutcome, ScanError> {
-        let (found, spent) = {
+        let (found, spent, undated) = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
                 Ok(
                     identify(&session.keychain, &outputs, options.coinbase_maturity).and_then(
                         |found| {
-                            let spent =
-                                session.store.read(|repos| stored_as_spent(repos, &found))?;
-                            Ok((found, spent))
+                            let (spent, undated) = session.store.read(|repos| {
+                                Ok::<_, ScanError>((
+                                    stored_as_spent(repos, &found)?,
+                                    unexplained_heights(repos, &found)?,
+                                ))
+                            })?;
+                            Ok((found, spent, undated))
                         },
                     ),
                 )
             })
             .await??
         };
+        let block_times = until_cancelled(cancel, async {
+            Ok::<_, NodeError>(block_times(&self.ports().node, undated).await)
+        })
+        .await?;
         let mut revivable = BTreeSet::new();
         if !spent.is_empty() {
             let held = until_cancelled(cancel, self.ports().node.get_outputs(&spent)).await?;
@@ -512,9 +524,17 @@ where
         }
         let now = self.ports().clock.now();
         self.blocking(move |_, _| {
-            Ok(session
-                .store
-                .write(|repos| store_found(repos, &found, &revivable, options, checkpoint, now)))
+            Ok(session.store.write(|repos| {
+                store_found(
+                    repos,
+                    &found,
+                    &revivable,
+                    &block_times,
+                    options,
+                    checkpoint,
+                    now,
+                )
+            }))
         })
         .await?
     }
@@ -608,6 +628,11 @@ fn stored_as_spent(
     Ok(spent)
 }
 
+/// Whether a scan from genesis has completed.
+pub(crate) fn has_scanned(repos: &dyn Repositories) -> Result<bool, StoreError> {
+    Ok(repos.setting(GENESIS_SCANNED_SETTING)?.is_some())
+}
+
 /// A stored position that does not parse is ignored, which costs a full scan and loses nothing.
 fn last_scanned(repos: &dyn Repositories) -> Result<Option<ScannedBlock>, StoreError> {
     Ok(match repos.setting(LAST_SCANNED_SETTING)? {
@@ -678,10 +703,27 @@ fn placement(key_id: &Identifier) -> (AccountIndex, Option<u32>) {
     }
 }
 
+/// The heights of found outputs that are new and that no imported entry explains: their
+/// entries are dated by their block.
+fn unexplained_heights(
+    repos: &dyn Repositories,
+    found: &[FoundOutput],
+) -> Result<BTreeSet<Height>, ScanError> {
+    let mut heights = BTreeSet::new();
+    for output in found {
+        let commitment = output.id.commitment.as_bytes();
+        if repos.output(commitment)?.is_none() && repos.imported_output(commitment)?.is_none() {
+            heights.insert(output.height);
+        }
+    }
+    Ok(heights)
+}
+
 fn store_found(
     repos: &mut dyn Repositories,
     found: &[FoundOutput],
     revivable: &BTreeSet<Commitment>,
+    block_times: &BTreeMap<Height, Timestamp>,
     options: ScanOptions,
     checkpoint: Checkpoint,
     now: Timestamp,
@@ -696,7 +738,8 @@ fn store_found(
                 reconcile(repos, stored, output, revivable, options, now, &mut outcome)?;
             }
             None => {
-                restore_missing(repos, output, now)?;
+                let created_at = block_times.get(&output.height).copied().unwrap_or(now);
+                restore_missing(repos, output, created_at, now)?;
                 outcome.restored = outcome.restored.saturating_add(1);
                 debug!(height = %output.height, "output restored");
                 if let Some(child) = output.child {
@@ -757,25 +800,41 @@ fn reconcile(
     Ok(())
 }
 
+/// Stores an output the store did not hold. One an imported entry created is linked to it;
+/// any other gets a confirmed incoming entry of its own, dated `created_at`.
 fn restore_missing(
     repos: &mut dyn Repositories,
     output: &FoundOutput,
+    created_at: Timestamp,
     now: Timestamp,
 ) -> Result<(), ScanError> {
     ensure_account(repos, output.account)?;
-    let tx = repos.insert_transaction(&TransactionEntry {
-        account: output.account,
-        direction: TxDirection::Incoming,
-        state: TxState::Confirmed,
-        slate_id: None,
-        transport: None,
-        amount_credited: output.amount,
-        amount_debited: Amount::ZERO,
-        fee: None,
-        created_at: now,
-        updated_at: now,
-    })?;
-    repos.set_confirmed_height(tx, output.height)?;
+    let commitment = *output.id.commitment.as_bytes();
+    let tx = match legacy_history::link_found_output(
+        repos,
+        &commitment,
+        output.account,
+        output.height,
+        now,
+    )? {
+        Some(imported) => imported,
+        None => {
+            let tx = repos.insert_transaction(&TransactionEntry {
+                account: output.account,
+                direction: TxDirection::Incoming,
+                state: TxState::Confirmed,
+                slate_id: None,
+                transport: None,
+                amount_credited: output.amount,
+                amount_debited: Amount::ZERO,
+                fee: None,
+                created_at,
+                updated_at: created_at,
+            })?;
+            repos.set_confirmed_height(tx, output.height)?;
+            tx
+        }
+    };
     repos.put_output(&OutputRecord {
         id: output.id,
         key_id: KeyId(output.key_id.to_bytes()),
@@ -876,6 +935,8 @@ fn finish(
     chain::observe_tip(repos, last_confirmed, block.height, now)?;
     if start_height == Height::ZERO {
         lifecycle::restore_scan_completed(repos)?;
+        repos.put_setting(GENESIS_SCANNED_SETTING, "1")?;
+        legacy_history::flag_missing_outputs(repos)?;
     }
     Ok(outcome)
 }

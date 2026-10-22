@@ -153,6 +153,10 @@ impl Recording {
         match method {
             "get_outputs" => self.answer_outputs(params),
             "get_unspent_outputs" => self.answer_unspent(params),
+            // Block times only date what a scan found, and sessions recorded before LEPIC asked
+            // for them hold none. A header not recorded is answered as the node answers a header
+            // it does not have.
+            "get_header" if !self.has_exact(method, params) => Answer::Rejected(json!("NotFound")),
             _ => self
                 .exact
                 .iter()
@@ -166,6 +170,14 @@ impl Recording {
                     |exchange| Answer::Response(exchange.response.clone()),
                 ),
         }
+    }
+
+    fn has_exact(&self, method: &str, params: &Value) -> bool {
+        self.exact.iter().any(|exchange| {
+            exchange.endpoint == FOREIGN_ENDPOINT
+                && exchange.method == method
+                && exchange.params == *params
+        })
     }
 
     fn answer_outputs(&self, params: &Value) -> Answer {

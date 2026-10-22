@@ -1299,6 +1299,8 @@ mod tests {
                 text: "got it".to_owned(),
             }],
             flow: lepic_wallet::details::TxFlow::Invoice,
+            origin: lepic_wallet::legacy_history::TxOrigin::Wallet,
+            imported: None,
         };
 
         assert_eq!(

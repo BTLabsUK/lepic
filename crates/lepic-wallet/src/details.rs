@@ -8,8 +8,8 @@ use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
 use lepic_store::{
-    AccountIndex, Repositories, SlateStage, StoreError, StoredTransaction, TxId, TxState,
-    WalletStore,
+    AccountIndex, ChainCheck, ImportedKind, Repositories, SlateStage, StoreError,
+    StoredTransaction, TxId, TxState, WalletStore,
 };
 use lepic_transport::transport::Destination;
 use tracing::instrument;
@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::account::AccountError;
 use crate::epicbox_invoice::display_message;
 use crate::error::WalletError;
+use crate::legacy_history::{self, TxOrigin};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
 use crate::refresh::{final_kernel, legacy_codecs, stored_slate, ttl_cutoff};
@@ -59,6 +60,22 @@ pub struct TransactionDetails {
     pub messages: Vec<SlateMessage>,
     /// Whether the transaction is a payment or an invoice, from the stages stored with it.
     pub flow: TxFlow,
+    /// Made here, imported from an old wallet's history, or an output a scan found.
+    pub origin: TxOrigin,
+    /// For an imported transaction, what only the old wallet knew. `None` for any other.
+    pub imported: Option<ImportedDetails>,
+}
+
+/// What an imported transaction carries beyond its log entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedDetails {
+    /// The old wallet's local log id.
+    pub source_id: u32,
+    pub kind: ImportedKind,
+    pub input_count: u32,
+    pub output_count: u32,
+    /// How the chain scan judged it.
+    pub check: ChainCheck,
 }
 
 /// Which slate flow a transaction belongs to. With the direction it tells the four kinds
@@ -161,10 +178,48 @@ fn details(
     };
     // A confirmed transaction is final, and only a state change updates an entry, so its last
     // update is the moment it was confirmed.
-    let confirmed_at =
+    let mut confirmed_at =
         (transaction.entry.state == TxState::Confirmed).then_some(transaction.entry.updated_at);
+    let (mut kernel_excess, mut ttl_cutoff_height, mut messages) =
+        (kernel_excess, ttl_cutoff_height, messages);
+    let record = repos.imported_transaction(tx_id)?;
+    if let Some(record) = &record {
+        // An imported entry has no stored slate: what it knew of its slate is in its record.
+        kernel_excess = kernel_excess.or_else(|| {
+            record
+                .kernel_excess
+                .and_then(|bytes| Commitment::from_bytes(&bytes).ok())
+        });
+        ttl_cutoff_height = ttl_cutoff_height.or(record.ttl_cutoff_height);
+        if messages.is_empty() {
+            messages = record
+                .messages
+                .iter()
+                .map(|message| SlateMessage {
+                    role: if message.participant == 0 {
+                        Role::Sender
+                    } else {
+                        Role::Receiver
+                    },
+                    text: message.text.clone(),
+                })
+                .collect();
+        }
+        if transaction.entry.state == TxState::Confirmed {
+            confirmed_at = record.confirmed_at.or(confirmed_at);
+        }
+    }
+    let origin = legacy_history::origin(repos, tx_id, &transaction.entry)?;
     let release = release_check(repos, codecs, &transaction)?.ok();
     Ok(TransactionDetails {
+        origin,
+        imported: record.map(|record| ImportedDetails {
+            source_id: record.source_id,
+            kind: record.kind,
+            input_count: record.input_count,
+            output_count: record.output_count,
+            check: record.check,
+        }),
         releasable_from: release.map(|check| check.from),
         releasable: release.is_some_and(|check| check.releasable()),
         kernel_excess,

@@ -5,7 +5,7 @@ use ed25519_dalek::Signer;
 use lepic_crypto::aggsig::{
     calculate_partial_sig, create_secnonce, sign_single, verify_completed_sig,
 };
-use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, SecretKey};
+use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, SecretKey, Signature};
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{
     Identifier, Keychain, KeychainError, ProofBuilder, ProofError, SwitchCommitment,
@@ -437,12 +437,17 @@ pub(crate) fn verify_message(
     message: &ParticipantMessage,
     signer: &PublicKey,
 ) -> Result<(), CryptoError> {
-    verify_completed_sig(
-        message.signature(),
-        signer,
-        Some(signer),
-        &message_digest(message.text()),
-    )
+    verify_signed_text(message.text(), message.signature(), signer)
+}
+
+/// Verifies a participant's message signature as `epic-wallet` signs it: over the BLAKE2b
+/// hash of the text, under the participant's public excess.
+pub(crate) fn verify_signed_text(
+    text: &str,
+    signature: &Signature,
+    signer: &PublicKey,
+) -> Result<(), CryptoError> {
+    verify_completed_sig(signature, signer, Some(signer), &message_digest(text))
 }
 
 /// The receiver's S2 and what it stores alongside. The excess key and nonce of its partial

@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 blake2 = { workspace = true, features = ["zeroize"] }
 ed25519-dalek.workspace = true
+futures-util = { workspace = true, features = ["alloc"] }
 jiff.workspace = true
 lepic-crypto.workspace = true
 lepic-epicbox.workspace = true
@@ -42,6 +43,7 @@ lepic-primitives.workspace = true
 lepic-telemetry.workspace = true
 lepic-transport = { workspace = true, features = ["loopback"] }
 rand = { workspace = true, features = ["std_rng"] }
+rusqlite.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros"] }
