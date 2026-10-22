@@ -24,7 +24,8 @@ pub enum SelectionStrategy {
 }
 
 /// How a send chooses its inputs and change, apart from the amount. [`SelectionOptions::new`]
-/// fills in the defaults of `epic-wallet`'s `InitTxArgs`.
+/// fills in the defaults of `epic-wallet`'s `InitTxArgs`, except the confirmations, which
+/// follow the balance ([`SelectionOptions::DEFAULT_MINIMUM_CONFIRMATIONS`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectionOptions {
     pub account: AccountIndex,
@@ -37,7 +38,9 @@ pub struct SelectionOptions {
 }
 
 impl SelectionOptions {
-    const DEFAULT_MINIMUM_CONFIRMATIONS: u64 = 10;
+    /// The confirmations a send needs by default: those after which the balance counts an
+    /// output as spendable, so a send can spend what the balance shows.
+    pub const DEFAULT_MINIMUM_CONFIRMATIONS: u64 = crate::refresh::BALANCE_MINIMUM_CONFIRMATIONS;
     const DEFAULT_MAX_OUTPUTS: NonZeroUsize = match NonZeroUsize::new(500) {
         Some(max) => max,
         None => NonZeroUsize::MIN,

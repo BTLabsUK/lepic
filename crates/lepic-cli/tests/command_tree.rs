@@ -321,3 +321,16 @@ fn help_that_names_the_password_variable_says_it_stays_in_the_environment() {
     }
     assert!(pages >= 4, "only {pages} help pages name LEPIC_PASSWORD");
 }
+
+#[test]
+fn a_send_needs_the_confirmations_the_balance_counts_as_spendable_by_default() {
+    let cli = Cli::try_parse_from(["lepic", "tx", "send", "1", "--to", "peer@relay"]).unwrap();
+    let lepic_cli::cli::Command::Tx(lepic_cli::cli::TxCommand::Send(args)) = cli.command else {
+        panic!("not a send");
+    };
+    assert_eq!(
+        args.spend.min_confirmations,
+        lepic_wallet::refresh::BALANCE_MINIMUM_CONFIRMATIONS
+    );
+    assert_eq!(args.spend.min_confirmations, 3);
+}

@@ -287,7 +287,11 @@ pub struct SendArgs {
 #[derive(Debug, Args)]
 pub struct SpendArgs {
     /// Confirmations an output needs before it is spent
-    #[arg(long, value_name = "COUNT", default_value_t = 10)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = lepic_wallet::selection::SelectionOptions::DEFAULT_MINIMUM_CONFIRMATIONS
+    )]
     pub min_confirmations: u64,
     /// Outputs the change is split into
     #[arg(long, value_name = "COUNT", default_value_t = 1)]

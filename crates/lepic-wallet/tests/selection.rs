@@ -394,3 +394,18 @@ fn past_the_weight_limit_the_largest_amount_is_found_below_the_bound() {
         Ok(max)
     );
 }
+
+#[test]
+fn sends_need_by_default_the_confirmations_the_balance_counts_as_spendable() {
+    let account = AccountIndex(0);
+    let defaults = [
+        lepic_wallet::selection::SelectionOptions::new(account).minimum_confirmations,
+        lepic_wallet::send::SendRequest::new(account, Amount::new(1)).minimum_confirmations,
+        lepic_wallet::invoice::PayRequest::new(account, Amount::new(1)).minimum_confirmations,
+    ];
+    assert_eq!(
+        defaults,
+        [lepic_wallet::refresh::BALANCE_MINIMUM_CONFIRMATIONS; 3]
+    );
+    assert_eq!(lepic_wallet::refresh::BALANCE_MINIMUM_CONFIRMATIONS, 3);
+}
