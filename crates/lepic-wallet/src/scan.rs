@@ -156,6 +156,11 @@ impl ScanCancel {
         self.0.send_replace(true);
     }
 
+    /// Whether `other` is this signal or a clone of it.
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// Whether [`ScanCancel::cancel`] was called on this signal or a clone.
     pub fn is_cancelled(&self) -> bool {
         *self.0.borrow()

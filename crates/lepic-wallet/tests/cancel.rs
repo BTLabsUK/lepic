@@ -16,6 +16,7 @@ use lepic_store::{OutboxStatus, OutputStatus, TxId, TxState, WalletStore};
 use lepic_transport::transport::Destination;
 use lepic_wallet::WalletError;
 use lepic_wallet::event::{Event, TransactionState};
+use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::state::InvalidTransition;
@@ -86,6 +87,34 @@ fn cancel_before_delivery_releases_the_inputs_and_drops_the_pending_delivery() {
         .unwrap();
     assert_cancelled(&sender, slate_id);
     assert_cancel_event(&mut events, tx_id);
+}
+
+#[test]
+fn a_repair_scan_cancels_a_waiting_send_as_a_cancel_does() {
+    let sender = Sender::new();
+    let error = sender
+        .harness
+        .block_on(sender.wallet.send(request(), to("nobody")))
+        .unwrap_err();
+    let SendError::Undelivered { slate_id, .. } = error else {
+        panic!("{error:?}");
+    };
+    assert!(sender.has_sender_context(uuid(slate_id)));
+    assert_eq!(sender.outbox(OutboxStatus::Pending).len(), 1);
+
+    let summary = sender
+        .harness
+        .block_on(sender.wallet.scan(
+            ScanOptions {
+                delete_unconfirmed: true,
+                ..ScanOptions::update(Network::Floonet)
+            },
+            &ScanCancel::new(),
+        ))
+        .unwrap();
+
+    assert_eq!((summary.unlocked, summary.deleted), (1, 1));
+    assert_cancelled(&sender, slate_id);
 }
 
 #[test]

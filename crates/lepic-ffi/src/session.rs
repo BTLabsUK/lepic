@@ -94,7 +94,10 @@ const MAX_SLATE_TEXT_LEN: usize = lepic_transport::file::MAX_WIRE_SLATE_LEN;
 
 /// The running scan's cancel signal in the session's slot, cleared when the scan ends, also
 /// when its future is dropped.
-struct ScanSlot<'a>(&'a Mutex<Option<ScanCancel>>);
+struct ScanSlot<'a> {
+    slot: &'a Mutex<Option<ScanCancel>>,
+    cancel: ScanCancel,
+}
 
 impl<'a> ScanSlot<'a> {
     /// Fails with `WalletBusy` while another scan of the session runs, so `cancel_scan` always
@@ -107,14 +110,21 @@ impl<'a> ScanSlot<'a> {
                 "a scan of this wallet is running",
             ));
         }
-        *running = Some(cancel);
-        Ok(Self(slot))
+        *running = Some(cancel.clone());
+        Ok(Self { slot, cancel })
     }
 }
 
 impl Drop for ScanSlot<'_> {
+    /// Clears the slot only while it holds this scan's signal, never a later scan's.
     fn drop(&mut self) {
-        lock(self.0).take();
+        let mut running = lock(self.slot);
+        if running
+            .as_ref()
+            .is_some_and(|cancel| cancel.is_same(&self.cancel))
+        {
+            running.take();
+        }
     }
 }
 
@@ -1476,6 +1486,32 @@ mod tests {
             let endpoint = relay_endpoint(&relay_config(domain)).unwrap();
             assert_eq!(endpoint.security(), Security::Tls, "{domain}");
         }
+    }
+
+    #[test]
+    fn a_scan_slot_frees_only_its_own_scan() {
+        let slot = Mutex::new(None);
+        let first = ScanSlot::claim(&slot, ScanCancel::new()).unwrap();
+        assert_eq!(
+            ScanSlot::claim(&slot, ScanCancel::new())
+                .err()
+                .map(|e| e.kind),
+            Some(WalletErrorKind::WalletBusy)
+        );
+        // A lock takes the slot while the scan winds down; a new scan may claim it then.
+        lock(&slot).take();
+        let second = ScanCancel::new();
+        let claimed = ScanSlot::claim(&slot, second.clone()).unwrap();
+
+        drop(first);
+
+        assert!(
+            lock(&slot)
+                .as_ref()
+                .is_some_and(|held| held.is_same(&second))
+        );
+        drop(claimed);
+        assert!(lock(&slot).is_none());
     }
 
     #[test]
