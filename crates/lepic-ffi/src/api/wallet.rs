@@ -857,7 +857,14 @@ impl EpicWallet {
     /// with `Cancelled`; a store write under way is finished first. Every later call on this
     /// handle fails with `Locked`. The wallet directory is released as soon as the database
     /// closes, at once when nothing was running, so the wallet can be opened anew on a fresh
-    /// handle right away; drop this one. Locking a locked wallet does nothing.
+    /// handle right away; drop this one. An open that comes while the write still runs waits
+    /// for it, up to about two seconds. Locking a locked wallet does nothing.
+    ///
+    /// A call that failed with `Cancelled` at a lock may still have stored its effect, since
+    /// the write ran to its end: a send, resend or repost may be stored as sent or finalized,
+    /// and a cancel as cancelled. After a lock, re-read the transactions on the next open
+    /// instead of taking the failure as the outcome; a send stored as sent is delivered again
+    /// with its resend, one finalized is posted again with [`EpicWallet::repost_transaction`].
     #[frb(sync)]
     pub fn lock(&self) {
         self.boundary().guard_or("lock", (), || self.session.lock());

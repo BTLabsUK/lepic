@@ -107,8 +107,15 @@ final wallet = await EpicWallet.create(
   fail with `cancelled` (a store write under way is finished first); every later call on that
   handle fails with `locked`. The wallet directory is released as soon as the database closes,
   at once when nothing was running, so the wallet can be opened anew on a fresh handle right
-  away, before or after the old one is disposed. `dispose()` alone also locks, but only once
-  calls still running on the handle finish, and releases the directory then.
+  away, before or after the old one is disposed; an open that comes while the write still runs
+  waits for it, up to about two seconds. `dispose()` alone also locks, but only once calls
+  still running on the handle finish, and releases the directory then.
+- A call that failed with `cancelled` at a lock may still have stored its effect, since the
+  write ran to its end: a send, resend or repost may be stored as `sent` or `finalized`, and a
+  cancel as `cancelled`. After a lock, re-read the transactions on the next open instead of
+  taking the failure as the outcome, and show such a send as one that finishes on the next
+  unlock: one stored `sent` is delivered again with its resend, one `finalized` is posted again
+  with `repostTransaction`.
 - `deleteWallet` needs no password or PIN, so a user who forgot both can delete the wallet and
   restore it from the recovery phrase. Confirm with the user before calling it.
 - A wallet directory is open in one runtime at a time, across processes too; LEPIC holds an OS
