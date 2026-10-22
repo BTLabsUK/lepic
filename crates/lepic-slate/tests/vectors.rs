@@ -377,7 +377,8 @@ fn v3_shaped_vectors_are_not_v2() {
 
 /// Mutations LEPIC refuses although an upstream parser may read them as V2, by the decode checks
 /// of `docs/compat/legacy-slates.md` and the header versions upstream writes. Upstream `v4.1.0`
-/// refuses the participant and offset cases too; `v4.0.2` read them.
+/// refuses the offset case on both paths and the participant cases on its file path only;
+/// `v4.0.2` read all three.
 fn stricter_than_upstream_v2(name: &str) -> Option<DecodeError> {
     let version = |version| DecodeError::UnsupportedVersion {
         codec: LEGACY_V2_JSON,

@@ -40,9 +40,9 @@ What differs between `v4.0.2` and `v4.1.0` and matters to LEPIC:
   arithmetic, requires between one and a block-weight-bounded number of change outputs, and
   splits change into equal parts with the remainder in the last output. For every change value
   the old code split correctly, the amounts are the same.
-- The HTTP send adapter parses the version and slate answers as typed errors, and posts
-  `receive_tx` with four parameters: slate, destination account, message, `addr_from`. The
-  foreign API method has the same fourth parameter (ADR 0017).
+- The HTTP send adapter parses the version and slate answers as typed errors. It posts
+  `receive_tx` with the four parameters `v4.0.2` already sent: slate, destination account,
+  message, `addr_from` (ADR 0017).
 - The node client asks the node's foreign API `ready_for_txs` for `is_node_ready`, and falls back
   to the owner status call only when the method is not found.
 - The Epicbox adapter refuses a slate that arrives before the relay challenge.
@@ -51,8 +51,9 @@ What differs between `v4.0.2` and `v4.1.0` and matters to LEPIC:
   `block_header_version` through (`v4.0.2` copied the whole header when it converted). Epicbox
   payloads therefore carry header `2/3/<b>` instead of `3/3/<b>`, and the invoice payer's
   V3-shaped file says 3, so its TTL is read. LEPIC writes the same; both header forms decode.
-- Slate parsing also refuses a duplicate participant id and a zero participant count, which
-  LEPIC already refused.
+- Slate parsing refuses an offset of the wrong length, and on the file path also a duplicate
+  participant id and a zero participant count (the Epicbox path still reads those two). LEPIC
+  already refused all three.
 - Wallet database layout and the field layout of the legacy slate V2 and V3 formats are
   unchanged.
 

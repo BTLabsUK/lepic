@@ -133,8 +133,9 @@ below the weight-based minimum, `version_info.version` 2 or 3 (upstream's Epicbo
 version for the V2 shape; see `malformed_header_version_1` and `_4`), and no non-null
 `payment_proof` in a V2-shaped slate (the V2 codec refuses it rather than reading the slate
 without it; the file path removes the V3-only keys before a header-2 file reaches it). Upstream
-`v4.1.0` also refuses a duplicate participant id, a zero participant count and an offset of the
-wrong length (`malformed_duplicate_participant_id`, `malformed_num_participants_zero`,
-`malformed_offset_too_short`), which `v4.0.2` read; the other checks are LEPIC's own and stricter
+`v4.1.0` refuses an offset of the wrong length on both paths (`malformed_offset_too_short`), and on
+the file path also a duplicate participant id and a zero participant count
+(`malformed_duplicate_participant_id`, `malformed_num_participants_zero`), which its Epicbox path
+still reads; `v4.0.2` read all three; the other checks are LEPIC's own and stricter
 than upstream's parse step.
 Any slate `epic-wallet` emits must still decode; the vectors prove it.
