@@ -52,5 +52,9 @@ tokio = { workspace = true, features = ["rt", "sync", "macros"] }
 name = "lifecycle"
 required-features = ["sqlite"]
 
+[[test]]
+name = "legacy_history"
+required-features = ["sqlite"]
+
 [lints]
 workspace = true
