@@ -1,0 +1,479 @@
+//! The Tor method as a transport: the foreign API exchange of `lepic-foreign` (`check_version`,
+//! then `receive_tx`) over a SOCKS stream to `<onion>:80`, through the wallet's own tor.
+//!
+//! As over HTTP, the receiver answers `receive_tx` with its S2 in the same exchange. The
+//! outbound side keeps that answer, keyed by slate id, until the caller finalizes it.
+
+use std::collections::VecDeque;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::Duration;
+
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
+use hyper::body::Bytes;
+use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
+use hyper::{Method, Request, StatusCode};
+use hyper_util::rt::TokioIo;
+use lepic_foreign::HttpPolicy;
+use lepic_foreign::error::RpcError;
+use lepic_foreign::rpc::{self, MAX_BODY_LEN, VersionInfo};
+use lepic_slate::codec::WireSlate;
+use lepic_transport::error::TransportError;
+use lepic_transport::policy::FormatPolicy;
+use lepic_transport::transport::{
+    AckToken, BoxFuture, Destination, Envelope, Inbound, Outbound, Transport, TransportId,
+};
+use serde::Deserialize;
+use thiserror::Error;
+use tracing::debug;
+
+use crate::onion::{OnionAddress, OnionError};
+use crate::process::SocksProxy;
+use crate::socks::{self, DEFAULT_CONNECT_TIMEOUT, SendFailure, SocksCredentials, SocksError};
+
+/// The transport id of the Tor method, stored with its transactions.
+pub const TRANSPORT_ID: TransportId = TransportId::new("tor");
+
+const ENDPOINT: &str = "/v2/foreign";
+const ONION_PORT: u16 = 80;
+const MAX_HELD_REPLIES: usize = 64;
+const MAX_SLATE_ID_LEN: usize = 64;
+
+/// Limits of a send over Tor.
+#[derive(Debug, Clone, Copy)]
+pub struct OnionClientSettings {
+    /// Reaching the onion through tor; a `check_version` that times out is tried once more on a
+    /// new circuit.
+    pub connect_timeout: Duration,
+    /// From sending a request to the last byte of its answer.
+    pub request_timeout: Duration,
+    pub max_response_bytes: usize,
+}
+
+impl Default for OnionClientSettings {
+    fn default() -> Self {
+        Self {
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            request_timeout: Duration::from_secs(120),
+            max_response_bytes: MAX_BODY_LEN,
+        }
+    }
+}
+
+/// Why a slate could not be sent over Tor.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum TorSendError {
+    #[error("tor is not running")]
+    NotRunning,
+    #[error("invalid onion address")]
+    Address(#[from] OnionError),
+    #[error("could not reach the other wallet over tor")]
+    Socks(#[from] SocksError),
+    #[error("the exchange with the other wallet failed")]
+    Exchange(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("the other wallet did not answer in time")]
+    Timeout,
+    #[error("the other wallet answered with http status {status}")]
+    Status { status: u16 },
+    #[error("the other wallet has no foreign api at this address")]
+    NotFound,
+    #[error("the answer is larger than {max} bytes")]
+    ResponseTooLarge { max: usize },
+    #[error("the answer could not be read")]
+    Rpc(#[from] RpcError),
+    #[error("the other wallet offers no slate version this wallet sends")]
+    NoCommonVersion,
+}
+
+impl TorSendError {
+    /// What the failure means for the person sending.
+    pub const fn class(&self) -> SendFailure {
+        match self {
+            Self::NotRunning => SendFailure::TorOff,
+            Self::Address(_) => SendFailure::InvalidAddress,
+            Self::Socks(error) => error.class(),
+            Self::Exchange(_) | Self::Timeout => SendFailure::Broken,
+            Self::Status { .. }
+            | Self::NotFound
+            | Self::ResponseTooLarge { .. }
+            | Self::Rpc(RpcError::Malformed | RpcError::NotJson | RpcError::TooLarge) => {
+                SendFailure::NotEpic
+            }
+            Self::Rpc(RpcError::Refused) => SendFailure::Refused,
+            Self::Rpc(_) | Self::NoCommonVersion => SendFailure::TooOld,
+        }
+    }
+}
+
+/// Talks to other wallets' foreign APIs at their onions, through a SOCKS proxy.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OnionClient {
+    settings: OnionClientSettings,
+}
+
+impl OnionClient {
+    pub const fn new(settings: OnionClientSettings) -> Self {
+        Self { settings }
+    }
+
+    /// Asks which slate versions the wallet at `onion` accepts.
+    pub async fn check_version(
+        &self,
+        proxy: SocketAddr,
+        onion: &OnionAddress,
+        credentials: &SocksCredentials,
+    ) -> Result<VersionInfo, TorSendError> {
+        let body = self
+            .post(proxy, onion, credentials, rpc::encode_version_request())
+            .await?;
+        let info = rpc::decode_version_response(&body)?;
+        debug!(
+            transport = "tor",
+            v3 = info.v3,
+            v2 = info.v2,
+            "foreign api version checked"
+        );
+        Ok(info)
+    }
+
+    /// Posts the S1 in `slate` to `onion` and returns the receiver's S2 as it came.
+    pub async fn receive_tx(
+        &self,
+        proxy: SocketAddr,
+        onion: &OnionAddress,
+        credentials: &SocksCredentials,
+        slate: &WireSlate,
+    ) -> Result<WireSlate, TorSendError> {
+        let body = self
+            .post(
+                proxy,
+                onion,
+                credentials,
+                rpc::encode_receive_request(slate)?,
+            )
+            .await?;
+        Ok(rpc::decode_slate_response(&body)?)
+    }
+
+    async fn post(
+        &self,
+        proxy: SocketAddr,
+        onion: &OnionAddress,
+        credentials: &SocksCredentials,
+        body: Vec<u8>,
+    ) -> Result<Vec<u8>, TorSendError> {
+        let host = onion.host();
+        let stream = socks::connect(
+            proxy,
+            &host,
+            ONION_PORT,
+            credentials,
+            self.settings.connect_timeout,
+        )
+        .await?;
+        tokio::time::timeout(
+            self.settings.request_timeout,
+            exchange(stream, &host, body, self.settings.max_response_bytes),
+        )
+        .await
+        .map_err(|_| TorSendError::Timeout)?
+    }
+}
+
+/// One HTTP/1.1 `POST /v2/foreign` over an established stream.
+pub async fn exchange<S>(
+    stream: S,
+    host: &str,
+    body: Vec<u8>,
+    max_response_bytes: usize,
+) -> Result<Vec<u8>, TorSendError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    let exchange_failed = |error: hyper::Error| TorSendError::Exchange(Box::new(error));
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .map_err(exchange_failed)?;
+    let driver = tokio::spawn(async move {
+        if let Err(error) = connection.await {
+            debug!(transport = "tor", error = %error, "foreign api connection ended");
+        }
+    });
+    let result = async {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(ENDPOINT)
+            .header(HOST, host)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(body)))
+            .map_err(|error| TorSendError::Exchange(Box::new(error)))?;
+        let response = sender
+            .send_request(request)
+            .await
+            .map_err(exchange_failed)?;
+        match response.status() {
+            StatusCode::NOT_FOUND => return Err(TorSendError::NotFound),
+            status if !status.is_success() => {
+                return Err(TorSendError::Status {
+                    status: status.as_u16(),
+                });
+            }
+            _ => {}
+        }
+        let max = max_response_bytes;
+        let declared = response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        if declared.is_some_and(|length| length > u64::try_from(max).unwrap_or(u64::MAX)) {
+            return Err(TorSendError::ResponseTooLarge { max });
+        }
+        let collected = Limited::new(response.into_body(), max)
+            .collect()
+            .await
+            .map_err(|error| {
+                if error.downcast_ref::<LengthLimitError>().is_some() {
+                    TorSendError::ResponseTooLarge { max }
+                } else {
+                    TorSendError::Exchange(error)
+                }
+            })?;
+        Ok(collected.to_bytes().to_vec())
+    }
+    .await;
+    driver.abort();
+    result
+}
+
+type SharedProxy = Arc<RwLock<Option<Arc<dyn SocksProxy>>>>;
+
+/// The Tor method. Clones share the attached tor and the held answers.
+#[derive(Clone)]
+pub struct TorTransport {
+    client: OnionClient,
+    proxy: SharedProxy,
+    held: Arc<Mutex<VecDeque<Held>>>,
+}
+
+impl std::fmt::Debug for TorTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TorTransport")
+            .field("attached", &self.is_attached())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+struct Held {
+    slate_id: String,
+    wire: WireSlate,
+}
+
+impl TorTransport {
+    /// A transport with no tor attached: sends fail with [`TorSendError::NotRunning`].
+    pub fn new(client: OnionClient) -> Self {
+        Self {
+            client,
+            proxy: Arc::new(RwLock::new(None)),
+            held: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+
+    /// Sends go through `proxy` from now on, usually the wallet's [`crate::TorProcess`].
+    pub fn attach(&self, proxy: Arc<dyn SocksProxy>) {
+        *self.proxy.write().unwrap_or_else(PoisonError::into_inner) = Some(proxy);
+    }
+
+    pub fn detach(&self) {
+        *self.proxy.write().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    pub fn is_attached(&self) -> bool {
+        self.proxy
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    fn socks_address(&self) -> Option<SocketAddr> {
+        self.proxy
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|proxy| proxy.socks_address())
+    }
+
+    /// The receiver's answer to the slate with `slate_id`, removed from the held answers.
+    pub fn take_reply(&self, slate_id: &str) -> Option<WireSlate> {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        let position = held
+            .iter()
+            .position(|reply| reply.slate_id.eq_ignore_ascii_case(slate_id))?;
+        held.remove(position).map(|reply| reply.wire)
+    }
+
+    fn hold(&self, slate_id: String, wire: WireSlate) {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.retain(|reply| !reply.slate_id.eq_ignore_ascii_case(&slate_id));
+        if held.len() >= MAX_HELD_REPLIES {
+            held.pop_front();
+        }
+        held.push_back(Held { slate_id, wire });
+    }
+
+    /// `check_version`, then `receive_tx` on the same circuit; the S2 is held for the caller.
+    pub async fn send(&self, to: &str, wire: &WireSlate) -> Result<(), TorSendError> {
+        let onion = OnionAddress::parse(to)?;
+        let proxy = self.socks_address().ok_or(TorSendError::NotRunning)?;
+        let mut credentials = SocksCredentials::random()?;
+        let version = match self.client.check_version(proxy, &onion, &credentials).await {
+            // The first circuit to an onion can take much longer than the next one.
+            Err(TorSendError::Socks(SocksError::Timeout)) => {
+                debug!(
+                    transport = "tor",
+                    attempt = 2,
+                    "onion connect timed out, retrying"
+                );
+                credentials = SocksCredentials::random()?;
+                self.client
+                    .check_version(proxy, &onion, &credentials)
+                    .await?
+            }
+            other => other?,
+        };
+        if !version.v2 {
+            return Err(TorSendError::NoCommonVersion);
+        }
+        let reply = self
+            .client
+            .receive_tx(proxy, &onion, &credentials, wire)
+            .await?;
+        let slate_id = slate_id_of(&reply).ok_or(TorSendError::Rpc(RpcError::Malformed))?;
+        debug!(transport = "tor", %slate_id, "answer received");
+        self.hold(slate_id, reply);
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+struct IdOnly {
+    id: String,
+}
+
+/// The `id` both legacy shapes carry at the top, read without decoding the slate.
+fn slate_id_of(wire: &WireSlate) -> Option<String> {
+    let text = wire.as_text()?;
+    let IdOnly { id } = serde_json::from_str(text).ok()?;
+    (id.len() <= MAX_SLATE_ID_LEN).then_some(id)
+}
+
+impl Outbound for TorTransport {
+    fn deliver<'a>(
+        &'a self,
+        to: &'a Destination,
+        wire: &'a WireSlate,
+    ) -> BoxFuture<'a, Result<(), TransportError>> {
+        Box::pin(async move {
+            self.send(to.as_str(), wire)
+                .await
+                .map_err(|error| TransportError::Backend {
+                    transport: TRANSPORT_ID,
+                    source: Box::new(error),
+                })
+        })
+    }
+}
+
+impl Inbound for TorTransport {
+    /// Held answers, oldest first. Acknowledging is a no-op: an answer leaves the queue when
+    /// it is handed out.
+    fn next_envelope(&self) -> BoxFuture<'_, Result<Option<Envelope>, TransportError>> {
+        Box::pin(async move {
+            let next = self
+                .held
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pop_front();
+            Ok(next.map(|reply| Envelope::new(AckToken::new(reply.slate_id), None, reply.wire)))
+        })
+    }
+
+    fn acknowledge<'a>(
+        &'a self,
+        _token: &'a AckToken,
+    ) -> BoxFuture<'a, Result<(), TransportError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl Transport for TorTransport {
+    fn id(&self) -> TransportId {
+        TRANSPORT_ID
+    }
+
+    /// The HTTP method's policy: the same foreign API answers over Tor.
+    fn policy(&self) -> &dyn FormatPolicy {
+        &HttpPolicy
+    }
+
+    fn outbound(&self) -> Option<&dyn Outbound> {
+        Some(self)
+    }
+
+    fn inbound(&self) -> Option<&dyn Inbound> {
+        Some(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failures_are_grouped_for_the_person_sending() {
+        assert_eq!(TorSendError::NotRunning.class(), SendFailure::TorOff);
+        assert_eq!(
+            TorSendError::Address(OnionError::Checksum).class(),
+            SendFailure::InvalidAddress
+        );
+        assert_eq!(
+            TorSendError::Socks(SocksError::Timeout).class(),
+            SendFailure::Unreachable
+        );
+        assert_eq!(
+            TorSendError::Status { status: 500 }.class(),
+            SendFailure::NotEpic
+        );
+        assert_eq!(TorSendError::NotFound.class(), SendFailure::NotEpic);
+        assert_eq!(
+            TorSendError::Rpc(RpcError::Malformed).class(),
+            SendFailure::NotEpic
+        );
+        assert_eq!(
+            TorSendError::Rpc(RpcError::Refused).class(),
+            SendFailure::Refused
+        );
+        assert_eq!(
+            TorSendError::Rpc(RpcError::Incompatible).class(),
+            SendFailure::TooOld
+        );
+        assert_eq!(TorSendError::NoCommonVersion.class(), SendFailure::TooOld);
+        assert_eq!(TorSendError::Timeout.class(), SendFailure::Broken);
+    }
+
+    #[test]
+    fn reads_the_slate_id_without_decoding() {
+        let wire = |text: &str| WireSlate::text(lepic_slate::codec::MediaType::JSON, text.into());
+        assert_eq!(
+            slate_id_of(&wire(r#"{"id":"abc","x":1}"#)).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            slate_id_of(&wire(&format!(r#"{{"id":"{}"}}"#, "a".repeat(65)))),
+            None
+        );
+        assert_eq!(slate_id_of(&wire("[]")), None);
+    }
+}

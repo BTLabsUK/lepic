@@ -4,6 +4,8 @@
 pub mod control;
 pub mod onion;
 pub mod process;
+pub mod socks;
+pub mod transport;
 
 pub use control::ControlError;
 pub use onion::{
@@ -13,3 +15,5 @@ pub use onion::{
 pub use process::{
     FailureKind, FixedSocks, SocksProxy, TorFailure, TorProcess, TorSettings, TorState, TorTimings,
 };
+pub use socks::{SendFailure, SocksError, SocksReply};
+pub use transport::{OnionClient, OnionClientSettings, TRANSPORT_ID, TorSendError, TorTransport};
