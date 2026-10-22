@@ -386,25 +386,39 @@ impl lepic_wallet::StoreOpener for ClaimedStores {
         data_dir: &Path,
         key: lepic_store::ContextKey,
     ) -> Result<ClaimedStore, lepic_store::StoreError> {
-        Ok(ClaimedStore {
-            inner: lepic_wallet::SqliteStores.open(data_dir, key)?,
-            holder: Arc::clone(&self.0),
-        })
+        Ok(ClaimedStore::new(
+            lepic_wallet::SqliteStores.open(data_dir, key)?,
+            &self.0,
+        ))
     }
 }
 
-pub(crate) struct ClaimedStore {
-    inner: lepic_store::SqliteStore,
-    holder: Arc<ClaimHolder>,
+/// A store that tells its session's [`ClaimHolder`] when it closes. Fields drop in order:
+/// the store closes its database before `_closed` reports it, so the directory is never
+/// released while the database is still open.
+pub(crate) struct ClaimedStore<S = lepic_store::SqliteStore> {
+    inner: S,
+    _closed: ReportsClosed,
 }
 
-impl Drop for ClaimedStore {
+impl<S> ClaimedStore<S> {
+    fn new(inner: S, holder: &Arc<ClaimHolder>) -> Self {
+        Self {
+            inner,
+            _closed: ReportsClosed(Arc::clone(holder)),
+        }
+    }
+}
+
+struct ReportsClosed(Arc<ClaimHolder>);
+
+impl Drop for ReportsClosed {
     fn drop(&mut self) {
-        self.holder.database_closed();
+        self.0.database_closed();
     }
 }
 
-impl lepic_store::WalletStore for ClaimedStore {
+impl<S: lepic_store::WalletStore> lepic_store::WalletStore for ClaimedStore<S> {
     fn read<R, E>(
         &self,
         operation: impl FnOnce(&dyn lepic_store::Repositories) -> Result<R, E>,
@@ -472,6 +486,74 @@ mod tests {
 
         releasing.join().unwrap();
         assert!(claimed.is_ok());
+    }
+
+    fn new_runtime() -> LepicRuntime {
+        crate::api::testing::MockChain::new(1)
+            .unwrap()
+            .runtime(LogLevel::Warn)
+            .unwrap()
+    }
+
+    /// A store that records, as it closes, whether the directory is still claimed.
+    struct ClosingStore {
+        inner: lepic_store::MemoryStore,
+        holder: Arc<ClaimHolder>,
+        held_while_closing: Arc<Mutex<Option<bool>>>,
+    }
+
+    impl Drop for ClosingStore {
+        fn drop(&mut self) {
+            *self.held_while_closing.lock().unwrap() = Some(self.holder.is_held());
+        }
+    }
+
+    impl lepic_store::WalletStore for ClosingStore {
+        fn read<R, E>(
+            &self,
+            operation: impl FnOnce(&dyn lepic_store::Repositories) -> Result<R, E>,
+        ) -> Result<R, E>
+        where
+            E: From<lepic_store::StoreError>,
+        {
+            self.inner.read(operation)
+        }
+
+        fn write<R, E>(
+            &self,
+            operation: impl FnOnce(&mut dyn lepic_store::Repositories) -> Result<R, E>,
+        ) -> Result<R, E>
+        where
+            E: From<lepic_store::StoreError>,
+        {
+            self.inner.write(operation)
+        }
+    }
+
+    /// The database closes before the directory is released, so a new open never finds it
+    /// still open.
+    #[tokio::test]
+    async fn a_locked_session_closes_its_database_before_it_releases_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = new_runtime();
+        let holder = ClaimHolder::new(runtime.inner.claim(dir.path()).await.unwrap());
+        let held_while_closing = Arc::new(Mutex::new(None));
+        let store = ClaimedStore::new(
+            ClosingStore {
+                inner: lepic_store::MemoryStore::new(lepic_store::ContextKey::from_bytes(
+                    [2; lepic_store::CONTEXT_KEY_LEN],
+                )),
+                holder: Arc::clone(&holder),
+                held_while_closing: Arc::clone(&held_while_closing),
+            },
+            &holder,
+        );
+        holder.release_when_closed();
+
+        drop(store);
+
+        assert_eq!(*held_while_closing.lock().unwrap(), Some(true));
+        assert!(!holder.is_held());
     }
 
     #[test]
