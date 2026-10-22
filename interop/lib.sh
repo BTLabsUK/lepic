@@ -174,6 +174,43 @@ ew_listening() {
     dc exec -T "$1" sh -c '[ -f /data/listen.pid ] && kill -0 "$(cat /data/listen.pid)" 2>/dev/null'
 }
 
+# Ports of the HTTP listeners the HTTP scenarios start. The funder's foreign API holds 23415 and
+# the miner's stratum server 23416 in the shared namespace.
+PEER_HTTP_PORT=23500
+LEPIC_HTTP_PORT=23510
+
+http_port_open() { dc exec -T "$1" curl -s -o /dev/null "http://127.0.0.1:$2/v2/foreign"; }
+
+# Starts `epic-wallet listen -m http` in the peer container and waits until the port answers. It
+# shares the pid file of the Epicbox listener, so ew_listen_stop stops either.
+peer_http_listen_start() {
+    ew_listen_stop peer
+    # shellcheck disable=SC2016 # expanded by the container's shell
+    dc exec -d peer sh -c "echo \$\$ >/data/listen.pid; exec ew listen -m http -n -l ${PEER_HTTP_PORT} >>/data/listen.log 2>&1"
+    wait_until "the peer http listener" 30 http_port_open peer "${PEER_HTTP_PORT}"
+}
+
+# Starts `lepic http listen` in the lepic container and waits until the port answers.
+lepic_http_listen_start() {
+    lepic_http_listen_stop >/dev/null
+    # shellcheck disable=SC2016 # expanded by the container's shell
+    dc exec -d lepic sh -c "rm -f /data/http.log; echo \$\$ >/data/http.pid; exec lepic http listen --port ${LEPIC_HTTP_PORT} >/data/http.log 2>&1"
+    wait_until "the lepic http listener" 30 http_port_open lepic "${LEPIC_HTTP_PORT}"
+}
+
+# Interrupts the lepic listener as Ctrl-C would and prints its report (the last log line).
+lepic_http_listen_stop() {
+    # shellcheck disable=SC2016 # expanded by the container's shell
+    dc exec -T lepic sh -c '
+        [ -f /data/http.pid ] || exit 0
+        pid="$(cat /data/http.pid)"
+        kill -INT "${pid}" 2>/dev/null || true
+        n=0
+        while kill -0 "${pid}" 2>/dev/null && [ "${n}" -lt 100 ]; do sleep 0.2; n=$((n + 1)); done
+        rm -f /data/http.pid
+        tail -n 1 /data/http.log'
+}
+
 peer_listen_start() { ew_listen_start peer; }
 
 peer_listen_stop() { ew_listen_stop peer; }

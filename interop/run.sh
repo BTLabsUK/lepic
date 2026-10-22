@@ -5,6 +5,9 @@
 #   ./run.sh            build what changed, start a clean stack, run, tear it down
 #   ./run.sh --keep     leave the stack running afterwards for inspection
 #   ./run.sh --no-build skip build.sh and use the binaries already in .work/bin
+#
+# SCENARIO_FILTER=<extended regex> runs only the scenarios whose names match it (setup always
+# runs). The scenarios share one chain and balances, so a subset is a check, not the full run.
 set -euo pipefail
 
 INTEROP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,10 +78,12 @@ run_step() {
 run_step "setup and funding" setup
 if [[ "${results[0]}" == PASS ]]; then
     for entry in "${SCENARIOS[@]}"; do
+        [[ "${entry%%:*}" =~ ${SCENARIO_FILTER:-.} ]] || continue
         run_step "${entry%%:*}" "${entry#*:}"
     done
 fi
 peer_listen_stop >/dev/null 2>&1 || true
+lepic_http_listen_stop >/dev/null 2>&1 || true
 
 printf '\n%-34s %-6s %6s  %s\n' "Scenario" "Result" "Time" "Detail"
 printf '%-34s %-6s %6s  %s\n' "--------" "------" "----" "------"

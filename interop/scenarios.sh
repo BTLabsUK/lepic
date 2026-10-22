@@ -393,6 +393,98 @@ scenario_file_epic_wallet_invoices() {
     DETAIL="V3 I2 with TTL finalized by epic-wallet; slate ${slate_id} confirmed on both sides"
 }
 
+# lepic pays the epic-wallet listening over HTTP; the send finalizes and posts in one command.
+scenario_http_lepic_sends() {
+    peer_http_listen_start || fail "epic-wallet http listener did not start" || return 1
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(($(to_units 1.3) + UNIT))" ||
+        fail "lepic has no spendable funds" || return 1
+    local sent
+    sent="$(lepic tx send 1.3 --to "http://127.0.0.1:${PEER_HTTP_PORT}")" || fail "lepic http send failed" || return 1
+    peer_listen_stop
+    [[ "$(jq -r .transport <<<"${sent}")" == http && "$(jq -r .state <<<"${sent}")" == posted ]] ||
+        fail "send was not finalized and posted over http: ${sent}" || return 1
+    local tx_id slate_id fee
+    tx_id="$(jq -r .tx_id <<<"${sent}")"
+    slate_id="$(jq -r .slate_id <<<"${sent}")"
+    fee="$(to_units "$(jq -r .fee <<<"${sent}")")"
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 1.3) - fee))
+    check_lepic_total || return 1
+    DETAIL="slate ${slate_id} posted by one command, confirmed on both sides"
+}
+
+# epic-wallet pays lepic's HTTP listener; epic-wallet finalizes and posts.
+scenario_http_epic_wallet_sends() {
+    peer_listen_stop
+    wait_until "peer spendable" 180 ew_spendable_at_least peer "$(($(to_units 2.1) + UNIT))" ||
+        fail "epic-wallet has no spendable funds" || return 1
+    local last
+    last="$(lepic_last_tx_id)"
+    lepic_http_listen_start || fail "lepic http listener did not start" || return 1
+    ew peer send -m http -d "http://127.0.0.1:${LEPIC_HTTP_PORT}" -c 1 -s smallest 2.1 >>"${RUN_LOG}" ||
+        { lepic_http_listen_stop >/dev/null; fail "epic-wallet http send failed"; return 1; }
+    # The listener holds the wallet open, so lepic's other commands wait until it is stopped.
+    local report
+    report="$(lepic_http_listen_stop)"
+    [[ "$(jq -r '[.received, .repeated, .refused] | join(",")' <<<"${report}")" == 1,0,0 ]] ||
+        fail "listener report is not one received payment: ${report}" || return 1
+    local tx
+    tx="$(lepic_incoming_after "${last}")"
+    [[ "$(wc -l <<<"${tx}")" -eq 1 && -n "${tx}" ]] || fail "expected one new incoming tx, got: ${tx}" || return 1
+    [[ "$(jq -r .amount_credited <<<"${tx}")" == 2.10000000 ]] || fail "credited amount wrong: ${tx}" || return 1
+    local tx_id slate_id
+    tx_id="$(jq -r .tx_id <<<"${tx}")"
+    slate_id="$(jq -r .slate_id <<<"${tx}")"
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 2.1)))
+    check_lepic_total || return 1
+    DETAIL="slate ${slate_id} received over http, confirmed on both sides"
+}
+
+# Posts a slate file to a wallet's foreign API as epic-wallet does, from the peer container, and
+# prints the JSON-RPC answer.
+post_receive_tx() {
+    local port="$1" slate="$2"
+    dc exec -T peer cat "${slate}" |
+        jq -c '{jsonrpc: "2.0", id: 1, method: "receive_tx", params: [., null, null]}' |
+        dc exec -T peer curl -s -H 'Content-Type: application/json' --data-binary @- \
+            "http://127.0.0.1:${port}/v2/foreign"
+}
+
+# The same S1 delivered twice gets the same S2 and leaves one transaction.
+scenario_http_repeat() {
+    peer_listen_stop
+    local slate=/exchange/http-repeat.slate
+    wait_until "peer spendable" 180 ew_spendable_at_least peer "$(($(to_units 0.9) + UNIT))" ||
+        fail "epic-wallet has no spendable funds" || return 1
+    ew peer send -m file -d "${slate}" -c 1 -s smallest 0.9 >>"${RUN_LOG}" || fail "epic-wallet send failed" || return 1
+    local slate_id count_before
+    slate_id="$(dc exec -T peer cat "${slate}" | jq -r .id)"
+    count_before="$(lepic_tx_count)"
+    lepic_http_listen_start || fail "lepic http listener did not start" || return 1
+    local first second
+    first="$(post_receive_tx "${LEPIC_HTTP_PORT}" "${slate}")"
+    second="$(post_receive_tx "${LEPIC_HTTP_PORT}" "${slate}")"
+    local report
+    report="$(lepic_http_listen_stop)"
+    jq -e '.result.Ok.id' <<<"${first}" >/dev/null || fail "first delivery refused: ${first}" || return 1
+    [[ "$(jq -S -c . <<<"${first}")" == "$(jq -S -c . <<<"${second}")" ]] ||
+        fail "the repeat got another S2: ${first} / ${second}" || return 1
+    [[ "$(jq -r '[.received, .repeated, .refused] | join(",")' <<<"${report}")" == 1,1,0 ]] ||
+        fail "listener report is not one received and one repeated: ${report}" || return 1
+    [[ "$(lepic_tx_count)" -eq $((count_before + 1)) ]] || fail "the repeat created a transaction" || return 1
+    [[ "$(lepic_tx_by_slate "${slate_id}" | wc -l)" -eq 1 ]] || fail "not one transaction for ${slate_id}" || return 1
+    # Settle it: epic-wallet finalizes the S2 and posts.
+    jq -c '.result.Ok' <<<"${first}" | dc exec -T peer sh -c "cat >${slate}.response"
+    ew peer finalize -i "${slate}.response" >>"${RUN_LOG}" || fail "epic-wallet could not finalize the S2" || return 1
+    local tx_id
+    tx_id="$(lepic_tx_by_slate "${slate_id}" | jq -r .tx_id)"
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 0.9)))
+    check_lepic_total || return 1
+    DETAIL="S1 ${slate_id} delivered twice: same S2, one transaction"
+}
+
 SCENARIOS=(
     "lepic sends to epic-wallet:scenario_lepic_sends"
     "epic-wallet sends to lepic:scenario_epic_wallet_sends"
@@ -404,4 +496,7 @@ SCENARIOS=(
     "epic-wallet sends to lepic by file:scenario_file_epic_wallet_sends"
     "lepic invoices epic-wallet by file:scenario_file_lepic_invoices"
     "epic-wallet invoices lepic by file:scenario_file_epic_wallet_invoices"
+    "lepic sends over http:scenario_http_lepic_sends"
+    "epic-wallet sends over http:scenario_http_epic_wallet_sends"
+    "same S1 twice over http:scenario_http_repeat"
 )

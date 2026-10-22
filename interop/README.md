@@ -108,6 +108,9 @@ the fees, so a lost or doubled effect fails the run.
 | epic-wallet sends to lepic by file | `epic-wallet send -m file`, `lepic tx receive`, `epic-wallet finalize -i` on the reply |
 | lepic invoices epic-wallet by file | `lepic invoice issue --to-file`, `epic-wallet pay -i`, `lepic tx finalize` on the reply |
 | epic-wallet invoices lepic by file | `epic-wallet invoice -d`, `lepic invoice pay --ttl-blocks`, `epic-wallet finalize -i` on the reply |
+| lepic sends over http | `epic-wallet listen -m http -l 23500` on loopback; `lepic tx send --to http://127.0.0.1:23500` reports `posted` in one command |
+| epic-wallet sends over http | `lepic http listen --port 23510`; `epic-wallet send -m http`; the listener's report counts one received payment |
+| same S1 twice over http | one S1 posted twice to `lepic http listen`: identical S2, one transaction, report counts one received and one repeated |
 
 `lepic` writes every slate file in the V3 shape with header `3/3/<b>` (ADR 0015), while `epic-wallet`
 writes V2 unless the slate carries a TTL or payment proof. Each file scenario checks that the file
@@ -119,6 +122,10 @@ file, so `epic-wallet finalize` reads a `lepic` V3 reply there too.
 Redeliveries are injected into the relay's MongoDB queue under a new message id, so `lepic` can only
 recognise them by slate id and stage. Every copy, including an S2 whose transaction is already
 confirmed, must count as repeated.
+
+`lepic http listen` holds the wallet open, so the scenarios stop it (as Ctrl-C does) before they
+run other `lepic` commands; those exit 5 ("in use") while it runs. `SCENARIO_FILTER=<regex> ./run.sh
+--no-build` runs only the scenarios whose names match; setup always runs.
 
 ## When a run fails
 
