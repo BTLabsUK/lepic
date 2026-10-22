@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::api::{
-    LocatedKernel, NodeApi, NodeVersion, OutputLocation, PmmrIndices, PoolTransaction, Propagation,
-    Tip, UnspentOutputs,
+    BlockHeaderInfo, LocatedKernel, NodeApi, NodeVersion, OutputLocation, PmmrIndices,
+    PoolTransaction, Propagation, Tip, UnspentOutputs,
 };
 use crate::decode;
 use crate::error::{ErrorChain, FieldProblem, NodeError};
@@ -276,6 +276,7 @@ fn call_span(method: &str, node: &str) -> Span {
     match method {
         "get_version" => info_span!("get_version", node),
         "get_tip" => info_span!("get_tip", node),
+        "get_header" => info_span!("get_header", node),
         "get_kernel" => info_span!("get_kernel", node),
         "get_outputs" => info_span!("get_outputs", node),
         "get_unspent_outputs" => info_span!("get_unspent_outputs", node),
@@ -296,6 +297,16 @@ impl<T: RpcTransport> NodeApi for NodeClient<T> {
 
     async fn get_tip(&self) -> Result<Tip, NodeError> {
         self.fetch_tip().await
+    }
+
+    async fn get_header(&self, height: Height) -> Result<Option<BlockHeaderInfo>, NodeError> {
+        const METHOD: &str = "get_header";
+        let params = json!([height.value(), null, null]);
+        let body = self.call(METHOD, &params, Idempotency::Read).await?;
+        let header = decode::header(&body, height)?;
+        self.ensure_not_above_tip(METHOD, "height", header.map(|found| found.height))
+            .await?;
+        Ok(header)
     }
 
     async fn get_kernel(

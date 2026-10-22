@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use lepic_crypto::Commitment;
 use lepic_node::mock::MockNode;
 use lepic_node::{
-    LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation, PmmrIndices,
-    PoolTransaction, Propagation, Tip, UnspentOutputs,
+    BlockHeaderInfo, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation,
+    PmmrIndices, PoolTransaction, Propagation, Tip, UnspentOutputs,
 };
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
@@ -123,6 +123,13 @@ impl NodeApi for Rechecking {
 
     fn get_tip(&self) -> impl Future<Output = Result<Tip, NodeError>> + Send {
         self.inner.get_tip()
+    }
+
+    fn get_header(
+        &self,
+        height: Height,
+    ) -> impl Future<Output = Result<Option<BlockHeaderInfo>, NodeError>> + Send {
+        self.inner.get_header(height)
     }
 
     fn get_kernel(

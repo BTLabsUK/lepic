@@ -111,6 +111,10 @@ pub enum FieldProblem {
     TooMany,
     #[error("value contradicts the call's contract")]
     Contradiction,
+    #[error("value is not an rfc 3339 timestamp")]
+    Timestamp,
+    #[error("timestamp lies before the first block of any chain")]
+    BeforeGenesis,
     #[error("height lies above the node's tip")]
     AboveTip,
 }

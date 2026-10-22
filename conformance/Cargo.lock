@@ -2333,6 +2333,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "jiff",
  "lepic-crypto",
  "lepic-primitives",
  "rustls",

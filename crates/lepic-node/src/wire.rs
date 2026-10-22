@@ -14,8 +14,8 @@ use lepic_primitives::tx::Transaction;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    LocatedKernel, MAX_POOL_KERNELS, NodeVersion, OutputLocation, PmmrIndices, PoolTransaction,
-    Tip, UnspentOutput, UnspentOutputs,
+    BlockHeaderInfo, LocatedKernel, MAX_POOL_KERNELS, NodeVersion, OutputLocation, PmmrIndices,
+    PoolTransaction, Tip, UnspentOutput, UnspentOutputs,
 };
 use crate::error::{FieldProblem, NodeError};
 
@@ -58,6 +58,52 @@ impl WireTip {
         Ok(Tip {
             height: Height::new(self.height),
             last_block_pushed,
+        })
+    }
+}
+
+/// `api::BlockHeaderPrintable`, reduced to the fields LEPIC reads.
+#[derive(Debug, Deserialize)]
+pub(crate) struct WireHeader {
+    height: u64,
+    hash: String,
+    timestamp: String,
+}
+
+// Epic mainnet started in 2019; a header dated earlier is not from any Epic chain.
+const EARLIEST_HEADER_TIMESTAMP_SECONDS: i64 = 1_546_300_800;
+
+impl WireHeader {
+    pub(crate) fn validate(
+        self,
+        method: &'static str,
+        requested: Height,
+    ) -> Result<BlockHeaderInfo, NodeError> {
+        let hash = Hash::from_hex(&self.hash)
+            .map_err(|error| NodeError::invalid(method, "hash", error.into()))?;
+        let height = Height::new(self.height);
+        if height != requested {
+            return Err(NodeError::invalid(
+                method,
+                "height",
+                FieldProblem::Contradiction,
+            ));
+        }
+        let timestamp = self
+            .timestamp
+            .parse::<jiff::Timestamp>()
+            .map_err(|_| NodeError::invalid(method, "timestamp", FieldProblem::Timestamp))?;
+        if timestamp.as_second() < EARLIEST_HEADER_TIMESTAMP_SECONDS {
+            return Err(NodeError::invalid(
+                method,
+                "timestamp",
+                FieldProblem::BeforeGenesis,
+            ));
+        }
+        Ok(BlockHeaderInfo {
+            height,
+            hash,
+            timestamp,
         })
     }
 }

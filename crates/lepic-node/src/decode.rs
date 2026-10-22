@@ -7,13 +7,14 @@ use lepic_crypto::Commitment;
 use lepic_primitives::amount::Height;
 
 use crate::api::{
-    LocatedKernel, NodeVersion, OutputLocation, PmmrIndices, PoolTransaction, Tip, UnspentOutputs,
+    BlockHeaderInfo, LocatedKernel, NodeVersion, OutputLocation, PmmrIndices, PoolTransaction, Tip,
+    UnspentOutputs,
 };
 use crate::error::{NodeError, RejectionKind};
 use crate::rpc::decode_response;
 use crate::wire::{
-    WireLocatedKernel, WireOutput, WireOutputListing, WirePoolEntry, WireTip, WireVersion,
-    validate_output_locations, validate_pool,
+    WireHeader, WireLocatedKernel, WireOutput, WireOutputListing, WirePoolEntry, WireTip,
+    WireVersion, validate_output_locations, validate_pool,
 };
 
 pub fn version(body: &[u8]) -> Result<NodeVersion, NodeError> {
@@ -38,6 +39,19 @@ pub fn kernel(
         Ok(kernel) => kernel
             .validate(METHOD, excess, min_height, max_height)
             .map(Some),
+        Err(NodeError::Rejected { rejection, .. }) if rejection.kind == RejectionKind::NotFound => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// `Ok(None)` when the node answered `NotFound`, which it does for every height it has no header
+/// for.
+pub fn header(body: &[u8], height: Height) -> Result<Option<BlockHeaderInfo>, NodeError> {
+    const METHOD: &str = "get_header";
+    match decode_response::<WireHeader>(METHOD, body) {
+        Ok(header) => header.validate(METHOD, height).map(Some),
         Err(NodeError::Rejected { rejection, .. }) if rejection.kind == RejectionKind::NotFound => {
             Ok(None)
         }

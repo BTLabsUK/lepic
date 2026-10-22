@@ -21,8 +21,9 @@ use std::sync::{Arc, Mutex};
 use lepic_crypto::{Commitment, RangeProof};
 use lepic_node::mock::{ChainOutput, MockNode};
 use lepic_node::{
-    CallPolicy, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation,
-    PmmrIndices, PoolTransaction, Propagation, RetryPolicy, RpcTransport, Tip, UnspentOutputs,
+    BlockHeaderInfo, CallPolicy, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion,
+    OutputLocation, PmmrIndices, PoolTransaction, Propagation, RetryPolicy, RpcTransport, Tip,
+    UnspentOutputs,
 };
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::tx::Transaction;
@@ -94,6 +95,13 @@ impl NodeApi for Scripted {
             }
             Ok(tip)
         }
+    }
+
+    fn get_header(
+        &self,
+        height: Height,
+    ) -> impl Future<Output = Result<Option<BlockHeaderInfo>, NodeError>> + Send {
+        self.inner.get_header(height)
     }
 
     fn get_kernel(

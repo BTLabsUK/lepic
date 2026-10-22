@@ -16,8 +16,8 @@ mod rpc;
 mod wire;
 
 pub use api::{
-    LocatedKernel, MAX_POOL_KERNELS, NodeApi, NodeVersion, OutputLocation, PmmrIndices,
-    PoolTransaction, Propagation, Tip, UnspentOutput, UnspentOutputs,
+    BlockHeaderInfo, LocatedKernel, MAX_POOL_KERNELS, NodeApi, NodeVersion, OutputLocation,
+    PmmrIndices, PoolTransaction, Propagation, Tip, UnspentOutput, UnspentOutputs,
 };
 pub use client::{CallPolicy, NodeClient, RetryPolicy, RpcTransport};
 pub use error::{FieldProblem, NodeError, NodeRejection, RejectionKind};

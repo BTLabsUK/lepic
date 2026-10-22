@@ -38,6 +38,7 @@ fn decode_all(body: &[u8]) {
     let requested: BTreeSet<Commitment> = commitments.iter().copied().collect();
     let _ = decode::version(body);
     let _ = decode::tip(body);
+    let _ = decode::header(body, Height::new(5));
     let _ = decode::kernel(body, &commitments[0], None, Some(Height::new(5)));
     let _ = decode::outputs(body, &requested);
     let _ = decode::unspent_outputs(body, 1, Some(100), 10);

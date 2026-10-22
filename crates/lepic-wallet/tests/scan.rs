@@ -21,8 +21,8 @@ use lepic_keychain::proof::create_output;
 use lepic_keychain::{Identifier, Keychain, LegacyProofBuilder, ProofBuilder, SwitchCommitment};
 use lepic_node::mock::{ChainOutput, MockNode};
 use lepic_node::{
-    LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation, PmmrIndices,
-    PoolTransaction, Propagation, Tip, UnspentOutputs,
+    BlockHeaderInfo, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation,
+    PmmrIndices, PoolTransaction, Propagation, Tip, UnspentOutputs,
 };
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
@@ -68,6 +68,13 @@ impl NodeApi for DisturbedNode {
 
     fn get_tip(&self) -> impl Future<Output = Result<Tip, NodeError>> + Send {
         self.inner.get_tip()
+    }
+
+    fn get_header(
+        &self,
+        height: Height,
+    ) -> impl Future<Output = Result<Option<BlockHeaderInfo>, NodeError>> + Send {
+        self.inner.get_header(height)
     }
 
     fn get_kernel(

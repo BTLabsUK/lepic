@@ -29,9 +29,9 @@ use lepic_crypto::{Commitment, RangeProof};
 use lepic_keychain::{Keychain, Seed};
 use lepic_node::mock::ChainOutput;
 use lepic_node::{
-    CallPolicy, HttpSettings, HttpTransport, LocatedKernel, NodeApi, NodeClient, NodeError,
-    NodeVersion, OutputLocation, PmmrIndices, PoolTransaction, Propagation, RetryPolicy, Tip,
-    UnspentOutputs, webpki_tls_config,
+    BlockHeaderInfo, CallPolicy, HttpSettings, HttpTransport, LocatedKernel, NodeApi, NodeClient,
+    NodeError, NodeVersion, OutputLocation, PmmrIndices, PoolTransaction, Propagation, RetryPolicy,
+    Tip, UnspentOutputs, webpki_tls_config,
 };
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::OutputFeatures;
@@ -93,6 +93,13 @@ impl NodeApi for LyingNode {
             }
             Ok(tip)
         }
+    }
+
+    fn get_header(
+        &self,
+        height: Height,
+    ) -> impl Future<Output = Result<Option<BlockHeaderInfo>, NodeError>> + Send {
+        self.inner.get_header(height)
     }
 
     fn get_kernel(

@@ -60,6 +60,13 @@ pub trait NodeApi: Send + Sync {
         propagation: Propagation,
     ) -> impl Future<Output = Result<(), NodeError>> + Send;
 
+    /// The header of the block at `height` on the node's chain. `Ok(None)` when the node has no
+    /// block at that height.
+    fn get_header(
+        &self,
+        height: Height,
+    ) -> impl Future<Output = Result<Option<BlockHeaderInfo>, NodeError>> + Send;
+
     /// The transactions in the node's transaction pool, waiting to be mined. A transaction
     /// still in the Dandelion stem phase is not listed. Fails with
     /// [`FieldProblem::TooMany`](crate::FieldProblem::TooMany) when the pool lists more than
@@ -89,6 +96,14 @@ pub struct NodeVersion {
 pub struct Tip {
     pub height: Height,
     pub last_block_pushed: Hash,
+}
+
+/// What a wallet needs of a block header: which block it is and when it was built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockHeaderInfo {
+    pub height: Height,
+    pub hash: Hash,
+    pub timestamp: jiff::Timestamp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

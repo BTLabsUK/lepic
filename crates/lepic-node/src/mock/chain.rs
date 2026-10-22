@@ -2,8 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use jiff::Timestamp;
 use lepic_crypto::{Commitment, RangeProof};
 use lepic_primitives::amount::Height;
+use lepic_primitives::hash::Hash;
 use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::tx::Transaction;
 use serde_json::{Value, json};
@@ -12,6 +14,12 @@ use super::Answer;
 use super::recording::window;
 use crate::api::{LocatedKernel, NodeVersion, Tip};
 use crate::wire::{WireKernel, WireTransaction};
+
+/// Seconds between the scripted chain's blocks, as the chain's own clock ticks.
+pub const BLOCK_INTERVAL_SECONDS: i64 = 60;
+
+/// 2019-03-01T00:00:00Z.
+const DEFAULT_GENESIS_SECONDS: i64 = 1_551_398_400;
 
 const ZERO_HASH_HEX: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -39,6 +47,10 @@ pub struct ChainState {
     pub kernels: Vec<LocatedKernel>,
     /// The transaction pool `get_unconfirmed_transactions` lists. A push does not add to it.
     pub pool: Vec<Transaction>,
+    /// The time of block 0. Block `n` is dated `n` intervals of [`BLOCK_INTERVAL_SECONDS`] later,
+    /// unless `header_times` says otherwise.
+    pub genesis_time: Timestamp,
+    pub header_times: BTreeMap<Height, Timestamp>,
 }
 
 impl ChainState {
@@ -49,7 +61,32 @@ impl ChainState {
             outputs: Vec::new(),
             kernels: Vec::new(),
             pool: Vec::new(),
+            genesis_time: Timestamp::from_second(DEFAULT_GENESIS_SECONDS)
+                .unwrap_or(Timestamp::UNIX_EPOCH),
+            header_times: BTreeMap::new(),
         }
+    }
+
+    /// The time the scripted chain gives the block at `height`.
+    pub fn header_time(&self, height: Height) -> Timestamp {
+        self.header_times.get(&height).copied().unwrap_or_else(|| {
+            let offset = i64::try_from(height.value())
+                .unwrap_or(i64::MAX)
+                .saturating_mul(BLOCK_INTERVAL_SECONDS);
+            Timestamp::from_second(self.genesis_time.as_second().saturating_add(offset))
+                .unwrap_or(self.genesis_time)
+        })
+    }
+
+    /// The hash the scripted chain gives the block at `height`: the tip's own hash at the tip,
+    /// otherwise one derived from the height.
+    pub fn header_hash(&self, height: Height) -> Hash {
+        if height == self.tip.height {
+            return self.tip.last_block_pushed;
+        }
+        let mut bytes = [0xb1; 32];
+        bytes[..8].copy_from_slice(&height.value().to_le_bytes());
+        Hash::from_bytes(bytes)
     }
 
     pub(super) fn answer(&self, method: &str, params: &Value) -> Answer {
@@ -64,6 +101,7 @@ impl ChainState {
                 "prev_block_to_last": ZERO_HASH_HEX,
                 "total_difficulty": {},
             })),
+            "get_header" => self.answer_header(params),
             "get_kernel" => self.answer_kernel(params),
             "get_outputs" => self.answer_outputs(params),
             "get_unspent_outputs" => self.answer_unspent(params),
@@ -82,6 +120,20 @@ impl ChainState {
             )),
             _ => Answer::Violation("method not served by the scripted chain"),
         }
+    }
+
+    fn answer_header(&self, params: &Value) -> Answer {
+        let Some(height) = params.get(0).and_then(Value::as_u64).map(Height::new) else {
+            return Answer::Violation("get_header without a height");
+        };
+        if height > self.tip.height {
+            return Answer::Rejected(json!("NotFound"));
+        }
+        Answer::Ok(json!({
+            "height": height.value(),
+            "hash": self.header_hash(height).to_hex(),
+            "timestamp": self.header_time(height).to_string(),
+        }))
     }
 
     fn answer_kernel(&self, params: &Value) -> Answer {
