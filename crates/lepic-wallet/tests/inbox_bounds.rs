@@ -853,3 +853,34 @@ fn at_the_open_receipt_cap_an_implausible_node_tip_holds_the_new_s1_only_to_the_
     assert_eq!(world.receiver.transactions(), MAX_OPEN_RECEIPTS);
     assert_eq!(incoming(&world, TxState::Received), MAX_OPEN_RECEIPTS);
 }
+
+#[test]
+fn a_sender_at_its_open_receipt_cap_is_received_once_a_refresh_confirms_its_payments() {
+    let world = World::new();
+    let cap = u32::try_from(MAX_OPEN_RECEIPTS_PER_SENDER).unwrap();
+    for n in 0..cap {
+        post_from(&world, 1, &s1_numbered(n));
+    }
+    assert_eq!(drain(&world).received, cap);
+    // The sender finalized every payment and the chain mined them; no refresh saw it yet.
+    for (index, tx_id) in open_receipts(&world).into_iter().enumerate() {
+        let output = receipt_output(&world, tx_id);
+        mine(&world, tx_id, 10 + index as u64, Some(output));
+    }
+    post_from(&world, 1, &s1_numbered(cap));
+
+    let summary = drain(&world);
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            received: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(
+        incoming(&world, TxState::Confirmed),
+        MAX_OPEN_RECEIPTS_PER_SENDER
+    );
+    assert_eq!(incoming(&world, TxState::Received), 1);
+}

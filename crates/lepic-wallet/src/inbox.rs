@@ -104,7 +104,8 @@ const TIP_REFRESHED_SETTING: &str = "inbox.tip_refreshed_at";
 /// Open receipts, payments received over Epicbox and answered with S2 that the sender has not
 /// finalized, kept from one sender key. A paying wallet finalizes as soon as the S2 arrives, so
 /// a sender with this many open is not finalizing; a further S1 from its key is refused and
-/// acknowledged without being signed or stored. The same cap applies to parked invoices.
+/// acknowledged without being signed or stored, unless a refresh, made first at most once a
+/// minute, confirms some of them. The same cap applies to parked invoices.
 pub const MAX_OPEN_RECEIPTS_PER_SENDER: usize = 10;
 
 /// Open receipts kept over every sender. Each holds an unconfirmed output, a transaction and its
@@ -1378,19 +1379,19 @@ where
         let Some(mut open) = self.open_receipts_unless_known(Some(slate_id)).await? else {
             return Ok(());
         };
-        let from_sender = sender_keys(&open, network)
-            .iter()
-            .filter(|key| key.as_deref() == Some(sender.as_str()))
-            .count();
-        if from_sender >= MAX_OPEN_RECEIPTS_PER_SENDER {
-            return Err(Refusal::OpenReceiptsFromSender.into());
-        }
-        if open.len() < MAX_OPEN_RECEIPTS {
-            return Ok(());
-        }
+        let from_sender = |open: &[OpenReceipt]| {
+            sender_keys(open, network)
+                .iter()
+                .filter(|key| key.as_deref() == Some(sender.as_str()))
+                .count()
+        };
+        let at_a_cap = |open: &[OpenReceipt]| {
+            from_sender(open) >= MAX_OPEN_RECEIPTS_PER_SENDER || open.len() >= MAX_OPEN_RECEIPTS
+        };
         // An open receipt is one no refresh has seen confirmed yet, so some may already be
-        // mined; a refresh confirms those before any is cancelled.
-        if self.tip_refresh_due().await? {
+        // mined; a refresh confirms those before a cap refuses the S1 or a receipt is
+        // cancelled.
+        if at_a_cap(&open) && self.tip_refresh_due().await? {
             if let Err(error) = self.refresh().await {
                 warn!(error = %ErrorChain(&error), "tip not refreshed");
             }
@@ -1398,9 +1399,12 @@ where
                 .open_receipts_unless_known(None)
                 .await?
                 .unwrap_or_default();
-            if open.len() < MAX_OPEN_RECEIPTS {
-                return Ok(());
-            }
+        }
+        if from_sender(&open) >= MAX_OPEN_RECEIPTS_PER_SENDER {
+            return Err(Refusal::OpenReceiptsFromSender.into());
+        }
+        if open.len() < MAX_OPEN_RECEIPTS {
+            return Ok(());
         }
         for tx_id in eviction_order(&open, network) {
             match self.cancel(tx_id).await {
