@@ -11,7 +11,7 @@ use lepic_foreign::{
 };
 use lepic_node::Propagation;
 use lepic_store::TxId;
-use lepic_transport::transport::{BoxFuture, Destination};
+use lepic_transport::transport::{BoxFuture, Destination, TransportId};
 use lepic_wallet::send::Delivery;
 use lepic_wallet::slate::WireSlate;
 use lepic_wallet::{ReceiveError, ReceiveRequest};
@@ -169,7 +169,18 @@ impl Session {
     /// Finalizes the answer the HTTP transport kept for `slate_id` and posts it. Returns
     /// whether the node accepted the transaction.
     async fn finalize_http_reply(&self, slate_id: &str) -> Result<bool, WalletError> {
-        let reply = self.http.take_reply(slate_id).ok_or_else(|| {
+        self.finalize_direct_reply(TRANSPORT_ID, self.http.take_reply(slate_id))
+            .await
+    }
+
+    /// Finalizes `reply`, the answer a direct send over `transport` kept, and posts it.
+    /// Returns whether the node accepted the transaction.
+    pub(super) async fn finalize_direct_reply(
+        &self,
+        transport: TransportId,
+        reply: Option<WireSlate>,
+    ) -> Result<bool, WalletError> {
+        let reply = reply.ok_or_else(|| {
             WalletError::new(
                 WalletErrorKind::TransportFailed,
                 "the other wallet's answer was not kept; send it again",
@@ -177,7 +188,7 @@ impl Session {
         })?;
         match self
             .engine
-            .finalize(TRANSPORT_ID, &reply, Propagation::Fluff)
+            .finalize(transport, &reply, Propagation::Fluff)
             .await
         {
             Ok(_) => Ok(true),
