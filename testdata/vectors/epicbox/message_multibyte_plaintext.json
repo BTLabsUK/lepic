@@ -5,7 +5,7 @@
   "generator": "conformance/vectors/epicbox",
   "upstream": {
     "repo": "https://github.com/EpicCash/epic-wallet",
-    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
   },
   "inputs": {
     "network": "floonet",
@@ -23,11 +23,11 @@
     "receiver_public_key_hex": "02531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
     "from": "zzNef1CHe6fpzTMMsy4X9AAMHboqfpRVv8XUv1kbh683aoa5qBEV@epicbox.epiccash.com",
     "to": "zzNhDvVNvan4xHZgmginw4EVTK5JfZN1b3nD9LXrFouT1xcvtPnF@relay.example.org",
-    "key": "6f7e06fe309c1736e35771c62a3cbad160862b1fded84879f9e39a1765c16651",
-    "salt": "37f8212fb9e144bd",
-    "nonce": "f8a30bef8df00e97f3d65eaa",
-    "encrypted_message": "9130659999d4d0e47aaca390f3b976a0bdbfcd92eaf82cca4c79f4dcbe78",
-    "str": "{\"destination\":{\"public_key\":\"zzNhDvVNvan4xHZgmginw4EVTK5JfZN1b3nD9LXrFouT1xcvtPnF\",\"domain\":\"relay.example.org\",\"port\":null},\"encrypted_message\":\"9130659999d4d0e47aaca390f3b976a0bdbfcd92eaf82cca4c79f4dcbe78\",\"salt\":\"37f8212fb9e144bd\",\"nonce\":\"f8a30bef8df00e97f3d65eaa\"}",
-    "signature": "3045022100f62888abd5514d5289c40e479db84e5ab7b99e8bdab30746b6de8c332390bc6f022072701cb35a1af01130ebc7ab628888cc0c00e62b508c31e2aa6f17b81d38f1ee"
+    "key": "e2f6dd4380957951ae6778e72e099844c0ed18e3d7f8bda6f72767b840d142b3",
+    "salt": "84030a84edc4685b",
+    "nonce": "0ba92187448d43402a819a78",
+    "encrypted_message": "62d243b0dba1cc23e83d42dba6cfc2ed0543d07720ccc086003ca4c0ab21",
+    "str": "{\"destination\":{\"public_key\":\"zzNhDvVNvan4xHZgmginw4EVTK5JfZN1b3nD9LXrFouT1xcvtPnF\",\"domain\":\"relay.example.org\",\"port\":null},\"encrypted_message\":\"62d243b0dba1cc23e83d42dba6cfc2ed0543d07720ccc086003ca4c0ab21\",\"salt\":\"84030a84edc4685b\",\"nonce\":\"0ba92187448d43402a819a78\"}",
+    "signature": "304402206057185a6d0a04359f3a752142f75788b858cd8085818594c03baddec5dfed9d022058e29a42155353362993a9e6cc9ac1433b4efd7f58311364df7e4369fbdb333d"
   }
 }

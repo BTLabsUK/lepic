@@ -20,7 +20,7 @@ use lepic_wallet::selection::{
 use serde_json::Value;
 
 const UPSTREAM_REPO: &str = "https://github.com/EpicCash/epic-wallet";
-const UPSTREAM_COMMIT: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
+const UPSTREAM_COMMIT: &str = "845b3fcf4df12ed0139929c62157015447a9d063";
 const ACCOUNT: AccountIndex = AccountIndex(0);
 
 fn vectors() -> Vec<(String, Value)> {

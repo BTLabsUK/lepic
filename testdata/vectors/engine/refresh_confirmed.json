@@ -5,7 +5,7 @@
   "generator": "conformance/vectors/engine",
   "upstream": {
     "repo": "https://github.com/EpicCash/epic-wallet",
-    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
   },
   "inputs": {
     "description": "The subject received a transaction that has since been mined; the refresh confirms its output and its transaction log entry.",
@@ -217,6 +217,19 @@
   "expected": {
     "exchanges": [
       {
+        "endpoint": "/v2/foreign",
+        "method": "ready_for_txs",
+        "params": [],
+        "response": {
+          "error": {
+            "code": -32601,
+            "message": "Method not found"
+          },
+          "id": 1,
+          "jsonrpc": "2.0"
+        }
+      },
+      {
         "endpoint": "/v2/owner",
         "method": "get_status",
         "params": null,
@@ -242,7 +255,7 @@
                   "randomx": 10
                 }
               },
-              "user_agent": "MW/Epic 4.0.4"
+              "user_agent": "MW/Epic 4.1.0"
             }
           }
         },

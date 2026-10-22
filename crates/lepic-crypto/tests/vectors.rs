@@ -21,7 +21,7 @@ use lepic_crypto::{
 };
 use serde_json::Value;
 
-const UPSTREAM_NODE: &str = "9d022b1d521d3f705532e12ab77e0a429f6fde1f";
+const UPSTREAM_NODE: &str = "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4";
 
 fn vector(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

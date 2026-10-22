@@ -5,7 +5,7 @@
   "generator": "conformance/vectors/keys",
   "upstream": {
     "repo": "https://github.com/EpicCash/epic-wallet",
-    "commit": "465d499f01aad7e570b6cc220d52c6bfcf6a9a44"
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
   },
   "inputs": {
     "mnemonic": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
@@ -14,9 +14,9 @@
     "wrong_password": "not the password"
   },
   "expected": {
-    "file": "{\n  \"encrypted_seed\": \"d81e8ca299f568f890af7ebcc1560cad16fe570f8767e21df60a797e7d0203a97f20003e9b0efb040f19241ba5374a69\",\n  \"salt\": \"e9033b5dfc1fca39\",\n  \"nonce\": \"6e2b432af12348d426d718e7\"\n}",
-    "encrypted_seed": "d81e8ca299f568f890af7ebcc1560cad16fe570f8767e21df60a797e7d0203a97f20003e9b0efb040f19241ba5374a69",
-    "salt": "e9033b5dfc1fca39",
-    "nonce": "6e2b432af12348d426d718e7"
+    "file": "{\n  \"encrypted_seed\": \"fdd435f4f382e007bc81ceb3e2fe5c09fe4e46ee4471c1052fdb8451cbbeb53c430b471c6e1da8b418d1bfca1df8f0bd\",\n  \"salt\": \"e8cd135b9a2134eb\",\n  \"nonce\": \"40786420dec173d13498aa05\"\n}",
+    "encrypted_seed": "fdd435f4f382e007bc81ceb3e2fe5c09fe4e46ee4471c1052fdb8451cbbeb53c430b471c6e1da8b418d1bfca1df8f0bd",
+    "salt": "e8cd135b9a2134eb",
+    "nonce": "40786420dec173d13498aa05"
   }
 }

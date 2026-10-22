@@ -29,9 +29,9 @@ use lepic_primitives::params::Network;
 use serde_json::Value;
 
 const NODE_REPO: &str = "https://github.com/EpicCash/epic";
-const NODE_COMMIT: &str = "9d022b1d521d3f705532e12ab77e0a429f6fde1f";
+const NODE_COMMIT: &str = "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4";
 const WALLET_REPO: &str = "https://github.com/EpicCash/epic-wallet";
-const WALLET_COMMIT: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
+const WALLET_COMMIT: &str = "845b3fcf4df12ed0139929c62157015447a9d063";
 
 const SEEDS: [&str; 2] = ["seed16", "seed32"];
 

@@ -24,7 +24,7 @@ use lepic_tor::{OnionAddress, OnionError, expanded_secret, onion_address, public
 use serde_json::Value;
 
 const WALLET_REPO: &str = "https://github.com/EpicCash/epic-wallet";
-const WALLET_COMMIT: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
+const WALLET_COMMIT: &str = "845b3fcf4df12ed0139929c62157015447a9d063";
 
 const KEY_FILE_SEED: &str = "37c50a0cfaf343cbc594fde3cb29a88427d40891de34791f1d97f9d99e1e35d9";
 const KEY_FILE_PUBLIC_KEY: &str =

@@ -26,7 +26,7 @@ use serde_json::Value;
 const V1: ProtocolVersion = ProtocolVersion::V1;
 const V2: ProtocolVersion = ProtocolVersion::V2;
 const UPSTREAM_REPO: &str = "https://github.com/EpicCash/epic";
-const UPSTREAM_COMMIT: &str = "9d022b1d521d3f705532e12ab77e0a429f6fde1f";
+const UPSTREAM_COMMIT: &str = "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4";
 
 // Helpers carry `cfg(test)` so the clippy test allowances (clippy.toml) cover them as they cover
 // the `#[test]` functions that call them.

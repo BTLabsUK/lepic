@@ -5,7 +5,7 @@
   "generator": "conformance/vectors/keys",
   "upstream": {
     "repo": "https://github.com/EpicCash/epic",
-    "commit": "9d022b1d521d3f705532e12ab77e0a429f6fde1f"
+    "commit": "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
   },
   "inputs": {
     "mnemonic": "PIPE stock song coast pair always emotion member joy sting dash theory"

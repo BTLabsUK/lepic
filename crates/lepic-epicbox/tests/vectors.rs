@@ -19,7 +19,7 @@ use lepic_epicbox::{
 };
 use serde_json::Value;
 
-const UPSTREAM_WALLET: &str = "465d499f01aad7e570b6cc220d52c6bfcf6a9a44";
+const UPSTREAM_WALLET: &str = "845b3fcf4df12ed0139929c62157015447a9d063";
 
 fn vector_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/vectors/epicbox")
