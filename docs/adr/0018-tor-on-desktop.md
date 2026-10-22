@@ -1,6 +1,6 @@
 # 0018 Tor on desktop through a bundled tor child process
 
-Status: proposed
+Status: accepted
 Date: 2026-10-22
 
 ## Context

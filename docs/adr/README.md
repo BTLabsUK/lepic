@@ -23,7 +23,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0015](0015-file-method-writes-v3.md) | The file method writes V3; Epicbox stays V2 for S1, V3 for invoice stages | accepted |
 | [0016](0016-epicbox-notices.md) | LEPIC notices over Epicbox, sent only to proven peers | accepted |
 | [0017](0017-foreign-api-over-http.md) | The wallet foreign API over HTTP in its own crate | accepted |
-| [0018](0018-tor-on-desktop.md) | Tor on desktop through a bundled tor child process | proposed |
+| [0018](0018-tor-on-desktop.md) | Tor on desktop through a bundled tor child process | accepted |
 
 Template:
 
