@@ -27,6 +27,7 @@ pub struct Wallet<N, S: StoreOpener, V> {
     ports: Arc<Ports<N, S, V>>,
     session: RwLock<Option<Arc<Session<S::Store>>>>,
     events: broadcast::Sender<Event>,
+    unsolicited: tokio::sync::Mutex<()>,
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -51,6 +52,7 @@ where
             ports: Arc::new(ports),
             session: RwLock::new(None),
             events,
+            unsolicited: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -274,6 +276,12 @@ where
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
             .ok_or(WalletError::Locked)
+    }
+
+    /// Serves receipts of payments nobody asked for one at a time, so the open receipt caps
+    /// hold under concurrent listeners.
+    pub(crate) async fn unsolicited_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.unsolicited.lock().await
     }
 
     pub(crate) fn emit(&self, event: Event) {

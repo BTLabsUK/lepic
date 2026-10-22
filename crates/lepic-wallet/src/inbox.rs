@@ -24,8 +24,6 @@
 //! [`Event::AnsweredAgain`]; finalizing an S2 again changes nothing that is stored. A message
 //! whose relay id settled before is acknowledged without an answer or an event.
 
-use std::cmp::Reverse;
-use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -44,8 +42,7 @@ use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    AccountIndex, InboxEntry, InboxStatus, OpenReceipt, Repositories, SlateStage, StoreError,
-    TxDirection, TxId, WalletStore,
+    AccountIndex, InboxEntry, InboxStatus, Repositories, SlateStage, StoreError, TxId, WalletStore,
 };
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Destination, Envelope, Inbound, TransportId};
@@ -61,6 +58,7 @@ use crate::finalize::FinalizeError;
 use crate::invoice::InvoiceError;
 use crate::notice::{self, Payload};
 use crate::ports::{SecretVault, StoreOpener};
+use crate::receipt_cap::{NoRoom, Sender};
 use crate::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
 use crate::refresh::last_confirmed;
 use crate::wallet::Wallet;
@@ -373,7 +371,8 @@ fn receive_is_permanent(error: &ReceiveError) -> bool {
         ReceiveError::Wallet(_)
         | ReceiveError::UnknownTransport { .. }
         | ReceiveError::Node(_)
-        | ReceiveError::Codecs(_) => false,
+        | ReceiveError::Codecs(_)
+        | ReceiveError::OpenReceipts(_) => false,
         ReceiveError::Decode(_)
         | ReceiveError::WrongStage { .. }
         | ReceiveError::ZeroAmount
@@ -504,37 +503,6 @@ fn reply_is_permanent(hold: &Hold) -> bool {
 fn sender_key(address: &str, network: RelayNetwork) -> String {
     EpicboxAddress::parse(address, network)
         .map_or_else(|_| address.to_owned(), |address| address.key_text())
-}
-
-/// The sender key of each open receipt, by [`sender_key`].
-fn sender_keys(open: &[OpenReceipt], network: RelayNetwork) -> Vec<Option<String>> {
-    open.iter()
-        .map(|receipt| {
-            receipt
-                .counterparty
-                .as_deref()
-                .map(|address| sender_key(address, network))
-        })
-        .collect()
-}
-
-/// The open receipts `open`, oldest first, in the order they are given up at the cap: those of
-/// the sender key with the most open receipts first, and each count oldest first.
-fn eviction_order(open: &[OpenReceipt], network: RelayNetwork) -> Vec<TxId> {
-    let keys = sender_keys(open, network);
-    let mut counts: HashMap<&Option<String>, usize> = HashMap::new();
-    for key in &keys {
-        let count = counts.entry(key).or_default();
-        *count = count.saturating_add(1);
-    }
-    let mut order: Vec<(usize, TxId)> = open
-        .iter()
-        .zip(&keys)
-        .map(|(receipt, key)| (counts.get(key).copied().unwrap_or_default(), receipt.id))
-        .collect();
-    // Stable, so receipts with equal counts keep their age order.
-    order.sort_by_key(|(count, _)| Reverse(*count));
-    order.into_iter().map(|(_, id)| id).collect()
 }
 
 /// The relay client's reconnect backoff also paces the retries of a held message.
@@ -1314,22 +1282,21 @@ where
 
     /// Records a tip refresh for the inbox now when none was made in the last
     /// [`TIP_REFRESH_INTERVAL`], and says whether it is due.
-    async fn tip_refresh_due(&self) -> Result<bool, Hold> {
-        Ok(self
-            .inbox_write(|repos, now| {
-                let last = repos
-                    .setting(TIP_REFRESHED_SETTING)?
-                    .and_then(|text| text.parse::<jiff::Timestamp>().ok());
-                let due = last.is_none_or(|last| {
-                    now.checked_sub(TIP_REFRESH_INTERVAL)
-                        .is_ok_and(|due_from| last <= due_from || last > now)
-                });
-                if due {
-                    repos.put_setting(TIP_REFRESHED_SETTING, &now.to_string())?;
-                }
-                Ok(due)
-            })
-            .await?)
+    pub(crate) async fn tip_refresh_due(&self) -> Result<bool, WalletError> {
+        self.inbox_write(|repos, now| {
+            let last = repos
+                .setting(TIP_REFRESHED_SETTING)?
+                .and_then(|text| text.parse::<jiff::Timestamp>().ok());
+            let due = last.is_none_or(|last| {
+                now.checked_sub(TIP_REFRESH_INTERVAL)
+                    .is_ok_and(|due_from| last <= due_from || last > now)
+            });
+            if due {
+                repos.put_setting(TIP_REFRESHED_SETTING, &now.to_string())?;
+            }
+            Ok(due)
+        })
+        .await
     }
 
     /// Whether the message `msg_id`, on its try `attempt`, reached the hold bound: this is try
@@ -1375,87 +1342,25 @@ where
     ) -> Result<(), Settlement> {
         let slate_id = Uuid::from_bytes(*proposal.id().as_bytes());
         let network = relay_network(self.config().network);
-        let sender = sender_key(reply_to.as_str(), network);
-        let Some(mut open) = self.open_receipts_unless_known(Some(slate_id)).await? else {
-            return Ok(());
+        let key = sender_key(reply_to.as_str(), network);
+        let key_of = |address: &str| sender_key(address, network);
+        let sender = Sender {
+            key: &key,
+            key_of: &key_of,
         };
-        let from_sender = |open: &[OpenReceipt]| {
-            sender_keys(open, network)
-                .iter()
-                .filter(|key| key.as_deref() == Some(sender.as_str()))
-                .count()
-        };
-        let at_a_cap = |open: &[OpenReceipt]| {
-            from_sender(open) >= MAX_OPEN_RECEIPTS_PER_SENDER || open.len() >= MAX_OPEN_RECEIPTS
-        };
-        // An open receipt is one no refresh has seen confirmed yet, so some may already be
-        // mined; a refresh confirms those before a cap refuses the S1 or a receipt is
-        // cancelled.
-        if at_a_cap(&open) && self.tip_refresh_due().await? {
-            if let Err(error) = self.refresh().await {
-                warn!(error = %ErrorChain(&error), "tip not refreshed");
+        match self.make_room(TRANSPORT_ID, slate_id, Some(sender)).await {
+            Ok(()) => Ok(()),
+            Err(NoRoom::FromSender) => Err(Refusal::OpenReceiptsFromSender.into()),
+            Err(NoRoom::Full) => Err(Refusal::OpenReceipts.into()),
+            Err(NoRoom::Unchecked(error)) => {
+                if self.hold_exhausted(msg_id, attempt).await? {
+                    Err(Refusal::OpenReceiptsUnchecked(error).into())
+                } else {
+                    Err(Hold::Wallet(error).into())
+                }
             }
-            open = self
-                .open_receipts_unless_known(None)
-                .await?
-                .unwrap_or_default();
+            Err(NoRoom::Wallet(error)) => Err(Hold::Wallet(error).into()),
         }
-        if from_sender(&open) >= MAX_OPEN_RECEIPTS_PER_SENDER {
-            return Err(Refusal::OpenReceiptsFromSender.into());
-        }
-        if open.len() < MAX_OPEN_RECEIPTS {
-            return Ok(());
-        }
-        for tx_id in eviction_order(&open, network) {
-            match self.cancel(tx_id).await {
-                Ok(()) => {
-                    info!(tx_id = %tx_id, "open receipt cancelled to make room");
-                    return Ok(());
-                }
-                Err(
-                    error @ (WalletError::InPool(_)
-                    | WalletError::OnChain(_)
-                    | WalletError::ChangedDuringCancel(_)
-                    | WalletError::Transition(_)
-                    | WalletError::UnknownTransaction(_)),
-                ) => {
-                    debug!(tx_id = %tx_id, error = %ErrorChain(&error), "open receipt kept");
-                }
-                // Either says nothing of this receipt, only that the node cannot be asked.
-                Err(error @ (WalletError::Node(_) | WalletError::Implausible(_))) => {
-                    return if self.hold_exhausted(msg_id, attempt).await? {
-                        Err(Refusal::OpenReceiptsUnchecked(error).into())
-                    } else {
-                        Err(Hold::Wallet(error).into())
-                    };
-                }
-                Err(error) => return Err(Hold::Wallet(error).into()),
-            }
-        }
-        Err(Refusal::OpenReceipts.into())
-    }
-
-    /// The open receipts over Epicbox, oldest first, or `None` when `slate_id` was received
-    /// before.
-    async fn open_receipts_unless_known(
-        &self,
-        slate_id: Option<Uuid>,
-    ) -> Result<Option<Vec<OpenReceipt>>, Hold> {
-        let session = self.session()?;
-        Ok(self
-            .blocking(move |_, _| {
-                Ok(session.store.read(|repos| {
-                    if let Some(slate_id) = slate_id
-                        && repos
-                            .transaction_by_slate(slate_id, TxDirection::Incoming)?
-                            .is_some()
-                    {
-                        return Ok::<_, StoreError>(None);
-                    }
-                    Ok(Some(repos.open_receipts(TRANSPORT_ID.as_str())?))
-                })?)
-            })
-            .await?)
     }
 
     /// Whether a refresh stored a confirmed height at or past `cutoff`. Only then is a slate

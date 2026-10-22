@@ -284,3 +284,67 @@ async fn lock_stops_the_http_listener_and_frees_its_port() {
         .await;
     assert_eq!(kind(locked), WalletErrorKind::Locked);
 }
+
+/// `slate` under slate id number `n`, so each is a new payment.
+fn numbered(slate: &str, slate_id: &str, n: u32) -> WireSlate {
+    let renumbered = slate.replace(slate_id, &format!("00000000-0000-4000-8000-{n:012x}"));
+    assert_ne!(renumbered, slate);
+    WireSlate::text(MediaType::JSON, renumbered)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_listener_caps_open_receipts_and_still_answers_a_payment_received_before() {
+    let pair = funded_pair().await;
+    let events = Events::default();
+    let receiver = pair.bob.http_receiver(events.report());
+    let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
+    let slate_id = slate.slate_id.clone();
+    let cap = u32::try_from(lepic_wallet::inbox::MAX_OPEN_RECEIPTS).unwrap();
+    let mut answers = Vec::new();
+    for n in 0..cap {
+        answers.push(
+            receiver
+                .receive(numbered(&slate.json, &slate_id, n))
+                .await
+                .unwrap(),
+        );
+    }
+    let receipts: Vec<u32> = events
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| event.tx_id.unwrap())
+        .collect();
+
+    receiver
+        .receive(numbered(&slate.json, &slate_id, cap))
+        .await
+        .unwrap();
+
+    let oldest = pair.bob.transaction(receipts[0]).await.unwrap();
+    assert_eq!(oldest.status, TxStatus::Cancelled);
+    let next = pair.bob.transaction(receipts[1]).await.unwrap();
+    assert_eq!(next.status, TxStatus::Received);
+    let again = receiver
+        .receive(numbered(&slate.json, &slate_id, 7))
+        .await
+        .unwrap();
+    assert_eq!(again.as_text(), answers[7].as_text());
+    assert!(events.last().repeated);
+
+    pair.chain.set_node_unreachable(true);
+    let before = pair.bob.transactions().await.unwrap().len();
+    let refused = receiver
+        .receive(numbered(&slate.json, &slate_id, cap + 1))
+        .await;
+
+    assert_eq!(refused, Err(lepic_foreign::Refusal::Unavailable));
+    let last = events.last();
+    assert_eq!(last.kind, HttpListenerEventKind::Refused);
+    assert_eq!(
+        last.refusal,
+        Some(crate::api::http::HttpRefusal::Unavailable)
+    );
+    assert_eq!(pair.bob.transactions().await.unwrap().len(), before);
+}

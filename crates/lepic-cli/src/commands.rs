@@ -1076,7 +1076,7 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
             let received = self
                 .opened
                 .wallet
-                .receive(
+                .receive_unsolicited(
                     lepic_foreign::TRANSPORT_ID,
                     &slate,
                     ReceiveRequest::default(),
@@ -1109,6 +1109,10 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
                 }
             }
         })
+    }
+
+    fn refused(&self, _refusal: Refusal) {
+        self.counts.refused.fetch_add(1, Ordering::Relaxed);
     }
 }
 

@@ -125,6 +125,11 @@ pub enum ReceiveError {
     Codecs(#[source] RegistryError),
     #[error("reply could not be encoded")]
     Encode(#[source] FormatError),
+    /// Too many payments nobody asked for wait for their senders to finalize, and none could
+    /// be cancelled to make room; it carries why the node could not be asked, when that was
+    /// the reason. See [`Wallet::receive_unsolicited`].
+    #[error("open receipts are at the cap")]
+    OpenReceipts(#[source] Option<WalletError>),
 }
 
 impl From<StoreError> for ReceiveError {
@@ -383,7 +388,7 @@ pub(crate) fn legacy_codecs(network: Network) -> Result<CodecRegistry, ReceiveEr
 }
 
 /// An S1 whose sender message, if any, is signed by the sender.
-fn check_proposal(slate: &Slate) -> Result<(), ReceiveError> {
+pub(crate) fn check_proposal(slate: &Slate) -> Result<(), ReceiveError> {
     if slate.stage() != Stage::S1 {
         return Err(ReceiveError::WrongStage {
             stage: slate.stage(),

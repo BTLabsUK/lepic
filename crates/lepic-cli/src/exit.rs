@@ -283,6 +283,7 @@ fn receive_kind(error: &ReceiveError) -> ErrorKind {
         ReceiveError::Wallet(error) => wallet_kind(error),
         ReceiveError::UnknownTransport { .. } => ErrorKind::Transport,
         ReceiveError::Node(_) => ErrorKind::Node,
+        ReceiveError::OpenReceipts(_) => ErrorKind::WalletState,
         ReceiveError::Decode(_)
         | ReceiveError::WrongStage { .. }
         | ReceiveError::AlreadyReceived { .. }
@@ -427,6 +428,10 @@ mod tests {
                 ErrorKind::Incomplete,
             ),
             (ReceiveError::FeeOverflow.into(), ErrorKind::Rejected),
+            (
+                ReceiveError::OpenReceipts(None).into(),
+                ErrorKind::WalletState,
+            ),
             (
                 InvoiceError::AmountMismatch {
                     invoiced: lepic_primitives::amount::Amount::new(2),

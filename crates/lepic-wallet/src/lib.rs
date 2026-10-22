@@ -26,6 +26,7 @@ pub mod lifecycle;
 pub mod notice;
 pub mod ports;
 mod process;
+mod receipt_cap;
 pub mod receive;
 pub mod refresh;
 pub mod release;

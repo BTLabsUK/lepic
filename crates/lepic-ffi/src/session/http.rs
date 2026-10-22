@@ -12,9 +12,9 @@ use lepic_foreign::{
 use lepic_node::Propagation;
 use lepic_store::TxId;
 use lepic_transport::transport::{BoxFuture, Destination};
-use lepic_wallet::ReceiveRequest;
 use lepic_wallet::send::Delivery;
 use lepic_wallet::slate::WireSlate;
+use lepic_wallet::{ReceiveError, ReceiveRequest};
 use tracing::{debug, warn};
 
 use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
@@ -215,10 +215,7 @@ impl Session {
             }
             *slot = HttpListener::Starting(generation);
         }
-        let receiver = Arc::new(HttpReceiver {
-            session: Arc::downgrade(self),
-            report: Arc::clone(&report),
-        });
+        let receiver = self.http_receiver(Arc::clone(&report));
         let settings = ListenSettings::new(self::exposure(exposure), port);
         let listening = lepic_foreign::listen(settings, receiver).await;
         let handle = match listening {
@@ -268,6 +265,14 @@ impl Session {
         Ok(())
     }
 
+    /// What the HTTP listener hands each payment to.
+    pub(crate) fn http_receiver(self: &Arc<Self>, report: HttpReport) -> Arc<dyn ReceiveHandler> {
+        Arc::new(HttpReceiver {
+            session: Arc::downgrade(self),
+            report,
+        })
+    }
+
     /// Stops the HTTP listener. `Stopped` is reported once its port is free.
     pub(crate) fn stop_http_listener(&self) {
         let previous = std::mem::take(&mut *lock(&self.http_listener));
@@ -309,14 +314,26 @@ impl ReceiveHandler for HttpReceiver {
             let boundary = session.runtime().boundary.clone();
             let received = boundary
                 .run("http_receive", async move {
-                    Ok(session
+                    match session
                         .engine
-                        .receive(TRANSPORT_ID, &slate, ReceiveRequest::default())
-                        .await?)
+                        .receive_unsolicited(TRANSPORT_ID, &slate, ReceiveRequest::default())
+                        .await
+                    {
+                        Err(ReceiveError::OpenReceipts(cause)) => Ok(Err(cause)),
+                        received => Ok(Ok(received?)),
+                    }
                 })
                 .await;
             match received {
-                Ok(received) => {
+                Ok(Err(cause)) => {
+                    debug!(
+                        error = cause.as_ref().map(tracing::field::display),
+                        "http payment refused at the open receipt cap"
+                    );
+                    self.refused(Refusal::Unavailable);
+                    Err(Refusal::Unavailable)
+                }
+                Ok(Ok(received)) => {
                     (self.report)(HttpListenerEvent {
                         tx_id: Some(received.tx_id.0),
                         amount: Some(received.slate.amount().value()),
@@ -328,13 +345,17 @@ impl ReceiveHandler for HttpReceiver {
                 Err(error) => {
                     let refusal = refusal(error.kind);
                     debug!(error = %error, "http payment refused");
-                    (self.report)(HttpListenerEvent {
-                        refusal: Some(http_refusal(refusal)),
-                        ..HttpListenerEvent::of(HttpListenerEventKind::Refused)
-                    });
+                    self.refused(refusal);
                     Err(refusal)
                 }
             }
         })
+    }
+
+    fn refused(&self, refusal: Refusal) {
+        (self.report)(HttpListenerEvent {
+            refusal: Some(http_refusal(refusal)),
+            ..HttpListenerEvent::of(HttpListenerEventKind::Refused)
+        });
     }
 }

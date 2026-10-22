@@ -105,6 +105,10 @@ impl Refusal {
 /// S1 sent again must return the same S2, so a sender whose answer was lost can retry.
 pub trait ReceiveHandler: Send + Sync + 'static {
     fn receive(&self, slate: WireSlate) -> BoxFuture<'_, Result<WireSlate, Refusal>>;
+
+    /// Told of a payment the listener refused before handing it to [`Self::receive`], as
+    /// it does over the per-minute limits.
+    fn refused(&self, _refusal: Refusal) {}
 }
 
 /// A running listener. Stops when [`ListenerHandle::stop`] is called or the handle is dropped.
@@ -314,6 +318,7 @@ async fn serve(state: &Served, request: Request<Incoming>) -> Response<Full<Byte
                 .take(state.settings.receives_per_minute);
             if !allowed {
                 debug!("receive limit reached");
+                state.handler.refused(Refusal::Unavailable);
                 return json(rpc::encode_refusal_response(
                     &request.id,
                     Refusal::Unavailable.reason(),
