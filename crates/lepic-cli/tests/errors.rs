@@ -85,6 +85,29 @@ fn engine_failures_map_to_exit_codes_and_json_errors() {
 }
 
 #[test]
+fn an_http_address_is_refused_before_the_wallet_stores_anything() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    for args in [
+        ["tx", "send", "1", "--to", "http://203.0.113.7:3415"],
+        ["tx", "send", "1", "--to", "ftp://host.example"],
+        ["invoice", "issue", "1", "--to", "http://127.0.0.1:3415"],
+    ] {
+        let outcome = wallet.run(&host, &args);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            (2, "usage"),
+            "{args:?}"
+        );
+    }
+    let listed = wallet.run(&host, &["tx", "list"]).json();
+    assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn a_data_directory_without_a_wallet_is_reported_as_such() {
     let host = TestHost::new();
     let empty = Instance::new("test password");

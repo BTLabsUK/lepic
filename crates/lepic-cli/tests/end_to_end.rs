@@ -80,12 +80,14 @@ fn send_receive_and_finalize_through_files() {
             "destination",
             "fee",
             "slate_id",
+            "state",
             "transport",
             "tx_id"
         ]
     );
     assert_eq!(sent["amount"], "1.50000000");
     assert_eq!(sent["transport"], "file");
+    assert_eq!(sent["state"], "sent");
     assert!(slate.is_file());
 
     let received = receiver
@@ -545,7 +547,10 @@ fn resend_delivers_the_first_slate_again_until_it_is_answered() {
         )
         .ok()
         .json();
-    assert_eq!(keys(&resent), ["destination", "transport", "tx_id"]);
+    assert_eq!(
+        keys(&resent),
+        ["destination", "state", "transport", "tx_id"]
+    );
     assert_eq!(resent["tx_id"], sent["tx_id"]);
     assert_eq!(resent["transport"], "file");
 

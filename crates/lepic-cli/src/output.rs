@@ -40,6 +40,7 @@ pub enum Report {
     InvoiceAddress(InvoiceAddressReport),
     EpicboxStatus(EpicboxStatusReport),
     Peer(PeerReport),
+    HttpListen(HttpListenReport),
     NodeStatus(NodeStatusReport),
 }
 
@@ -134,16 +135,21 @@ pub struct SendReport {
     pub amount: String,
     pub fee: String,
     pub transport: String,
-    /// The Epicbox address or the file path the slate went to.
+    /// The Epicbox address, the file path or the HTTP endpoint the slate went to.
     pub destination: String,
+    /// `sent`, or `posted` when the receiver answered over HTTP and the transaction was
+    /// finalized and posted in the same command.
+    pub state: &'static str,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ResendReport {
     pub tx_id: u32,
     pub transport: String,
-    /// The Epicbox address or the file path the slate went to.
+    /// The Epicbox address, the file path or the HTTP endpoint the slate went to.
     pub destination: String,
+    /// As in [`SendReport::state`].
+    pub state: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -332,6 +338,18 @@ pub struct InvoiceAddressReport {
     pub index: u32,
     /// The address moved to `index` in this command.
     pub rotated: bool,
+}
+
+/// What `http listen` did before it was stopped.
+#[derive(Debug, Serialize)]
+pub struct HttpListenReport {
+    pub port: u16,
+    /// `local` or `internet`.
+    pub exposure: &'static str,
+    pub received: u32,
+    /// Payments answered again with the reply stored the first time.
+    pub repeated: u32,
+    pub refused: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -602,10 +620,20 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             Ok(())
         }
         Report::Address(r) => writeln!(out, "{}", r.address),
+        Report::Send(r) if r.state == "posted" => writeln!(
+            out,
+            "Transaction {} sent {} EPIC (fee {}) by {} to {}, finalized and posted.\nSlate {}.",
+            r.tx_id, r.amount, r.fee, r.transport, r.destination, r.slate_id
+        ),
         Report::Send(r) => writeln!(
             out,
             "Transaction {} sent {} EPIC (fee {}) by {} to {}.\nSlate {}.",
             r.tx_id, r.amount, r.fee, r.transport, r.destination, r.slate_id
+        ),
+        Report::Resend(r) if r.state == "posted" => writeln!(
+            out,
+            "Transaction {} sent again by {} to {}, finalized and posted.",
+            r.tx_id, r.transport, r.destination
         ),
         Report::Resend(r) => writeln!(
             out,
@@ -827,6 +855,11 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             }
             Ok(())
         }
+        Report::HttpListen(r) => writeln!(
+            out,
+            "Listened on port {} ({}): received {}, repeated {}, refused {}.",
+            r.port, r.exposure, r.received, r.repeated, r.refused
+        ),
         Report::EpicboxStatus(r) => {
             writeln!(out, "Relay    {}", r.relay)?;
             writeln!(out, "Address  {}", r.address)?;
@@ -1035,12 +1068,14 @@ mod tests {
                     fee: text("1"),
                     transport: text("file"),
                     destination: text("f"),
+                    state: "sent",
                 }),
                 vec![
                     "amount",
                     "destination",
                     "fee",
                     "slate_id",
+                    "state",
                     "transport",
                     "tx_id",
                 ],
@@ -1050,8 +1085,9 @@ mod tests {
                     tx_id: 1,
                     transport: text("epicbox"),
                     destination: text("a"),
+                    state: "sent",
                 }),
-                vec!["destination", "transport", "tx_id"],
+                vec!["destination", "state", "transport", "tx_id"],
             ),
             (
                 Report::Receive(ReceiveReport {
@@ -1277,6 +1313,16 @@ mod tests {
                     capability: "unknown",
                 }),
                 vec!["address", "capability"],
+            ),
+            (
+                Report::HttpListen(HttpListenReport {
+                    port: 3415,
+                    exposure: "local",
+                    received: 1,
+                    repeated: 0,
+                    refused: 0,
+                }),
+                vec!["exposure", "port", "received", "refused", "repeated"],
             ),
             (
                 Report::NodeStatus(NodeStatusReport {

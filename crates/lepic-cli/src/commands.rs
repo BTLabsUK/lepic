@@ -10,6 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
+use lepic_foreign::{
+    Exposure, ForeignClient, ForeignUrl, ListenSettings, PlainHttp, ReceiveHandler, Refusal,
+    webpki_tls_config,
+};
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::amount::Height;
@@ -20,7 +24,7 @@ use lepic_store::{
 use lepic_transport::error::TransportError;
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{Destination, Exchange as _, Location};
+use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location};
 use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::details::TransactionDetails;
 use lepic_wallet::epicbox_invoice::{
@@ -34,6 +38,7 @@ use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
+use lepic_wallet::slate::WireSlate;
 use lepic_wallet::state::state_name;
 use lepic_wallet::{
     Clock, Event, Password, Ports, ReceiveRequest, SharedRng, Wallet, WalletConfig, WalletError,
@@ -47,17 +52,17 @@ use zeroize::Zeroizing;
 use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
-    AllowCommand, Command, DestinationArgs, EpicboxCommand, FinalizeArgs, ImportSeedArgs, InitArgs,
-    InvoiceCommand, IssueArgs, NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs,
-    RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs, TxCommand, WalletCommand,
-    WalletScanArgs, WordsArg,
+    AllowCommand, Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand,
+    HttpListenArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, NodeCommand, PayArgs,
+    PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs,
+    TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
-use crate::exit::CliError;
+use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
 use crate::output::{
     AccountReport, AddressReport, AllowListReport, AllowRemoveReport, AllowedSenderReport,
-    EpicboxStatusReport, ExpiredReport, FinalizeReport, InboxReport, InfoReport, InitReport,
-    InvoiceAddressReport, InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport,
+    EpicboxStatusReport, ExpiredReport, FinalizeReport, HttpListenReport, InboxReport, InfoReport,
+    InitReport, InvoiceAddressReport, InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport,
     InvoicePayReport, MessageReport, NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport,
     ReceiveReport, Report, ResendReport, RestoreReport, ScanReport, SendReport, TxListReport,
     TxReport, TxStateReport, WalletScanReport,
@@ -84,6 +89,8 @@ impl Clock for SystemClock {
 struct Opened<N: NodeApi + 'static> {
     wallet: CliWallet<N>,
     epicbox: EpicboxTransport,
+    /// Holds the answers of HTTP sends until they are finalized.
+    http: lepic_foreign::HttpTransport,
     /// Held until the command ends; `None` when the data directory does not exist.
     _lock: Option<std::fs::File>,
 }
@@ -155,6 +162,7 @@ impl<H: Host> Run<'_, H> {
             Command::Tx(command) => self.tx(command).await,
             Command::Invoice(command) => self.invoice(command).await,
             Command::Epicbox(command) => self.epicbox(command).await,
+            Command::Http(HttpCommand::Listen(args)) => self.http_listen(&args).await,
             Command::Node(NodeCommand::Status) => self.node_status().await,
         }
     }
@@ -568,7 +576,8 @@ impl<H: Host> Run<'_, H> {
     async fn send(&mut self, args: SendArgs) -> Result<Report, CliError> {
         let amount = parse_amount(&args.amount)?;
         let spend = Spend::from_args(&args.spend)?;
-        let (delivery, destination) = self.delivery(args.destination)?;
+        let (delivery, destination) =
+            self.delivery(args.destination, args.plain_http.allow_plain_http)?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
         if delivery.transport() == TRANSPORT_ID {
@@ -584,6 +593,17 @@ impl<H: Host> Run<'_, H> {
             ..SendRequest::new(account.index, amount)
         };
         let sent = opened.wallet.send(request, delivery).await?;
+        let state = if transport == lepic_foreign::TRANSPORT_ID {
+            finalize_http_reply(
+                &opened,
+                sent.tx_id,
+                &sent.slate_id.to_string(),
+                args.fluff.fluff,
+            )
+            .await?
+        } else {
+            "sent"
+        };
         Ok(Report::Send(SendReport {
             tx_id: sent.tx_id.0,
             slate_id: sent.slate_id.to_string(),
@@ -591,30 +611,102 @@ impl<H: Host> Run<'_, H> {
             fee: format_fee(sent.fee),
             transport: transport.to_string(),
             destination,
+            state,
         }))
     }
 
     async fn resend(&mut self, args: ResendArgs) -> Result<Report, CliError> {
-        let (delivery, destination) = self.delivery(args.destination)?;
+        let (delivery, destination) =
+            self.delivery(args.destination, args.plain_http.allow_plain_http)?;
         let opened = self.open().await?;
         if delivery.transport() == TRANSPORT_ID {
             opened.wallet.epicbox_attach(&opened.epicbox)?;
         }
-        let transport = delivery.transport().to_string();
+        let transport = delivery.transport();
         let tx_id = TxId(args.tx.tx_id);
         opened.wallet.resend(tx_id, delivery).await?;
+        let state = if transport == lepic_foreign::TRANSPORT_ID {
+            let details = opened.wallet.transaction_details(tx_id).await?;
+            let slate_id = details
+                .transaction
+                .entry
+                .slate_id
+                .ok_or(CliError::HttpReplyLost { tx_id: tx_id.0 })?;
+            finalize_http_reply(&opened, tx_id, &slate_id.to_string(), args.fluff.fluff).await?
+        } else {
+            "sent"
+        };
         Ok(Report::Resend(ResendReport {
             tx_id: tx_id.0,
-            transport,
+            transport: transport.to_string(),
             destination,
+            state,
         }))
     }
 
-    /// Where a first slate goes, and how the report names it. An Epicbox address is parsed
-    /// here, before the wallet stores anything: a send to an address that cannot be delivered
-    /// to would leave a transaction behind with its inputs locked.
-    fn delivery(&self, destination: DestinationArgs) -> Result<(Delivery, String), CliError> {
+    /// Answers payments over HTTP until interrupted.
+    async fn http_listen(&mut self, args: &HttpListenArgs) -> Result<Report, CliError> {
+        let opened = Arc::new(self.open().await?);
+        let exposure = if args.internet {
+            Exposure::Internet
+        } else {
+            Exposure::LocalOnly
+        };
+        let counts = Arc::new(HttpCounts::default());
+        let receiver = Arc::new(HttpReceiver {
+            opened: Arc::clone(&opened),
+            counts: Arc::clone(&counts),
+        });
+        let handle =
+            lepic_foreign::listen(ListenSettings::new(exposure, args.port), receiver).await?;
+        let port = handle.local_addr().port();
+        if self.settings.output == OutputFormat::Human {
+            self.show_line(&format!(
+                "Listening for payments over HTTP on port {port} ({}). Ctrl-C stops.",
+                exposure.as_str()
+            ));
+        }
+        let stop = tokio::sync::Notify::new();
+        self.until_interrupted(opened.wallet.subscribe(), stop.notified(), || {
+            stop.notify_one();
+        })
+        .await;
+        handle.shutdown().await;
+        Ok(Report::HttpListen(HttpListenReport {
+            port,
+            exposure: exposure.as_str(),
+            received: counts.received.load(Ordering::Relaxed),
+            repeated: counts.repeated.load(Ordering::Relaxed),
+            refused: counts.refused.load(Ordering::Relaxed),
+        }))
+    }
+
+    /// Where a first slate goes, and how the report names it. An address is parsed here,
+    /// before the wallet stores anything: a send to an address that cannot be delivered to
+    /// would leave a transaction behind with its inputs locked. An address with a scheme is a
+    /// listening wallet's HTTP endpoint; plain HTTP to another computer needs
+    /// `allow_plain_http`.
+    fn delivery(
+        &self,
+        destination: DestinationArgs,
+        allow_plain_http: bool,
+    ) -> Result<(Delivery, String), CliError> {
         match (destination.to, destination.to_file) {
+            (Some(address), _) if address.contains("://") => {
+                let plain = if allow_plain_http {
+                    PlainHttp::Allowed
+                } else {
+                    PlainHttp::LoopbackOnly
+                };
+                let url = ForeignUrl::parse(&address, plain).map_err(CliError::HttpUrl)?;
+                Ok((
+                    Delivery::Deliver {
+                        transport: lepic_foreign::TRANSPORT_ID,
+                        to: Destination::new(url.as_uri()),
+                    },
+                    url.as_uri(),
+                ))
+            }
             (Some(address), _) => {
                 EpicboxAddress::parse(&address, relay_network(self.settings.network))
                     .map_err(CliError::Address)?;
@@ -736,7 +828,10 @@ impl<H: Host> Run<'_, H> {
 
     async fn issue_invoice(&mut self, args: IssueArgs) -> Result<Report, CliError> {
         let amount = parse_amount(&args.amount)?;
-        let (delivery, destination) = self.delivery(args.destination)?;
+        let (delivery, destination) = self.delivery(args.destination, false)?;
+        if delivery.transport() == lepic_foreign::TRANSPORT_ID {
+            return Err(CliError::InvoiceOverHttp);
+        }
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
         if delivery.transport() == TRANSPORT_ID {
@@ -865,6 +960,14 @@ impl<H: Host> Run<'_, H> {
         }
         check_private_dir(&self.settings.data_dir)?;
         let lock = lock_data_dir(&self.settings.data_dir)?;
+        let tls = webpki_tls_config().map_err(|error| CliError::Io {
+            what: "set up tls for http",
+            source: std::io::Error::other(error),
+        })?;
+        let http = lepic_foreign::HttpTransport::new(ForeignClient::new(
+            lepic_foreign::ClientSettings::default(),
+            tls,
+        ));
         let relay = ClientSettings::new(self.settings.relay.clone());
         let epicbox = EpicboxTransport::new(
             relay,
@@ -875,6 +978,7 @@ impl<H: Host> Run<'_, H> {
         for transport in [
             Box::new(FileTransport::new()) as Box<dyn lepic_transport::transport::Transport>,
             Box::new(epicbox.clone()),
+            Box::new(http.clone()),
         ] {
             transports.register(transport)?;
         }
@@ -896,11 +1000,12 @@ impl<H: Host> Run<'_, H> {
             network: self.settings.network,
             data_dir: self.settings.data_dir.clone(),
             node: self.settings.node.clone(),
-            transports: vec![FILE, TRANSPORT_ID],
+            transports: vec![FILE, TRANSPORT_ID, lepic_foreign::TRANSPORT_ID],
         };
         Ok(Opened {
             wallet: Wallet::new(config, ports)?,
             epicbox,
+            http,
             _lock: lock,
         })
     }
@@ -930,6 +1035,81 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
         .clone()
         .with_known_tip(tip.height, seen_ago);
     Ok(())
+}
+
+/// Finalizes the answer the HTTP transport kept for the send and posts it. Returns the state
+/// the send is reported in.
+async fn finalize_http_reply<N: NodeApi + 'static>(
+    opened: &Opened<N>,
+    tx_id: TxId,
+    slate_id: &str,
+    fluff: bool,
+) -> Result<&'static str, CliError> {
+    let reply = opened
+        .http
+        .take_reply(slate_id)
+        .ok_or(CliError::HttpReplyLost { tx_id: tx_id.0 })?;
+    opened
+        .wallet
+        .finalize(lepic_foreign::TRANSPORT_ID, &reply, propagation(fluff))
+        .await?;
+    Ok("posted")
+}
+
+/// What `http listen` answered.
+#[derive(Default)]
+struct HttpCounts {
+    received: std::sync::atomic::AtomicU32,
+    repeated: std::sync::atomic::AtomicU32,
+    refused: std::sync::atomic::AtomicU32,
+}
+
+/// The wallet behind `http listen`. Receipts reach the user as the wallet's events.
+struct HttpReceiver<N: NodeApi + 'static> {
+    opened: Arc<Opened<N>>,
+    counts: Arc<HttpCounts>,
+}
+
+impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
+    fn receive(&self, slate: WireSlate) -> BoxFuture<'_, Result<WireSlate, Refusal>> {
+        Box::pin(async move {
+            let received = self
+                .opened
+                .wallet
+                .receive(
+                    lepic_foreign::TRANSPORT_ID,
+                    &slate,
+                    ReceiveRequest::default(),
+                )
+                .await;
+            match received {
+                Ok(received) => {
+                    let count = if received.repeated {
+                        &self.counts.repeated
+                    } else {
+                        &self.counts.received
+                    };
+                    count.fetch_add(1, Ordering::Relaxed);
+                    Ok(received.reply)
+                }
+                Err(error) => {
+                    self.counts.refused.fetch_add(1, Ordering::Relaxed);
+                    let error = CliError::from(error);
+                    tracing::debug!(
+                        error = %lepic_telemetry::ErrorChain(&error),
+                        "http payment refused"
+                    );
+                    // The sender may try again when nothing about the slate was wrong.
+                    Err(match error.kind() {
+                        ErrorKind::WalletState | ErrorKind::Node | ErrorKind::Internal => {
+                            Refusal::Unavailable
+                        }
+                        _ => Refusal::Rejected,
+                    })
+                }
+            }
+        })
+    }
 }
 
 /// Names the slate file in a file transport error, which knows only what failed.

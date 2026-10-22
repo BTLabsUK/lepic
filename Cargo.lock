@@ -985,6 +985,7 @@ dependencies = [
  "clap",
  "jiff",
  "lepic-epicbox",
+ "lepic-foreign",
  "lepic-keychain",
  "lepic-node",
  "lepic-primitives",

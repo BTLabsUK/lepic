@@ -108,6 +108,9 @@ pub enum Command {
     /// Exchange slates through an Epicbox relay
     #[command(subcommand)]
     Epicbox(EpicboxCommand),
+    /// Take payments sent straight to this wallet over HTTP
+    #[command(subcommand)]
+    Http(HttpCommand),
     /// Query the node
     #[command(subcommand)]
     Node(NodeCommand),
@@ -199,6 +202,7 @@ pub struct ScanArgs {
 #[derive(Debug, Subcommand)]
 pub enum TxCommand {
     /// Create a transaction and deliver its first slate
+    #[command(after_help = SEND_HTTP_HELP)]
     Send(SendArgs),
     /// Accept a slate file and write the reply next to it
     Receive(ReceiveArgs),
@@ -228,6 +232,12 @@ its change is back in the balance.")]
     Show(TxIdArgs),
 }
 
+const SEND_HTTP_HELP: &str = "\
+To an http(s):// address the wallet listening there, epic-wallet `listen -m http` or `lepic http
+listen`, answers at once, and the transaction is finalized and posted in the same command. A
+missing port is 3415 for http and 443 for https. Plain http goes only to this computer unless
+--allow-plain-http is given, since the slate then travels unencrypted.";
+
 #[derive(Debug, Args)]
 pub struct SendArgs {
     /// Amount in EPIC, for example 1.5
@@ -235,6 +245,10 @@ pub struct SendArgs {
     pub amount: String,
     #[command(flatten)]
     pub destination: DestinationArgs,
+    #[command(flatten)]
+    pub plain_http: PlainHttpArg,
+    #[command(flatten)]
+    pub fluff: FluffArg,
     #[command(flatten)]
     pub account: AccountArg,
     #[command(flatten)]
@@ -266,12 +280,24 @@ pub struct ResendArgs {
     pub tx: TxIdArgs,
     #[command(flatten)]
     pub destination: DestinationArgs,
+    #[command(flatten)]
+    pub plain_http: PlainHttpArg,
+    #[command(flatten)]
+    pub fluff: FluffArg,
+}
+
+#[derive(Debug, Args)]
+pub struct PlainHttpArg {
+    /// Allow an http:// address on another computer, so the slate travels unencrypted
+    #[arg(long)]
+    pub allow_plain_http: bool,
 }
 
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
 pub struct DestinationArgs {
-    /// Epicbox address the slate goes to
+    /// Epicbox address the slate goes to, or for a send the http(s):// address of a listening
+    /// wallet
     #[arg(long, value_name = "ADDRESS")]
     pub to: Option<String>,
     /// Write the slate to this file, as V3 slate JSON
@@ -337,7 +363,8 @@ pub struct FinalizeArgs {
 
 #[derive(Debug, Args)]
 pub struct FluffArg {
-    /// Broadcast to all peers at once instead of through the stem phase
+    /// Broadcast to all peers at once instead of through the stem phase, when the transaction
+    /// is posted
     #[arg(long)]
     pub fluff: bool,
 }
@@ -507,6 +534,29 @@ pub struct InvoiceAddressArgs {
     /// Move to a new invoice address and abandon the current one
     #[arg(long)]
     pub rotate: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HttpCommand {
+    /// Answer payments sent to this wallet over HTTP, until interrupted
+    #[command(after_help = "\
+Serves the wallet foreign API at /v2/foreign, as epic-wallet `listen -m http` does: senders
+using `send -m http` or `lepic tx send --to http://...` are paid at once. Only payments are
+answered, never invoices. Without --internet it listens on 127.0.0.1 only. With --internet it
+listens on every interface, for a port forwarded from the internet: anyone who reaches the port
+can send the wallet payments. A request may take up to a minute; at most 16 connections are
+served at once and 30 payments a minute are taken.")]
+    Listen(HttpListenArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct HttpListenArgs {
+    /// Port to listen on; 0 lets the system pick one
+    #[arg(long, value_name = "PORT", default_value_t = 3415)]
+    pub port: u16,
+    /// Listen on every network interface instead of this computer only
+    #[arg(long)]
+    pub internet: bool,
 }
 
 #[derive(Debug, Subcommand)]

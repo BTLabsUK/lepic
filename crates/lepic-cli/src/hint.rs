@@ -61,6 +61,10 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
             );
             if let Some(settings) = settings
                 && !matches!(source, TransportError::File(_))
+                && !matches!(
+                    source,
+                    TransportError::Backend { transport, .. } if *transport == lepic_foreign::TRANSPORT_ID
+                )
                 && settings.relay.port() != DEFAULT_PORT
             {
                 text.push_str(&format!(
@@ -71,6 +75,17 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
                 ));
             }
             return Some(text);
+        }
+        CliError::HttpReplyLost { tx_id } => {
+            return Some(format!(
+                "the receiver answered but the answer was lost; `lepic tx resend {tx_id} --to \
+                 <ADDRESS>` asks for it again, and the receiver answers the same way"
+            ));
+        }
+        CliError::HttpUrl(lepic_foreign::UrlError::PlainHttpNotAllowed) => {
+            return Some(
+                "use https, or add --allow-plain-http to send this slate unencrypted".to_owned(),
+            );
         }
         CliError::Finalize(FinalizeError::NotPosted { tx_id, .. })
         | CliError::Invoice(InvoiceError::NotPosted { tx_id, .. }) => {

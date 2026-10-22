@@ -91,7 +91,7 @@ Exit codes:
    7  rejected: the slate or request was refused; nothing was stored
    8  insufficient_funds: not enough spendable funds
    9  node: the node could not be reached or answered badly
-  10  transport: the slate file or relay failed
+  10  transport: the slate file, the relay or the http listener failed
   11  incomplete: stored, but not delivered or not posted; retry
   12  interrupted: stopped before it finished";
 
@@ -160,6 +160,14 @@ pub enum CliError {
     SharedDataDir,
     #[error("another lepic process is using the data directory")]
     DataDirInUse,
+    #[error("http address rejected")]
+    HttpUrl(#[source] lepic_foreign::UrlError),
+    #[error("invoices go over epicbox or through a slate file, not over http")]
+    InvoiceOverHttp,
+    #[error("the http listener could not start")]
+    HttpListen(#[from] lepic_foreign::ListenError),
+    #[error("the answer of transaction {tx_id} was not kept")]
+    HttpReplyLost { tx_id: u32 },
 }
 
 impl CliError {
@@ -180,7 +188,11 @@ impl CliError {
             | Self::SlateId
             | Self::ReplyFileForParked
             | Self::StartAboveTip { .. }
-            | Self::Address(_) => ErrorKind::Usage,
+            | Self::Address(_)
+            | Self::HttpUrl(_)
+            | Self::InvoiceOverHttp => ErrorKind::Usage,
+            Self::HttpListen(_) => ErrorKind::Transport,
+            Self::HttpReplyLost { .. } => ErrorKind::Incomplete,
             Self::Wallet(error) => wallet_kind(error),
             Self::DataDirInUse => ErrorKind::WalletState,
             Self::Send(error) => send_kind(error),

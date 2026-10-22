@@ -76,6 +76,7 @@ fn the_tree_has_every_planned_command() {
         "epicbox allow remove",
         "epicbox allow list",
         "epicbox invoice-address",
+        "http listen",
         "node status",
     ] {
         assert!(
@@ -83,6 +84,43 @@ fn the_tree_has_every_planned_command() {
             "missing {expected}"
         );
     }
+}
+
+#[test]
+fn a_send_takes_an_http_address_with_its_options() {
+    let cli = Cli::try_parse_from([
+        "lepic",
+        "tx",
+        "send",
+        "1",
+        "--to",
+        "http://203.0.113.7:3415",
+        "--allow-plain-http",
+        "--fluff",
+    ])
+    .unwrap();
+    let lepic_cli::cli::Command::Tx(lepic_cli::cli::TxCommand::Send(args)) = cli.command else {
+        panic!("not a send");
+    };
+    assert_eq!(
+        args.destination.to.as_deref(),
+        Some("http://203.0.113.7:3415")
+    );
+    assert!(args.plain_http.allow_plain_http && args.fluff.fluff);
+
+    let cli = Cli::try_parse_from(["lepic", "http", "listen"]).unwrap();
+    let lepic_cli::cli::Command::Http(lepic_cli::cli::HttpCommand::Listen(args)) = cli.command
+    else {
+        panic!("not an http listen");
+    };
+    assert_eq!((args.port, args.internet), (3415, false));
+    let cli =
+        Cli::try_parse_from(["lepic", "http", "listen", "--port", "0", "--internet"]).unwrap();
+    let lepic_cli::cli::Command::Http(lepic_cli::cli::HttpCommand::Listen(args)) = cli.command
+    else {
+        panic!("not an http listen");
+    };
+    assert_eq!((args.port, args.internet), (0, true));
 }
 
 #[test]

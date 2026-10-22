@@ -4,7 +4,8 @@
 
 `lepic` is a light Epic Cash wallet for the terminal. It keeps keys and history on your machine,
 asks an Epic node for chain data, and exchanges transactions with other wallets, `epic-wallet`
-included, through slate files or an Epicbox relay. It does not mine or store the chain.
+included, through slate files, an Epicbox relay or straight over HTTP. It does not mine or store
+the chain.
 
 ```
 cargo xtask install                   # build and install to ~/.local/bin/lepic
@@ -197,13 +198,15 @@ The JSON document has `start_height`, `end_height`, `resumed`, `found`, `restore
 A payment is a slate that goes from sender to receiver and back: the sender writes S1, the
 receiver answers with S2, and the sender finalizes S3 and posts it to the node. An invoice runs
 the other way: the receiver issues I1, the payer answers with I2, the issuer finalizes. `lepic`
-moves slates in one of two ways:
+moves slates in one of three ways:
 
 - Slate files, which you carry to the other party yourself. `lepic` writes V3 slate JSON and reads
   V2 and V3, so `epic-wallet` `v4.0.2` reads its files and it reads `epic-wallet`'s.
 - An Epicbox relay, which holds encrypted slates for an address until its wallet fetches them.
   Over Epicbox `lepic` sends payments as V2 slates, as `epic-wallet` does, and invoices as V3
   slates, which carry the payment's TTL.
+- HTTP, straight to a wallet that listens for payments, which answers in the same exchange. Only
+  payments travel this way, not invoices.
 
 ## Receive and send with slate files
 
@@ -298,6 +301,35 @@ exit code 7 while its pool or chain already holds it. After a cancel, the next w
 still looks for it, and if it is mined after all, the transaction becomes `confirmed` and its
 outputs come back. A received payment that carries no TTL ends by itself a week of blocks after
 the wallet first saw it, under the same check.
+
+## Direct over HTTP
+
+A wallet that runs `epic-wallet listen -m http`, or `lepic http listen`, answers a payment as it
+arrives, so the send is finalized and posted in the same command:
+
+```
+$ lepic tx send 1.5 --to https://wallet.example.org
+Transaction 4 sent 1.50000000 EPIC (fee 0.00800000) by http to https://wallet.example.org:443/v2/foreign, finalized and posted.
+```
+
+A missing port is 3415 for `http` and 443 for `https`, and `/v2/foreign` is appended. Plain
+`http` goes only to this computer unless you add `--allow-plain-http`: the slate then travels
+unencrypted, and anyone on the way can read the amount. `--fluff` posts without the stem phase,
+as for `tx post`. If the other wallet cannot be reached or refuses, `lepic` exits with code 11
+and the inputs stay locked; `lepic tx resend <ID> --to <URL>` delivers the same slate again,
+and a wallet that answered it before answers the same way.
+
+To take payments this way:
+
+```
+$ lepic http listen
+Listening for payments over HTTP on port 3415 (local). Ctrl-C stops.
+```
+
+It listens on `127.0.0.1` only. `--internet` listens on every interface, for a port you forward
+from your router: anyone who reaches the port can send you payments. `--port` picks another
+port; 0 lets the system choose. Each payment prints a line on stderr, and Ctrl-C prints how many
+were received, repeated and refused. Invoices are never answered over HTTP.
 
 ## Invoices
 
@@ -499,7 +531,7 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 | 7 | `rejected` | the slate or request was refused; nothing was stored |
 | 8 | `insufficient_funds` | not enough spendable funds |
 | 9 | `node` | the node could not be reached or answered badly |
-| 10 | `transport` | the slate file or relay failed |
+| 10 | `transport` | the slate file, the relay or the http listener failed |
 | 11 | `incomplete` | stored, but not delivered or not posted; retry |
 | 12 | `interrupted` | stopped before it finished |
 
@@ -520,6 +552,9 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `epicbox address rejected` (exit 2) | The address is mistyped or belongs to the other network. Nothing was stored. |
 | `stored but was not delivered` (exit 11) | The relay did not take the slate; check the address and its port, then `tx resend` or `tx cancel`. |
 | `epicbox subscription failed` | The relay at `epicbox_relay` is unreachable. |
+| `http address rejected` (exit 2) | The `--to` URL is not `http(s)://host[:port][/path]`, or is plain `http` to another computer without `--allow-plain-http`. Nothing was stored. |
+| `invoices go over epicbox or through a slate file, not over http` (exit 2) | `invoice issue --to` was given a URL. |
+| `the http listener could not start` (exit 10) | Another program holds the port, or the port needs privileges; pick another with `--port`. |
 | `invoice amount differs from the approved amount` | The amount you typed is not the one in the invoice; nothing was paid. |
 | `invoice ... is not waiting to be paid` (exit 6) | The slate id is not a parked invoice: it was paid, declined or expired. `lepic invoice list` shows the ones waiting. |
 | `goes only to the allowed address of its invoice` (exit 7) | `tx resend` of an invoice payment names another key than the sender's allowed address; `epicbox allow list` shows it. |

@@ -19,6 +19,7 @@ path = "src/main.rs"
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
 jiff = { workspace = true, features = ["std"] }
 lepic-epicbox.workspace = true
+lepic-foreign.workspace = true
 lepic-keychain.workspace = true
 lepic-node.workspace = true
 lepic-primitives.workspace = true
