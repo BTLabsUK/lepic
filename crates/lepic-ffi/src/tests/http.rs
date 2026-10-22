@@ -358,13 +358,25 @@ async fn a_payment_over_the_listener_rate_is_reported_refused_as_unavailable() {
     let to = ForeignUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
     let budget = lepic_foreign::ListenSettings::new(lepic_foreign::Exposure::LocalOnly, 0)
         .receives_per_minute;
+    // Slates the wallet refuses as invalid leave the budget to real payments.
     for n in 0..=budget {
-        let slate = format!(r#"{{"id":"{n}","amount":"1","participant_data":[]}}"#);
+        let junk = format!(r#"{{"id":"{n}","amount":"1","participant_data":[]}}"#);
         let refused = client
-            .receive_tx(&to, &WireSlate::text(MediaType::JSON, slate))
+            .receive_tx(&to, &WireSlate::text(MediaType::JSON, junk))
             .await;
         assert!(refused.is_err());
     }
+    let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
+    for n in 0..budget {
+        client
+            .receive_tx(&to, &numbered(&slate.json, &slate.slate_id, n))
+            .await
+            .unwrap();
+    }
+    let over = client
+        .receive_tx(&to, &numbered(&slate.json, &slate.slate_id, budget))
+        .await;
+    assert!(over.is_err());
 
     let refusals: Vec<_> = events
         .0
@@ -376,7 +388,7 @@ async fn a_payment_over_the_listener_rate_is_reported_refused_as_unavailable() {
         .collect();
     let (last, checked) = refusals.split_last().unwrap();
     assert_eq!(*last, Some(crate::api::http::HttpRefusal::Unavailable));
-    assert_eq!(checked.len(), usize::try_from(budget).unwrap());
+    assert_eq!(checked.len(), usize::try_from(budget + 1).unwrap());
     assert!(
         checked
             .iter()

@@ -71,7 +71,8 @@ const HONEST: Script = Script {
     hangs_on_active: false,
 };
 
-const ADD_FLAGS: &str = "Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=4";
+const ADD_FLAGS: &str = "Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=4 \
+    PoWDefensesEnabled=1 PoWQueueRate=2 PoWQueueBurst=10";
 
 fn add_onion_command(port: u16) -> String {
     format!("ADD_ONION {ADD_FLAGS} Port=80,127.0.0.1:{port}")

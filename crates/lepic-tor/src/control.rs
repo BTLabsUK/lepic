@@ -47,6 +47,11 @@ const HASH_LEN: usize = 32;
 const SAFECOOKIE_SERVER_KEY: &[u8] = b"Tor safe cookie authentication server-to-controller hash";
 const SAFECOOKIE_CLIENT_KEY: &[u8] = b"Tor safe cookie authentication controller-to-server hash";
 const ASYNC_CODE: u16 = 650;
+/// Rendezvous requests tor takes from its proof-of-work queue per second, and at once: a
+/// phone answers a handful of payments a minute, not tor's defaults for large services
+/// (250 and 2500). Under a flood the senders that solved the hardest puzzles go first.
+pub const POW_QUEUE_RATE: u32 = 2;
+pub const POW_QUEUE_BURST: u32 = 10;
 
 /// Why a control-port exchange failed.
 #[derive(Debug, Error)]
@@ -577,7 +582,9 @@ impl ControlConnection {
 
     /// `ADD_ONION` with the 64-byte expanded key, port 80 to `127.0.0.1:<target_port>`.
     /// `DiscardPK` keeps tor from echoing the key; `MaxStreams` with `MaxStreamsCloseCircuit`
-    /// closes a circuit that opens more than [`MAX_STREAMS_PER_CIRCUIT`] streams at once.
+    /// closes a circuit that opens more than [`MAX_STREAMS_PER_CIRCUIT`] streams at once; the
+    /// proof-of-work defence makes each new sender circuit cost a puzzle once the service is
+    /// flooded ([`POW_QUEUE_RATE`]). A tor built without the defence ignores it.
     pub async fn add_onion(
         &self,
         expanded_key: &[u8; 64],
@@ -601,6 +608,10 @@ impl ControlConnection {
         line.push_str(encoded);
         line.push_str(" Flags=DiscardPK,MaxStreamsCloseCircuit MaxStreams=");
         line.push_str(&MAX_STREAMS_PER_CIRCUIT.to_string());
+        line.push_str(" PoWDefensesEnabled=1 PoWQueueRate=");
+        line.push_str(&POW_QUEUE_RATE.to_string());
+        line.push_str(" PoWQueueBurst=");
+        line.push_str(&POW_QUEUE_BURST.to_string());
         line.push_str(" Port=80,127.0.0.1:");
         line.push_str(&target_port.to_string());
         let (added_at, reply) = self.positioned_command(&line).await?;

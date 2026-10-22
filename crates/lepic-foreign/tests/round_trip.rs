@@ -228,6 +228,62 @@ async fn takes_only_so_many_requests_a_minute() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn requests_that_are_not_payments_leave_room_for_payments() {
+    let wallet = handler(None);
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.requests_per_minute = 2;
+    settings.receives_per_minute = 2;
+    let listener = listen(settings, wallet.clone()).await.unwrap();
+    let port = listener.local_addr().port();
+    for _ in 0..2 {
+        client().check_version(&url(port)).await.unwrap();
+    }
+    let flood = client().check_version(&url(port)).await.unwrap_err();
+    assert!(
+        matches!(flood, ClientError::Status { status: 503 }),
+        "{flood:?}"
+    );
+    let reply = client().receive_tx(&url(port), &s1()).await.unwrap();
+    assert_eq!(reply.as_text(), Some(S2));
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn past_the_request_budget_only_so_many_payments_are_read() {
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.requests_per_minute = 1;
+    settings.receives_per_minute = 1;
+    let listener = listen(settings, handler(None)).await.unwrap();
+    let port = listener.local_addr().port();
+    client().check_version(&url(port)).await.unwrap();
+    client().receive_tx(&url(port), &s1()).await.unwrap();
+    let error = client().receive_tx(&url(port), &s1()).await.unwrap_err();
+    assert!(
+        matches!(error, ClientError::Status { status: 503 }),
+        "{error:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_payment_refused_as_invalid_gives_its_budget_back() {
+    let wallet = handler(None);
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.receives_per_minute = 1;
+    let listener = listen(settings, wallet.clone()).await.unwrap();
+    let port = listener.local_addr().port();
+    let junk = r#"{"id":"x","amount":"1","participant_data":[]}"#;
+    for _ in 0..3 {
+        let answer = raw_exchange(port, receive_tx_request(junk).as_bytes()).await;
+        assert!(answer.contains("slate refused"), "{answer}");
+    }
+    let reply = client().receive_tx(&url(port), &s1()).await.unwrap();
+    assert_eq!(reply.as_text(), Some(S2));
+    let error = client().receive_tx(&url(port), &s1()).await.unwrap_err();
+    assert!(matches!(error, ClientError::Rpc(RpcError::Refused)));
+    assert_eq!(wallet.refused.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serves_only_post_to_the_foreign_endpoint() {
     let listener = listen(ListenSettings::new(Exposure::LocalOnly, 0), handler(None))
         .await
