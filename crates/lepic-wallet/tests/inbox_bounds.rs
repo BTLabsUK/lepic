@@ -787,3 +787,27 @@ fn an_s1_expired_by_the_tip_alone_refreshes_the_tip_at_most_once_a_minute() {
     assert_eq!(tip_requests(&world) - before - first - second, second);
     assert!(refreshes >= 1);
 }
+
+#[test]
+fn a_held_message_that_first_arrived_less_than_a_minute_after_the_wallet_clock_stays_held() {
+    let world = quick_receiver();
+    world.relay.set_unroutable(&sender_address(1));
+    let msg_id = post_from(&world, 1, &s1_numbered(1));
+    assert_eq!(drain(&world).held, 1);
+    // A small step back of the clock, as time synchronisation makes.
+    let arrived = support::fixed_time()
+        .checked_add(Duration::from_secs(30))
+        .unwrap();
+    arrived_at(&world, &msg_id, arrived);
+
+    let held = drain(&world);
+
+    assert_eq!(
+        held,
+        InboxSummary {
+            held: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.receiver_address), 1);
+}

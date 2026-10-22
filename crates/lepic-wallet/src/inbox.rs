@@ -91,6 +91,10 @@ const MAX_HOLD_ATTEMPTS: u32 = 3;
 /// discarded, as for [`MAX_HOLD_ATTEMPTS`].
 const HOLD_PATIENCE: Duration = Duration::from_secs(3 * 60);
 
+/// How far the wallet clock may step back, as time synchronisation steps it, before a message
+/// that seems to have arrived in the future counts as held for [`HOLD_PATIENCE`].
+const CLOCK_STEP_TOLERANCE: Duration = Duration::from_secs(60);
+
 /// An expired slate makes the inbox refresh the tip at most this often, on the wallet clock, so
 /// a stream of expired slates costs bounded node work.
 const TIP_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -1328,8 +1332,9 @@ where
     }
 
     /// Whether the message `msg_id`, on its try `attempt`, reached the hold bound: this is try
-    /// [`MAX_HOLD_ATTEMPTS`], or it first arrived [`HOLD_PATIENCE`] or longer ago, or after the
-    /// wallet clock's now, which only a clock set back explains.
+    /// [`MAX_HOLD_ATTEMPTS`], or it first arrived [`HOLD_PATIENCE`] or longer ago, or more than
+    /// [`CLOCK_STEP_TOLERANCE`] after the wallet clock's now, which only a clock set back
+    /// explains.
     async fn hold_exhausted(&self, msg_id: Option<&str>, attempt: u32) -> Result<bool, Hold> {
         if attempt >= MAX_HOLD_ATTEMPTS {
             return Ok(true);
@@ -1346,8 +1351,11 @@ where
             .blocking(move |_, _| Ok(session.store.read(|repos| repos.inbox(&msg_id))?))
             .await?
             .map(|entry| entry.received_at);
+        let stepped_back_from = now.checked_add(CLOCK_STEP_TOLERANCE).ok();
         Ok(match (first_seen, now.checked_sub(HOLD_PATIENCE)) {
-            (Some(first_seen), _) if first_seen > now => true,
+            (Some(first_seen), _) if stepped_back_from.is_some_and(|late| first_seen > late) => {
+                true
+            }
             (Some(first_seen), Ok(held_from)) => first_seen <= held_from,
             _ => false,
         })
