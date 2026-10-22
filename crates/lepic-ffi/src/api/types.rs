@@ -118,7 +118,8 @@ pub struct WalletOutput {
     pub commitment: String,
     pub value: u64,
     pub status: OutputStatus,
-    /// Where it counts in `WalletSummary`; `None` for a spent output.
+    /// Where it counts in `WalletSummary`; `None` for a spent output and an unconfirmed
+    /// coinbase output, which count nowhere.
     pub category: Option<OutputCategory>,
     /// A mining reward, spendable only from `lock_height`.
     pub is_coinbase: bool,

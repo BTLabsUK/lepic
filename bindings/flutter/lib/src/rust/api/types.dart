@@ -1418,7 +1418,8 @@ class WalletOutput {
   final BigInt value;
   final OutputStatus status;
 
-  /// Where it counts in `WalletSummary`; `None` for a spent output.
+  /// Where it counts in `WalletSummary`; `None` for a spent output and an unconfirmed
+  /// coinbase output, which count nowhere.
   final OutputCategory? category;
 
   /// A mining reward, spendable only from `lock_height`.

@@ -151,7 +151,15 @@ enum WalletErrorKind {
 
   /// The other wallet is not online with Tor on, or could not be reached in time. The send
   /// is stored as sent with its inputs locked: resend it later or cancel it.
-  onionUnreachable;
+  onionUnreachable,
+
+  /// The change is too small to split into the change outputs asked for: fewer base units
+  /// than outputs. Nothing was stored; ask for fewer change outputs.
+  changeTooSmall,
+
+  /// The transaction would spend more inputs or make more outputs than a transaction may
+  /// hold. Nothing was stored; send a smaller amount, or consolidate first.
+  tooHeavy;
 
   /// The stable number of this kind.
   Future<int> code() =>

@@ -100,6 +100,12 @@ pub enum WalletErrorKind {
     /// The other wallet is not online with Tor on, or could not be reached in time. The send
     /// is stored as sent with its inputs locked: resend it later or cancel it.
     OnionUnreachable,
+    /// The change is too small to split into the change outputs asked for: fewer base units
+    /// than outputs. Nothing was stored; ask for fewer change outputs.
+    ChangeTooSmall,
+    /// The transaction would spend more inputs or make more outputs than a transaction may
+    /// hold. Nothing was stored; send a smaller amount, or consolidate first.
+    TooHeavy,
 }
 
 impl WalletErrorKind {
@@ -143,6 +149,8 @@ impl WalletErrorKind {
             Self::OnionAddressInvalid => 42,
             Self::TorNotRunning => 43,
             Self::OnionUnreachable => 44,
+            Self::ChangeTooSmall => 45,
+            Self::TooHeavy => 46,
         }
     }
 }
@@ -233,6 +241,10 @@ impl From<SendError> for WalletError {
             SendError::Selection(SelectionError::NotEnoughFunds { .. }) => {
                 WalletErrorKind::NotEnoughFunds
             }
+            SendError::Selection(SelectionError::ChangeTooSmall { .. }) => {
+                WalletErrorKind::ChangeTooSmall
+            }
+            SendError::Selection(SelectionError::TooHeavy { .. }) => WalletErrorKind::TooHeavy,
             SendError::Selection(_)
             | SendError::NotResendable { .. }
             | SendError::PayeeMismatch { .. }
@@ -435,10 +447,43 @@ mod tests {
             (K::OnionAddressInvalid, 42),
             (K::TorNotRunning, 43),
             (K::OnionUnreachable, 44),
+            (K::ChangeTooSmall, 45),
+            (K::TooHeavy, 46),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
             assert_eq!(WalletError::new(kind, "x").code, code);
+        }
+    }
+
+    #[test]
+    fn selection_refusals_that_are_about_funds_have_their_own_kinds() {
+        use lepic_primitives::amount::Amount;
+        let cases = [
+            (
+                SelectionError::ChangeTooSmall {
+                    change: Amount::new(2),
+                    outputs: 3,
+                },
+                WalletErrorKind::ChangeTooSmall,
+            ),
+            (
+                SelectionError::TooHeavy {
+                    inputs: 900,
+                    outputs: 2,
+                },
+                WalletErrorKind::TooHeavy,
+            ),
+            (
+                SelectionError::NotEnoughFunds {
+                    available: Amount::new(1),
+                    needed: Amount::new(2),
+                },
+                WalletErrorKind::NotEnoughFunds,
+            ),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(WalletError::from(SendError::Selection(error)).kind, kind);
         }
     }
 

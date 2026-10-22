@@ -113,6 +113,8 @@ const errorCodes = {
   WalletErrorKind.onionAddressInvalid: 42,
   WalletErrorKind.torNotRunning: 43,
   WalletErrorKind.onionUnreachable: 44,
+  WalletErrorKind.changeTooSmall: 45,
+  WalletErrorKind.tooHeavy: 46,
 };
 
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(
