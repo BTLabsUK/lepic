@@ -485,6 +485,184 @@ scenario_http_repeat() {
     DETAIL="S1 ${slate_id} delivered twice: same S2, one transaction"
 }
 
+# One balance field of lepic's first account in units, from a `wallet info` document.
+info_field() { to_units "$(jq -r ".accounts[0].$2" <<<"$1")"; }
+
+# A refused `tx cancel`: exit code 7, kind `rejected`, and the reason matching `pattern`.
+cancel_refused() {
+    local output="$1" status="$2" pattern="$3"
+    ((status == 7)) || return 1
+    jq -e --arg p "${pattern}" '.error.kind == "rejected"
+        and (([.error.message] + (.error.causes // [])) | join(" ") | test($p))' \
+        <<<"${output}" >/dev/null
+}
+
+# epic-wallet pays lepic over Epicbox and does not finalize; lepic answers, then cancels the
+# receipt, which the node has never seen. epic-wallet finalizes later anyway: the mined
+# transaction confirms on lepic again and its output comes back.
+scenario_cancel_unseen() {
+    peer_listen_stop
+    local last before
+    last="$(lepic_last_tx_id)"
+    before="$(lepic wallet info)" || fail "wallet info failed" || return 1
+    peer_send_to_lepic 0.3 || fail "epic-wallet send failed" || return 1
+    local summary
+    summary="$(drain_until received 1 120)" || fail "lepic received nothing: ${summary}" || return 1
+    local tx tx_id slate_id
+    tx="$(lepic_incoming_after "${last}")"
+    [[ "$(wc -l <<<"${tx}")" -eq 1 && -n "${tx}" ]] || fail "expected one new incoming tx, got: ${tx}" || return 1
+    tx_id="$(jq -r .tx_id <<<"${tx}")"
+    slate_id="$(jq -r .slate_id <<<"${tx}")"
+    local received
+    received="$(lepic wallet info)" || fail "wallet info failed" || return 1
+    (($(info_field "${received}" awaiting_finalization) == $(info_field "${before}" awaiting_finalization) + $(to_units 0.3))) ||
+        fail "the receipt is not awaiting finalization: ${received}" || return 1
+
+    local output status=0
+    output="$(lepic tx cancel "${tx_id}")" || status=$?
+    ((status == 0)) || fail "cancel of the unseen receipt exited ${status}: ${output}" || return 1
+    [[ "$(lepic_tx_state "${tx_id}")" == cancelled ]] || fail "tx ${tx_id} is not cancelled" || return 1
+    local cancelled
+    cancelled="$(lepic wallet info)" || fail "wallet info failed" || return 1
+    local field
+    for field in total spendable awaiting_finalization awaiting_confirmation locked; do
+        (($(info_field "${cancelled}" "${field}") == $(info_field "${before}" "${field}"))) ||
+            fail "${field} after the cancel differs from before the receipt: ${cancelled}" || return 1
+    done
+    check_lepic_total || return 1
+
+    log "epic-wallet finalizes the cancelled receipt anyway"
+    peer_listen_start || fail "epic-wallet listener did not start" || return 1
+    wait_until "peer tx ${slate_id} confirmed" 180 ew_tx_confirmed peer "${slate_id}" ||
+        fail "epic-wallet did not finalize and confirm ${slate_id}" || return 1
+    peer_listen_stop
+    wait_until "lepic tx ${tx_id} confirmed" 120 lepic_tx_confirmed "${tx_id}" ||
+        fail "lepic tx ${tx_id} is $(lepic_tx_state "${tx_id}") after it was mined" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 0.3)))
+    check_lepic_total || return 1
+    DETAIL="unseen receipt ${slate_id} cancelled; mined later, confirmed and restored"
+}
+
+# epic-wallet pays lepic over Epicbox, finalizes and posts. While the node's pool holds the
+# transaction, and after it is mined, lepic refuses to cancel the receipt.
+scenario_cancel_posted_body() {
+    peer_listen_start || fail "epic-wallet listener did not start" || return 1
+    local last
+    last="$(lepic_last_tx_id)"
+    peer_send_to_lepic 0.35 || fail "epic-wallet send failed" || return 1
+    local summary
+    summary="$(drain_until received 1 120)" || fail "lepic received nothing: ${summary}" || return 1
+    local tx tx_id slate_id
+    tx="$(lepic_incoming_after "${last}")"
+    [[ "$(wc -l <<<"${tx}")" -eq 1 && -n "${tx}" ]] || fail "expected one new incoming tx, got: ${tx}" || return 1
+    tx_id="$(jq -r .tx_id <<<"${tx}")"
+    slate_id="$(jq -r .slate_id <<<"${tx}")"
+    wait_until "the posted transaction in the pool" 120 node_pool_holds_at_least 1 ||
+        fail "epic-wallet did not post ${slate_id} to the node's pool" || return 1
+    peer_listen_stop
+    local state before
+    state="$(lepic_tx_state "${tx_id}")"
+    before="$(lepic wallet info)" || fail "wallet info failed" || return 1
+
+    local output status=0
+    output="$(lepic tx cancel "${tx_id}")" || status=$?
+    cancel_refused "${output}" "${status}" "pool" ||
+        fail "cancel while in the pool was not refused as in the pool (exit ${status}): ${output}" || return 1
+    [[ "$(lepic_tx_state "${tx_id}")" == "${state}" ]] || fail "the refused cancel changed the state" || return 1
+    [[ "$(jq -S -c '.accounts' <<<"$(lepic wallet info)")" == "$(jq -S -c '.accounts' <<<"${before}")" ]] ||
+        fail "the refused cancel changed the balance" || return 1
+
+    mine_until_pool_empty || fail "the transaction was not mined block by block" || return 1
+    # No refresh between the block and the cancel: the cancel itself must find the kernel.
+    status=0
+    output="$(lepic tx cancel "${tx_id}")" || status=$?
+    cancel_refused "${output}" "${status}" "on chain" ||
+        fail "cancel after mining was not refused as on chain (exit ${status}): ${output}" || return 1
+    [[ "$(lepic_tx_state "${tx_id}")" == "${state}" ]] || fail "the refused cancel changed the state" || return 1
+
+    miner_resume
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 0.35)))
+    check_lepic_total || return 1
+    DETAIL="cancel of ${slate_id} refused in the pool and on chain (exit 7); confirmed"
+}
+
+scenario_cancel_posted() {
+    miner_pause || fail "could not pause the miner" || return 1
+    local status=0
+    scenario_cancel_posted_body || status=$?
+    peer_listen_stop
+    miner_resume
+    return "${status}"
+}
+
+lepic_nothing_pending() {
+    local info
+    info="$(lepic wallet info)" || return 1
+    (($(info_field "${info}" awaiting_confirmation) == 0 && $(info_field "${info}" awaiting_finalization) == 0 &&
+        $(info_field "${info}" locked) == 0))
+}
+
+# A received output awaits confirmation at one and two confirmations and is spendable at three
+# (operator decision D1); a send that needs it fails before.
+scenario_three_confirmations_body() {
+    local amount=0.45 slate=/exchange/three-confirmations.slate
+    ew peer send -m file -d "${slate}" -c 1 -s smallest "${amount}" >>"${RUN_LOG}" || fail "epic-wallet send failed" || return 1
+    local received tx_id
+    received="$(lepic tx receive "${slate}")" || fail "lepic could not receive the S1" || return 1
+    tx_id="$(jq -r .tx_id <<<"${received}")"
+    ew peer finalize -i "$(jq -r .reply_file <<<"${received}")" >>"${RUN_LOG}" ||
+        fail "epic-wallet could not finalize" || return 1
+    wait_until "the posted transaction in the pool" 120 node_pool_holds_at_least 1 ||
+        fail "the transaction is not in the node's pool" || return 1
+    local before
+    before="$(lepic wallet info)" || fail "wallet info failed" || return 1
+    local spendable0 units
+    spendable0="$(info_field "${before}" spendable)"
+    units="$(to_units "${amount}")"
+
+    mine_until_pool_empty || fail "the transaction was not mined block by block" || return 1
+    local n info confirmed_height tip
+    for n in 1 2 3; do
+        ((n == 1)) || mine_one_block || fail "could not mine block ${n}" || return 1
+        info="$(lepic wallet info)" || fail "wallet info failed" || return 1
+        tip="$(jq -r .height <<<"${info}")"
+        [[ "$(lepic_tx_state "${tx_id}")" == confirmed ]] || fail "tx ${tx_id} not confirmed at ${n}" || return 1
+        confirmed_height="$(lepic tx show "${tx_id}" | jq -r .confirmed_height)"
+        ((tip - confirmed_height + 1 == n)) ||
+            fail "expected ${n} confirmations, tip ${tip}, mined at ${confirmed_height}" || return 1
+        if ((n < 3)); then
+            (($(info_field "${info}" awaiting_confirmation) == units && $(info_field "${info}" spendable) == spendable0)) ||
+                fail "at ${n} confirmations the output is not awaiting confirmation: ${info}" || return 1
+        else
+            (($(info_field "${info}" awaiting_confirmation) == 0 && $(info_field "${info}" spendable) == spendable0 + units)) ||
+                fail "at 3 confirmations the output is not spendable: ${info}" || return 1
+        fi
+        if ((n == 2)); then
+            # More than what was spendable before, so it needs the 2-confirmation output.
+            local need output status=0
+            need="$(from_units $((spendable0 + units / 2)))"
+            output="$(lepic tx send "${need}" --to-file /exchange/three-confirmations-early.slate)" || status=$?
+            ((status == 8)) || fail "a send of ${need} needing the 2-confirmation output exited ${status}: ${output}" || return 1
+        fi
+    done
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + units))
+    check_lepic_total || return 1
+    DETAIL="awaiting at 1 and 2 confirmations, spendable at 3 (tip ${tip})"
+}
+
+scenario_three_confirmations() {
+    peer_listen_stop
+    wait_until "peer spendable" 180 ew_spendable_at_least peer "$(($(to_units 0.45) + UNIT))" ||
+        fail "epic-wallet has no spendable funds" || return 1
+    wait_until "lepic settled" 120 lepic_nothing_pending || fail "lepic still has pending amounts" || return 1
+    miner_pause || fail "could not pause the miner" || return 1
+    local status=0
+    scenario_three_confirmations_body || status=$?
+    miner_resume
+    return "${status}"
+}
+
 # shellcheck source=history.sh
 source "${INTEROP_DIR}/history.sh"
 
@@ -502,5 +680,8 @@ SCENARIOS=(
     "lepic sends over http:scenario_http_lepic_sends"
     "epic-wallet sends over http:scenario_http_epic_wallet_sends"
     "same S1 twice over http:scenario_http_repeat"
+    "receiver cancels an unseen receipt:scenario_cancel_unseen"
+    "receiver cancel of a posted receipt:scenario_cancel_posted"
+    "spendable at three confirmations:scenario_three_confirmations"
     "import epic-wallet history:scenario_import_history"
 )

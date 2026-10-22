@@ -67,6 +67,9 @@ to_units() {
     echo $((10#${whole} * UNIT + 10#${frac}))
 }
 
+# 1234000000 -> "12.34000000"
+from_units() { printf '%d.%08d\n' $(($1 / UNIT)) $(($1 % UNIT)); }
+
 # Runs a check every 2 seconds until it succeeds or `timeout` seconds pass.
 wait_until() {
     local what="$1" timeout="$2"
@@ -253,4 +256,71 @@ restart_relay() {
 mongo_eval() {
     dc exec -T mongodb mongosh --quiet -u root -p rootpass --authenticationDatabase admin epicbox \
         --eval "$1"
+}
+
+# Calls the node's foreign API from the lepic container and prints the JSON-RPC answer.
+node_foreign() {
+    local method="$1" params="${2:-[]}"
+    dc exec -T lepic sh -c "curl -s -u \"epic:\$(cat /node/.foreign_api_secret)\" \
+        -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"${method}\",\"params\":${params}}' \
+        http://127.0.0.1:23413/v2/foreign"
+}
+
+node_height() { node_foreign get_tip | jq -r '.result.Ok.height'; }
+
+# Transactions in the node's pool (stem transactions are not counted).
+node_pool_count() { node_foreign get_unconfirmed_transactions | jq -r '.result.Ok | length'; }
+
+node_pool_holds_at_least() { (($(node_pool_count) >= $1)); }
+
+# The miner mines a block every couple of seconds. Scenarios that must see the chain at an exact
+# height freeze it, and mine one block at a time with mine_one_block.
+miner_pause() {
+    [[ "$(docker inspect --format '{{.State.Paused}}' "$(dc ps -q miner)")" == true ]] && return 0
+    dc pause miner >/dev/null 2>&1
+}
+
+miner_resume() {
+    [[ "$(docker inspect --format '{{.State.Paused}}' "$(dc ps -q miner)")" == true ]] || return 0
+    dc unpause miner >/dev/null 2>&1
+}
+
+node_height_above() { (($(node_height) > $1)); }
+
+# Lets the paused miner find exactly one block and pauses it again. The miner waits two seconds
+# after each block it finds, which leaves time to pause it before the next. Fails when the chain
+# moved by anything but one block.
+mine_one_block() {
+    local before after
+    before="$(node_height)"
+    dc unpause miner >/dev/null 2>&1 || return 1
+    local deadline=$((SECONDS + 60))
+    until node_height_above "${before}"; do
+        if ((SECONDS >= deadline)); then
+            dc pause miner >/dev/null 2>&1
+            log "no block mined above ${before} in 60s"
+            return 1
+        fi
+        sleep 0.2
+    done
+    dc pause miner >/dev/null 2>&1 || return 1
+    # A block submitted just before the pause lands now.
+    sleep 1
+    after="$(node_height)"
+    if ((after != before + 1)); then
+        log "mined from ${before} to ${after}, not one block"
+        return 1
+    fi
+}
+
+# Mines one block at a time until the node's pool is empty, at most `limit` blocks. A job the
+# miner held while paused may not include the newest transaction, so the first block can miss it.
+mine_until_pool_empty() {
+    local limit="${1:-4}" n
+    for ((n = 0; n < limit; n++)); do
+        mine_one_block || return 1
+        (($(node_pool_count) == 0)) && return 0
+    done
+    log "the pool still holds transactions after ${limit} blocks"
+    return 1
 }
