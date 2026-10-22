@@ -15,12 +15,20 @@ recordings skip the owner exchange.
 |---|---|---|
 | `get_version` | none | `node_version`, `block_header_version` |
 | `get_tip` | none | `height`, `last_block_pushed` |
+| `get_header` | `[height, null, null]` | `height`, `hash`, `timestamp` (RFC 3339); `{"Err": "NotFound"}` inside `result` means the node has no block at that height |
 | `get_kernel` | `[excess_hex, min_height or null, max_height or null]` | `tx_kernel`, `height`, `mmr_index`; `{"Err": "NotFound"}` inside `result` means none |
 | `get_outputs` | `[commits_hex[], null, null, false, false]` | `commit`, `block_height`, `mmr_index`; only the outputs found are answered |
 | `get_unspent_outputs` | `[start_index, end_index or null, max, true]` | `highest_index`, `last_retrieved_index`, `outputs[]` with `commit`, `proof`, `output_type` (`Coinbase` or `Transaction`), `spent`, `block_height`, `mmr_index` |
 | `get_pmmr_indices` | `[start_height, end_height or null]` | `last_retrieved_index` (the first index of the range), `highest_index` (the last) |
 | `push_transaction` | `[tx, fluff]` | none |
 | `get_unconfirmed_transactions` | `[]` | `tx.body.kernels[]` with `excess`, `excess_sig`, `features`; the transaction pool only, not the Dandelion stem pool |
+
+`get_header` follows `ForeignRpc::get_header` (`api/src/foreign_rpc.rs:814`, `Foreign::get_header` in
+`api/src/foreign.rs:100`) and answers a `BlockHeaderPrintable` (`api/src/types.rs:593`). The node maps every
+failure of `get_header_by_height`, a height above its chain included, to `Error::NotFound`
+(`api/src/handlers/blocks_api.rs:84-87`); LEPIC returns `None` for it and keeps every other error. LEPIC
+refuses a header whose hash is not 32 hex bytes, whose height is not the one asked for, whose timestamp
+is not RFC 3339 or is dated before 2019-01-01, or whose height is above the tip it has seen.
 
 Requests are JSON-RPC 2.0. The reference client sends `get_outputs` in chunks of 500 commitments in
 parallel. A node may require HTTP Basic auth on the foreign API; LEPIC supports an optional secret.
