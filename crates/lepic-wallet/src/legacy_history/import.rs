@@ -390,7 +390,8 @@ fn import_records(
     advance_children(repos, history, plan, &allowed)?;
 
     let mut by_source: BTreeMap<(AccountIndex, u32), TxId> = BTreeMap::new();
-    let heights = confirmation_heights(history, plan);
+    let creators = creators(history, plan);
+    let heights = confirmation_heights(history, &creators);
     for entry in &history.transactions {
         let Some(account) = account_of(&entry.parent_key_id).filter(|a| allowed.contains(a)) else {
             outcome.skipped = outcome.skipped.saturating_add(1);
@@ -408,18 +409,14 @@ fn import_records(
             None => outcome.skipped = outcome.skipped.saturating_add(1),
         }
     }
-    for index in &plan.ours {
+    for (index, creator) in &creators {
         let Some(output) = history.outputs.get(*index) else {
             continue;
         };
-        let (Some(commitment), Some(log_id), Some(account)) = (
-            output.commitment,
-            output.tx_log_entry,
-            account_of(&output.root_key_id),
-        ) else {
+        let Some(commitment) = output.commitment else {
             continue;
         };
-        let Some(tx) = by_source.get(&(account, log_id)) else {
+        let Some(tx) = by_source.get(creator) else {
             continue;
         };
         // Upstream may hold one commitment twice; the copy nearest the chain is kept.
@@ -440,13 +437,121 @@ fn import_records(
     Ok(())
 }
 
-/// The height each log entry's outputs were confirmed at, from the outputs the seed made.
+/// A log entry by its account and the old wallet's id.
+type SourceKey = (AccountIndex, u32);
+
+/// The log entry that created each output the seed reproduces, by index into the history's
+/// outputs.
+///
+/// `epic-wallet` points an output at the entry that last locked it, so an output a send spent,
+/// or locked before it was cancelled, points at that send, not at the entry that made it. An
+/// output pointing at an incoming entry was made by it. Of the outputs pointing at a send, its
+/// change is the `num_outputs` with the highest key child (change keys are derived after the
+/// inputs existed), when their values add up to what the send credited; the others are its
+/// inputs. Each input is matched to an entry that credited exactly its value in one output,
+/// before the send, and that no other output was matched to. An output no rule places has no
+/// creator, and a scan that finds it stores an entry of its own for it.
+fn creators(history: &LegacyHistory, plan: &ImportPlan) -> BTreeMap<usize, SourceKey> {
+    let mut entries: BTreeMap<SourceKey, &LegacyTxLogEntry> = BTreeMap::new();
+    for entry in &history.transactions {
+        if let Some(account) = account_of(&entry.parent_key_id) {
+            entries.insert((account, entry.id), entry);
+        }
+    }
+    let mut pointed: BTreeMap<SourceKey, Vec<usize>> = BTreeMap::new();
+    let mut unplaced: Vec<(usize, Option<u32>)> = Vec::new();
+    for index in &plan.ours {
+        let Some(output) = history.outputs.get(*index) else {
+            continue;
+        };
+        let Some(account) = account_of(&output.root_key_id) else {
+            continue;
+        };
+        match output.tx_log_entry {
+            Some(id) if entries.contains_key(&(account, id)) => {
+                pointed.entry((account, id)).or_default().push(*index);
+            }
+            _ => unplaced.push((*index, None)),
+        }
+    }
+    let mut made: BTreeMap<usize, SourceKey> = BTreeMap::new();
+    for (key, mut indices) in pointed {
+        let Some(entry) = entries.get(&key) else {
+            continue;
+        };
+        if direction_and_kind(entry.kind).0 == TxDirection::Incoming {
+            made.extend(indices.into_iter().map(|index| (index, key)));
+            continue;
+        }
+        indices.sort_by_key(|index| {
+            std::cmp::Reverse(
+                history
+                    .outputs
+                    .get(*index)
+                    .map_or(0, |output| output.n_child),
+            )
+        });
+        let count = usize::try_from(entry.num_outputs).unwrap_or(usize::MAX);
+        let change: Vec<usize> = indices.iter().copied().take(count).collect();
+        let credited = change.iter().try_fold(0_u64, |sum, index| {
+            history
+                .outputs
+                .get(*index)
+                .and_then(|output| sum.checked_add(output.value.value()))
+        });
+        let is_change = count > 0 && credited == Some(entry.amount_credited.value());
+        for index in indices {
+            if is_change && change.contains(&index) {
+                made.insert(index, key);
+            } else {
+                unplaced.push((index, Some(key.1)));
+            }
+        }
+    }
+    let mut taken: BTreeSet<SourceKey> = made.values().copied().collect();
+    unplaced.sort_by_key(|(index, _)| {
+        history
+            .outputs
+            .get(*index)
+            .map_or(0, |output| output.n_child)
+    });
+    for (index, spender) in unplaced {
+        let Some(output) = history.outputs.get(index) else {
+            continue;
+        };
+        let Some(account) = account_of(&output.root_key_id) else {
+            continue;
+        };
+        let maker = entries
+            .iter()
+            .filter(|((entry_account, id), entry)| {
+                *entry_account == account
+                    && spender.is_none_or(|spender| *id < spender)
+                    && entry.num_outputs == 1
+                    && entry.amount_credited == output.value
+                    && !matches!(
+                        entry.kind,
+                        LegacyTxKind::TxReceivedCancelled | LegacyTxKind::TxSentCancelled
+                    )
+                    && !taken.contains(&(*entry_account, *id))
+            })
+            .map(|(key, _)| *key)
+            .next_back();
+        if let Some(key) = maker {
+            taken.insert(key);
+            made.insert(index, key);
+        }
+    }
+    made
+}
+
+/// The height each log entry's outputs were confirmed at, from the outputs it created.
 fn confirmation_heights(
     history: &LegacyHistory,
-    plan: &ImportPlan,
-) -> BTreeMap<(AccountIndex, u32), Height> {
+    creators: &BTreeMap<usize, SourceKey>,
+) -> BTreeMap<SourceKey, Height> {
     let mut heights = BTreeMap::new();
-    for index in &plan.ours {
+    for (index, creator) in creators {
         let Some(output) = history.outputs.get(*index) else {
             continue;
         };
@@ -456,11 +561,7 @@ fn confirmation_heights(
         ) {
             continue;
         }
-        let (Some(log_id), Some(account)) = (output.tx_log_entry, account_of(&output.root_key_id))
-        else {
-            continue;
-        };
-        let height = heights.entry((account, log_id)).or_insert(output.height);
+        let height = heights.entry(*creator).or_insert(output.height);
         *height = (*height).max(output.height);
     }
     heights

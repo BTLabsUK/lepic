@@ -186,8 +186,10 @@ impl OldTx {
             "creation_ts": self.created,
             "confirmation_ts": self.confirmed_at,
             "confirmed": self.confirmed,
-            "num_inputs": 1,
-            "num_outputs": 2,
+            // As epic-wallet counts them: a receipt makes one output, a send one change
+            // output when it has change, and spends at least one input.
+            "num_inputs": u32::from(self.debited > 0),
+            "num_outputs": u32::from(self.credited > 0),
             "amount_credited": self.credited.to_string(),
             "amount_debited": self.debited.to_string(),
             "fee": self.fee.map(|fee| fee.to_string()),

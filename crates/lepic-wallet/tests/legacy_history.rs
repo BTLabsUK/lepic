@@ -647,6 +647,54 @@ fn entries_of_accounts_the_old_wallet_never_had_are_skipped() {
 }
 
 #[test]
+fn an_input_an_unfinished_send_locked_stays_with_the_receipt_that_made_it() {
+    // epic-wallet points an output at the send that locked it: the pizza payment's output is
+    // the input of the unfinished send, still unspent on chain.
+    let mut old = OldWallet::standard(&keychain(MNEMONIC));
+    let input = old.output_mut(0, 2);
+    input.status = "Locked";
+    input.tx = 6;
+    let world = World::new(&old, &[]);
+
+    world.import();
+    world.scan();
+
+    let created = world.tx(DEFAULT, SLATE_CREATED);
+    assert_eq!(created.transaction.entry.state, TxState::Sent);
+    assert_eq!(created.imported.unwrap().check, ChainCheck::Unchecked);
+    let pizza = world.tx(DEFAULT, SLATE_PIZZA);
+    assert_eq!(pizza.transaction.entry.state, TxState::Confirmed);
+    assert_eq!(pizza.imported.unwrap().check, ChainCheck::OnChain);
+    assert!(
+        world
+            .txs(DEFAULT)
+            .iter()
+            .all(|tx| tx.origin != TxOrigin::FoundByScan),
+        "the locked input is not shown a second time as found by a scan"
+    );
+}
+
+#[test]
+fn the_unlocked_input_of_a_cancelled_send_does_not_make_it_on_chain() {
+    // A cancelled send leaves its inputs unspent but still pointing at it.
+    let mut old = OldWallet::standard(&keychain(MNEMONIC));
+    let input = old.output_mut(0, 2);
+    input.tx = 4;
+    let world = World::new(&old, &[]);
+
+    world.import();
+    world.scan();
+
+    let cancelled = world.tx(DEFAULT, SLATE_SENT_CANCELLED);
+    assert_eq!(cancelled.transaction.entry.state, TxState::Cancelled);
+    assert_eq!(cancelled.imported.unwrap().check, ChainCheck::Unchecked);
+    assert_eq!(
+        world.tx(DEFAULT, SLATE_PIZZA).imported.unwrap().check,
+        ChainCheck::OnChain
+    );
+}
+
+#[test]
 fn the_source_folder_is_not_touched_and_the_work_copy_can_be_removed() {
     let world = World::new(&OldWallet::standard(&keychain(MNEMONIC)), &[UNKNOWN]);
     let before = snapshot(world.source.path());
