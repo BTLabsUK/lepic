@@ -1,9 +1,9 @@
-//! The HTTP method as a transport (ADR 0003, ADR 0017): its format policy, the client as its
-//! outbound side, and the receivers' answers as its inbound side.
+//! The HTTP method as a transport (ADR 0003, ADR 0017): its format policy and the client as its
+//! outbound side. It has no inbound side: payments to this wallet reach the listener.
 //!
 //! Over HTTP the receiver answers `receive_tx` with its S2 in the same exchange. The outbound
-//! side keeps that answer, keyed by slate id, until the caller finalizes it; nothing else is
-//! ever handed out inbound.
+//! side keeps that answer, keyed by the id of the slate it answers, until the caller takes it
+//! with [`HttpTransport::take_reply`] to finalize it.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -18,13 +18,13 @@ use lepic_slate::validate::check_size;
 use lepic_transport::error::TransportError;
 use lepic_transport::policy::{Encoding, FormatPolicy};
 use lepic_transport::transport::{
-    AckToken, BoxFuture, Destination, Envelope, Inbound, Outbound, Transport, TransportId,
+    BoxFuture, Destination, Inbound, Outbound, Transport, TransportId,
 };
 use serde::Deserialize;
 use tracing::debug;
 
 use crate::client::ForeignClient;
-use crate::error::ClientError;
+use crate::error::{ClientError, RpcError};
 use crate::url::{ForeignUrl, PlainHttp};
 
 /// The transport id of the HTTP method, stored with its transactions.
@@ -116,17 +116,21 @@ impl HttpTransport {
         held.push_back(Held { slate_id, wire });
     }
 
+    /// Sends `wire` and holds the answer under its slate id. An answer for another slate is
+    /// refused as malformed and not held.
     async fn post(&self, to: &Destination, wire: &WireSlate) -> Result<(), ClientError> {
         // The caller checked the destination with the user's plain-HTTP choice when it was
         // typed; what reaches the transport is already consented to.
         let url = ForeignUrl::parse(to.as_str(), PlainHttp::Allowed)?;
+        let slate_id = slate_id_of(wire).ok_or(ClientError::Rpc(RpcError::NotJson))?;
         let version = self.client.check_version(&url).await?;
         if !version.v2 {
             return Err(ClientError::NoCommonVersion);
         }
         let reply = self.client.receive_tx(&url, wire).await?;
-        let slate_id =
-            slate_id_of(&reply).ok_or(ClientError::Rpc(crate::error::RpcError::Malformed))?;
+        if !slate_id_of(&reply).is_some_and(|answered| answered.eq_ignore_ascii_case(&slate_id)) {
+            return Err(ClientError::Rpc(RpcError::Malformed));
+        }
         debug!(%slate_id, "answer received");
         self.hold(slate_id, reply);
         Ok(())
@@ -162,28 +166,6 @@ impl Outbound for HttpTransport {
     }
 }
 
-impl Inbound for HttpTransport {
-    /// Held answers, oldest first. Acknowledging is a no-op: an answer leaves the queue when
-    /// it is handed out.
-    fn next_envelope(&self) -> BoxFuture<'_, Result<Option<Envelope>, TransportError>> {
-        Box::pin(async move {
-            let next = self
-                .held
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .pop_front();
-            Ok(next.map(|reply| Envelope::new(AckToken::new(reply.slate_id), None, reply.wire)))
-        })
-    }
-
-    fn acknowledge<'a>(
-        &'a self,
-        _token: &'a AckToken,
-    ) -> BoxFuture<'a, Result<(), TransportError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
 impl Transport for HttpTransport {
     fn id(&self) -> TransportId {
         TRANSPORT_ID
@@ -198,6 +180,6 @@ impl Transport for HttpTransport {
     }
 
     fn inbound(&self) -> Option<&dyn Inbound> {
-        Some(self)
+        None
     }
 }
