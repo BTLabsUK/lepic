@@ -336,6 +336,39 @@ void main() {
   );
 
   test(
+    'an unpaid invoice is not money on its way until its payment is finalized',
+    () async {
+      final p = await parties('figures');
+      final (issued, _) = await parked(p);
+
+      Future<WalletOutput> invoiceOutput() async => (await p.issuer.outputs())
+          .singleWhere((output) => output.txId == issued.txId);
+      final unpaid = await invoiceOutput();
+      expect(unpaid.category, OutputCategory.unpaidInvoice);
+      expect(unpaid.value, BigInt.from(3 * epic));
+      final before = await p.issuer.summary(refresh: false);
+      expect(before.awaitingFinalization, BigInt.zero);
+      expect(before.total, BigInt.zero);
+
+      await p.payer.payInvoice(
+        slateId: issued.slateId,
+        amount: BigInt.from(3 * epic),
+        minimumConfirmations: BigInt.one,
+      );
+      // Paid, but the issuer has not read the payment yet.
+      expect((await invoiceOutput()).category, OutputCategory.unpaidInvoice);
+      expect((await p.issuer.drainEpicbox()).finalized, 1);
+
+      expect(
+        (await invoiceOutput()).category,
+        OutputCategory.awaitingFinalization,
+      );
+      final after = await p.issuer.summary(refresh: false);
+      expect(after.awaitingFinalization, BigInt.from(3 * epic));
+    },
+  );
+
+  test(
     'an invoice from a sender that is not allowed is dropped unopened',
     () async {
       final p = await parties('stranger');

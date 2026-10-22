@@ -515,12 +515,10 @@ where
             if repos.account(account)?.is_none() {
                 return Err(crate::AccountError::UnknownAccount(account).into());
             }
-            balance(
-                account,
-                &repos.outputs(account, None)?,
-                balance_height(repos)?,
-            )
-            .map_err(WalletError::Balance)
+            let outputs = repos.outputs(account, None)?;
+            let unpaid = unpaid_invoices(repos, &outputs)?;
+            balance(account, &outputs, balance_height(repos)?, &unpaid)
+                .map_err(WalletError::Balance)
         })
     }
 
@@ -537,8 +535,9 @@ where
                 return Err(crate::AccountError::UnknownAccount(account).into());
             }
             let height = balance_height(repos)?;
-            Ok(repos
-                .outputs(account, None)?
+            let outputs = repos.outputs(account, None)?;
+            let unpaid = unpaid_invoices(repos, &outputs)?;
+            Ok(outputs
                 .into_iter()
                 .map(|output| OutputDetails {
                     confirmations: if output.status == OutputStatus::Unconfirmed {
@@ -546,7 +545,7 @@ where
                     } else {
                         confirmations(&output, height)
                     },
-                    category: balance_category(&output, height),
+                    category: balance_category(&output, height, &unpaid),
                     output,
                 })
                 .collect())
@@ -1109,11 +1108,9 @@ fn balances(repos: &dyn Repositories) -> Result<Vec<Balance>, RefreshError> {
     let height = balance_height(repos)?;
     let mut balances = Vec::new();
     for account in repos.accounts()? {
-        balances.push(balance(
-            account.index,
-            &repos.outputs(account.index, None)?,
-            height,
-        )?);
+        let outputs = repos.outputs(account.index, None)?;
+        let unpaid = unpaid_invoices(repos, &outputs)?;
+        balances.push(balance(account.index, &outputs, height, &unpaid)?);
     }
     Ok(balances)
 }
@@ -1122,6 +1119,7 @@ fn balance(
     account: AccountIndex,
     outputs: &[OutputRecord],
     height: Height,
+    unpaid: &BTreeSet<TxId>,
 ) -> Result<Balance, ArithmeticError> {
     let mut balance = Balance {
         account,
@@ -1134,10 +1132,12 @@ fn balance(
         locked: Amount::ZERO,
     };
     for output in outputs {
-        let Some(category) = balance_category(output, height) else {
+        let Some(category) = balance_category(output, height, unpaid) else {
             continue;
         };
         let slot = match category {
+            // Money nobody has sent yet: the payer may never pay.
+            BalanceCategory::UnpaidInvoice => continue,
             BalanceCategory::Spendable => &mut balance.spendable,
             BalanceCategory::AwaitingConfirmation => &mut balance.awaiting_confirmation,
             BalanceCategory::AwaitingFinalization => &mut balance.awaiting_finalization,
@@ -1165,11 +1165,51 @@ pub enum BalanceCategory {
     Immature,
     /// An input of a send in progress.
     Locked,
+    /// The output an invoice this wallet issued asks for, while nobody has paid it. It counts
+    /// in no figure of [`Balance`], its total included, where upstream's `retrieve_info`
+    /// counts it as awaiting finalization. Once a payment is finalized it is
+    /// [`BalanceCategory::AwaitingFinalization`].
+    UnpaidInvoice,
+}
+
+/// The transactions among those of `outputs` that are invoices this wallet issued and nobody
+/// paid yet: incoming, still `received`, with the I1 stored. Finalizing a payment moves the
+/// transaction to `finalized`; cancelling it, or a sweep, drops its output.
+fn unpaid_invoices(
+    repos: &dyn Repositories,
+    outputs: &[OutputRecord],
+) -> Result<BTreeSet<TxId>, StoreError> {
+    let mut unpaid = BTreeSet::new();
+    for output in outputs {
+        let (OutputStatus::Unconfirmed, Some(tx_id)) = (output.status, output.tx) else {
+            continue;
+        };
+        if unpaid.contains(&tx_id) {
+            continue;
+        }
+        let Some(entry) = repos.transaction(tx_id)? else {
+            continue;
+        };
+        let (TxDirection::Incoming, TxState::Received, Some(slate_id)) =
+            (entry.direction, entry.state, entry.slate_id)
+        else {
+            continue;
+        };
+        if repos.slate(slate_id, SlateStage::Invoice1)?.is_some() {
+            unpaid.insert(tx_id);
+        }
+    }
+    Ok(unpaid)
 }
 
 /// The category `output` counts in at `height`, as upstream's `retrieve_info` sorts it; `None`
-/// for a spent output and an unconfirmed coinbase output, which count nowhere.
-fn balance_category(output: &OutputRecord, height: Height) -> Option<BalanceCategory> {
+/// for a spent output and an unconfirmed coinbase output, which count nowhere. The output of a
+/// transaction in `unpaid` is [`BalanceCategory::UnpaidInvoice`].
+fn balance_category(
+    output: &OutputRecord,
+    height: Height,
+    unpaid: &BTreeSet<TxId>,
+) -> Option<BalanceCategory> {
     let coinbase = output.id.features.is_coinbase();
     match output.status {
         OutputStatus::Unspent if coinbase && output.lock_height > height => {
@@ -1181,6 +1221,11 @@ fn balance_category(output: &OutputRecord, height: Height) -> Option<BalanceCate
         OutputStatus::Unspent => Some(BalanceCategory::Spendable),
         // Upstream ignores unconfirmed coinbase outputs, which a wallet that does not mine
         // never has.
+        OutputStatus::Unconfirmed
+            if !coinbase && output.tx.is_some_and(|tx| unpaid.contains(&tx)) =>
+        {
+            Some(BalanceCategory::UnpaidInvoice)
+        }
         OutputStatus::Unconfirmed if !coinbase => Some(BalanceCategory::AwaitingFinalization),
         OutputStatus::Locked => Some(BalanceCategory::Locked),
         OutputStatus::Unconfirmed | OutputStatus::Spent => None,

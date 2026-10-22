@@ -458,7 +458,11 @@ Issuer, a service wallet:
   address. Its transaction is `incoming` like a received payment, with `flow` `invoice`; a
   paid invoice is `outgoing` with `flow` `invoice`. The payment arrives on the payments
   address, where `drainEpicbox()` or the listener finalizes and posts it with an
-  `invoiceFinalized` event. `cancelTransaction` withdraws an unpaid invoice. A payer that does not pay invoices, such as a stock `epic-wallet`, sends the
+  `invoiceFinalized` event. Until then the invoice's output is not money on its way: it
+  counts in no figure of `WalletSummary`, and `outputs()` lists it with the category
+  `unpaidInvoice` (new; before, it counted in `awaitingFinalization`, so an
+  exhaustive `switch` over `OutputCategory` must handle it). Once the payment is finalized it is
+  `awaitingFinalization`. `cancelTransaction` withdraws an unpaid invoice. A payer that does not pay invoices, such as a stock `epic-wallet`, sends the
   invoice back; `drainEpicbox()` counts it in `InboxReport.bounced`, and that payer is never
   sent a notice. Each bounced invoice raises one `invoiceBounced` event with its `txId` and
   `slateId`, on `events()` and, while it runs, the listener's stream (`ListenerEvent.slateId`).

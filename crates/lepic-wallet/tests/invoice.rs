@@ -16,7 +16,7 @@ mod support;
 use invoice_harness::{ACCOUNT, FUNDING, ISSUER_MNEMONIC, PAYER_MNEMONIC, Party};
 use lepic_crypto::SecretKey;
 use lepic_keychain::Identifier;
-use lepic_node::mock::{ChainState, MockFailure, MockNode};
+use lepic_node::mock::{ChainOutput, ChainState, MockFailure, MockNode};
 use lepic_node::{LocatedKernel, NodeVersion, Tip};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::hash::Hash;
@@ -35,11 +35,12 @@ use lepic_store::{
 };
 use lepic_transport::file::FilePolicy;
 use lepic_transport::policy::FormatPolicy;
-use lepic_wallet::event::TransactionState;
+use lepic_wallet::event::{Balance, TransactionState};
 use lepic_wallet::invoice::{
     BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, InvoiceError, InvoiceField, PayRequest,
     build_i1, build_i2, build_i3,
 };
+use lepic_wallet::refresh::BalanceCategory;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::ChangeOutput;
 use lepic_wallet::{Event, WalletError};
@@ -975,4 +976,129 @@ fn a_refused_push_of_an_invoice_whose_kernel_is_on_chain_is_posted() {
 
     assert_eq!(flow.state(), TxState::Posted);
     assert!(flow.node.pushed_transactions().is_empty());
+}
+
+/// The issuer's balance and the category of the output its invoice `tx_id` asks for.
+fn issuer_figures(issuer: &Party, tx_id: TxId) -> (Balance, Option<BalanceCategory>) {
+    let balance = issuer.wallet.balance(ACCOUNT).unwrap();
+    let outputs = issuer.wallet.outputs(ACCOUNT).unwrap();
+    let mine: Vec<_> = outputs
+        .iter()
+        .filter(|details| details.output.tx == Some(tx_id))
+        .collect();
+    assert!(mine.len() <= 1, "{mine:?}");
+    (balance, mine.first().and_then(|details| details.category))
+}
+
+fn assert_counts_nowhere(balance: &Balance) {
+    assert_eq!(balance.total, Amount::ZERO);
+    assert_eq!(balance.spendable, Amount::ZERO);
+    assert_eq!(balance.awaiting_confirmation, Amount::ZERO);
+    assert_eq!(balance.awaiting_finalization, Amount::ZERO);
+    assert_eq!(balance.immature, Amount::ZERO);
+    assert_eq!(balance.locked, Amount::ZERO);
+}
+
+#[test]
+fn an_unpaid_invoice_counts_in_no_balance_figure() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+
+    let issued = issuer.issue(AMOUNT, None).unwrap();
+
+    let (balance, category) = issuer_figures(&issuer, issued.tx_id);
+    assert_counts_nowhere(&balance);
+    assert_eq!(category, Some(BalanceCategory::UnpaidInvoice));
+    let outputs = issuer.wallet.outputs(ACCOUNT).unwrap();
+    assert_eq!(outputs[0].output.amount, Amount::new(AMOUNT));
+    assert_eq!(outputs[0].confirmations, 0);
+}
+
+#[test]
+fn a_paid_invoice_awaits_finalization_then_confirmation() {
+    let flow = flow(None, request());
+    // The payer paid; the issuer has not read the payment yet.
+    let (balance, category) = issuer_figures(&flow.issuer, flow.tx_id);
+    assert_counts_nowhere(&balance);
+    assert_eq!(category, Some(BalanceCategory::UnpaidInvoice));
+
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+
+    let (balance, category) = issuer_figures(&flow.issuer, flow.tx_id);
+    assert_eq!(balance.awaiting_finalization, Amount::new(AMOUNT));
+    assert_eq!(balance.total, Amount::ZERO);
+    assert_eq!(category, Some(BalanceCategory::AwaitingFinalization));
+
+    let output = flow
+        .issuer
+        .read(|repos| repos.outputs_of_transaction(flow.tx_id))
+        .pop()
+        .unwrap();
+    let on_chain = finalized
+        .transaction
+        .outputs()
+        .iter()
+        .find(|candidate| candidate.commitment == output.id.commitment)
+        .unwrap()
+        .clone();
+    let kernel = *finalized.transaction.kernels().first().unwrap();
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 1);
+        chain.kernels.push(LocatedKernel {
+            kernel,
+            height: Height::new(TIP + 1),
+            mmr_index: 1,
+        });
+        chain.outputs.push(ChainOutput {
+            commitment: on_chain.commitment,
+            features: on_chain.features,
+            proof: on_chain.proof,
+            height: Height::new(TIP + 1),
+            mmr_index: 1,
+            spent: false,
+        });
+    });
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+
+    assert_eq!(flow.state(), TxState::Confirmed);
+    let (balance, category) = issuer_figures(&flow.issuer, flow.tx_id);
+    assert_eq!(balance.awaiting_confirmation, Amount::new(AMOUNT));
+    assert_eq!(balance.awaiting_finalization, Amount::ZERO);
+    assert_eq!(balance.total, Amount::new(AMOUNT));
+    assert_eq!(category, Some(BalanceCategory::AwaitingConfirmation));
+}
+
+#[test]
+fn a_cancelled_invoice_leaves_nothing_in_the_balance() {
+    let flow = flow(None, request());
+
+    flow.issuer
+        .block_on(flow.issuer.wallet.cancel(flow.tx_id))
+        .unwrap();
+
+    let (balance, category) = issuer_figures(&flow.issuer, flow.tx_id);
+    assert_counts_nowhere(&balance);
+    assert_eq!(category, None);
+}
+
+#[test]
+fn a_payers_change_still_awaits_finalization() {
+    // The payer's change of an unfinalized payment is not an invoice of its own.
+    let flow = flow(None, request());
+    let payment = transaction(&flow.payer, flow.slate_id, TxDirection::Outgoing);
+    let outputs = flow.payer.wallet.outputs(ACCOUNT).unwrap();
+    let change: Vec<_> = outputs
+        .iter()
+        .filter(|details| {
+            details.output.tx == Some(payment.id)
+                && details.output.status == OutputStatus::Unconfirmed
+        })
+        .collect();
+    assert_eq!(change.len(), 1);
+    assert_eq!(
+        change[0].category,
+        Some(BalanceCategory::AwaitingFinalization)
+    );
+    let balance = flow.payer.wallet.balance(ACCOUNT).unwrap();
+    assert_eq!(balance.awaiting_finalization, change[0].output.amount);
 }

@@ -628,6 +628,11 @@ enum OutputCategory {
   awaitingFinalization,
   immature,
   locked,
+
+  /// The output an invoice this wallet issued asks for, while nobody has paid it. It counts
+  /// in no figure of `WalletSummary`; once a payment is finalized it is
+  /// `AwaitingFinalization`.
+  unpaidInvoice,
 }
 
 /// An output's state, as `epic-wallet outputs` shows it.

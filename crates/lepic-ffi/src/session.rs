@@ -1244,6 +1244,7 @@ fn wallet_output(details: &OutputDetails) -> WalletOutput {
             BalanceCategory::AwaitingFinalization => OutputCategory::AwaitingFinalization,
             BalanceCategory::Immature => OutputCategory::Immature,
             BalanceCategory::Locked => OutputCategory::Locked,
+            BalanceCategory::UnpaidInvoice => OutputCategory::UnpaidInvoice,
         }),
         is_coinbase: output.id.features.is_coinbase(),
         height: output.height.value(),

@@ -7430,6 +7430,7 @@ impl SseDecode for crate::api::types::OutputCategory {
             2 => crate::api::types::OutputCategory::AwaitingFinalization,
             3 => crate::api::types::OutputCategory::Immature,
             4 => crate::api::types::OutputCategory::Locked,
+            5 => crate::api::types::OutputCategory::UnpaidInvoice,
             _ => unreachable!("Invalid variant for OutputCategory: {}", inner),
         };
     }
@@ -9367,6 +9368,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::OutputCategory {
             Self::AwaitingFinalization => 2.into_dart(),
             Self::Immature => 3.into_dart(),
             Self::Locked => 4.into_dart(),
+            Self::UnpaidInvoice => 5.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -11204,6 +11206,7 @@ impl SseEncode for crate::api::types::OutputCategory {
                 crate::api::types::OutputCategory::AwaitingFinalization => 2,
                 crate::api::types::OutputCategory::Immature => 3,
                 crate::api::types::OutputCategory::Locked => 4,
+                crate::api::types::OutputCategory::UnpaidInvoice => 5,
                 _ => {
                     unimplemented!("");
                 }

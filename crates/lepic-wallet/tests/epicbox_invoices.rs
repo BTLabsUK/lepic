@@ -19,7 +19,7 @@ mod world;
 use std::time::Duration;
 
 use lepic_epicbox::{EpicboxClient, TRANSPORT_ID};
-use lepic_primitives::amount::Height;
+use lepic_primitives::amount::{Amount, Height};
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::codec::{Codec, EncodeContext};
@@ -555,6 +555,9 @@ fn expiry_deletes_parked_invoices_cancels_issued_ones_and_refuses_late_payments(
     let late = world.issue(None);
     let ignored = world.issue(None);
     world.drain_payer_invoices();
+    let before = world.issuer.wallet.balance(world::ACCOUNT).unwrap();
+    assert_eq!(before.awaiting_finalization, Amount::ZERO);
+    assert_eq!(before.total, Amount::ZERO);
     let mut payer_events = world.payer.wallet.subscribe();
     let mut issuer_events = world.issuer.wallet.subscribe();
 
@@ -602,6 +605,10 @@ fn expiry_deletes_parked_invoices_cancels_issued_ones_and_refuses_late_payments(
             .state;
         assert_eq!(state, TxState::Cancelled);
     }
+    // Neither invoice counted before the sweep, and nothing of them counts after it.
+    let balance = world.issuer.wallet.balance(world::ACCOUNT).unwrap();
+    assert_eq!(balance.awaiting_finalization, Amount::ZERO);
+    assert_eq!(balance.total, Amount::ZERO);
     let expired = |events: &mut tokio::sync::broadcast::Receiver<Event>| {
         std::iter::from_fn(|| events.try_recv().ok())
             .filter(|event| matches!(event, Event::InvoiceExpired(_)))

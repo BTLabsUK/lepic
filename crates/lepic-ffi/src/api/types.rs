@@ -162,6 +162,10 @@ pub enum OutputCategory {
     AwaitingFinalization,
     Immature,
     Locked,
+    /// The output an invoice this wallet issued asks for, while nobody has paid it. It counts
+    /// in no figure of `WalletSummary`; once a payment is finalized it is
+    /// `AwaitingFinalization`.
+    UnpaidInvoice,
 }
 
 /// Where a transaction stands, as stored by the wallet.
