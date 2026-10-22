@@ -19,7 +19,8 @@ use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_store::{
-    OutboxStatus, Repositories, SlateStage, StoredTransaction, TxDirection, TxId, WalletStore,
+    ChainCheck, ImportedKind, OutboxStatus, Repositories, SlateStage, StoredTransaction,
+    TxDirection, TxId, WalletStore,
 };
 use lepic_tor::{SocksProxy, TorProcess, TorSettings, TorState};
 use lepic_transport::error::TransportError;
@@ -35,6 +36,7 @@ use lepic_wallet::event::{Balance, SlateId};
 use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
+use lepic_wallet::legacy_history::{ImportWorkDir, LegacyImportStatus, TxOrigin};
 use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
@@ -54,19 +56,21 @@ use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
     AllowCommand, Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand,
-    HttpListenArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, NodeCommand, PayArgs,
-    PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs,
-    TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
+    HttpListenArgs, ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs,
+    NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
+    SendArgs, SpendArgs, TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand,
+    WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
 use crate::output::{
     AccountReport, AddressReport, AllowListReport, AllowRemoveReport, AllowedSenderReport,
-    EpicboxStatusReport, ExpiredReport, FinalizeReport, HttpListenReport, InboxReport, InfoReport,
-    InitReport, InvoiceAddressReport, InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport,
-    InvoicePayReport, MessageReport, NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport,
-    ReceiveReport, Report, ResendReport, RestoreReport, ScanReport, SendReport, TorAddressReport,
-    TorListenReport, TxListReport, TxReport, TxStateReport, WalletScanReport,
+    EpicboxStatusReport, ExpiredReport, FinalizeReport, HttpListenReport, ImportHistoryReport,
+    ImportedReport, InboxReport, InfoReport, InitReport, InvoiceAddressReport,
+    InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport, InvoicePayReport, MessageReport,
+    NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport, ReceiveReport, Report,
+    ResendReport, RestoreReport, ScanReport, SendReport, TorAddressReport, TorListenReport,
+    TxListReport, TxReport, TxStateReport, WalletScanReport,
 };
 use crate::progress::Progress;
 use crate::settings::{OutputFormat, Settings};
@@ -255,6 +259,7 @@ impl<H: Host> Run<'_, H> {
             WalletCommand::ImportSeed(args) => self.import_seed(&args).await,
             WalletCommand::Info => self.info().await,
             WalletCommand::Scan(args) => self.scan(&args).await,
+            WalletCommand::ImportHistory(args) => self.import_history(&args).await,
             WalletCommand::Address => {
                 let opened = self.open().await?;
                 let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
@@ -528,6 +533,31 @@ impl<H: Host> Run<'_, H> {
             unlocked: summary.unlocked,
             deleted: summary.deleted,
             delete_unconfirmed: args.delete_unconfirmed,
+        }))
+    }
+
+    async fn import_history(&mut self, args: &ImportHistoryArgs) -> Result<Report, CliError> {
+        let opened = self.open().await?;
+        let suffix = format!(
+            "{}-{}",
+            std::process::id(),
+            jiff::Timestamp::now().as_nanosecond()
+        );
+        let work = ImportWorkDir::create(&self.settings.data_dir, &suffix)
+            .map_err(CliError::io("create the import folder"))?;
+        let outcome = opened
+            .wallet
+            .import_legacy_history(&args.dir, work.path())
+            .await?;
+        Ok(Report::ImportHistory(ImportHistoryReport {
+            status: import_status_name(outcome.status),
+            transactions: outcome.transactions,
+            outputs: outcome.outputs,
+            accounts_named: outcome.accounts_named,
+            linked: outcome.linked,
+            skipped: outcome.skipped,
+            confirmed_by_kernel: outcome.confirmed_by_kernel,
+            dated: outcome.dated,
         }))
     }
 
@@ -1736,8 +1766,58 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
                 })
                 .collect(),
         ),
+        origin: Some(match details.origin {
+            TxOrigin::Wallet => "wallet",
+            TxOrigin::Imported => "imported",
+            TxOrigin::FoundByScan => "found-by-scan",
+        }),
+        imported: details.imported.as_ref().map(|imported| {
+            Box::new(ImportedReport {
+                source_id: imported.source_id,
+                kind: imported_kind_name(imported.kind),
+                input_count: imported.input_count,
+                output_count: imported.output_count,
+                check: chain_check_name(imported.check),
+            })
+        }),
         ..tx_report(tx, Some(stages))
     })
+}
+
+const fn imported_kind_name(kind: ImportedKind) -> &'static str {
+    match kind {
+        ImportedKind::Coinbase => "coinbase",
+        ImportedKind::Received => "received",
+        ImportedKind::Sent => "sent",
+        ImportedKind::ReceivedCancelled => "received-cancelled",
+        ImportedKind::SentCancelled => "sent-cancelled",
+        ImportedKind::SentMempool => "sent-mempool",
+        ImportedKind::ReceivedMempool => "received-mempool",
+        ImportedKind::SentCreated => "sent-created",
+    }
+}
+
+const fn chain_check_name(check: ChainCheck) -> &'static str {
+    match check {
+        ChainCheck::Unchecked => "unchecked",
+        ChainCheck::OnChain => "on-chain",
+        ChainCheck::CancelledButOnChain => "cancelled-but-on-chain",
+        ChainCheck::UnspentNotOnChain => "unspent-not-on-chain",
+    }
+}
+
+const fn import_status_name(status: LegacyImportStatus) -> &'static str {
+    match status {
+        LegacyImportStatus::Imported => "imported",
+        LegacyImportStatus::AlreadyImported => "already-imported",
+        LegacyImportStatus::NoHistory => "no-history",
+        LegacyImportStatus::OldFormat => "old-format",
+        LegacyImportStatus::Unreadable => "unreadable",
+        LegacyImportStatus::SourceBusy => "source-busy",
+        LegacyImportStatus::TooLarge => "too-large",
+        LegacyImportStatus::OtherWallet => "other-wallet",
+        LegacyImportStatus::OtherHistory => "other-history",
+    }
 }
 
 fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
@@ -1763,6 +1843,8 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         releasable_from: None,
         releasable: None,
         messages: None,
+        origin: None,
+        imported: None,
     }
 }
 

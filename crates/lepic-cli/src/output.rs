@@ -44,6 +44,7 @@ pub enum Report {
     TorAddress(TorAddressReport),
     TorListen(TorListenReport),
     NodeStatus(NodeStatusReport),
+    ImportHistory(ImportHistoryReport),
 }
 
 #[derive(Serialize)]
@@ -225,6 +226,35 @@ pub struct TxReport {
     /// The parties' messages whose signatures verify; listed by `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<Vec<MessageReport>>,
+    /// `wallet`, `imported` or `found-by-scan`; shown by `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<&'static str>,
+    /// For an imported transaction, what the old wallet recorded; `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imported: Option<Box<ImportedReport>>,
+}
+
+/// What `wallet import-history` did; counts are of records.
+#[derive(Debug, Serialize)]
+pub struct ImportHistoryReport {
+    pub status: &'static str,
+    pub transactions: u32,
+    pub outputs: u32,
+    pub accounts_named: u32,
+    pub linked: u32,
+    pub skipped: u32,
+    pub confirmed_by_kernel: u32,
+    pub dated: u32,
+}
+
+/// What the old wallet recorded of an imported transaction.
+#[derive(Debug, Serialize)]
+pub struct ImportedReport {
+    pub source_id: u32,
+    pub kind: &'static str,
+    pub input_count: u32,
+    pub output_count: u32,
+    pub check: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -638,6 +668,21 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             Ok(())
         }
         Report::Address(r) => writeln!(out, "{}", r.address),
+        Report::ImportHistory(r) => {
+            writeln!(out, "History import: {}.", r.status)?;
+            writeln!(
+                out,
+                "{} transactions, {} outputs, {} accounts named, {} found outputs linked, {} \
+                 skipped, {} confirmed by kernel, {} dated by block.",
+                r.transactions,
+                r.outputs,
+                r.accounts_named,
+                r.linked,
+                r.skipped,
+                r.confirmed_by_kernel,
+                r.dated
+            )
+        }
         Report::Send(r) if r.state == "posted" => writeln!(
             out,
             "Transaction {} sent {} EPIC (fee {}) by {} to {}, finalized and posted.\nSlate {}.",
@@ -749,6 +794,21 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             ];
             for (name, value) in rows {
                 writeln!(out, "{name:<12} {value}")?;
+            }
+            if let Some(origin) = &tx.origin {
+                writeln!(out, "{:<12} {origin}", "Origin")?;
+            }
+            if let Some(imported) = &tx.imported {
+                writeln!(
+                    out,
+                    "{:<12} old id {}, {}, {} in, {} out, chain {}",
+                    "Imported",
+                    imported.source_id,
+                    imported.kind,
+                    imported.input_count,
+                    imported.output_count,
+                    imported.check
+                )?;
             }
             match tx.messages.as_deref() {
                 Some(messages) if !messages.is_empty() => {
@@ -956,6 +1016,8 @@ mod tests {
             releasable_from: None,
             releasable: None,
             messages: None,
+            origin: None,
+            imported: None,
         }
     }
 

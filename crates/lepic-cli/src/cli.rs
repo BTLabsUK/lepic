@@ -137,6 +137,22 @@ pub enum WalletCommand {
     /// Scan the chain for the wallet's outputs and bring the wallet in line with it
     #[command(after_help = WALLET_SCAN_HELP)]
     Scan(WalletScanArgs),
+    /// Import the transaction history of the epic-wallet wallet this one was made from
+    #[command(after_help = IMPORT_HISTORY_HELP)]
+    ImportHistory(ImportHistoryArgs),
+}
+
+const IMPORT_HISTORY_HELP: &str = "\
+DIR is the old wallet's folder (the one holding wallet_data) or its wallet_data folder. Its
+database is copied and read from the copy; nothing in DIR is changed. Run it after
+`wallet import-seed` or `wallet restore` with the same seed, before or after the scan. Funds
+and balances still come from the scan.";
+
+#[derive(Debug, Args)]
+pub struct ImportHistoryArgs {
+    /// The old wallet's folder
+    #[arg(value_name = "DIR")]
+    pub dir: PathBuf,
 }
 
 const WALLET_SCAN_HELP: &str = "\

@@ -156,8 +156,25 @@ lepic wallet import-seed ~/.epic/floo/wallet_data/wallet.seed
 Both refuse a data directory that already holds a wallet; give `--data-dir` for a new one. Ctrl-C
 stops the scan and keeps what it found. `--no-scan` skips the scan; the wallet then refuses to
 create outputs, so to receive or to send with change, until `lepic wallet scan` has scanned the
-chain from genesis. The history is not restored: each output found appears in `tx list` as one
-confirmed incoming transaction with no slate.
+chain from genesis. The scan alone does not restore the history: each output found appears in
+`tx list` as one confirmed incoming transaction with no slate, dated by its block.
+
+## Import history
+
+```
+lepic wallet import-history ~/.epic/floo
+```
+
+brings across the transaction history of the epic-wallet wallet (CLI or GUI) the wallet was made
+from: give its folder, or its `wallet_data` folder. Its database is copied into the data directory
+and read from the copy, and nothing in the old folder changes. Run it after `import-seed` or
+`restore` with the same seed, before or after the scan. Each old transaction keeps its dates, type,
+amounts, fee, slate id, messages and kernel; `tx show` marks it `Origin imported` with the old id
+and how the chain judged it. Funds and balances still come from the scan: an output the scan finds
+is linked to the old transaction that made it. The report's status says why nothing was imported:
+`no-history`, `old-format` (epic-wallet before 3.3), `unreadable`, `source-busy` (close the old
+wallet), `too-large`, `other-wallet` (another seed) or `other-history`. Running it again with the
+same folder reports `already-imported` and only links and dates what later scans found.
 
 ## Scan
 
