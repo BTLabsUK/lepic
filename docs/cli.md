@@ -260,10 +260,10 @@ Slate d4217e26-f23c-46f0-9944-84b406dd16a6.
 The inputs stay locked from the send until the transaction confirms or is cancelled. Options:
 `--min-confirmations` (3, the confirmations the balance counts), `--selection all|smallest`
 (`smallest`, the default, spends as few as cover the amount; `all`, as `epic-wallet`, spends every
-eligible output and so locks all of them until it confirms), `--change-outputs`, `--ttl-blocks` (the receiver must refuse the slate after that many
-blocks), `-m, --message <TEXT>` (a message to the other party, signed with the slate; `tx
-receive`, `invoice issue` and `invoice pay` take it too), `--fluff` on finalize to skip the stem
-phase.
+eligible output and so locks all of them until it confirms), `--change-outputs`, `--ttl-blocks`
+(the receiver must refuse the slate after that many blocks), `-m, --message <TEXT>` (a message to
+the other party, signed with the slate; `tx receive`, `invoice issue` and `invoice pay` take it
+too), `--fluff` on finalize to skip the stem phase.
 
 `-a, --account <LABEL>` on `tx send`, `tx receive`, `tx list`, `invoice issue` and `invoice pay`
 picks the account, `default` unless given. No command creates accounts yet: a new wallet has
