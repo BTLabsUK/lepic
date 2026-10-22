@@ -23,7 +23,7 @@ use lepic_primitives::params::Network;
 use lepic_store::OutputStatus::{self, Locked, Unconfirmed, Unspent};
 use lepic_store::{TxDirection, TxId, TxState, WalletStore as _};
 use lepic_wallet::WalletError;
-use lepic_wallet::event::{Balance, Event, TransactionState};
+use lepic_wallet::event::{Balance, Event, SelfSentTransaction, TransactionState};
 use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::refresh::{RefreshOutcome, UNFINALIZED_RECEIVE_BLOCKS};
 use lepic_wallet::release::RELEASE_AFTER_BLOCKS;
@@ -108,6 +108,39 @@ fn a_split_makes_outputs_of_nearly_equal_value_for_the_estimated_fee() {
     pushed[0].validate().unwrap();
     assert_eq!(pushed[0].outputs().len(), 4);
     assert!(!sender.has_sender_context(outgoing.entry.slate_id.unwrap()));
+}
+
+#[test]
+fn a_self_send_reports_itself_and_never_a_received_payment() {
+    let sender = Sender::new();
+    let mut events = sender.wallet.subscribe();
+
+    let sent = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .self_send(options(), split(2), Propagation::Fluff),
+        )
+        .unwrap();
+
+    let mut self_sent = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            Event::Received(received) => panic!("reported as received: {received:?}"),
+            Event::SelfSent(stored) => self_sent.push(stored),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        self_sent,
+        vec![SelfSentTransaction {
+            tx_id: sent.tx_id,
+            received_tx_id: sent.received_tx_id,
+            account: ACCOUNT,
+            amount: sent.selection.amount,
+        }]
+    );
 }
 
 #[test]

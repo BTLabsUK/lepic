@@ -16,7 +16,7 @@ use tracing::{Span, info, instrument};
 
 use crate::account::AccountError;
 use crate::error::WalletError;
-use crate::event::{Event, ReceivedTransaction};
+use crate::event::{Event, SelfSentTransaction};
 use crate::finalize::{FinalizeError, finalize_own};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::{ReceiveError, receive_own};
@@ -76,7 +76,8 @@ where
     /// outputs of this wallet, and posts the transaction with `propagation`. It is stored as an
     /// outgoing entry that spent the inputs and holds the change, and an incoming entry that
     /// holds the output of the amount, both over [`SELF`]; it confirms as any send does.
-    /// [`Wallet::estimate_self_send`] tells what it will spend and pay.
+    /// It raises [`Event::SelfSent`], never [`Event::Received`]: nothing was received from
+    /// anyone. [`Wallet::estimate_self_send`] tells what it will spend and pay.
     ///
     /// Fails, storing nothing, as [`Wallet::send`] fails before it delivers, or with
     /// [`SelfSendError::Receive`] or [`SelfSendError::Finalize`] when the wallet's own slate
@@ -166,11 +167,11 @@ where
         let (chosen, received_tx_id, finalized) = stored;
         Span::current().record("tx_id", finalized.tx_id.0);
         info!("self-send finalized");
-        self.emit(Event::Received(ReceivedTransaction {
-            tx_id: received_tx_id,
+        self.emit(Event::SelfSent(SelfSentTransaction {
+            tx_id: finalized.tx_id,
+            received_tx_id,
             account: options.account,
             amount: chosen.amount,
-            transport: SELF,
         }));
         if let Some(change) = finalized.change {
             self.emit(change.into());

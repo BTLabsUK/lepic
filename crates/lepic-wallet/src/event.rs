@@ -20,8 +20,13 @@ pub enum Event {
     Balance(Balance),
     Transaction(TransactionState),
     /// A received slate created a transaction. Its later state changes arrive as
-    /// [`Event::Transaction`].
+    /// [`Event::Transaction`]. A send to the wallet itself raises [`Event::SelfSent`]
+    /// instead: nothing was received from anyone.
     Received(ReceivedTransaction),
+    /// A send to the wallet itself was stored and finalized: two entries over transport
+    /// `self`, the outgoing one `finalized` and the incoming one `received`. Its posting and
+    /// confirmation arrive as [`Event::Transaction`] for each entry.
+    SelfSent(SelfSentTransaction),
     /// A slate received before arrived again and was answered with the reply stored the first
     /// time. Nothing changed; no [`Event::Received`] follows for it.
     AnsweredAgain(AnsweredSlate),
@@ -95,6 +100,17 @@ pub struct ReceivedTransaction {
     pub account: AccountIndex,
     pub amount: Amount,
     pub transport: TransportId,
+}
+
+/// The two entries a send to the wallet itself stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelfSentTransaction {
+    /// The outgoing entry: it spent the inputs and holds the change.
+    pub tx_id: TxId,
+    /// The incoming entry: it holds the output of `amount`.
+    pub received_tx_id: TxId,
+    pub account: AccountIndex,
+    pub amount: Amount,
 }
 
 /// A received transaction whose S2 reply was not delivered.
