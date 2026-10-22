@@ -110,6 +110,15 @@ pub enum WalletErrorKind {
     /// `consolidate_outputs` found fewer than two spendable outputs, so there is nothing to
     /// merge. Nothing was stored.
     NothingToConsolidate,
+    /// The invoice was already paid: this wallet holds its payment, or finalized it. Nothing
+    /// was signed or posted again.
+    InvoiceAlreadyPaid,
+    /// The invoice's lock height is above the chain tip, so its transaction cannot be mined
+    /// yet. Nothing was signed; pay or finalize it once the chain reaches that height.
+    InvoiceLockedAboveTip,
+    /// The payer's answer changed a field of the invoice this wallet issued: the amount, the
+    /// lock height, the offset, the issuer's outputs or its data. Nothing was finalized or posted.
+    InvoiceChanged,
 }
 
 impl WalletErrorKind {
@@ -156,6 +165,9 @@ impl WalletErrorKind {
             Self::ChangeTooSmall => 45,
             Self::TooHeavy => 46,
             Self::NothingToConsolidate => 47,
+            Self::InvoiceAlreadyPaid => 48,
+            Self::InvoiceLockedAboveTip => 49,
+            Self::InvoiceChanged => 50,
         }
     }
 }
@@ -387,19 +399,20 @@ impl From<InvoiceError> for WalletError {
             | E::NotFinalizable { .. } => WalletErrorKind::InvalidArgument,
             E::Decode(_)
             | E::WrongStage { .. }
-            | E::AlreadyPaid { .. }
-            | E::AlreadyFinalized { .. }
             | E::UnknownSlate { .. }
             | E::MessageSignature { .. }
-            | E::Mismatch { .. }
             | E::PayerSignature(_)
             | E::FeeBelowMinimum { .. }
             | E::InvalidTransaction(_)
             | E::Slate(_)
             | E::Encode(_)
             | E::Unrepresentable(_)
-            | E::LockedUntil { .. }
             | E::AheadOfTip { .. } => WalletErrorKind::InvalidSlate,
+            E::AlreadyPaid { .. } | E::AlreadyFinalized { .. } => {
+                WalletErrorKind::InvoiceAlreadyPaid
+            }
+            E::LockedUntil { .. } => WalletErrorKind::InvoiceLockedAboveTip,
+            E::Mismatch { .. } => WalletErrorKind::InvoiceChanged,
             E::AmountMismatch { .. } => WalletErrorKind::AmountMismatch,
             E::Expired { .. } => WalletErrorKind::PaymentExpired,
             E::NotParked { .. } => WalletErrorKind::InvoiceNotFound,
@@ -470,6 +483,9 @@ mod tests {
             (K::ChangeTooSmall, 45),
             (K::TooHeavy, 46),
             (K::NothingToConsolidate, 47),
+            (K::InvoiceAlreadyPaid, 48),
+            (K::InvoiceLockedAboveTip, 49),
+            (K::InvoiceChanged, 50),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -601,7 +617,7 @@ mod tests {
                     lock_height: lepic_primitives::amount::Height::new(9),
                     tip: lepic_primitives::amount::Height::new(4),
                 },
-                WalletErrorKind::InvalidSlate,
+                WalletErrorKind::InvoiceLockedAboveTip,
             ),
             (
                 InvoiceError::AheadOfTip {
@@ -617,9 +633,33 @@ mod tests {
                 }),
                 WalletErrorKind::NotEnoughFunds,
             ),
+            (
+                InvoiceError::AlreadyPaid { slate_id, tx_id },
+                WalletErrorKind::InvoiceAlreadyPaid,
+            ),
+            (
+                InvoiceError::AlreadyFinalized { slate_id, tx_id },
+                WalletErrorKind::InvoiceAlreadyPaid,
+            ),
+            (
+                InvoiceError::Mismatch {
+                    field: lepic_wallet::invoice::InvoiceField::Amount,
+                },
+                WalletErrorKind::InvoiceChanged,
+            ),
+            (
+                InvoiceError::Mismatch {
+                    field: lepic_wallet::invoice::InvoiceField::Outputs,
+                },
+                WalletErrorKind::InvoiceChanged,
+            ),
         ];
         for (error, kind) in cases {
-            assert_eq!(WalletError::from(error).kind, kind);
+            let message = error.to_string();
+            let mapped = WalletError::from(error);
+            assert_eq!(mapped.kind, kind);
+            assert_eq!(mapped.code, kind.code());
+            assert!(mapped.message.contains(&message), "{}", mapped.message);
         }
         for error in [
             InboxError::PaymentsAddressIndex,

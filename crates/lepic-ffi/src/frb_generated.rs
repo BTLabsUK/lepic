@@ -8066,6 +8066,9 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             37 => crate::api::error::WalletErrorKind::ChangeTooSmall,
             38 => crate::api::error::WalletErrorKind::TooHeavy,
             39 => crate::api::error::WalletErrorKind::NothingToConsolidate,
+            40 => crate::api::error::WalletErrorKind::InvoiceAlreadyPaid,
+            41 => crate::api::error::WalletErrorKind::InvoiceLockedAboveTip,
+            42 => crate::api::error::WalletErrorKind::InvoiceChanged,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -10152,6 +10155,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::ChangeTooSmall => 37.into_dart(),
             Self::TooHeavy => 38.into_dart(),
             Self::NothingToConsolidate => 39.into_dart(),
+            Self::InvoiceAlreadyPaid => 40.into_dart(),
+            Self::InvoiceLockedAboveTip => 41.into_dart(),
+            Self::InvoiceChanged => 42.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -11762,6 +11768,9 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::ChangeTooSmall => 37,
                 crate::api::error::WalletErrorKind::TooHeavy => 38,
                 crate::api::error::WalletErrorKind::NothingToConsolidate => 39,
+                crate::api::error::WalletErrorKind::InvoiceAlreadyPaid => 40,
+                crate::api::error::WalletErrorKind::InvoiceLockedAboveTip => 41,
+                crate::api::error::WalletErrorKind::InvoiceChanged => 42,
                 _ => {
                     unimplemented!("");
                 }

@@ -116,6 +116,9 @@ const errorCodes = {
   WalletErrorKind.changeTooSmall: 45,
   WalletErrorKind.tooHeavy: 46,
   WalletErrorKind.nothingToConsolidate: 47,
+  WalletErrorKind.invoiceAlreadyPaid: 48,
+  WalletErrorKind.invoiceLockedAboveTip: 49,
+  WalletErrorKind.invoiceChanged: 50,
 };
 
 Matcher throwsWalletError(WalletErrorKind kind) => throwsA(

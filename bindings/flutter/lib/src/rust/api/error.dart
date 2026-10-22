@@ -163,7 +163,19 @@ enum WalletErrorKind {
 
   /// `consolidate_outputs` found fewer than two spendable outputs, so there is nothing to
   /// merge. Nothing was stored.
-  nothingToConsolidate;
+  nothingToConsolidate,
+
+  /// The invoice was already paid: this wallet holds its payment, or finalized it. Nothing
+  /// was signed or posted again.
+  invoiceAlreadyPaid,
+
+  /// The invoice's lock height is above the chain tip, so its transaction cannot be mined
+  /// yet. Nothing was signed; pay or finalize it once the chain reaches that height.
+  invoiceLockedAboveTip,
+
+  /// The payer's answer changed a field of the invoice this wallet issued: the amount, the
+  /// lock height, the offset, the issuer's outputs or its data. Nothing was finalized or posted.
+  invoiceChanged;
 
   /// The stable number of this kind.
   Future<int> code() =>
