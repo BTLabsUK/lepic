@@ -82,20 +82,23 @@ fn state_of(receiver: &Receiver, tx_id: TxId) -> TxState {
 }
 
 #[test]
-fn at_the_cap_a_new_payment_cancels_the_oldest_open_receipt_of_its_transport() {
+fn at_the_cap_a_new_payment_is_refused_and_no_open_receipt_is_cancelled() {
     let receiver = receiver();
     let filled = fill_to_cap(&receiver);
     let epicbox = open_receipts(&receiver, EPICBOX);
+    let before = receiver.transaction_count();
     assert_eq!(open_receipts(&receiver, FILE).len(), MAX_OPEN_RECEIPTS);
 
-    let received = unsolicited(&receiver, FILE, 1_000).unwrap();
+    let refused = unsolicited(&receiver, FILE, 1_000);
 
-    assert!(!received.repeated);
-    assert_eq!(state_of(&receiver, filled[0]), TxState::Cancelled);
-    assert_eq!(state_of(&receiver, filled[1]), TxState::Received);
-    let open = open_receipts(&receiver, FILE);
-    assert_eq!(open.len(), MAX_OPEN_RECEIPTS);
-    assert!(open.contains(&received.tx_id));
+    assert!(
+        matches!(refused, Err(ReceiveError::OpenReceipts(None))),
+        "{refused:?}"
+    );
+    for tx_id in &filled {
+        assert_eq!(state_of(&receiver, *tx_id), TxState::Received);
+    }
+    assert_eq!(receiver.transaction_count(), before);
     assert_eq!(open_receipts(&receiver, EPICBOX), epicbox);
 }
 
@@ -123,7 +126,7 @@ fn at_the_cap_a_payment_received_before_gets_its_stored_reply_again() {
 }
 
 #[test]
-fn at_the_cap_a_node_that_cannot_be_asked_refuses_the_new_payment() {
+fn at_the_cap_a_node_that_cannot_be_asked_still_refuses_the_new_payment() {
     let receiver = receiver();
     fill_to_cap(&receiver);
     let before = receiver.transaction_count();
@@ -134,7 +137,7 @@ fn at_the_cap_a_node_that_cannot_be_asked_refuses_the_new_payment() {
     let refused = unsolicited(&receiver, FILE, 1_000);
 
     assert!(
-        matches!(refused, Err(ReceiveError::OpenReceipts(Some(_)))),
+        matches!(refused, Err(ReceiveError::OpenReceipts(_))),
         "{refused:?}"
     );
     assert_eq!(receiver.transaction_count(), before);

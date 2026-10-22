@@ -81,14 +81,14 @@ where
     /// [`Wallet::receive`] of a payment nobody asked for, such as one a listener took: a new
     /// S1 is received only within the open receipt caps on `transport`, which names no sender,
     /// so only [`crate::inbox::MAX_OPEN_RECEIPTS`] applies. At that cap the wallet refreshes
-    /// first, at most once a minute, then cancels one open receipt of `transport`, oldest
-    /// first, as [`Wallet::cancel`] does, skipping any the node's pool or chain holds. An S1
-    /// received before is answered with its stored S2 whatever the count. Calls are served one
-    /// at a time.
+    /// first, at most once a minute, so receipts already mined leave the count. With no sender
+    /// to tell payments apart, no open receipt is cancelled to make room: a new S1 is refused
+    /// until the count drops. An S1 received before is answered with its stored S2 whatever
+    /// the count. Calls are served one at a time.
     ///
-    /// Fails with [`ReceiveError::OpenReceipts`] when no open receipt could be cancelled or the
-    /// node could not be asked; the sender can send the payment again later. Otherwise fails as
-    /// [`Wallet::receive`] does, and checks the slate as it does before anything is cancelled.
+    /// Fails with [`ReceiveError::OpenReceipts`] at the cap; the sender can send the payment
+    /// again later. Otherwise fails as [`Wallet::receive`] does; the slate is checked before
+    /// the caps are.
     #[instrument(
         name = "receive_unsolicited",
         skip_all,
@@ -100,7 +100,6 @@ where
         wire: &WireSlate,
         request: ReceiveRequest,
     ) -> Result<Received, ReceiveError> {
-        let _turn = self.unsolicited_turn().await;
         let policy = self
             .ports()
             .transports
@@ -111,6 +110,8 @@ where
             .decode(&legacy_codecs(self.config().network)?, wire)
             .map_err(ReceiveError::Decode)?;
         check_proposal(&slate)?;
+        // Taken after the checks, so slates that are not payments never wait for it.
+        let _turn = self.unsolicited_turn().await;
         let slate_id = Uuid::from_bytes(*slate.id().as_bytes());
         match self.make_room(transport, slate_id, None).await {
             Ok(()) => {}
@@ -124,7 +125,9 @@ where
     /// Checks the open receipt caps of `transport` before the new S1 `slate_id`, from `sender`
     /// when the transport names one, is received. A slate id received before passes, so its
     /// stored S2 is sent again. Over the sender's cap the S1 is refused; at the total cap room
-    /// is made as [`MAX_OPEN_RECEIPTS`] says.
+    /// is made as [`MAX_OPEN_RECEIPTS`] says, and only on a transport that names a sender:
+    /// without one, the oldest receipt is as likely a real payment as not, so the S1 is
+    /// refused instead.
     pub(crate) async fn make_room(
         &self,
         transport: TransportId,
@@ -167,6 +170,9 @@ where
         }
         if open.len() < MAX_OPEN_RECEIPTS {
             return Ok(());
+        }
+        if sender.is_none() {
+            return Err(NoRoom::Full);
         }
         for tx_id in eviction_order(&open, key_of) {
             match self.cancel(tx_id).await {

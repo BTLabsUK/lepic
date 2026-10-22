@@ -317,15 +317,13 @@ async fn the_listener_caps_open_receipts_and_still_answers_a_payment_received_be
         .map(|event| event.tx_id.unwrap())
         .collect();
 
-    receiver
+    let at_cap = receiver
         .receive(numbered(&slate.json, &slate_id, cap))
-        .await
-        .unwrap();
+        .await;
 
+    assert_eq!(at_cap, Err(lepic_foreign::Refusal::Unavailable));
     let oldest = pair.bob.transaction(receipts[0]).await.unwrap();
-    assert_eq!(oldest.status, TxStatus::Cancelled);
-    let next = pair.bob.transaction(receipts[1]).await.unwrap();
-    assert_eq!(next.status, TxStatus::Received);
+    assert_eq!(oldest.status, TxStatus::Received);
     let again = receiver
         .receive(numbered(&slate.json, &slate_id, 7))
         .await

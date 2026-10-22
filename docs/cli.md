@@ -328,8 +328,8 @@ Listening for payments over HTTP on port 3415 (local). Ctrl-C stops.
 
 It listens on `127.0.0.1` only. `--internet` listens on every IPv4 interface, for a port you
 forward from your router: anyone who reaches the port can send you payments. Payments that wait
-for their senders to finalize are capped at 100; at the cap the oldest one not yet on chain is
-cancelled to make room, and a new payment is refused for now when none can be. The listener
+for their senders to finalize are capped at 100; at the cap a new payment is refused for now,
+and none already taken is cancelled. The listener
 also takes at most 30 payments a minute. `--port` picks another
 port; 0 lets the system choose. Each payment prints a line on stderr, and Ctrl-C prints how many
 were received, repeated and refused. Invoices are never answered over HTTP.
