@@ -29,4 +29,11 @@ LEPIC sends the S1 in the V2 shape, as over Epicbox, and finalizes the S2 like a
 - Every other method answers JSON-RPC error `-32601`. `finalize_invoice_tx` and
   `build_coinbase` are not served.
 - A refusal is `result.Err` with `{"GenericError":"slate refused"}` or
-  `{"GenericError":"wallet not ready"}`.
+  `{"GenericError":"wallet not ready"}`. "Wallet not ready" may be retried later: the wallet is
+  locked or its node unreachable, the listener took its 30 payments of the minute, or 100
+  payments received over HTTP still wait for their senders to finalize and none could be
+  cancelled to make room.
+- LEPIC's limits, which `epic-wallet` does not have: a body over the size limit answers 413, a
+  body not complete 15 s after the headers 408, more than 120 requests a minute 503, and a
+  remote address with 4 connections open has further ones closed unanswered. The listener binds
+  IPv4 only (`127.0.0.1`, or `0.0.0.0` from the internet).

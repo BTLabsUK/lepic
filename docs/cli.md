@@ -326,8 +326,11 @@ $ lepic http listen
 Listening for payments over HTTP on port 3415 (local). Ctrl-C stops.
 ```
 
-It listens on `127.0.0.1` only. `--internet` listens on every interface, for a port you forward
-from your router: anyone who reaches the port can send you payments. `--port` picks another
+It listens on `127.0.0.1` only. `--internet` listens on every IPv4 interface, for a port you
+forward from your router: anyone who reaches the port can send you payments. Payments that wait
+for their senders to finalize are capped at 100; at the cap the oldest one not yet on chain is
+cancelled to make room, and a new payment is refused for now when none can be. The listener
+also takes at most 30 payments a minute. `--port` picks another
 port; 0 lets the system choose. Each payment prints a line on stderr, and Ctrl-C prints how many
 were received, repeated and refused. Invoices are never answered over HTTP.
 
@@ -553,7 +556,7 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `stored but was not delivered` (exit 11) | The relay did not take the slate; check the address and its port, then `tx resend` or `tx cancel`. |
 | `epicbox subscription failed` | The relay at `epicbox_relay` is unreachable. |
 | `http address rejected` (exit 2) | The `--to` URL is not `http(s)://host[:port][/path]`, or is plain `http` to another computer without `--allow-plain-http`. Nothing was stored. |
-| `invoices go over epicbox or through a slate file, not over http` (exit 2) | `invoice issue --to` was given a URL. |
+| `invoices go over epicbox or through a slate file, not over http` (exit 2) | `invoice issue --to` was given an address with a scheme (`://`). |
 | `the http listener could not start` (exit 10) | Another program holds the port, or the port needs privileges; pick another with `--port`. |
 | `invoice amount differs from the approved amount` | The amount you typed is not the one in the invoice; nothing was paid. |
 | `invoice ... is not waiting to be paid` (exit 6) | The slate id is not a parked invoice: it was paid, declined or expired. `lepic invoice list` shows the ones waiting. |
