@@ -1543,12 +1543,14 @@ pub(crate) async fn node_tip(
         .get_version()
         .await
         .map_err(|error| node_error(&error))?;
-    // Both are extras of the answer: a node that fails them still gives its tip.
-    let ready_for_txs = node.ready_for_txs().await.unwrap_or_else(|error| {
+    // Both are extras of the answer, asked for at once: a node that fails them still gives
+    // its tip.
+    let (ready_for_txs, header) = tokio::join!(node.ready_for_txs(), node.get_header(tip.height));
+    let ready_for_txs = ready_for_txs.unwrap_or_else(|error| {
         debug!(error = %lepic_telemetry::ErrorChain(&error), "ready_for_txs unanswered");
         None
     });
-    let tip_time_ms = match node.get_header(tip.height).await {
+    let tip_time_ms = match header {
         Ok(header) => header.map(|header| header.timestamp.as_millisecond()),
         Err(error) => {
             debug!(error = %lepic_telemetry::ErrorChain(&error), "tip header unanswered");
