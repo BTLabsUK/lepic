@@ -575,6 +575,7 @@ async fn supervise(
     state.send_replace(progress.visible());
     let failure = loop {
         let deadline = next_deadline(&progress);
+        let armed = Instant::now();
         tokio::select! {
             request = requests.recv() => match request {
                 None => {
@@ -629,7 +630,7 @@ async fn supervise(
                 break exit_failure(&progress, running.last_problem(&detail));
             }
             () = sleep_until(deadline) => {
-                if postpone_after_pause(&mut progress, deadline, Instant::now(), timings) {
+                if postpone_after_pause(&mut progress, deadline, armed, Instant::now(), timings) {
                     continue;
                 }
                 catch_dropped_upload(&running.control, &mut progress, running.started);
@@ -755,16 +756,19 @@ fn next_deadline(progress: &Progress) -> Instant {
 }
 
 /// Moves every deadline by how late `deadline` fired, when that is more than [`PAUSE_SLACK`]:
-/// the host was paused with tor, and that time passed without either running. When the pause
-/// began is unknown, so each moved deadline also leaves tor at least a stall time from `now`.
-/// Returns whether it moved them.
+/// the host was paused with tor, and that time passed without either running. Lateness counts
+/// from when the sleep was `armed` if that came after `deadline`, so a deadline that passed
+/// while the loop waited on a slow command is not taken for a pause. When the pause began is
+/// unknown, so each moved deadline also leaves tor at least a stall time from `now`. Returns
+/// whether it moved them.
 fn postpone_after_pause(
     progress: &mut Progress,
     deadline: Instant,
+    armed: Instant,
     now: Instant,
     timings: TorTimings,
 ) -> bool {
-    let late = now.saturating_duration_since(deadline);
+    let late = now.saturating_duration_since(deadline.max(armed));
     if late <= PAUSE_SLACK {
         return false;
     }
@@ -1342,6 +1346,7 @@ mod tests {
         assert!(!postpone_after_pause(
             &mut progress,
             deadline,
+            start,
             deadline + Duration::from_millis(500),
             timings
         ));
@@ -1350,6 +1355,7 @@ mod tests {
         assert!(postpone_after_pause(
             &mut progress,
             deadline,
+            start,
             thawed,
             timings
         ));
@@ -1360,6 +1366,45 @@ mod tests {
         );
         assert_eq!(overdue(&progress), None);
         assert!(next_deadline(&progress) >= thawed + timings.stall);
+    }
+
+    #[test]
+    fn a_deadline_passed_during_a_slow_command_is_not_a_pause() {
+        let start = Instant::now();
+        let timings = TorTimings::default();
+        let mut progress = Progress {
+            progress: 40,
+            tag: "loading".into(),
+            bootstrapped: false,
+            published: None,
+            stall_deadline: start + timings.stall,
+            bootstrap_deadline: start + timings.bootstrap,
+            publish_deadline: None,
+        };
+        let before = (progress.stall_deadline, progress.bootstrap_deadline);
+        let deadline = next_deadline(&progress);
+        // A command took its whole timeout, and the deadline passed meanwhile: the sleep armed
+        // after it fires at once.
+        let armed = deadline + timings.command;
+        assert!(!postpone_after_pause(
+            &mut progress,
+            deadline,
+            armed,
+            armed + Duration::from_millis(5),
+            timings
+        ));
+        assert_eq!(
+            (progress.stall_deadline, progress.bootstrap_deadline),
+            before
+        );
+        // Paused while the sleep armed after the command waited.
+        assert!(postpone_after_pause(
+            &mut progress,
+            deadline,
+            armed,
+            armed + Duration::from_secs(60),
+            timings
+        ));
     }
 
     #[tokio::test]
