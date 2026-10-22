@@ -828,10 +828,16 @@ impl<H: Host> Run<'_, H> {
 
     async fn issue_invoice(&mut self, args: IssueArgs) -> Result<Report, CliError> {
         let amount = parse_amount(&args.amount)?;
-        let (delivery, destination) = self.delivery(args.destination, false)?;
-        if delivery.transport() == lepic_foreign::TRANSPORT_ID {
+        // Any address with a scheme would go over HTTP, whatever else is wrong with it.
+        if args
+            .destination
+            .to
+            .as_deref()
+            .is_some_and(|address| address.contains("://"))
+        {
             return Err(CliError::InvoiceOverHttp);
         }
+        let (delivery, destination) = self.delivery(args.destination, false)?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
         if delivery.transport() == TRANSPORT_ID {

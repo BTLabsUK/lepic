@@ -108,6 +108,29 @@ fn an_http_address_is_refused_before_the_wallet_stores_anything() {
 }
 
 #[test]
+fn an_invoice_to_any_address_with_a_scheme_is_refused_as_an_invoice_over_http() {
+    let host = TestHost::new();
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    for to in [
+        "http://127.0.0.1:3415",
+        "http://203.0.113.7:3415",
+        "https://host.example/path?query",
+        "ftp://host.example",
+    ] {
+        let outcome = wallet.run(&host, &["invoice", "issue", "1", "--to", to]);
+        assert_eq!(error_kind(&outcome), "usage", "{to}");
+        let document = outcome.json();
+        assert_eq!(
+            text(&document["error"], "message"),
+            "invoices go over epicbox or through a slate file, not over http",
+            "{to}"
+        );
+    }
+}
+
+#[test]
 fn a_data_directory_without_a_wallet_is_reported_as_such() {
     let host = TestHost::new();
     let empty = Instance::new("test password");
