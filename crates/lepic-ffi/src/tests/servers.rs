@@ -466,3 +466,93 @@ async fn a_listener_that_ended_on_its_own_can_be_started_again_after_a_switch() 
         .unwrap()
         .unwrap();
 }
+
+/// A SOCKS5 proxy that records the target of every `CONNECT` and refuses it.
+async fn recording_socks() -> (std::net::SocketAddr, Arc<Mutex<Vec<(String, u16)>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let targets = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&targets);
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let seen = Arc::clone(&seen);
+            tokio::spawn(async move {
+                let mut greeting = [0u8; 3];
+                stream.read_exact(&mut greeting).await.ok()?;
+                stream.write_all(&[5, 2]).await.ok()?;
+                let mut length = [0u8; 2];
+                stream.read_exact(&mut length).await.ok()?;
+                let mut user = vec![0u8; usize::from(length[1])];
+                stream.read_exact(&mut user).await.ok()?;
+                let mut pass_length = [0u8; 1];
+                stream.read_exact(&mut pass_length).await.ok()?;
+                let mut pass = vec![0u8; usize::from(pass_length[0])];
+                stream.read_exact(&mut pass).await.ok()?;
+                stream.write_all(&[1, 0]).await.ok()?;
+                let mut head = [0u8; 5];
+                stream.read_exact(&mut head).await.ok()?;
+                let mut host = vec![0u8; usize::from(head[4])];
+                stream.read_exact(&mut host).await.ok()?;
+                let mut port = [0u8; 2];
+                stream.read_exact(&mut port).await.ok()?;
+                seen.lock()
+                    .unwrap()
+                    .push((String::from_utf8(host).ok()?, u16::from_be_bytes(port)));
+                stream.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).await.ok()
+            });
+        }
+    });
+    (address, targets)
+}
+
+/// Posts to the wallet's own address over its current relay; the post fails at the proxy.
+async fn post_once(session: &Session) {
+    let to = Destination::new(address(session).to_string());
+    let wire = WireSlate::text(MediaType::JSON, "{}".to_owned());
+    let posted = session
+        .epicbox()
+        .unwrap()
+        .outbound()
+        .unwrap()
+        .deliver(&to, &wire)
+        .await;
+    assert!(posted.is_err(), "the proxy refuses every connection");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_switched_to_while_over_tor_is_reached_through_tor() {
+    let mut world = World::new();
+    // The wallets' own connectors, not the mock relays.
+    Arc::get_mut(&mut world.runtime.inner).unwrap().relay = None;
+    let (wallet, config) = world.wallet("one.example").await;
+    let session = wallet.session();
+    let (socks, targets) = recording_socks().await;
+    session.attach_relay_socks(socks);
+    assert!(session.relay_through_tor());
+
+    let mapped = WalletConfig {
+        epicbox_domain: "flooepicbox.btlabs.uk".to_owned(),
+        ..config.clone()
+    };
+    switch(session, &mapped).await.unwrap();
+    post_once(session).await;
+    let onion = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+    assert_eq!(*targets.lock().unwrap(), [(onion.to_owned(), 443)]);
+
+    let unmapped = WalletConfig {
+        epicbox_domain: "two.example".to_owned(),
+        ..config
+    };
+    switch(session, &unmapped).await.unwrap();
+    targets.lock().unwrap().clear();
+    post_once(session).await;
+    assert_eq!(
+        *targets.lock().unwrap(),
+        [
+            ("two.example".to_owned(), 443),
+            ("two.example".to_owned(), 443)
+        ],
+        "its discovery document, then the relay itself, both through tor"
+    );
+}

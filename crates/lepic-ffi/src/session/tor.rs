@@ -617,6 +617,12 @@ impl Session {
         Ok(())
     }
 
+    /// Takes the relay connection through the SOCKS proxy at `socks`, as a running tor would.
+    #[cfg(test)]
+    pub(crate) fn attach_relay_socks(&self, socks: std::net::SocketAddr) {
+        self.relay_tor.attach_socks(lepic_tor::FixedSocks(socks));
+    }
+
     #[cfg(test)]
     pub(crate) fn relay_through_tor(&self) -> bool {
         *self.relay_tor.active().borrow()
