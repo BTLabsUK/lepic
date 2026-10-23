@@ -31,8 +31,6 @@ const RUNS: usize = 5;
 /// How often a running probe's memory high-water mark is read.
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(1);
 
-/// Where `cargo xtask mobile --package` puts each target's library, relative to the root.
-const PACKAGE_NATIVE_DIR: &str = "bindings/flutter/native";
 const FFI_LIBRARY_STEM: &str = "lepic_ffi";
 
 /// Probe output goes here, so a failing probe can be read after the fact.
@@ -362,7 +360,7 @@ fn library_size(root: &Path, target: &str) -> Result<Measured> {
     )?;
     let extension = if apple { "dylib" } else { "so" };
     let library = root
-        .join(PACKAGE_NATIVE_DIR)
+        .join(mobile::PACKAGE_NATIVE_DIR)
         .join(target)
         .join(format!("lib{FFI_LIBRARY_STEM}.{extension}"));
     let bytes = fs::metadata(&library)
