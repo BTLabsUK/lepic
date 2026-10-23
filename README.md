@@ -32,6 +32,15 @@ Status: pre-alpha, design and plan only. Not for real funds.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through [SECURITY.md](SECURITY.md).
 
+## Versioning
+
+LEPIC follows Semantic Versioning: all workspace crates share one `MAJOR.MINOR.PATCH` version, and
+while it is `0.y.z` a minor bump marks a breaking change (rule: `CONTRIBUTING.md`,
+"Releases"). Apps built on LEPIC version themselves separately. Epic Wallet, for one, uses calendar
+versions (`26.10.0`) and shows LEPIC's version beside its own (`26.10.0 · core 0.1.0`), read from the
+workspace `Cargo.toml` at the commit it pins. Its rules are in the app's repository,
+`docs/VERSIONING.md`.
+
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Parts of LEPIC are ported from the Epic
