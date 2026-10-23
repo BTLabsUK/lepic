@@ -25,12 +25,20 @@ use lepic_store::{PeerSupport, PendingInvoiceStatus, TxDirection, TxState};
 use lepic_transport::transport::Inbound;
 use lepic_wallet::Event;
 use lepic_wallet::event::{DeclinedInvoice, PostedInvoice, WithdrawnInvoice};
-use lepic_wallet::inbox::InboxSummary;
+use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{IssuedInvoice, PaidInvoice};
 use lepic_wallet::notice::{MAX_NOTICE_LEN, Notice, NoticeKind, Payload, classify_text};
+use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
+
 use uuid::Uuid;
 use world::{World, pay_request};
+
+/// Tries of a held message in one listen, as the inbox bounds them.
+const MAX_HOLD_ATTEMPTS: usize = 3;
+
+/// How long a drain holds a message after it first arrived, as the inbox bounds it.
+const HOLD_PATIENCE: Duration = Duration::from_secs(3 * 60);
 
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
@@ -88,6 +96,32 @@ impl World {
         let paid = self.pay(&issued);
         assert_eq!(self.drain_issuer().finalized, 1);
         (issued, paid)
+    }
+
+    fn listen_issuer_until_empty(&self) -> InboxSummary {
+        let handle = ListenHandle::new();
+        self.block_on(async {
+            let listen = self
+                .issuer
+                .wallet
+                .epicbox_listen(&self.issuer.epicbox, &handle);
+            let script = async {
+                self.within(
+                    self.relay
+                        .wait_until(|relay| relay.pending(&self.issuer.address) == 0),
+                )
+                .await;
+                handle.stop();
+            };
+            tokio::join!(listen, script).0
+        })
+        .unwrap()
+    }
+
+    /// Whether the issuer recorded that the payer of the withdrawn invoice `slate_id` was told.
+    fn withdrawn_answered(&self, slate_id: SlateId) -> bool {
+        let key = format!("notice.withdrawn_answered.{}", uuid(slate_id));
+        self.issuer.read(|repos| repos.setting(&key)).is_some()
     }
 
     fn issuer_capability(&self, key: &str) -> Option<PeerSupport> {
@@ -335,7 +369,7 @@ fn a_payment_of_a_withdrawn_invoice_is_kept_while_its_answer_fails() {
         .block_on(world.issuer.wallet.cancel(issued.tx_id))
         .unwrap();
     world.relay.set_refusing(false);
-    world.relay.set_post_refused(&world.payer.invoice_address());
+    world.issuer.set_deliveries_failing(true);
 
     let summary = world.drain_issuer();
 
@@ -344,6 +378,147 @@ fn a_payment_of_a_withdrawn_invoice_is_kept_while_its_answer_fails() {
         (0, 0, 1)
     );
     assert_eq!(world.relay.pending(&world.issuer.address), 1);
+}
+
+#[test]
+fn a_withdrawn_answer_the_relay_refuses_settles_the_payment_at_once() {
+    let world = World::new();
+    let issued = withdrawn_offline_with_a_message_behind(&world);
+    world.relay.set_post_refused(&world.payer.invoice_address());
+
+    let summary = world.drain_issuer();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert!(!world.withdrawn_answered(issued.slate_id));
+}
+
+/// The payer pays an invoice that the issuer then withdraws while it cannot reach the relay, and
+/// a message the issuer can handle is queued behind the payment. Returns the invoice.
+fn withdrawn_offline_with_a_message_behind(world: &World) -> IssuedInvoice {
+    world.settle_one_invoice();
+    world.payer.fund(10, world::FUNDING);
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world.pay(&issued);
+    world.relay.set_refusing(true);
+    world
+        .block_on(world.issuer.wallet.cancel(issued.tx_id))
+        .unwrap();
+    world.relay.set_refusing(false);
+    world.post(
+        9,
+        &world.issuer.address,
+        &notice("thanks", issued.slate_id),
+        1,
+    );
+    issued
+}
+
+fn deliveries_to(world: &World, address: &lepic_epicbox::EpicboxAddress) -> usize {
+    let address = address.to_string();
+    world
+        .issuer
+        .delivered_to()
+        .iter()
+        .filter(|to| **to == address)
+        .count()
+}
+
+#[test]
+fn a_listen_gives_up_an_undeliverable_withdrawn_answer_at_the_hold_bound() {
+    let world = World::new();
+    let issued = withdrawn_offline_with_a_message_behind(&world);
+    let invoiced = world.payer.invoice_address();
+    let before = deliveries_to(&world, &invoiced);
+    world.issuer.set_deliveries_failing(true);
+
+    let summary = world.listen_issuer_until_empty();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(deliveries_to(&world, &invoiced) - before, MAX_HOLD_ATTEMPTS);
+    assert!(!world.withdrawn_answered(issued.slate_id));
+}
+
+#[test]
+fn a_drain_gives_up_an_undeliverable_withdrawn_answer_after_the_hold_patience() {
+    let world = World::new();
+    let issued = withdrawn_offline_with_a_message_behind(&world);
+    world.issuer.set_deliveries_failing(true);
+
+    let held = world.drain_issuer();
+    world
+        .issuer
+        .clock
+        .advance(HOLD_PATIENCE - Duration::from_secs(1));
+    let still_held = world.drain_issuer();
+    world.issuer.clock.advance(Duration::from_secs(1));
+    let settled = world.drain_issuer();
+
+    for summary in [held, still_held] {
+        assert_eq!(
+            summary,
+            InboxSummary {
+                held: 1,
+                ..InboxSummary::default()
+            }
+        );
+    }
+    assert_eq!(
+        settled,
+        InboxSummary {
+            rejected: 1,
+            dropped: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert!(!world.withdrawn_answered(issued.slate_id));
+}
+
+#[test]
+fn a_payment_repeated_after_its_answer_was_given_up_is_answered() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let (issued, i2) = withdrawn_offline_through(&world, &peer);
+    world.issuer.set_deliveries_failing(true);
+    world.post(9, &world.issuer.address, &i2, 1);
+    assert_eq!(world.drain_issuer().held, 1);
+    world.issuer.clock.advance(HOLD_PATIENCE);
+    assert_eq!(world.drain_issuer().rejected, 1);
+    assert!(world.drain_peer(&peer).is_empty());
+    assert!(!world.withdrawn_answered(issued.slate_id));
+
+    world.issuer.set_deliveries_failing(false);
+    world.post(9, &world.issuer.address, &i2, 1);
+    let summary = world.drain_issuer();
+
+    assert_eq!(summary.rejected, 1);
+    assert_eq!(
+        world
+            .drain_peer(&peer)
+            .iter()
+            .map(|text| classify_text(text))
+            .collect::<Vec<_>>(),
+        vec![Payload::Notice(Notice {
+            slate_id: issued.slate_id,
+            kind: NoticeKind::Withdrawn,
+        })]
+    );
+    assert!(world.withdrawn_answered(issued.slate_id));
 }
 
 /// The issuer invoices `peer` and withdraws it while it cannot reach the relay, after the payer

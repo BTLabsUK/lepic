@@ -371,6 +371,8 @@ pub(crate) enum Hold {
     Wallet(#[from] WalletError),
     #[error("transport {transport} cannot deliver the reply")]
     NoOutbound { transport: TransportId },
+    #[error("notice withheld from a peer not proven to run lepic")]
+    Withheld,
     #[error("reply was not delivered")]
     Reply(#[source] TransportError),
     #[error("slate was not received")]
@@ -1117,7 +1119,10 @@ where
                 None if mailbox == Mailbox::Invoices => self.park(envelope, &slate, reply_to).await,
                 None => Err(Refusal::UnsupportedStage { stage: Stage::I1 }.into()),
             },
-            (Stage::I2, _) => self.complete_invoice(envelope, &slate, reply_to).await,
+            (Stage::I2, _) => {
+                self.complete_invoice(msg_id, attempt, envelope, &slate, reply_to)
+                    .await
+            }
             (stage, _) => Err(Refusal::UnsupportedStage { stage }.into()),
         }
     }
@@ -1129,6 +1134,8 @@ where
     /// pushed, that payer is sent a `posted` notice.
     async fn complete_invoice(
         &self,
+        msg_id: Option<&str>,
+        attempt: u32,
         envelope: &Envelope,
         payment: &Slate,
         reply_to: &Destination,
@@ -1179,22 +1186,27 @@ where
             }
             // The payer may not have heard the withdrawal: the notice sent at the cancel fails
             // while this wallet is offline. The payment is kept for another try while the
-            // answer cannot be delivered.
+            // answer cannot be delivered, up to the hold bound; after that the payer's next
+            // try of the same payment brings the answer again.
             Err(
                 error @ InvoiceError::NotFinalizable {
                     tx_id,
                     state: TxState::Cancelled,
                 },
-            ) if marked => {
-                if self
-                    .answer_withdrawn_payment(tx_id, payment, reply_to)
-                    .await
+            ) if marked => match self
+                .answer_withdrawn_payment(tx_id, payment, reply_to)
+                .await
+            {
+                Ok(()) => Err(Refusal::Invoice(error).into()),
+                Err(hold)
+                    if reply_is_permanent(&hold)
+                        || self.hold_exhausted(msg_id, attempt).await? =>
                 {
+                    warn!(tx_id = %tx_id, error = %ErrorChain(&hold), "withdrawn notice undelivered");
                     Err(Refusal::Invoice(error).into())
-                } else {
-                    Err(Hold::Invoice(error).into())
                 }
-            }
+                Err(_) => Err(Hold::Invoice(error).into()),
+            },
             Err(error) if invoice_finalize_is_permanent(&error) => {
                 Err(Refusal::Invoice(error).into())
             }

@@ -16,6 +16,7 @@ use lepic_store::{
     PeerCapability, PeerSupport, PendingInvoiceStatus, Repositories, SlateStage, StoreError,
     TxDirection, TxId, TxState, WalletStore,
 };
+use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Destination, Outbound, Transport};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -333,13 +334,13 @@ where
             slate_id,
             kind: NoticeKind::Posted { excess },
         };
-        self.send_notice(None, &to, notice).await;
+        let _ = self.send_notice(None, &to, notice).await;
     }
 
     /// Tells the payer that the cancelled invoice `tx_id` is withdrawn, when it was one issued
-    /// over Epicbox, and records that it was told. Returns false when such a notice was not
+    /// over Epicbox, and records that it was told. Fails with why such a notice was not
     /// delivered.
-    pub(crate) async fn notify_withdrawn(&self, tx_id: TxId) -> bool {
+    pub(crate) async fn notify_withdrawn(&self, tx_id: TxId) -> Result<(), Hold> {
         let target = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
@@ -351,19 +352,17 @@ where
         };
         let (slate_id, to) = match target.await {
             Ok(Some(target)) => target,
-            Ok(None) => return true,
+            Ok(None) => return Ok(()),
             Err(error) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&error), "notice not sent");
-                return false;
+                return Err(error.into());
             }
         };
         let notice = Notice {
             slate_id,
             kind: NoticeKind::Withdrawn,
         };
-        if !self.send_notice(None, &to, notice).await {
-            return false;
-        }
+        self.send_notice(None, &to, notice).await?;
         let key = withdrawn_answer_key(uuid(slate_id));
         let recorded = self
             .inbox_write(move |repos, now| repos.put_setting(&key, &now.to_string()))
@@ -371,19 +370,19 @@ where
         if let Err(error) = recorded {
             warn!(tx_id = %tx_id, error = %ErrorChain(&error), "withdrawn notice not recorded");
         }
-        true
+        Ok(())
     }
 
     /// Answers a marked `payment` of the cancelled invoice `tx_id` with a `withdrawn` to the
     /// address the invoice was issued to, when the payer was never told: the notice sent at the
-    /// cancel fails while this wallet is offline. Returns false when that answer was due and
-    /// not delivered.
+    /// cancel fails while this wallet is offline. Fails with why that answer was due and not
+    /// delivered.
     pub(crate) async fn answer_withdrawn_payment(
         &self,
         tx_id: TxId,
         payment: &Slate,
         reply_to: &Destination,
-    ) -> bool {
+    ) -> Result<(), Hold> {
         let due = async {
             let session = self.session()?;
             let codecs = stored_codecs(self.config().network);
@@ -397,10 +396,10 @@ where
         };
         match due.await {
             Ok(true) => {}
-            Ok(false) => return true,
+            Ok(false) => return Ok(()),
             Err(error) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&error), "notice not sent");
-                return false;
+                return Err(error.into());
             }
         }
         self.record_paying_peer(tx_id, reply_to).await;
@@ -442,7 +441,8 @@ where
             slate_id,
             kind: NoticeKind::Declined,
         };
-        self.send_notice(Some(&client as &dyn Outbound), &to, notice)
+        let _ = self
+            .send_notice(Some(&client as &dyn Outbound), &to, notice)
             .await;
     }
 
@@ -461,18 +461,21 @@ where
     }
 
     /// Sends `notice` to `to`, through `sender` or else the registered Epicbox transport, when
-    /// the peer proved it runs LEPIC. Returns whether it was sent. Notices are advisory, so a
-    /// failure is logged and not returned.
+    /// the peer proved it runs LEPIC. A notice that was not sent is logged here, and the
+    /// reason is returned for the one caller that holds a message on it.
     async fn send_notice(
         &self,
         sender: Option<&dyn Outbound>,
         to: &Destination,
         notice: Notice,
-    ) -> bool {
+    ) -> Result<(), Hold> {
         let slate_id = notice.slate_id;
         let network = relay_network(self.config().network);
         let Some(key) = key_of(to.as_str(), network) else {
-            return false;
+            debug!(slate_id = %slate_id, "notice not sent to a destination that is no address");
+            return Err(Hold::Reply(TransportError::UnknownDestination {
+                transport: TRANSPORT_ID,
+            }));
         };
         let proof = async {
             let session = self.session()?;
@@ -483,11 +486,11 @@ where
             Ok(true) => {}
             Ok(false) => {
                 debug!(slate_id = %slate_id, "notice withheld from a peer not proven to run lepic");
-                return false;
+                return Err(Hold::Withheld);
             }
             Err(error) => {
                 warn!(slate_id = %slate_id, error = %ErrorChain(&error), "notice not sent");
-                return false;
+                return Err(error.into());
             }
         }
         let registered = self
@@ -497,16 +500,18 @@ where
             .and_then(Transport::outbound);
         let Some(outbound) = sender.or(registered) else {
             warn!(slate_id = %slate_id, "notice not sent");
-            return false;
+            return Err(Hold::NoOutbound {
+                transport: TRANSPORT_ID,
+            });
         };
         match outbound.deliver(to, &notice.encode()).await {
             Ok(()) => {
                 info!(slate_id = %slate_id, "notice sent");
-                true
+                Ok(())
             }
             Err(error) => {
                 warn!(slate_id = %slate_id, error = %ErrorChain(&error), "notice not sent");
-                false
+                Err(Hold::Reply(error))
             }
         }
     }

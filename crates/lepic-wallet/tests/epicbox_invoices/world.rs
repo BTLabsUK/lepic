@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -157,10 +157,12 @@ impl StoreOpener for CountingStores {
     }
 }
 
-/// The Epicbox transport as the wallet's registry holds it, recording where each delivery went.
+/// The Epicbox transport as the wallet's registry holds it, recording where each delivery went,
+/// and failing every delivery while a test asks.
 struct RecordingEpicbox {
     inner: EpicboxTransport,
     delivered_to: Arc<Mutex<Vec<String>>>,
+    failing: Arc<AtomicBool>,
 }
 
 impl Transport for RecordingEpicbox {
@@ -187,6 +189,14 @@ impl Outbound for RecordingEpicbox {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(to.as_str().to_owned());
+        if self.failing.load(Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(TransportError::Backend {
+                    transport: TRANSPORT_ID,
+                    source: Box::new(std::io::Error::from(std::io::ErrorKind::TimedOut)),
+                })
+            });
+        }
         self.inner.deliver(to, wire)
     }
 }
@@ -228,6 +238,7 @@ pub struct Party {
     pub address: EpicboxAddress,
     pub clock: TestClock,
     delivered_to: Arc<Mutex<Vec<String>>>,
+    deliveries_failing: Arc<AtomicBool>,
     stores: CountingStores,
     seed: Seed,
     data_dir: PathBuf,
@@ -244,11 +255,13 @@ impl Party {
     ) -> Self {
         let epicbox = EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
         let delivered_to = Arc::default();
+        let deliveries_failing = Arc::default();
         let mut transports = TransportRegistry::new();
         transports
             .register(Box::new(RecordingEpicbox {
                 inner: epicbox.clone(),
                 delivered_to: Arc::clone(&delivered_to),
+                failing: Arc::clone(&deliveries_failing),
             }))
             .unwrap();
         let stores = CountingStores::default();
@@ -282,6 +295,7 @@ impl Party {
             address,
             clock,
             delivered_to,
+            deliveries_failing,
             stores,
             seed: Seed::from_mnemonic(mnemonic).unwrap(),
             data_dir,
@@ -311,6 +325,12 @@ impl Party {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Makes every delivery through the registered transport fail as an unreachable relay
+    /// does, or succeed again. Connections the wallet opens itself are not affected.
+    pub fn set_deliveries_failing(&self, failing: bool) {
+        self.deliveries_failing.store(failing, Ordering::SeqCst);
     }
 
     /// Lets `succeeding` more write transactions through, then fails the one after.
