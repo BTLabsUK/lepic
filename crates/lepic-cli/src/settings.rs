@@ -46,6 +46,21 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "relay as wss://host[:port], or ws://host[:port] for a loopback host",
     ),
     (
+        "epicbox_tor_socks",
+        "LEPIC_EPICBOX_TOR_SOCKS",
+        "reach the relay through the tor whose socks5 proxy is at this loopback address",
+    ),
+    (
+        "epicbox_tor_binary",
+        "LEPIC_EPICBOX_TOR_BINARY",
+        "reach the relay through a tor that the cli runs from this binary",
+    ),
+    (
+        "epicbox_tor_lib_dir",
+        "LEPIC_EPICBOX_TOR_LIB_DIR",
+        "directory of the libraries that tor binary needs",
+    ),
+    (
         "invoice_expiry_hours",
         "LEPIC_INVOICE_EXPIRY_HOURS",
         "hours an unpaid invoice is kept, 1 to 48",
@@ -171,6 +186,20 @@ pub enum OutputFormat {
     Json,
 }
 
+/// The tor the relay connection goes through (ADR 0021).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RelayTor {
+    /// The relay is reached directly.
+    Off,
+    /// A tor that runs already, at this loopback SOCKS5 address.
+    Socks(std::net::SocketAddr),
+    /// A tor the CLI runs from this binary when the relay is first reached.
+    Binary {
+        binary: PathBuf,
+        lib_dir: Option<PathBuf>,
+    },
+}
+
 /// Everything a command runs with.
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -183,6 +212,7 @@ pub struct Settings {
     pub node: NodeEndpoint,
     pub node_api_secret_file: Option<PathBuf>,
     pub relay: RelayEndpoint,
+    pub relay_tor: RelayTor,
     /// How long an unpaid invoice is kept, on either side.
     pub invoice_expiry: InvoiceExpiry,
 }
@@ -267,6 +297,7 @@ impl Settings {
         let invoice_expiry = lookup
             .parse("invoice_expiry_hours", parse_expiry_hours)?
             .unwrap_or_default();
+        let relay_tor = relay_tor(&lookup)?;
 
         Ok(Self {
             network,
@@ -284,6 +315,7 @@ impl Settings {
             node,
             node_api_secret_file: lookup.path("node_api_secret_file")?,
             relay,
+            relay_tor,
             invoice_expiry,
         })
     }
@@ -303,6 +335,31 @@ fn default_node_url(network: Network) -> &'static str {
     match network {
         Network::Mainnet => "http://127.0.0.1:3413",
         Network::Floonet => "http://127.0.0.1:13413",
+    }
+}
+
+/// At most one way through tor: a running tor's SOCKS address, or a tor binary to run.
+fn relay_tor(lookup: &Lookup<'_>) -> Result<RelayTor, SettingsError> {
+    let socks = lookup.parse("epicbox_tor_socks", |text| {
+        text.parse::<std::net::SocketAddr>()
+            .ok()
+            .filter(|address| address.ip().is_loopback())
+    })?;
+    let binary = lookup.path("epicbox_tor_binary")?;
+    let lib_dir = lookup.path("epicbox_tor_lib_dir")?;
+    let invalid = |key| {
+        let origin = lookup
+            .raw(key)
+            .map_or(Origin::Default, |(_, origin)| origin);
+        SettingsError::InvalidValue { key, origin }
+    };
+    match (socks, binary) {
+        (Some(_), Some(_)) => Err(invalid("epicbox_tor_binary")),
+        (Some(_), None) if lib_dir.is_some() => Err(invalid("epicbox_tor_lib_dir")),
+        (None, None) if lib_dir.is_some() => Err(invalid("epicbox_tor_lib_dir")),
+        (Some(address), None) => Ok(RelayTor::Socks(address)),
+        (None, Some(binary)) => Ok(RelayTor::Binary { binary, lib_dir }),
+        (None, None) => Ok(RelayTor::Off),
     }
 }
 
@@ -540,5 +597,55 @@ mod tests {
         assert!(parse_relay("ws://localhost:3423").is_some());
         assert!(parse_relay("ws://relay.example.org").is_none());
         assert!(parse_relay("").is_none());
+    }
+
+    fn resolve(vars: &[(&str, &str)]) -> Result<Settings, SettingsError> {
+        let mut all = vec![("HOME".to_owned(), "/home/test".to_owned())];
+        all.extend(
+            vars.iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+        );
+        Settings::resolve(&GlobalArgs::default(), &Env::new(all))
+    }
+
+    #[test]
+    fn the_relay_goes_through_tor_only_when_a_tor_is_named() {
+        assert_eq!(resolve(&[]).unwrap().relay_tor, RelayTor::Off);
+        assert_eq!(
+            resolve(&[("LEPIC_EPICBOX_TOR_SOCKS", "127.0.0.1:9050")])
+                .unwrap()
+                .relay_tor,
+            RelayTor::Socks("127.0.0.1:9050".parse().unwrap())
+        );
+        assert_eq!(
+            resolve(&[
+                ("LEPIC_EPICBOX_TOR_BINARY", "/opt/tor/tor"),
+                ("LEPIC_EPICBOX_TOR_LIB_DIR", "/opt/tor"),
+            ])
+            .unwrap()
+            .relay_tor,
+            RelayTor::Binary {
+                binary: PathBuf::from("/opt/tor/tor"),
+                lib_dir: Some(PathBuf::from("/opt/tor")),
+            }
+        );
+    }
+
+    #[test]
+    fn a_relay_tor_that_is_remote_ambiguous_or_incomplete_is_refused() {
+        for vars in [
+            &[("LEPIC_EPICBOX_TOR_SOCKS", "192.0.2.1:9050")][..],
+            &[("LEPIC_EPICBOX_TOR_SOCKS", "localhost:9050")][..],
+            &[
+                ("LEPIC_EPICBOX_TOR_SOCKS", "127.0.0.1:9050"),
+                ("LEPIC_EPICBOX_TOR_BINARY", "/opt/tor/tor"),
+            ][..],
+            &[("LEPIC_EPICBOX_TOR_LIB_DIR", "/opt/tor")][..],
+        ] {
+            assert!(
+                matches!(resolve(vars), Err(SettingsError::InvalidValue { .. })),
+                "{vars:?}"
+            );
+        }
     }
 }

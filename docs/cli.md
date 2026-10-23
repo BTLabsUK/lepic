@@ -64,6 +64,9 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `node_url` | `LEPIC_NODE_URL` | | `http://127.0.0.1:3413`, floonet `:13413` |
 | `node_api_secret_file` | `LEPIC_NODE_API_SECRET_FILE` | | none |
 | `epicbox_relay` | `LEPIC_EPICBOX_RELAY` | | `wss://epicbox.epiccash.com` |
+| `epicbox_tor_socks` | `LEPIC_EPICBOX_TOR_SOCKS` | | none: the relay is reached directly |
+| `epicbox_tor_binary` | `LEPIC_EPICBOX_TOR_BINARY` | | none |
+| `epicbox_tor_lib_dir` | `LEPIC_EPICBOX_TOR_LIB_DIR` | | none |
 | `output` | `LEPIC_OUTPUT` | `--output` | `human` |
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
@@ -89,6 +92,22 @@ over `https://`, and leave `node_api_secret_file` out unless that node asks for 
 for a loopback host, because the node secret and the relay traffic would otherwise cross the
 network in the clear; use `https://` and `wss://` for anything else. An `epicbox_relay` without a
 scheme means `wss://`.
+
+### Epicbox over Tor
+
+Set one of these to take the connection to the relay through tor (ADR 0021):
+
+- `epicbox_tor_socks`: the SOCKS5 address of a tor already running on this computer, such as
+  `127.0.0.1:9050`. Only a loopback address is accepted.
+- `epicbox_tor_binary`: a tor binary the command runs when it first reaches the relay, with its
+  files in `tor-epicbox/` inside the data directory; `epicbox_tor_lib_dir` names the directory of
+  the libraries the Tor Expert Bundle ships, as `--lib-dir` does.
+
+The relay `flooepicbox.btlabs.uk` is then reached at its onion; any other relay at the onion its
+`/.well-known/epicbox.json` names, else through the Tor network. TLS still checks the relay
+domain's certificate, and the wallet's address does not change. While one is set, the relay is
+never reached directly: a tor that is not ready makes the connection wait and, for
+`epicbox listen`, retry. `--log-level lepic_epicbox=debug` shows `epicbox relay through tor`.
 
 ## Passwords and the recovery phrase
 

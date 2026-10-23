@@ -105,7 +105,7 @@ impl Host for TestHost {
         Ok(self.node.client())
     }
 
-    fn relay_connector(&self) -> Result<Arc<dyn Connector>, CliError> {
+    fn relay_connector(&self, _: &Settings) -> Result<Arc<dyn Connector>, CliError> {
         Ok(self.relay.connector())
     }
 

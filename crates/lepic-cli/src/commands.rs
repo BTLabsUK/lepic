@@ -1172,7 +1172,7 @@ impl<H: Host> Run<'_, H> {
         let epicbox = EpicboxTransport::new(
             relay,
             relay_network(self.settings.network),
-            self.host.relay_connector()?,
+            self.host.relay_connector(self.settings)?,
         );
         let tor = lepic_tor::TorTransport::new(lepic_tor::OnionClient::default());
         let mut transports = TransportRegistry::new();

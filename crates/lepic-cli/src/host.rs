@@ -5,14 +5,15 @@ use std::io::Read as _;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use lepic_epicbox::{Connector, TcpConnector};
+use lepic_epicbox::tunnel::{Tunnel, TunnelConnector};
+use lepic_epicbox::{Connector, RelayStream, TcpConnector};
 use lepic_keychain::KdfParams;
 use lepic_node::{CallPolicy, HttpSettings, HttpTransport, NodeClient, RpcTransport};
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::exit::CliError;
-use crate::settings::Settings;
+use crate::settings::{RelayTor, Settings};
 
 pub type Interrupt = Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -31,7 +32,8 @@ pub trait Host {
 
     fn node(&self, settings: &Settings) -> Result<HostNode<Self>, CliError>;
 
-    fn relay_connector(&self) -> Result<Arc<dyn Connector>, CliError>;
+    /// Reaches the relay directly, or through tor when the settings name one.
+    fn relay_connector(&self, settings: &Settings) -> Result<Arc<dyn Connector>, CliError>;
 
     /// The Argon2 setting of a new vault. Opening a vault reads the setting from the file.
     fn vault_kdf(&self) -> KdfParams;
@@ -65,10 +67,12 @@ impl Host for ProcessHost {
         Ok(NodeClient::new(transport, CallPolicy::default()))
     }
 
-    fn relay_connector(&self) -> Result<Arc<dyn Connector>, CliError> {
-        Ok(Arc::new(
-            TcpConnector::new(lepic_node::webpki_tls_config()?),
-        ))
+    fn relay_connector(&self, settings: &Settings) -> Result<Arc<dyn Connector>, CliError> {
+        let tls = lepic_node::webpki_tls_config()?;
+        Ok(match relay_tunnel(settings) {
+            None => Arc::new(TcpConnector::new(tls)),
+            Some(tunnel) => Arc::new(TunnelConnector::new(tls, tunnel)),
+        })
     }
 
     fn vault_kdf(&self) -> KdfParams {
@@ -98,6 +102,76 @@ impl Host for ProcessHost {
                 std::future::pending::<()>().await;
             }
         })
+    }
+}
+
+/// The directory inside the data directory that holds the files of the relay's tor, apart from
+/// those of `tor listen`, which may run at the same time.
+const RELAY_TOR_DIR: &str = "tor-epicbox";
+
+/// The tor the settings name for the relay connection. While there is one, the relay is never
+/// reached directly.
+fn relay_tunnel(settings: &Settings) -> Option<Arc<dyn Tunnel>> {
+    let relay = lepic_tor::RelayTor::new(true);
+    let start = match &settings.relay_tor {
+        RelayTor::Off => return None,
+        RelayTor::Socks(address) => {
+            relay.attach_socks(lepic_tor::FixedSocks(*address));
+            None
+        }
+        RelayTor::Binary { binary, lib_dir } => {
+            let mut tor =
+                lepic_tor::TorSettings::new(binary.clone(), settings.data_dir.join(RELAY_TOR_DIR));
+            tor.lib_dir.clone_from(lib_dir);
+            Some(tor)
+        }
+    };
+    Some(Arc::new(RelayTunnel {
+        relay,
+        start: std::sync::Mutex::new(start),
+        active: tokio::sync::watch::Sender::new(true),
+    }))
+}
+
+/// Tor for the relay connection, started on the first connection when the CLI runs it.
+struct RelayTunnel {
+    relay: lepic_tor::RelayTor,
+    start: std::sync::Mutex<Option<lepic_tor::TorSettings>>,
+    /// Always on: the relay goes through tor for the whole command.
+    active: tokio::sync::watch::Sender<bool>,
+}
+
+impl Tunnel for RelayTunnel {
+    fn active(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.active.subscribe()
+    }
+
+    fn open<'a>(
+        &'a self,
+        host: &'a str,
+        port: u16,
+    ) -> Pin<Box<dyn Future<Output = std::io::Result<Box<dyn RelayStream>>> + Send + 'a>> {
+        Box::pin(async move {
+            let start = self
+                .start
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(start) = start {
+                self.relay
+                    .attach(Arc::new(lepic_tor::TorProcess::start(start)));
+            }
+            let stream = self
+                .relay
+                .open(host, port)
+                .await
+                .map_err(std::io::Error::other)?;
+            Ok(Box::new(stream) as Box<dyn RelayStream>)
+        })
+    }
+
+    fn is_onion(&self, host: &str) -> bool {
+        lepic_tor::RelayTor::is_onion(host)
     }
 }
 
