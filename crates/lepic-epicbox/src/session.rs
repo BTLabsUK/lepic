@@ -128,6 +128,26 @@ impl TcpConnector {
     pub fn new(tls: Arc<ClientConfig>) -> Self {
         Self { tls }
     }
+
+    /// `stream` as the endpoint asks for it: with TLS for the endpoint's domain, whatever
+    /// host the stream reaches, or as it is for a plain endpoint.
+    pub async fn secure<S: RelayStream + 'static>(
+        &self,
+        endpoint: &RelayEndpoint,
+        stream: S,
+    ) -> io::Result<Box<dyn RelayStream>> {
+        match endpoint.security() {
+            Security::Plain => Ok(Box::new(stream)),
+            Security::Tls => {
+                let name = ServerName::try_from(endpoint.domain().as_str().to_owned())
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+                let tls = TlsConnector::from(Arc::clone(&self.tls))
+                    .connect(name, stream)
+                    .await?;
+                Ok(Box::new(tls))
+            }
+        }
+    }
 }
 
 impl fmt::Debug for TcpConnector {
@@ -147,17 +167,7 @@ impl Connector for TcpConnector {
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
             let tcp = TcpStream::connect((endpoint.domain().as_str(), endpoint.port())).await?;
             tcp.set_nodelay(true)?;
-            match endpoint.security() {
-                Security::Plain => Ok(Box::new(tcp) as Box<dyn RelayStream>),
-                Security::Tls => {
-                    let name = ServerName::try_from(endpoint.domain().as_str().to_owned())
-                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-                    let tls = TlsConnector::from(Arc::clone(&self.tls))
-                        .connect(name, tcp)
-                        .await?;
-                    Ok(Box::new(tls) as Box<dyn RelayStream>)
-                }
-            }
+            self.secure(endpoint, tcp).await
         })
     }
 }
