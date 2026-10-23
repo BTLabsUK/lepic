@@ -5,10 +5,14 @@ use std::io::Read as _;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use lepic_epicbox::tunnel::OnionRoutes;
 use lepic_epicbox::tunnel::{Tunnel, TunnelConnector};
 use lepic_epicbox::{Connector, RelayStream, TcpConnector};
 use lepic_keychain::KdfParams;
-use lepic_node::{CallPolicy, HttpSettings, HttpTransport, NodeClient, RpcTransport};
+use lepic_node::{
+    CallPolicy, DialFuture, HttpSettings, HttpTransport, NodeClient, NodeStream, RpcTransport,
+    is_loopback_host,
+};
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
@@ -44,8 +48,17 @@ pub trait Host {
 }
 
 /// The node over HTTP, the relay over TCP and TLS, Ctrl-C.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ProcessHost;
+#[derive(Default)]
+pub struct ProcessHost {
+    /// The tor the settings name, shared by the relay and the node so one command runs one tor.
+    tor: std::sync::OnceLock<Option<Arc<CliTor>>>,
+}
+
+impl ProcessHost {
+    fn tor(&self, settings: &Settings) -> Option<Arc<CliTor>> {
+        self.tor.get_or_init(|| cli_tor(settings)).clone()
+    }
+}
 
 impl Host for ProcessHost {
     type Transport = HttpTransport;
@@ -59,19 +72,36 @@ impl Host for ProcessHost {
             api_secret,
             ..HttpSettings::default()
         };
-        let transport = HttpTransport::new(
-            settings.node.as_str(),
-            &http,
-            lepic_node::webpki_tls_config()?,
-        )?;
+        let tls = lepic_node::webpki_tls_config()?;
+        let transport = match self.tor(settings).filter(|_| settings.node_over_tor) {
+            Some(tor) => HttpTransport::with_dialer(
+                settings.node.as_str(),
+                &HttpSettings {
+                    request_timeout: NODE_TOR_REQUEST_TIMEOUT,
+                    ..http
+                },
+                tls,
+                Arc::new(CliNodeDialer {
+                    tor,
+                    routes: OnionRoutes::default(),
+                }),
+            )?,
+            None => HttpTransport::new(settings.node.as_str(), &http, tls)?,
+        };
         Ok(NodeClient::new(transport, CallPolicy::default()))
     }
 
     fn relay_connector(&self, settings: &Settings) -> Result<Arc<dyn Connector>, CliError> {
         let tls = lepic_node::webpki_tls_config()?;
-        Ok(match relay_tunnel(settings) {
+        Ok(match self.tor(settings) {
             None => Arc::new(TcpConnector::new(tls)),
-            Some(tunnel) => Arc::new(TunnelConnector::new(tls, tunnel)),
+            Some(tor) => Arc::new(TunnelConnector::new(
+                tls,
+                Arc::new(RelayTunnel {
+                    tor,
+                    active: tokio::sync::watch::Sender::new(true),
+                }),
+            )),
         })
     }
 
@@ -109,9 +139,12 @@ impl Host for ProcessHost {
 /// those of `tor listen`, which may run at the same time.
 const RELAY_TOR_DIR: &str = "tor-epicbox";
 
-/// The tor the settings name for the relay connection. While there is one, the relay is never
-/// reached directly.
-fn relay_tunnel(settings: &Settings) -> Option<Arc<dyn Tunnel>> {
+/// Room for a first circuit to the node's onion.
+const NODE_TOR_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// The tor the settings name. While there is one, the relay is never reached directly, nor the
+/// node when `node_over_tor` is set.
+fn cli_tor(settings: &Settings) -> Option<Arc<CliTor>> {
     let relay = lepic_tor::RelayTor::new(true);
     let start = match &settings.relay_tor {
         RelayTor::Off => return None,
@@ -126,17 +159,38 @@ fn relay_tunnel(settings: &Settings) -> Option<Arc<dyn Tunnel>> {
             Some(tor)
         }
     };
-    Some(Arc::new(RelayTunnel {
+    Some(Arc::new(CliTor {
         relay,
         start: std::sync::Mutex::new(start),
-        active: tokio::sync::watch::Sender::new(true),
     }))
 }
 
-/// Tor for the relay connection, started on the first connection when the CLI runs it.
-struct RelayTunnel {
+/// Tor for the relay and node connections, started on the first connection when the CLI runs it.
+struct CliTor {
     relay: lepic_tor::RelayTor,
     start: std::sync::Mutex<Option<lepic_tor::TorSettings>>,
+}
+
+impl CliTor {
+    async fn open(&self, host: &str, port: u16) -> std::io::Result<tokio::net::TcpStream> {
+        let start = self
+            .start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(start) = start {
+            self.relay
+                .attach(Arc::new(lepic_tor::TorProcess::start(start)));
+        }
+        self.relay
+            .open(host, port)
+            .await
+            .map_err(std::io::Error::other)
+    }
+}
+
+struct RelayTunnel {
+    tor: Arc<CliTor>,
     /// Always on: the relay goes through tor for the whole command.
     active: tokio::sync::watch::Sender<bool>,
 }
@@ -152,26 +206,36 @@ impl Tunnel for RelayTunnel {
         port: u16,
     ) -> Pin<Box<dyn Future<Output = std::io::Result<Box<dyn RelayStream>>> + Send + 'a>> {
         Box::pin(async move {
-            let start = self
-                .start
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(start) = start {
-                self.relay
-                    .attach(Arc::new(lepic_tor::TorProcess::start(start)));
-            }
-            let stream = self
-                .relay
-                .open(host, port)
-                .await
-                .map_err(std::io::Error::other)?;
+            let stream = self.tor.open(host, port).await?;
             Ok(Box::new(stream) as Box<dyn RelayStream>)
         })
     }
 
     fn is_onion(&self, host: &str) -> bool {
         lepic_tor::RelayTor::is_onion(host)
+    }
+}
+
+/// Node connections through tor: to the node's onion when one is known, else to its name
+/// through the exit. A loopback node is reached directly. Never directly otherwise.
+struct CliNodeDialer {
+    tor: Arc<CliTor>,
+    routes: OnionRoutes,
+}
+
+impl lepic_node::NodeDialer for CliNodeDialer {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> DialFuture<'a> {
+        Box::pin(async move {
+            let stream = if is_loopback_host(host) {
+                tokio::net::TcpStream::connect((host, port)).await?
+            } else {
+                match self.routes.route_to(host, port) {
+                    Some(onion) => self.tor.open(&onion.host, onion.port).await?,
+                    None => self.tor.open(host, port).await?,
+                }
+            };
+            Ok(Box::new(stream) as Box<dyn NodeStream>)
+        })
     }
 }
 

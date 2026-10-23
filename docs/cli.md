@@ -67,6 +67,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `epicbox_tor_socks` | `LEPIC_EPICBOX_TOR_SOCKS` | | none: the relay is reached directly |
 | `epicbox_tor_binary` | `LEPIC_EPICBOX_TOR_BINARY` | | none |
 | `epicbox_tor_lib_dir` | `LEPIC_EPICBOX_TOR_LIB_DIR` | | none |
+| `node_over_tor` | `LEPIC_NODE_OVER_TOR` | | `false` |
 | `output` | `LEPIC_OUTPUT` | `--output` | `human` |
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
@@ -108,6 +109,14 @@ The relay `flooepicbox.btlabs.uk` is then reached at its onion; any other relay 
 domain's certificate, and the wallet's address does not change. While one is set, the relay is
 never reached directly: a tor that is not ready makes the connection wait and, for
 `epicbox listen`, retry. `--log-level lepic_epicbox=debug` shows `epicbox relay through tor`.
+
+### Node over Tor
+
+`node_over_tor = true` takes the node requests through the same tor as the relay (ADR 0022), so
+it needs `epicbox_tor_socks` or `epicbox_tor_binary`. `node.btlabs.uk` is reached at its onion;
+any other node by name through the Tor network, which resolves the name. A loopback node stays
+direct. `http://` is refused for any other host, so nothing leaves a Tor exit unencrypted. While
+set, the node is never reached directly.
 
 ## Passwords and the recovery phrase
 

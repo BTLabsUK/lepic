@@ -61,6 +61,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "directory of the libraries that tor binary needs",
     ),
     (
+        "node_over_tor",
+        "LEPIC_NODE_OVER_TOR",
+        "true to reach the node through the tor named by the epicbox_tor settings",
+    ),
+    (
         "invoice_expiry_hours",
         "LEPIC_INVOICE_EXPIRY_HOURS",
         "hours an unpaid invoice is kept, 1 to 48",
@@ -213,6 +218,8 @@ pub struct Settings {
     pub node_api_secret_file: Option<PathBuf>,
     pub relay: RelayEndpoint,
     pub relay_tor: RelayTor,
+    /// Node requests go through the same tor as the relay (ADR 0022). Only with a tor named.
+    pub node_over_tor: bool,
     /// How long an unpaid invoice is kept, on either side.
     pub invoice_expiry: InvoiceExpiry,
 }
@@ -298,6 +305,22 @@ impl Settings {
             .parse("invoice_expiry_hours", parse_expiry_hours)?
             .unwrap_or_default();
         let relay_tor = relay_tor(&lookup)?;
+        let node_over_tor = lookup
+            .parse("node_over_tor", |text| match text {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            })?
+            .unwrap_or(false);
+        if node_over_tor && relay_tor == RelayTor::Off {
+            let origin = lookup
+                .raw("node_over_tor")
+                .map_or(Origin::Default, |(_, origin)| origin);
+            return Err(SettingsError::InvalidValue {
+                key: "node_over_tor",
+                origin,
+            });
+        }
 
         Ok(Self {
             network,
@@ -316,6 +339,7 @@ impl Settings {
             node_api_secret_file: lookup.path("node_api_secret_file")?,
             relay,
             relay_tor,
+            node_over_tor,
             invoice_expiry,
         })
     }
@@ -629,6 +653,37 @@ mod tests {
                 lib_dir: Some(PathBuf::from("/opt/tor")),
             }
         );
+    }
+
+    #[test]
+    fn the_node_goes_through_tor_only_when_asked_and_a_tor_is_named() {
+        let tor = ("LEPIC_EPICBOX_TOR_SOCKS", "127.0.0.1:9050");
+        assert!(!resolve(&[tor]).unwrap().node_over_tor);
+        assert!(
+            resolve(&[tor, ("LEPIC_NODE_OVER_TOR", "true")])
+                .unwrap()
+                .node_over_tor
+        );
+        assert!(
+            !resolve(&[tor, ("LEPIC_NODE_OVER_TOR", "false")])
+                .unwrap()
+                .node_over_tor
+        );
+        for vars in [
+            &[("LEPIC_NODE_OVER_TOR", "true")][..],
+            &[tor, ("LEPIC_NODE_OVER_TOR", "yes")][..],
+        ] {
+            assert!(
+                matches!(
+                    resolve(vars),
+                    Err(SettingsError::InvalidValue {
+                        key: "node_over_tor",
+                        ..
+                    })
+                ),
+                "{vars:?}"
+            );
+        }
     }
 
     #[test]

@@ -21,5 +21,9 @@ fn main() -> ExitCode {
         stderr: Box::new(io::stderr()),
         ansi: io::stderr().is_terminal(),
     };
-    ExitCode::from(run(&ProcessHost, std::env::args_os(), &mut console))
+    ExitCode::from(run(
+        &ProcessHost::default(),
+        std::env::args_os(),
+        &mut console,
+    ))
 }
