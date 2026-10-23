@@ -148,7 +148,9 @@ fn apply_notice(
             &from,
             network,
         )? {
-            Some((tx_id, _)) => Effect::Declined { tx_id },
+            Some((tx_id, TxState::Received)) => Effect::Declined { tx_id },
+            // The invoice was paid and finalized, or ended otherwise, before the decline came.
+            Some(_) => Effect::Noted,
             None => Effect::Dropped,
         },
         NoticeKind::Withdrawn => withdraw(repos, slate_id, &from, network)?,

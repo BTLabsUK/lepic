@@ -656,6 +656,33 @@ fn the_issuer_hears_a_decline_from_the_invoiced_address() {
 }
 
 #[test]
+fn a_decline_after_the_invoice_was_finalized_raises_no_event() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let (issued, _, i2) = world.pay_through(&peer, 9);
+    world.post(9, &world.issuer.address, &i2, 1);
+    assert_eq!(world.drain_issuer().finalized, 1);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    world.post(
+        9,
+        &world.issuer.address,
+        &notice("declined", issued.slate_id),
+        1,
+    );
+
+    let summary = world.drain_issuer();
+
+    assert_eq!(summary.notices, 1);
+    assert!(notice_events(&mut issuer_events).is_empty());
+    let state = world
+        .issuer
+        .read(|repos| repos.transaction(issued.tx_id))
+        .unwrap()
+        .state;
+    assert_eq!(state, TxState::Posted);
+}
+
+#[test]
 fn a_peer_proven_by_its_notice_is_sent_withdrawn() {
     let world = World::new();
     let peer = world.peer_client(9);
