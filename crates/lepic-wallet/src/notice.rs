@@ -2,7 +2,9 @@
 //! invoice, which are not slates.
 //!
 //! A notice is the JSON object `{"lepic":1,"type":<kind>,"slate_id":<uuid>}`, with the kernel
-//! `excess` added for `posted`, at most [`MAX_NOTICE_LEN`] bytes. A stock `epic-wallet` listener
+//! `excess` added for `posted`, at most [`MAX_NOTICE_LEN`] bytes. This wallet pads every notice
+//! it writes to [`PADDED_NOTICE_LEN`] with a `pad` key, which readers ignore as they ignore
+//! every unknown key, so that its size does not tell one kind from another. A stock `epic-wallet` listener
 //! processes only V2 and V3 slates, so a notice goes only to a peer whose own messages proved
 //! it runs LEPIC. A notice never moves funds or unlocks anything, and is taken
 //! only from the recorded counterparty of its slate.
@@ -16,8 +18,15 @@ use serde::{Deserialize, Serialize};
 /// The notice format version this wallet writes and reads.
 pub const NOTICE_VERSION: u64 = 1;
 
-/// The longest notice accepted, in bytes. Every notice this wallet writes is far shorter.
+/// The longest notice accepted, in bytes.
 pub const MAX_NOTICE_LEN: usize = 512;
+
+/// The length of every notice this wallet writes, in bytes: under [`MAX_NOTICE_LEN`], so that a
+/// later version can add a key and still be read by this one.
+pub const PADDED_NOTICE_LEN: usize = 256;
+const _: () = assert!(PADDED_NOTICE_LEN <= MAX_NOTICE_LEN);
+
+const PAD: char = '0';
 
 const DECLINED: &str = "declined";
 const WITHDRAWN: &str = "withdrawn";
@@ -81,6 +90,7 @@ struct Written {
     slate_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     excess: Option<String>,
+    pad: String,
 }
 
 /// Classifies a decrypted payload. Bounded: anything over the slate size bound, binary, or not
@@ -139,14 +149,19 @@ impl Notice {
             NoticeKind::Withdrawn => (WITHDRAWN, None),
             NoticeKind::Posted { excess } => (POSTED, Some(excess.to_hex())),
         };
-        let written = Written {
+        let mut written = Written {
             lepic: NOTICE_VERSION,
             kind,
             slate_id: self.slate_id.to_string(),
             excess,
+            pad: String::new(),
         };
-        // A struct of strings and a number always serializes.
-        let text = serde_json::to_string(&written).unwrap_or_default();
+        // A struct of strings and a number always serializes, and each pad character adds one
+        // byte, as it needs no escaping.
+        let unpadded = serde_json::to_string(&written).unwrap_or_default();
+        written.pad =
+            std::iter::repeat_n(PAD, PADDED_NOTICE_LEN.saturating_sub(unpadded.len())).collect();
+        let text = serde_json::to_string(&written).unwrap_or(unpadded);
         WireSlate::text(MediaType::JSON, text)
     }
 }
@@ -174,22 +189,30 @@ mod tests {
         notice.encode().as_text().unwrap().to_owned()
     }
 
+    /// The notice as written, up to its padding.
+    fn unpadded(notice: Notice) -> String {
+        let text = text(notice);
+        let (head, pad) = text.split_once(r#","pad":""#).unwrap();
+        assert!(pad.trim_end_matches(['"', '}']).chars().all(|c| c == PAD));
+        format!("{head}}}")
+    }
+
+    fn every_kind() -> [Notice; 3] {
+        [
+            NoticeKind::Declined,
+            NoticeKind::Withdrawn,
+            NoticeKind::Posted { excess: excess() },
+        ]
+        .map(|kind| Notice {
+            slate_id: slate_id(),
+            kind,
+        })
+    }
+
     #[test]
     fn notices_are_written_with_the_version_first() {
-        let declined = Notice {
-            slate_id: slate_id(),
-            kind: NoticeKind::Declined,
-        };
-        let withdrawn = Notice {
-            slate_id: slate_id(),
-            kind: NoticeKind::Withdrawn,
-        };
-        let posted = Notice {
-            slate_id: slate_id(),
-            kind: NoticeKind::Posted { excess: excess() },
-        };
         insta::assert_snapshot!(
-            [text(declined), text(withdrawn), text(posted)].join("\n"),
+            every_kind().map(unpadded).join("\n"),
             @r#"
         {"lepic":1,"type":"declined","slate_id":"0436430c-2b02-624c-2032-570501212b00"}
         {"lepic":1,"type":"withdrawn","slate_id":"0436430c-2b02-624c-2032-570501212b00"}
@@ -199,12 +222,11 @@ mod tests {
     }
 
     #[test]
-    fn a_written_notice_fits_the_bound() {
-        let posted = Notice {
-            slate_id: slate_id(),
-            kind: NoticeKind::Posted { excess: excess() },
-        };
-        assert!(text(posted).len() <= MAX_NOTICE_LEN);
+    fn every_kind_is_written_at_one_length_and_reads_back() {
+        for notice in every_kind() {
+            assert_eq!(text(notice).len(), PADDED_NOTICE_LEN, "{notice:?}");
+            assert_eq!(classify(&notice.encode()), Payload::Notice(notice));
+        }
     }
 
     #[test]
