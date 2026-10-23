@@ -662,6 +662,20 @@ where
         Ok(self.attached_client(epicbox)?.address().clone())
     }
 
+    /// The payments address of `epicbox` and the signature of the push registration `request`
+    /// made with its key. Fails as [`Wallet::epicbox_attach`] does.
+    pub fn epicbox_push_signature(
+        &self,
+        epicbox: &EpicboxTransport,
+        request: &lepic_epicbox::PushRequest,
+    ) -> Result<(EpicboxAddress, lepic_crypto::EcdsaSignature), InboxError> {
+        let identity = self.identity_at(epicbox, ADDRESS_INDEX)?;
+        let signature = identity
+            .sign_push(request)
+            .map_err(|_| InboxError::Identity(ClientError::IdentityMismatch))?;
+        Ok((identity.address().clone(), signature))
+    }
+
     fn attached_client(&self, epicbox: &EpicboxTransport) -> Result<EpicboxClient, InboxError> {
         Ok(epicbox.attach(self.identity_at(epicbox, ADDRESS_INDEX)?))
     }

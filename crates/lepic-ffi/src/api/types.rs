@@ -584,6 +584,23 @@ pub struct RefreshProgress {
     pub summary: Option<WalletSummary>,
 }
 
+/// A push registration signed with the wallet's Epicbox address key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PushSignature {
+    /// The full Epicbox address, as [`EpicWallet::epicbox_address`] returns it.
+    pub address: String,
+    /// Secp256k1 ECDSA over SHA-256 of the push text, DER hex.
+    pub signature: String,
+}
+
+impl std::fmt::Debug for PushSignature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushSignature")
+            .field("address", &self.address)
+            .finish_non_exhaustive()
+    }
+}
+
 /// What one Epicbox drain did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InboxReport {

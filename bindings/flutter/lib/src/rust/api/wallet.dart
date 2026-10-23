@@ -549,6 +549,18 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// `expiry_secs` deletes them. `expiry_secs` is as in [`EpicWallet::sweep_invoices`].
   Future<List<IncomingInvoice>> pendingInvoices({BigInt? expirySecs});
 
+  /// Signs a push registration for this wallet's Epicbox address, so a push service can tie
+  /// the FCM `token` to it. LEPIC builds the text itself, `epic-push-v1`, `action`, the
+  /// address key, `token` and `timestamp` (unix seconds) on five lines, and signs nothing
+  /// else. `action` is `register` or `unregister`; `token` is 1 to 4096 characters of
+  /// `[A-Za-z0-9_:.-]`. Fails with `InvalidArgument` for any other, and with `Unsupported`
+  /// when the configuration names no relay.
+  Future<PushSignature> pushSignature({
+    required String action,
+    required String token,
+    required BigInt timestamp,
+  });
+
   /// [`EpicWallet::receive_slate`] for the slate file at `path`. The answer is also written to
   /// `<path>.response`, as `epic-wallet` names it, for a repeated slate too.
   Future<ReceivedSlate> receiveFile({required String path});
