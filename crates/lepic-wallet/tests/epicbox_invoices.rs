@@ -35,8 +35,8 @@ use lepic_wallet::epicbox_invoice::{InvoiceExpiry, PeerInvoiceSupport};
 use lepic_wallet::event::BouncedInvoice;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, PayRequest};
-use lepic_wallet::selection::SelectionOptions;
-use lepic_wallet::send::{Delivery, SendError};
+use lepic_wallet::selection::{SelectionOptions, SelectionStrategy};
+use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
@@ -1154,6 +1154,65 @@ fn a_payment_for_an_invoice_another_install_issued_is_refused_with_an_event() {
     assert_eq!(issuer_summary, InboxSummary::default());
     assert!(
         std::iter::from_fn(|| issuer_events.try_recv().ok())
+            .all(|event| !matches!(event, Event::UnknownSlate(_)))
+    );
+}
+
+#[test]
+fn an_answer_to_a_send_another_install_made_is_refused_with_an_event() {
+    let world = World::new();
+    let twin = world.payer_twin();
+    assert_eq!(twin.address, world.payer.address);
+    let sent = world
+        .block_on(world.payer.wallet.send(
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+            },
+            Delivery::Deliver {
+                transport: TRANSPORT_ID,
+                to: Destination::new(world.issuer.address.to_string()),
+            },
+        ))
+        .unwrap();
+    let received = world
+        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .unwrap();
+    assert_eq!(received.received, 1, "{received:?}");
+    let mut twin_events = twin.wallet.subscribe();
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    let summary = world
+        .block_on(twin.wallet.epicbox_drain(&twin.epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    let unknown: Vec<_> = std::iter::from_fn(|| twin_events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::UnknownSlate(unknown) => Some(unknown),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(unknown.len(), 1, "{unknown:?}");
+    assert_eq!(unknown[0].slate_id, sent.slate_id);
+    assert_eq!(unknown[0].stage, Stage::S2);
+    assert_eq!(unknown[0].sender, world.issuer.address.to_string());
+    // The refusal stands: the sending install never reads the S2 and posts nothing.
+    assert_eq!(world.relay.pending(&world.payer.address), 0);
+    assert!(world.node.pushed_transactions().is_empty());
+    let payer_summary = world
+        .block_on(world.payer.wallet.epicbox_drain(&world.payer.epicbox))
+        .unwrap();
+    assert_eq!(payer_summary, InboxSummary::default());
+    assert!(
+        std::iter::from_fn(|| payer_events.try_recv().ok())
             .all(|event| !matches!(event, Event::UnknownSlate(_)))
     );
 }

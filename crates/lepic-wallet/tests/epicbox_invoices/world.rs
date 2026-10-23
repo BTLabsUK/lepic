@@ -417,6 +417,18 @@ impl World {
         )
     }
 
+    /// A second install of the payer's wallet, as [`World::issuer_twin`] is of the issuer's.
+    pub fn payer_twin(&self) -> Party {
+        Party::new(
+            PAYER_MNEMONIC,
+            "payer-twin",
+            4,
+            &self.node,
+            &self.relay,
+            &self.runtime,
+        )
+    }
+
     /// The issuer invoices the payer's invoice address over Epicbox.
     pub fn issue(&self, message: Option<&str>) -> IssuedInvoice {
         let to = self.payer.invoice_address();
