@@ -100,9 +100,17 @@ void main() {
     expect(assets.single.file, library.uri);
   });
 
-  test('bundles nothing for macos and windows builds', () async {
+  test('bundles the windows x64 library', () async {
+    final library = standIn('x86_64-pc-windows-msvc', 'lepic_ffi.dll');
+    final assets = await bundled(os: OS.windows, arch: Architecture.x64);
+    expect(assets, hasLength(1));
+    expect(assets.single.id, 'package:lepic/src/rust/frb_generated.io.dart');
+    expect(assets.single.linkMode, isA<DynamicLoadingBundled>());
+    expect(assets.single.file, library.uri);
+  });
+
+  test('bundles nothing for macos builds', () async {
     expect(await bundled(os: OS.macOS, arch: Architecture.arm64), isEmpty);
-    expect(await bundled(os: OS.windows, arch: Architecture.x64), isEmpty);
   });
 
   test('fails with the packaging command when the library is missing', () {
