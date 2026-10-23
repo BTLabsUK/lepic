@@ -36,7 +36,8 @@ commands:
               --package [--mock] [--out <dir>] [--target <triple>]...: build release
               lepic-ffi into <dir>/<triple>/ with a SHA256SUMS, default dist/native; --mock adds
               the scripted node and relay, default dist/native-mock
-  repo-lint   workspace lints and unsafe code, pure crates, the secp256k1-zkp pin, interop images
+  repo-lint   workspace lints and unsafe code, pure crates, the secp256k1-zkp pin, the bridge
+              fingerprint in crates/lepic-ffi/bridge.sha256, interop images
   soak        --iterations <n> [--seed <s>] [--jobs <j>]: randomized differential soak
   upstream-drift
               upstream commits since the ones recorded in upstream.toml

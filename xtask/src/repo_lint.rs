@@ -1,6 +1,7 @@
 //! `cargo xtask repo-lint`: repository rules that neither the compiler nor cargo-deny can check.
 //! Each gate returns its findings; this module only gathers the inputs and reports.
 
+mod bridge;
 mod interop;
 mod lints;
 mod pure;
@@ -42,6 +43,24 @@ pub(crate) fn run(root: &Path) -> Result<()> {
 
     let lockfile = read(&root.join("Cargo.lock"))?;
     report("secp", boxed(secp::check(&lockfile)));
+
+    let bridge_api = repository_files(root, &[bridge::API_DIR])?;
+    let bridge_generated = repository_files(root, &[bridge::GENERATED_FILE])?;
+    let bridge_manifest_path = root.join(bridge::MANIFEST_FILE);
+    let bridge_manifest = if bridge_manifest_path.is_file() {
+        Some(read(&bridge_manifest_path)?)
+    } else {
+        None
+    };
+    report(
+        "bridge",
+        boxed(bridge::check(
+            &bridge_api,
+            bridge_generated.first(),
+            bridge_manifest.as_deref(),
+            &lockfile,
+        )),
+    );
 
     let interop_files = repository_files(root, &["interop"])?;
     report("interop", boxed(interop::check(&interop_files)));
