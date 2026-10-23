@@ -10076,7 +10076,9 @@ class EpicWalletImpl extends RustOpaque implements EpicWallet {
   /// [`EpicWallet::create_send_slate`].
   ///
   /// Fails with `InvoiceNotFound` when no invoice with that id waits, `AmountMismatch`,
-  /// `PaymentExpired`, `NotEnoughFunds`, `InvalidSlate`, `NodeUnreachable`, and with
+  /// `PaymentExpired`, `NotEnoughFunds`, `InvalidSlate`, `InvoiceAlreadyPaid` when this
+  /// invoice was paid before, `InvoiceLockedAboveTip` when it is locked above the chain tip,
+  /// `NodeUnreachable`, and with
   /// `NotDelivered` when the payment was stored but the relay did not take it: deliver it
   /// with [`EpicWallet::resend_invoice_payment`] or give up with `cancel_transaction`.
   Future<PaidInvoice> payInvoice({
