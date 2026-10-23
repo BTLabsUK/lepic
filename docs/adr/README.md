@@ -26,6 +26,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0018](0018-tor-on-desktop.md) | Tor on desktop through a bundled tor child process | accepted |
 | [0019](0019-import-epic-wallet-history.md) | Import the transaction history of an epic-wallet wallet, reconciled with the scan | accepted |
 | [0020](0020-reference-epic-wallet-4-1.md) | Reference wallet and node move to epic-wallet v4.1.0 | accepted |
+| [0021](0021-epicbox-over-tor.md) | Epicbox over Tor | accepted |
 
 Template:
 
