@@ -67,6 +67,10 @@ pub enum Event {
     /// recovery phrase and so the same payments address, may have sent the payment or issued
     /// the invoice it answers; that install never receives it, and the payer's funds stay
     /// locked until the payer cancels. The host should tell the user. Nothing changed here.
+    /// An answer redelivered before its relay message was settled raises this again for the
+    /// same `slate_id`; treat it as the same answer. Nothing verifies the slate id or the
+    /// sender: anyone who knows the payments address can raise this with any id, so the host
+    /// must only inform the user, never act on it or treat the sender as trusted.
     UnknownSlate(UnknownSlate),
 }
 

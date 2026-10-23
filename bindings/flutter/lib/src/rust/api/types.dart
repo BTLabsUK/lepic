@@ -1507,7 +1507,10 @@ enum WalletEventKind {
   /// invoice) and `sender` are set. Another install of the same wallet, on the same recovery
   /// phrase, may have made that send or issued that invoice; it will never receive this
   /// answer, so tell the user to finish it there or have the other side cancel and send
-  /// again. Nothing changed here.
+  /// again. Nothing changed here. An answer redelivered because its relay message was not
+  /// settled raises this again; treat a repeat for the same `slate_id` as one. Nothing
+  /// verifies `slate_id` or `sender`: anyone who knows the payments address can raise this
+  /// with any id. Only inform the user; never act on it or show the sender as trusted.
   unknownSlate,
 }
 

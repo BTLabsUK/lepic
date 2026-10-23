@@ -131,7 +131,11 @@ final wallet = await EpicWallet.create(
   `slateId`, `slateStage` and `sender`, the address it came from. On one recovery phrase
   installed twice, for example on a phone and a desktop, both share the payments address, and
   whichever reads such an answer first refuses it for the other: tell the user to finish that
-  payment on the other device, or ask the other side to cancel and send again.
+  payment on the other device, or ask the other side to cancel and send again. As with
+  `invoiceBounced`, an answer redelivered because its relay acknowledgement failed raises
+  the event again; treat a repeat for the same `slateId` as one. Nothing verifies `slateId`
+  or `sender`: anyone who knows the payments address can raise `unknownSlate` with any id.
+  Only inform the user; never act on it, and never show the sender as trusted.
   `WalletEventKind` and `ListenerEventKind` only gain values, at the end, and a value never
   changes meaning; an exhaustive `switch` over either must handle the new ones.
   `TransactionDetails` has the required fields `flow` and `origin` (and `imported`, nullable)
