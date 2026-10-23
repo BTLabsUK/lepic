@@ -1,5 +1,6 @@
 //! Notices between LEPIC wallets over Epicbox on the mock relay (ADR 0016): the payer hears
-//! that its payment was posted or the invoice withdrawn, the issuer hears a decline, notices
+//! that its payment was posted or the invoice withdrawn, also from an issuer that withdrew it
+//! offline and answers the payment once it arrives, the issuer hears a decline, notices
 //! from anyone but the counterparty of their slate are dropped, and no notice is ever posted to
 //! a peer that has not proved it runs LEPIC.
 
@@ -287,6 +288,112 @@ fn a_withdrawn_paid_invoice_raises_an_event_and_moves_nothing() {
             .status,
         PendingInvoiceStatus::Paid
     );
+}
+
+#[test]
+fn a_payment_of_an_invoice_withdrawn_offline_is_answered_with_withdrawn() {
+    let world = World::new();
+    world.settle_one_invoice();
+    world.payer.fund(10, world::FUNDING);
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    let paid = world.pay(&issued);
+    // The issuer withdraws while it cannot reach the relay: its notice is lost.
+    world.relay.set_refusing(true);
+    world
+        .block_on(world.issuer.wallet.cancel(issued.tx_id))
+        .unwrap();
+    world.relay.set_refusing(false);
+    assert_eq!(world.drain_payer_invoices().notices, 0);
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    let summary = world.drain_issuer();
+    let payer_summary = world.drain_payer_invoices();
+
+    assert_eq!((summary.finalized, summary.rejected), (0, 1));
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert_eq!(payer_summary.notices, 1);
+    assert_eq!(
+        notice_events(&mut payer_events),
+        vec![Event::InvoiceWithdrawn(WithdrawnInvoice {
+            slate_id: issued.slate_id,
+            tx_id: Some(paid.tx_id),
+        })]
+    );
+}
+
+#[test]
+fn a_payment_of_a_withdrawn_invoice_is_kept_while_its_answer_fails() {
+    let world = World::new();
+    world.settle_one_invoice();
+    world.payer.fund(10, world::FUNDING);
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world.pay(&issued);
+    world.relay.set_refusing(true);
+    world
+        .block_on(world.issuer.wallet.cancel(issued.tx_id))
+        .unwrap();
+    world.relay.set_refusing(false);
+    world.relay.set_post_refused(&world.payer.invoice_address());
+
+    let summary = world.drain_issuer();
+
+    assert_eq!(
+        (summary.finalized, summary.rejected, summary.held),
+        (0, 0, 1)
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 1);
+}
+
+/// The issuer invoices `peer` and withdraws it while it cannot reach the relay, after the payer
+/// paid it to `peer`. Returns the invoice and the marked I2 as `peer` received it.
+fn withdrawn_offline_through(world: &World, peer: &EpicboxClient) -> (IssuedInvoice, String) {
+    let (issued, _, i2) = world.pay_through(peer, 9);
+    world.relay.set_refusing(true);
+    world
+        .block_on(world.issuer.wallet.cancel(issued.tx_id))
+        .unwrap();
+    world.relay.set_refusing(false);
+    (issued, i2)
+}
+
+#[test]
+fn a_repeated_payment_of_a_withdrawn_invoice_is_answered_once() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let (issued, i2) = withdrawn_offline_through(&world, &peer);
+
+    world.post(9, &world.issuer.address, &i2, 3);
+    let summary = world.drain_issuer();
+
+    assert_eq!(summary.rejected, 3);
+    let received = world.drain_peer(&peer);
+    assert_eq!(
+        received
+            .iter()
+            .map(|text| classify_text(text))
+            .collect::<Vec<_>>(),
+        vec![Payload::Notice(Notice {
+            slate_id: issued.slate_id,
+            kind: NoticeKind::Withdrawn,
+        })]
+    );
+}
+
+#[test]
+fn a_payment_of_another_amount_gets_no_withdrawn() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let (_, i2) = withdrawn_offline_through(&world, &peer);
+    let mut slate: serde_json::Value = serde_json::from_str(&i2).unwrap();
+    slate["amount"] = serde_json::Value::String((world::AMOUNT + 1).to_string());
+
+    world.post(9, &world.issuer.address, &slate.to_string(), 1);
+    let summary = world.drain_issuer();
+
+    assert_eq!(summary.rejected, 1);
+    assert!(world.drain_peer(&peer).is_empty());
 }
 
 #[test]

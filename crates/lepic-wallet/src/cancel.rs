@@ -126,7 +126,7 @@ where
             for change in changes {
                 self.emit(change.into());
             }
-            self.notify_withdrawn(tx_id).await;
+            let _ = self.notify_withdrawn(tx_id).await;
         }
         Ok(())
     }

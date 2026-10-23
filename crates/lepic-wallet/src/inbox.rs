@@ -42,7 +42,8 @@ use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    AccountIndex, InboxEntry, InboxStatus, Repositories, SlateStage, StoreError, TxId, WalletStore,
+    AccountIndex, InboxEntry, InboxStatus, Repositories, SlateStage, StoreError, TxId, TxState,
+    WalletStore,
 };
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Destination, Envelope, Inbound, TransportId};
@@ -1161,6 +1162,24 @@ where
             Err(error @ InvoiceError::UnknownSlate { .. }) => {
                 self.unknown_slate(payment.id(), Stage::I2, reply_to);
                 Err(Refusal::Invoice(error).into())
+            }
+            // The payer may not have heard the withdrawal: the notice sent at the cancel fails
+            // while this wallet is offline. The payment is kept for another try while the
+            // answer cannot be delivered.
+            Err(
+                error @ InvoiceError::NotFinalizable {
+                    tx_id,
+                    state: TxState::Cancelled,
+                },
+            ) if marked => {
+                if self
+                    .answer_withdrawn_payment(tx_id, payment, reply_to)
+                    .await
+                {
+                    Err(Refusal::Invoice(error).into())
+                } else {
+                    Err(Hold::Invoice(error).into())
+                }
             }
             Err(error) if invoice_finalize_is_permanent(&error) => {
                 Err(Refusal::Invoice(error).into())

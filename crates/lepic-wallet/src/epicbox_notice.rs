@@ -10,7 +10,7 @@
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::NodeApi;
-use lepic_slate::model::SlateId;
+use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
     PeerCapability, PeerSupport, PendingInvoiceStatus, Repositories, SlateStage, StoreError,
@@ -25,7 +25,7 @@ use crate::event::{DeclinedInvoice, Event, PostedInvoice, WithdrawnInvoice};
 use crate::inbox::{ErrorChain, Handled, Hold, relay_network};
 use crate::notice::{Notice, NoticeKind};
 use crate::ports::{SecretVault, StoreOpener};
-use crate::refresh::final_kernel;
+use crate::refresh::{final_kernel, stored_slate};
 use crate::wallet::Wallet;
 
 /// What an accepted notice changed, for the event it raises.
@@ -215,6 +215,38 @@ fn withdrawal_target(
     }))
 }
 
+/// The setting that records that the payer of the withdrawn invoice `slate_id` was told.
+fn withdrawn_answer_key(slate_id: Uuid) -> String {
+    format!("{WITHDRAWN_ANSWER_PREFIX}{slate_id}")
+}
+
+const WITHDRAWN_ANSWER_PREFIX: &str = "notice.withdrawn_answered.";
+
+/// Whether `payment` of the cancelled invoice `tx_id` is to be answered with a `withdrawn`: it
+/// pays the amount of the I1 this wallet issued under its slate id, and the payer of that slate
+/// was not told before. Once per slate, so repeating a payment sends nothing more.
+fn withdrawn_answer_due(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+    payment: &Slate,
+) -> Result<bool, StoreError> {
+    let slate_id = uuid(payment.id());
+    let Some(entry) = repos.transaction(tx_id)? else {
+        return Ok(false);
+    };
+    if entry.state != TxState::Cancelled
+        || entry.slate_id != Some(slate_id)
+        || repos.setting(&withdrawn_answer_key(slate_id))?.is_some()
+    {
+        return Ok(false);
+    }
+    Ok(
+        stored_slate(repos, codecs, tx_id, slate_id, SlateStage::Invoice1)?
+            .is_some_and(|issued| issued.amount() == payment.amount()),
+    )
+}
+
 impl<N, S, V> Wallet<N, S, V>
 where
     N: NodeApi + 'static,
@@ -304,9 +336,10 @@ where
         self.send_notice(None, &to, notice).await;
     }
 
-    /// Tells the payer that the invoice `tx_id`, just cancelled, is withdrawn, when it was one
-    /// issued over Epicbox.
-    pub(crate) async fn notify_withdrawn(&self, tx_id: TxId) {
+    /// Tells the payer that the cancelled invoice `tx_id` is withdrawn, when it was one issued
+    /// over Epicbox, and records that it was told. Returns false when such a notice was not
+    /// delivered.
+    pub(crate) async fn notify_withdrawn(&self, tx_id: TxId) -> bool {
         let target = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
@@ -318,17 +351,60 @@ where
         };
         let (slate_id, to) = match target.await {
             Ok(Some(target)) => target,
-            Ok(None) => return,
+            Ok(None) => return true,
             Err(error) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&error), "notice not sent");
-                return;
+                return false;
             }
         };
         let notice = Notice {
             slate_id,
             kind: NoticeKind::Withdrawn,
         };
-        self.send_notice(None, &to, notice).await;
+        if !self.send_notice(None, &to, notice).await {
+            return false;
+        }
+        let key = withdrawn_answer_key(uuid(slate_id));
+        let recorded = self
+            .inbox_write(move |repos, now| repos.put_setting(&key, &now.to_string()))
+            .await;
+        if let Err(error) = recorded {
+            warn!(tx_id = %tx_id, error = %ErrorChain(&error), "withdrawn notice not recorded");
+        }
+        true
+    }
+
+    /// Answers a marked `payment` of the cancelled invoice `tx_id` with a `withdrawn` to the
+    /// address the invoice was issued to, when the payer was never told: the notice sent at the
+    /// cancel fails while this wallet is offline. Returns false when that answer was due and
+    /// not delivered.
+    pub(crate) async fn answer_withdrawn_payment(
+        &self,
+        tx_id: TxId,
+        payment: &Slate,
+        reply_to: &Destination,
+    ) -> bool {
+        let due = async {
+            let session = self.session()?;
+            let codecs = stored_codecs(self.config().network);
+            let payment = payment.clone();
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| withdrawn_answer_due(repos, &codecs, tx_id, &payment))?)
+            })
+            .await
+        };
+        match due.await {
+            Ok(true) => {}
+            Ok(false) => return true,
+            Err(error) => {
+                warn!(tx_id = %tx_id, error = %ErrorChain(&error), "notice not sent");
+                return false;
+            }
+        }
+        self.record_paying_peer(tx_id, reply_to).await;
+        self.notify_withdrawn(tx_id).await
     }
 
     /// Tells the issuer of the parked invoice `slate_id` that it was declined, from the invoice
