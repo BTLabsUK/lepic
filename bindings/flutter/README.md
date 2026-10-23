@@ -485,7 +485,7 @@ final on = wallet.epicboxOverTor();
   listener is not connected yet: the relay waits for tor, it never falls back to a direct
   connection.
 - Hosts with an onion are reached at it: a built-in table holds `flooepicbox.btlabs.uk:443`
-  until the app passes its own list, for example the signed one it fetched:
+  and `node.btlabs.uk:443` (the node client, below) until the app passes its own list, for example the signed one it fetched:
 
   ```dart
   wallet.setOnionRoutes(routes: [
@@ -499,6 +499,37 @@ final on = wallet.epicboxOverTor();
   list LEPIC asks it once per wallet session for `/.well-known/epicbox.json` through tor, and
   uses the onion it names only when it names the relay's own domain; otherwise it goes through
   the Tor network.
+
+### Node over Tor and the SOCKS address
+
+The node client goes through the wallet's tor the same way (ADR 0022). It is on when the wallet
+opens; the app's setting is separate from Epicbox's:
+
+```dart
+wallet.setNodeOverTor(enabled: settings.nodeOverTor);
+final on = wallet.nodeOverTor();
+```
+
+- On, with tor running or expected (`expectTor()`, `startTor`): every node request goes through
+  tor and never directly. A node in the onion list (built in: `https://node.btlabs.uk`) is
+  reached at its onion with TLS for its domain; any other node is reached by name through a Tor
+  exit, which resolves the name: the system resolver is not used. The user's node does not
+  change.
+- Plain `http://` is refused with `invalidArgument` when the wallet opens, for any host but
+  loopback (which stays direct, as always) and `.onion` hosts. Nothing travels through a Tor
+  exit unencrypted.
+- While tor starts, requests wait for it, within their 90 second timeout, then fail with
+  `nodeUnreachable`; they never fall back to a direct connection. Tor stopped by `stopTor` or
+  `lock`, or the setting off: the node is reached directly. A request in progress finishes on
+  its own connection.
+- `torStatus().socksPort` and the `socksPort` of the `bootstrapped`, `publishing` and `ready`
+  events give the port of tor's SOCKS5 proxy once tor has bootstrapped; it is `null` before
+  and while tor is off, and it changes when tor restarts. The proxy listens on `127.0.0.1`
+  only: connect to that address, never to another one. Use the SOCKS5 domain address type
+  (`socks5h`), so tor resolves the names. Tor needs no credentials: any user name and
+  password work, and different ones only put the connections on different circuits
+  (`IsolateSOCKSAuth`), so use a fresh pair per connection or request series that should not
+  be linked.
 
 ## Invoices over Epicbox
 
