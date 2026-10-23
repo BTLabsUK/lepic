@@ -35,6 +35,9 @@ pub const RELAY_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Acknowledged message ids remembered per subscription, so a redelivery after a lost `Made`
 /// is acknowledged again instead of handed out twice.
+/// How long a connection whose route changed is kept for the messages in flight on it.
+const REROUTE_GRACE: Duration = Duration::from_secs(30);
+
 const REMEMBERED_ACKNOWLEDGEMENTS: usize = 4096;
 
 /// Received messages and rejections waiting to be handed out. Beyond this a relay that pushes faster than the
@@ -753,6 +756,14 @@ impl<'a> Session<'a> {
         let mut pings = interval_at(first_ping, ping_every);
         pings.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let cancel = self.manager.cancel.clone();
+        let context = Arc::clone(&self.manager.context);
+        let route = self
+            .connection
+            .as_ref()
+            .map_or(0, |connection| connection.route);
+        // Set once the route changed: the connection is replaced when nothing is in flight on
+        // it, or at this instant.
+        let mut reroute_by: Option<Instant> = None;
 
         loop {
             tokio::select! {
@@ -761,6 +772,13 @@ impl<'a> Session<'a> {
                 sent = self.send_next() => sent?,
             }
             self.publish_expecting();
+            if let Some(by) = reroute_by
+                && (self.is_quiet() || Instant::now() >= by)
+            {
+                info!("epicbox relay route changed, reconnecting");
+                self.leave().await;
+                return Err(ClientError::Closed);
+            }
             if self.is_drained() {
                 return Ok(self.finish_drain().await);
             }
@@ -777,6 +795,11 @@ impl<'a> Session<'a> {
                     None => return Ok(self.leave().await),
                 },
                 frame = connection.receive() => self.handle(frame?)?,
+                () = context.connector.route_changed(&context.settings.endpoint, route),
+                    if reroute_by.is_none() => {
+                    reroute_by = Some(deadline_after(REROUTE_GRACE));
+                }
+                () = sleep_until(reroute_by.unwrap_or_else(Instant::now)), if reroute_by.is_some() => {}
                 _ = pings.tick() => {
                     if connection.idle_for() > silence_limit {
                         return Err(ClientError::Timeout { awaiting: Awaiting::Traffic });
@@ -817,6 +840,14 @@ impl<'a> Session<'a> {
         self.manager
             .shared
             .update(|inbox| inbox.expecting = expecting);
+    }
+
+    /// Nothing sent awaits its answer, nothing is queued, and every message handed out was
+    /// acknowledged.
+    fn is_quiet(&self) -> bool {
+        self.outstanding.is_none()
+            && self.queue.is_empty()
+            && self.manager.shared.lock().is_settled()
     }
 
     fn is_drained(&self) -> bool {

@@ -107,6 +107,26 @@ pub trait Connector: Send + Sync {
         &'a self,
         endpoint: &'a RelayEndpoint,
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>>;
+
+    /// The limit for the handshakes of a connection to `endpoint`, given the configured one.
+    fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
+        let _ = endpoint;
+        configured
+    }
+
+    /// Which way a connection to `endpoint` made now would take, as a number that changes when
+    /// the way does.
+    fn route(&self, endpoint: &RelayEndpoint) -> u64 {
+        let _ = endpoint;
+        0
+    }
+
+    /// Resolves once [`Connector::route`] of `endpoint` is no longer `route`, so a connection
+    /// held open can be replaced by one that takes the new way. Cancel-safe.
+    fn route_changed<'a>(&'a self, endpoint: &'a RelayEndpoint, route: u64) -> BoxFuture<'a, ()> {
+        let _ = (endpoint, route);
+        Box::pin(std::future::pending())
+    }
 }
 
 /// Why [`TcpConnector`] refused an endpoint without connecting. Carried inside the
@@ -224,6 +244,8 @@ pub(crate) struct Greeting {
 pub(crate) struct Connection {
     ws: WebSocketStream<Box<dyn RelayStream>>,
     last_heard: Instant,
+    /// The connector's route when the connection was opened.
+    pub(crate) route: u64,
 }
 
 fn websocket_config() -> WebSocketConfig {
@@ -242,6 +264,7 @@ impl Connection {
         endpoint: &RelayEndpoint,
         connect_timeout: Duration,
     ) -> Result<Self, ClientError> {
+        let route = connector.route(endpoint);
         let attempt = async {
             let stream = connector
                 .connect(endpoint)
@@ -256,14 +279,18 @@ impl Connection {
             .map_err(websocket_error)?;
             Ok::<_, ClientError>(ws)
         };
-        let ws = timeout(connect_timeout, attempt)
-            .await
-            .map_err(|_| ClientError::Timeout {
-                awaiting: Awaiting::Connection,
-            })??;
+        let ws = timeout(
+            connector.connect_timeout(endpoint, connect_timeout),
+            attempt,
+        )
+        .await
+        .map_err(|_| ClientError::Timeout {
+            awaiting: Awaiting::Connection,
+        })??;
         Ok(Self {
             ws,
             last_heard: Instant::now(),
+            route,
         })
     }
 

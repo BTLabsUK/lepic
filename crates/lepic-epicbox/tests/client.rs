@@ -705,3 +705,113 @@ async fn subscription_outside_a_runtime_is_an_error() {
     });
     assert!(relay.join().unwrap());
 }
+
+/// The mock relay's connector, with a route the test changes.
+struct Rerouted {
+    inner: std::sync::Arc<dyn lepic_epicbox::Connector>,
+    route: tokio::sync::watch::Sender<u64>,
+}
+
+impl lepic_epicbox::Connector for Rerouted {
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a lepic_epicbox::RelayEndpoint,
+    ) -> lepic_transport::transport::BoxFuture<
+        'a,
+        std::io::Result<Box<dyn lepic_epicbox::RelayStream>>,
+    > {
+        self.inner.connect(endpoint)
+    }
+
+    fn route(&self, _endpoint: &lepic_epicbox::RelayEndpoint) -> u64 {
+        *self.route.borrow()
+    }
+
+    fn route_changed<'a>(
+        &'a self,
+        _endpoint: &'a lepic_epicbox::RelayEndpoint,
+        route: u64,
+    ) -> lepic_transport::transport::BoxFuture<'a, ()> {
+        let mut changes = self.route.subscribe();
+        Box::pin(async move {
+            let _ = changes.wait_for(|now| *now != route).await;
+        })
+    }
+}
+
+fn rerouted(relay: &MockRelay) -> std::sync::Arc<Rerouted> {
+    std::sync::Arc::new(Rerouted {
+        inner: relay.connector(),
+        route: tokio::sync::watch::Sender::new(0),
+    })
+}
+
+fn listen_rerouted(connector: &std::sync::Arc<Rerouted>) -> lepic_epicbox::Subscription {
+    let identity = lepic_epicbox::Identity::new(client_support::secret(BOB), address(BOB)).unwrap();
+    lepic_epicbox::EpicboxClient::new(
+        settings(),
+        identity,
+        std::sync::Arc::clone(connector) as std::sync::Arc<dyn lepic_epicbox::Connector>,
+    )
+    .listen()
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_listener_reconnects_when_its_route_changes_and_gets_what_waits() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let connector = rerouted(&relay);
+    let bob = listen_rerouted(&connector);
+    until(|| relay.received("Subscribe") == 1).await;
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+
+    connector.route.send_replace(1);
+    until(|| relay.received("Subscribe") == 2).await;
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    assert_eq!(relay.connections(), 1, "the old connection was closed");
+
+    relay.store(
+        &address(ALICE),
+        &address(BOB),
+        &sealed(ALICE, BOB, "after the change"),
+    );
+    within(LONG, bob.delivery_available()).await;
+    assert_eq!(text(&next(&bob).await.unwrap()), "after the change");
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_message_in_flight_when_the_route_changes_is_acknowledged_once_before_the_reconnect() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let id = relay.store(
+        &address(ALICE),
+        &address(BOB),
+        &sealed(ALICE, BOB, "in flight"),
+    );
+    let connector = rerouted(&relay);
+    let bob = listen_rerouted(&connector);
+    let envelope = next(&bob).await.unwrap();
+    assert_eq!(text(&envelope), "in flight");
+
+    connector.route.send_replace(1);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(
+        relay.received("Subscribe"),
+        1,
+        "the connection is kept while the message is unacknowledged"
+    );
+    bob.acknowledge(envelope.ack_token()).await.unwrap();
+    until(|| relay.received("Subscribe") == 2).await;
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+
+    assert_eq!(relay.received("Made"), 1);
+    assert_eq!(relay.deliveries(&id), 1);
+    assert_eq!(relay.pending(&address(BOB)), 0);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), bob.next_envelope())
+            .await
+            .map_or(true, |next| next.unwrap().is_none()),
+        "nothing is handed out again"
+    );
+    bob.stop().await.unwrap();
+}
