@@ -37,6 +37,9 @@ pub enum Event {
     ReplyUndelivered(UndeliveredReply),
     Sync(SyncProgress),
     Transport(TransportStatus),
+    /// A transport's connection dropped: why, and how long it waits before it tries again.
+    /// Follows the [`Event::Transport`] that reports `Disconnected`.
+    TransportDisconnected(TransportDisconnect),
     /// An invoice from an allowed sender was stored on the invoice address, waiting for the
     /// user to pay or decline it. Nothing was paid.
     InvoiceParked(ParkedInvoice),
@@ -214,6 +217,15 @@ impl From<StateChange> for Event {
 pub struct SyncProgress {
     pub height: Height,
     pub target: Height,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportDisconnect {
+    pub transport: TransportId,
+    /// What ended the connection, as the transport reports it. No secrets.
+    pub reason: String,
+    /// The wait before the next attempt; `None` when the transport does not retry.
+    pub retry_in: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

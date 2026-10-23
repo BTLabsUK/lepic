@@ -7658,11 +7658,15 @@ impl SseDecode for crate::api::types::ListenerEvent {
         let mut var_txId = <Option<u32>>::sse_decode(deserializer);
         let mut var_slateId = <Option<String>>::sse_decode(deserializer);
         let mut var_message = <String>::sse_decode(deserializer);
+        let mut var_reason = <Option<String>>::sse_decode(deserializer);
+        let mut var_retryInMs = <Option<u64>>::sse_decode(deserializer);
         return crate::api::types::ListenerEvent {
             kind: var_kind,
             tx_id: var_txId,
             slate_id: var_slateId,
             message: var_message,
+            reason: var_reason,
+            retry_in_ms: var_retryInMs,
         };
     }
 }
@@ -9856,6 +9860,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ListenerEvent {
             self.tx_id.into_into_dart().into_dart(),
             self.slate_id.into_into_dart().into_dart(),
             self.message.into_into_dart().into_dart(),
+            self.reason.into_into_dart().into_dart(),
+            self.retry_in_ms.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -11605,6 +11611,8 @@ impl SseEncode for crate::api::types::ListenerEvent {
         <Option<u32>>::sse_encode(self.tx_id, serializer);
         <Option<String>>::sse_encode(self.slate_id, serializer);
         <String>::sse_encode(self.message, serializer);
+        <Option<String>>::sse_encode(self.reason, serializer);
+        <Option<u64>>::sse_encode(self.retry_in_ms, serializer);
     }
 }
 

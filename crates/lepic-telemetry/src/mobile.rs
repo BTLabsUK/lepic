@@ -19,7 +19,7 @@ use thiserror::Error;
 use crate::{LogRecord, LogSink};
 
 /// Fields from the log vocabulary whose values say nothing about keys, amounts or addresses.
-const KEPT_FIELDS: [&str; 15] = [
+const KEPT_FIELDS: [&str; 17] = [
     "wallet",
     "account",
     "tx_id",
@@ -33,6 +33,8 @@ const KEPT_FIELDS: [&str; 15] = [
     "height",
     "attempt",
     "elapsed_ms",
+    "retry_in_ms",
+    "code",
     "error",
     "tag",
 ];

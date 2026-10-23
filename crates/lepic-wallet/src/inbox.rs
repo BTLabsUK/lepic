@@ -55,8 +55,8 @@ use uuid::Uuid;
 use crate::account;
 use crate::error::WalletError;
 use crate::event::{
-    Event, FinalizedInvoice, SlateId, TransportState, TransportStatus, UndeliveredReply,
-    UnknownSlate,
+    Event, FinalizedInvoice, SlateId, TransportDisconnect, TransportState, TransportStatus,
+    UndeliveredReply, UnknownSlate,
 };
 use crate::finalize::FinalizeError;
 use crate::invoice::InvoiceError;
@@ -828,6 +828,17 @@ where
                     transport: TRANSPORT_ID,
                     state: mapped,
                 }));
+                if mapped == TransportState::Disconnected {
+                    let disconnect = subscription.last_disconnect();
+                    self.emit(Event::TransportDisconnected(TransportDisconnect {
+                        transport: TRANSPORT_ID,
+                        reason: disconnect.as_ref().map_or_else(
+                            || "connection ended".to_owned(),
+                            |disconnect| disconnect.reason.clone(),
+                        ),
+                        retry_in: disconnect.map(|disconnect| disconnect.retry_in),
+                    }));
+                }
             }
             if state.has_ended() || states.changed().await.is_err() {
                 return;

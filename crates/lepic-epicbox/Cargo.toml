@@ -35,6 +35,8 @@ zeroize.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+lepic-telemetry = { path = "../lepic-telemetry" }
 lepic-epicbox = { path = ".", features = ["mock-relay"] }
 proptest = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "test-util", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+tracing.workspace = true

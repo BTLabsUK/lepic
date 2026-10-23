@@ -17,7 +17,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use crate::address::{DEFAULT_PORT, Domain};
 use crate::client::{Awaiting, ClientError, ClientSettings};
@@ -337,12 +337,29 @@ impl Connection {
                 .ws
                 .next()
                 .await
-                .ok_or(ClientError::Closed)?
-                .map_err(websocket_error)?;
+                .ok_or_else(|| {
+                    info!("epicbox relay ended the stream without a close frame");
+                    ClientError::Closed
+                })?
+                .map_err(|error| {
+                    let error = websocket_error(error);
+                    warn!(error = %crate::client::ErrorChain(&error), "epicbox websocket failed");
+                    error
+                })?;
             self.last_heard = Instant::now();
             let text = match message {
                 Message::Text(text) => text,
-                Message::Close(_) => return Err(ClientError::Closed),
+                Message::Close(frame) => {
+                    match frame {
+                        Some(frame) => info!(
+                            code = u16::from(frame.code),
+                            error = %frame.reason,
+                            "epicbox relay sent a close frame"
+                        ),
+                        None => info!("epicbox relay sent a close frame without a reason"),
+                    }
+                    return Err(ClientError::Closed);
+                }
                 Message::Binary(_) => {
                     debug!("epicbox binary frame ignored");
                     continue;

@@ -755,6 +755,12 @@ pub struct ListenerEvent {
     /// The slate id, for `InvoiceBounced`.
     pub slate_id: Option<String>,
     pub message: String,
+    /// For `Disconnected`: why the connection ended (close frame, I/O error, timeout), as text
+    /// without secrets. `None` for other kinds.
+    pub reason: Option<String>,
+    /// For `Disconnected`: milliseconds until the listener tries again. `None` for other kinds
+    /// and when it does not retry.
+    pub retry_in_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

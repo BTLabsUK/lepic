@@ -1172,6 +1172,8 @@ impl EpicWallet {
                     tx_id: None,
                     slate_id: None,
                     message: error.to_string(),
+                    reason: None,
+                    retry_in_ms: None,
                 });
             }
             let _ = events.add(ListenerEvent {
@@ -1179,6 +1181,8 @@ impl EpicWallet {
                 tx_id: None,
                 slate_id: None,
                 message: String::new(),
+                reason: None,
+                retry_in_ms: None,
             });
         });
     }

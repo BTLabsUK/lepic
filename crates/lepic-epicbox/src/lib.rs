@@ -22,7 +22,8 @@ pub use client::{
     Awaiting, Backoff, ClientError, ClientSettings, EpicboxClient, Identity, TRANSPORT_ID,
 };
 pub use client_inbox::{
-    ConnectionState, InboxCounters, Mode, RELAY_RETENTION, Rejection, RejectionReason, Subscription,
+    ConnectionState, Disconnect, InboxCounters, Mode, RELAY_RETENTION, Rejection, RejectionReason,
+    Subscription,
 };
 pub use crypto::{
     Destination, EncryptedMessage, KEY_LEN, MAX_MESSAGE_LEN, MessageError, MessageField,

@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{
     Instant, MissedTickBehavior, interval_at, sleep, sleep_until, timeout, timeout_at,
 };
+use tracing::instrument::WithSubscriber;
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::address::EpicboxAddress;
@@ -195,6 +196,7 @@ impl Subscription {
             changed: Notify::new(),
             commands,
             status,
+            disconnect: Mutex::new(None),
         });
         let cancel = CancelToken::new();
         let ack_timeout = context.settings.response_timeout.saturating_mul(2);
@@ -210,7 +212,8 @@ impl Subscription {
             mode,
             cancel: cancel.clone(),
         };
-        let task = runtime.spawn(manager.run().instrument(span));
+        // The host's subscriber is scoped to the calling thread, so the task carries it along.
+        let task = runtime.spawn(manager.run().instrument(span).with_current_subscriber());
         Ok(Self {
             mode,
             shared,
@@ -222,6 +225,16 @@ impl Subscription {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Why the connection last dropped and the wait before the next attempt; `None` until it
+    /// has dropped.
+    pub fn last_disconnect(&self) -> Option<Disconnect> {
+        self.shared
+            .disconnect
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn state(&self) -> watch::Receiver<ConnectionState> {
@@ -384,6 +397,14 @@ struct Shared {
     changed: Notify,
     commands: mpsc::UnboundedSender<Command>,
     status: watch::Sender<ConnectionState>,
+    disconnect: Mutex<Option<Disconnect>>,
+}
+
+/// Why the last connection ended and how long the client waits before the next attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Disconnect {
+    pub reason: String,
+    pub retry_in: Duration,
 }
 
 impl Shared {
@@ -615,6 +636,11 @@ impl Manager {
         let mut attempt: u32 = 0;
         loop {
             attempt = attempt.saturating_add(1);
+            info!(
+                attempt,
+                relay = %self.context.settings.endpoint.domain(),
+                "epicbox connecting"
+            );
             self.shared
                 .set_state(ConnectionState::Connecting { attempt });
             let opened = tokio::select! {
@@ -641,7 +667,17 @@ impl Manager {
                 .settings
                 .backoff
                 .delay(attempt.max(1), getrandom::u32().unwrap_or(u32::MAX));
-            warn!(attempt, error = %ErrorChain(&failure), "epicbox disconnected, retrying");
+            let reason = ErrorChain(&failure).to_string();
+            let retry_in_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+            warn!(attempt, retry_in_ms, error = %reason, "epicbox disconnected, retrying");
+            *self
+                .shared
+                .disconnect
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(Disconnect {
+                reason,
+                retry_in: delay,
+            });
             self.shared
                 .set_state(ConnectionState::Waiting { attempt, delay });
             if self.wait(delay).await {

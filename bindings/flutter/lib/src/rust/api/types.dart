@@ -530,16 +530,31 @@ class ListenerEvent {
   final String? slateId;
   final String message;
 
+  /// For `Disconnected`: why the connection ended (close frame, I/O error, timeout), as text
+  /// without secrets. `None` for other kinds.
+  final String? reason;
+
+  /// For `Disconnected`: milliseconds until the listener tries again. `None` for other kinds
+  /// and when it does not retry.
+  final BigInt? retryInMs;
+
   const ListenerEvent({
     required this.kind,
     this.txId,
     this.slateId,
     required this.message,
+    this.reason,
+    this.retryInMs,
   });
 
   @override
   int get hashCode =>
-      kind.hashCode ^ txId.hashCode ^ slateId.hashCode ^ message.hashCode;
+      kind.hashCode ^
+      txId.hashCode ^
+      slateId.hashCode ^
+      message.hashCode ^
+      reason.hashCode ^
+      retryInMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -549,7 +564,9 @@ class ListenerEvent {
           kind == other.kind &&
           txId == other.txId &&
           slateId == other.slateId &&
-          message == other.message;
+          message == other.message &&
+          reason == other.reason &&
+          retryInMs == other.retryInMs;
 }
 
 enum ListenerEventKind {

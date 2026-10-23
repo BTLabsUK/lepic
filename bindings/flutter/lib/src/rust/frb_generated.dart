@@ -6058,13 +6058,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ListenerEvent dco_decode_listener_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return ListenerEvent(
       kind: dco_decode_listener_event_kind(arr[0]),
       txId: dco_decode_opt_box_autoadd_u_32(arr[1]),
       slateId: dco_decode_opt_String(arr[2]),
       message: dco_decode_String(arr[3]),
+      reason: dco_decode_opt_String(arr[4]),
+      retryInMs: dco_decode_opt_box_autoadd_u_64(arr[5]),
     );
   }
 
@@ -7645,11 +7647,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_txId = sse_decode_opt_box_autoadd_u_32(deserializer);
     var var_slateId = sse_decode_opt_String(deserializer);
     var var_message = sse_decode_String(deserializer);
+    var var_reason = sse_decode_opt_String(deserializer);
+    var var_retryInMs = sse_decode_opt_box_autoadd_u_64(deserializer);
     return ListenerEvent(
       kind: var_kind,
       txId: var_txId,
       slateId: var_slateId,
       message: var_message,
+      reason: var_reason,
+      retryInMs: var_retryInMs,
     );
   }
 
@@ -9479,6 +9485,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_box_autoadd_u_32(self.txId, serializer);
     sse_encode_opt_String(self.slateId, serializer);
     sse_encode_String(self.message, serializer);
+    sse_encode_opt_String(self.reason, serializer);
+    sse_encode_opt_box_autoadd_u_64(self.retryInMs, serializer);
   }
 
   @protected

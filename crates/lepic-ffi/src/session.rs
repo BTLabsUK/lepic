@@ -1642,14 +1642,31 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
             tx_id: Some(bounced.tx_id.0),
             slate_id: Some(bounced.slate_id.to_string()),
             message: String::new(),
+            reason: None,
+            retry_in_ms: None,
+        });
+    }
+    if let Event::TransportDisconnected(disconnect) = event
+        && disconnect.transport == TRANSPORT_ID
+    {
+        return Some(ListenerEvent {
+            kind: ListenerEventKind::Disconnected,
+            tx_id: None,
+            slate_id: None,
+            message: String::new(),
+            reason: Some(disconnect.reason.clone()),
+            retry_in_ms: disconnect
+                .retry_in
+                .map(|wait| u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
         });
     }
     let (kind, tx_id) = match event {
         Event::Transport(status) if status.transport == TRANSPORT_ID => {
             match transport_state(status.state) {
                 TransportState::Connected => (ListenerEventKind::Connected, None),
-                TransportState::Disconnected => (ListenerEventKind::Disconnected, None),
-                TransportState::Connecting | TransportState::Stopped => return None,
+                TransportState::Connecting
+                | TransportState::Disconnected
+                | TransportState::Stopped => return None,
             }
         }
         Event::Received(received) => (ListenerEventKind::Received, Some(received.tx_id.0)),
@@ -1664,6 +1681,8 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
         tx_id,
         slate_id: None,
         message: String::new(),
+        reason: None,
+        retry_in_ms: None,
     })
 }
 
