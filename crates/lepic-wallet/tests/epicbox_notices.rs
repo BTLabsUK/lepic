@@ -557,6 +557,48 @@ fn a_repeated_payment_of_a_withdrawn_invoice_is_answered_once() {
 }
 
 #[test]
+fn a_payment_of_a_withdrawn_invoice_proves_only_the_invoiced_key() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let (issued, i2) = withdrawn_offline_through(&world, &peer);
+
+    world.post(8, &world.issuer.address, &i2, 1);
+    let summary = world.drain_issuer();
+
+    assert_eq!(summary.rejected, 1);
+    assert_eq!(world.drain_peer(&peer).len(), 1);
+    let sender = World::address_of(8).key_text();
+    assert_eq!(world.issuer_capability(&sender), None);
+    let invoiced = World::address_of(9).key_text();
+    assert_eq!(world.issuer_capability(&invoiced), Some(PeerSupport::Lepic));
+    assert!(world.withdrawn_answered(issued.slate_id));
+}
+
+#[test]
+fn a_payment_whose_payer_signature_fails_gets_no_withdrawn() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let (issued, i2) = withdrawn_offline_through(&world, &peer);
+    let mut slate: serde_json::Value = serde_json::from_str(&i2).unwrap();
+    let participants = slate["participant_data"].as_array_mut().unwrap();
+    let signed = participants
+        .iter()
+        .position(|participant| !participant["part_sig"].is_null())
+        .unwrap();
+    let other_nonce = participants[1 - signed]["public_nonce"].clone();
+    participants[signed]["public_nonce"] = other_nonce;
+
+    world.post(9, &world.issuer.address, &slate.to_string(), 1);
+    let summary = world.drain_issuer();
+
+    assert_eq!(summary.rejected, 1);
+    assert!(world.drain_peer(&peer).is_empty());
+    assert!(!world.withdrawn_answered(issued.slate_id));
+    let invoiced = World::address_of(9).key_text();
+    assert_eq!(world.issuer_capability(&invoiced), None);
+}
+
+#[test]
 fn a_payment_of_another_amount_gets_no_withdrawn() {
     let world = World::new();
     let peer = world.peer_client(9);

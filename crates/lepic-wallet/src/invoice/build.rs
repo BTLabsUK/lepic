@@ -413,6 +413,41 @@ fn sorted_body(slate: Slate) -> Result<Slate, InvoiceError> {
     Slate::from_parts(parts).map_err(InvoiceError::Slate)
 }
 
+/// Checks that `i2` pays `i1` as it was issued and that the payer's partial signature in it
+/// verifies against the issuer's public excess and nonce in `i1`. Needs no issuer secret, so it
+/// still answers once the issuer's context is gone.
+pub(crate) fn check_signed_payment(i1: &Slate, i2: &Slate) -> Result<(), InvoiceError> {
+    if i2.stage() != Stage::I2 {
+        return Err(InvoiceError::WrongStage { stage: i2.stage() });
+    }
+    check_payment(i1, i2)?;
+    let issuer = initiator(i1)?;
+    let payer = i2.participant(Role::Sender).ok_or(InvoiceError::Slate(
+        SlateError::MissingParticipant {
+            stage: i2.stage(),
+            role: Role::Sender,
+        },
+    ))?;
+    let signature = payer.partial_signature.ok_or(InvoiceError::Slate(
+        SlateError::MissingPartialSignature {
+            stage: i2.stage(),
+            role: Role::Sender,
+        },
+    ))?;
+    let nonce_sum = PublicKey::sum(&[issuer.public_nonce, payer.public_nonce])
+        .map_err(InvoiceError::Signing)?;
+    let excess_sum = PublicKey::sum(&[issuer.public_blind_excess, payer.public_blind_excess])
+        .map_err(InvoiceError::Signing)?;
+    verify_partial_sig(
+        &signature,
+        &nonce_sum,
+        &payer.public_blind_excess,
+        Some(&excess_sum),
+        &i2.kernel_features().signature_message(),
+    )
+    .map_err(InvoiceError::PayerSignature)
+}
+
 /// The payer adds its participant data, its inputs and change, the fee, its height and
 /// optionally a TTL. Everything else is what the issuer proposed.
 fn check_payment(i1: &Slate, i2: &Slate) -> Result<(), InvoiceError> {

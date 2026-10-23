@@ -1193,10 +1193,7 @@ where
                     tx_id,
                     state: TxState::Cancelled,
                 },
-            ) if marked => match self
-                .answer_withdrawn_payment(tx_id, payment, reply_to)
-                .await
-            {
+            ) if marked => match self.answer_withdrawn_payment(tx_id, payment).await {
                 Ok(()) => Err(Refusal::Invoice(error).into()),
                 Err(hold)
                     if reply_is_permanent(&hold)

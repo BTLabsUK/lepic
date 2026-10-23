@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::epicbox_invoice::stored_codecs;
 use crate::event::{DeclinedInvoice, Event, PostedInvoice, WithdrawnInvoice};
 use crate::inbox::{ErrorChain, Handled, Hold, relay_network};
+use crate::invoice::check_signed_payment;
 use crate::notice::{Notice, NoticeKind};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{final_kernel, stored_slate};
@@ -224,8 +225,10 @@ fn withdrawn_answer_key(slate_id: Uuid) -> String {
 const WITHDRAWN_ANSWER_PREFIX: &str = "notice.withdrawn_answered.";
 
 /// Whether `payment` of the cancelled invoice `tx_id` is to be answered with a `withdrawn`: it
-/// pays the amount of the I1 this wallet issued under its slate id, and the payer of that slate
-/// was not told before. Once per slate, so repeating a payment sends nothing more.
+/// pays the I1 this wallet issued under its slate id with a payer signature that verifies, and
+/// the payer of that slate was not told before. Once per slate, so repeating a payment sends
+/// nothing more. The sender key is not compared: a payer pays from its payments address, not
+/// from the invoice address the invoice went to.
 fn withdrawn_answer_due(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -244,7 +247,7 @@ fn withdrawn_answer_due(
     }
     Ok(
         stored_slate(repos, codecs, tx_id, slate_id, SlateStage::Invoice1)?
-            .is_some_and(|issued| issued.amount() == payment.amount()),
+            .is_some_and(|issued| check_signed_payment(&issued, payment).is_ok()),
     )
 }
 
@@ -375,25 +378,24 @@ where
 
     /// Answers a marked `payment` of the cancelled invoice `tx_id` with a `withdrawn` to the
     /// address the invoice was issued to, when the payer was never told: the notice sent at the
-    /// cancel fails while this wallet is offline. Fails with why that answer was due and not
-    /// delivered.
+    /// cancel fails while this wallet is offline. A due answer records the key the invoice went
+    /// to as running LEPIC, and not the sender's, which a verified payment does not prove.
+    /// Fails with why that answer was due and not delivered.
     pub(crate) async fn answer_withdrawn_payment(
         &self,
         tx_id: TxId,
         payment: &Slate,
-        reply_to: &Destination,
     ) -> Result<(), Hold> {
-        let due = async {
-            let session = self.session()?;
-            let codecs = stored_codecs(self.config().network);
-            let payment = payment.clone();
-            self.blocking(move |_, _| {
-                Ok(session
-                    .store
-                    .read(|repos| withdrawn_answer_due(repos, &codecs, tx_id, &payment))?)
-            })
-            .await
-        };
+        let network = relay_network(self.config().network);
+        let codecs = stored_codecs(self.config().network);
+        let payment = payment.clone();
+        let due = self.inbox_write(move |repos, now| {
+            let due = withdrawn_answer_due(repos, &codecs, tx_id, &payment)?;
+            if due && let Some(invoiced) = counterparty_key(repos, tx_id, network)? {
+                record_lepic(repos, invoiced, now)?;
+            }
+            Ok(due)
+        });
         match due.await {
             Ok(true) => {}
             Ok(false) => return Ok(()),
@@ -402,7 +404,6 @@ where
                 return Err(error.into());
             }
         }
-        self.record_paying_peer(tx_id, reply_to).await;
         self.notify_withdrawn(tx_id).await
     }
 
