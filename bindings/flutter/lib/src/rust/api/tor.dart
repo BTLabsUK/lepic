@@ -58,6 +58,10 @@ class TorEvent {
   /// For `Ready`: `<56 characters>.onion`.
   final String? onion;
 
+  /// For `Bootstrapped`, `Publishing` and `Ready`: the port of tor's SOCKS proxy on
+  /// `127.0.0.1`, as [`TorStatus::socks_port`].
+  final int? socksPort;
+
   /// For `Failed`.
   final TorFailureKind? failure;
 
@@ -77,6 +81,7 @@ class TorEvent {
     required this.kind,
     this.progress,
     this.onion,
+    this.socksPort,
     this.failure,
     this.txId,
     this.amount,
@@ -89,6 +94,7 @@ class TorEvent {
       kind.hashCode ^
       progress.hashCode ^
       onion.hashCode ^
+      socksPort.hashCode ^
       failure.hashCode ^
       txId.hashCode ^
       amount.hashCode ^
@@ -103,6 +109,7 @@ class TorEvent {
           kind == other.kind &&
           progress == other.progress &&
           onion == other.onion &&
+          socksPort == other.socksPort &&
           failure == other.failure &&
           txId == other.txId &&
           amount == other.amount &&
@@ -183,6 +190,10 @@ class TorStatus {
   /// For `Ready`.
   final String? onion;
 
+  /// Once tor has bootstrapped: the port of its SOCKS5 proxy, on `127.0.0.1` only. The app
+  /// may send its own HTTP through it; see the binding README. It changes when tor restarts.
+  final int? socksPort;
+
   /// Why the onion was not published while tor runs for sends: `Listener` or `Keys`.
   final TorFailureKind? failure;
 
@@ -190,12 +201,17 @@ class TorStatus {
     required this.kind,
     this.progress,
     this.onion,
+    this.socksPort,
     this.failure,
   });
 
   @override
   int get hashCode =>
-      kind.hashCode ^ progress.hashCode ^ onion.hashCode ^ failure.hashCode;
+      kind.hashCode ^
+      progress.hashCode ^
+      onion.hashCode ^
+      socksPort.hashCode ^
+      failure.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -205,6 +221,7 @@ class TorStatus {
           kind == other.kind &&
           progress == other.progress &&
           onion == other.onion &&
+          socksPort == other.socksPort &&
           failure == other.failure;
 }
 

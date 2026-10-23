@@ -117,7 +117,7 @@ impl HttpTransport {
         tls: Arc<ClientConfig>,
         dialer: Option<Arc<dyn NodeDialer>>,
     ) -> Result<Self, NodeError> {
-        let (base_url, host) = parse_node_url(node_url)?;
+        let (base_url, host) = parse_node_url(node_url, dialer.is_some())?;
         let route = dialer.map_or_else(
             || {
                 let mut http = HttpConnector::new();
@@ -225,13 +225,14 @@ impl RpcTransport for HttpTransport {
     }
 }
 
-/// Accepts `https` URLs, and `http` URLs to a loopback host, with a host and an optional path
+/// Accepts `https` URLs, and `http` URLs to a loopback host, or to an onion when `onion_over_http`
+/// says a dialer takes the connection to tor, which encrypts it to the onion, with a host and an optional path
 /// prefix, and nothing that could carry credentials or change the endpoint: no user info, query
 /// or fragment.
 ///
 /// Plain HTTP is limited to loopback because the API secret and every answer the wallet acts on
 /// would otherwise cross the network unprotected.
-fn parse_node_url(node_url: &str) -> Result<(String, String), NodeError> {
+fn parse_node_url(node_url: &str, onion_over_http: bool) -> Result<(String, String), NodeError> {
     let uri: Uri = node_url.trim().parse().map_err(|_| NodeError::InvalidUrl)?;
     let scheme = uri.scheme_str().ok_or(NodeError::InvalidUrl)?;
     if scheme != "http" && scheme != "https" {
@@ -244,7 +245,8 @@ fn parse_node_url(node_url: &str) -> Result<(String, String), NodeError> {
     if uri.query().is_some() || node_url.contains('#') {
         return Err(NodeError::InvalidUrl);
     }
-    if scheme == "http" && !is_loopback_host(authority.host()) {
+    let onion = onion_over_http && is_onion_host(authority.host());
+    if scheme == "http" && !onion && !is_loopback_host(authority.host()) {
         return Err(NodeError::PlainHttpToRemoteHost);
     }
     let path = uri.path().trim_end_matches('/');
@@ -252,9 +254,15 @@ fn parse_node_url(node_url: &str) -> Result<(String, String), NodeError> {
     Ok((base_url, authority.host().to_owned()))
 }
 
+fn is_onion_host(host: &str) -> bool {
+    host.rsplit('.')
+        .next()
+        .is_some_and(|label| label.eq_ignore_ascii_case("onion"))
+}
+
 /// `localhost` or a loopback IP literal. `localhost` relies on the resolver keeping the name on
 /// loopback, as RFC 6761 requires; any other name could resolve anywhere.
-fn is_loopback_host(host: &str) -> bool {
+pub fn is_loopback_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
@@ -321,7 +329,7 @@ mod tests {
 
     #[test]
     fn keeps_scheme_host_port_and_path_prefix() {
-        let (base, host) = parse_node_url("https://node.example:3413/api/").unwrap();
+        let (base, host) = parse_node_url("https://node.example:3413/api/", false).unwrap();
         assert_eq!(base, "https://node.example:3413/api");
         assert_eq!(host, "node.example");
     }
@@ -337,7 +345,7 @@ mod tests {
             "",
         ] {
             assert!(
-                matches!(parse_node_url(url), Err(NodeError::InvalidUrl)),
+                matches!(parse_node_url(url, false), Err(NodeError::InvalidUrl)),
                 "{url}"
             );
         }
@@ -363,6 +371,34 @@ mod tests {
                 BASE64.encode(format!("epic:{}", secret.expose_secret()))
             );
             assert_eq!(header.as_slice(), expected.as_bytes(), "{len}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod onion_tests {
+    use super::*;
+
+    #[test]
+    fn plain_http_to_an_onion_needs_a_dialer_and_to_a_remote_host_is_never_allowed() {
+        let onion = "http://abc.onion:3413";
+        assert!(parse_node_url(onion, true).is_ok());
+        assert!(matches!(
+            parse_node_url(onion, false),
+            Err(NodeError::PlainHttpToRemoteHost)
+        ));
+        for url in [
+            "http://node.example",
+            "http://onion.example",
+            "http://1.2.3.4",
+        ] {
+            assert!(
+                matches!(
+                    parse_node_url(url, true),
+                    Err(NodeError::PlainHttpToRemoteHost)
+                ),
+                "{url}"
+            );
         }
     }
 }

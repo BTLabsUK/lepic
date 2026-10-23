@@ -90,6 +90,9 @@ pub struct TorEvent {
     pub progress: Option<u8>,
     /// For `Ready`: `<56 characters>.onion`.
     pub onion: Option<String>,
+    /// For `Bootstrapped`, `Publishing` and `Ready`: the port of tor's SOCKS proxy on
+    /// `127.0.0.1`, as [`TorStatus::socks_port`].
+    pub socks_port: Option<u16>,
     /// For `Failed`.
     pub failure: Option<TorFailureKind>,
     /// For `Received`.
@@ -108,6 +111,7 @@ impl TorEvent {
             kind,
             progress: None,
             onion: None,
+            socks_port: None,
             failure: None,
             tx_id: None,
             amount: None,
@@ -137,6 +141,9 @@ pub struct TorStatus {
     pub progress: Option<u8>,
     /// For `Ready`.
     pub onion: Option<String>,
+    /// Once tor has bootstrapped: the port of its SOCKS5 proxy, on `127.0.0.1` only. The app
+    /// may send its own HTTP through it; see the binding README. It changes when tor restarts.
+    pub socks_port: Option<u16>,
     /// Why the onion was not published while tor runs for sends: `Listener` or `Keys`.
     pub failure: Option<TorFailureKind>,
 }
@@ -248,6 +255,29 @@ impl EpicWallet {
     /// `start_tor` that follows. A further `stop_tor`, or `lock`, ends the wait. Nothing on iOS.
     ///
     /// Fails with `Locked` while the wallet is locked.
+    /// Turns the node client over Tor on or off; it is on when the wallet opens. While it is
+    /// on and the wallet's tor runs or is expected (see [`EpicWallet::expect_tor`]), every
+    /// request to the node goes through tor: to the node's onion when one is known, else to
+    /// its domain, which tor resolves, through the Tor network. The system resolver is not
+    /// used and nothing goes directly; while tor starts, requests wait for it, within their
+    /// timeouts, and fail with `NodeUnreachable` if it does not connect. The node's TLS
+    /// certificate is checked for its domain either way. With tor stopped by
+    /// [`EpicWallet::stop_tor`] or `lock`, or the setting off, the node is reached directly.
+    /// A request in progress finishes on its own connection.
+    #[frb(sync)]
+    pub fn set_node_over_tor(&self, enabled: bool) {
+        self.boundary().guard_or("set_node_over_tor", (), || {
+            self.session.set_node_over_tor(enabled);
+        });
+    }
+
+    /// Whether the node client over Tor is on, as [`EpicWallet::set_node_over_tor`] set it.
+    #[frb(sync)]
+    pub fn node_over_tor(&self) -> bool {
+        self.boundary()
+            .guard_or("node_over_tor", true, || self.session.node_over_tor())
+    }
+
     #[frb(sync)]
     pub fn expect_tor(&self) -> Result<(), WalletError> {
         self.boundary()
@@ -255,7 +285,8 @@ impl EpicWallet {
     }
 
     /// Replaces the onion routes the wallet uses through tor, for example with the signed list
-    /// the app fetched; until then a built-in table holds `flooepicbox.btlabs.uk:443`. Only TLS
+    /// the app fetched; until then a built-in table holds `flooepicbox.btlabs.uk:443` and
+    /// `node.btlabs.uk:443`, for the relay and for the node client. Only TLS
     /// hosts belong here: the connection still checks `host`'s certificate. Applies from the
     /// next connection. An empty list leaves no route, so every host goes through a Tor exit.
     ///
@@ -282,6 +313,7 @@ impl EpicWallet {
                 kind: TorStatusKind::Off,
                 progress: None,
                 onion: None,
+                socks_port: None,
                 failure: None,
             },
             || self.session.tor_status(),

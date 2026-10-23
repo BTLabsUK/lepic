@@ -592,7 +592,12 @@ fn the_node_api_secret_is_taken_out_of_the_config_before_the_client_is_built() {
     let secret = crate::node::NodeSecret::take(&mut config);
     assert_eq!(config.node_api_secret, None);
     crate::node::NodeFactory::Http
-        .client(&config, &secret)
+        .client(
+            &config,
+            &secret,
+            &std::sync::Arc::new(lepic_tor::RelayTor::new(true)),
+            &std::sync::Arc::new(lepic_epicbox::tunnel::OnionRoutes::default()),
+        )
         .unwrap();
 }
 

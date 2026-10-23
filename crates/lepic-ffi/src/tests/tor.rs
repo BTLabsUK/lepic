@@ -909,3 +909,64 @@ async fn live_a_payment_over_the_tor_network_is_finalized_and_posted() {
     pair.bob.lock();
     wait(bob_events, TorEventKind::Stopped).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_node_goes_through_tor_while_it_runs_and_the_setting_is_on() {
+    let (pair, network) = tor_pair().await;
+    let bob = &pair.bob;
+    assert!(bob.node_over_tor(), "on by default");
+    assert!(!bob.node_through_tor(), "tor is off");
+
+    bob.expect_tor().unwrap();
+    assert!(bob.node_through_tor(), "never direct while tor is awaited");
+    bob.set_node_over_tor(false);
+    assert!(!bob.node_over_tor() && !bob.node_through_tor());
+    bob.set_node_over_tor(true);
+    assert!(bob.node_through_tor());
+    bob.stop_tor();
+    bob.stop_tor();
+    assert!(!bob.node_through_tor(), "a stop leads back to direct");
+
+    let (events, _) = start_tor(&network, bob, pair.dirs[1].path()).await;
+    assert!(bob.node_through_tor() && bob.relay_through_tor());
+    bob.set_epicbox_over_tor(false);
+    assert!(
+        bob.node_through_tor(),
+        "the settings of the node and the relay are separate"
+    );
+    bob.set_node_over_tor(false);
+    assert!(!bob.node_through_tor());
+    bob.set_node_over_tor(true);
+
+    bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+    assert!(bob.node_over_tor() && !bob.node_through_tor());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_status_and_the_events_carry_the_socks_port_once_tor_has_bootstrapped() {
+    let (pair, network) = tor_pair().await;
+    let bob = &pair.bob;
+    assert_eq!(bob.tor_status().socks_port, None);
+    let socks_port = network.socks.port();
+
+    let (events, _) = start_tor(&network, bob, pair.dirs[1].path()).await;
+    let status = bob.tor_status();
+    assert_eq!(status.kind, TorStatusKind::Ready);
+    assert_eq!(status.socks_port, Some(socks_port));
+    for kind in [
+        TorEventKind::Bootstrapped,
+        TorEventKind::Publishing,
+        TorEventKind::Ready,
+    ] {
+        assert_eq!(
+            events.wait_for(kind).await.socks_port,
+            Some(socks_port),
+            "{kind:?}"
+        );
+    }
+
+    bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+    assert_eq!(bob.tor_status().socks_port, None);
+}

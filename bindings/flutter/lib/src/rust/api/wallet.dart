@@ -304,14 +304,6 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// as its error.
   Stream<WalletEvent> events();
 
-  /// Says that [`EpicWallet::start_tor`] follows, so that a relay connection made before it,
-  /// such as the listener's when the wallet opens, waits for tor instead of going directly.
-  /// Call it before [`EpicWallet::start_listener`] when tor is about to start and Epicbox over
-  /// Tor is on. Until `start_tor`, relay connections wait. To restart tor, call it before
-  /// [`EpicWallet::stop_tor`]: that stop keeps the relay connection waiting for the
-  /// `start_tor` that follows. A further `stop_tor`, or `lock`, ends the wait. Nothing on iOS.
-  ///
-  /// Fails with `Locked` while the wallet is locked.
   void expectTor();
 
   /// Sender side: finalizes the recipient's answer and posts the transaction to the node.
@@ -443,6 +435,9 @@ abstract class EpicWallet implements RustOpaqueInterface {
     required String pin,
     required String sealedPassword,
   });
+
+  /// Whether the node client over Tor is on, as [`EpicWallet::set_node_over_tor`] set it.
+  bool nodeOverTor();
 
   /// The wallet's onion address, `<56 characters>.onion`: its payment-proof address in onion
   /// form, which `epic-wallet address` prints too. It is known without tor running and stays
@@ -750,8 +745,28 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// the payments address.
   Future<void> setInvoiceAddressIndex({required int index});
 
+  /// Says that [`EpicWallet::start_tor`] follows, so that a relay connection made before it,
+  /// such as the listener's when the wallet opens, waits for tor instead of going directly.
+  /// Call it before [`EpicWallet::start_listener`] when tor is about to start and Epicbox over
+  /// Tor is on. Until `start_tor`, relay connections wait. To restart tor, call it before
+  /// [`EpicWallet::stop_tor`]: that stop keeps the relay connection waiting for the
+  /// `start_tor` that follows. A further `stop_tor`, or `lock`, ends the wait. Nothing on iOS.
+  ///
+  /// Fails with `Locked` while the wallet is locked.
+  /// Turns the node client over Tor on or off; it is on when the wallet opens. While it is
+  /// on and the wallet's tor runs or is expected (see [`EpicWallet::expect_tor`]), every
+  /// request to the node goes through tor: to the node's onion when one is known, else to
+  /// its domain, which tor resolves, through the Tor network. The system resolver is not
+  /// used and nothing goes directly; while tor starts, requests wait for it, within their
+  /// timeouts, and fail with `NodeUnreachable` if it does not connect. The node's TLS
+  /// certificate is checked for its domain either way. With tor stopped by
+  /// [`EpicWallet::stop_tor`] or `lock`, or the setting off, the node is reached directly.
+  /// A request in progress finishes on its own connection.
+  void setNodeOverTor({required bool enabled});
+
   /// Replaces the onion routes the wallet uses through tor, for example with the signed list
-  /// the app fetched; until then a built-in table holds `flooepicbox.btlabs.uk:443`. Only TLS
+  /// the app fetched; until then a built-in table holds `flooepicbox.btlabs.uk:443` and
+  /// `node.btlabs.uk:443`, for the relay and for the node client. Only TLS
   /// hosts belong here: the connection still checks `host`'s certificate. Applies from the
   /// next connection. An empty list leaves no route, so every host goes through a Tor exit.
   ///

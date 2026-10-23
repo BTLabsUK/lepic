@@ -105,7 +105,10 @@ impl Session {
         }
         lepic_wallet::NodeEndpoint::parse(&config.node_url)
             .map_err(|_| invalid("node url is not an http or https url with a host"))?;
-        let node = self.runtime.nodes.backend(config, node_secret)?;
+        let node =
+            self.runtime
+                .nodes
+                .backend(config, node_secret, &self.node_tor, &self.onion_routes)?;
         let relay = self.next_relay(config)?;
         if let Some((slot, transport)) = &relay {
             // Before anything changes, so a refusal leaves the old relay in place.

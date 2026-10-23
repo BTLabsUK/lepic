@@ -189,6 +189,9 @@ pub(crate) struct Session {
     tor_starts: AtomicU64,
     /// Takes the relay connection through the wallet's tor while it runs (ADR 0021).
     relay_tor: Arc<lepic_tor::RelayTor>,
+    /// The same for node requests; it follows the wallet's tor like `relay_tor`, with a
+    /// setting of its own.
+    node_tor: Arc<lepic_tor::RelayTor>,
     /// `expect_tor` was called and no start followed yet: a stop keeps the relay waiting.
     tor_expected: AtomicBool,
     /// Hosts reached at an onion through tor, with TLS for the host: the built-in table until
@@ -327,9 +330,12 @@ impl Session {
         let claim = runtime.claim(&data_dir).await?;
         let data_dir = claim.dir.clone();
         let claim = ClaimHolder::new(claim);
-        let node = runtime.nodes.client(config, node_secret)?;
+        let node_tor = Arc::new(lepic_tor::RelayTor::new(true));
         let relay_tor = Arc::new(lepic_tor::RelayTor::new(true));
         let onion_routes = Arc::new(OnionRoutes::default());
+        let node = runtime
+            .nodes
+            .client(config, node_secret, &node_tor, &onion_routes)?;
         let epicbox = epicbox_transport(runtime, config, network, &relay_tor, &onion_routes)?
             .map(EpicboxSlot::new);
         let mut transports = TransportRegistry::new();
@@ -390,6 +396,7 @@ impl Session {
             tor_slot: Mutex::default(),
             tor_starts: AtomicU64::new(0),
             relay_tor,
+            node_tor,
             tor_expected: AtomicBool::new(false),
             onion_routes,
             #[cfg(test)]
@@ -1697,7 +1704,13 @@ pub(crate) async fn node_tip(
     config: &WalletConfig,
     node_secret: &NodeSecret,
 ) -> Result<NodeTip, WalletError> {
-    let node = runtime.nodes.client(config, node_secret)?;
+    // No wallet is open, so there is no tor of its own to go through.
+    let node = runtime.nodes.client(
+        config,
+        node_secret,
+        &Arc::new(lepic_tor::RelayTor::new(true)),
+        &Arc::new(OnionRoutes::default()),
+    )?;
     let tip = node.get_tip().await.map_err(|error| node_error(&error))?;
     let version = node
         .get_version()

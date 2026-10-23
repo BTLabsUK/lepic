@@ -282,7 +282,7 @@ impl Session {
                         *slot = TorSlot::Starting(generation);
                         // The relay connection waits for this tor instead of going directly.
                         self.tor_expected.store(false, Ordering::Relaxed);
-                        self.relay_tor.expect();
+                        self.expect_routes();
                         break;
                     }
                     TorSlot::Stopping(down) => down.clone(),
@@ -338,7 +338,7 @@ impl Session {
                 ));
                 self.tor
                     .attach(Arc::clone(&tor) as Arc<dyn SocksProxy + 'static>);
-                self.relay_tor.attach(Arc::clone(&tor));
+                self.attach_routes(&tor);
                 *slot = TorSlot::Running(Box::new(TorRun {
                     generation,
                     tor,
@@ -382,7 +382,7 @@ impl Session {
                 // The start finds the slot changed and stops what it started.
                 *slot = TorSlot::Idle;
                 if !self.tor_expected.swap(false, Ordering::Relaxed) {
-                    self.relay_tor.detach();
+                    self.detach_routes();
                 }
                 return;
             }
@@ -390,7 +390,7 @@ impl Session {
                 // Ends what `expect_tor` announced, unless it was announced again for a
                 // restart.
                 if !self.tor_expected.swap(false, Ordering::Relaxed) {
-                    self.relay_tor.detach();
+                    self.detach_routes();
                 }
                 return;
             }
@@ -402,9 +402,9 @@ impl Session {
         // next start. Only stopping tor or turning the setting off leads back to a direct
         // connection.
         if generation.is_some() || self.tor_expected.swap(false, Ordering::Relaxed) {
-            self.relay_tor.expect();
+            self.expect_routes();
         } else {
-            self.relay_tor.detach();
+            self.detach_routes();
         }
         let (down, down_receiver) = watch::channel(false);
         *slot = TorSlot::Stopping(down_receiver);
@@ -422,6 +422,7 @@ impl Session {
             kind: TorStatusKind::Off,
             progress: None,
             onion: None,
+            socks_port: None,
             failure: None,
         };
         let mut slot = lock(&self.tor_slot);
@@ -438,6 +439,7 @@ impl Session {
             TorSlot::Running(run) => run,
         };
         let failure = *lock(&run.publish_failure);
+        let socks_port = run.tor.socks_address().map(|address| address.port());
         match run.tor.state() {
             TorState::Starting { progress, .. } => TorStatus {
                 kind: TorStatusKind::Starting,
@@ -446,16 +448,19 @@ impl Session {
             },
             TorState::Bootstrapped => TorStatus {
                 kind: TorStatusKind::Bootstrapped,
+                socks_port,
                 failure,
                 ..off
             },
             TorState::Publishing => TorStatus {
                 kind: TorStatusKind::Publishing,
+                socks_port,
                 ..off
             },
             TorState::Ready { onion } => TorStatus {
                 kind: TorStatusKind::Ready,
                 onion: Some(onion.host()),
+                socks_port,
                 ..off
             },
             _ => off,
@@ -600,6 +605,31 @@ impl Session {
         Ok(())
     }
 
+    /// Whether node requests go through the wallet's tor while it runs.
+    pub(crate) fn set_node_over_tor(&self, enabled: bool) {
+        self.node_tor.set_enabled(enabled);
+    }
+
+    pub(crate) fn node_over_tor(&self) -> bool {
+        self.node_tor.enabled()
+    }
+
+    /// The relay connection and node requests wait for a tor that is being started.
+    fn expect_routes(&self) {
+        self.relay_tor.expect();
+        self.node_tor.expect();
+    }
+
+    fn attach_routes(&self, tor: &Arc<TorProcess>) {
+        self.relay_tor.attach(Arc::clone(tor));
+        self.node_tor.attach(Arc::clone(tor));
+    }
+
+    fn detach_routes(&self) {
+        self.relay_tor.detach();
+        self.node_tor.detach();
+    }
+
     /// The app is about to start tor: until it does, relay connections wait for it instead of
     /// going directly, and the next [`Session::stop_tor`] keeps them waiting, as for a restart.
     /// A stop after that, or a lock, ends the wait.
@@ -612,7 +642,7 @@ impl Session {
         slot.settle();
         self.tor_expected.store(true, Ordering::Relaxed);
         if matches!(&*slot, TorSlot::Idle | TorSlot::Stopping(_)) {
-            self.relay_tor.expect();
+            self.expect_routes();
         }
         Ok(())
     }
@@ -626,6 +656,11 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn relay_through_tor(&self) -> bool {
         *self.relay_tor.active().borrow()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn node_through_tor(&self) -> bool {
+        *self.node_tor.active().borrow()
     }
 
     #[cfg(test)]
@@ -657,7 +692,14 @@ async fn drive(
         let mut reported = Phase::Starting;
         loop {
             let state = states.borrow_and_update().clone();
-            for event in state_events(&mut reported, &state) {
+            let socks_port = tor.socks_address().map(|address| address.port());
+            for mut event in state_events(&mut reported, &state) {
+                if matches!(
+                    event.kind,
+                    TorEventKind::Bootstrapped | TorEventKind::Publishing | TorEventKind::Ready
+                ) {
+                    event.socks_port = socks_port;
+                }
                 report(event);
             }
             if matches!(state, TorState::Failed(_) | TorState::Off) {
