@@ -147,16 +147,19 @@ impl Session {
     async fn move_listener(&self) {
         let next = ListenHandle::new();
         let previous = {
+            // Under the slot's lock, as a listener that ends reads both under it: it either
+            // sees the handle to continue with, or marks its own stopped before this looks.
             let mut slot = lock(&self.listener);
-            match slot.as_ref() {
-                Some(running) if !running.is_stopped() => slot.replace(next.clone()),
-                _ => None,
+            let running = slot.as_ref().is_some_and(|running| !running.is_stopped());
+            if !running {
+                return;
             }
+            *lock(&self.relisten) = Some(next.clone());
+            slot.replace(next)
         };
         let Some(previous) = previous else {
             return;
         };
-        *lock(&self.relisten) = Some(next);
         previous.finish();
         if timeout(LISTENER_GRACE, self.listen_run.lock())
             .await

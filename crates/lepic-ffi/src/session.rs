@@ -188,6 +188,9 @@ pub(crate) struct Session {
     tor_starts: AtomicU64,
     #[cfg(test)]
     tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
+    /// Makes the next listen fail before it subscribes.
+    #[cfg(test)]
+    pub(crate) fail_next_listen: std::sync::atomic::AtomicBool,
     scan: Mutex<Option<ScanCancel>>,
     balance: Mutex<Option<Balance>>,
     runtime: Arc<RuntimeInner>,
@@ -370,6 +373,8 @@ impl Session {
             tor_starts: AtomicU64::new(0),
             #[cfg(test)]
             tor_timings: Mutex::default(),
+            #[cfg(test)]
+            fail_next_listen: std::sync::atomic::AtomicBool::new(false),
             scan: Mutex::default(),
             balance: Mutex::default(),
             runtime: Arc::clone(runtime),
@@ -1168,9 +1173,19 @@ impl Session {
                     self.listen_once(&handle, &report).await
                 }
             };
-            match self.take_relisten() {
-                Some(next) if !next.is_stopped() => handle = next,
-                _ => return result,
+            let next = {
+                let _slot = lock(&self.listener);
+                let next = self.take_relisten().filter(|next| !next.is_stopped());
+                if next.is_none() {
+                    // A listener that ended on its own reads as stopped, so it can be started
+                    // again and no switch hands it on.
+                    handle.stop();
+                }
+                next
+            };
+            match next {
+                Some(next) => handle = next,
+                None => return result,
             }
         }
     }
@@ -1180,6 +1195,13 @@ impl Session {
         handle: &ListenHandle,
         report: &impl Fn(ListenerEvent),
     ) -> Result<(), WalletError> {
+        #[cfg(test)]
+        if self
+            .fail_next_listen
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(WalletError::new(WalletErrorKind::Other, "listen failed"));
+        }
         let epicbox = self.epicbox()?;
         let mut events = self.engine.subscribe();
         let listen = self.engine.epicbox_listen(&epicbox, handle);

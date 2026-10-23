@@ -270,7 +270,10 @@ async fn the_listener_moves_to_the_new_relay_after_the_payment_in_hand() {
     let (dave, _) = world.funded("two.example").await;
     // A second output, for the second send while the first one's input is locked.
     let phrase = dave.mnemonic("password".to_owned()).await.unwrap();
-    world.chain.fund(phrase, Chain::Floonet, 10 * EPIC, 1).unwrap();
+    world
+        .chain
+        .fund(phrase, Chain::Floonet, 10 * EPIC, 1)
+        .unwrap();
     dave.session().scan_to_tip().await;
     let bob = bob.session();
     let old_address = address(bob);
@@ -407,4 +410,59 @@ async fn a_lock_during_a_switch_stops_the_moved_listener() {
         .unwrap()
         .unwrap();
     assert!(eventually(|| world.two.connections() == 0).await);
+}
+
+/// A listener that failed on its own reads as stopped: the switch hands nothing on, and a new
+/// listener starts on the new relay and receives there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_listener_that_ended_on_its_own_can_be_started_again_after_a_switch() {
+    let mut world = World::new();
+    let (bob, bob_config) = world.wallet("one.example").await;
+    let (dave, _) = world.funded("two.example").await;
+    let bob = bob.session();
+    bob.fail_next_listen
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let handle = bob.claim_listener().unwrap().unwrap();
+    assert!(bob.listen(&handle, |_| {}).await.is_err());
+    assert!(!bob.listener_running());
+
+    switch(
+        bob,
+        &WalletConfig {
+            epicbox_domain: "two.example".to_owned(),
+            ..bob_config
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!bob.listener_running(), "the switch started no listener");
+
+    let received = Arc::new(Mutex::new(0));
+    let handle = bob
+        .claim_listener()
+        .unwrap()
+        .expect("a new listener starts");
+    let listening = tokio::spawn({
+        let (bob, received) = (Arc::clone(bob), Arc::clone(&received));
+        async move {
+            bob.listen(&handle, |event| {
+                if event.kind == ListenerEventKind::Received {
+                    *received.lock().unwrap() += 1;
+                }
+            })
+            .await
+        }
+    });
+    assert!(eventually(|| world.two.connections() == 1).await);
+    dave.send_epicbox(EPIC, 1, address(bob).to_string(), None, None)
+        .await
+        .unwrap();
+    assert!(eventually(|| *received.lock().unwrap() == 1).await);
+
+    bob.stop_listener();
+    tokio::time::timeout(Duration::from_secs(5), listening)
+        .await
+        .expect("the listener ended")
+        .unwrap()
+        .unwrap();
 }
