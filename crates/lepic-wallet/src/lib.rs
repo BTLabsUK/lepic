@@ -17,6 +17,7 @@ pub mod details;
 pub mod epicbox_invoice;
 mod epicbox_notice;
 pub mod error;
+pub mod error_text;
 mod estimate;
 pub mod event;
 pub mod finalize;

@@ -202,18 +202,12 @@ impl NodeDialer for TorNodeDialer {
 }
 
 fn node_config_error(error: &NodeError) -> WalletError {
-    WalletError::new(
-        WalletErrorKind::InvalidArgument,
-        lepic_telemetry::ErrorChain(error).to_string(),
-    )
+    WalletError::chained(WalletErrorKind::InvalidArgument, error)
 }
 
 /// The node's error as a binding error.
 pub(crate) fn node_error(error: &NodeError) -> WalletError {
-    WalletError::new(
-        WalletErrorKind::NodeUnreachable,
-        lepic_telemetry::ErrorChain(error).to_string(),
-    )
+    WalletError::chained(WalletErrorKind::NodeUnreachable, error)
 }
 
 #[cfg(test)]

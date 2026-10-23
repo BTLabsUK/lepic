@@ -2,7 +2,7 @@
 //! [`WalletError::kind`] or the stable [`WalletError::code`], never on the message.
 
 use lepic_keychain::AppDataError;
-use lepic_telemetry::ErrorChain;
+use lepic_wallet::error_text::{display_error_chain, display_error_message};
 use lepic_wallet::inbox::InboxError;
 use lepic_wallet::invoice::InvoiceError;
 use lepic_wallet::refresh::RefreshError;
@@ -191,16 +191,21 @@ impl std::fmt::Display for WalletError {
 impl std::error::Error for WalletError {}
 
 impl WalletError {
+    /// The message can quote a node, a peer or a file, so it is cleaned and bounded for display.
     pub(crate) fn new(kind: WalletErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             code: kind.code(),
-            message: message.into(),
+            message: display_error_message(&message.into()),
         }
     }
 
-    fn chained(kind: WalletErrorKind, error: &(dyn std::error::Error + 'static)) -> Self {
-        Self::new(kind, ErrorChain(error).to_string())
+    /// `error` and its sources as the message, each entry cleaned and bounded on its own.
+    pub(crate) fn chained(
+        kind: WalletErrorKind,
+        error: &(dyn std::error::Error + 'static),
+    ) -> Self {
+        Self::new(kind, display_error_chain(error).join(": "))
     }
 }
 
@@ -437,6 +442,34 @@ impl WalletError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messages_are_cleaned_and_bounded() {
+        let planted = format!("\u{1b}[2J\u{202E}\u{2066}{}\n", "x".repeat(50_000));
+        let error = lepic_node::NodeError::Connect(Box::new(std::io::Error::other(planted)));
+        let hidden = |c: char| {
+            c.is_control()
+                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200B}'..='\u{200F}')
+        };
+        for wallet_error in [
+            WalletError::chained(WalletErrorKind::NodeUnreachable, &error),
+            WalletError::new(
+                WalletErrorKind::InvalidSlate,
+                error.to_string() + &"y".repeat(9_000),
+            ),
+        ] {
+            let message = &wallet_error.message;
+            assert!(!message.chars().any(hidden), "{message:?}");
+            assert!(message.chars().count() <= 16 * 258, "{}", message.len());
+        }
+        let chained = WalletError::chained(WalletErrorKind::NodeUnreachable, &error);
+        assert!(
+            chained
+                .message
+                .split(": ")
+                .all(|entry| entry.chars().count() <= 256)
+        );
+    }
 
     /// The codes are API: `bindings/flutter/README.md` lists them and apps store them.
     #[test]

@@ -1,12 +1,11 @@
 //! Typed command failures and the exit codes they map to. The codes are part of the CLI's
 //! interface: scripts branch on them, so a code never changes meaning.
 
-use std::error::Error as StdError;
-
 use lepic_node::NodeError;
 use lepic_store::StoreError;
 use lepic_telemetry::TelemetryError;
 use lepic_transport::error::TransportError;
+use lepic_wallet::error_text::display_error_chain;
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::InboxError;
 use lepic_wallet::invoice::InvoiceError;
@@ -228,19 +227,10 @@ impl CliError {
         }
     }
 
-    /// The message and every cause under it, outermost first. Repeated texts, as when a
-    /// wrapper prints its source, appear once.
+    /// The message and every cause under it, outermost first, cleaned and bounded for a
+    /// terminal. Repeated texts, as when a wrapper prints its source, appear once.
     pub fn chain(&self) -> Vec<String> {
-        let mut messages: Vec<String> = Vec::new();
-        let mut next: Option<&dyn StdError> = Some(self);
-        while let Some(error) = next {
-            let text = error.to_string();
-            if messages.last() != Some(&text) {
-                messages.push(text);
-            }
-            next = error.source();
-        }
-        messages
+        display_error_chain(self)
     }
 }
 

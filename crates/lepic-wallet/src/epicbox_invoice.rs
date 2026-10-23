@@ -147,10 +147,10 @@ pub struct InvoiceSweep {
 
 /// Characters that make displayed text read differently from what was signed: bidirectional
 /// formatting, line and paragraph separators, and zero-width characters.
-pub(crate) const HIDDEN_FORMATTING: [char; 18] = [
+pub(crate) const HIDDEN_FORMATTING: [char; 19] = [
     '\u{061C}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}',
     '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{2028}', '\u{2029}', '\u{200B}', '\u{200C}',
-    '\u{200D}', '\u{FEFF}',
+    '\u{200D}', '\u{2060}', '\u{FEFF}',
 ];
 
 /// `text` as a host may display it: control characters, bidirectional formatting, line and

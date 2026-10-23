@@ -204,3 +204,43 @@ fn ready_for_txs_reads_the_flag_and_refuses_anything_else() {
         );
     }
 }
+
+#[cfg(test)]
+fn display_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(next) = source {
+        text.push_str(": ");
+        text.push_str(&next.to_string());
+        source = next.source();
+    }
+    text
+}
+
+#[test]
+fn malformed_response_errors_carry_none_of_the_node_text() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/vectors/engine/restore_full_scan.json");
+    let vector: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut response = vector["expected"]["exchanges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|exchange| exchange["method"] == "get_unspent_outputs")
+        .unwrap()["response"]
+        .clone();
+    let planted = format!("\u{1b}[2J\u{202e}{}", "x".repeat(100_000));
+    response["result"]["Ok"]["outputs"][0]["output_type"] = Value::String(planted);
+    let body = serde_json::to_vec(&response).unwrap();
+
+    let error = decode::unspent_outputs(&body, 1, None, 1_000).unwrap_err();
+    assert!(
+        matches!(error, lepic_node::NodeError::MalformedResponse { .. }),
+        "{error:?}"
+    );
+    let text = display_chain(&error);
+    assert!(!text.contains('\u{1b}'), "{text:?}");
+    assert!(!text.contains('\u{202e}'), "{text:?}");
+    assert!(!text.contains("xxx"), "{text:?}");
+    assert!(text.len() < 256, "{text:?}");
+}

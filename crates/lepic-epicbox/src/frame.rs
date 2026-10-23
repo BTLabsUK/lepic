@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::address::EpicboxAddress;
 use crate::crypto::{MAX_MESSAGE_LEN, SignedMessage, sign_text};
+use crate::json::JsonProblem;
 
 /// The protocol version LEPIC speaks, which the public relay supports.
 pub const PROTOCOL_VERSION: &str = "3.0.0";
@@ -52,14 +53,14 @@ pub enum FrameError {
     #[error("frame has {actual} bytes, the limit is {max}")]
     TooLong { actual: usize, max: usize },
     #[error("frame is not valid json")]
-    Json(#[source] serde_json::Error),
+    Json(#[source] JsonProblem),
     #[error("frame has no string \"type\"")]
     MissingType,
     #[error("frame of type {type_name} has missing or invalid fields")]
     Fields {
         type_name: String,
         #[source]
-        source: serde_json::Error,
+        source: JsonProblem,
     },
     #[error("client frame type {type_name} is unknown")]
     UnknownClientType { type_name: String },
@@ -165,7 +166,7 @@ impl ClientFrame {
     }
 
     pub fn to_json(&self) -> Result<String, FrameError> {
-        serde_json::to_string(self).map_err(FrameError::Json)
+        serde_json::to_string(self).map_err(|error| FrameError::Json(error.into()))
     }
 
     /// Decodes a frame as a relay receives it. Unknown types are errors here; only the client
@@ -387,7 +388,7 @@ impl RelayFrame {
         };
         serde_json::to_string(&known)
             .map(Some)
-            .map_err(FrameError::Json)
+            .map_err(|error| FrameError::Json(error.into()))
     }
 }
 
@@ -424,13 +425,16 @@ struct ErrorFields {
 /// Reads the fields of a frame whose type is known. The `type` key is ignored like any other
 /// unknown key, which serde skips without keeping it.
 fn fields<T: DeserializeOwned>(text: &str, type_name: String) -> Result<T, FrameError> {
-    serde_json::from_str(text).map_err(|source| FrameError::Fields { type_name, source })
+    serde_json::from_str(text).map_err(|error| FrameError::Fields {
+        type_name,
+        source: error.into(),
+    })
 }
 
 /// The frame's `type`, bounded, after checking that the whole text is one JSON object. Every
 /// other value is skipped without being kept, so the work is bounded by the text alone.
 fn probe_type(text: &str) -> Result<String, FrameError> {
-    match serde_json::from_str::<TypeProbe>(text).map_err(FrameError::Json)? {
+    match serde_json::from_str::<TypeProbe>(text).map_err(|error| FrameError::Json(error.into()))? {
         TypeProbe::Object(Some(TypeTag::Text(name))) => Ok(name),
         TypeProbe::Object(Some(TypeTag::NotText) | None) | TypeProbe::NotObject => {
             Err(FrameError::MissingType)

@@ -1535,10 +1535,7 @@ fn fee_estimate(selection: &Selection) -> Result<FeeEstimate, WalletError> {
 }
 
 fn transport_error(error: &lepic_transport::error::TransportError) -> WalletError {
-    WalletError::new(
-        WalletErrorKind::TransportFailed,
-        lepic_telemetry::ErrorChain(error).to_string(),
-    )
+    WalletError::chained(WalletErrorKind::TransportFailed, error)
 }
 
 const fn transport_state(state: EngineTransportState) -> TransportState {

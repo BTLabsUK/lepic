@@ -1782,4 +1782,32 @@ mod tests {
         assert_eq!(value["error"]["kind"], "interrupted");
         assert_eq!(value["error"]["exit_code"], 12);
     }
+
+    #[test]
+    fn error_output_is_cleaned_and_bounded() {
+        let planted = format!("\u{1b}[2J\u{202E}\u{200B}{}\n{}", "x".repeat(50_000), "y");
+        let error = CliError::Node(lepic_node::NodeError::Connect(Box::new(
+            std::io::Error::other(planted),
+        )));
+        let hidden = |c: char| {
+            c == '\u{1b}' || matches!(c, '\u{202A}'..='\u{202E}' | '\u{200B}'..='\u{200F}')
+        };
+
+        let human = render_error(&error, OutputFormat::Human, None);
+        assert!(!human.chars().any(hidden), "{human:?}");
+        assert!(human.lines().count() <= 3, "{human:?}");
+        assert!(human.lines().all(|line| line.chars().count() < 1_024));
+
+        let json = render_error(&error, OutputFormat::Json, None);
+        let value: Value = serde_json::from_str(&json).unwrap();
+        let causes = value["error"]["causes"].as_array().unwrap();
+        for text in std::iter::once(&value["error"]["message"]).chain(causes) {
+            let text = text.as_str().unwrap();
+            assert!(
+                !text.chars().any(|c| c.is_control() || hidden(c)),
+                "{text:?}"
+            );
+            assert!(text.chars().count() <= 256);
+        }
+    }
 }

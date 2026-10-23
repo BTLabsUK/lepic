@@ -53,8 +53,11 @@ pub(crate) fn decode_response<T: DeserializeOwned>(
     method: &'static str,
     body: &[u8],
 ) -> Result<T, NodeError> {
-    let envelope: Envelope<T> = serde_json::from_slice(body)
-        .map_err(|source| NodeError::MalformedResponse { method, source })?;
+    let envelope: Envelope<T> =
+        serde_json::from_slice(body).map_err(|error| NodeError::MalformedResponse {
+            method,
+            source: error.into(),
+        })?;
     if envelope
         .id
         .as_ref()

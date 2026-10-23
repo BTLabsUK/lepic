@@ -22,7 +22,7 @@ pub use api::{
 };
 pub use client::{CallPolicy, NodeClient, RetryPolicy, RpcTransport};
 pub use dial::{DialFuture, NodeDialer, NodeStream};
-pub use error::{FieldProblem, NodeError, NodeRejection, RejectionKind};
+pub use error::{FieldProblem, JsonProblem, NodeError, NodeRejection, RejectionKind};
 pub use http::{HttpSettings, HttpTransport, is_loopback_host, webpki_tls_config};
 
 /// A client for a real node over HTTP or HTTPS.

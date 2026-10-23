@@ -433,10 +433,7 @@ mod mock_peer {
     const PORT: u16 = 443;
 
     fn failed(error: &(dyn std::error::Error + 'static)) -> WalletError {
-        WalletError::new(
-            WalletErrorKind::TransportFailed,
-            lepic_telemetry::ErrorChain(error).to_string(),
-        )
+        WalletError::chained(WalletErrorKind::TransportFailed, error)
     }
 
     pub(super) fn new(relay: &MockRelay, seed: &[u8]) -> Result<MockStockPeer, WalletError> {

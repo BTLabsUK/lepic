@@ -284,7 +284,11 @@ async fn rejects_wrong_types() {
         let NodeError::MalformedResponse { source, .. } = &error else {
             panic!("{value}: {error:?}");
         };
-        assert!(source.is_data(), "{value}: {source}");
+        assert_eq!(
+            source.category,
+            serde_json::error::Category::Data,
+            "{value}: {source}"
+        );
     }
 
     let overflow =

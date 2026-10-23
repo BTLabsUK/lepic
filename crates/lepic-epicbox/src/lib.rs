@@ -5,6 +5,7 @@ mod client;
 mod client_inbox;
 mod crypto;
 mod frame;
+mod json;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
 mod prefilter;
@@ -33,6 +34,7 @@ pub use frame::{
     MAX_FRAME_TYPE_LEN, MAX_RELAY_MESSAGE_ID_LEN, PROTOCOL_VERSION, RelayErrorKind, RelayFrame,
     RelayMessageId, SlateFrame, WalletMode,
 };
+pub use json::JsonProblem;
 pub use prefilter::{Admission, Prefilter};
 pub use push::{MAX_PUSH_TOKEN_LEN, PushAction, PushError, PushRequest};
 pub use session::{

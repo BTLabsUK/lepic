@@ -2,7 +2,6 @@
 
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
-use lepic_telemetry::ErrorChain;
 use lepic_transport::file::{FilePolicy, MAX_WIRE_SLATE_LEN};
 use lepic_transport::policy::FormatPolicy as _;
 use lepic_wallet::slate::{
@@ -29,7 +28,7 @@ pub(crate) fn inspect(json: String, network: Network) -> Result<SlateInfo, Walle
     let _ = codecs.register(Box::new(V2JsonCodec::new(base_fee)));
     let slate = FilePolicy
         .decode(&codecs, &WireSlate::text(MediaType::JSON, json))
-        .map_err(|error| invalid_slate(ErrorChain(&error).to_string()))?;
+        .map_err(|error| WalletError::chained(WalletErrorKind::InvalidSlate, &error))?;
     slate_info(&slate)
 }
 

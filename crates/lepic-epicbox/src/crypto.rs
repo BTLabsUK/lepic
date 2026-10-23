@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256, Sha512};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::address::{AddressError, EpicboxAddress};
+use crate::json::JsonProblem;
 
 pub const SALT_LEN: usize = 8;
 pub const NONCE_LEN: usize = 12;
@@ -134,7 +135,7 @@ pub enum MessageError {
     #[error("message has {actual} bytes, the limit is {max}")]
     TooLong { actual: usize, max: usize },
     #[error("message is not the expected json")]
-    Json(#[source] serde_json::Error),
+    Json(#[source] JsonProblem),
     #[error("message field {field:?} is not hex")]
     InvalidHex { field: MessageField },
     #[error("message field {field:?} has {actual} bytes, expected {expected}")]
@@ -251,7 +252,8 @@ impl EncryptedMessage {
                 max: MAX_MESSAGE_LEN,
             });
         }
-        let json: MessageJson<'_> = serde_json::from_str(text).map_err(MessageError::Json)?;
+        let json: MessageJson<'_> =
+            serde_json::from_str(text).map_err(|error| MessageError::Json(error.into()))?;
         let ciphertext = hex_decode(&json.encrypted_message, MessageField::EncryptedMessage)?;
         if ciphertext.len() < TAG_LEN {
             return Err(MessageError::CiphertextTooShort {
@@ -274,7 +276,7 @@ impl EncryptedMessage {
             salt: hex_encode(&self.salt.0).into(),
             nonce: hex_encode(&self.nonce.0).into(),
         })
-        .map_err(MessageError::Json)
+        .map_err(|error| MessageError::Json(error.into()))
     }
 
     pub fn destination(&self) -> &Destination {
