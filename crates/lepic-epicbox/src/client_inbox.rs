@@ -33,11 +33,11 @@ use crate::session::{Connection, Greeting, ProtocolVersion, deadline_after};
 /// A relay message id received longer ago than this cannot be delivered again.
 pub const RELAY_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Acknowledged message ids remembered per subscription, so a redelivery after a lost `Made`
-/// is acknowledged again instead of handed out twice.
 /// How long a connection whose route changed is kept for the messages in flight on it.
 const REROUTE_GRACE: Duration = Duration::from_secs(30);
 
+/// Acknowledged message ids remembered per subscription, so a redelivery after a lost `Made`
+/// is acknowledged again instead of handed out twice.
 const REMEMBERED_ACKNOWLEDGEMENTS: usize = 4096;
 
 /// Received messages and rejections waiting to be handed out. Beyond this a relay that pushes faster than the
