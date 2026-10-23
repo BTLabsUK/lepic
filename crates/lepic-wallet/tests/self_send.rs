@@ -19,9 +19,10 @@ use jiff::SignedDuration;
 use lepic_node::Propagation;
 use lepic_node::mock::{ChainOutput, MockFailure};
 use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
 use lepic_store::OutputStatus::{self, Locked, Unconfirmed, Unspent};
-use lepic_store::{TxDirection, TxId, TxState, WalletStore as _};
+use lepic_store::{AccountIndex, AccountRecord, TxDirection, TxId, TxState, WalletStore as _};
 use lepic_wallet::WalletError;
 use lepic_wallet::event::{Balance, Event, SelfSentTransaction, TransactionState};
 use lepic_wallet::finalize::{FinalizeError, Posted};
@@ -31,7 +32,7 @@ use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::selection::{SelectionError, SelectionOptions, SelfSendShape, SplitCount};
 use lepic_wallet::self_send::{SELF, SelfSendError};
 use lepic_wallet::send::SendError;
-use send_support::{ACCOUNT, FUNDING, Sender, TIP};
+use send_support::{ACCOUNT, FUNDING, Sender, TIP, output};
 use support::{MovableClock, fixed_time, some_proof};
 
 fn options() -> SelectionOptions {
@@ -664,5 +665,76 @@ fn spending_named_outputs_refuses_what_cannot_be_spent_and_stores_nothing() {
     assert_eq!(
         selection(&error),
         SelectionError::NamedOutputUnavailable { position: 1 }
+    );
+}
+
+#[test]
+fn spending_named_outputs_refuses_young_unconfirmed_and_other_account_outputs() {
+    let sender = Sender::new();
+    // One confirmation at the tip.
+    let mut young = output(&sender.keychain, 1, 2 * FUNDING, OutputFeatures::Plain);
+    young.height = Height::new(TIP);
+    let mut unconfirmed = output(&sender.keychain, 2, 3 * FUNDING, OutputFeatures::Plain);
+    unconfirmed.status = Unconfirmed;
+    let mut elsewhere = output(&sender.keychain, 3, 4 * FUNDING, OutputFeatures::Plain);
+    elsewhere.account = AccountIndex(1);
+    sender
+        .store
+        .write(|repos| {
+            repos.put_account(&AccountRecord {
+                index: AccountIndex(1),
+                label: "other".to_owned(),
+                next_child: 0,
+            })?;
+            repos.put_output(&young)?;
+            repos.put_output(&unconfirmed)?;
+            repos.put_output(&elsewhere)
+        })
+        .unwrap();
+    let funding = commitment_of(&sender, FUNDING);
+    let before = (sender.transactions(), sender.outputs());
+    let spend = |minimum_confirmations, named: lepic_crypto::Commitment| {
+        let options = SelectionOptions {
+            minimum_confirmations,
+            ..SelectionOptions::new(ACCOUNT)
+        };
+        sender
+            .harness
+            .block_on(sender.wallet.spend_outputs_to_self(
+                options,
+                vec![funding, named],
+                Propagation::Fluff,
+            ))
+            .unwrap_err()
+    };
+
+    let cases = [
+        (spend(2, young.id.commitment), "below the minimum"),
+        // Not even when unconfirmed outputs would count.
+        (spend(0, unconfirmed.id.commitment), "unconfirmed"),
+        (spend(1, elsewhere.id.commitment), "another account"),
+    ];
+
+    for (error, case) in cases {
+        assert!(
+            matches!(
+                error,
+                SelfSendError::Send(SendError::Selection(
+                    SelectionError::NamedOutputUnavailable { position: 1 }
+                ))
+            ),
+            "{case}: {error:?}"
+        );
+    }
+    assert_eq!((sender.transactions(), sender.outputs()), before);
+    assert!(sender.harness.node.pushed_transactions().is_empty());
+    // The young output is spendable once the minimum is met.
+    assert!(
+        spend_named(&sender, vec![young.id.commitment])
+            .unwrap()
+            .selection
+            .inputs
+            .iter()
+            .any(|input| input.id.commitment == young.id.commitment)
     );
 }

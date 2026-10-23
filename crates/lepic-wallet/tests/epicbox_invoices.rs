@@ -19,12 +19,15 @@ mod world;
 use std::time::Duration;
 
 use lepic_epicbox::{EpicboxClient, TRANSPORT_ID};
+use lepic_node::Propagation;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::stage::Stage;
-use lepic_store::{PeerSupport, PendingInvoiceStatus, SlateStage, TxDirection, TxState};
+use lepic_store::{
+    OutputStatus, PeerSupport, PendingInvoiceStatus, SlateStage, TxDirection, TxState,
+};
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::Event;
 use lepic_wallet::details::TxFlow;
@@ -32,11 +35,12 @@ use lepic_wallet::epicbox_invoice::{InvoiceExpiry, PeerInvoiceSupport};
 use lepic_wallet::event::BouncedInvoice;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, PayRequest};
+use lepic_wallet::selection::SelectionOptions;
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
-use world::{AMOUNT, TIP, World, pay_request};
+use world::{ACCOUNT, AMOUNT, FUNDING, TIP, World, pay_request};
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -1035,4 +1039,66 @@ impl World {
             .read(|repos| repos.pending_invoice(uuid(slate_id)))
             .unwrap()
     }
+}
+
+#[test]
+fn a_cancelled_payment_has_exactly_its_inputs_spent_to_the_payer_itself() {
+    let world = World::new();
+    // A second output the payer holds, which the self-send must leave alone.
+    world.payer.fund(9, 2 * FUNDING);
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    let paid = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+    let locked = |world: &World| -> Vec<_> {
+        world
+            .payer
+            .read(|repos| repos.outputs(ACCOUNT, None))
+            .into_iter()
+            .filter(|output| output.status == OutputStatus::Locked)
+            .map(|output| output.id.commitment)
+            .collect()
+    };
+    let inputs = locked(&world);
+    assert_eq!(inputs.len(), 1);
+    world
+        .block_on(world.payer.wallet.cancel(paid.tx_id))
+        .unwrap();
+    assert!(locked(&world).is_empty());
+
+    // The issuer still holds the signed I2; spending its inputs elsewhere voids it.
+    let sent = world
+        .block_on(world.payer.wallet.spend_outputs_to_self(
+            SelectionOptions {
+                minimum_confirmations: 1,
+                ..SelectionOptions::new(ACCOUNT)
+            },
+            inputs.clone(),
+            Propagation::Fluff,
+        ))
+        .unwrap();
+
+    let spent: Vec<_> = sent
+        .selection
+        .inputs
+        .iter()
+        .map(|input| input.id.commitment)
+        .collect();
+    assert_eq!(spent, inputs);
+    assert!(sent.selection.change.is_empty());
+    assert_eq!(locked(&world), inputs, "the other output stays unspent");
+    let pushed = world.node.pushed_transactions();
+    assert_eq!(pushed.len(), 1);
+    let pushed_inputs: Vec<_> = pushed[0]
+        .inputs()
+        .iter()
+        .map(|input| input.commitment)
+        .collect();
+    assert_eq!(pushed_inputs, inputs);
 }
