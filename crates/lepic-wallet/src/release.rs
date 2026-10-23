@@ -37,7 +37,7 @@ use crate::state::{StateChange, apply_transition, confirm_released, state_name};
 use crate::wallet::Wallet;
 
 /// Blocks after finalizing that a send's kernel must still be missing before it may be
-/// released: a day of blocks, the wait the Flutter app applies.
+/// released: a day of blocks, the wait the Epic Cash app applies.
 pub const RELEASE_AFTER_BLOCKS: u64 = 1_440;
 
 /// Blocks after a release during which a refresh still looks for the send's kernel: a week of

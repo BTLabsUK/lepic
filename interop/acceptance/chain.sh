@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Drives the stack `run.sh --stack-only` keeps running, for tests of a lepic outside the stack
-# such as the Flutter binding's. It takes no lock: the run.sh holding the stack holds it.
+# Drives the stack `run.sh --stack-only` keeps running, for tests of a lepic outside the stack,
+# such as the Flutter binding (BTLabs-EPIC/lepic-flutter). It takes no lock: the run.sh
+# holding the stack holds it.
 #
 #   ./chain.sh env                    the node URL, its API secret file, the relay and the
 #                                     slate exchange directory, as KEY=value lines

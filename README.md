@@ -12,15 +12,16 @@
 [![CI](https://github.com/BTLabs-EPIC/lepic/actions/workflows/ci.yml/badge.svg)](https://github.com/BTLabs-EPIC/lepic/actions/workflows/ci.yml)
 
 [Quick start](#quick-start) · [Architecture](docs/architecture.md) ·
-[Flutter package](bindings/flutter/README.md) · [Security](SECURITY.md)
+[Flutter binding](https://github.com/BTLabs-EPIC/lepic-flutter) · [Security](SECURITY.md)
 
 </div>
 
 LEPIC (light Epic) is an Epic Cash wallet that runs as a library inside a mobile or desktop app, in
 the app's own process. It creates and restores wallets, scans the chain through an Epic node, and
 sends and receives transactions with the standard `epic-wallet`. It is the wallet core of Epic Cash
-Mobile and Epic Cash Desktop, and ships with a Flutter package built on
-[flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge).
+Mobile and Epic Cash Desktop. `lepic-ffi` is its FFI API, built on
+[flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge); apps use it through the
+[Flutter binding](https://github.com/BTLabs-EPIC/lepic-flutter), a separate repository.
 
 > **Status: pre-alpha.** APIs still change. Use floonet (the test network); do not put real funds
 > in it yet.
@@ -32,15 +33,15 @@ desktop, but a phone app cannot keep a second process running, and building the 
 Android and iOS drags in mining and chain-storage code a phone never uses. LEPIC is the wallet
 rebuilt for that setting:
 
-- **No wallet process.** The engine is a library the app calls directly, from Rust or Dart. There
-  is no wallet binary or API server to start and keep alive.
+- **No wallet process.** The engine is a library the app calls directly, from Rust or through its
+  FFI API. There is no wallet binary or API server to start and keep alive.
 - **Small mobile builds.** Android and iOS builds need Rust and a C compiler, nothing else: no
   mining code, chain storage, LMDB, OpenSSL or C++.
 - **Works with app suspension.** The Epicbox client connects, collects waiting messages and
   disconnects, so receiving works when the phone pauses the app in the background.
 - **Keys in the platform keystore.** Seeds are kept in the Android Keystore or iOS Keychain, or on
   desktop in a vault file encrypted with XChaCha20-Poly1305 under an Argon2id key. Transaction
-  secrets are encrypted at rest, and only a short, fixed list of secrets may pass into Dart.
+  secrets are encrypted at rest, and only a short, fixed list of secrets may cross the FFI boundary.
 
 ## What's different
 
@@ -121,8 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-In a Flutter app, use the [Flutter package](bindings/flutter/README.md), which wraps the full
-wallet: create or restore, scan the chain, send and receive.
+Apps use the Flutter binding, a separate repository:
+https://github.com/BTLabs-EPIC/lepic-flutter. It wraps the full wallet: create or restore, scan the
+chain, send and receive.
 
 ## Contributing
 

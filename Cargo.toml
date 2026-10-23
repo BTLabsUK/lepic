@@ -67,7 +67,7 @@ jiff = { version = "0.2.37", default-features = false }
 rand = { version = "0.10.3", default-features = false }
 rand_core = { version = "0.10.1", default-features = false }
 getrandom = { version = "0.4.3", default-features = false }
-# The Dart code generator must run at exactly this version (ADR 0007).
+# The code generator must run at exactly this version (ADR 0007).
 flutter_rust_bridge = { version = "=2.13.0", default-features = false }
 proptest = { version = "1.11.0", default-features = false }
 insta = { version = "1.48.0", default-features = false }

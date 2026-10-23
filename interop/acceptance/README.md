@@ -32,10 +32,11 @@ recorded in `docs/compat/epicbox.md`, and the raw output goes to the run's `prob
 
 `--stack-only` funds nothing and runs no step: it prints the node URL, the node API secret file,
 the relay and the exchange directory, and holds the stack and its lock until stopped, for a
-lepic outside this script such as the Flutter binding's tests. `chain.sh` drives that stack:
+lepic outside this script, such as the tests of the Flutter binding, a separate repository
+(https://github.com/BTLabs-EPIC/lepic-flutter). `chain.sh` drives that stack:
 `env`, `height`, `mine <blocks>`, `fund <address> <epic>` (the funder sends over Epicbox) and
 `receive <file>` (the funder answers a send file in the exchange directory).
-`bindings/flutter/README.md` shows the whole workflow.
+The binding repository's README shows the whole workflow.
 
 Needs what `../README.md` lists, plus a Rust toolchain for `cargo xtask install`. Every run
 starts from nothing: a new chain and new wallets, and a lepic home, config file and data

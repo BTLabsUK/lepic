@@ -30,7 +30,7 @@ the peak, so the check catches a regression of that order and not load or run-to
 ## What is measured
 
 - `size.<target>`: the file size of `liblepic_ffi.so` that `cargo xtask mobile --package --target
-  <target>` builds and copies into `bindings/flutter/native/<target>/`. The release profile strips
+  <target>` builds and copies into `dist/native/<target>/`. The release profile strips
   symbols, so this is the size the app bundles before its own compression.
 - `restore.*`: the release build of the `lepic-wallet` test
   `restore_vectors_find_exactly_the_outputs_upstream_found`, run alone. It restores a wallet from
@@ -53,7 +53,7 @@ high-water mark (`VmHWM` in `/proc/<pid>/status`) over the runs, read every mill
 - The recorded restore sessions are small chains, so `restore.*` catches regressions in the fixed
   cost of a restore and in per-output work, not in behaviour that only shows on a long chain.
 - Probe output goes to `target/budget/`, and the size check leaves the built libraries in
-  `bindings/flutter/native/`, which is ignored by git.
+  `dist/native/`, which is ignored by git (`/dist/`).
 
 ## Changing a budget
 

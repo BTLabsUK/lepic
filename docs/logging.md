@@ -35,7 +35,7 @@ message. Use these field names and add new ones to this list in the same change:
 | `attempt` | retry number, starting at 1 |
 | `elapsed_ms` | duration of the operation |
 | `error` | the error, with its source chain |
-| `tag` | app-chosen tag of a line the Flutter app logs under target `dart` |
+| `tag` | app-chosen tag of a line the app logs under target `dart` |
 | `status` | outcome of an operation that reports one instead of failing, such as a history import |
 | `count` | number of records an operation handled |
 
