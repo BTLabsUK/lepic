@@ -556,3 +556,45 @@ async fn a_relay_switched_to_while_over_tor_is_reached_through_tor() {
         "its discovery document, then the relay itself, both through tor"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_node_switched_to_while_over_tor_is_reached_through_tor() {
+    let mut world = World::new();
+    Arc::get_mut(&mut world.runtime.inner).unwrap().nodes = crate::node::NodeFactory::Http;
+    let (wallet, config) = world.wallet("one.example").await;
+    let session = wallet.session();
+    let (socks, targets) = recording_socks().await;
+    session.attach_node_socks(socks);
+
+    let mapped = WalletConfig {
+        node_url: "https://node.btlabs.uk".to_owned(),
+        ..config.clone()
+    };
+    switch(session, &mapped).await.unwrap();
+    assert!(session.node().get_tip().await.is_err());
+    let onion = "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion";
+    assert_eq!(targets.lock().unwrap()[0], (onion.to_owned(), 443));
+
+    let unmapped = WalletConfig {
+        node_url: "https://other.example:3413".to_owned(),
+        ..config.clone()
+    };
+    switch(session, &unmapped).await.unwrap();
+    targets.lock().unwrap().clear();
+    assert!(session.node().get_tip().await.is_err());
+    assert_eq!(
+        targets.lock().unwrap()[0],
+        ("other.example".to_owned(), 3413),
+        "by name, so tor resolves it"
+    );
+
+    let plain = WalletConfig {
+        node_url: "http://other.example".to_owned(),
+        ..config
+    };
+    assert_eq!(
+        kind(switch(session, &plain).await),
+        WalletErrorKind::InvalidArgument,
+        "plain http never leaves through an exit"
+    );
+}
