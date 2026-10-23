@@ -4,7 +4,10 @@
 //! targets share them.
 
 use lepic_slate::codec::{MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
+use std::fmt;
+
 use serde::Deserialize;
+use serde::de::{self, Deserializer, IgnoredAny, SeqAccess, Visitor};
 use serde_json::value::RawValue;
 
 use crate::error::RpcError;
@@ -61,8 +64,55 @@ struct RawRequest<'a> {
     method: &'a str,
     #[serde(borrow)]
     id: Option<&'a RawValue>,
-    #[serde(borrow, default)]
-    params: Option<Vec<&'a RawValue>>,
+    #[serde(borrow, default, deserialize_with = "bounded_params")]
+    params: Vec<&'a RawValue>,
+}
+
+// `receive_tx` takes at most this many parameters.
+const MAX_PARAMS: usize = 4;
+
+/// `params` with at most one entry past [`MAX_PARAMS`] kept, which is enough for the call to
+/// refuse the request, and the rest skipped unparsed, so the memory a request spends does not
+/// grow with the length of the array. `null` reads as no parameters.
+fn bounded_params<'de, D>(deserializer: D) -> Result<Vec<&'de RawValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_option(ParamsVisitor)
+}
+
+struct ParamsVisitor;
+
+impl<'de> Visitor<'de> for ParamsVisitor {
+    type Value = Vec<&'de RawValue>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an array or null")
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(Vec::new())
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(Vec::new())
+    }
+
+    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut kept = Vec::new();
+        while kept.len() <= MAX_PARAMS {
+            match seq.next_element::<&'de RawValue>()? {
+                Some(param) => kept.push(param),
+                None => return Ok(kept),
+            }
+        }
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(kept)
+    }
 }
 
 /// Reads a listener request body. A body that is not a JSON-RPC 2.0 request is an
@@ -97,10 +147,9 @@ pub fn decode_request(body: &[u8]) -> Result<Request, Unanswerable> {
             code: INVALID_REQUEST,
         });
     }
-    let params = raw.params.unwrap_or_default();
     let call = match raw.method {
         "check_version" => Call::CheckVersion,
-        "receive_tx" => match receive_tx_slate(&params) {
+        "receive_tx" => match receive_tx_slate(&raw.params) {
             Some(slate) => Call::ReceiveTx(slate),
             None => {
                 return Err(Unanswerable {
@@ -133,7 +182,7 @@ fn is_id(text: &str) -> bool {
 /// unauthenticated.
 fn receive_tx_slate(params: &[&RawValue]) -> Option<WireSlate> {
     let (slate, rest) = params.split_first()?;
-    if rest.len() > 3 || !slate.get().starts_with('{') {
+    if params.len() > MAX_PARAMS || !slate.get().starts_with('{') {
         return None;
     }
     let extras_ok = rest.iter().all(|extra| {
@@ -366,6 +415,37 @@ mod tests {
             "a".repeat(80)
         );
         assert_eq!(code(&long_id), INVALID_REQUEST);
+    }
+
+    #[test]
+    fn keeps_no_more_params_than_it_needs_to_refuse() {
+        let many = format!(
+            r#"{{"jsonrpc":"2.0","method":"receive_tx","id":5,"params":[{{}}{}]}}"#,
+            ",0".repeat(1_000_000)
+        );
+        let raw: RawRequest<'_> = serde_json::from_str(&many).unwrap();
+        assert_eq!(raw.params.len(), MAX_PARAMS + 1);
+        let refused = decode_request(many.as_bytes()).unwrap_err();
+        assert_eq!(refused.code, INVALID_PARAMS);
+        assert_eq!(refused.id, "5");
+
+        for params in ["null", "[]"] {
+            let body =
+                format!(r#"{{"jsonrpc":"2.0","method":"check_version","id":1,"params":{params}}}"#);
+            let raw: RawRequest<'_> = serde_json::from_str(&body).unwrap();
+            assert!(raw.params.is_empty());
+        }
+        let not_array = r#"{"jsonrpc":"2.0","method":"check_version","id":1,"params":5}"#;
+        assert_eq!(
+            decode_request(not_array.as_bytes()).unwrap_err().code,
+            PARSE_ERROR
+        );
+        let broken =
+            r#"{"jsonrpc":"2.0","method":"check_version","id":1,"params":[{},1,2,3,4,5,}]}"#;
+        assert_eq!(
+            decode_request(broken.as_bytes()).unwrap_err().code,
+            PARSE_ERROR
+        );
     }
 
     #[test]
