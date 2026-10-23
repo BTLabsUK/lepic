@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Enforces the Conventional Commits rules of this repository.
+# Enforces the commit message rules in CONTRIBUTING.md.
 # Usage: commit-msg <message-file>                  (git hook)
 #        commit-msg --no-autosquash <message-file>  (commits in CI)
 #        commit-msg --subject "<subject>"           (pull request titles in CI)
@@ -11,6 +11,7 @@ scopes='primitives|crypto|keychain|slate|node|store|transport|epicbox|wallet|tel
 fail() {
     printf 'commit-msg: %s\n' "$1" >&2
     printf 'subject was: %s\n' "$subject" >&2
+    printf 'rules: CONTRIBUTING.md\n' >&2
     exit 1
 }
 

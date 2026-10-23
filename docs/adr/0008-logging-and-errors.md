@@ -26,7 +26,7 @@ into strings at layer boundaries. Mobile apps cannot install their own logger cl
 
 - Each engine operation gets a span, so a log file reads as a sequence of named operations with their
   outcomes.
-- Adding a field name means updating the vocabulary in docs/logging.md in the same change.
+- Adding a field name means updating the vocabulary in `docs/logging.md` in the same change.
 
 ## Alternatives considered
 
