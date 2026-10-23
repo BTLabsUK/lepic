@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use lepic_transport::transport::BoxFuture;
@@ -70,15 +70,66 @@ pub struct DialTarget {
 
 /// The built-in onion of `endpoint`, if it has one.
 pub fn built_in_route(endpoint: &RelayEndpoint) -> Option<DialTarget> {
-    ONION_ROUTES
-        .iter()
-        .find(|(domain, port, _, _)| {
-            endpoint.domain().as_str().eq_ignore_ascii_case(domain) && endpoint.port() == *port
-        })
-        .map(|(_, _, onion, onion_port)| DialTarget {
-            host: (*onion).to_owned(),
-            port: *onion_port,
-        })
+    OnionRoutes::default().route(endpoint)
+}
+
+/// A relay that is also an onion service: its domain and port, and the onion and port to dial
+/// instead. The onion must present the domain's certificate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnionRoute {
+    pub domain: Domain,
+    pub port: u16,
+    /// `<56 characters>.onion`.
+    pub onion: String,
+    pub onion_port: u16,
+}
+
+/// The relays known to be onion services: [`ONION_ROUTES`] until replaced, for example by a
+/// signed list the host app fetched. Shared by the connectors that use it.
+#[derive(Debug)]
+pub struct OnionRoutes(RwLock<Vec<OnionRoute>>);
+
+impl Default for OnionRoutes {
+    fn default() -> Self {
+        let built_in = ONION_ROUTES
+            .iter()
+            .filter_map(|(domain, port, onion, onion_port)| {
+                Some(OnionRoute {
+                    domain: Domain::parse(domain).ok()?,
+                    port: *port,
+                    onion: (*onion).to_owned(),
+                    onion_port: *onion_port,
+                })
+            })
+            .collect();
+        Self(RwLock::new(built_in))
+    }
+}
+
+impl OnionRoutes {
+    /// Replaces every route, the built-in ones included. Connections made from now on use them.
+    pub fn replace(&self, routes: Vec<OnionRoute>) {
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) = routes;
+    }
+
+    /// The onion of `endpoint`, if it has one.
+    pub fn route(&self, endpoint: &RelayEndpoint) -> Option<DialTarget> {
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|route| {
+                route
+                    .domain
+                    .as_str()
+                    .eq_ignore_ascii_case(endpoint.domain().as_str())
+                    && route.port == endpoint.port()
+            })
+            .map(|route| DialTarget {
+                host: route.onion.clone(),
+                port: route.onion_port,
+            })
+    }
 }
 
 /// Why a relay's discovery document was not used.
@@ -233,24 +284,36 @@ fn complete(response: &[u8]) -> bool {
 pub struct TunnelConnector {
     direct: TcpConnector,
     tunnel: Arc<dyn Tunnel>,
+    routes: Arc<OnionRoutes>,
     /// Discovery outcomes of this connector, by relay; `None` when the relay named no onion.
     discovered: Mutex<HashMap<(String, u16), Option<DialTarget>>>,
 }
 
 impl TunnelConnector {
+    /// With the built-in onion routes.
     pub fn new(tls: Arc<ClientConfig>, tunnel: Arc<dyn Tunnel>) -> Self {
+        Self::with_routes(tls, tunnel, Arc::default())
+    }
+
+    /// With `routes`, which the caller may replace while the connector is in use.
+    pub fn with_routes(
+        tls: Arc<ClientConfig>,
+        tunnel: Arc<dyn Tunnel>,
+        routes: Arc<OnionRoutes>,
+    ) -> Self {
         Self {
             direct: TcpConnector::new(tls),
             tunnel,
+            routes,
             discovered: Mutex::default(),
         }
     }
 
-    /// Where a connection to `endpoint` through the tunnel goes: the built-in onion, else the
+    /// Where a connection to `endpoint` through the tunnel goes: its onion route, else the
     /// onion the relay names in its discovery document, asked once per connector, else the
     /// relay's own domain and port.
     pub async fn dial_target(&self, endpoint: &RelayEndpoint) -> DialTarget {
-        if let Some(target) = built_in_route(endpoint) {
+        if let Some(target) = self.routes.route(endpoint) {
             return target;
         }
         let key = (
@@ -485,6 +548,43 @@ mod tests {
         );
         assert_eq!(built_in_route(&relay("flooepicbox.btlabs.uk", 3420)), None);
         assert_eq!(built_in_route(&relay("epicbox.epiccash.com", 443)), None);
+    }
+
+    #[tokio::test]
+    async fn replaced_routes_are_dialled_and_the_built_in_one_is_gone() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let routes = Arc::new(OnionRoutes::default());
+        let connector = TunnelConnector::with_routes(
+            tls(),
+            Arc::clone(&tunnel) as Arc<dyn Tunnel>,
+            Arc::clone(&routes),
+        );
+        let other = format!("{}.onion", "b".repeat(56));
+        routes.replace(vec![OnionRoute {
+            domain: Domain::parse("relay.example").unwrap(),
+            port: 443,
+            onion: other.clone(),
+            onion_port: 8443,
+        }]);
+        connector
+            .remember(&relay("flooepicbox.btlabs.uk", 443), None)
+            .await;
+        assert!(
+            connector
+                .connect(&relay("Relay.Example", 443))
+                .await
+                .is_err()
+        );
+        assert!(
+            connector
+                .connect(&relay("flooepicbox.btlabs.uk", 443))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tunnel.opened(),
+            [(other, 8443), ("flooepicbox.btlabs.uk".to_owned(), 443)]
+        );
     }
 
     #[tokio::test]
