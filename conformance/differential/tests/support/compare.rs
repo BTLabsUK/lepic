@@ -1,7 +1,7 @@
 //! Comparing a LEPIC run with its reference run of the same story.
 
 use super::view::{differences, restarted_differences};
-use super::{MinedShape, World, hex};
+use super::{AMOUNT, MinedShape, World, hex};
 
 /// The slate file the subject wrote, and whether the subject created the slate in it.
 #[derive(Debug, Clone, Copy)]
@@ -43,7 +43,8 @@ pub fn compare(
         for difference in compare_views(&observed.peer, &expected.peer) {
             found.push(format!("{name} {}: peer {difference}", observed.label));
         }
-        for difference in compare_views(&observed.subject, &expected.subject) {
+        let expected_subject = expected_subject(expected, observed.label, subject_file);
+        for difference in compare_views(&observed.subject, &expected_subject) {
             found.push(format!("{name} {}: subject {difference}", observed.label));
         }
     }
@@ -78,6 +79,22 @@ pub fn compare(
     found.extend(check_v3_file(lepic, subject_file).map(|d| format!("{name}: {d}")));
     found.extend(check_kernel(lepic).map(|d| format!("{name}: {d}")));
     found
+}
+
+/// The reference's view of the subject. Until the invoice is paid and finalized, an upstream
+/// issuer counts the invoice's output as awaiting finalization, while LEPIC counts it in no
+/// figure (a deliberate difference, commit 2cc8512): the reference view loses that amount.
+fn expected_subject(
+    expected: &super::Checkpoint,
+    label: &str,
+    file: SubjectFile,
+) -> super::view::PartyView {
+    let mut view = expected.subject.clone();
+    if file.created && file.name == "case.invoice" && matches!(label, "initiated" | "responded") {
+        view.balance.awaiting_finalization =
+            view.balance.awaiting_finalization.saturating_sub(AMOUNT);
+    }
+    view
 }
 
 /// The file LEPIC wrote is in the V3 shape with `version` and `orig_version` 3 (ADR 0015).
