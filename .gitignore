@@ -7,7 +7,6 @@
 /dist/
 
 # Mobile build output
-/bindings/out/
 *.xcframework/
 *.aar
 

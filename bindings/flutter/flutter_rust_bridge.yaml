@@ -1,6 +1,0 @@
-# Regenerate with `dart run tool/generate.dart` in this directory, which runs
-# `flutter_rust_bridge_codegen generate` and then fixes the stream error decoders, with the codegen at
-# exactly the flutter_rust_bridge version pinned in the root Cargo.toml (ADR 0007).
-rust_input: crate::api
-rust_root: ../../crates/lepic-ffi
-dart_output: lib/src/rust

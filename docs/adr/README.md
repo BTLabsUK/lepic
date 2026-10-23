@@ -12,7 +12,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0004](0004-epicbox-client.md) | Async Epicbox client with listen and drain modes, acknowledge after store | accepted |
 | [0005](0005-storage.md) | SQLite storage, platform keystore for secrets, legacy seed import | accepted, database-import bullet superseded by 0019 |
 | [0006](0006-tls-and-http.md) | rustls with ring, hyper for HTTP, tokio-tungstenite for websockets | accepted |
-| [0007](0007-mobile-bindings.md) | flutter_rust_bridge bindings for the existing Flutter frontend | accepted, secrets line superseded by 0014 |
+| [0007](0007-mobile-bindings.md) | flutter_rust_bridge bindings for the existing Flutter frontend | accepted, secrets line superseded by 0014, delivery bullet superseded by 0023 |
 | [0008](0008-logging-and-errors.md) | tracing everywhere, host-installed subscribers, typed errors | accepted |
 | [0009](0009-conformance.md) | Separate conformance workspace on public pins, golden vectors | accepted, version table superseded by 0020 |
 | [0010](0010-dependency-policy.md) | Latest stable crates and toolchain, banned list, update bots | accepted |
@@ -27,6 +27,8 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0019](0019-import-epic-wallet-history.md) | Import the transaction history of an epic-wallet wallet, reconciled with the scan | accepted |
 | [0020](0020-reference-epic-wallet-4-1.md) | Reference wallet and node move to epic-wallet v4.1.0 | accepted |
 | [0021](0021-epicbox-over-tor.md) | Epicbox over Tor | accepted |
+| [0022](0022-node-over-tor.md) | Node over Tor | accepted |
+| [0023](0023-binding-in-its-own-repository.md) | The Flutter binding lives in its own repository | accepted |
 
 Template:
 

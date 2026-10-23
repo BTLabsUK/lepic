@@ -13,7 +13,7 @@ use lepic_wallet::send::SendError;
 use lepic_wallet::{FinalizeError, ReceiveError};
 
 /// What went wrong, in terms the app can act on. The numbers in [`WalletErrorKind::code`] are
-/// part of the API and never change meaning; `bindings/flutter/README.md` lists them.
+/// part of the API and never change meaning; the binding's README lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalletErrorKind {
     InvalidMnemonic,
@@ -471,7 +471,7 @@ mod tests {
         );
     }
 
-    /// The codes are API: `bindings/flutter/README.md` lists them and apps store them.
+    /// The codes are API: the binding's README lists them and apps store them.
     #[test]
     fn error_codes_are_stable_and_unique() {
         use WalletErrorKind as K;

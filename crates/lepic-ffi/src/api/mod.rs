@@ -1,5 +1,5 @@
 //! The API the Dart package is generated from. Names follow the earlier binding of the app
-//! where the operation is the same; `bindings/flutter/README.md` maps old calls to new ones.
+//! where the operation is the same; the binding's README maps old calls to new ones.
 
 pub mod app_data;
 pub mod diagnostics;

@@ -1,6 +1,6 @@
 # 0007 Mobile bindings with flutter_rust_bridge for the existing Flutter frontend
 
-Status: accepted
+Status: accepted, delivery bullet superseded by 0023
 Date: 2026-10-02
 
 ## Context

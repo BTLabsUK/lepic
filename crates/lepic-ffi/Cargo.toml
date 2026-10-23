@@ -1,6 +1,6 @@
 [package]
 name = "lepic-ffi"
-description = "flutter_rust_bridge API over the LEPIC wallet engine for the Flutter frontend."
+description = "flutter_rust_bridge API over the LEPIC wallet engine for mobile and desktop apps."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,8 +11,8 @@ publish.workspace = true
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
-# An in-process scripted node and Epicbox relay for the Dart package tests
-# (`bindings/flutter/test`). Never in an app build.
+# An in-process scripted node and Epicbox relay for the binding's own tests
+# (the binding repository's `test/`). Never in an app build.
 mock = ["lepic-node/mock", "lepic-epicbox/mock-relay"]
 
 [dependencies]
