@@ -6,7 +6,7 @@ use std::error::Error;
 
 use crate::epicbox_invoice::HIDDEN_FORMATTING;
 
-/// Entries longer than this many characters are cut and end in [`ELLIPSIS`].
+/// Entries longer than this many characters are cut and end in an ellipsis.
 pub const MAX_ERROR_ENTRY_CHARS: usize = 256;
 
 /// The most entries of one error chain that are shown; deeper sources are left out.
@@ -18,9 +18,9 @@ pub const MAX_ERROR_MESSAGE_CHARS: usize = MAX_ERROR_ENTRIES * (MAX_ERROR_ENTRY_
 
 const ELLIPSIS: char = '…';
 
-/// One entry of an error chain with control characters, bidirectional formatting, line and
-/// paragraph separators and zero-width characters removed, cut to [`MAX_ERROR_ENTRY_CHARS`]
-/// characters.
+/// One entry of an error chain with each run of line breaks and tabs made one space, other
+/// control characters, bidirectional formatting and zero-width characters removed, and cut to
+/// [`MAX_ERROR_ENTRY_CHARS`] characters.
 pub fn display_error_text(text: &str) -> String {
     cleaned(text, MAX_ERROR_ENTRY_CHARS)
 }
@@ -32,9 +32,7 @@ pub fn display_error_message(text: &str) -> String {
 }
 
 fn cleaned(text: &str, max_chars: usize) -> String {
-    let mut kept = text
-        .chars()
-        .filter(|c| !c.is_control() && !HIDDEN_FORMATTING.contains(c));
+    let mut kept = shown_chars(text);
     let mut shown = String::new();
     for c in kept.by_ref().take(max_chars) {
         shown.push(c);
@@ -44,6 +42,24 @@ fn cleaned(text: &str, max_chars: usize) -> String {
         shown.push(ELLIPSIS);
     }
     shown
+}
+
+/// The characters of `text` that are shown. A run of line breaks and tabs becomes one space, so
+/// the words around it stay apart; other hidden characters are dropped.
+fn shown_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+    let mut after_break = false;
+    text.chars().filter_map(move |c| {
+        if matches!(c, '\n' | '\r' | '\t' | '\u{2028}' | '\u{2029}') {
+            let first = !after_break;
+            after_break = true;
+            return first.then_some(' ');
+        }
+        if c.is_control() || HIDDEN_FORMATTING.contains(&c) {
+            return None;
+        }
+        after_break = false;
+        Some(c)
+    })
 }
 
 /// The message of `error` and of each source under it, outermost first, each through
@@ -97,7 +113,16 @@ mod tests {
                 .chars()
                 .all(|c| !c.is_control() && !HIDDEN_FORMATTING.contains(&c))
         );
-        assert!(shown.starts_with('a') && shown.ends_with('f'));
+        assert!(shown.starts_with('a') && shown.ends_with("f "));
+    }
+
+    #[test]
+    fn line_breaks_and_tabs_become_one_space() {
+        assert_eq!(display_error_text("a\nb"), "a b");
+        assert_eq!(
+            display_error_text("a\r\n\u{202E}\tb\u{2028}c\u{2029}d"),
+            "a b c d"
+        );
     }
 
     #[test]
