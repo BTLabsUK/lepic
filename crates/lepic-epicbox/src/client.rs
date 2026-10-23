@@ -203,6 +203,15 @@ impl Identity {
     pub(crate) fn secret(&self) -> &SecretKey {
         &self.secret
     }
+
+    /// Signs the push registration text of `request` for this identity's address, the only text
+    /// this method signs.
+    pub fn sign_push(
+        &self,
+        request: &crate::PushRequest,
+    ) -> Result<lepic_crypto::EcdsaSignature, lepic_crypto::CryptoError> {
+        crate::sign_text(&request.signed_text(&self.address.key_text()), &self.secret)
+    }
 }
 
 impl fmt::Debug for Identity {

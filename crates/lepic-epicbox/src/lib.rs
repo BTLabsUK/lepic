@@ -8,6 +8,7 @@ mod frame;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
 mod prefilter;
+mod push;
 mod session;
 pub mod transport;
 pub mod tunnel;
@@ -33,6 +34,7 @@ pub use frame::{
     RelayMessageId, SlateFrame, WalletMode,
 };
 pub use prefilter::{Admission, Prefilter};
+pub use push::{MAX_PUSH_TOKEN_LEN, PushAction, PushError, PushRequest};
 pub use session::{
     Connector, DEFAULT_PLAIN_PORT, EndpointError, ProtocolVersion, RelayEndpoint, RelayStream,
     Security, TcpConnector,
