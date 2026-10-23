@@ -54,7 +54,7 @@ fn incoming(invoice: EngineIncomingInvoice) -> IncomingInvoice {
 
 impl Session {
     pub(crate) fn invoice_address(&self) -> Result<String, WalletError> {
-        Ok(self.engine.invoice_address(self.epicbox()?)?.to_string())
+        Ok(self.engine.invoice_address(&self.epicbox()?)?.to_string())
     }
 
     pub(crate) fn invoice_address_index(&self) -> Result<u32, WalletError> {
@@ -69,7 +69,7 @@ impl Session {
     pub(crate) fn rotate_invoice_address(&self) -> Result<String, WalletError> {
         Ok(self
             .engine
-            .rotate_invoice_address(self.epicbox()?)?
+            .rotate_invoice_address(&self.epicbox()?)?
             .to_string())
     }
 
@@ -116,7 +116,7 @@ impl Session {
         relay_address(&address, self.network)
             .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
         // The payer's I2 comes back to the payments address the I1 is sent from.
-        self.engine.epicbox_attach(epicbox)?;
+        self.engine.epicbox_attach(&epicbox)?;
         let issued = self
             .engine
             .issue_invoice(
@@ -139,7 +139,7 @@ impl Session {
     }
 
     pub(crate) async fn drain_invoices(&self) -> Result<InvoiceReport, WalletError> {
-        let summary = self.engine.epicbox_drain_invoices(self.epicbox()?).await?;
+        let summary = self.engine.epicbox_drain_invoices(&self.epicbox()?).await?;
         Ok(InvoiceReport {
             parked: summary.parked,
             finalized: summary.finalized,
@@ -175,7 +175,7 @@ impl Session {
         let slate_id = self::slate_id(slate_id)?;
         let defaults = Self::send_request_with(amount, minimum_confirmations, message, options)?;
         // The payment goes out from the payments address, where the issuer's answers arrive.
-        self.engine.epicbox_attach(self.epicbox()?)?;
+        self.engine.epicbox_attach(&self.epicbox()?)?;
         let request = PayRequest {
             minimum_confirmations,
             strategy: defaults.strategy,
@@ -196,7 +196,7 @@ impl Session {
         let slate_id = self::slate_id(slate_id)?;
         Ok(self
             .engine
-            .decline_invoice(self.epicbox()?, slate_id)
+            .decline_invoice(&self.epicbox()?, slate_id)
             .await?)
     }
 
@@ -208,7 +208,7 @@ impl Session {
         let to = details
             .counterparty
             .ok_or_else(|| invalid("transaction is not a payment of an invoice"))?;
-        self.engine.epicbox_attach(epicbox)?;
+        self.engine.epicbox_attach(&epicbox)?;
         Ok(self
             .engine
             .resend(

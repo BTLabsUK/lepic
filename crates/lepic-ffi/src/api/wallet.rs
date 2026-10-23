@@ -250,8 +250,18 @@ impl EpicWallet {
     {
         let session = Arc::clone(&self.session);
         let in_flight = Arc::clone(&self.session.in_flight);
+        let gate = Arc::clone(&self.session);
+        let work = work(session);
         self.boundary()
-            .run_tracked(operation, work(session), &in_flight)
+            .run_tracked(
+                operation,
+                async move {
+                    // A server switch waiting or under way goes first.
+                    let _servers = gate.servers.read().await;
+                    work.await
+                },
+                &in_flight,
+            )
             .await
     }
 
@@ -1064,6 +1074,32 @@ impl EpicWallet {
             session.drain_epicbox().await
         })
         .await
+    }
+
+    /// Moves the open wallet to the node and Epicbox relay `config` names, keeping it unlocked.
+    /// Calls running when it starts end first, and calls made while it waits or runs start
+    /// after it; a running scan is waited for too, so cancel it first to switch at once. A
+    /// running listener moves to a new relay once the message in hand is settled and
+    /// acknowledged, at most 30 seconds later, and its stream goes on without `Stopped`. A new
+    /// relay changes the wallet's Epicbox address to `<key>@<new relay>`; answers sent to the
+    /// old address stay on the old relay.
+    ///
+    /// `config.data_dir` and `config.chain` must be those the wallet was opened with: another
+    /// chain is another wallet. Fails with `InvalidArgument`, keeping the servers in use, for
+    /// a node URL or relay that is not one, for another directory or chain, and when
+    /// `config` turns Epicbox on or off; with `Locked` on a locked wallet.
+    pub async fn set_servers(&self, config: WalletConfig) -> Result<(), WalletError> {
+        let mut config = config;
+        let node_secret = NodeSecret::take(&mut config);
+        let session = Arc::clone(&self.session);
+        let in_flight = Arc::clone(&self.session.in_flight);
+        self.boundary()
+            .run_tracked(
+                "set_servers",
+                async move { session.set_servers(&config, &node_secret).await },
+                &in_flight,
+            )
+            .await
     }
 
     /// Starts the Epicbox listener, unless it runs already, and streams what it does until

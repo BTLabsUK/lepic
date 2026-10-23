@@ -68,6 +68,11 @@ impl MockChain {
         })
     }
 
+    #[cfg(all(test, feature = "mock"))]
+    pub(crate) fn backend(&self) -> &crate::mock::MockBackend {
+        &self.backend
+    }
+
     /// [`MockChain::runtime`] whose wallets also reach `relay` for every Epicbox connection,
     /// whatever relay they are configured with.
     #[frb(sync)]

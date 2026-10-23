@@ -50,6 +50,15 @@ final wallet = await EpicWallet.create(
   keys above have fixed names, so wallets sharing a store would share one vault slot, one PIN key
   and one failure count: a second wallet is refused with `walletAlreadyExists`, and wrong PINs
   for one wallet would delay attempts for another.
+- `wallet.setServers(config: …)` moves an open wallet to the node and relay of a new
+  `WalletConfig` without locking it; the data directory and chain must be the wallet's own (a
+  change of chain is another wallet: open it). Calls running when it starts end first, a
+  running scan included, and calls made meanwhile wait for it. A running listener moves to a
+  new relay once the message in hand is answered and acknowledged (at most 30 s), and its stream
+  goes on without `stopped`. A new relay changes `epicboxAddress()` to `<key>@<new relay>`;
+  answers sent to the old address stay on the old relay. A node URL or relay that is not one,
+  or a config that turns Epicbox on or off, fails with `invalidArgument` and keeps the servers
+  in use.
 - For PIN unlock use `EpicWallet.createWithPin` and `EpicWallet.openWithPin`: LEPIC generates the
   wallet password, seals it under the PIN together with a random key it writes into the store as
   `lepic.pin-key`, and returns only the sealed text, which the app stores. A new PIN, in

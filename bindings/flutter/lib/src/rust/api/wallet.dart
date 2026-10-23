@@ -725,6 +725,20 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// the payments address.
   Future<void> setInvoiceAddressIndex({required int index});
 
+  /// Moves the open wallet to the node and Epicbox relay `config` names, keeping it unlocked.
+  /// Calls running when it starts end first, and calls made while it waits or runs start
+  /// after it; a running scan is waited for too, so cancel it first to switch at once. A
+  /// running listener moves to a new relay once the message in hand is settled and
+  /// acknowledged, at most 30 seconds later, and its stream goes on without `Stopped`. A new
+  /// relay changes the wallet's Epicbox address to `<key>@<new relay>`; answers sent to the
+  /// old address stay on the old relay.
+  ///
+  /// `config.data_dir` and `config.chain` must be those the wallet was opened with: another
+  /// chain is another wallet. Fails with `InvalidArgument`, keeping the servers in use, for
+  /// a node URL or relay that is not one, for another directory or chain, and when
+  /// `config` turns Epicbox on or off; with `Locked` on a locked wallet.
+  Future<void> setServers({required WalletConfig config});
+
   /// Spends exactly the outputs `commitments` names, by `WalletOutput.commitment`, into one
   /// output of this wallet, as [`EpicWallet::consolidate_outputs`] does, and locks nothing
   /// else. Use it to make a cancelled payment final: once a payment is cancelled its inputs

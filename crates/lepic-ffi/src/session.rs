@@ -77,6 +77,9 @@ pub(crate) use http::HttpReport;
 #[cfg(test)]
 pub(crate) use tor::TorReport;
 mod invoice;
+mod servers;
+
+use servers::EpicboxSlot;
 
 type EngineWallet = Wallet<Node, ClaimedStores, AppVault>;
 
@@ -167,8 +170,14 @@ pub(crate) struct Session {
     data_dir: PathBuf,
     store: AppSecretStore,
     vault: VaultBytes,
-    epicbox: Option<EpicboxTransport>,
+    epicbox: Option<EpicboxSlot>,
     listener: Mutex<Option<ListenHandle>>,
+    /// The handle a listener that a server switch ended continues with.
+    relisten: Mutex<Option<ListenHandle>>,
+    /// Held by a listener while it is subscribed, so a server switch can wait for its end.
+    listen_run: tokio::sync::Mutex<()>,
+    /// Held for reading by every wallet call and for writing by a server switch.
+    pub(crate) servers: tokio::sync::RwLock<()>,
     /// Holds the answers of HTTP sends until they are finalized.
     http: lepic_foreign::HttpTransport,
     http_listener: Mutex<http::HttpListener>,
@@ -301,7 +310,7 @@ impl Session {
         let data_dir = claim.dir.clone();
         let claim = ClaimHolder::new(claim);
         let node = runtime.nodes.client(config, node_secret)?;
-        let epicbox = epicbox_transport(runtime, config, network)?;
+        let epicbox = epicbox_transport(runtime, config, network)?.map(EpicboxSlot::new);
         let mut transports = TransportRegistry::new();
         let mut ids = vec![FILE];
         transports
@@ -350,6 +359,9 @@ impl Session {
             vault,
             epicbox,
             listener: Mutex::default(),
+            relisten: Mutex::default(),
+            listen_run: tokio::sync::Mutex::default(),
+            servers: tokio::sync::RwLock::default(),
             http,
             http_listener: Mutex::default(),
             http_starts: AtomicU64::new(0),
@@ -393,12 +405,15 @@ impl Session {
         if let Some(listener) = lock(&self.listener).take() {
             listener.stop();
         }
+        if let Some(listener) = self.take_relisten() {
+            listener.stop();
+        }
         if let Some(scan) = lock(&self.scan).take() {
             scan.cancel();
         }
         lock(&self.balance).take();
         if let Some(epicbox) = &self.epicbox {
-            epicbox.detach();
+            epicbox.current().detach();
         }
         // Before the engine locks, so a database that closes at the lock releases the
         // directory.
@@ -1055,7 +1070,7 @@ impl Session {
     /// a cancel of an issued invoice sends leaves from the address the invoice came from.
     fn attach_for_notices(&self) -> Result<(), WalletError> {
         if let Some(epicbox) = &self.epicbox {
-            self.engine.epicbox_attach(epicbox)?;
+            self.engine.epicbox_attach(&epicbox.current())?;
         }
         Ok(())
     }
@@ -1064,17 +1079,21 @@ impl Session {
         Ok(self.engine.release(TxId(tx_id)).await?)
     }
 
-    fn epicbox(&self) -> Result<&EpicboxTransport, WalletError> {
-        self.epicbox.as_ref().ok_or_else(|| {
-            WalletError::new(
-                WalletErrorKind::Unsupported,
-                "epicbox is not configured for this wallet",
-            )
-        })
+    /// The transport of the relay in use.
+    pub(crate) fn epicbox(&self) -> Result<EpicboxTransport, WalletError> {
+        self.epicbox
+            .as_ref()
+            .map(EpicboxSlot::current)
+            .ok_or_else(|| {
+                WalletError::new(
+                    WalletErrorKind::Unsupported,
+                    "epicbox is not configured for this wallet",
+                )
+            })
     }
 
     pub(crate) fn epicbox_address(&self) -> Result<String, WalletError> {
-        Ok(self.engine.epicbox_attach(self.epicbox()?)?.to_string())
+        Ok(self.engine.epicbox_attach(&self.epicbox()?)?.to_string())
     }
 
     pub(crate) async fn send_epicbox(
@@ -1089,7 +1108,7 @@ impl Session {
         let epicbox = self.epicbox()?;
         relay_address(&address, self.network)
             .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
-        self.engine.epicbox_attach(epicbox)?;
+        self.engine.epicbox_attach(&epicbox)?;
         let sent = self
             .engine
             .send(
@@ -1104,7 +1123,7 @@ impl Session {
     }
 
     pub(crate) async fn drain_epicbox(&self) -> Result<InboxReport, WalletError> {
-        let summary = self.engine.epicbox_drain(self.epicbox()?).await?;
+        let summary = self.engine.epicbox_drain(&self.epicbox()?).await?;
         Ok(InboxReport {
             received: summary.received,
             finalized: summary.finalized,
@@ -1130,15 +1149,40 @@ impl Session {
         Ok(Some(handle))
     }
 
-    /// Runs the listener until `handle` is stopped, handing what it does to `report`.
+    /// Runs the listener until `handle` is stopped, handing what it does to `report`. A
+    /// server switch that moves it to a new relay hands it the handle to continue with.
     pub(crate) async fn listen(
         &self,
         handle: &ListenHandle,
         report: impl Fn(ListenerEvent),
     ) -> Result<(), WalletError> {
+        let mut handle = handle.clone();
+        loop {
+            // A switch under way ends first, so the listener starts on the servers it set.
+            drop(self.servers.read().await);
+            let result = {
+                let _running = self.listen_run.lock().await;
+                if handle.is_stopped() {
+                    Ok(())
+                } else {
+                    self.listen_once(&handle, &report).await
+                }
+            };
+            match self.take_relisten() {
+                Some(next) if !next.is_stopped() => handle = next,
+                _ => return result,
+            }
+        }
+    }
+
+    async fn listen_once(
+        &self,
+        handle: &ListenHandle,
+        report: &impl Fn(ListenerEvent),
+    ) -> Result<(), WalletError> {
         let epicbox = self.epicbox()?;
         let mut events = self.engine.subscribe();
-        let listen = self.engine.epicbox_listen(epicbox, handle);
+        let listen = self.engine.epicbox_listen(&epicbox, handle);
         tokio::pin!(listen);
         let result = loop {
             tokio::select! {
@@ -2035,7 +2079,8 @@ mod tests {
             MediaType::JSON,
             vector["expected"]["json"].as_str().unwrap().to_owned(),
         );
-        let outbound = sender.epicbox().unwrap().outbound().unwrap();
+        let epicbox = sender.epicbox().unwrap();
+        let outbound = epicbox.outbound().unwrap();
         outbound.deliver(&to, &s1).await.unwrap();
         outbound.deliver(&to, &s1).await.unwrap();
 

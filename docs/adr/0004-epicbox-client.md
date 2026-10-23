@@ -55,3 +55,17 @@ the store before `Made`, within caps on parked invoices in total and per sender;
 acknowledged and dropped. Index 0 is unchanged, except that it now also finalizes an I2 answering an
 invoice the wallet issued, and recognises an I1 sent back unchanged by a peer that does not pay
 invoices. After a restore the invoice address starts at index 1; the host may set the index it kept.
+
+## Amendment 2026-10-23: switching the relay of an open wallet
+
+`EpicWallet::set_servers` moves an open wallet to another node and relay without locking it,
+because a PIN wallet's password never reaches the host, which cannot reopen it. The binding
+registers the relay's transport behind a slot it can replace, so the engine's registry is
+unchanged. A switch waits until the wallet calls running end and holds new ones until it is
+done. A running listener is not rerouted inside its subscription, as a route change of the same
+relay is (ADR 0021): the relay endpoint and the identity's domain are fixed per client. It is
+asked to finish instead (`ListenHandle::finish`): the message in hand is settled and
+acknowledged, one waiting for a retry stays on the relay, and after 30 s the message in hand is
+abandoned to the old relay. The listener then subscribes on the new relay with the address
+`<key>@<new relay>`; its event stream continues. Messages sent to the old address stay on the
+old relay until the wallet returns to it.

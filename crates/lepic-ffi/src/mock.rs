@@ -1,22 +1,22 @@
 //! The scripted node of `mock` builds, which the Dart package tests drive through
 //! `crate::api::testing`.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{Identifier, Keychain, ProofBuilder, SwitchCommitment};
 use lepic_node::mock::{ChainOutput, ChainState, MockNode};
 use lepic_node::{
-    CallPolicy, LocatedKernel, NodeClient, NodeError, NodeVersion, RetryPolicy, RpcTransport, Tip,
+    CallPolicy, LocatedKernel, NodeError, NodeVersion, RetryPolicy, RpcTransport, Tip,
 };
 use lepic_primitives::amount::Height;
 use lepic_primitives::hash::Hash;
 use lepic_primitives::params::Network;
 
 use crate::api::error::{WalletError, WalletErrorKind};
-use crate::node::{Node, NodeBackend};
 
 /// How often a request to a stalled node checks whether the node answers again.
 const STALL_POLL: Duration = Duration::from_millis(10);
@@ -29,6 +29,8 @@ pub(crate) struct MockBackend {
     stalled: Arc<AtomicBool>,
     stalled_calls: Arc<AtomicU64>,
     lose_post_reply: Arc<AtomicBool>,
+    /// Other nodes by the URL they are served at.
+    others: Arc<Mutex<HashMap<String, MockBackend>>>,
 }
 
 impl MockBackend {
@@ -51,17 +53,35 @@ impl MockBackend {
             stalled: Arc::default(),
             stalled_calls: Arc::default(),
             lose_post_reply: Arc::default(),
+            others: Arc::default(),
         })
     }
 
-    pub(crate) fn client(&self) -> Node {
-        NodeClient::new(
-            NodeBackend::Mock(self.clone()),
-            CallPolicy {
-                retry: RetryPolicy::NONE,
-                ..CallPolicy::default()
-            },
-        )
+    pub(crate) fn policy() -> CallPolicy {
+        CallPolicy {
+            retry: RetryPolicy::NONE,
+            ..CallPolicy::default()
+        }
+    }
+
+    /// The node a wallet configured with `url` reaches: one [`MockBackend::serve_at`] put
+    /// there, or this one.
+    pub(crate) fn at(&self, url: &str) -> Self {
+        self.others
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(url)
+            .cloned()
+            .unwrap_or_else(|| self.clone())
+    }
+
+    /// Serves `node` to the wallets configured with `url` from now on.
+    #[cfg(test)]
+    pub(crate) fn serve_at(&self, url: &str, node: &Self) {
+        self.others
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(url.to_owned(), node.clone());
     }
 
     // The point of this hook is a panic inside an engine operation, so the binding's panic

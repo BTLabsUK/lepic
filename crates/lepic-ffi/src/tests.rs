@@ -18,6 +18,7 @@ mod password;
 mod scan;
 mod selection;
 mod self_send;
+mod servers;
 #[cfg(unix)]
 mod tor;
 
