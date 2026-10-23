@@ -1,0 +1,768 @@
+//! Reaching the relay through a tunnel, such as the wallet's tor (ADR 0021). Only the byte
+//! stream goes another way: to the relay's onion when one is known, else to the relay's domain
+//! through the tunnel's exit. The TLS server name and the websocket URL stay the relay's
+//! domain, so the relay must still show that domain's certificate.
+
+use std::collections::HashMap;
+use std::fmt;
+use std::io;
+use std::sync::Arc;
+use std::time::Duration;
+
+use lepic_transport::transport::BoxFuture;
+use serde::Deserialize;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{Mutex, watch};
+use tokio_rustls::rustls::ClientConfig;
+use tracing::debug;
+
+use crate::address::{DEFAULT_PORT, Domain};
+use crate::session::{Connector, RelayEndpoint, RelayStream, Security, TcpConnector};
+
+/// Relays whose onion is known in advance: domain, port, onion host, onion port. The same on
+/// every network. A built-in entry wins over discovery.
+pub const ONION_ROUTES: &[(&str, u16, &str, u16)] = &[(
+    "flooepicbox.btlabs.uk",
+    443,
+    "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion",
+    443,
+)];
+
+/// Where a relay may say which onion it is also reachable at.
+pub const DISCOVERY_PATH: &str = "/.well-known/epicbox.json";
+
+/// The largest discovery document read.
+pub const MAX_DISCOVERY_LEN: usize = 4096;
+
+/// The largest discovery answer read, headers included.
+const MAX_RESPONSE_LEN: usize = 2 * MAX_DISCOVERY_LEN;
+
+/// How long discovery may take before the relay is reached through the exit instead.
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// The least time a connection through the tunnel is given: a first circuit to an onion often
+/// needs most of a minute.
+pub const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Another way to reach hosts, such as tor's SOCKS proxy.
+pub trait Tunnel: Send + Sync {
+    /// Whether relay connections go through the tunnel, now and as it changes. While it is
+    /// true, no relay connection is made directly.
+    fn active(&self) -> watch::Receiver<bool>;
+
+    /// A byte stream to `host:port` through the tunnel. The tunnel resolves `host`.
+    fn open<'a>(
+        &'a self,
+        host: &'a str,
+        port: u16,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>>;
+
+    /// Whether `host` is a valid onion host name.
+    fn is_onion(&self, host: &str) -> bool;
+}
+
+/// The host and port a connection through the tunnel asks for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DialTarget {
+    pub host: String,
+    pub port: u16,
+}
+
+/// The built-in onion of `endpoint`, if it has one.
+pub fn built_in_route(endpoint: &RelayEndpoint) -> Option<DialTarget> {
+    ONION_ROUTES
+        .iter()
+        .find(|(domain, port, _, _)| {
+            endpoint.domain().as_str().eq_ignore_ascii_case(domain) && endpoint.port() == *port
+        })
+        .map(|(_, _, onion, onion_port)| DialTarget {
+            host: (*onion).to_owned(),
+            port: *onion_port,
+        })
+}
+
+/// Why a relay's discovery document was not used.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DiscoveryError {
+    #[error("discovery connection failed")]
+    Io(#[source] io::Error),
+    #[error("discovery took too long")]
+    Timeout,
+    #[error("discovery answer is not a complete 200 response")]
+    Http,
+    #[error("discovery answer is too large")]
+    TooLarge,
+    #[error("discovery document does not parse")]
+    Malformed,
+    #[error("discovery document names another relay")]
+    OtherRelay,
+    #[error("discovery document names no valid onion")]
+    NotOnion,
+}
+
+#[derive(Deserialize)]
+struct Document {
+    domain: String,
+    port: u16,
+    onion: String,
+    onion_port: u16,
+    tls_name: String,
+}
+
+/// The onion a discovery answer gives for `endpoint`. The document must name the relay's own
+/// domain, port and TLS name, and a valid onion.
+pub fn parse_discovery(
+    response: &[u8],
+    endpoint: &RelayEndpoint,
+    is_onion: impl Fn(&str) -> bool,
+) -> Result<DialTarget, DiscoveryError> {
+    let body = response_body(response)?;
+    if body.len() > MAX_DISCOVERY_LEN {
+        return Err(DiscoveryError::TooLarge);
+    }
+    let document: Document = serde_json::from_slice(body).map_err(|_| DiscoveryError::Malformed)?;
+    let relay = endpoint.domain().as_str();
+    if !document.domain.eq_ignore_ascii_case(relay)
+        || !document.tls_name.eq_ignore_ascii_case(relay)
+        || document.port != endpoint.port()
+    {
+        return Err(DiscoveryError::OtherRelay);
+    }
+    let onion = document.onion.to_ascii_lowercase();
+    if document.onion_port == 0 || !is_onion(&onion) {
+        return Err(DiscoveryError::NotOnion);
+    }
+    Ok(DialTarget {
+        host: onion,
+        port: document.onion_port,
+    })
+}
+
+/// The body of a complete HTTP/1.x `200` answer without chunked encoding.
+fn response_body(response: &[u8]) -> Result<&[u8], DiscoveryError> {
+    let (head, body) = split_head(response).ok_or(DiscoveryError::Http)?;
+    let head = std::str::from_utf8(head).map_err(|_| DiscoveryError::Http)?;
+    let mut lines = head.split("\r\n");
+    let status = lines.next().unwrap_or_default();
+    let mut parts = status.split(' ');
+    if !matches!(parts.next(), Some("HTTP/1.1" | "HTTP/1.0")) || parts.next() != Some("200") {
+        return Err(DiscoveryError::Http);
+    }
+    let mut length = None;
+    for line in lines {
+        let (name, value) = line.split_once(':').ok_or(DiscoveryError::Http)?;
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err(DiscoveryError::Http);
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            let parsed: usize = value.parse().map_err(|_| DiscoveryError::Http)?;
+            if parsed > MAX_DISCOVERY_LEN {
+                return Err(DiscoveryError::TooLarge);
+            }
+            length = Some(parsed);
+        }
+    }
+    match length {
+        Some(length) => body.get(..length).ok_or(DiscoveryError::Http),
+        None => Ok(body),
+    }
+}
+
+/// The head of an HTTP answer and what follows the blank line after it.
+fn split_head(response: &[u8]) -> Option<(&[u8], &[u8])> {
+    const END: &[u8] = b"\r\n\r\n";
+    let at = response
+        .windows(END.len())
+        .position(|window| window == END)?;
+    let (head, rest) = response.split_at_checked(at)?;
+    Some((head, rest.get(END.len()..)?))
+}
+
+/// Asks for the discovery document of `domain` over `stream` and reads the answer, at most
+/// [`MAX_RESPONSE_LEN`] bytes. A connection closed without TLS `close_notify` ends the answer.
+async fn fetch<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    domain: &Domain,
+) -> Result<Vec<u8>, DiscoveryError> {
+    let request = format!(
+        "GET {DISCOVERY_PATH} HTTP/1.1\r\nHost: {domain}\r\nAccept: application/json\r\n\
+         Connection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .map_err(DiscoveryError::Io)?;
+    stream.flush().await.map_err(DiscoveryError::Io)?;
+    let mut response = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let read = match stream.read(&mut buffer).await {
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => 0,
+            Err(error) => return Err(DiscoveryError::Io(error)),
+        };
+        if read == 0 {
+            return Ok(response);
+        }
+        response.extend_from_slice(buffer.get(..read).unwrap_or_default());
+        if response.len() > MAX_RESPONSE_LEN {
+            return Err(DiscoveryError::TooLarge);
+        }
+        if complete(&response) {
+            return Ok(response);
+        }
+    }
+}
+
+/// Whether an answer with a `Content-Length` holds its whole body.
+fn complete(response: &[u8]) -> bool {
+    let Some((head, body)) = split_head(response) else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(head).to_ascii_lowercase();
+    head.split("\r\n")
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .is_some_and(|length| body.len() >= length)
+}
+
+/// Connects to relays through a [`Tunnel`] while it is active, and directly otherwise. A
+/// loopback relay is always reached directly.
+pub struct TunnelConnector {
+    direct: TcpConnector,
+    tunnel: Arc<dyn Tunnel>,
+    /// Discovery outcomes of this connector, by relay; `None` when the relay named no onion.
+    discovered: Mutex<HashMap<(String, u16), Option<DialTarget>>>,
+}
+
+impl TunnelConnector {
+    pub fn new(tls: Arc<ClientConfig>, tunnel: Arc<dyn Tunnel>) -> Self {
+        Self {
+            direct: TcpConnector::new(tls),
+            tunnel,
+            discovered: Mutex::default(),
+        }
+    }
+
+    /// Where a connection to `endpoint` through the tunnel goes: the built-in onion, else the
+    /// onion the relay names in its discovery document, asked once per connector, else the
+    /// relay's own domain and port.
+    pub async fn dial_target(&self, endpoint: &RelayEndpoint) -> DialTarget {
+        if let Some(target) = built_in_route(endpoint) {
+            return target;
+        }
+        let key = (
+            endpoint.domain().as_str().to_ascii_lowercase(),
+            endpoint.port(),
+        );
+        let mut discovered = self.discovered.lock().await;
+        let found = match discovered.get(&key) {
+            Some(found) => found.clone(),
+            None => {
+                let found = match self.discover(endpoint).await {
+                    Ok(target) => Some(target),
+                    Err(error) => {
+                        debug!(error = %error, "epicbox relay names no onion");
+                        None
+                    }
+                };
+                discovered.insert(key, found.clone());
+                found
+            }
+        };
+        found.unwrap_or_else(|| DialTarget {
+            host: endpoint.domain().as_str().to_owned(),
+            port: endpoint.port(),
+        })
+    }
+
+    async fn discover(&self, endpoint: &RelayEndpoint) -> Result<DialTarget, DiscoveryError> {
+        let site = RelayEndpoint::new(endpoint.domain().clone(), None, Security::Tls);
+        let response = tokio::time::timeout(DISCOVERY_TIMEOUT, async {
+            let stream = self
+                .tunnel
+                .open(site.domain().as_str(), DEFAULT_PORT)
+                .await
+                .map_err(DiscoveryError::Io)?;
+            let mut stream = self
+                .direct
+                .secure(&site, stream)
+                .await
+                .map_err(DiscoveryError::Io)?;
+            fetch(&mut stream, site.domain()).await
+        })
+        .await
+        .map_err(|_| DiscoveryError::Timeout)??;
+        parse_discovery(&response, endpoint, |host| self.tunnel.is_onion(host))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn remember(&self, endpoint: &RelayEndpoint, target: Option<DialTarget>) {
+        self.discovered.lock().await.insert(
+            (
+                endpoint.domain().as_str().to_ascii_lowercase(),
+                endpoint.port(),
+            ),
+            target,
+        );
+    }
+
+    fn tunnelled(&self, endpoint: &RelayEndpoint) -> bool {
+        !endpoint.domain().is_loopback() && *self.tunnel.active().borrow()
+    }
+}
+
+impl fmt::Debug for TunnelConnector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TunnelConnector").finish_non_exhaustive()
+    }
+}
+
+impl Connector for TunnelConnector {
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            if !self.tunnelled(endpoint) {
+                return self.direct.connect(endpoint).await;
+            }
+            endpoint
+                .check_security()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            let target = self.dial_target(endpoint).await;
+            debug!(
+                onion = target.host.ends_with(".onion"),
+                "epicbox relay through tor"
+            );
+            let stream = self.tunnel.open(&target.host, target.port).await?;
+            self.direct.secure(endpoint, stream).await
+        })
+    }
+
+    fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
+        if self.tunnelled(endpoint) {
+            configured.max(TUNNEL_CONNECT_TIMEOUT)
+        } else {
+            configured
+        }
+    }
+
+    fn route(&self, endpoint: &RelayEndpoint) -> u64 {
+        u64::from(self.tunnelled(endpoint))
+    }
+
+    fn route_changed<'a>(&'a self, endpoint: &'a RelayEndpoint, route: u64) -> BoxFuture<'a, ()> {
+        let mut active = self.tunnel.active();
+        Box::pin(async move {
+            if active
+                .wait_for(|_| self.route(endpoint) != route)
+                .await
+                .is_err()
+            {
+                std::future::pending::<()>().await;
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex as StdMutex;
+
+    use tokio::io::DuplexStream;
+    use tokio::sync::mpsc;
+    use tokio_rustls::rustls::RootCertStore;
+    use tokio_rustls::rustls::crypto::ring;
+
+    use super::*;
+
+    const ONION: &str = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+    const REFUSED: &str = "tunnel refused";
+
+    struct FakeTunnel {
+        active: watch::Sender<bool>,
+        opened: StdMutex<Vec<(String, u16)>>,
+        /// Gets the far end of each stream opened; without it every open fails.
+        serve: Option<mpsc::UnboundedSender<DuplexStream>>,
+    }
+
+    impl FakeTunnel {
+        fn new(active: bool) -> Self {
+            Self {
+                active: watch::Sender::new(active),
+                opened: StdMutex::default(),
+                serve: None,
+            }
+        }
+
+        fn opened(&self) -> Vec<(String, u16)> {
+            self.opened.lock().unwrap().clone()
+        }
+    }
+
+    impl Tunnel for FakeTunnel {
+        fn active(&self) -> watch::Receiver<bool> {
+            self.active.subscribe()
+        }
+
+        fn open<'a>(
+            &'a self,
+            host: &'a str,
+            port: u16,
+        ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+            self.opened.lock().unwrap().push((host.to_owned(), port));
+            Box::pin(async move {
+                let Some(serve) = &self.serve else {
+                    return Err(io::Error::other(REFUSED));
+                };
+                let (near, far) = tokio::io::duplex(64 * 1024);
+                serve.send(far).unwrap();
+                Ok(Box::new(near) as Box<dyn RelayStream>)
+            })
+        }
+
+        fn is_onion(&self, host: &str) -> bool {
+            host.len() == 62 && host.ends_with(".onion")
+        }
+    }
+
+    fn tls() -> Arc<ClientConfig> {
+        Arc::new(
+            ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_root_certificates(RootCertStore::empty())
+                .with_no_client_auth(),
+        )
+    }
+
+    fn relay(domain: &str, port: u16) -> RelayEndpoint {
+        RelayEndpoint::new(Domain::parse(domain).unwrap(), Some(port), Security::Tls)
+    }
+
+    fn connector(tunnel: &Arc<FakeTunnel>) -> TunnelConnector {
+        TunnelConnector::new(tls(), Arc::clone(tunnel) as Arc<dyn Tunnel>)
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    }
+
+    #[tokio::test]
+    async fn a_mapped_relay_is_dialled_at_its_onion_with_the_relay_name_for_tls() {
+        let (serve, mut streams) = mpsc::unbounded_channel();
+        let tunnel = Arc::new(FakeTunnel {
+            serve: Some(serve),
+            ..FakeTunnel::new(true)
+        });
+        let connector = connector(&tunnel);
+        let endpoint = relay("flooepicbox.btlabs.uk", 443);
+        let connecting = tokio::spawn(async move { connector.connect(&endpoint).await.err() });
+        let mut far = streams.recv().await.unwrap();
+        let mut hello = vec![0u8; 4096];
+        let read = far.read(&mut hello).await.unwrap();
+        let hello = hello.get(..read).unwrap();
+        assert!(contains(hello, b"flooepicbox.btlabs.uk"), "server name");
+        assert!(!contains(hello, ONION.as_bytes()));
+        drop(far);
+        assert!(connecting.await.unwrap().is_some());
+        assert_eq!(tunnel.opened(), [(ONION.to_owned(), 443)]);
+    }
+
+    #[test]
+    fn only_the_mapped_port_has_a_built_in_onion() {
+        assert_eq!(
+            built_in_route(&relay("FlooEpicbox.BTLabs.uk", 443)),
+            Some(DialTarget {
+                host: ONION.to_owned(),
+                port: 443
+            })
+        );
+        assert_eq!(built_in_route(&relay("flooepicbox.btlabs.uk", 3420)), None);
+        assert_eq!(built_in_route(&relay("epicbox.epiccash.com", 443)), None);
+    }
+
+    #[tokio::test]
+    async fn a_discovered_onion_is_dialled() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        let endpoint = relay("relay.example", 443);
+        let onion = format!("{}.onion", "a".repeat(56));
+        connector
+            .remember(
+                &endpoint,
+                Some(DialTarget {
+                    host: onion.clone(),
+                    port: 8443,
+                }),
+            )
+            .await;
+        assert!(connector.connect(&endpoint).await.is_err());
+        assert_eq!(tunnel.opened(), [(onion, 8443)]);
+    }
+
+    #[tokio::test]
+    async fn a_relay_without_an_onion_is_dialled_through_the_exit_and_asked_once() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        let endpoint = relay("relay.example", 3420);
+        for _ in 0..2 {
+            let error = connector.connect(&endpoint).await.err().unwrap();
+            assert_eq!(error.to_string(), REFUSED);
+        }
+        let exit = ("relay.example".to_owned(), 3420);
+        assert_eq!(
+            tunnel.opened(),
+            [
+                ("relay.example".to_owned(), 443),
+                exit.clone(),
+                exit.clone()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_active_tunnel_that_fails_is_never_bypassed() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        connector.remember(&relay("relay.example", 443), None).await;
+        let error = connector
+            .connect(&relay("relay.example", 443))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            REFUSED,
+            "the tunnel's error, not a direct one"
+        );
+        assert_eq!(tunnel.opened(), [("relay.example".to_owned(), 443)]);
+    }
+
+    #[tokio::test]
+    async fn an_inactive_tunnel_is_not_used() {
+        let tunnel = Arc::new(FakeTunnel::new(false));
+        let connector = connector(&tunnel);
+        // The direct path refuses a plain websocket to a remote host before connecting.
+        let endpoint = RelayEndpoint::new(
+            Domain::parse("relay.example").unwrap(),
+            Some(80),
+            Security::Plain,
+        );
+        let error = connector.connect(&endpoint).await.err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(tunnel.opened().is_empty());
+        assert_eq!(
+            connector.connect_timeout(&endpoint, Duration::from_secs(15)),
+            Duration::from_secs(15)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_loopback_relay_is_reached_directly_with_the_tunnel_active() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        let endpoint = RelayEndpoint::new(
+            Domain::parse("127.0.0.1").unwrap(),
+            Some(port),
+            Security::Plain,
+        );
+        let (connected, accepted) = tokio::join!(connector.connect(&endpoint), listener.accept());
+        assert!(connected.is_ok() && accepted.is_ok());
+        assert!(tunnel.opened().is_empty());
+    }
+
+    #[test]
+    fn a_tunnelled_connection_gets_time_for_a_first_circuit() {
+        let connector = connector(&Arc::new(FakeTunnel::new(true)));
+        let endpoint = relay("relay.example", 443);
+        assert_eq!(
+            connector.connect_timeout(&endpoint, Duration::from_secs(15)),
+            TUNNEL_CONNECT_TIMEOUT
+        );
+        assert_eq!(
+            connector.connect_timeout(&endpoint, Duration::from_secs(300)),
+            Duration::from_secs(300)
+        );
+    }
+
+    fn answer(body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    fn document(domain: &str, port: u16, onion: &str, tls_name: &str) -> String {
+        format!(
+            r#"{{"domain":"{domain}","port":{port},"onion":"{onion}","onion_port":443,"tls_name":"{tls_name}"}}"#
+        )
+    }
+
+    fn parse(response: &[u8]) -> Result<DialTarget, DiscoveryError> {
+        let is_onion = |host: &str| host.len() == 62 && host.ends_with(".onion");
+        parse_discovery(response, &relay("flooepicbox.btlabs.uk", 443), is_onion)
+    }
+
+    #[test]
+    fn a_discovery_document_for_the_relay_gives_its_onion() {
+        let relay = "flooepicbox.btlabs.uk";
+        let found = parse(&answer(&document(relay, 443, ONION, relay))).unwrap();
+        assert_eq!(
+            found,
+            DialTarget {
+                host: ONION.to_owned(),
+                port: 443
+            }
+        );
+        let upper = ONION.to_ascii_uppercase().replace(".ONION", ".onion");
+        assert_eq!(
+            parse(&answer(&document(relay, 443, &upper, relay)))
+                .unwrap()
+                .host,
+            ONION
+        );
+    }
+
+    #[test]
+    fn a_discovery_document_for_another_relay_is_refused() {
+        let relay = "flooepicbox.btlabs.uk";
+        for body in [
+            document("other.example", 443, ONION, relay),
+            document(relay, 443, ONION, "other.example"),
+            document(relay, 3420, ONION, relay),
+        ] {
+            assert!(
+                matches!(parse(&answer(&body)), Err(DiscoveryError::OtherRelay)),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_discovery_document_without_a_valid_onion_is_refused() {
+        let relay = "flooepicbox.btlabs.uk";
+        for onion in ["relay.example", "abc.onion", ""] {
+            assert!(matches!(
+                parse(&answer(&document(relay, 443, onion, relay))),
+                Err(DiscoveryError::NotOnion)
+            ));
+        }
+        let zero_port =
+            document(relay, 443, ONION, relay).replace(r#""onion_port":443"#, r#""onion_port":0"#);
+        assert!(matches!(
+            parse(&answer(&zero_port)),
+            Err(DiscoveryError::NotOnion)
+        ));
+    }
+
+    #[test]
+    fn a_discovery_answer_that_is_not_a_plain_200_is_refused() {
+        let relay = "flooepicbox.btlabs.uk";
+        let body = document(relay, 443, ONION, relay);
+        let not_found = String::from_utf8(answer(&body))
+            .unwrap()
+            .replace("200 OK", "404 Not Found");
+        let chunked = format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{body}");
+        let short = String::from_utf8(answer(&body)).unwrap();
+        let short = short.get(..short.len() - 1).unwrap();
+        for response in [
+            not_found.as_str(),
+            chunked.as_str(),
+            short,
+            "HTTP/1.1 200 OK",
+        ] {
+            assert!(
+                matches!(parse(response.as_bytes()), Err(DiscoveryError::Http)),
+                "{response}"
+            );
+        }
+        assert!(matches!(
+            parse(&answer("{\"domain\":")),
+            Err(DiscoveryError::Malformed)
+        ));
+        let large = answer(&" ".repeat(MAX_DISCOVERY_LEN + 1));
+        assert!(matches!(parse(&large), Err(DiscoveryError::TooLarge)));
+    }
+
+    #[tokio::test]
+    async fn fetch_reads_an_answer_that_arrives_in_parts_on_a_kept_alive_connection() {
+        let (mut near, mut far) = tokio::io::duplex(1024);
+        let relay = "flooepicbox.btlabs.uk";
+        let response = answer(&document(relay, 443, ONION, relay));
+        let expected = response.clone();
+        let server = tokio::spawn(async move {
+            let mut request = vec![0u8; 1024];
+            let read = far.read(&mut request).await.unwrap();
+            let request = String::from_utf8(request.get(..read).unwrap().to_vec()).unwrap();
+            let (first, second) = response.split_at(40);
+            far.write_all(first).await.unwrap();
+            far.write_all(second).await.unwrap();
+            // Kept open: the answer ends at its length.
+            (request, far)
+        });
+        let read = fetch(&mut near, &Domain::parse(relay).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(read, expected);
+        let (request, _far) = server.await.unwrap();
+        assert!(request.starts_with("GET /.well-known/epicbox.json HTTP/1.1\r\n"));
+        assert!(request.contains("\r\nHost: flooepicbox.btlabs.uk\r\n"));
+    }
+
+    #[tokio::test]
+    async fn fetch_stops_reading_at_its_limit() {
+        let (mut near, mut far) = tokio::io::duplex(64 * 1024);
+        let server = tokio::spawn(async move {
+            let mut request = [0u8; 256];
+            let _ = far.read(&mut request).await.unwrap();
+            let _ = far.write_all(&vec![b'x'; MAX_RESPONSE_LEN + 10]).await;
+            far
+        });
+        assert!(matches!(
+            fetch(&mut near, &Domain::parse("relay.example").unwrap()).await,
+            Err(DiscoveryError::TooLarge)
+        ));
+        drop(server.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_route_changes_when_the_tunnel_turns_on_or_off() {
+        let tunnel = Arc::new(FakeTunnel::new(false));
+        let connector = connector(&tunnel);
+        let endpoint = relay("relay.example", 443);
+        let direct = connector.route(&endpoint);
+        let mut changed = std::pin::pin!(connector.route_changed(&endpoint, direct));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), changed.as_mut())
+                .await
+                .is_err()
+        );
+        tunnel.active.send_replace(true);
+        changed.await;
+        let tunnelled = connector.route(&endpoint);
+        assert_ne!(tunnelled, direct);
+        tunnel.active.send_replace(false);
+        connector.route_changed(&endpoint, tunnelled).await;
+
+        let loopback =
+            RelayEndpoint::new(Domain::parse("localhost").unwrap(), None, Security::Plain);
+        let route = connector.route(&loopback);
+        tunnel.active.send_replace(true);
+        let changed = connector.route_changed(&loopback, route);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), changed)
+                .await
+                .is_err(),
+            "a loopback relay keeps its direct connection"
+        );
+    }
+}

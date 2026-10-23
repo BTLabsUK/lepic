@@ -10,6 +10,7 @@ pub mod mock_relay;
 mod prefilter;
 mod session;
 pub mod transport;
+pub mod tunnel;
 
 pub use address::{
     AddressError, DEFAULT_DOMAIN, DEFAULT_PORT, Domain, EpicboxAddress, MAX_ADDRESS_LEN,
