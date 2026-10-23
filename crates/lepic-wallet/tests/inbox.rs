@@ -640,6 +640,35 @@ fn stopping_a_listener_returns_promptly_and_reports_the_transport_stopped() {
 }
 
 #[test]
+fn finishing_an_idle_listener_returns_promptly_and_reports_the_transport_stopped() {
+    let world = World::new();
+    let mut events = world.receiver_wallet.subscribe();
+    let handle = ListenHandle::new();
+
+    world.block_on(async {
+        let listen = world
+            .receiver_wallet
+            .epicbox_listen(&world.receiver_epicbox, &handle);
+        let script = async {
+            let mut events = world.receiver_wallet.subscribe();
+            transport_reaches(&mut events, TransportState::Connected).await;
+            handle.finish();
+            tokio::time::Instant::now()
+        };
+        let (listened, finished_at) = tokio::join!(listen, script);
+        assert_eq!(listened.unwrap(), InboxSummary::default());
+        assert!(finished_at.elapsed() < Duration::from_secs(1));
+    });
+
+    assert!(handle.is_stopped());
+    assert_eq!(world.relay.connections(), 0);
+    assert_eq!(
+        transport_states(&mut events).last(),
+        Some(&TransportState::Stopped)
+    );
+}
+
+#[test]
 fn a_locked_wallet_neither_attaches_nor_drains() {
     let world = World::new();
     world.receiver_wallet.lock();

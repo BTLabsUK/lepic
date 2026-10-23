@@ -200,27 +200,60 @@ impl InboxSummary {
 
 /// Ends an [`Wallet::epicbox_listen`]. Clones stop the same listen.
 #[derive(Debug, Clone)]
-pub struct ListenHandle(Arc<watch::Sender<bool>>);
+pub struct ListenHandle(Arc<watch::Sender<Ending>>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    Running,
+    /// Ends once no message is in hand.
+    Finish,
+    /// Ends at once, abandoning the message in hand.
+    Stop,
+}
 
 impl ListenHandle {
     pub fn new() -> Self {
-        Self(Arc::new(watch::Sender::new(false)))
+        Self(Arc::new(watch::Sender::new(Ending::Running)))
     }
 
     /// Asks the listen to end. It finishes or abandons the message in hand, unsubscribes and
     /// returns.
     pub fn stop(&self) {
-        self.0.send_replace(true);
+        self.0.send_replace(Ending::Stop);
     }
 
+    /// Asks the listen to end once no message is in hand: one being handled is settled and
+    /// acknowledged first, one waiting for a retry stays on the relay. Then it unsubscribes
+    /// and returns. A later [`ListenHandle::stop`] ends it at once.
+    pub fn finish(&self) {
+        self.0.send_if_modified(|ending| {
+            let running = *ending == Ending::Running;
+            if running {
+                *ending = Ending::Finish;
+            }
+            running
+        });
+    }
+
+    /// True once [`ListenHandle::stop`] or [`ListenHandle::finish`] was called.
     pub fn is_stopped(&self) -> bool {
-        *self.0.borrow()
+        *self.0.borrow() != Ending::Running
     }
 
+    /// Resolves once the listen should end between messages.
     async fn stopped(&self) {
+        self.wait_for(|ending| ending != Ending::Running).await;
+    }
+
+    /// Resolves once the listen should end even with a message in hand.
+    async fn abandoned(&self) {
+        self.wait_for(|ending| ending == Ending::Stop).await;
+    }
+
+    async fn wait_for(&self, ends: impl Fn(Ending) -> bool) {
         let mut receiver = self.0.subscribe();
         // The sender lives in `self`, so waiting cannot fail.
-        let _ = receiver.wait_for(|stopped| *stopped).await;
+        let _ = receiver.wait_for(|ending| ends(*ending)).await;
     }
 }
 
@@ -861,7 +894,7 @@ where
                 None => self.handle(item, pruning, mailbox, try_number).await,
                 Some(handle) => tokio::select! {
                     biased;
-                    () = handle.stopped() => return None,
+                    () = handle.abandoned() => return None,
                     disposition = self.handle(item, pruning, mailbox, try_number) => disposition,
                 },
             };
@@ -911,7 +944,7 @@ where
             attempt = attempt.saturating_add(1);
             tokio::select! {
                 biased;
-                () = handle.stopped() => return,
+                () = handle.abandoned() => return,
                 () = tokio::time::sleep(backoff.ceiling(attempt)) => {}
             }
         }
