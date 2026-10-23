@@ -598,3 +598,75 @@ async fn a_node_switched_to_while_over_tor_is_reached_through_tor() {
         "plain http never leaves through an exit"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_node_tip_asked_while_over_tor_goes_through_tor() {
+    let mut world = World::new();
+    Arc::get_mut(&mut world.runtime.inner).unwrap().nodes = crate::node::NodeFactory::Http;
+    let (wallet, config) = world.wallet("one.example").await;
+    let (socks, targets) = recording_socks().await;
+    wallet.session().attach_node_socks(socks);
+
+    let mapped = WalletConfig {
+        node_url: "https://node.btlabs.uk".to_owned(),
+        node_api_secret: Some("secret".to_owned()),
+        ..config.clone()
+    };
+    assert_eq!(
+        kind(wallet.node_tip_for(mapped).await),
+        WalletErrorKind::NodeUnreachable
+    );
+    let onion = "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion";
+    assert_eq!(targets.lock().unwrap()[0], (onion.to_owned(), 443));
+
+    targets.lock().unwrap().clear();
+    let unmapped = WalletConfig {
+        node_url: "https://other.example:3413".to_owned(),
+        ..config
+    };
+    assert_eq!(
+        kind(wallet.node_tip_for(unmapped).await),
+        WalletErrorKind::NodeUnreachable
+    );
+    assert_eq!(
+        targets.lock().unwrap()[0],
+        ("other.example".to_owned(), 3413),
+        "by name, so tor resolves it"
+    );
+    assert_eq!(
+        wallet.session().node().get_tip().await.ok(),
+        None,
+        "the wallet's own node stays as it is"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_node_tip_asked_of_a_loopback_node_while_over_tor_goes_directly() {
+    let mut world = World::new();
+    Arc::get_mut(&mut world.runtime.inner).unwrap().nodes = crate::node::NodeFactory::Http;
+    let (wallet, config) = world.wallet("one.example").await;
+    let (socks, targets) = recording_socks().await;
+    wallet.session().attach_node_socks(socks);
+    let node = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = node.local_addr().unwrap().port();
+    let accepted = tokio::spawn(async move { node.accept().await.is_ok() });
+
+    let local = WalletConfig {
+        node_url: format!("http://127.0.0.1:{port}"),
+        ..config
+    };
+    assert!(wallet.node_tip_for(local).await.is_err());
+    assert!(accepted.await.unwrap());
+    assert!(targets.lock().unwrap().is_empty(), "nothing went to tor");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_node_tip_is_refused_on_a_locked_wallet() {
+    let mut world = World::new();
+    let (wallet, config) = world.wallet("one.example").await;
+    wallet.lock();
+    assert_eq!(
+        kind(wallet.node_tip_for(config).await),
+        WalletErrorKind::Locked
+    );
+}

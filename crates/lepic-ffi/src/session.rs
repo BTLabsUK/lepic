@@ -1698,19 +1698,42 @@ impl Drop for ScratchFile {
     }
 }
 
-/// The tip and version of the node `config` names, without opening a wallet.
+/// The tip and version of the node `config` names, without opening a wallet. No wallet is
+/// open, so there is no tor of its own to go through: the request always goes directly.
 pub(crate) async fn node_tip(
     runtime: &Arc<RuntimeInner>,
     config: &WalletConfig,
     node_secret: &NodeSecret,
 ) -> Result<NodeTip, WalletError> {
-    // No wallet is open, so there is no tor of its own to go through.
     let node = runtime.nodes.client(
         config,
         node_secret,
         &Arc::new(lepic_tor::RelayTor::new(true)),
         &Arc::new(OnionRoutes::default()),
     )?;
+    ask_node_tip(&node).await
+}
+
+impl Session {
+    /// The tip and version of the node `config` names, asked as the session asks its own
+    /// node: through the wallet's tor and onion routes while node requests go over tor, and
+    /// directly otherwise or for a loopback node. The session's node stays as it is. Fails with
+    /// `Locked` on a locked wallet, whose tor is stopped.
+    pub(crate) async fn node_tip_for(
+        &self,
+        config: &WalletConfig,
+        node_secret: &NodeSecret,
+    ) -> Result<NodeTip, WalletError> {
+        self.ensure_unlocked()?;
+        let node =
+            self.runtime
+                .nodes
+                .client(config, node_secret, &self.node_tor, &self.onion_routes)?;
+        ask_node_tip(&node).await
+    }
+}
+
+async fn ask_node_tip(node: &Node) -> Result<NodeTip, WalletError> {
     let tip = node.get_tip().await.map_err(|error| node_error(&error))?;
     let version = node
         .get_version()

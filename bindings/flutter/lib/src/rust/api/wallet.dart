@@ -65,6 +65,9 @@ Future<void> deleteWallet({
 /// The configured node's tip, version, readiness and tip block time, without opening a
 /// wallet. Fails with `NodeUnreachable` when the tip or version cannot be had; readiness and
 /// the block time are `None` when only they fail.
+///
+/// No wallet is open, so the request always goes directly, never through tor. While a wallet
+/// is open, use [`EpicWallet::node_tip_for`], which follows the wallet's tor.
 Future<NodeTip> nodeTip({
   required LepicRuntime runtime,
   required WalletConfig config,
@@ -438,6 +441,17 @@ abstract class EpicWallet implements RustOpaqueInterface {
 
   /// Whether the node client over Tor is on, as [`EpicWallet::set_node_over_tor`] set it.
   bool nodeOverTor();
+
+  /// The tip, version, readiness and tip block time of the node `config` names, asked as the
+  /// open wallet asks its own node: through the wallet's tor, with its onion routes, while
+  /// node requests go over tor, and directly when they do not or for a node on this
+  /// computer. Use it instead of [`node_tip`] while a wallet is open, also to probe a node
+  /// that is not the wallet's; the wallet's node stays as it is. Only `node_url` and
+  /// `node_api_secret` of `config` are used.
+  ///
+  /// Fails with `NodeUnreachable` when the tip or version cannot be had, `InvalidArgument`
+  /// for a URL that is not one of a node, and `Locked` on a locked wallet.
+  Future<NodeTip> nodeTipFor({required WalletConfig config});
 
   /// The wallet's onion address, `<56 characters>.onion`: its payment-proof address in onion
   /// form, which `epic-wallet address` prints too. It is known without tor running and stays
