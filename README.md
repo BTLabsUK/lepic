@@ -4,81 +4,82 @@
 
 # LEPIC
 
-**An embeddable Epic Cash wallet core in Rust.**
+**A mobile-first Epic Cash wallet core in Rust.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MSRV 1.99](https://img.shields.io/badge/rust-1.99-orange.svg)](rust-toolchain.toml)
 [![Version 0.1.0](https://img.shields.io/badge/version-0.1.0-informational.svg)](CHANGELOG.md)
 [![CI](https://github.com/BTLabs-EPIC/lepic/actions/workflows/ci.yml/badge.svg)](https://github.com/BTLabs-EPIC/lepic/actions/workflows/ci.yml)
 
-[Quick start](#quick-start) · [Architecture](docs/architecture.md) · [Decisions](docs/adr/README.md) ·
-[CLI](docs/cli.md) · [Flutter](bindings/flutter/README.md) · [Security](SECURITY.md)
+[Quick start](#quick-start) · [Architecture](docs/architecture.md) ·
+[Flutter package](bindings/flutter/README.md) · [Security](SECURITY.md)
 
 </div>
 
-LEPIC (light Epic) is an Epic Cash wallet that runs as a library inside your app. It creates and
-restores wallets, scans the chain through an Epic node, and sends and receives transactions with
-the reference `epic-wallet`. It ships with a Flutter binding built on
-[flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge) and a command-line wallet,
-and it is the wallet core of Epic Cash Desktop and Epic Cash Mobile.
+LEPIC (light Epic) is an Epic Cash wallet that runs as a library inside a mobile or desktop app, in
+the app's own process. It creates and restores wallets, scans the chain through an Epic node, and
+sends and receives transactions with the standard `epic-wallet`. It is the wallet core of Epic Cash
+Mobile and Epic Cash Desktop, and ships with a Flutter package built on
+[flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge).
 
-> **Status: pre-alpha.** APIs still change. Use floonet; do not put real funds in it yet.
+> **Status: pre-alpha.** APIs still change. Use floonet (the test network); do not put real funds
+> in it yet.
 
 ## Why LEPIC
 
-- **No wallet process.** The engine runs in your process and is called through a Rust API or the
-  Dart binding. There is no `epic-wallet` binary or owner API server to start and keep alive.
-- **Built for phones.** Builds for Android and iOS need Rust and a C compiler, nothing else: no
-  mining code, chain storage, LMDB, OpenSSL or C++. The Epicbox client can connect, drain its
-  messages and disconnect, so it works when the OS suspends the app.
-- **A safer key store.** Seeds sit in the platform keystore (Android Keystore, iOS Keychain) or a
-  desktop vault file sealed with XChaCha20-Poly1305 under an Argon2id key. Transaction secrets are
-  encrypted at rest, and only the secrets [ADR 0014](docs/adr/0014-secrets-at-the-flutter-boundary.md)
-  lists may cross into Dart.
-- **Testable.** The node, storage, secrets, transports, clock and random number generator are
-  explicit ports, and there is no global state, so a test can run several wallets, on different
-  networks, in one process.
-- **Rejects, does not panic.** Network, file and peer input becomes a typed error. `unwrap`,
-  `panic!`, unchecked indexing and unchecked arithmetic are denied by lint outside tests.
+The standard Epic Cash wallet is a separate program with its own API server. That works on a
+desktop, but a phone app cannot keep a second process running, and building the full wallet for
+Android and iOS drags in mining and chain-storage code a phone never uses. LEPIC is the wallet
+rebuilt for that setting:
 
-## What's different from epic-wallet
+- **No wallet process.** The engine is a library the app calls directly, from Rust or Dart. There
+  is no wallet binary or API server to start and keep alive.
+- **Small mobile builds.** Android and iOS builds need Rust and a C compiler, nothing else: no
+  mining code, chain storage, LMDB, OpenSSL or C++.
+- **Works with app suspension.** The Epicbox client connects, collects waiting messages and
+  disconnects, so receiving works when the phone pauses the app in the background.
+- **Keys in the platform keystore.** Seeds are kept in the Android Keystore or iOS Keychain, or on
+  desktop in a vault file encrypted with XChaCha20-Poly1305 under an Argon2id key. Transaction
+  secrets are encrypted at rest, and only a short, fixed list of secrets may pass into Dart.
 
-LEPIC speaks `epic-wallet`'s wire formats and adds:
+## What's different
 
-- **Every transaction method in one engine:** slate files, Epicbox, and direct HTTP(S) and Tor
-  sends and listeners compatible with `epic-wallet` `send -m http` and `listen -m http`.
-- **Tor where it matters:** the wallet's own `.onion` address on desktop and Android, and
-  with Tor on, the Epicbox relay and the node are reached through it as well.
-- **Invoices over Epicbox,** plus short notices between LEPIC wallets when an invoice is declined,
-  withdrawn or posted ([ADR 0016](docs/adr/0016-epicbox-notices.md)).
-- **SQLite storage with a real schema** and migrations, instead of a key-value table.
-- **Moving in from epic-wallet:** import its `wallet.seed`, and its transaction history,
-  reconciled with a chain scan ([ADR 0019](docs/adr/0019-import-epic-wallet-history.md)).
+LEPIC reads and writes the same formats as `epic-wallet` and adds:
 
-## Staying in step with Epic Cash
+- **Every way to send in one engine:** slate files, Epicbox, and direct HTTP(S) and Tor, compatible
+  with `epic-wallet`'s HTTP send and listener.
+- **Tor where it matters:** the wallet gets its own `.onion` address on desktop and Android, and
+  with Tor on, the Epicbox relay and the node are reached through it too.
+- **Invoices over Epicbox,** with short notices between LEPIC wallets when an invoice is declined,
+  withdrawn or posted.
+- **Moving in from epic-wallet:** import its seed file and its transaction history, checked against
+  a chain scan.
+- **Errors, not crashes.** Bad input from the network, files or other wallets becomes a typed error.
+  Code that can panic is rejected by lint outside tests.
+- **Testable.** The node, storage, keys, network and clock are passed in, with no global state, so
+  one test can run several wallets side by side.
 
-LEPIC ports the transaction, keychain and slate logic of the Epic node and `epic-wallet` instead of
-depending on their crates, which pull in the miner and chain store
-([ADR 0001](docs/adr/0001-port-not-depend.md)). Its cryptography is the same: it links the
-`secp256k1-zkp` library Epic Cash uses, from
-[EpicCash/rust-secp256k1-zkp](https://github.com/EpicCash/rust-secp256k1-zkp) pinned by commit,
-and is checked against the reference code rather than trusted to match:
+## Compatible and secure with Epic Cash releases
 
-- **Pinned references.** The compatibility target is `epic-wallet` and `epic` `v4.1.0`, by tag and
-  commit ([ADR 0020](docs/adr/0020-reference-epic-wallet-4-1.md)). Moving to a new release is
-  done the same way: new pins, regenerated vectors, every changed behaviour reviewed.
-- **Golden vectors.** Slates, keys, signatures and Epicbox messages are generated by the pinned
-  reference code ([conformance/](conformance)) and replayed byte for byte in LEPIC's tests.
-- **Interop with real binaries.** [interop/](interop/README.md) runs LEPIC against stock
-  `epic-wallet`, a node and an Epicbox relay on a private network.
-- **Drift tracking.** [upstream.toml](upstream.toml) records the origin of every ported module,
-  and a weekly job reports upstream changes not yet reviewed.
-- **Supply chain.** `cargo deny` checks advisories, licences, sources and duplicate crates on
-  every change and weekly; dependencies and CI actions are pinned.
-- **Fuzzing and review.** [fuzz/](fuzz) holds 14 targets over the decoders of untrusted input
-  (slates, Epicbox frames, node responses, vault files), smoke-run weekly.
+LEPIC reimplements the transaction, key and slate logic of the Epic Cash node and wallet instead of
+linking their full code, and uses the same cryptography library Epic Cash uses,
+[rust-secp256k1-zkp](https://github.com/EpicCash/rust-secp256k1-zkp), pinned to an exact commit.
+Matching is checked, not assumed:
 
-The formats LEPIC matches are documented in [docs/compat/](docs/compat).
+- **One target release.** LEPIC targets `epic-wallet` and the Epic node `v4.1.0`, pinned to exact
+  commits. Moving to a new release means new pins, new test data and a review of every change.
+- **Byte-for-byte test data.** Slates, keys, signatures and Epicbox messages are generated by the
+  pinned Epic Cash code, and LEPIC's tests must reproduce them exactly.
+- **Tests against the real programs.** An [interop suite](interop/README.md) runs LEPIC against an
+  unmodified `epic-wallet`, node and Epicbox relay on a private test network.
+- **Watching upstream.** A weekly job reports changes in the Epic Cash code that LEPIC has not
+  reviewed yet.
+- **Dependencies checked.** Every change, and a weekly job, checks dependencies for known
+  vulnerabilities, licences and sources; dependencies and CI actions are pinned.
+- **Fuzzing.** The parsers of untrusted input (slates, Epicbox messages, node responses, vault
+  files) are fuzzed.
+
+The formats LEPIC matches are written up in the [compatibility notes](docs/compat).
 
 ## Quick start
 
@@ -120,29 +121,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-A full wallet is a `lepic_wallet::Wallet` built from a `WalletConfig` and its `Ports`; the CLI's
-`crates/lepic-cli/src/commands.rs` shows the complete wiring. From Flutter, use the Dart package
-in [bindings/flutter](bindings/flutter/README.md). To try the command-line wallet:
-
-```sh
-cargo xtask install                   # builds and installs ~/.local/bin/lepic
-lepic --network floonet wallet init   # create a test wallet, write down the phrase
-```
-
-The [CLI guide](docs/cli.md) covers nodes, relays and sending.
-
-## Coming soon
-
-- **A strong CLI layer** that improves the developer workflow while staying compatible with the
-  `epic-wallet` CLI API.
-- **A compact native slate format** for LEPIC-to-LEPIC transfers, small enough for QR codes and
-  copy-paste ([ADR 0012](docs/adr/0012-native-slate-format.md), proposed).
-
-## Versioning
-
-LEPIC follows [Semantic Versioning](https://semver.org). All workspace crates share one version;
-while it is `0.y.z`, a minor bump marks a breaking change. Apps built on LEPIC version themselves
-separately and show LEPIC's version as their core version.
+In a Flutter app, use the [Flutter package](bindings/flutter/README.md), which wraps the full
+wallet: create or restore, scan the chain, send and receive.
 
 ## Contributing
 
@@ -151,7 +131,7 @@ Conventional Commits with a DCO sign-off, and every change passes `cargo xtask c
 
 ## Security
 
-Please do not open public issues for vulnerabilities. See [SECURITY.md](SECURITY.md) for how to
+Please do not open public issues for vulnerabilities. [SECURITY.md](SECURITY.md) explains how to
 report one privately.
 
 ## License
