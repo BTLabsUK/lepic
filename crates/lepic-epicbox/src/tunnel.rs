@@ -19,14 +19,22 @@ use tracing::debug;
 use crate::address::{DEFAULT_PORT, Domain};
 use crate::session::{Connector, RelayEndpoint, RelayStream, Security, TcpConnector};
 
-/// Relays whose onion is known in advance: domain, port, onion host, onion port. The same on
-/// every network. A built-in entry wins over discovery.
-pub const ONION_ROUTES: &[(&str, u16, &str, u16)] = &[(
-    "flooepicbox.btlabs.uk",
-    443,
-    "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion",
-    443,
-)];
+/// Hosts whose onion is known in advance, relays and nodes: domain, port, onion host, onion
+/// port. The same on every network. A built-in entry wins over discovery.
+pub const ONION_ROUTES: &[(&str, u16, &str, u16)] = &[
+    (
+        "flooepicbox.btlabs.uk",
+        443,
+        "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion",
+        443,
+    ),
+    (
+        "node.btlabs.uk",
+        443,
+        "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion",
+        443,
+    ),
+];
 
 /// Where a relay may say which onion it is also reachable at.
 pub const DISCOVERY_PATH: &str = "/.well-known/epicbox.json";
@@ -114,17 +122,16 @@ impl OnionRoutes {
 
     /// The onion of `endpoint`, if it has one.
     pub fn route(&self, endpoint: &RelayEndpoint) -> Option<DialTarget> {
+        self.route_to(endpoint.domain().as_str(), endpoint.port())
+    }
+
+    /// The onion of the host `host:port`, if it has one.
+    pub fn route_to(&self, host: &str, port: u16) -> Option<DialTarget> {
         self.0
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .find(|route| {
-                route
-                    .domain
-                    .as_str()
-                    .eq_ignore_ascii_case(endpoint.domain().as_str())
-                    && route.port == endpoint.port()
-            })
+            .find(|route| route.domain.as_str().eq_ignore_ascii_case(host) && route.port == port)
             .map(|route| DialTarget {
                 host: route.onion.clone(),
                 port: route.onion_port,
@@ -433,6 +440,20 @@ impl Connector for TunnelConnector {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_built_in_routes_name_the_relay_and_the_node_by_host_and_port() {
+        let routes = OnionRoutes::default();
+        let node = routes.route_to("Node.BTLabs.uk", 443).unwrap();
+        assert_eq!(
+            node.host,
+            "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion"
+        );
+        assert_eq!(node.port, 443);
+        assert!(routes.route_to("flooepicbox.btlabs.uk", 443).is_some());
+        assert!(routes.route_to("node.btlabs.uk", 3413).is_none());
+        assert!(routes.route_to("node.example", 443).is_none());
+    }
+
     use std::sync::Mutex as StdMutex;
 
     use tokio::io::DuplexStream;
