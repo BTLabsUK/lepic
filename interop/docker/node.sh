@@ -45,7 +45,8 @@ fi
 
 # The node enables basic auth on an API only when its secret file exists, so only the owner API
 # has one. The wallets and lepic read the owner secret from `.foreign_api_secret`, a copy kept
-# under the path the scenarios already use; epic-wallet v4.1.0 sends it to owner calls only.
+# under the path the scenarios already use; epic-wallet v4.1.0 sends it to owner calls
+# only, and not to the owner `get_status` fallback.
 if [ ! -s "${dir}/.api_secret" ]; then
     head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' >"${dir}/.api_secret"
 fi

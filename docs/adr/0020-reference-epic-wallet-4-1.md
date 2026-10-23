@@ -4,6 +4,9 @@ Status: accepted
 Date: 2026-10-22
 
 Supersedes the version table of [0009](0009-conformance.md). The rest of 0009 stands.
+Also supersedes the statement in [0002](0002-slate-domain-and-codecs.md) that an Epicbox payload
+has the V2 shape while its header says version 3: that holds for `v4.0.2`; at `v4.1.0` the header
+follows the shape.
 
 ## Context
 
@@ -54,6 +57,9 @@ What differs between `v4.0.2` and `v4.1.0` and matters to LEPIC:
 - Slate parsing refuses an offset of the wrong length, and on the file path also a duplicate
   participant id and a zero participant count (the Epicbox path still reads those two). LEPIC
   already refused all three.
+- The regenerated `epicbox/message_*` vectors change in the plaintext's slate header (`3/3/6` to
+  `2/3/6`) as well as in key, salt, nonce, ciphertext and signature; the header change is the
+  rule above.
 - Wallet database layout and the field layout of the legacy slate V2 and V3 formats are
   unchanged.
 

@@ -62,9 +62,10 @@ The node runs with `--usernet`. Two facts shape the setup:
   therefore runs with `only_randomx = true` and its stratum server enabled. `miner/` asks for jobs,
   hashes them with `epic_core`'s own RandomX context and submits blocks every couple of seconds.
 
-The node's owner API secret is generated on first start and shared read-only with the wallets and
-`lepic`. The foreign API has no secret, as on a node with the default configuration: `epic-wallet`
-`v4.1.0` sends its node secret to owner calls only.
+The node's owner API secret is generated on first start. The foreign API has no secret, as on a
+node with the default configuration: `epic-wallet` `v4.1.0` sends its node secret to owner calls
+only. `.foreign_api_secret` is a copy of the owner secret, kept under the path the scenarios use
+and shared read-only with the wallets and `lepic`.
 
 ## Funding recipe
 
