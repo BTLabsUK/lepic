@@ -408,6 +408,20 @@ void main() {
     },
   );
 
+  test('epicbox over tor is on when a wallet opens and follows the app', () async {
+    final wallet = await EpicWallet.create(
+      runtime: runtime,
+      config: configFor(walletDir('epicbox-over-tor')),
+      store: lepicSecretStore(MemoryStore()),
+      password: password,
+    );
+    expect(wallet.epicboxOverTor(), isTrue);
+    wallet.setEpicboxOverTor(enabled: false);
+    expect(wallet.epicboxOverTor(), isFalse);
+    wallet.setEpicboxOverTor(enabled: true);
+    expect(wallet.epicboxOverTor(), isTrue);
+  });
+
   test('a panic inside the engine reaches Dart as an error', () async {
     final wallet = await EpicWallet.create(
       runtime: runtime,

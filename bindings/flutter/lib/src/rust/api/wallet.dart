@@ -253,6 +253,9 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// the configuration names no relay.
   Future<String> epicboxAddress();
 
+  /// Whether Epicbox over Tor is on, as [`EpicWallet::set_epicbox_over_tor`] set it.
+  bool epicboxOverTor();
+
   /// The fee and inputs of [`EpicWallet::consolidate_outputs`] now, with nothing locked.
   /// Fails as that call does.
   Future<FeeEstimate> estimateConsolidate({
@@ -300,6 +303,16 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// which only a defect inside LEPIC causes, ends the stream with a `Panic` [`WalletError`]
   /// as its error.
   Stream<WalletEvent> events();
+
+  /// Says that [`EpicWallet::start_tor`] follows, so that a relay connection made before it,
+  /// such as the listener's when the wallet opens, waits for tor instead of going directly.
+  /// Call it before [`EpicWallet::start_listener`] when tor is about to start and Epicbox over
+  /// Tor is on. Until `start_tor`, relay connections wait. To restart tor, call it before
+  /// [`EpicWallet::stop_tor`]: that stop keeps the relay connection waiting for the
+  /// `start_tor` that follows. A further `stop_tor`, or `lock`, ends the wait. Nothing on iOS.
+  ///
+  /// Fails with `Locked` while the wallet is locked.
+  void expectTor();
 
   /// Sender side: finalizes the recipient's answer and posts the transaction to the node.
   /// Fails with `NotPosted` when it was finalized but the node did not accept it; post it
@@ -718,6 +731,18 @@ abstract class EpicWallet implements RustOpaqueInterface {
     String? message,
     SendOptions? options,
   });
+
+  /// Turns Epicbox over Tor on or off (ADR 0021); it is on when the wallet opens. While it is
+  /// on and the wallet's tor runs, the connection to the wallet's Epicbox relay goes through
+  /// tor: to the relay's onion when one is known, else to its domain through the Tor network.
+  /// It then never goes directly: it waits for tor to connect while it starts, and for the
+  /// app to start it again when it ended on its own. With tor stopped by
+  /// [`EpicWallet::stop_tor`] or `lock`, or the setting off, the relay is reached directly.
+  /// Addresses do not change. A listener
+  /// connection that would now go another way is replaced as soon as the messages in flight
+  /// on it are acknowledged, within 30 seconds; messages not acknowledged by then stay with
+  /// the relay and come again. A send in progress finishes on its own connection.
+  void setEpicboxOverTor({required bool enabled});
 
   /// Sets the address index of the invoice address, for example to the one the app kept
   /// before the wallet was restored from its phrase, which does not record it. Messages to

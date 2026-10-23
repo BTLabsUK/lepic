@@ -135,8 +135,9 @@ impl Session {
                 if slot.current().settings().endpoint == endpoint {
                     return Ok(None);
                 }
-                let transport = epicbox_transport(&self.runtime, config, self.network)?
-                    .ok_or_else(|| invalid("epicbox domain is empty"))?;
+                let transport =
+                    epicbox_transport(&self.runtime, config, self.network, &self.relay_tor)?
+                        .ok_or_else(|| invalid("epicbox domain is empty"))?;
                 Ok(Some((slot, transport)))
             }
         }

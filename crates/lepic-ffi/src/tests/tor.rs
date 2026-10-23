@@ -492,6 +492,78 @@ async fn stop_tor_frees_the_slot_for_a_new_start_and_a_wallet_runs_one_tor() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_relay_goes_through_tor_while_it_runs_and_the_setting_is_on() {
+    let (pair, network) = tor_pair().await;
+    let bob = &pair.bob;
+    assert!(bob.epicbox_over_tor(), "on by default");
+    assert!(!bob.relay_through_tor(), "tor is off");
+
+    let (events, _) = start_tor(&network, bob, pair.dirs[1].path()).await;
+    assert!(bob.relay_through_tor());
+    bob.set_epicbox_over_tor(false);
+    assert!(!bob.epicbox_over_tor() && !bob.relay_through_tor());
+    bob.set_epicbox_over_tor(true);
+    assert!(bob.relay_through_tor());
+
+    bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+    assert!(bob.epicbox_over_tor() && !bob.relay_through_tor());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_relay_waits_for_a_tor_that_has_not_bootstrapped() {
+    let (pair, _network) = tor_pair().await;
+    let bob = &pair.bob;
+    // No control port is served for this tor, so it stays starting.
+    bob.set_tor_timings(quick());
+    let events = Events::default();
+    bob.start_tor(fake_tor(), None, events.report())
+        .await
+        .unwrap();
+    assert_eq!(bob.tor_status().kind, TorStatusKind::Starting);
+    assert!(bob.relay_through_tor(), "never direct while tor starts");
+    bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+    assert!(!bob.relay_through_tor());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tor_announced_before_it_starts_holds_the_relay_until_started_or_stopped() {
+    let (pair, network) = tor_pair().await;
+    let bob = &pair.bob;
+    bob.expect_tor().unwrap();
+    assert!(bob.relay_through_tor(), "the listener would wait for tor");
+    bob.stop_tor();
+    assert!(
+        bob.relay_through_tor(),
+        "the stop of a restart keeps it waiting"
+    );
+    bob.stop_tor();
+    assert!(!bob.relay_through_tor(), "a second stop ends the wait");
+
+    bob.expect_tor().unwrap();
+    let (events, _) = start_tor(&network, bob, pair.dirs[1].path()).await;
+    assert!(bob.relay_through_tor());
+    // A restart: announced, stopped, started again, with the relay waiting throughout.
+    bob.expect_tor().unwrap();
+    bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+    assert!(bob.relay_through_tor());
+    let (events, _) = start_tor(&network, bob, pair.dirs[1].path()).await;
+    bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+    assert!(
+        !bob.relay_through_tor(),
+        "a stop without an announcement leads back"
+    );
+
+    bob.expect_tor().unwrap();
+    bob.lock();
+    assert!(!bob.relay_through_tor(), "lock ends the wait");
+    assert_eq!(kind(bob.expect_tor()), WalletErrorKind::Locked);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_right_after_a_stop_waits_for_the_stopped_tor_to_be_down() {
     let (pair, network) = tor_pair().await;
     let (first, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
@@ -541,8 +613,14 @@ async fn tor_ending_after_it_bootstrapped_is_reported_and_frees_the_slot() {
     );
     assert!(eventually(|| pair.bob.tor_status().kind == TorStatusKind::Off).await);
     std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    assert!(
+        pair.bob.relay_through_tor(),
+        "the relay waits for tor to be started again, never going directly"
+    );
 
     start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+    pair.bob.stop_tor();
+    assert!(!pair.bob.relay_through_tor(), "stopping tor leads back");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

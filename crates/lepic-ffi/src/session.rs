@@ -3,14 +3,15 @@
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
+use lepic_epicbox::tunnel::TunnelConnector;
 use lepic_epicbox::{
     ClientSettings, Domain, EpicboxAddress, Network as RelayNetwork, RelayEndpoint, Security,
-    TRANSPORT_ID, TcpConnector,
+    TRANSPORT_ID,
 };
 use lepic_keychain::vault::SecretName;
 use lepic_keychain::{SecretStore as _, Seed, Vault};
@@ -186,6 +187,10 @@ pub(crate) struct Session {
     tor: lepic_tor::TorTransport,
     tor_slot: Mutex<tor::TorSlot>,
     tor_starts: AtomicU64,
+    /// Takes the relay connection through the wallet's tor while it runs (ADR 0021).
+    relay_tor: Arc<lepic_tor::RelayTor>,
+    /// `expect_tor` was called and no start followed yet: a stop keeps the relay waiting.
+    tor_expected: AtomicBool,
     #[cfg(test)]
     tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
     /// Makes the next listen fail before it subscribes.
@@ -276,6 +281,7 @@ fn epicbox_transport(
     runtime: &RuntimeInner,
     config: &WalletConfig,
     network: Network,
+    relay_tor: &Arc<lepic_tor::RelayTor>,
 ) -> Result<Option<EpicboxTransport>, WalletError> {
     if config.epicbox_domain.is_empty() {
         return Ok(None);
@@ -292,10 +298,11 @@ fn epicbox_transport(
     #[cfg(not(feature = "mock"))]
     let _ = runtime;
     let tls = webpki_tls_config().map_err(|error| node_error(&error))?;
+    let tunnel = Arc::new(tor::RelayTunnel(Arc::clone(relay_tor)));
     Ok(Some(EpicboxTransport::new(
         ClientSettings::new(endpoint),
         relay_network(network),
-        Arc::new(TcpConnector::new(tls)),
+        Arc::new(TunnelConnector::new(tls, tunnel)),
     )))
 }
 
@@ -313,7 +320,9 @@ impl Session {
         let data_dir = claim.dir.clone();
         let claim = ClaimHolder::new(claim);
         let node = runtime.nodes.client(config, node_secret)?;
-        let epicbox = epicbox_transport(runtime, config, network)?.map(EpicboxSlot::new);
+        let relay_tor = Arc::new(lepic_tor::RelayTor::new(true));
+        let epicbox =
+            epicbox_transport(runtime, config, network, &relay_tor)?.map(EpicboxSlot::new);
         let mut transports = TransportRegistry::new();
         let mut ids = vec![FILE];
         transports
@@ -371,6 +380,8 @@ impl Session {
             tor,
             tor_slot: Mutex::default(),
             tor_starts: AtomicU64::new(0),
+            relay_tor,
+            tor_expected: AtomicBool::new(false),
             #[cfg(test)]
             tor_timings: Mutex::default(),
             #[cfg(test)]
@@ -407,6 +418,7 @@ impl Session {
     /// directory is released as soon as the database closes: now, or when the last such call
     /// has ended.
     pub(crate) fn lock(&self) {
+        self.tor_expected.store(false, Ordering::Relaxed);
         if let Some(listener) = lock(&self.listener).take() {
             listener.stop();
         }

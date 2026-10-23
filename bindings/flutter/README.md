@@ -452,6 +452,42 @@ final sent = await wallet.sendTor(
   `onionUnreachable`, `torNotRunning` after it started, or `transportFailed` is stored as `sent`:
   deliver it again with `resendTor(txId, onion)` or `resendHttp`, or cancel it.
 
+### Epicbox over Tor
+
+While the wallet's tor runs, its connection to its Epicbox relay goes through tor (ADR 0021):
+to the relay's onion when LEPIC knows one, else to the relay's domain through the Tor network.
+TLS still checks the relay domain's certificate, and Epicbox addresses do not change. It is on
+when the wallet opens; pass the app's setting after opening and whenever it changes:
+
+```dart
+wallet.setEpicboxOverTor(enabled: settings.epicboxOverTor);
+final on = wallet.epicboxOverTor();
+```
+
+- When the wallet opens with tor about to start, call `wallet.expectTor()` before
+  `startListener`, then `startTor`: the listener's first connection then waits for tor instead
+  of going directly. To restart tor, call `expectTor()` before `stopTor()`: that stop keeps the
+  relay waiting for the next `startTor`. A further `stopTor()`, or `lock`, ends the wait.
+- On, with tor running or starting: the relay is never reached directly. A connection made
+  while tor starts waits for it, within a connection limit of 90 seconds; one that fails is
+  retried as any lost relay connection is.
+- Tor that ended on its own (`failed`, then `stopped`) keeps the relay waiting for the next
+  `startTor`. Only `stopTor`, `lock` or the setting off lead back to a direct connection, so call
+  `stopTor` when the user turns Tor off, even after tor ended.
+- Tor off, or the setting off: the relay is reached directly, as without Tor.
+- A change, or tor starting or stopping, replaces a listener connection that would now go
+  another way, once the messages in flight on it are acknowledged (at most 30 seconds); the
+  listener then subscribes again with the same address. A message not acknowledged by then stays
+  with the relay and comes again; the wallet keeps one transaction for it and sends the same
+  answer again. A send in progress
+  finishes on its own connection.
+- Show "Connecting via Tor" while the setting is on, `torStatus()` is not `off` and the
+  listener is not connected yet: the relay waits for tor, it never falls back to a direct
+  connection.
+- The relay `flooepicbox.btlabs.uk` is reached at its onion. For another relay LEPIC asks it once
+  per wallet session for `/.well-known/epicbox.json` through tor, and uses the onion it names
+  only when it names the relay's own domain; otherwise it goes through the Tor network.
+
 ## Invoices over Epicbox
 
 A service issues an invoice, the user pays it with one call, and the service finalizes and

@@ -6,13 +6,15 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
+use lepic_epicbox::RelayStream;
+use lepic_epicbox::tunnel::Tunnel;
 use lepic_foreign::ListenerHandle;
 use lepic_store::TxId;
 use lepic_tor::{
-    FailureKind, OnionAddress, SendFailure, SocksProxy, TRANSPORT_ID, TorProcess, TorSendError,
-    TorSettings, TorState, TorTransport,
+    FailureKind, OnionAddress, RelayTor, SendFailure, SocksProxy, TRANSPORT_ID, TorProcess,
+    TorSendError, TorSettings, TorState, TorTransport,
 };
-use lepic_transport::transport::Destination;
+use lepic_transport::transport::{BoxFuture, Destination};
 use lepic_wallet::OnionKey;
 use lepic_wallet::send::{Delivery, SendError};
 use tokio::sync::watch;
@@ -69,6 +71,34 @@ pub(super) struct TorRun {
     driver: JoinHandle<()>,
     /// Why the onion could not be published while tor still runs for sends.
     publish_failure: Arc<std::sync::Mutex<Option<TorFailureKind>>>,
+}
+
+/// The wallet's tor as the way to its Epicbox relay.
+pub(super) struct RelayTunnel(pub(super) Arc<RelayTor>);
+
+impl Tunnel for RelayTunnel {
+    fn active(&self) -> watch::Receiver<bool> {
+        self.0.active()
+    }
+
+    fn open<'a>(
+        &'a self,
+        host: &'a str,
+        port: u16,
+    ) -> BoxFuture<'a, std::io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            let stream = self
+                .0
+                .open(host, port)
+                .await
+                .map_err(std::io::Error::other)?;
+            Ok(Box::new(stream) as Box<dyn RelayStream>)
+        })
+    }
+
+    fn is_onion(&self, host: &str) -> bool {
+        RelayTor::is_onion(host)
+    }
 }
 
 pub(super) fn tor_transport() -> TorTransport {
@@ -245,6 +275,9 @@ impl Session {
                 match &*slot {
                     TorSlot::Idle => {
                         *slot = TorSlot::Starting(generation);
+                        // The relay connection waits for this tor instead of going directly.
+                        self.tor_expected.store(false, Ordering::Relaxed);
+                        self.relay_tor.expect();
                         break;
                     }
                     TorSlot::Stopping(down) => down.clone(),
@@ -266,6 +299,7 @@ impl Session {
             Ok(listener) => listener,
             Err(error) => {
                 let mut slot = lock(&self.tor_slot);
+                // The relay connection keeps waiting, as after tor ending on its own.
                 if matches!(&*slot, TorSlot::Starting(started) if *started == generation) {
                     *slot = TorSlot::Idle;
                 }
@@ -299,6 +333,7 @@ impl Session {
                 ));
                 self.tor
                     .attach(Arc::clone(&tor) as Arc<dyn SocksProxy + 'static>);
+                self.relay_tor.attach(Arc::clone(&tor));
                 *slot = TorSlot::Running(Box::new(TorRun {
                     generation,
                     tor,
@@ -341,12 +376,31 @@ impl Session {
             TorSlot::Starting(_) if generation.is_none() => {
                 // The start finds the slot changed and stops what it started.
                 *slot = TorSlot::Idle;
+                if !self.tor_expected.swap(false, Ordering::Relaxed) {
+                    self.relay_tor.detach();
+                }
+                return;
+            }
+            TorSlot::Idle if generation.is_none() => {
+                // Ends what `expect_tor` announced, unless it was announced again for a
+                // restart.
+                if !self.tor_expected.swap(false, Ordering::Relaxed) {
+                    self.relay_tor.detach();
+                }
                 return;
             }
             _ => return,
         };
         // Under the slot lock, so a start that follows attaches after this detach.
         self.tor.detach();
+        // Tor ended on its own, or the app restarts it: the relay connection waits for the
+        // next start. Only stopping tor or turning the setting off leads back to a direct
+        // connection.
+        if generation.is_some() || self.tor_expected.swap(false, Ordering::Relaxed) {
+            self.relay_tor.expect();
+        } else {
+            self.relay_tor.detach();
+        }
         let (down, down_receiver) = watch::channel(false);
         *slot = TorSlot::Stopping(down_receiver);
         drop(slot);
@@ -501,6 +555,38 @@ impl Session {
             slate_id,
             posted,
         })
+    }
+
+    /// Whether the relay connection goes through the wallet's tor while it runs. A held
+    /// connection that would now go another way is replaced.
+    pub(crate) fn set_epicbox_over_tor(&self, enabled: bool) {
+        self.relay_tor.set_enabled(enabled);
+    }
+
+    pub(crate) fn epicbox_over_tor(&self) -> bool {
+        self.relay_tor.enabled()
+    }
+
+    /// The app is about to start tor: until it does, relay connections wait for it instead of
+    /// going directly, and the next [`Session::stop_tor`] keeps them waiting, as for a restart.
+    /// A stop after that, or a lock, ends the wait.
+    pub(crate) fn expect_tor(&self) -> Result<(), WalletError> {
+        if cfg!(target_os = "ios") {
+            return Ok(());
+        }
+        let mut slot = lock(&self.tor_slot);
+        self.ensure_unlocked()?;
+        slot.settle();
+        self.tor_expected.store(true, Ordering::Relaxed);
+        if matches!(&*slot, TorSlot::Idle | TorSlot::Stopping(_)) {
+            self.relay_tor.expect();
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn relay_through_tor(&self) -> bool {
+        *self.relay_tor.active().borrow()
     }
 
     #[cfg(test)]
