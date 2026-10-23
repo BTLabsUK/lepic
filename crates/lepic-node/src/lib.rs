@@ -7,6 +7,7 @@
 mod api;
 mod client;
 pub mod decode;
+mod dial;
 mod error;
 mod http;
 #[cfg(feature = "mock")]
@@ -20,6 +21,7 @@ pub use api::{
     PmmrIndices, PoolTransaction, Propagation, Tip, UnspentOutput, UnspentOutputs,
 };
 pub use client::{CallPolicy, NodeClient, RetryPolicy, RpcTransport};
+pub use dial::{DialFuture, NodeDialer, NodeStream};
 pub use error::{FieldProblem, NodeError, NodeRejection, RejectionKind};
 pub use http::{HttpSettings, HttpTransport, webpki_tls_config};
 

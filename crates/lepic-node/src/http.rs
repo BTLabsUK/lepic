@@ -19,6 +19,7 @@ use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
 use crate::client::RpcTransport;
+use crate::dial::{NodeConnector, NodeDialer};
 use crate::error::NodeError;
 
 // The node's foreign API accepts Basic auth with this fixed user name.
@@ -66,7 +67,7 @@ pub fn webpki_tls_config() -> Result<Arc<ClientConfig>, NodeError> {
 /// Posts JSON-RPC requests to one node over HTTP/1.1, plain or TLS.
 #[derive(Clone)]
 pub struct HttpTransport {
-    client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    client: Client<HttpsConnector<NodeConnector>, Full<Bytes>>,
     base_url: String,
     host: String,
     authorization: Option<HeaderValue>,
@@ -95,16 +96,43 @@ impl HttpTransport {
         settings: &HttpSettings,
         tls: Arc<ClientConfig>,
     ) -> Result<Self, NodeError> {
+        Self::build(node_url, settings, tls, None)
+    }
+
+    /// As [`HttpTransport::new`], but every connection is opened by `dialer`, which the
+    /// connect timeout of `settings` does not bound. TLS and the `Host` header still use the
+    /// host of `node_url`, wherever the dialer connects.
+    pub fn with_dialer(
+        node_url: &str,
+        settings: &HttpSettings,
+        tls: Arc<ClientConfig>,
+        dialer: Arc<dyn NodeDialer>,
+    ) -> Result<Self, NodeError> {
+        Self::build(node_url, settings, tls, Some(dialer))
+    }
+
+    fn build(
+        node_url: &str,
+        settings: &HttpSettings,
+        tls: Arc<ClientConfig>,
+        dialer: Option<Arc<dyn NodeDialer>>,
+    ) -> Result<Self, NodeError> {
         let (base_url, host) = parse_node_url(node_url)?;
-        let mut http = HttpConnector::new();
-        http.enforce_http(false);
-        http.set_connect_timeout(Some(settings.connect_timeout));
-        http.set_nodelay(true);
+        let route = dialer.map_or_else(
+            || {
+                let mut http = HttpConnector::new();
+                http.enforce_http(false);
+                http.set_connect_timeout(Some(settings.connect_timeout));
+                http.set_nodelay(true);
+                NodeConnector::Direct(http)
+            },
+            NodeConnector::Dialed,
+        );
         let connector = HttpsConnectorBuilder::new()
             .with_tls_config(Arc::unwrap_or_clone(tls))
             .https_or_http()
             .enable_http1()
-            .wrap_connector(http);
+            .wrap_connector(route);
         let client = Client::builder(TokioExecutor::new()).build(connector);
         let authorization = settings
             .api_secret

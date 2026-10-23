@@ -8,13 +8,15 @@
 
 mod support;
 
+use std::io;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lepic_crypto::Commitment;
 use lepic_node::{
-    CallPolicy, FieldProblem, HttpSettings, HttpTransport, NodeApi, NodeClient, NodeError,
-    Propagation, RejectionKind, RetryPolicy, webpki_tls_config,
+    CallPolicy, DialFuture, FieldProblem, HttpSettings, HttpTransport, NodeApi, NodeClient,
+    NodeDialer, NodeError, Propagation, RejectionKind, RetryPolicy, webpki_tls_config,
 };
 use lepic_primitives::amount::Height;
 use lepic_primitives::ser::ProtocolVersion;
@@ -878,4 +880,71 @@ fn allows_plain_http_only_to_loopback() {
             "{url}"
         );
     }
+}
+
+struct RecordingDialer {
+    connect_to: std::net::SocketAddr,
+    dialed: Mutex<Vec<(String, u16)>>,
+}
+
+impl NodeDialer for RecordingDialer {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> DialFuture<'a> {
+        self.dialed.lock().unwrap().push((host.to_owned(), port));
+        Box::pin(async move {
+            let stream = tokio::net::TcpStream::connect(self.connect_to).await?;
+            Ok(Box::new(stream) as Box<dyn lepic_node::NodeStream>)
+        })
+    }
+}
+
+#[tokio::test]
+async fn opens_connections_through_the_dialer_with_the_urls_host() {
+    let server = serving_with_tip(serde_json::to_vec(&recorded_response("get_tip")).unwrap()).await;
+    let dialer = Arc::new(RecordingDialer {
+        connect_to: server.addr,
+        dialed: Mutex::default(),
+    });
+    let url = "http://localhost:3413";
+    let transport = HttpTransport::with_dialer(
+        url,
+        &settings(),
+        webpki_tls_config().unwrap(),
+        Arc::clone(&dialer) as Arc<dyn NodeDialer>,
+    )
+    .unwrap();
+    NodeClient::new(transport, CallPolicy::default())
+        .get_tip()
+        .await
+        .unwrap();
+    assert_eq!(
+        *dialer.dialed.lock().unwrap(),
+        vec![("localhost".to_owned(), 3413)]
+    );
+    assert_eq!(server.received()[0].header("host"), Some("localhost:3413"));
+}
+
+struct RefusingDialer;
+
+impl NodeDialer for RefusingDialer {
+    fn dial<'a>(&'a self, _host: &'a str, _port: u16) -> DialFuture<'a> {
+        Box::pin(async { Err(io::Error::other("tor is not connected")) })
+    }
+}
+
+#[tokio::test]
+async fn a_dialer_that_fails_is_a_connect_error_and_nothing_goes_around_it() {
+    let server = serving_with_tip(Vec::new()).await;
+    let transport = HttpTransport::with_dialer(
+        &server.url(),
+        &settings(),
+        webpki_tls_config().unwrap(),
+        Arc::new(RefusingDialer),
+    )
+    .unwrap();
+    let error = NodeClient::new(transport, CallPolicy::default())
+        .get_tip()
+        .await
+        .unwrap_err();
+    assert!(matches!(error, NodeError::Connect(_)), "{error:?}");
+    assert!(server.received().is_empty());
 }

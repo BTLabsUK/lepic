@@ -1149,6 +1149,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tower-service",
  "tracing",
  "webpki-roots",
  "zeroize",

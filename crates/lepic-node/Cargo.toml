@@ -27,6 +27,7 @@ serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
+tower-service.workspace = true
 tracing = { workspace = true, features = ["std", "attributes"] }
 webpki-roots.workspace = true
 zeroize = { workspace = true, features = ["alloc"] }
