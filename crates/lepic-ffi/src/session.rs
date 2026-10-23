@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
-use lepic_epicbox::tunnel::TunnelConnector;
+use lepic_epicbox::tunnel::{OnionRoutes, TunnelConnector};
 use lepic_epicbox::{
     ClientSettings, Domain, EpicboxAddress, Network as RelayNetwork, RelayEndpoint, Security,
     TRANSPORT_ID,
@@ -191,6 +191,9 @@ pub(crate) struct Session {
     relay_tor: Arc<lepic_tor::RelayTor>,
     /// `expect_tor` was called and no start followed yet: a stop keeps the relay waiting.
     tor_expected: AtomicBool,
+    /// Hosts reached at an onion through tor, with TLS for the host: the built-in table until
+    /// the app sets its own. Shared by every connection of the session that goes through tor.
+    pub(crate) onion_routes: Arc<OnionRoutes>,
     #[cfg(test)]
     tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
     /// Makes the next listen fail before it subscribes.
@@ -282,6 +285,7 @@ fn epicbox_transport(
     config: &WalletConfig,
     network: Network,
     relay_tor: &Arc<lepic_tor::RelayTor>,
+    onion_routes: &Arc<OnionRoutes>,
 ) -> Result<Option<EpicboxTransport>, WalletError> {
     if config.epicbox_domain.is_empty() {
         return Ok(None);
@@ -302,7 +306,11 @@ fn epicbox_transport(
     Ok(Some(EpicboxTransport::new(
         ClientSettings::new(endpoint),
         relay_network(network),
-        Arc::new(TunnelConnector::new(tls, tunnel)),
+        Arc::new(TunnelConnector::with_routes(
+            tls,
+            tunnel,
+            Arc::clone(onion_routes),
+        )),
     )))
 }
 
@@ -321,8 +329,9 @@ impl Session {
         let claim = ClaimHolder::new(claim);
         let node = runtime.nodes.client(config, node_secret)?;
         let relay_tor = Arc::new(lepic_tor::RelayTor::new(true));
-        let epicbox =
-            epicbox_transport(runtime, config, network, &relay_tor)?.map(EpicboxSlot::new);
+        let onion_routes = Arc::new(OnionRoutes::default());
+        let epicbox = epicbox_transport(runtime, config, network, &relay_tor, &onion_routes)?
+            .map(EpicboxSlot::new);
         let mut transports = TransportRegistry::new();
         let mut ids = vec![FILE];
         transports
@@ -382,6 +391,7 @@ impl Session {
             tor_starts: AtomicU64::new(0),
             relay_tor,
             tor_expected: AtomicBool::new(false),
+            onion_routes,
             #[cfg(test)]
             tor_timings: Mutex::default(),
             #[cfg(test)]

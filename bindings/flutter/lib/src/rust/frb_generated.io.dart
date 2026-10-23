@@ -363,6 +363,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LogField> dco_decode_list_log_field(dynamic raw);
 
   @protected
+  List<OnionRoute> dco_decode_list_onion_route(dynamic raw);
+
+  @protected
   Uint32List dco_decode_list_prim_u_32_strict(dynamic raw);
 
   @protected
@@ -397,6 +400,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   NodeTip dco_decode_node_tip(dynamic raw);
+
+  @protected
+  OnionRoute dco_decode_onion_route(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -921,6 +927,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LogField> sse_decode_list_log_field(SseDeserializer deserializer);
 
   @protected
+  List<OnionRoute> sse_decode_list_onion_route(SseDeserializer deserializer);
+
+  @protected
   Uint32List sse_decode_list_prim_u_32_strict(SseDeserializer deserializer);
 
   @protected
@@ -963,6 +972,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   NodeTip sse_decode_node_tip(SseDeserializer deserializer);
+
+  @protected
+  OnionRoute sse_decode_onion_route(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -1598,6 +1610,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_list_log_field(List<LogField> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_onion_route(
+    List<OnionRoute> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_32_strict(
     Uint32List self,
     SseSerializer serializer,
@@ -1650,6 +1668,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_node_tip(NodeTip self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_onion_route(OnionRoute self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

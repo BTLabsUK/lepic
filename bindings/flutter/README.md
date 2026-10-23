@@ -484,9 +484,21 @@ final on = wallet.epicboxOverTor();
 - Show "Connecting via Tor" while the setting is on, `torStatus()` is not `off` and the
   listener is not connected yet: the relay waits for tor, it never falls back to a direct
   connection.
-- The relay `flooepicbox.btlabs.uk` is reached at its onion. For another relay LEPIC asks it once
-  per wallet session for `/.well-known/epicbox.json` through tor, and uses the onion it names
-  only when it names the relay's own domain; otherwise it goes through the Tor network.
+- Hosts with an onion are reached at it: a built-in table holds `flooepicbox.btlabs.uk:443`
+  until the app passes its own list, for example the signed one it fetched:
+
+  ```dart
+  wallet.setOnionRoutes(routes: [
+    OnionRoute(host: 'flooepicbox.btlabs.uk', port: 443, onion: '<56 characters>.onion', onionPort: 443),
+  ]);
+  ```
+
+  The list replaces the table, from the next connection; only TLS hosts belong in it, since the
+  connection still checks the host's certificate. A list with an invalid host, onion or port 0,
+  or more than 256 routes, throws `invalidArgument` and changes nothing. For a relay not in the
+  list LEPIC asks it once per wallet session for `/.well-known/epicbox.json` through tor, and
+  uses the onion it names only when it names the relay's own domain; otherwise it goes through
+  the Tor network.
 
 ## Invoices over Epicbox
 

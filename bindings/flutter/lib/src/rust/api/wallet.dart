@@ -750,6 +750,15 @@ abstract class EpicWallet implements RustOpaqueInterface {
   /// the payments address.
   Future<void> setInvoiceAddressIndex({required int index});
 
+  /// Replaces the onion routes the wallet uses through tor, for example with the signed list
+  /// the app fetched; until then a built-in table holds `flooepicbox.btlabs.uk:443`. Only TLS
+  /// hosts belong here: the connection still checks `host`'s certificate. Applies from the
+  /// next connection. An empty list leaves no route, so every host goes through a Tor exit.
+  ///
+  /// Fails with `InvalidArgument`, changing nothing, when a host is not a host name, an onion
+  /// is not an onion v3 address, a port is 0, or there are more than 256 routes.
+  void setOnionRoutes({required List<OnionRoute> routes});
+
   /// Moves the open wallet to the node and Epicbox relay `config` names, keeping it unlocked.
   /// Calls running when it starts end first, and calls made while it waits or runs start
   /// after it; a running scan is waited for too, so cancel it first to switch at once. A

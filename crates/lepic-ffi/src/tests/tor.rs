@@ -564,6 +564,69 @@ async fn a_tor_announced_before_it_starts_holds_the_relay_until_started_or_stopp
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn onion_routes_replace_the_built_in_table_only_when_every_one_is_valid() {
+    use crate::api::tor::OnionRoute;
+    use lepic_epicbox::tunnel::DialTarget;
+    use lepic_epicbox::{Domain, RelayEndpoint, Security};
+
+    let (pair, _network) = tor_pair().await;
+    let bob = &pair.bob;
+    let endpoint =
+        |host: &str| RelayEndpoint::new(Domain::parse(host).unwrap(), None, Security::Tls);
+    let built_in = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+    assert_eq!(
+        bob.onion_routes.route(&endpoint("flooepicbox.btlabs.uk")),
+        Some(DialTarget {
+            host: built_in.to_owned(),
+            port: 443
+        })
+    );
+
+    let onion = lepic_tor::OnionAddress::from_public_key(&[3; 32]).host();
+    let route = |host: &str, onion: &str, port: u16| OnionRoute {
+        host: host.to_owned(),
+        port,
+        onion: onion.to_owned(),
+        onion_port: 443,
+    };
+    for bad in [
+        vec![
+            route("node.btlabs.uk", &onion, 443),
+            route("bad host!", &onion, 443),
+        ],
+        vec![route("node.btlabs.uk", "notanonion.onion", 443)],
+        vec![route("node.btlabs.uk", &onion, 0)],
+        vec![route("node.btlabs.uk", &onion, 443); 257],
+    ] {
+        assert_eq!(
+            kind(bob.set_onion_routes(bad)),
+            WalletErrorKind::InvalidArgument
+        );
+    }
+    assert!(
+        bob.onion_routes
+            .route(&endpoint("flooepicbox.btlabs.uk"))
+            .is_some(),
+        "a refused list changes nothing"
+    );
+
+    let upper = onion.to_ascii_uppercase().replace(".ONION", ".onion");
+    bob.set_onion_routes(vec![route("node.btlabs.uk", &upper, 443)])
+        .unwrap();
+    assert_eq!(
+        bob.onion_routes.route(&endpoint("node.btlabs.uk")),
+        Some(DialTarget {
+            host: onion.clone(),
+            port: 443
+        })
+    );
+    assert_eq!(
+        bob.onion_routes.route(&endpoint("flooepicbox.btlabs.uk")),
+        None
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_right_after_a_stop_waits_for_the_stopped_tor_to_be_down() {
     let (pair, network) = tor_pair().await;
     let (first, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;

@@ -25,7 +25,12 @@ use super::http::HttpReport;
 use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::http::{HttpListenerEvent, HttpListenerEventKind, HttpResentTx, HttpSentTx};
-use crate::api::tor::{TorEvent, TorEventKind, TorFailureKind, TorStatus, TorStatusKind};
+use crate::api::tor::{
+    OnionRoute, TorEvent, TorEventKind, TorFailureKind, TorStatus, TorStatusKind,
+};
+
+/// More onion routes than any signed list holds.
+const MAX_ONION_ROUTES: usize = 256;
 use crate::api::types::SendOptions;
 
 /// Where the tor events of a session go.
@@ -565,6 +570,34 @@ impl Session {
 
     pub(crate) fn epicbox_over_tor(&self) -> bool {
         self.relay_tor.enabled()
+    }
+
+    /// Replaces the onion routes of the session after checking every one: a host name, an
+    /// onion v3 host and two ports that are not 0. Nothing changes when one is invalid.
+    pub(crate) fn set_onion_routes(&self, routes: Vec<OnionRoute>) -> Result<(), WalletError> {
+        if routes.len() > MAX_ONION_ROUTES {
+            return Err(invalid("too many onion routes"));
+        }
+        let checked = routes
+            .into_iter()
+            .map(|route| {
+                let domain = lepic_epicbox::Domain::parse(&route.host)
+                    .map_err(|_| invalid("onion route host is not a host name"))?;
+                let onion = lepic_tor::parse_onion(&route.onion)
+                    .map_err(|_| invalid("onion route onion is not an onion v3 address"))?;
+                if route.port == 0 || route.onion_port == 0 {
+                    return Err(invalid("onion route port is 0"));
+                }
+                Ok(lepic_epicbox::tunnel::OnionRoute {
+                    domain,
+                    port: route.port,
+                    onion: onion.host(),
+                    onion_port: route.onion_port,
+                })
+            })
+            .collect::<Result<Vec<_>, WalletError>>()?;
+        self.onion_routes.replace(checked);
+        Ok(())
     }
 
     /// The app is about to start tor: until it does, relay connections wait for it instead of

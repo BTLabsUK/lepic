@@ -21,6 +21,17 @@ use crate::api::wallet::EpicWallet;
 use crate::boundary::{end_stream, guard_or};
 use crate::frb_generated::StreamSink;
 
+/// A host that is also an onion service presenting the host's TLS certificate: connections to
+/// `host:port` through tor dial `onion:onion_port` instead, with TLS for `host`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnionRoute {
+    pub host: String,
+    pub port: u16,
+    /// `<56 characters>.onion`, as [`validate_onion_address`] reads it.
+    pub onion: String,
+    pub onion_port: u16,
+}
+
 /// Why the wallet's tor is not working. None of them carries a key or the control cookie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorFailureKind {
@@ -241,6 +252,19 @@ impl EpicWallet {
     pub fn expect_tor(&self) -> Result<(), WalletError> {
         self.boundary()
             .guard("expect_tor", || self.session.expect_tor())
+    }
+
+    /// Replaces the onion routes the wallet uses through tor, for example with the signed list
+    /// the app fetched; until then a built-in table holds `flooepicbox.btlabs.uk:443`. Only TLS
+    /// hosts belong here: the connection still checks `host`'s certificate. Applies from the
+    /// next connection. An empty list leaves no route, so every host goes through a Tor exit.
+    ///
+    /// Fails with `InvalidArgument`, changing nothing, when a host is not a host name, an onion
+    /// is not an onion v3 address, a port is 0, or there are more than 256 routes.
+    #[frb(sync)]
+    pub fn set_onion_routes(&self, routes: Vec<OnionRoute>) -> Result<(), WalletError> {
+        self.boundary()
+            .guard("set_onion_routes", || self.session.set_onion_routes(routes))
     }
 
     /// Whether Epicbox over Tor is on, as [`EpicWallet::set_epicbox_over_tor`] set it.

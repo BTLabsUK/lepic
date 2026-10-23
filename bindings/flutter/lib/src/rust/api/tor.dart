@@ -9,12 +9,44 @@ import 'http.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `of`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 /// Whether `address` is an onion v3 address: 56 characters, with or without `.onion`, an
 /// `http://` prefix, a port or a path, whose version and checksum hold.
 bool validateOnionAddress({required String address}) =>
     RustLib.instance.api.crateApiTorValidateOnionAddress(address: address);
+
+/// A host that is also an onion service presenting the host's TLS certificate: connections to
+/// `host:port` through tor dial `onion:onion_port` instead, with TLS for `host`.
+class OnionRoute {
+  final String host;
+  final int port;
+
+  /// `<56 characters>.onion`, as [`validate_onion_address`] reads it.
+  final String onion;
+  final int onionPort;
+
+  const OnionRoute({
+    required this.host,
+    required this.port,
+    required this.onion,
+    required this.onionPort,
+  });
+
+  @override
+  int get hashCode =>
+      host.hashCode ^ port.hashCode ^ onion.hashCode ^ onionPort.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OnionRoute &&
+          runtimeType == other.runtimeType &&
+          host == other.host &&
+          port == other.port &&
+          onion == other.onion &&
+          onionPort == other.onionPort;
+}
 
 /// What the wallet's tor did. Nothing about a sender, the slate or a key is reported.
 class TorEvent {
