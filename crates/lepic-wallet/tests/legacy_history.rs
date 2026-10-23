@@ -567,6 +567,20 @@ fn an_account_the_wallet_lacks_is_created_with_the_old_label() {
 }
 
 #[test]
+fn an_old_label_with_hidden_formatting_is_imported_without_it() {
+    let mut old = OldWallet::standard(&keychain(MNEMONIC));
+    old.accounts = vec![("default", 0), ("sav\u{202E}in\u{200B}gs", 1)];
+    let world = World::new(&old, &[]);
+
+    world.import();
+
+    assert_eq!(
+        world.labels(),
+        [(0, "default".to_owned()), (1, "savings".to_owned())]
+    );
+}
+
+#[test]
 fn a_label_a_scan_generated_is_renamed_to_the_old_label() {
     let world = World::new(&OldWallet::standard(&keychain(MNEMONIC)), &[]);
     world.scan();

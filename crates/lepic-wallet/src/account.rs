@@ -7,6 +7,7 @@ use lepic_keychain::Identifier;
 use lepic_store::{AccountIndex, AccountRecord, Repositories};
 use thiserror::Error;
 
+use crate::epicbox_invoice::HIDDEN_FORMATTING;
 use crate::error::WalletError;
 use crate::lifecycle;
 
@@ -24,7 +25,7 @@ pub(crate) const FIRST_HARDENED: u32 = 1 << 31;
 pub enum AccountError {
     #[error("account label has {actual} bytes, expected 1 to {MAX_ACCOUNT_LABEL_LEN}")]
     LabelLength { actual: usize },
-    #[error("account label character {position} is a control character")]
+    #[error("account label character {position} is a control or hidden formatting character")]
     LabelCharacter { position: usize },
     #[error("account label is already used by another account")]
     LabelTaken,
@@ -49,7 +50,7 @@ impl AccountLabel {
                 actual: label.len(),
             });
         }
-        match label.chars().position(char::is_control) {
+        match label.chars().position(is_hidden) {
             Some(position) => Err(AccountError::LabelCharacter { position }),
             None => Ok(Self(label.to_owned())),
         }
@@ -58,6 +59,11 @@ impl AccountLabel {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Characters a label may not hold: they would make it display differently from what it is.
+pub(crate) fn is_hidden(c: char) -> bool {
+    c.is_control() || HIDDEN_FORMATTING.contains(&c)
 }
 
 impl fmt::Display for AccountLabel {
@@ -181,6 +187,43 @@ mod tests {
         let store = MemoryStore::new(ContextKey::from_bytes([1; CONTEXT_KEY_LEN]));
         store.write(|repos| ensure_default_account(repos)).unwrap();
         store
+    }
+
+    #[test]
+    fn new_labels_refuse_control_and_hidden_formatting_characters() {
+        for (label, position) in [
+            ("a\u{202E}b", 1),
+            ("\u{200B}ab", 0),
+            ("ab\u{2068}", 2),
+            ("a\u{FEFF}", 1),
+            ("a\tb", 1),
+        ] {
+            assert_eq!(
+                AccountLabel::new(label),
+                Err(AccountError::LabelCharacter { position }),
+                "{label:?}"
+            );
+        }
+        assert!(AccountLabel::new("savings – 2").is_ok());
+    }
+
+    #[test]
+    fn a_stored_label_with_hidden_formatting_still_loads() {
+        let store = store_with_default_account();
+        let label = "old\u{202E}name";
+        store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(4),
+                    label: label.to_owned(),
+                    next_child: 0,
+                })?;
+                Ok::<_, WalletError>(())
+            })
+            .unwrap();
+        let account = store.read(|repos| account_by_label(repos, label)).unwrap();
+        assert_eq!(account.index, AccountIndex(4));
+        assert_eq!(account.label, label);
     }
 
     #[test]

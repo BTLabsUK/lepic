@@ -816,6 +816,15 @@ fn the_allowlist_matches_on_the_key_and_keeps_the_address_the_user_added() {
         wallet.allow_invoice_sender("not an address", "x"),
         Err(lepic_wallet::inbox::InboxError::Address(_))
     ));
+    for label in ["sh\u{202E}op", "sh\u{200B}op", "sh\u{2066}op", "sh\nop"] {
+        assert!(
+            matches!(
+                wallet.allow_invoice_sender(&world.issuer.address.to_string(), label),
+                Err(lepic_wallet::inbox::InboxError::SenderLabel)
+            ),
+            "{label:?}"
+        );
+    }
     // The same key under another domain is the same sender.
     let key = world.issuer.address.key_text();
     assert!(

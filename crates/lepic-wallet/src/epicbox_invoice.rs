@@ -39,6 +39,7 @@ use lepic_transport::transport::{Destination, Envelope, Transport};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
+use crate::account::is_hidden;
 use crate::cancel::pool_holds;
 use crate::epicbox_notice::record_lepic;
 use crate::error::WalletError;
@@ -386,7 +387,7 @@ where
     ///
     /// Fails with [`InboxError::Address`] for an address that does not parse or is on the other
     /// network, with [`InboxError::SenderLabel`] for a label longer than
-    /// [`MAX_SENDER_LABEL_LEN`] bytes or with control characters, and with
+    /// [`MAX_SENDER_LABEL_LEN`] bytes or with control or hidden formatting characters, and with
     /// [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub fn allow_invoice_sender(
@@ -395,7 +396,7 @@ where
         label: &str,
     ) -> Result<AllowedSender, InboxError> {
         let address = self.parse_address(address)?;
-        if label.len() > MAX_SENDER_LABEL_LEN || label.chars().any(char::is_control) {
+        if label.len() > MAX_SENDER_LABEL_LEN || label.chars().any(is_hidden) {
             return Err(InboxError::SenderLabel);
         }
         let session = self.session()?;

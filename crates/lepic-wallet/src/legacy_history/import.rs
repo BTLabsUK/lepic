@@ -836,7 +836,7 @@ fn name_accounts(
     for source in &history.accounts {
         let (Some(index), Ok(label)) = (
             account_of(&source.path).filter(|index| allowed.contains(index)),
-            AccountLabel::new(&source.label),
+            AccountLabel::new(&display_message(&source.label)),
         ) else {
             *skipped = skipped.saturating_add(1);
             continue;
