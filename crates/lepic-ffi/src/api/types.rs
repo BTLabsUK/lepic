@@ -778,6 +778,18 @@ pub enum TransportState {
     Stopped,
 }
 
+/// Which of a transport's connections changed. A drain connects on its own beside a running
+/// listener; only `Listener` says anything about the listener's health.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportConnection {
+    /// The connection the Epicbox listener holds.
+    Listener,
+    /// A one-time drain of the payments address.
+    PaymentsDrain,
+    /// A one-time drain of the invoice address.
+    InvoicesDrain,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalletEventKind {
     /// `session` is set.
@@ -789,7 +801,8 @@ pub enum WalletEventKind {
     Transaction,
     /// Scan progress: `height` and `target_height` are set.
     Sync,
-    /// A transport's connection changed: `transport` and `transport_state` are set.
+    /// A transport's connection changed: `transport`, `transport_connection` and
+    /// `transport_state` are set.
     Transport,
     /// The stream fell behind and `missed` events were dropped. Refresh to catch up.
     Missed,
@@ -851,6 +864,7 @@ pub struct WalletEvent {
     pub target_height: Option<u64>,
     pub transport: Option<String>,
     pub transport_state: Option<TransportState>,
+    pub transport_connection: Option<TransportConnection>,
     pub missed: Option<u64>,
     pub slate_id: Option<String>,
     pub amount: Option<u64>,
@@ -876,6 +890,7 @@ impl WalletEvent {
             target_height: None,
             transport: None,
             transport_state: None,
+            transport_connection: None,
             missed: None,
             slate_id: None,
             amount: None,

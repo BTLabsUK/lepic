@@ -12,6 +12,7 @@ use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
 
 mod http;
+mod listener;
 mod node;
 mod outputs;
 mod password;

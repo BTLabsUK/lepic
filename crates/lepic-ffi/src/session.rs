@@ -23,7 +23,7 @@ use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Exchange as _, Location};
 use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
-use lepic_wallet::event::{Balance, TransportState as EngineTransportState};
+use lepic_wallet::event::{Balance, Connection, TransportState as EngineTransportState};
 use lepic_wallet::inbox::ListenHandle;
 use lepic_wallet::legacy_history::{
     ImportWorkDir, LegacyImportOutcome, LegacyImportStatus as EngineLegacyStatus,
@@ -58,8 +58,9 @@ use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
     LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, OutputCategory, OutputStatus,
     PushSignature, ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy,
-    SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, TransactionDetails, TransportState,
-    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+    SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, TransactionDetails, TransportConnection,
+    TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput,
+    WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -1547,6 +1548,14 @@ const fn transport_state(state: EngineTransportState) -> TransportState {
     }
 }
 
+const fn transport_connection(connection: Connection) -> TransportConnection {
+    match connection {
+        Connection::PaymentsDrain => TransportConnection::PaymentsDrain,
+        Connection::InvoicesDrain => TransportConnection::InvoicesDrain,
+        Connection::Listener => TransportConnection::Listener,
+    }
+}
+
 fn wallet_event(event: &Event) -> Option<WalletEvent> {
     Some(match event {
         Event::Session(state) => WalletEvent {
@@ -1587,6 +1596,7 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
         Event::Transport(status) => WalletEvent {
             transport: Some(status.transport.as_str().to_owned()),
             transport_state: Some(transport_state(status.state)),
+            transport_connection: Some(transport_connection(status.connection)),
             ..WalletEvent::of(WalletEventKind::Transport)
         },
         Event::InvoiceParked(parked) => WalletEvent {
@@ -1648,6 +1658,7 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
     }
     if let Event::TransportDisconnected(disconnect) = event
         && disconnect.transport == TRANSPORT_ID
+        && disconnect.connection == Connection::Listener
     {
         return Some(ListenerEvent {
             kind: ListenerEventKind::Disconnected,
@@ -1661,7 +1672,9 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
         });
     }
     let (kind, tx_id) = match event {
-        Event::Transport(status) if status.transport == TRANSPORT_ID => {
+        Event::Transport(status)
+            if status.transport == TRANSPORT_ID && status.connection == Connection::Listener =>
+        {
             match transport_state(status.state) {
                 TransportState::Connected => (ListenerEventKind::Connected, None),
                 TransportState::Connecting
