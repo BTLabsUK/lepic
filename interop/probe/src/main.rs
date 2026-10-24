@@ -10,6 +10,9 @@
 //!       subscribes, acknowledges and saves every message until `want` arrived or the time is up
 //!   lepic-interop-probe sessions <relay-url>
 //!       how the relay treats two addresses on one socket and on two sockets
+//!   lepic-interop-probe drains <relay-url>
+//!       whether one socket drains several addresses in turn, and what a late message for an
+//!       address drained earlier on it does
 //!   lepic-interop-probe decode <slate-file>
 //!       what the Epicbox format policy decodes the file as
 //!
@@ -67,6 +70,7 @@ async fn main() -> Result<()> {
             drain(&relay, &identity, Path::new(out_dir), want, seconds).await?
         }
         ["sessions", relay] => sessions(&Relay::parse(relay)?).await?,
+        ["drains", relay] => drains(&Relay::parse(relay)?).await?,
         ["decode", file] => decode(Path::new(file))?,
         _ => bail!("usage: see the comment at the top of interop/probe/src/main.rs"),
     };
@@ -487,6 +491,190 @@ async fn sessions(relay: &Relay) -> Result<Value> {
             "second": second.address.to_string(),
             "late_message_queue": first.address.key_text(),
         },
+    }))
+}
+
+/// Fact 6: a drain of several addresses on one socket. For each mode the socket can take, two
+/// addresses get two messages each; the socket subscribes as the first, takes and acknowledges
+/// everything, then subscribes as the second and does the same. A late message for each
+/// address then shows what reaches the socket now subscribed as the second, and a fresh drain
+/// per address collects whatever was left, so the probe leaves nothing pending.
+async fn drains(relay: &Relay) -> Result<Value> {
+    let mut report = serde_json::Map::new();
+    for (name, mode) in [
+        ("send", WalletMode::Send),
+        ("listener", WalletMode::Listener),
+    ] {
+        report.insert(name.to_owned(), drains_in_mode(relay, mode).await?);
+    }
+    report.insert("kept".to_owned(), drain_after_kept(relay).await?);
+    Ok(Value::Object(report))
+}
+
+/// A message left unacknowledged for the first address, then a subscribe as the second on the
+/// same socket: is the second address's message handed out there? A fresh socket per address
+/// then collects both, so nothing stays pending.
+async fn drain_after_kept(relay: &Relay) -> Result<Value> {
+    let first = Identity::random(relay)?;
+    let second = Identity::random(relay)?;
+    let sender = Identity::random(relay)?;
+    let mut outbox = Session::open(relay, WalletMode::Send).await?;
+    let posts = vec![
+        post_on(&mut outbox, &sender, &first.address, "{\"probe\":\"kept\"}").await?,
+        post_on(
+            &mut outbox,
+            &sender,
+            &second.address,
+            "{\"probe\":\"after-kept\"}",
+        )
+        .await?,
+    ];
+    let mut socket = Session::open(relay, WalletMode::Send).await?;
+    socket.subscribe(&first).await?;
+    let kept = socket.subscribe_answer().await?.is_some();
+    socket.subscribe(&second).await?;
+    let second_answer = socket.subscribe_answer().await?;
+    let second_opened = second_answer
+        .as_ref()
+        .is_some_and(|slate| open_message(&second, slate).is_ok());
+    drop(socket);
+    let mut collected = Vec::new();
+    for identity in [&first, &second] {
+        let mut fresh = Session::open(relay, WalletMode::Send).await?;
+        collected.push(drain_on(&mut fresh, identity).await?);
+    }
+    Ok(json!({
+        "posts": posts,
+        "first_message_kept": kept,
+        "second_subscribe_answer": second_answer.as_ref().map_or("Ok", |_| "Slate"),
+        "second_message_opened": second_opened,
+        "collected_later": collected,
+    }))
+}
+
+const DRAIN_MESSAGES_PER_ADDRESS: usize = 2;
+
+async fn drains_in_mode(relay: &Relay, mode: WalletMode) -> Result<Value> {
+    let first = Identity::random(relay)?;
+    let second = Identity::random(relay)?;
+    let sender = Identity::random(relay)?;
+    let mut outbox = Session::open(relay, WalletMode::Send).await?;
+    let mut posts = Vec::new();
+    for to in [&first, &second] {
+        for n in 0..DRAIN_MESSAGES_PER_ADDRESS {
+            posts.push(
+                post_on(
+                    &mut outbox,
+                    &sender,
+                    &to.address,
+                    &format!("{{\"probe\":{n}}}"),
+                )
+                .await?,
+            );
+        }
+    }
+
+    let mut socket = Session::open(relay, mode).await?;
+    let mut drained = Vec::new();
+    for identity in [&first, &second] {
+        drained.push(drain_on(&mut socket, identity).await?);
+    }
+
+    // The socket is now subscribed as the second address. A message for each address arrives.
+    let late_posts = vec![
+        post_on(
+            &mut outbox,
+            &sender,
+            &first.address,
+            "{\"probe\":\"late-first\"}",
+        )
+        .await?,
+        post_on(
+            &mut outbox,
+            &sender,
+            &second.address,
+            "{\"probe\":\"late-second\"}",
+        )
+        .await?,
+    ];
+    let mut late_arrivals = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while let Some(frame) = socket.receive_until(deadline).await? {
+        let RelayFrame::Slate(slate) = frame else {
+            continue;
+        };
+        let (addressed_to, opener) = if open_message(&first, &slate).is_ok() {
+            ("first", Some(&first))
+        } else if open_message(&second, &slate).is_ok() {
+            ("second", Some(&second))
+        } else {
+            ("neither", None)
+        };
+        // Acknowledge with the key the message is for; for the first address that is not the
+        // key the socket last subscribed with.
+        let made = match (opener, slate.epicboxmsgid.as_ref()) {
+            (Some(identity), Some(id)) => Some(socket.made(identity, id).await?),
+            _ => None,
+        };
+        late_arrivals.push(json!({ "addressed_to": addressed_to, "made": made }));
+    }
+
+    // A fresh socket per address collects what the shared socket left.
+    let mut collected = Vec::new();
+    for identity in [&first, &second] {
+        let mut fresh = Session::open(relay, WalletMode::Send).await?;
+        let report = drain_on(&mut fresh, identity).await?;
+        collected.push(report);
+    }
+
+    let error_kinds: Vec<Value> = [&outbox, &socket]
+        .iter()
+        .flat_map(|session| session.transcript.iter())
+        .filter_map(|frame| frame.get("kind").cloned())
+        .collect();
+    Ok(json!({
+        "mode": format!("{mode:?}"),
+        "posts": posts,
+        "drained": drained,
+        "late_posts": late_posts,
+        "late_arrivals": late_arrivals,
+        "collected_later": collected,
+        "error_kinds_seen": error_kinds,
+        "transcript": socket.transcript,
+    }))
+}
+
+/// Subscribes as `identity` with the latest challenge and takes, opens and acknowledges every
+/// message the relay hands out, re-subscribing after each `Made` with the challenge the relay
+/// sends then, until a subscribe is answered `Ok`.
+async fn drain_on(session: &mut Session, identity: &Identity) -> Result<Value> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut made = Vec::new();
+    let mut opened = 0usize;
+    let mut repeats = 0usize;
+    for _ in 0..16 {
+        session.subscribe(identity).await?;
+        let Some(slate) = session.subscribe_answer().await? else {
+            break;
+        };
+        if open_message(identity, &slate).is_ok() {
+            opened += 1;
+        }
+        let id = slate.epicboxmsgid.clone().context("message id")?;
+        if ids.iter().any(|seen| seen == id.as_str()) {
+            repeats += 1;
+        } else {
+            ids.push(id.as_str().to_owned());
+        }
+        made.push(session.made(identity, &id).await?);
+        session.next_challenge().await?;
+    }
+    Ok(json!({
+        "address": identity.address.to_string(),
+        "delivered": ids.len(),
+        "opened": opened,
+        "repeats": repeats,
+        "made": made,
     }))
 }
 

@@ -103,6 +103,34 @@ probe_relay_sessions() {
     DETAIL="one socket serves the last subscribed address only; two sockets serve two; relay source names TooManySubscriptions ${named} times"
 }
 
+# Fact 6. One socket drains several addresses in turn. No wallet takes part: the probe holds every
+# key, and fresh drains collect what the shared socket left, so nothing stays pending.
+probe_mailbox_drains() {
+    local report
+    report="$(probe_saved drains drains "${RELAY_URL}")" || fail "the drains probe failed" || return 1
+    local mode
+    for mode in send listener; do
+        jq -e --arg m "${mode}" '.[$m] | (.posts + .late_posts | all(. == "Ok"))
+            and (.drained | length == 2)
+            and (.drained | all(.delivered == 2 and .opened == 2 and .repeats == 0
+                and .made == ["Ok", "Ok"]))' <<<"${report}" >/dev/null ||
+            fail "sequential subscribes in ${mode} mode did not drain both addresses: ${report}" || return 1
+        jq -e --arg m "${mode}" '.[$m].collected_later | map(.delivered) == [1, 1]
+            and all(.made == ["Ok"])' <<<"${report}" >/dev/null ||
+            fail "the late messages in ${mode} mode were not left for the next drain" || return 1
+    done
+    jq -e '.send.late_arrivals == [] and .send.error_kinds_seen == []' <<<"${report}" >/dev/null ||
+        fail "a send-mode socket was handed live messages: ${report}" || return 1
+    jq -e '.listener.late_arrivals == [{"addressed_to": "first", "made": "InvalidSignature"}]' \
+        <<<"${report}" >/dev/null ||
+        fail "the listener socket did not get the earlier address's late message, unackable" || return 1
+    jq -e '.kept.first_message_kept and .kept.second_subscribe_answer == "Ok"
+        and (.kept.second_message_opened | not)
+        and (.kept.collected_later | map(.delivered) == [1, 1])' <<<"${report}" >/dev/null ||
+        fail "a kept message did not hold back the next address on its socket: ${report}" || return 1
+    DETAIL="2+2 messages drained on one socket in send and listener mode; late messages wait for the next drain; listener socket gets the earlier key's late message, unackable; a kept message stops the socket serving the next key"
+}
+
 # Facts 1 and 2 for an invoice: a stock listener sends LEPIC's V3 I1 straight back.
 probe_invoice_bounce() {
     local i1="${STATE_DIR}/probe-i1.slate"
@@ -194,6 +222,7 @@ probe_non_slate_unacknowledged() {
 
 PROBE_STEPS=(
     "fact 4 relay sessions and addresses:probe_relay_sessions"
+    "fact 6 one socket drains mailboxes in turn:probe_mailbox_drains"
     "fact 1, 2 stock listener bounces a V3 I1:probe_invoice_bounce"
     "fact 2 stock reply drops the marker:probe_reply_drops_marker"
     "fact 5 policy decodes a marked V3 invoice:probe_policy_decode"
