@@ -24,7 +24,9 @@ use tracing::instrument::WithSubscriber;
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::address::EpicboxAddress;
-use crate::client::{Awaiting, CancelToken, ClientContext, ClientError, ErrorChain, TRANSPORT_ID};
+use crate::client::{
+    Awaiting, CancelToken, ClientContext, ClientError, ErrorChain, TRANSPORT_ID, post_frame,
+};
 use crate::crypto::{MessageError, ReceivedMessage};
 use crate::frame::{ClientFrame, RelayFrame, RelayMessageId, SlateFrame, WalletMode};
 use crate::prefilter::Admission;
@@ -180,6 +182,7 @@ impl Rejection {
 /// stay on the relay, so treat a failed drain as "retry later". A listener reconnects instead.
 pub struct Subscription {
     mode: Mode,
+    context: Arc<ClientContext>,
     shared: Arc<Shared>,
     cancel: CancelToken,
     task: tokio::sync::Mutex<Option<JoinHandle<Result<(), ClientError>>>>,
@@ -206,7 +209,7 @@ impl Subscription {
             Mode::Drain => info_span!("epicbox_drain", transport = TRANSPORT_ID.as_str(), relay),
         };
         let manager = Manager {
-            context,
+            context: Arc::clone(&context),
             shared: Arc::clone(&shared),
             commands: receiver,
             mode,
@@ -216,6 +219,7 @@ impl Subscription {
         let task = runtime.spawn(manager.run().instrument(span).with_current_subscriber());
         Ok(Self {
             mode,
+            context,
             shared,
             cancel,
             task: tokio::sync::Mutex::new(Some(task)),
@@ -292,6 +296,37 @@ impl Subscription {
             .cloned()
     }
 
+    /// Posts the handed-out envelope of `token` back to this subscription's address, exactly as
+    /// its sender signed it: the same `from`, `str` and `signature`, which is all the relay
+    /// checks. The relay queues the copy behind every message already waiting, and another
+    /// install listening on the same address can collect it. Acknowledge the original only
+    /// after this succeeds, or the message is lost if the post fails. Posting goes over a
+    /// short connection of its own, as sending does.
+    ///
+    /// Fails with [`ClientError::NotHandedOut`] when `token` is not a handed-out envelope, and
+    /// as [`crate::EpicboxClient::post`] does when the relay does not take the copy.
+    pub async fn requeue(&self, token: &AckToken) -> Result<(), ClientError> {
+        let signed = self
+            .shared
+            .lock()
+            .signed
+            .get(token)
+            .cloned()
+            .ok_or(ClientError::NotHandedOut)?;
+        let frame = ClientFrame::PostSlate {
+            from: signed.from,
+            to: self.context.identity.address().to_string(),
+            str: signed.str,
+            signature: signed.signature,
+        };
+        let span = info_span!(
+            "epicbox_requeue",
+            transport = TRANSPORT_ID.as_str(),
+            relay = %self.context.settings.endpoint.domain(),
+        );
+        post_frame(&self.context, &frame).instrument(span).await
+    }
+
     /// Stops the subscription and waits for its task, which returns promptly from any state.
     /// Returns the task's error the first time it is joined.
     pub async fn stop(&self) -> Result<(), ClientError> {
@@ -328,6 +363,7 @@ impl Subscription {
                 }
                 Some(Delivery::Local(_)) => {
                     inbox.handed_out.remove(token);
+                    inbox.signed.remove(token);
                     return Ok(());
                 }
                 Some(Delivery::Relay(msg_id)) => msg_id.clone(),
@@ -452,6 +488,14 @@ impl Delivery {
     }
 }
 
+/// The `from`, `str` and `signature` of a received `Slate` frame, as the relay sent them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Signed {
+    from: String,
+    str: String,
+    signature: String,
+}
+
 /// How a received message id relates to what this subscription has seen.
 enum Seen {
     New,
@@ -465,12 +509,14 @@ struct InboxState {
     /// Whether the relay may still deliver without the caller doing anything.
     expecting: bool,
     relay_version: Option<ProtocolVersion>,
-    ready: VecDeque<(Delivery, Envelope)>,
+    ready: VecDeque<(Delivery, Envelope, Signed)>,
     /// The total length of the slates in `ready`.
     ready_bytes: usize,
     rejected: VecDeque<Rejection>,
     /// Handed-out envelopes and rejections by token, with what acknowledging them means.
     handed_out: HashMap<AckToken, Delivery>,
+    /// The message as its sender signed it, for each handed-out envelope.
+    signed: HashMap<AckToken, Signed>,
     acknowledged: HashSet<RelayMessageId>,
     acknowledged_order: VecDeque<RelayMessageId>,
     local_tokens: u64,
@@ -487,6 +533,7 @@ impl InboxState {
             ready_bytes: 0,
             rejected: VecDeque::new(),
             handed_out: HashMap::new(),
+            signed: HashMap::new(),
             acknowledged: HashSet::new(),
             acknowledged_order: VecDeque::new(),
             local_tokens: 0,
@@ -494,10 +541,11 @@ impl InboxState {
     }
 
     fn take_envelope(&mut self, mode: Mode) -> Option<Result<Option<Envelope>, ClientError>> {
-        if let Some((delivery, envelope)) = self.ready.pop_front() {
+        if let Some((delivery, envelope, signed)) = self.ready.pop_front() {
             self.ready_bytes = self.ready_bytes.saturating_sub(envelope.wire().len());
             self.handed_out
                 .insert(envelope.ack_token().clone(), delivery);
+            self.signed.insert(envelope.ack_token().clone(), signed);
             return Some(Ok(Some(envelope)));
         }
         match self.state {
@@ -515,7 +563,7 @@ impl InboxState {
         } else if self
             .handed_out
             .values()
-            .chain(self.ready.iter().map(|(delivery, _)| delivery))
+            .chain(self.ready.iter().map(|(delivery, _, _)| delivery))
             .chain(self.rejected.iter().map(|rejection| &rejection.delivery))
             .any(|delivery| delivery.relay_id() == Some(msg_id))
         {
@@ -535,11 +583,17 @@ impl InboxState {
         }
     }
 
-    fn push(&mut self, msg_id: Option<RelayMessageId>, reply_to: Destination, wire: WireSlate) {
+    fn push(
+        &mut self,
+        msg_id: Option<RelayMessageId>,
+        reply_to: Destination,
+        wire: WireSlate,
+        signed: Signed,
+    ) {
         let delivery = self.delivery_for(msg_id);
         self.ready_bytes = self.ready_bytes.saturating_add(wire.len());
         let envelope = Envelope::new(delivery.ack_token(), Some(reply_to), wire);
-        self.ready.push_back((delivery, envelope));
+        self.ready.push_back((delivery, envelope, signed));
     }
 
     fn push_rejection(
@@ -572,6 +626,9 @@ impl InboxState {
     fn record_acknowledged(&mut self, msg_id: &RelayMessageId) {
         self.handed_out
             .retain(|_, delivery| delivery.relay_id() != Some(msg_id));
+        let handed_out = &self.handed_out;
+        self.signed
+            .retain(|token, _| handed_out.contains_key(token));
         if self.acknowledged.insert(msg_id.clone()) {
             self.acknowledged_order.push_back(msg_id.clone());
         }
@@ -1063,7 +1120,12 @@ impl<'a> Session<'a> {
                             MediaType::JSON,
                             received.plaintext.expose_str().to_owned(),
                         );
-                        shared.update(|inbox| inbox.push(msg_id, reply_to, wire));
+                        let signed = Signed {
+                            from: slate.from.clone(),
+                            str: slate.str.clone(),
+                            signature: slate.signature.clone(),
+                        };
+                        shared.update(|inbox| inbox.push(msg_id, reply_to, wire, signed));
                     }
                     Err(error) => {
                         warn!(
