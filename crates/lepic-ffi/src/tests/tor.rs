@@ -206,7 +206,9 @@ async fn serve_control(
                 }
             }
             "TAKEOWNERSHIP" | "RESETCONF" | "SETEVENTS" | "SETCONF" => "250 OK\r\n".to_owned(),
-            "SIGNAL" if line == "SIGNAL ACTIVE" => "250 OK\r\n".to_owned(),
+            "SIGNAL" if line == "SIGNAL ACTIVE" || line == "SIGNAL NEWNYM" => {
+                "250 OK\r\n".to_owned()
+            }
             "DEL_ONION" => {
                 onions.lock().unwrap().remove(words.next().unwrap());
                 "250 OK\r\n".to_owned()
@@ -452,11 +454,12 @@ async fn a_refresh_reaches_the_running_tor_and_keeps_the_onion() {
     pair.bob.refresh_tor(true).await.unwrap();
     let commands = commands.lock().unwrap().clone();
     assert_eq!(
-        commands[commands.len() - 4..],
+        commands[commands.len() - 5..],
         [
             "SETCONF DisableNetwork=1".to_owned(),
             "SETCONF DisableNetwork=0".to_owned(),
             "GETINFO net/listeners/socks".to_owned(),
+            "SIGNAL NEWNYM".to_owned(),
             "SIGNAL ACTIVE".to_owned(),
         ]
     );
@@ -471,6 +474,32 @@ async fn a_refresh_reaches_the_running_tor_and_keeps_the_onion() {
         kind(pair.bob.refresh_tor(false).await),
         WalletErrorKind::Locked
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_network_turns_the_running_tor_off_until_the_next_refresh() {
+    let (pair, network) = tor_pair().await;
+    pair.bob.tor_network_lost().await.unwrap();
+    let (events, commands) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+
+    let before = commands.lock().unwrap().len();
+    pair.bob.tor_network_lost().await.unwrap();
+    assert_eq!(
+        commands.lock().unwrap()[before..],
+        ["SETCONF DisableNetwork=1".to_owned()]
+    );
+    pair.bob.refresh_tor(true).await.unwrap();
+    assert_eq!(
+        commands.lock().unwrap().last().map(String::as_str),
+        Some("SIGNAL ACTIVE")
+    );
+    assert!(commands.lock().unwrap()[before..].contains(&"SETCONF DisableNetwork=0".to_owned()));
+    assert_eq!(pair.bob.tor_status().kind, TorStatusKind::Ready);
+    assert!(events.find(TorEventKind::Failed).is_none());
+
+    pair.bob.lock();
+    events.wait_for(TorEventKind::Stopped).await;
+    pair.bob.tor_network_lost().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

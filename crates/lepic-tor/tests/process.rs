@@ -263,7 +263,7 @@ async fn serve_control(
                     std::future::pending::<()>().await;
                     return;
                 }
-                Some("ACTIVE") => "250 OK\r\n".to_owned(),
+                Some("ACTIVE" | "NEWNYM") => "250 OK\r\n".to_owned(),
                 _ => {
                     write.write_all(b"250 OK\r\n").await.unwrap();
                     return;
@@ -638,12 +638,75 @@ async fn a_refresh_wakes_tor_and_after_a_network_change_reconnects_it() {
             "SETCONF DisableNetwork=1".to_owned(),
             "SETCONF DisableNetwork=0".to_owned(),
             "GETINFO net/listeners/socks".to_owned(),
+            "SIGNAL NEWNYM".to_owned(),
             "SIGNAL ACTIVE".to_owned(),
         ]
     );
     assert_eq!(tor.state(), ready);
     assert_eq!(tor.socks_address(), Some(socks_after(1)));
     assert_eq!(tor.wait_bootstrapped().await.unwrap(), socks_after(1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_network_turns_tor_off_until_the_next_refresh() {
+    let fake = FakeTor::start(HONEST).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.wait_bootstrapped().await.unwrap();
+    let onion = tor
+        .publish_onion(&SEED, listener.local_addr().unwrap().port())
+        .await
+        .unwrap();
+    let ready = TorState::Ready { onion };
+
+    let before = fake.commands().len();
+    tor.network_lost().await.unwrap();
+    assert_eq!(
+        fake.commands()[before..],
+        ["SETCONF DisableNetwork=1".to_owned()]
+    );
+    tor.network_lost().await.unwrap();
+    assert_eq!(fake.commands().len(), before + 1, "already off");
+    assert_eq!(tor.state(), ready);
+
+    // Any refresh turns it on again, as after a network change.
+    let before = fake.commands().len();
+    tor.refresh(false).await.unwrap();
+    assert_eq!(
+        fake.commands()[before..],
+        [
+            "SETCONF DisableNetwork=1".to_owned(),
+            "SETCONF DisableNetwork=0".to_owned(),
+            "GETINFO net/listeners/socks".to_owned(),
+            "SIGNAL NEWNYM".to_owned(),
+            "SIGNAL ACTIVE".to_owned(),
+        ]
+    );
+    assert_eq!(tor.state(), ready);
+    assert_eq!(tor.wait_bootstrapped().await.unwrap(), socks_after(1));
+    let before = fake.commands().len();
+    tor.refresh(false).await.unwrap();
+    assert_eq!(fake.commands()[before..], ["SIGNAL ACTIVE".to_owned()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_network_leaves_a_bootstrapping_tor_alone() {
+    let fake = FakeTor::start(Script {
+        bootstrap: Bootstrap::Stalls,
+        uploads: false,
+        ..HONEST
+    })
+    .await;
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.network_lost().await.unwrap();
+    assert!(
+        !fake
+            .commands()
+            .iter()
+            .any(|command| command.starts_with("SETCONF DisableNetwork")),
+        "a network turned off would stall the bootstrap"
+    );
+    assert!(matches!(tor.state(), TorState::Starting { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -213,8 +213,9 @@ impl EpicWallet {
     /// Tells the wallet's tor that the app is back: call it when the app returns to the
     /// foreground and, with `network_changed`, when the device's network changed (Wi-Fi to
     /// mobile data, or back online). Tor leaves its dormant state, and after a network change
-    /// it drops every connection, whose routes may be gone, and builds new ones: sends over
-    /// Tor in progress then fail, and the onion stays this wallet's and is republished by tor
+    /// it drops every connection, whose routes may be gone, builds new ones and forgets the
+    /// onion services that failed while the network was gone: sends over Tor in progress then
+    /// fail, and the onion stays this wallet's and is republished by tor
     /// itself, so `Ready` is not reported again. A bootstrap in progress gets its full time
     /// again. Returns once tor has taken the commands, in at most about 15 seconds.
     ///
@@ -226,6 +227,23 @@ impl EpicWallet {
     pub async fn refresh_tor(&self, network_changed: bool) -> Result<(), WalletError> {
         self.run("refresh_tor", |session| async move {
             session.refresh_tor(network_changed).await
+        })
+        .await
+    }
+
+    /// Tells the wallet's tor that the device has no network: call it when the device's
+    /// network goes (airplane mode, no signal). Tor turns its network off at once and makes no
+    /// connection attempt until the next [`EpicWallet::refresh_tor`], which turns it on again
+    /// whatever its `network_changed`; attempts made without a network would mark the relays
+    /// tor enters the Tor network through as unreachable, and slow its return for minutes.
+    /// Sends over Tor in progress fail. Does nothing when no tor runs, while the wallet is
+    /// locked, or while tor is still being started (a network turned off would stall it).
+    ///
+    /// A tor that does not answer is ended, as by [`EpicWallet::refresh_tor`]: the call fails
+    /// with `TorNotRunning`.
+    pub async fn tor_network_lost(&self) -> Result<(), WalletError> {
+        self.run("tor_network_lost", |session| async move {
+            session.tor_network_lost().await
         })
         .await
     }

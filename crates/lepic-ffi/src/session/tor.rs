@@ -487,6 +487,24 @@ impl Session {
         })
     }
 
+    /// Turns the running tor's network off until the next [`Session::refresh_tor`]. Nothing to
+    /// do without a running tor, locked or not, or while it is still being started.
+    pub(crate) async fn tor_network_lost(&self) -> Result<(), WalletError> {
+        let tor = {
+            let mut slot = lock(&self.tor_slot);
+            slot.settle();
+            match &*slot {
+                TorSlot::Running(run) => Arc::clone(&run.tor),
+                TorSlot::Starting(_) | TorSlot::Idle | TorSlot::Stopping(_) => return Ok(()),
+            }
+        };
+        // A tor that failed to answer has ended; its stream reports `Failed` and `Stopped`.
+        tor.network_lost().await.map_err(|failure| {
+            debug!(transport = "tor", error = %failure, "tor network not turned off");
+            tor_not_running()
+        })
+    }
+
     /// Where the `Sending` of a send goes, once tor can send; checked before anything is
     /// stored.
     fn tor_send_report(&self) -> Result<TorReport, WalletError> {

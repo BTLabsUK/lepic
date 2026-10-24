@@ -233,6 +233,9 @@ enum Request {
         network_changed: bool,
         reply: oneshot::Sender<Result<(), TorFailure>>,
     },
+    NetworkLost {
+        reply: oneshot::Sender<Result<(), TorFailure>>,
+    },
     Stop {
         reply: oneshot::Sender<()>,
     },
@@ -367,9 +370,11 @@ impl TorProcess {
 
     /// Tells tor the host is back: from a pause, or with another network when
     /// `network_changed`. Tor leaves its dormant state if it was in it; after a network change
-    /// it also closes every connection, whose routes may be gone, and builds new ones; sends in
-    /// progress fail, the onion stays added and tor publishes it again by itself, and the SOCKS
-    /// address may change. A bootstrap in progress gets its full stall time again.
+    /// it also closes every connection, whose routes may be gone, builds new ones on new
+    /// circuits and forgets the onion services that failed meanwhile; sends in progress fail,
+    /// the onion stays added and tor publishes it again by itself, and the SOCKS address may
+    /// change. A bootstrap in progress gets its full stall time again. After
+    /// [`TorProcess::network_lost`] any refresh turns the network back on, as after a change.
     ///
     /// A tor that does not answer in time is ended: the error is the [`FailureKind::Stopped`]
     /// (or, before the bootstrap, [`FailureKind::Start`]) failure the state shows too.
@@ -381,6 +386,22 @@ impl TorProcess {
                 network_changed,
                 reply,
             })
+            .await
+            .map_err(|_| stopped())?;
+        answer.await.map_err(|_| stopped())?
+    }
+
+    /// Tells tor the host has no network: tor turns its network off (`DisableNetwork`) at
+    /// once, closing every connection, so it makes no attempt that would fail meanwhile and
+    /// count its guards as unreachable. The next [`TorProcess::refresh`] turns it on again.
+    /// Nothing happens while tor bootstraps, which a network turned off would stall.
+    ///
+    /// A tor that does not answer in time is ended, as by [`TorProcess::refresh`].
+    pub async fn network_lost(&self) -> Result<(), TorFailure> {
+        let (reply, answer) = oneshot::channel();
+        let stopped = || TorFailure::new(FailureKind::Stopped, "tor stopped");
+        self.requests
+            .send(Request::NetworkLost { reply })
             .await
             .map_err(|_| stopped())?;
         answer.await.map_err(|_| stopped())?
@@ -573,6 +594,8 @@ async fn supervise(
         on_bootstrap(&mut progress, phase, timings, running.started);
     }
     state.send_replace(progress.visible());
+    // Turned off by `network_lost`, until a refresh turns it on.
+    let mut network_off = false;
     let failure = loop {
         let deadline = next_deadline(&progress);
         let armed = Instant::now();
@@ -597,14 +620,35 @@ async fn supervise(
                     let _ = reply.send(result);
                 }
                 Some(Request::Refresh { network_changed, reply }) => {
+                    let network_changed = network_changed || network_off;
                     match refresh(&running, &mut progress, network_changed, timings, &socks).await {
                         Ok(()) => {
+                            network_off = false;
                             let _ = reply.send(Ok(()));
                         }
                         Err(error) => {
                             let failure = exit_failure(
                                 &progress,
                                 format!("tor did not answer after a pause: {error}"),
+                            );
+                            let _ = reply.send(Err(failure.clone()));
+                            break failure;
+                        }
+                    }
+                }
+                Some(Request::NetworkLost { reply }) if !progress.bootstrapped || network_off => {
+                    let _ = reply.send(Ok(()));
+                }
+                Some(Request::NetworkLost { reply }) => {
+                    match network_lost(&running, &mut progress).await {
+                        Ok(()) => {
+                            network_off = true;
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(error) => {
+                            let failure = exit_failure(
+                                &progress,
+                                format!("tor did not answer when the network went: {error}"),
                             );
                             let _ = reply.send(Err(failure.clone()));
                             break failure;
@@ -859,8 +903,11 @@ async fn add_onion(
     Ok(())
 }
 
-/// `SIGNAL ACTIVE`, and after a network change `DisableNetwork` on and off and the new SOCKS
-/// address. An error leaves the connection closed or tor in a state the wallet did not ask
+/// `SIGNAL ACTIVE`, and after a network change `DisableNetwork` on and off, the new SOCKS
+/// address and `SIGNAL NEWNYM`. Turning the network off and on closes the old connections but
+/// keeps what tor learned of onion services while the network was gone: intro points that
+/// failed and directories asked within 15 minutes, which tor would not ask again, so a node or
+/// relay onion stayed unreachable for minutes (android-04). NEWNYM forgets them. An error leaves the connection closed or tor in a state the wallet did not ask
 /// for, so the caller ends tor.
 async fn refresh(
     running: &Running,
@@ -873,12 +920,31 @@ async fn refresh(
         running.control.set_network_enabled(false).await?;
         running.control.set_network_enabled(true).await?;
         socks.set(running.control.socks_address().await?);
+        running.control.signal_newnym().await?;
+        // An upload the network took away gets its full time again.
+        if progress.bootstrapped
+            && progress
+                .published
+                .as_ref()
+                .is_some_and(|published| !published.uploaded)
+        {
+            progress.publish_deadline = Some(after(Instant::now(), timings.publish));
+        }
     }
     running.control.signal_active().await?;
     if !progress.bootstrapped {
         progress.stall_deadline = after(Instant::now(), timings.stall);
     }
     debug!(network_changed, "tor refreshed");
+    Ok(())
+}
+
+/// `DisableNetwork` on. An upload waited for is not due while there is no network: the
+/// refresh that turns it on gives it its time again.
+async fn network_lost(running: &Running, progress: &mut Progress) -> Result<(), ControlError> {
+    running.control.set_network_enabled(false).await?;
+    progress.publish_deadline = None;
+    debug!(transport = "tor", "tor network off");
     Ok(())
 }
 
@@ -912,7 +978,7 @@ async fn fail(
             Request::Publish { reply, .. } => {
                 let _ = reply.send(Err(failure.clone()));
             }
-            Request::Refresh { reply, .. } => {
+            Request::Refresh { reply, .. } | Request::NetworkLost { reply } => {
                 let _ = reply.send(Err(failure.clone()));
             }
             Request::Stop { reply } => {
