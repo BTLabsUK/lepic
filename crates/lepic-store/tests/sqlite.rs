@@ -305,3 +305,36 @@ fn a_healthy_database_is_opened_in_place() {
         database_files(dir.path())
     );
 }
+
+#[test]
+fn pairing_secrets_are_not_in_the_database_file() {
+    use lepic_store::{PairingId, PairingSecrets};
+    let backend = SqliteBackend::create(context_key(1));
+    let mut pairing = support::pairing(1, 10);
+    pairing.secrets = PairingSecrets {
+        code: Some([0xa1; 16]),
+        na: Some([0xb2; 16]),
+        nb: Some([0xc3; 16]),
+        rc: Some([0xd4; 16]),
+    };
+    backend
+        .store()
+        .write(|repos| repos.put_pending_pairing(&pairing))
+        .unwrap();
+    let opened = backend
+        .store()
+        .read(|repos| repos.pending_pairing(PairingId([1; 16])))
+        .unwrap();
+    assert_eq!(opened, Some(pairing));
+    // The log holds the commit until a checkpoint, so look at the file and the log both.
+    let mut raw = fs::read(backend.path()).unwrap();
+    let mut wal = backend.path().into_os_string();
+    wal.push("-wal");
+    raw.extend(fs::read(wal).unwrap_or_default());
+    for byte in [0xa1_u8, 0xb2, 0xc3, 0xd4] {
+        assert!(
+            !raw.windows(16).any(|window| window == [byte; 16]),
+            "{byte:x}"
+        );
+    }
+}

@@ -6,6 +6,12 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::account::{AccountIndex, AccountRecord, AccountRepository};
+use crate::contact::{
+    self, CARD_KEY_LEN, ContactCap, ContactId, ContactKind, ContactMailbox, ContactOutboxEntry,
+    ContactOutboxId, ContactOutboxState, ContactRecord, ContactRepository, ContactState,
+    INVITE_ID_LEN, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PairingId, PairingRole, PairingState,
+    PeerCard, PendingPairing, PreviousHome, RelayBackoff, SealMode, StoredContactOutbox,
+};
 use crate::context::{self, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 use crate::encoding::{timestamp_from_column, timestamp_to_column, u64_from_column, u64_to_column};
 use crate::error::{Record, StoreError};
@@ -17,7 +23,7 @@ use crate::invoice::{
     self, InvoiceAddressIndex, InvoiceRepository, PendingInvoice, PendingInvoiceStatus,
 };
 use crate::output::{CommitmentBytes, KeyId, OutputRecord, OutputRepository, OutputStatus};
-use crate::peer::{AllowedPeer, PeerCapability, PeerRepository, PeerSupport};
+use crate::peer::{PeerCapability, PeerRepository, PeerSupport};
 use crate::relay::{
     InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };
@@ -951,17 +957,6 @@ impl InvoiceRepository for SqliteRepos<'_> {
     }
 }
 
-const ALLOWED_PEER_COLUMNS: &str = "key, address, label, added_at";
-
-fn decode_allowed_peer(row: &Row<'_>) -> Result<AllowedPeer, StoreError> {
-    Ok(AllowedPeer {
-        key: row.get(0)?,
-        address: row.get(1)?,
-        label: row.get(2)?,
-        added_at: timestamp_from_column(row.get(3)?, Record::AllowedPeer, "added at")?,
-    })
-}
-
 fn decode_peer_capability(row: &Row<'_>) -> Result<PeerCapability, StoreError> {
     let record = Record::PeerCapability;
     let support: String = row.get(1)?;
@@ -973,46 +968,6 @@ fn decode_peer_capability(row: &Row<'_>) -> Result<PeerCapability, StoreError> {
 }
 
 impl PeerRepository for SqliteRepos<'_> {
-    fn put_allowed_peer(&mut self, peer: &AllowedPeer) -> Result<(), StoreError> {
-        self.conn.execute(
-            &format!(
-                "INSERT INTO allowed_peers ({ALLOWED_PEER_COLUMNS}) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (key) DO UPDATE SET address = excluded.address,
-                     label = excluded.label, added_at = excluded.added_at"
-            ),
-            params![
-                peer.key,
-                peer.address,
-                peer.label,
-                timestamp_to_column(peer.added_at)?,
-            ],
-        )?;
-        Ok(())
-    }
-
-    fn allowed_peer(&self, key: &str) -> Result<Option<AllowedPeer>, StoreError> {
-        self.first(
-            &format!("SELECT {ALLOWED_PEER_COLUMNS} FROM allowed_peers WHERE key = ?1"),
-            [key],
-            decode_allowed_peer,
-        )
-    }
-
-    fn allowed_peers(&self) -> Result<Vec<AllowedPeer>, StoreError> {
-        self.collect(
-            &format!("SELECT {ALLOWED_PEER_COLUMNS} FROM allowed_peers ORDER BY added_at, key"),
-            [],
-            decode_allowed_peer,
-        )
-    }
-
-    fn remove_allowed_peer(&mut self, key: &str) -> Result<bool, StoreError> {
-        Ok(self
-            .conn
-            .execute("DELETE FROM allowed_peers WHERE key = ?1", [key])?
-            > 0)
-    }
-
     fn put_peer_capability(&mut self, capability: &PeerCapability) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO peer_capabilities (key, support, learned_at) VALUES (?1, ?2, ?3)
@@ -1242,4 +1197,589 @@ fn decode_imported_output(row: &Row<'_>) -> Result<ImportedOutput, StoreError> {
         height: Height::new(u64_from_column(row.get(3)?)),
         amount: Amount::new(u64_from_column(row.get(4)?)),
     })
+}
+
+fn fixed<const N: usize>(
+    bytes: &[u8],
+    record: Record,
+    field: &'static str,
+) -> Result<[u8; N], StoreError> {
+    <[u8; N]>::try_from(bytes).map_err(|_| corrupt(record, field))
+}
+
+fn optional_time(
+    value: Option<i64>,
+    record: Record,
+    field: &'static str,
+) -> Result<Option<Timestamp>, StoreError> {
+    value
+        .map(|value| timestamp_from_column(value, record, field))
+        .transpose()
+}
+
+fn optional_column(time: Option<Timestamp>) -> Result<Option<i64>, StoreError> {
+    time.map(timestamp_to_column).transpose()
+}
+
+/// The seven columns of a card slot, starting at `first`.
+fn decode_card(
+    row: &Row<'_>,
+    first: usize,
+    record: Record,
+) -> Result<Option<PeerCard>, StoreError> {
+    let at = |offset: usize| first.saturating_add(offset);
+    let bytes: Option<Vec<u8>> = row.get(first)?;
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    let sig_key: Option<Vec<u8>> = row.get(at(1))?;
+    let enc_key: Option<Vec<u8>> = row.get(at(2))?;
+    let hint_key: Option<Vec<u8>> = row.get(at(3))?;
+    let seq: Option<i64> = row.get(at(4))?;
+    let kind: Option<String> = row.get(at(5))?;
+    let name: Option<String> = row.get(at(6))?;
+    let (Some(sig_key), Some(enc_key), Some(hint_key), Some(seq), Some(kind), Some(name)) =
+        (sig_key, enc_key, hint_key, seq, kind, name)
+    else {
+        return Err(corrupt(record, "peer card"));
+    };
+    Ok(Some(PeerCard {
+        bytes,
+        sig_key: fixed(&sig_key, record, "peer sig key")?,
+        enc_key: fixed(&enc_key, record, "peer enc key")?,
+        hint_key: fixed(&hint_key, record, "peer hint key")?,
+        seq: decode_u32(seq, record, "card seq")?,
+        kind: decode_code(&kind, ContactKind::from_code, record, "kind")?,
+        claimed_name: name,
+    }))
+}
+
+const CONTACT_COLUMNS: &str = "contact_id, card, peer_sig_key, peer_enc_key, peer_hint_key, \
+    card_seq, kind, claimed_name, alt_card, alt_sig_key, alt_enc_key, alt_hint_key, alt_seq, \
+    alt_kind, alt_name, label, state, verified_at, allow_invoices, seal, last_sealed_in, \
+    app_contact, imported_from_backup, created_at, updated_at";
+
+fn decode_contact(row: &Row<'_>) -> Result<ContactRecord, StoreError> {
+    let record = Record::Contact;
+    let id: Vec<u8> = row.get(0)?;
+    let state: String = row.get(16)?;
+    let seal: String = row.get(19)?;
+    Ok(ContactRecord {
+        contact_id: ContactId(fixed(&id, record, "contact id")?),
+        peer: decode_card(row, 1, record)?,
+        alternate: decode_card(row, 8, record)?,
+        label: row.get(15)?,
+        state: decode_code(&state, ContactState::from_code, record, "state")?,
+        verified_at: optional_time(row.get(17)?, record, "verified at")?,
+        allow_invoices: row.get(18)?,
+        seal: decode_code(&seal, SealMode::from_code, record, "seal")?,
+        last_sealed_in: optional_time(row.get(20)?, record, "last sealed in")?,
+        app_contact: row.get(21)?,
+        imported_from_backup: row.get(22)?,
+        created_at: timestamp_from_column(row.get(23)?, record, "created at")?,
+        updated_at: timestamp_from_column(row.get(24)?, record, "updated at")?,
+    })
+}
+
+const PAIRING_COLUMNS: &str = "pairing_id, role, contact_id, sealed, invite_id, expires_at, \
+    our_mailbox, peer_mailbox, state, created_at";
+
+impl SqliteRepos<'_> {
+    fn contact_where(
+        &self,
+        condition: &str,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<ContactRecord>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {CONTACT_COLUMNS} FROM contacts WHERE {condition} \
+                 ORDER BY created_at, contact_id"
+            ),
+            params,
+            decode_contact,
+        )
+    }
+
+    fn decode_pairing(&self, row: &Row<'_>) -> Result<PendingPairing, StoreError> {
+        let record = Record::PendingPairing;
+        let id: Vec<u8> = row.get(0)?;
+        let role: String = row.get(1)?;
+        let contact_id: Vec<u8> = row.get(2)?;
+        let sealed: Vec<u8> = row.get(3)?;
+        let invite_id: Vec<u8> = row.get(4)?;
+        let state: String = row.get(8)?;
+        let pairing_id = PairingId(fixed(&id, record, "pairing id")?);
+        let invite_id: [u8; INVITE_ID_LEN] = fixed(&invite_id, record, "invite id")?;
+        Ok(PendingPairing {
+            pairing_id,
+            role: decode_code(&role, PairingRole::from_code, record, "role")?,
+            contact_id: ContactId(fixed(&contact_id, record, "contact id")?),
+            secrets: contact::open_secrets(self.key, pairing_id, &invite_id, &sealed)?,
+            invite_id,
+            expires_at: timestamp_from_column(row.get(5)?, record, "expires at")?,
+            our_mailbox: row.get(6)?,
+            peer_mailbox: row.get(7)?,
+            state: decode_code(&state, PairingState::from_code, record, "state")?,
+            created_at: timestamp_from_column(row.get(9)?, record, "created at")?,
+        })
+    }
+
+    fn require_contact(&self, id: ContactId) -> Result<(), StoreError> {
+        if self.exists(
+            "SELECT EXISTS (SELECT 1 FROM contacts WHERE contact_id = ?1)",
+            [&id.0[..]],
+        )? {
+            Ok(())
+        } else {
+            Err(StoreError::NotFound {
+                record: Record::Contact,
+            })
+        }
+    }
+}
+
+fn card_params(card: Option<&PeerCard>) -> [rusqlite::types::Value; 7] {
+    use rusqlite::types::Value;
+    match card {
+        Some(card) => [
+            Value::Blob(card.bytes.clone()),
+            Value::Blob(card.sig_key.to_vec()),
+            Value::Blob(card.enc_key.to_vec()),
+            Value::Blob(card.hint_key.to_vec()),
+            Value::Integer(i64::from(card.seq)),
+            Value::Text(card.kind.code().to_owned()),
+            Value::Text(card.claimed_name.clone()),
+        ],
+        None => [
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+        ],
+    }
+}
+
+fn decode_contact_outbox(row: &Row<'_>) -> Result<StoredContactOutbox, StoreError> {
+    let record = Record::ContactOutbox;
+    let id: i64 = row.get(0)?;
+    let contact_id: Vec<u8> = row.get(1)?;
+    let slate_id: Vec<u8> = row.get(2)?;
+    let stage: String = row.get(3)?;
+    let state: String = row.get(8)?;
+    Ok(StoredContactOutbox {
+        id: ContactOutboxId(u64::try_from(id).map_err(|_| corrupt(record, "id"))?),
+        entry: ContactOutboxEntry {
+            contact_id: ContactId(fixed(&contact_id, record, "contact id")?),
+            slate_id: decode_uuid(&slate_id, record)?,
+            stage: decode_code(&stage, SlateStage::from_code, record, "stage")?,
+            payload: row.get(4)?,
+            destination: row.get(5)?,
+            attempts: decode_u32(row.get(6)?, record, "attempts")?,
+            next_try_at: timestamp_from_column(row.get(7)?, record, "next try at")?,
+            state: decode_code(&state, ContactOutboxState::from_code, record, "state")?,
+            created_at: timestamp_from_column(row.get(9)?, record, "created at")?,
+            delivered_at: optional_time(row.get(10)?, record, "delivered at")?,
+        },
+    })
+}
+
+const CONTACT_OUTBOX_COLUMNS: &str = "id, contact_id, slate_id, stage, payload, destination, \
+    attempts, next_try_at, state, created_at, delivered_at";
+
+fn contact_outbox_id_column(id: ContactOutboxId) -> Result<i64, StoreError> {
+    i64::try_from(id.0).map_err(|_| StoreError::OutOfRange { field: "outbox id" })
+}
+
+impl ContactRepository for SqliteRepos<'_> {
+    fn put_contact(&mut self, contact: &ContactRecord) -> Result<(), StoreError> {
+        contact::check_contact(contact)?;
+        let id = &contact.contact_id.0[..];
+        if let Some(peer) = &contact.peer {
+            let taken = self.exists(
+                "SELECT EXISTS (SELECT 1 FROM contacts WHERE peer_sig_key = ?1 AND contact_id != ?2)",
+                params![&peer.sig_key[..], id],
+            )?;
+            if taken {
+                return Err(StoreError::Duplicate {
+                    record: Record::Contact,
+                });
+            }
+        }
+        let stored = self.exists(
+            "SELECT EXISTS (SELECT 1 FROM contacts WHERE contact_id = ?1)",
+            [id],
+        )?;
+        if !stored && self.count("SELECT COUNT(*) FROM contacts", [])? >= MAX_CONTACTS {
+            return Err(StoreError::ContactCapReached {
+                cap: ContactCap::Contacts,
+            });
+        }
+        let mut values: Vec<rusqlite::types::Value> = vec![id.to_vec().into()];
+        values.extend(card_params(contact.peer.as_ref()));
+        values.extend(card_params(contact.alternate.as_ref()));
+        values.extend([
+            contact.label.clone().into(),
+            contact.state.code().to_owned().into(),
+            optional_column(contact.verified_at)?.into(),
+            contact.allow_invoices.into(),
+            contact.seal.code().to_owned().into(),
+            optional_column(contact.last_sealed_in)?.into(),
+            contact.app_contact.clone().into(),
+            contact.imported_from_backup.into(),
+            timestamp_to_column(contact.created_at)?.into(),
+            timestamp_to_column(contact.updated_at)?.into(),
+        ]);
+        self.conn.execute(
+            &format!(
+                "INSERT OR REPLACE INTO contacts ({CONTACT_COLUMNS}) VALUES \
+                 (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
+                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"
+            ),
+            rusqlite::params_from_iter(values),
+        )?;
+        Ok(())
+    }
+
+    fn contact(&self, id: ContactId) -> Result<Option<ContactRecord>, StoreError> {
+        Ok(self
+            .contact_where("contact_id = ?1", [&id.0[..]])?
+            .into_iter()
+            .next())
+    }
+
+    fn contact_by_peer_sig_key(
+        &self,
+        key: &[u8; CARD_KEY_LEN],
+    ) -> Result<Option<ContactRecord>, StoreError> {
+        Ok(self
+            .contact_where("peer_sig_key = ?1", [&key[..]])?
+            .into_iter()
+            .next())
+    }
+
+    fn contact_by_peer_hint_key(
+        &self,
+        key: &[u8; CARD_KEY_LEN],
+    ) -> Result<Option<ContactRecord>, StoreError> {
+        Ok(self
+            .contact_where("peer_hint_key = ?1", [&key[..]])?
+            .into_iter()
+            .next())
+    }
+
+    fn contacts_by_our_mailbox(&self, address: &str) -> Result<Vec<ContactRecord>, StoreError> {
+        self.contact_where(
+            "contact_id IN (SELECT contact_id FROM contact_mailboxes \
+                 WHERE our_mailbox = ?1 OR prev_our_mailbox = ?1)",
+            [address],
+        )
+    }
+
+    fn contacts(&self) -> Result<Vec<ContactRecord>, StoreError> {
+        self.contact_where("1", [])
+    }
+
+    fn contacts_allowing_invoices(&self) -> Result<Vec<ContactRecord>, StoreError> {
+        self.contact_where("allow_invoices = 1", [])
+    }
+
+    fn delete_contact(&mut self, id: ContactId) -> Result<bool, StoreError> {
+        // The mailbox, its backoff and the outbox entries go with the contact by cascade.
+        Ok(self
+            .conn
+            .execute("DELETE FROM contacts WHERE contact_id = ?1", [&id.0[..]])?
+            > 0)
+    }
+
+    fn put_contact_mailbox(&mut self, mailbox: &ContactMailbox) -> Result<(), StoreError> {
+        contact::check_mailbox(mailbox)?;
+        self.require_contact(mailbox.contact_id)?;
+        let id = &mailbox.contact_id.0[..];
+        let previous = mailbox.previous.as_ref();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO contact_mailboxes (contact_id, peer_mailbox, our_mailbox, \
+                 home_relay, onion, prev_relay, prev_peer_mailbox, prev_our_mailbox, prev_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                mailbox.peer_mailbox,
+                mailbox.our_mailbox,
+                mailbox.home_relay,
+                mailbox.onion,
+                previous.map(|p| p.relay.as_str()),
+                previous.map(|p| p.peer_mailbox.as_str()),
+                previous.map(|p| p.our_mailbox.as_str()),
+                optional_column(previous.map(|p| p.until))?,
+            ],
+        )?;
+        self.conn.execute(
+            "DELETE FROM contact_relay_backoff WHERE contact_id = ?1",
+            [id],
+        )?;
+        for backoff in &mailbox.backoff {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO contact_relay_backoff (contact_id, relay, next_try_at, failures)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    id,
+                    backoff.relay,
+                    timestamp_to_column(backoff.next_try_at)?,
+                    i64::from(backoff.failures),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn contact_mailbox(&self, id: ContactId) -> Result<Option<ContactMailbox>, StoreError> {
+        let record = Record::ContactMailbox;
+        let Some(mut mailbox) = self.first(
+            "SELECT peer_mailbox, our_mailbox, home_relay, onion, prev_relay, prev_peer_mailbox, \
+                 prev_our_mailbox, prev_until FROM contact_mailboxes WHERE contact_id = ?1",
+            [&id.0[..]],
+            |row| {
+                let relay: Option<String> = row.get(4)?;
+                let peer: Option<String> = row.get(5)?;
+                let ours: Option<String> = row.get(6)?;
+                let until: Option<i64> = row.get(7)?;
+                let previous = match (relay, peer, ours, until) {
+                    (None, None, None, None) => None,
+                    (Some(relay), Some(peer_mailbox), Some(our_mailbox), Some(until)) => {
+                        Some(PreviousHome {
+                            relay,
+                            peer_mailbox,
+                            our_mailbox,
+                            until: timestamp_from_column(until, record, "previous until")?,
+                        })
+                    }
+                    _ => return Err(corrupt(record, "previous home")),
+                };
+                Ok(ContactMailbox {
+                    contact_id: id,
+                    peer_mailbox: row.get(0)?,
+                    our_mailbox: row.get(1)?,
+                    home_relay: row.get(2)?,
+                    onion: row.get(3)?,
+                    previous,
+                    backoff: Vec::new(),
+                })
+            },
+        )?
+        else {
+            return Ok(None);
+        };
+        mailbox.backoff = self.collect(
+            "SELECT relay, next_try_at, failures FROM contact_relay_backoff \
+             WHERE contact_id = ?1 ORDER BY relay",
+            [&id.0[..]],
+            |row| {
+                Ok(RelayBackoff {
+                    relay: row.get(0)?,
+                    next_try_at: timestamp_from_column(row.get(1)?, record, "next try at")?,
+                    failures: decode_u32(row.get(2)?, record, "failures")?,
+                })
+            },
+        )?;
+        Ok(Some(mailbox))
+    }
+
+    fn put_pending_pairing(&mut self, pairing: &PendingPairing) -> Result<(), StoreError> {
+        contact::check_pairing(pairing)?;
+        let id = &pairing.pairing_id.0[..];
+        let taken = self.exists(
+            "SELECT EXISTS (SELECT 1 FROM pairings WHERE invite_id = ?1 AND pairing_id != ?2)",
+            params![&pairing.invite_id[..], id],
+        )?;
+        if taken {
+            return Err(StoreError::Duplicate {
+                record: Record::PendingPairing,
+            });
+        }
+        let stored = self.exists(
+            "SELECT EXISTS (SELECT 1 FROM pairings WHERE pairing_id = ?1)",
+            [id],
+        )?;
+        if !stored && self.count("SELECT COUNT(*) FROM pairings", [])? >= MAX_PENDING_PAIRINGS {
+            return Err(StoreError::ContactCapReached {
+                cap: ContactCap::PendingPairings,
+            });
+        }
+        let sealed = contact::seal_secrets(self.key, pairing)?;
+        self.conn.execute(
+            &format!(
+                "INSERT OR REPLACE INTO pairings ({PAIRING_COLUMNS}) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+            ),
+            params![
+                id,
+                pairing.role.code(),
+                &pairing.contact_id.0[..],
+                sealed,
+                &pairing.invite_id[..],
+                timestamp_to_column(pairing.expires_at)?,
+                pairing.our_mailbox,
+                pairing.peer_mailbox,
+                pairing.state.code(),
+                timestamp_to_column(pairing.created_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn pending_pairing(&self, id: PairingId) -> Result<Option<PendingPairing>, StoreError> {
+        self.first(
+            &format!("SELECT {PAIRING_COLUMNS} FROM pairings WHERE pairing_id = ?1"),
+            [&id.0[..]],
+            |row| self.decode_pairing(row),
+        )
+    }
+
+    fn pending_pairing_by_invite(
+        &self,
+        invite_id: &[u8; INVITE_ID_LEN],
+    ) -> Result<Option<PendingPairing>, StoreError> {
+        self.first(
+            &format!("SELECT {PAIRING_COLUMNS} FROM pairings WHERE invite_id = ?1"),
+            [&invite_id[..]],
+            |row| self.decode_pairing(row),
+        )
+    }
+
+    fn pending_pairings(&self) -> Result<Vec<PendingPairing>, StoreError> {
+        self.collect(
+            &format!("SELECT {PAIRING_COLUMNS} FROM pairings ORDER BY created_at, pairing_id"),
+            [],
+            |row| self.decode_pairing(row),
+        )
+    }
+
+    fn delete_pending_pairing(&mut self, id: PairingId) -> Result<bool, StoreError> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM pairings WHERE pairing_id = ?1", [&id.0[..]])?
+            > 0)
+    }
+
+    fn prune_expired_pairings(&mut self, now: Timestamp) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM pairings WHERE expires_at <= ?1",
+            [timestamp_to_column(now)?],
+        )?)
+    }
+
+    fn enqueue_contact_outbox(
+        &mut self,
+        entry: &ContactOutboxEntry,
+    ) -> Result<ContactOutboxId, StoreError> {
+        contact::check_outbox(entry)?;
+        self.require_contact(entry.contact_id)?;
+        self.conn.execute(
+            "INSERT INTO contact_outbox (contact_id, slate_id, stage, payload, destination, \
+                 attempts, next_try_at, state, created_at, delivered_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                &entry.contact_id.0[..],
+                &entry.slate_id.as_bytes()[..],
+                entry.stage.code(),
+                entry.payload,
+                entry.destination,
+                i64::from(entry.attempts),
+                timestamp_to_column(entry.next_try_at)?,
+                entry.state.code(),
+                timestamp_to_column(entry.created_at)?,
+                optional_column(entry.delivered_at)?,
+            ],
+        )?;
+        u64::try_from(self.conn.last_insert_rowid())
+            .map(ContactOutboxId)
+            .map_err(|_| StoreError::OutOfRange { field: "outbox id" })
+    }
+
+    fn update_contact_outbox(
+        &mut self,
+        id: ContactOutboxId,
+        entry: &ContactOutboxEntry,
+    ) -> Result<(), StoreError> {
+        contact::check_outbox(entry)?;
+        self.require_contact(entry.contact_id)?;
+        let changed = self.conn.execute(
+            "UPDATE contact_outbox SET contact_id = ?2, slate_id = ?3, stage = ?4, payload = ?5, \
+                 destination = ?6, attempts = ?7, next_try_at = ?8, state = ?9, created_at = ?10, \
+                 delivered_at = ?11 WHERE id = ?1",
+            params![
+                contact_outbox_id_column(id)?,
+                &entry.contact_id.0[..],
+                &entry.slate_id.as_bytes()[..],
+                entry.stage.code(),
+                entry.payload,
+                entry.destination,
+                i64::from(entry.attempts),
+                timestamp_to_column(entry.next_try_at)?,
+                entry.state.code(),
+                timestamp_to_column(entry.created_at)?,
+                optional_column(entry.delivered_at)?,
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound {
+                record: Record::ContactOutbox,
+            });
+        }
+        Ok(())
+    }
+
+    fn contact_outbox_entry(
+        &self,
+        id: ContactOutboxId,
+    ) -> Result<Option<StoredContactOutbox>, StoreError> {
+        self.first(
+            &format!("SELECT {CONTACT_OUTBOX_COLUMNS} FROM contact_outbox WHERE id = ?1"),
+            [contact_outbox_id_column(id)?],
+            decode_contact_outbox,
+        )
+    }
+
+    fn contact_outbox(&self, contact: ContactId) -> Result<Vec<StoredContactOutbox>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {CONTACT_OUTBOX_COLUMNS} FROM contact_outbox WHERE contact_id = ?1 ORDER BY id"
+            ),
+            [&contact.0[..]],
+            decode_contact_outbox,
+        )
+    }
+
+    fn due_contact_outbox(&self, now: Timestamp) -> Result<Vec<StoredContactOutbox>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {CONTACT_OUTBOX_COLUMNS} FROM contact_outbox \
+                 WHERE state = 'queued' AND next_try_at <= ?1 ORDER BY next_try_at, id"
+            ),
+            [timestamp_to_column(now)?],
+            decode_contact_outbox,
+        )
+    }
+
+    fn redirect_contact_outbox(
+        &mut self,
+        contact: ContactId,
+        destination: &str,
+    ) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "UPDATE contact_outbox SET destination = ?2 \
+             WHERE contact_id = ?1 AND state != 'delivered' AND destination != ?2",
+            params![&contact.0[..], destination],
+        )?)
+    }
+
+    fn delete_contact_outbox(&mut self, id: ContactOutboxId) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM contact_outbox WHERE id = ?1",
+            [contact_outbox_id_column(id)?],
+        )?;
+        Ok(())
+    }
 }

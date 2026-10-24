@@ -3,6 +3,7 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::account::AccountIndex;
+use crate::contact::ContactCap;
 use crate::invoice::InvoiceCap;
 use crate::transaction::TxId;
 
@@ -19,7 +20,10 @@ pub enum Record {
     Setting,
     SchemaVersion,
     PendingInvoice,
-    AllowedPeer,
+    Contact,
+    ContactMailbox,
+    PendingPairing,
+    ContactOutbox,
     PeerCapability,
     InvoiceAddress,
     ImportedTransaction,
@@ -39,7 +43,10 @@ impl fmt::Display for Record {
             Self::Setting => "setting",
             Self::SchemaVersion => "schema version",
             Self::PendingInvoice => "pending invoice",
-            Self::AllowedPeer => "allowed peer",
+            Self::Contact => "contact",
+            Self::ContactMailbox => "contact mailbox",
+            Self::PendingPairing => "pending pairing",
+            Self::ContactOutbox => "contact outbox entry",
             Self::PeerCapability => "peer capability",
             Self::InvoiceAddress => "invoice address",
             Self::ImportedTransaction => "imported transaction",
@@ -100,6 +107,10 @@ pub enum StoreError {
     InvalidStatus { record: Record },
     #[error("{cap} cap on parked invoices is reached")]
     InvoiceCapReached { cap: InvoiceCap },
+    #[error("cap on {cap} is reached")]
+    ContactCapReached { cap: ContactCap },
+    #[error("contact backup is version {found}, which this build cannot read")]
+    UnsupportedBackup { found: u64 },
     #[error("operating system randomness is unavailable")]
     Randomness(#[source] getrandom::Error),
     #[error("store is unusable after a panic in another thread")]

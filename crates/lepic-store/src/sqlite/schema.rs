@@ -174,10 +174,98 @@ CREATE INDEX imported_outputs_status ON imported_outputs (status);
 CREATE INDEX imported_outputs_tx ON imported_outputs (tx_id);
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
+/// Paired contacts with their mailboxes, pairings in progress and the contact outbox. The invoice
+/// allowlist goes: invoice trust now lives on the contact (`allow_invoices`).
+const V6: &str = "
+CREATE TABLE contacts (
+    contact_id BLOB PRIMARY KEY,
+    card BLOB,
+    peer_sig_key BLOB UNIQUE,
+    peer_enc_key BLOB,
+    peer_hint_key BLOB,
+    card_seq INTEGER,
+    kind TEXT,
+    claimed_name TEXT,
+    alt_card BLOB,
+    alt_sig_key BLOB,
+    alt_enc_key BLOB,
+    alt_hint_key BLOB,
+    alt_seq INTEGER,
+    alt_kind TEXT,
+    alt_name TEXT,
+    label TEXT NOT NULL,
+    state TEXT NOT NULL,
+    verified_at INTEGER,
+    allow_invoices INTEGER NOT NULL,
+    seal TEXT NOT NULL,
+    last_sealed_in INTEGER,
+    app_contact TEXT,
+    imported_from_backup INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX contacts_hint_key ON contacts (peer_hint_key);
+CREATE INDEX contacts_allow_invoices ON contacts (created_at) WHERE allow_invoices = 1;
+
+CREATE TABLE contact_mailboxes (
+    contact_id BLOB PRIMARY KEY REFERENCES contacts (contact_id) ON DELETE CASCADE,
+    peer_mailbox TEXT NOT NULL,
+    our_mailbox TEXT NOT NULL,
+    home_relay TEXT NOT NULL,
+    onion TEXT,
+    prev_relay TEXT,
+    prev_peer_mailbox TEXT,
+    prev_our_mailbox TEXT,
+    prev_until INTEGER
+);
+CREATE INDEX contact_mailboxes_our ON contact_mailboxes (our_mailbox);
+CREATE INDEX contact_mailboxes_prev_our ON contact_mailboxes (prev_our_mailbox);
+
+CREATE TABLE contact_relay_backoff (
+    contact_id BLOB NOT NULL REFERENCES contacts (contact_id) ON DELETE CASCADE,
+    relay TEXT NOT NULL,
+    next_try_at INTEGER NOT NULL,
+    failures INTEGER NOT NULL,
+    PRIMARY KEY (contact_id, relay)
+);
+
+CREATE TABLE pairings (
+    pairing_id BLOB PRIMARY KEY,
+    role TEXT NOT NULL,
+    contact_id BLOB NOT NULL,
+    sealed BLOB NOT NULL,
+    invite_id BLOB NOT NULL UNIQUE,
+    expires_at INTEGER NOT NULL,
+    our_mailbox TEXT NOT NULL,
+    peer_mailbox TEXT,
+    state TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX pairings_expires ON pairings (expires_at);
+
+CREATE TABLE contact_outbox (
+    id INTEGER PRIMARY KEY,
+    contact_id BLOB NOT NULL REFERENCES contacts (contact_id) ON DELETE CASCADE,
+    slate_id BLOB NOT NULL,
+    stage TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    next_try_at INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    delivered_at INTEGER
+);
+CREATE INDEX contact_outbox_due ON contact_outbox (state, next_try_at);
+CREATE INDEX contact_outbox_contact ON contact_outbox (contact_id);
+
+DROP TABLE allowed_peers;
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

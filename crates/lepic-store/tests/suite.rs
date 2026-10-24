@@ -14,19 +14,20 @@ use jiff::Timestamp;
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_store::{
-    AccountIndex, AccountRecord, ChainCheck, ContextKey, ImportedKind, ImportedMessage,
-    ImportedOutput, ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus,
-    InvoiceAddressIndex, InvoiceCap, MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES,
-    MAX_PARKED_INVOICES_PER_SENDER, OpenReceipt, OutboxEntry, OutboxId, OutboxStatus, OutputStatus,
-    ParticipantId, PeerCapability, PeerSupport, PendingInvoiceStatus, PrivateContext, Record,
-    Repositories, SlateStage, StoreError, TransactionEntry, TxDirection, TxId, TxState,
-    WalletStore,
+    AccountIndex, AccountRecord, ChainCheck, ContactCap, ContactOutboxState, ContactState,
+    ContextKey, ImportSummary, ImportedKind, ImportedMessage, ImportedOutput, ImportedOutputStatus,
+    ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex, InvoiceCap, MAX_CONTACTS,
+    MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER,
+    MAX_PENDING_PAIRINGS, OpenReceipt, OutboxEntry, OutboxId, OutboxStatus, OutputStatus,
+    PairingId, PairingState, ParticipantId, PeerCapability, PeerSupport, PendingInvoiceStatus,
+    PrivateContext, Record, Repositories, SealMode, SlateStage, StoreError, TransactionEntry,
+    TxDirection, TxId, TxState, WalletStore, export_contacts, import_contacts,
 };
 use uuid::Uuid;
 
 use support::{
-    Backend, account, allowed_peer, context_key, invoice, invoice_id, output, peer_key, slate,
-    transaction,
+    Backend, account, contact, contact_id, contact_mailbox, contact_outbox_entry, context_key,
+    invoice, invoice_id, output, pairing, peer_card, peer_key, slate, transaction,
 };
 
 const DEFAULT: AccountIndex = AccountIndex(0);
@@ -540,7 +541,7 @@ fn failed_write_leaves_every_repository_unchanged<B: Backend>() {
             updated_at: support::time(1),
         })?;
         repos.park_invoice(&invoice(SLATE_B, 1, 1))?;
-        repos.put_allowed_peer(&allowed_peer(1, 1))?;
+        repos.put_contact(&contact(1, 1))?;
         repos.put_peer_capability(&PeerCapability {
             key: peer_key(1),
             support: PeerSupport::Lepic,
@@ -560,7 +561,7 @@ fn failed_write_leaves_every_repository_unchanged<B: Backend>() {
             && repos.setting("key")?.is_none()
             && repos.inbox("m")?.is_none()
             && repos.pending_invoices()?.is_empty()
-            && repos.allowed_peers()?.is_empty()
+            && repos.contacts()?.is_empty()
             && repos.peer_capability(&peer_key(1))?.is_none()
             && repos.invoice_address_index()?.is_none())
     })
@@ -1066,41 +1067,457 @@ fn invoice_address_index_is_unset_until_set_then_replaced<B: Backend>() {
     );
 }
 
-fn allowed_peers_are_replaced_by_key_listed_in_order_and_removed<B: Backend>() {
+fn contacts_round_trip_and_are_found_by_every_lookup<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
-    let mut moved = allowed_peer(1, 5);
-    moved.address = format!("{}@other.example:13420", peer_key(1));
-    moved.label = "renamed".to_owned();
+    let mut first = contact(1, 5);
+    first.allow_invoices = true;
+    first.state = ContactState::KeysChanged;
+    first.alternate = Some(peer_card(9));
+    first.verified_at = Some(support::time(3));
+    first.last_sealed_in = Some(support::time(4));
+    first.app_contact = Some("address-book-17".to_owned());
+    first.seal = SealMode::Degraded;
+    let mut waiting = contact(2, 1);
+    waiting.peer = None;
+    waiting.state = ContactState::PendingInvite;
     write(store, |repos| {
-        repos.put_allowed_peer(&allowed_peer(1, 5))?;
-        repos.put_allowed_peer(&allowed_peer(2, 1))?;
-        repos.put_allowed_peer(&moved)
+        repos.put_contact(&first)?;
+        repos.put_contact(&contact(3, 9))?;
+        repos.put_contact(&waiting)?;
+        repos.put_contact_mailbox(&contact_mailbox(1))?;
+        repos.put_contact_mailbox(&contact_mailbox(3))
     })
     .unwrap();
-    let (all, found, missing) = read(store, |repos| {
-        Ok((
-            repos.allowed_peers()?,
-            repos.allowed_peer(&peer_key(1))?,
-            repos.allowed_peer(&peer_key(3))?,
-        ))
+    let card = peer_card(1);
+    read(store, |repos| {
+        assert_eq!(repos.contact(contact_id(1))?, Some(first.clone()));
+        assert_eq!(repos.contact(contact_id(2))?, Some(waiting.clone()));
+        assert_eq!(repos.contact(contact_id(8))?, None);
+        assert_eq!(
+            repos.contact_by_peer_sig_key(&card.sig_key)?,
+            Some(first.clone())
+        );
+        assert_eq!(
+            repos.contact_by_peer_hint_key(&card.hint_key)?,
+            Some(first.clone())
+        );
+        assert_eq!(repos.contact_by_peer_sig_key(&[77; 32])?, None);
+        assert_eq!(
+            repos.contacts()?,
+            vec![waiting.clone(), first.clone(), contact(3, 9)]
+        );
+        assert_eq!(repos.contacts_allowing_invoices()?, vec![first.clone()]);
+        // Current and previous mailboxes both find the contact.
+        let current = repos.contacts_by_our_mailbox("our1@relay.example:443")?;
+        let previous = repos.contacts_by_our_mailbox("oldour1@old.example:443")?;
+        assert_eq!(current, vec![first.clone()]);
+        assert_eq!(previous, vec![first.clone()]);
+        assert!(
+            repos
+                .contacts_by_our_mailbox("nobody@relay.example")?
+                .is_empty()
+        );
+        Ok(())
     })
     .unwrap();
-    assert_eq!(all, vec![allowed_peer(2, 1), moved.clone()]);
-    assert_eq!(found, Some(moved));
-    assert_eq!(missing, None);
+}
+
+fn put_contact_replaces_by_id_and_keeps_the_peer_key_unique<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let mut renamed = contact(1, 5);
+    renamed.label = "renamed".to_owned();
+    renamed.allow_invoices = true;
+    write(store, |repos| {
+        repos.put_contact(&contact(1, 5))?;
+        repos.put_contact(&renamed)
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.contacts()).unwrap(),
+        vec![renamed]
+    );
+
+    let mut clash = contact(2, 6);
+    clash.peer = Some(peer_card(1));
+    let error = write(store, |repos| repos.put_contact(&clash)).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::Duplicate {
+            record: Record::Contact
+        }
+    ));
+    assert_eq!(read(store, |repos| repos.contacts()).unwrap().len(), 1);
+}
+
+fn contacts_stop_at_the_cap<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    write(store, |repos| {
+        for n in 0..MAX_CONTACTS {
+            let mut record = contact(0, 1);
+            let bytes = u32::try_from(n).unwrap().to_be_bytes();
+            record.contact_id = lepic_store::ContactId([
+                bytes[0], bytes[1], bytes[2], bytes[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            ]);
+            record.peer.as_mut().unwrap().sig_key = [
+                bytes[0], bytes[1], bytes[2], bytes[3], 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+                9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+            ];
+            repos.put_contact(&record)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let error = write(store, |repos| repos.put_contact(&contact(1, 1))).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::ContactCapReached {
+            cap: ContactCap::Contacts
+        }
+    ));
+    // An existing contact can still be replaced at the cap.
+    let first = read(store, |repos| repos.contacts()).unwrap().remove(0);
+    write(store, |repos| repos.put_contact(&first)).unwrap();
+}
+
+fn mailboxes_need_their_contact_and_go_with_it<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let error = write(store, |repos| {
+        repos.put_contact_mailbox(&contact_mailbox(1))
+    })
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::NotFound {
+            record: Record::Contact
+        }
+    ));
+
+    let mut moved = contact_mailbox(1);
+    moved.previous = None;
+    moved.onion = None;
+    moved.backoff = Vec::new();
+    write(store, |repos| {
+        repos.put_contact(&contact(1, 1))?;
+        repos.put_contact_mailbox(&contact_mailbox(1))
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.contact_mailbox(contact_id(1))).unwrap(),
+        Some(contact_mailbox(1))
+    );
+    write(store, |repos| repos.put_contact_mailbox(&moved)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.contact_mailbox(contact_id(1))).unwrap(),
+        Some(moved)
+    );
     let removed = write(store, |repos| {
+        repos.enqueue_contact_outbox(&contact_outbox_entry(1, 5))?;
         Ok((
-            repos.remove_allowed_peer(&peer_key(1))?,
-            repos.remove_allowed_peer(&peer_key(1))?,
+            repos.delete_contact(contact_id(1))?,
+            repos.delete_contact(contact_id(1))?,
         ))
     })
     .unwrap();
     assert_eq!(removed, (true, false));
+    read(store, |repos| {
+        assert_eq!(repos.contact_mailbox(contact_id(1))?, None);
+        assert!(repos.contact_outbox(contact_id(1))?.is_empty());
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn pairings_round_trip_with_their_secrets_and_are_found_by_invite<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let mut reply = pairing(2, 20);
+    reply.role = lepic_store::PairingRole::Invitee;
+    reply.state = PairingState::PendingReply;
+    reply.peer_mailbox = Some("peer@relay.example".to_owned());
+    write(store, |repos| {
+        repos.put_pending_pairing(&pairing(1, 10))?;
+        repos.put_pending_pairing(&reply)
+    })
+    .unwrap();
+    read(store, |repos| {
+        assert_eq!(
+            repos.pending_pairing(PairingId([1; 16]))?,
+            Some(pairing(1, 10))
+        );
+        assert_eq!(
+            repos.pending_pairing_by_invite(&[2; 8])?,
+            Some(reply.clone())
+        );
+        assert_eq!(repos.pending_pairing_by_invite(&[3; 8])?, None);
+        assert_eq!(
+            repos.pending_pairings()?,
+            vec![pairing(1, 10), reply.clone()]
+        );
+        Ok(())
+    })
+    .unwrap();
+
+    let mut clash = pairing(3, 30);
+    clash.invite_id = [1; 8];
+    let error = write(store, |repos| repos.put_pending_pairing(&clash)).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::Duplicate {
+            record: Record::PendingPairing
+        }
+    ));
+
+    let (pruned, left) = write(store, |repos| {
+        Ok((
+            repos.prune_expired_pairings(support::time(610))?,
+            repos.pending_pairings()?,
+        ))
+    })
+    .unwrap();
+    assert_eq!((pruned, left), (1, vec![reply]));
+    let removed = write(store, |repos| {
+        Ok((
+            repos.delete_pending_pairing(PairingId([2; 16]))?,
+            repos.delete_pending_pairing(PairingId([2; 16]))?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(removed, (true, false));
+}
+
+fn pairing_secrets_cannot_be_read_without_the_key<B: Backend>() {
+    let backend = B::create(context_key(1));
+    write(backend.store(), |repos| {
+        repos.put_pending_pairing(&pairing(1, 10))
+    })
+    .unwrap();
+    let other = backend.reopen(context_key(2));
+    let error = read(&other, |repos| repos.pending_pairing(PairingId([1; 16]))).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::Undecryptable {
+            record: Record::PendingPairing
+        }
+    ));
+}
+
+fn pending_pairings_stop_at_the_cap<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    write(store, |repos| {
+        for n in 0..MAX_PENDING_PAIRINGS {
+            let mut next = pairing(0, 10);
+            let id = u8::try_from(n).unwrap();
+            next.pairing_id = PairingId([id; 16]);
+            next.invite_id = [id; 8];
+            repos.put_pending_pairing(&next)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let error = write(store, |repos| repos.put_pending_pairing(&pairing(200, 10))).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::ContactCapReached {
+            cap: ContactCap::PendingPairings
+        }
+    ));
+    // Replacing one at the cap works; so does a new one after one is removed.
+    write(store, |repos| {
+        repos.put_pending_pairing(&pairing(1, 10))?;
+        repos.delete_pending_pairing(PairingId([1; 16]))?;
+        repos.put_pending_pairing(&pairing(200, 10))
+    })
+    .unwrap();
+}
+
+fn contact_outbox_lists_due_entries_and_follows_a_home_relay_move<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let now = support::time(100);
+    let (late, soon, later, id_delivered) = write(store, |repos| {
+        repos.put_contact(&contact(1, 1))?;
+        repos.put_contact(&contact(2, 1))?;
+        let late = repos.enqueue_contact_outbox(&contact_outbox_entry(1, 90))?;
+        let soon = repos.enqueue_contact_outbox(&contact_outbox_entry(1, 50))?;
+        let later = repos.enqueue_contact_outbox(&contact_outbox_entry(2, 500))?;
+        let mut delivered = contact_outbox_entry(2, 10);
+        delivered.state = ContactOutboxState::Delivered;
+        delivered.delivered_at = Some(support::time(11));
+        let id_delivered = repos.enqueue_contact_outbox(&delivered)?;
+        Ok((late, soon, later, id_delivered))
+    })
+    .unwrap();
     assert_eq!(
-        read(store, |repos| repos.allowed_peers()).unwrap(),
-        vec![allowed_peer(2, 1)]
+        read(store, |repos| repos.due_contact_outbox(now))
+            .unwrap()
+            .iter()
+            .map(|stored| stored.id)
+            .collect::<Vec<_>>(),
+        vec![soon, late]
     );
+
+    let changed = write(store, |repos| {
+        repos.redirect_contact_outbox(contact_id(2), "peer2@new.example:443")
+    })
+    .unwrap();
+    assert_eq!(changed, 1);
+    read(store, |repos| {
+        let moved = repos.contact_outbox_entry(later)?.unwrap();
+        assert_eq!(moved.entry.destination, "peer2@new.example:443");
+        let delivered = repos.contact_outbox_entry(id_delivered)?.unwrap();
+        assert_eq!(delivered.entry.destination, "peer2@relay.example:443");
+        Ok(())
+    })
+    .unwrap();
+
+    let mut sent = read(store, |repos| repos.contact_outbox_entry(soon))
+        .unwrap()
+        .unwrap()
+        .entry;
+    sent.state = ContactOutboxState::Delivered;
+    sent.attempts = 2;
+    sent.delivered_at = Some(now);
+    write(store, |repos| repos.update_contact_outbox(soon, &sent)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.contact_outbox_entry(soon))
+            .unwrap()
+            .unwrap()
+            .entry,
+        sent
+    );
+    assert_eq!(
+        read(store, |repos| repos.contact_outbox(contact_id(1)))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        read(store, |repos| repos.due_contact_outbox(now))
+            .unwrap()
+            .len(),
+        1
+    );
+    let missing = write(store, |repos| {
+        repos.update_contact_outbox(lepic_store::ContactOutboxId(999), &sent)
+    })
+    .unwrap_err();
+    assert!(matches!(
+        missing,
+        StoreError::NotFound {
+            record: Record::ContactOutbox
+        }
+    ));
+    write(store, |repos| repos.delete_contact_outbox(late)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.contact_outbox_entry(late)).unwrap(),
+        None
+    );
+}
+
+fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
+    let source = B::create(context_key(1));
+    let mut verified = contact(1, 1);
+    verified.state = ContactState::Verified;
+    verified.verified_at = Some(support::time(2));
+    verified.allow_invoices = true;
+    verified.app_contact = Some("book-1".to_owned());
+    let mut changed = contact(2, 2);
+    changed.state = ContactState::KeysChanged;
+    changed.alternate = Some(peer_card(8));
+    let mut waiting = contact(3, 3);
+    waiting.peer = None;
+    waiting.state = ContactState::PendingInvite;
+    write(source.store(), |repos| {
+        repos.put_contact(&verified)?;
+        repos.put_contact(&changed)?;
+        repos.put_contact(&waiting)?;
+        repos.put_contact_mailbox(&contact_mailbox(1))?;
+        repos.put_pending_pairing(&pairing(3, 3))
+    })
+    .unwrap();
+    let json = read(source.store(), |repos| export_contacts(repos)).unwrap();
+    assert!(json.starts_with("{\"version\":1,\"contacts\":["));
+    assert!(!json.contains("pairing") && !json.contains("secret"));
+
+    let target = B::create(context_key(2));
+    // A contact the target already holds is kept as it is.
+    let mut local = contact(2, 2);
+    local.label = "mine".to_owned();
+    write(target.store(), |repos| repos.put_contact(&local)).unwrap();
+    let mut conflicting = contact(5, 5);
+    conflicting.peer = Some(peer_card(1));
+    write(target.store(), |repos| repos.put_contact(&conflicting)).unwrap();
+    let summary = write(target.store(), |repos| import_contacts(repos, &json)).unwrap();
+    assert_eq!(
+        summary,
+        ImportSummary {
+            imported: 0,
+            skipped_existing: 1,
+            skipped_conflict: 1
+        }
+    );
+
+    let clean = B::create(context_key(3));
+    let summary = write(clean.store(), |repos| import_contacts(repos, &json)).unwrap();
+    assert_eq!(
+        summary,
+        ImportSummary {
+            imported: 2,
+            ..ImportSummary::default()
+        }
+    );
+    read(clean.store(), |repos| {
+        let mut expected = verified.clone();
+        expected.imported_from_backup = true;
+        let mut expected_changed = changed.clone();
+        expected_changed.imported_from_backup = true;
+        assert_eq!(repos.contacts()?, vec![expected, expected_changed]);
+        let mut mailbox = contact_mailbox(1);
+        mailbox.backoff = Vec::new();
+        assert_eq!(repos.contact_mailbox(contact_id(1))?, Some(mailbox));
+        assert!(repos.pending_pairings()?.is_empty());
+        // The restored store exports the same document.
+        assert_eq!(export_contacts(repos)?.len(), json.len());
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn contact_backup_rejects_unknown_versions_and_malformed_records<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let newer = write(store, |repos| {
+        import_contacts(repos, "{\"version\":2,\"contacts\":[]}")
+    })
+    .unwrap_err();
+    assert!(matches!(newer, StoreError::UnsupportedBackup { found: 2 }));
+    for bad in [
+        "not json",
+        "{\"version\":1}",
+        "{\"version\":1,\"contacts\":[{}]}",
+    ] {
+        let error = write(store, |repos| import_contacts(repos, bad)).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                StoreError::Corrupt {
+                    record: Record::Contact,
+                    ..
+                }
+            ),
+            "{bad}"
+        );
+    }
+    let empty = write(store, |repos| {
+        import_contacts(repos, "{\"version\":1,\"contacts\":[]}")
+    })
+    .unwrap();
+    assert_eq!(empty, ImportSummary::default());
 }
 
 fn peer_capability_is_replaced_by_later_evidence<B: Backend>() {
@@ -1374,7 +1791,16 @@ for_each_backend!(
     prune_removes_only_parked_invoices_received_before_the_cutoff,
     pending_invoice_bytes_cannot_be_read_without_the_key,
     invoice_address_index_is_unset_until_set_then_replaced,
-    allowed_peers_are_replaced_by_key_listed_in_order_and_removed,
+    contacts_round_trip_and_are_found_by_every_lookup,
+    put_contact_replaces_by_id_and_keeps_the_peer_key_unique,
+    contacts_stop_at_the_cap,
+    mailboxes_need_their_contact_and_go_with_it,
+    pairings_round_trip_with_their_secrets_and_are_found_by_invite,
+    pairing_secrets_cannot_be_read_without_the_key,
+    pending_pairings_stop_at_the_cap,
+    contact_outbox_lists_due_entries_and_follows_a_home_relay_move,
+    contact_backup_round_trips_without_secrets_and_flags_imports,
+    contact_backup_rejects_unknown_versions_and_malformed_records,
     peer_capability_is_replaced_by_later_evidence,
     imported_transactions_round_trip_and_are_replaced,
     imported_records_need_their_transaction_and_bounded_messages,

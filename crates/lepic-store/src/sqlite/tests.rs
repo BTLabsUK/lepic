@@ -14,7 +14,7 @@ use crate::account::{AccountIndex, AccountRecord};
 use crate::context::ContextKey;
 use crate::error::StoreError;
 use crate::invoice::{InvoiceAddressIndex, PendingInvoice, PendingInvoiceStatus};
-use crate::peer::{AllowedPeer, PeerSupport};
+use crate::peer::PeerSupport;
 use crate::store::WalletStore;
 use crate::transaction::{TxId, TxState};
 
@@ -73,16 +73,12 @@ fn check_v2_seed(store: &SqliteStore) {
 fn check_v3_seed(store: &SqliteStore) {
     let counterparty = store.read(|repos| repos.counterparty(TxId(1))).unwrap();
     assert_eq!(counterparty.as_deref(), Some("peer@relay"));
-    let (invoices, peers, index) = store
+    let (invoices, index) = store
         .read(|repos| {
-            Ok::<_, StoreError>((
-                repos.pending_invoices()?,
-                repos.allowed_peers()?,
-                repos.invoice_address_index()?,
-            ))
+            Ok::<_, StoreError>((repos.pending_invoices()?, repos.invoice_address_index()?))
         })
         .unwrap();
-    assert!(invoices.is_empty() && peers.is_empty());
+    assert!(invoices.is_empty());
     assert_eq!(index, None);
     let parked = PendingInvoice {
         slate_id: uuid::Uuid::from_bytes([4; 16]),
@@ -99,29 +95,35 @@ fn check_v3_seed(store: &SqliteStore) {
 }
 
 fn check_v4_seed(store: &SqliteStore) {
-    let (peers, capability, index) = store
+    let (capability, index) = store
         .read(|repos| {
             Ok::<_, StoreError>((
-                repos.allowed_peers()?,
                 repos.peer_capability("key")?,
                 repos.invoice_address_index()?,
             ))
         })
         .unwrap();
-    assert_eq!(
-        peers,
-        vec![AllowedPeer {
-            key: "key".to_owned(),
-            address: "key@relay".to_owned(),
-            label: "shop".to_owned(),
-            added_at: Timestamp::from_nanosecond(7).unwrap(),
-        }]
-    );
+    // The invoice allowlist is gone; the contact tables take its place.
+    let conn = store.conn.lock().unwrap();
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('allowed_peers', 'contacts', 'pairings', 'contact_outbox', 'contact_mailboxes')")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(!tables.iter().any(|name| name == "allowed_peers"));
+    assert_eq!(tables.len(), 4);
+    drop(conn);
     assert_eq!(
         capability.map(|capability| capability.support),
         Some(PeerSupport::NoInvoices)
     );
     assert_eq!(index, InvoiceAddressIndex::new(3));
+}
+
+fn check_v6_seed(store: &SqliteStore) {
+    assert!(store.read(|repos| repos.contacts()).unwrap().is_empty());
 }
 
 fn check_v5_seed(store: &SqliteStore) {
@@ -182,6 +184,11 @@ const UPGRADES: &[UpgradeCase] = &[
                    amount_debited, created_at, updated_at)
                VALUES (1, 0, 'incoming', 'received', 5, 0, 1, 1);",
         check: check_v5_seed,
+    },
+    UpgradeCase {
+        from: 6,
+        seed: "",
+        check: check_v6_seed,
     },
 ];
 

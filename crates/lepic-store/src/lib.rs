@@ -4,6 +4,9 @@
 //! implementation; [`MemoryStore`] behaves the same without a file, for tests of the layers above.
 
 mod account;
+mod contact;
+#[cfg(feature = "sqlite")]
+mod contact_backup;
 mod context;
 mod encoding;
 mod error;
@@ -23,6 +26,15 @@ mod store;
 mod transaction;
 
 pub use account::{AccountIndex, AccountRecord, AccountRepository};
+pub use contact::{
+    CARD_KEY_LEN, CONTACT_ID_LEN, ContactCap, ContactId, ContactKind, ContactMailbox,
+    ContactOutboxEntry, ContactOutboxId, ContactOutboxState, ContactRecord, ContactRepository,
+    ContactState, INVITE_ID_LEN, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PairingId, PairingRole,
+    PairingSecrets, PairingState, PeerCard, PendingPairing, PreviousHome, RelayBackoff, SealMode,
+    StoredContactOutbox,
+};
+#[cfg(feature = "sqlite")]
+pub use contact_backup::{CONTACT_BACKUP_VERSION, ImportSummary, export_contacts, import_contacts};
 pub use context::{CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 pub use error::{DatabaseError, Record, StoreError};
 pub use imported::{
@@ -38,7 +50,7 @@ pub use output::{
     COMMITMENT_LEN, CommitmentBytes, KEY_ID_LEN, KeyId, OutputRecord, OutputRepository,
     OutputStatus,
 };
-pub use peer::{AllowedPeer, PeerCapability, PeerRepository, PeerSupport};
+pub use peer::{PeerCapability, PeerRepository, PeerSupport};
 pub use relay::{
     InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };

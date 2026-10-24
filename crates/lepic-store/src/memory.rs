@@ -8,6 +8,11 @@ use lepic_primitives::amount::Height;
 use uuid::Uuid;
 
 use crate::account::{AccountIndex, AccountRecord, AccountRepository};
+use crate::contact::{
+    self, CARD_KEY_LEN, ContactCap, ContactId, ContactMailbox, ContactOutboxEntry, ContactOutboxId,
+    ContactOutboxState, ContactRecord, ContactRepository, INVITE_ID_LEN, MAX_CONTACTS,
+    MAX_PENDING_PAIRINGS, PairingId, PairingSecrets, PendingPairing, StoredContactOutbox,
+};
 use crate::context::{self, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 use crate::encoding::timestamp_to_column;
 use crate::error::{Record, StoreError};
@@ -18,7 +23,7 @@ use crate::invoice::{
     self, InvoiceAddressIndex, InvoiceRepository, PendingInvoice, PendingInvoiceStatus,
 };
 use crate::output::{CommitmentBytes, OutputRecord, OutputRepository, OutputStatus};
-use crate::peer::{AllowedPeer, PeerCapability, PeerRepository};
+use crate::peer::{PeerCapability, PeerRepository};
 use crate::relay::{
     InboxEntry, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };
@@ -45,8 +50,11 @@ struct State {
     outbox: BTreeMap<OutboxId, OutboxEntry>,
     settings: BTreeMap<String, String>,
     pending_invoices: BTreeMap<[u8; 16], SealedInvoice>,
-    allowed_peers: BTreeMap<String, AllowedPeer>,
     peer_capabilities: BTreeMap<String, PeerCapability>,
+    contacts: BTreeMap<ContactId, ContactRecord>,
+    contact_mailboxes: BTreeMap<ContactId, ContactMailbox>,
+    pairings: BTreeMap<PairingId, SealedPairing>,
+    contact_outbox: BTreeMap<ContactOutboxId, ContactOutboxEntry>,
     invoice_address_index: Option<InvoiceAddressIndex>,
     imported_transactions: BTreeMap<TxId, ImportedTransaction>,
     imported_outputs: BTreeMap<CommitmentBytes, ImportedOutput>,
@@ -56,6 +64,13 @@ struct State {
 #[derive(Debug, Clone)]
 struct SealedInvoice {
     fields: PendingInvoice,
+    sealed: Vec<u8>,
+}
+
+/// A pending pairing as the SQLite row holds it: its secrets sealed, the other fields in clear.
+#[derive(Debug, Clone)]
+struct SealedPairing {
+    fields: PendingPairing,
     sealed: Vec<u8>,
 }
 
@@ -648,28 +663,6 @@ impl InvoiceRepository for MemoryRepos<'_> {
 }
 
 impl PeerRepository for MemoryRepos<'_> {
-    fn put_allowed_peer(&mut self, peer: &AllowedPeer) -> Result<(), StoreError> {
-        timestamp_to_column(peer.added_at)?;
-        self.state
-            .allowed_peers
-            .insert(peer.key.clone(), peer.clone());
-        Ok(())
-    }
-
-    fn allowed_peer(&self, key: &str) -> Result<Option<AllowedPeer>, StoreError> {
-        Ok(self.state.allowed_peers.get(key).cloned())
-    }
-
-    fn allowed_peers(&self) -> Result<Vec<AllowedPeer>, StoreError> {
-        let mut peers: Vec<AllowedPeer> = self.state.allowed_peers.values().cloned().collect();
-        peers.sort_by(|a, b| (a.added_at, &a.key).cmp(&(b.added_at, &b.key)));
-        Ok(peers)
-    }
-
-    fn remove_allowed_peer(&mut self, key: &str) -> Result<bool, StoreError> {
-        Ok(self.state.allowed_peers.remove(key).is_some())
-    }
-
     fn put_peer_capability(&mut self, capability: &PeerCapability) -> Result<(), StoreError> {
         timestamp_to_column(capability.learned_at)?;
         self.state
@@ -742,5 +735,298 @@ impl ImportedRepository for MemoryRepos<'_> {
             .filter(|output| output.status == status)
             .cloned()
             .collect())
+    }
+}
+
+impl MemoryRepos<'_> {
+    fn open_pairing(&self, stored: &SealedPairing) -> Result<PendingPairing, StoreError> {
+        let mut pairing = stored.fields.clone();
+        pairing.secrets = contact::open_secrets(
+            self.key,
+            pairing.pairing_id,
+            &pairing.invite_id,
+            &stored.sealed,
+        )?;
+        Ok(pairing)
+    }
+
+    fn contacts_where(&self, keep: impl Fn(&ContactRecord) -> bool) -> Vec<ContactRecord> {
+        let mut found: Vec<ContactRecord> = self
+            .state
+            .contacts
+            .values()
+            .filter(|contact| keep(contact))
+            .cloned()
+            .collect();
+        found.sort_by_key(|contact| (contact.created_at, contact.contact_id));
+        found
+    }
+
+    fn outbox_where(&self, keep: impl Fn(&ContactOutboxEntry) -> bool) -> Vec<StoredContactOutbox> {
+        self.state
+            .contact_outbox
+            .iter()
+            .filter(|(_, entry)| keep(entry))
+            .map(|(id, entry)| StoredContactOutbox {
+                id: *id,
+                entry: entry.clone(),
+            })
+            .collect()
+    }
+}
+
+impl ContactRepository for MemoryRepos<'_> {
+    fn put_contact(&mut self, contact: &ContactRecord) -> Result<(), StoreError> {
+        contact::check_contact(contact)?;
+        if let Some(peer) = &contact.peer {
+            let taken = self.state.contacts.values().any(|other| {
+                other.contact_id != contact.contact_id
+                    && other.peer.as_ref().map(|card| card.sig_key) == Some(peer.sig_key)
+            });
+            if taken {
+                return Err(StoreError::Duplicate {
+                    record: Record::Contact,
+                });
+            }
+        }
+        if !self.state.contacts.contains_key(&contact.contact_id)
+            && self.state.contacts.len() >= MAX_CONTACTS
+        {
+            return Err(StoreError::ContactCapReached {
+                cap: ContactCap::Contacts,
+            });
+        }
+        self.state
+            .contacts
+            .insert(contact.contact_id, contact.clone());
+        Ok(())
+    }
+
+    fn contact(&self, id: ContactId) -> Result<Option<ContactRecord>, StoreError> {
+        Ok(self.state.contacts.get(&id).cloned())
+    }
+
+    fn contact_by_peer_sig_key(
+        &self,
+        key: &[u8; CARD_KEY_LEN],
+    ) -> Result<Option<ContactRecord>, StoreError> {
+        Ok(self
+            .contacts_where(|contact| contact.peer.as_ref().is_some_and(|c| &c.sig_key == key))
+            .into_iter()
+            .next())
+    }
+
+    fn contact_by_peer_hint_key(
+        &self,
+        key: &[u8; CARD_KEY_LEN],
+    ) -> Result<Option<ContactRecord>, StoreError> {
+        Ok(self
+            .contacts_where(|contact| contact.peer.as_ref().is_some_and(|c| &c.hint_key == key))
+            .into_iter()
+            .next())
+    }
+
+    fn contacts_by_our_mailbox(&self, address: &str) -> Result<Vec<ContactRecord>, StoreError> {
+        Ok(self.contacts_where(|contact| {
+            self.state
+                .contact_mailboxes
+                .get(&contact.contact_id)
+                .is_some_and(|mailbox| {
+                    mailbox.our_mailbox == address
+                        || mailbox
+                            .previous
+                            .as_ref()
+                            .is_some_and(|previous| previous.our_mailbox == address)
+                })
+        }))
+    }
+
+    fn contacts(&self) -> Result<Vec<ContactRecord>, StoreError> {
+        Ok(self.contacts_where(|_| true))
+    }
+
+    fn contacts_allowing_invoices(&self) -> Result<Vec<ContactRecord>, StoreError> {
+        Ok(self.contacts_where(|contact| contact.allow_invoices))
+    }
+
+    fn delete_contact(&mut self, id: ContactId) -> Result<bool, StoreError> {
+        self.state.contact_mailboxes.remove(&id);
+        self.state
+            .contact_outbox
+            .retain(|_, entry| entry.contact_id != id);
+        Ok(self.state.contacts.remove(&id).is_some())
+    }
+
+    fn put_contact_mailbox(&mut self, mailbox: &ContactMailbox) -> Result<(), StoreError> {
+        contact::check_mailbox(mailbox)?;
+        if !self.state.contacts.contains_key(&mailbox.contact_id) {
+            return Err(StoreError::NotFound {
+                record: Record::Contact,
+            });
+        }
+        self.state
+            .contact_mailboxes
+            .insert(mailbox.contact_id, mailbox.clone());
+        Ok(())
+    }
+
+    fn contact_mailbox(&self, id: ContactId) -> Result<Option<ContactMailbox>, StoreError> {
+        Ok(self.state.contact_mailboxes.get(&id).cloned())
+    }
+
+    fn put_pending_pairing(&mut self, pairing: &PendingPairing) -> Result<(), StoreError> {
+        contact::check_pairing(pairing)?;
+        let taken = self.state.pairings.values().any(|other| {
+            other.fields.pairing_id != pairing.pairing_id
+                && other.fields.invite_id == pairing.invite_id
+        });
+        if taken {
+            return Err(StoreError::Duplicate {
+                record: Record::PendingPairing,
+            });
+        }
+        if !self.state.pairings.contains_key(&pairing.pairing_id)
+            && self.state.pairings.len() >= MAX_PENDING_PAIRINGS
+        {
+            return Err(StoreError::ContactCapReached {
+                cap: ContactCap::PendingPairings,
+            });
+        }
+        let sealed = contact::seal_secrets(self.key, pairing)?;
+        let mut fields = pairing.clone();
+        fields.secrets = PairingSecrets::default();
+        self.state
+            .pairings
+            .insert(pairing.pairing_id, SealedPairing { fields, sealed });
+        Ok(())
+    }
+
+    fn pending_pairing(&self, id: PairingId) -> Result<Option<PendingPairing>, StoreError> {
+        self.state
+            .pairings
+            .get(&id)
+            .map(|stored| self.open_pairing(stored))
+            .transpose()
+    }
+
+    fn pending_pairing_by_invite(
+        &self,
+        invite_id: &[u8; INVITE_ID_LEN],
+    ) -> Result<Option<PendingPairing>, StoreError> {
+        self.state
+            .pairings
+            .values()
+            .find(|stored| &stored.fields.invite_id == invite_id)
+            .map(|stored| self.open_pairing(stored))
+            .transpose()
+    }
+
+    fn pending_pairings(&self) -> Result<Vec<PendingPairing>, StoreError> {
+        let mut stored: Vec<&SealedPairing> = self.state.pairings.values().collect();
+        stored.sort_by_key(|s| (s.fields.created_at, s.fields.pairing_id));
+        stored.into_iter().map(|s| self.open_pairing(s)).collect()
+    }
+
+    fn delete_pending_pairing(&mut self, id: PairingId) -> Result<bool, StoreError> {
+        Ok(self.state.pairings.remove(&id).is_some())
+    }
+
+    fn prune_expired_pairings(&mut self, now: Timestamp) -> Result<usize, StoreError> {
+        let before = self.state.pairings.len();
+        self.state
+            .pairings
+            .retain(|_, stored| stored.fields.expires_at > now);
+        Ok(before.saturating_sub(self.state.pairings.len()))
+    }
+
+    fn enqueue_contact_outbox(
+        &mut self,
+        entry: &ContactOutboxEntry,
+    ) -> Result<ContactOutboxId, StoreError> {
+        contact::check_outbox(entry)?;
+        if !self.state.contacts.contains_key(&entry.contact_id) {
+            return Err(StoreError::NotFound {
+                record: Record::Contact,
+            });
+        }
+        let id = next_key(
+            &self.state.contact_outbox,
+            ContactOutboxId(1),
+            |ContactOutboxId(last)| last.checked_add(1).map(ContactOutboxId),
+        )
+        .ok_or(StoreError::OutOfRange { field: "outbox id" })?;
+        self.state.contact_outbox.insert(id, entry.clone());
+        Ok(id)
+    }
+
+    fn update_contact_outbox(
+        &mut self,
+        id: ContactOutboxId,
+        entry: &ContactOutboxEntry,
+    ) -> Result<(), StoreError> {
+        contact::check_outbox(entry)?;
+        if !self.state.contacts.contains_key(&entry.contact_id) {
+            return Err(StoreError::NotFound {
+                record: Record::Contact,
+            });
+        }
+        match self.state.contact_outbox.get_mut(&id) {
+            Some(stored) => {
+                *stored = entry.clone();
+                Ok(())
+            }
+            None => Err(StoreError::NotFound {
+                record: Record::ContactOutbox,
+            }),
+        }
+    }
+
+    fn contact_outbox_entry(
+        &self,
+        id: ContactOutboxId,
+    ) -> Result<Option<StoredContactOutbox>, StoreError> {
+        Ok(self
+            .state
+            .contact_outbox
+            .get(&id)
+            .map(|entry| StoredContactOutbox {
+                id,
+                entry: entry.clone(),
+            }))
+    }
+
+    fn contact_outbox(&self, contact: ContactId) -> Result<Vec<StoredContactOutbox>, StoreError> {
+        Ok(self.outbox_where(|entry| entry.contact_id == contact))
+    }
+
+    fn due_contact_outbox(&self, now: Timestamp) -> Result<Vec<StoredContactOutbox>, StoreError> {
+        let mut due = self.outbox_where(|entry| {
+            entry.state == ContactOutboxState::Queued && entry.next_try_at <= now
+        });
+        due.sort_by_key(|stored| (stored.entry.next_try_at, stored.id));
+        Ok(due)
+    }
+
+    fn redirect_contact_outbox(
+        &mut self,
+        contact: ContactId,
+        destination: &str,
+    ) -> Result<usize, StoreError> {
+        let mut changed = 0_usize;
+        for entry in self.state.contact_outbox.values_mut() {
+            if entry.contact_id == contact
+                && entry.state != ContactOutboxState::Delivered
+                && entry.destination != destination
+            {
+                destination.clone_into(&mut entry.destination);
+                changed = changed.saturating_add(1);
+            }
+        }
+        Ok(changed)
+    }
+
+    fn delete_contact_outbox(&mut self, id: ContactOutboxId) -> Result<(), StoreError> {
+        self.state.contact_outbox.remove(&id);
+        Ok(())
     }
 }

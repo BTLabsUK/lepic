@@ -10,9 +10,12 @@ use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::ser::{ProtocolVersion, deserialize};
 use lepic_store::{
-    AccountIndex, AccountRecord, AllowedPeer, CONTEXT_KEY_LEN, ContextKey, KEY_ID_LEN, KeyId,
-    MemoryStore, OutputRecord, OutputStatus, PendingInvoice, PendingInvoiceStatus, SlateStage,
-    SqliteStore, StoredSlate, TransactionEntry, TxDirection, TxState, WalletStore,
+    AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContactId, ContactKind, ContactMailbox,
+    ContactOutboxEntry, ContactOutboxState, ContactRecord, ContactState, ContextKey, KEY_ID_LEN,
+    KeyId, MemoryStore, OutputRecord, OutputStatus, PairingId, PairingRole, PairingSecrets,
+    PairingState, PeerCard, PendingInvoice, PendingInvoiceStatus, PendingPairing, PreviousHome,
+    RelayBackoff, SealMode, SlateStage, SqliteStore, StoredSlate, TransactionEntry, TxDirection,
+    TxState, WalletStore,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -182,11 +185,94 @@ pub fn invoice_id(n: u32) -> Uuid {
     Uuid::from_u128(0x1000_0000 + u128::from(n))
 }
 
-pub fn allowed_peer(n: u32, second: i64) -> AllowedPeer {
-    AllowedPeer {
-        key: peer_key(n),
-        address: format!("{}@relay.example", peer_key(n)),
-        label: format!("service {n}"),
-        added_at: time(second),
+pub fn contact_id(n: u8) -> ContactId {
+    ContactId([n; 16])
+}
+
+pub fn peer_card(n: u8) -> PeerCard {
+    PeerCard {
+        bytes: vec![0xc0, n, 0xde, 0xad],
+        sig_key: [n; 32],
+        enc_key: [n.wrapping_add(100); 32],
+        hint_key: [n.wrapping_add(200); 32],
+        seq: 1,
+        kind: ContactKind::Shop,
+        claimed_name: format!("Shop {n}"),
+    }
+}
+
+/// A paired contact created at `time(second)`.
+pub fn contact(n: u8, second: i64) -> ContactRecord {
+    ContactRecord {
+        contact_id: contact_id(n),
+        peer: Some(peer_card(n)),
+        alternate: None,
+        label: format!("contact {n}"),
+        state: ContactState::Paired,
+        verified_at: None,
+        allow_invoices: false,
+        seal: SealMode::On,
+        last_sealed_in: None,
+        app_contact: None,
+        imported_from_backup: false,
+        created_at: time(second),
+        updated_at: time(second),
+    }
+}
+
+pub fn contact_mailbox(n: u8) -> ContactMailbox {
+    ContactMailbox {
+        contact_id: contact_id(n),
+        peer_mailbox: format!("peer{n}@relay.example:443"),
+        our_mailbox: format!("our{n}@relay.example:443"),
+        home_relay: "relay.example:443".to_owned(),
+        onion: Some("relayonion.onion".to_owned()),
+        previous: Some(PreviousHome {
+            relay: "old.example:443".to_owned(),
+            peer_mailbox: format!("oldpeer{n}@old.example:443"),
+            our_mailbox: format!("oldour{n}@old.example:443"),
+            until: time(7 * 86_400),
+        }),
+        backoff: vec![RelayBackoff {
+            relay: "relay.example:443".to_owned(),
+            next_try_at: time(30),
+            failures: 3,
+        }],
+    }
+}
+
+/// A pairing in progress whose secrets are all set to bytes of `n`.
+pub fn pairing(n: u8, second: i64) -> PendingPairing {
+    PendingPairing {
+        pairing_id: PairingId([n; 16]),
+        role: PairingRole::Inviter,
+        contact_id: contact_id(n),
+        secrets: PairingSecrets {
+            code: Some([n; 16]),
+            na: Some([n.wrapping_add(1); 16]),
+            nb: None,
+            rc: Some([n.wrapping_add(2); 16]),
+        },
+        invite_id: [n; 8],
+        expires_at: time(second + 600),
+        our_mailbox: format!("our{n}@relay.example:443"),
+        peer_mailbox: None,
+        state: PairingState::PendingInvite,
+        created_at: time(second),
+    }
+}
+
+pub fn contact_outbox_entry(n: u8, next_try: i64) -> ContactOutboxEntry {
+    ContactOutboxEntry {
+        contact_id: contact_id(n),
+        slate_id: Uuid::from_u128(0x2000 + u128::from(next_try.unsigned_abs())),
+        stage: SlateStage::Invoice1,
+        payload: "BEGINSLATEPACK. payload. ENDSLATEPACK.".to_owned(),
+        destination: format!("peer{n}@relay.example:443"),
+        attempts: 0,
+        next_try_at: time(next_try),
+        state: ContactOutboxState::Queued,
+        created_at: time(0),
+        delivered_at: None,
     }
 }
