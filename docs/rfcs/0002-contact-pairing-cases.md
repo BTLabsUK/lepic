@@ -183,25 +183,29 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 
 - **What happens.** With the `.wfeh` backup (10.5) the records and the slot counter come back:
   same keys, same mailboxes, same trust, and contacts notice nothing. Without it, the user
-  re-pairs (in person, by invite or by words) and attaches the new pairing to the same contact
-  on the other side; that side holds the old record and runs the key check (7.8). The restored
-  wallet finds its old slot (2.5), takes it back and sends a contact update signed with the old
-  key; the contact keeps its old record with its trust and Verified mark, and the new pairing
-  is folded away. The keys are the same as before the restore; only the restored side's own
-  switches for that contact start at their defaults, and its mailbox is new.
-- Only when the slot is not found (the other wallet uses another seed) does the old record go to
-  `keys-changed`, holding both cards. Then nothing is sealed to either key without asking,
-  invoices are not accepted, and "Allow invoices" and Verified are reset, so an impostor who
-  re-pairs as the contact inherits nothing. A key never changes any other way: a card or envelope
-  signed by another key is never a silent update.
+  re-pairs (in person, by invite or by words) and, on the other side, the contact adds the new
+  pairing to the existing entry; that side holds the old record and runs the key check (7.8). The
+  restored wallet finds its old slot (2.5) and proves it with the old key; the contact proves its
+  own old key back; the old record keeps its trust and Verified mark and the new pairing is folded
+  away. The keys are the same as before the restore; only the restored side's own switches for
+  that contact start at their defaults, and its mailbox is new.
+- When the slot is not found (the other wallet uses another seed) or no answer comes within 24
+  hours, the old record stays exactly as it was and the new pairing goes to `keys-changed`. That
+  pairing seals nothing and takes no invoices until the user keeps the old record or uses the new
+  keys; an impostor who re-pairs as the contact inherits nothing and cannot change the old record.
+  A key never changes any other way: a card or envelope signed by another key, or a contact update
+  on the old pairing, never completes a check.
 - **User sees.** After a re-pair that finds the slot: "Anna's keys are back." When it does not:
   "Anna's keys changed. This can mean she uses a different wallet now, or someone else is using
   her name. Check the words again." with "Check the words", "Keep the old keys" and "Use the new
   keys".
 - **Test.** engine: restore with the backup → the same keys and pairings, the contact
   unaffected; restore without the backup, re-pair → the same keys, the contact's record and trust
-  kept, no `keys-changed`; re-pair with a wallet of another seed → `keys-changed` with trust
-  reset, and verifying moves it to `verified`; no answer within 24 h → `keys-changed`.
+  kept, no `keys-changed`; re-pair with a wallet of another seed → the new pairing in
+  `keys-changed`, the old record unchanged; no answer within 24 h → the same; a 05 on the old
+  pairing during an open check does not complete it (MITM of the old pairing); a check whose
+  found answer carries no valid old-key proof is refused; the restored side refuses a restored
+  answer without X's old-key proof.
 
 ### C-13 A seed later used in a stock wallet
 
@@ -233,7 +237,7 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 ### C-15 The invite used twice, forwarded to a third person, or leaked publicly
 
 - **What happens.** A pairs with the first valid reply and answers every later one with status 02
-  (7.3). If the first replier is not the intended person, A sees their claimed name in "Anna
+  (7.3), an anonymous one-byte confirm that carries none of A's keys or nonces. If the first replier is not the intended person, A sees their claimed name in "Anna
   answered your invite" and a SAS that will not match on a call. A service binds each invite to
   a logged-in account and expires it in 15 minutes, so a leaked service invite pairs at most one
   wallet to that account, which the account page shows and can remove.
@@ -302,13 +306,14 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 
 - **What happens.** The address book stays in the app (the `Contact` type); a pairing record
   points to one entry (`app_contact`). After pairing, the app offers to attach it to an existing
-  entry whose Epicbox address equals the card's payments address, or to a new entry. An entry has
-  at most one pairing. A second pairing that joins the same entry runs the key check (7.8).
+  entry the user picks, or to a new entry; it never suggests an entry because of the payments
+  address a card claims. An entry has at most one pairing. A second pairing that the user adds
+  to the same entry runs the key check (7.8).
   Entries hold at most one address per method: one Epicbox, one Link · HTTP, one Link · Tor, no
   lists. The card's payments address fills the Epicbox address of a new entry; it replaces a
   different one only after the user agrees. The pairing's mailbox is never shown as an address and
   never typed by users. For an unpaired entry no address changes on its own.
-- **User sees.** "Anna is already in your contacts. Add the pairing to her?" The contact page shows
+- **User sees.** "Save as a new contact" or "Add to a contact" with a picker. The contact page shows
   "Paired" or "Verified" with the trust switches.
 - **Test.** app: attaching, the existing-entry offer, one pairing per entry, one address per
   method.

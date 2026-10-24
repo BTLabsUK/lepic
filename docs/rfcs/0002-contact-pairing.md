@@ -103,7 +103,9 @@ No other key is derived from path `m/<a>/2/*`; a later key family takes `m/<a>/2
 #### 2.2 Keys for one contact
 
 `HKDF-Expand` below uses `root` itself as the PRK (no Extract step). Each pairing record has a
-`slot`, a u32 below 65,536, and a `box_salt`, 16 random bytes. Neither is secret. From them:
+`slot`, a u32, and a `box_salt`, 16 random bytes. Neither is secret. A wallet keeps its slots
+below 65,536 so that the search of 2.5 covers them; a service keeps its records in its own
+database, never searches, and may use the whole u32 range. From them:
 
 | Key | Derivation | Use |
 |---|---|---|
@@ -119,7 +121,8 @@ counter (a new wallet, or a restore without the backup), the first record takes 
 0..32,767, so two installs on one seed rarely meet in the same slot. When they do, the two contacts
 of that slot see the same keys for this wallet; envelopes still go to the right record, because a
 record is chosen by the sender's signing key (3.4), and mailboxes stay apart through `box_salt`.
-A wallet that has used every slot below 65,536 refuses new pairings.
+A wallet that has used every slot below 65,536 refuses new pairings; every invite and every card
+showing takes a slot, which a wallet with at most 64 pending pairings never comes near.
 
 `box_salt` is random so that two installs on one seed never share a contact mailbox even in one
 slot (9.5). It is in the record and in the backup (10.5); a restore without the backup gets a new
@@ -227,8 +230,12 @@ proves (it answers a slate this wallet started, or its partial signatures verify
 Field rules: tag FF without tag 08 is refused; tag 08 without FF counts as not signed. Type and
 purpose outside the values above are malformed; an unknown suite is its own error (a newer
 wallet), an unknown flag is malformed. Lengths are exact for fixed-size fields. Type-specific
-rules sit above the envelope: a reply (03) is anonymous; a confirm (04) is signed by the key in
-the card it carries; types 05, 06 and 07 are signed. A card carried in a signed envelope (tag 07,
+rules sit above the envelope: a reply (03) is anonymous; a confirm (04) with status 01 is signed
+by the key in the card it carries, any other confirm is anonymous with a one-byte body (7.3);
+types 05, 06 and 07 are signed. An Ed25519 key of small order is refused wherever a sig key is
+read (tag 08, card tag 06), before any verification. Anonymous envelopes never attribute to a
+record or update one, even when they open with a contact slot's key; the reply (03) is the only
+anonymous type that starts anything. A card carried in a signed envelope (tag 07,
 or the body of 04 and 05) must carry the envelope's sender key as its sig key.
 
 #### 3.4 Opening rules
@@ -321,7 +328,7 @@ later version defines them they are rejected as unknown. A card is at most 1,024
 `contact` and `pair` links at most 4,096 characters, the `pair-reply` and `pair-confirm` links
 at most 96 KiB.
 
-Address texts (tags 08, 09, 0A here, and 09, 0A, 0B of the invite) are printable ASCII, `!` to
+The sig key (tag 06) must not be of small order. Address texts (tags 08, 09, 0A here, and 09, 0A, 0B of the invite) are printable ASCII, `!` to
 `~`, with domains in punycode. Same TLV rules as 3.3. A card from a contact replaces the stored one only when its signature
 verifies with the recorded `sig_pk` and its `seq` is higher. The name is the contact's claim; the
 app shows the user's own label for the contact and the claimed name only as "calls themselves".
@@ -385,15 +392,23 @@ and whose card verifies:
 
 1. A stores the pairing record (state `paired`), computes the SAS (7.5) and shows it.
 2. A posts to the confirm mailbox (8.1, from `rc`) an envelope sealed to cardB's enc key and
-   signed by A: type `04`, body `nA (16) || cardA || status (u8: 01 accepted, 02 invite already
-   used, 03 expired, 04 cancelled by the inviter)`. A manual-mode A shows it as
-   `epiccash://pair-confirm/1/<base64url>` instead.
-3. A deletes `code` and `nA` from the pending pairing. Later replies to the invite are opened only
-   far enough to answer status 02, then dropped.
+   signed by A: type `04`, body `nA (16) || cardA || 01` (accepted). A manual-mode A shows it as
+   `epiccash://pair-confirm/1/<base64url>` instead. `cardA` is the exact card bytes A committed
+   to in the invite, kept with the pending pairing for that purpose.
+3. A deletes `code` and `nA` from the pending pairing and keeps `invite_id` and the invite's
+   slot until the invite would have expired. A later reply (hint `invite_id`) is opened only far
+   enough to read its card and answered with status 02.
 
-B drains the confirm mailbox. It checks `commit == H("epic-pair/1 commit" || nA || H(cardA))` and
-that cardA's enc key equals the invite's. A mismatch ends the pairing with "This invite was
-changed on the way" and nothing is stored. Otherwise B stores the record and shows the SAS.
+A reply that cannot be accepted (status 02 invite already used, 03 expired, 04 cancelled by the
+inviter) gets a confirm without nonce or card: type `04`, anonymous, body one byte, the status,
+sealed to the replier's card. It is advisory: B ends its pending pairing and shows the reason,
+and nothing is stored or trusted on either side. A reply whose card carries the sig key of a
+contact A already has is refused (a replayed card), never merged.
+
+B drains the confirm mailbox. For status 01 it checks that the confirm is signed by cardA's sig
+key, `commit == H("epic-pair/1 commit" || nA || H(cardA))`, and that cardA's enc key equals the
+invite's. A mismatch ends the pairing with "This invite was changed on the way" and nothing is
+stored. Otherwise B stores the record and shows the SAS.
 
 #### 7.4 In person
 
@@ -405,7 +420,9 @@ network is used, so this works Offline.
 
 There is no invite, so no shared home relay: each card's mailbox (tag 08) is on the relay its
 owner uses when it shows the card (a service's card names its inbox), each side delivers to the
-other's tag 08 and collects its own mailbox there. The record keeps both relays.
+other's tag 08 and collects its own mailbox there. The record keeps both relays. A card QR is
+seen by anyone nearby, so on its first collect after an in-person pairing each wallet sends the
+contact one update (05) with a mailbox from a new `box_salt`; the hint key in the shown card stays.
 
 A one-way scan (B scans A's invite QR, the invite of 7.1 shown as a QR) is an online pairing whose
 first message went by camera. When only one phone has a camera, or neither, "Use words instead"
@@ -458,51 +475,75 @@ call, or typed from the other screen. They look exactly as the SAS check does, e
 name below it, and the user types the names (the field completes them from the table; pasting the
 emoji also works). Five entries carry 40 bits.
 
-A makes an invite as in 7.1, with a 10-minute expiry, and 5 random bytes `words`. Then:
+A makes an invite as in 7.1, with a 10-minute expiry, and 5 random bytes `words`. With
+`window = floor(unix seconds / 600)` at the time A makes the invite:
 
-- `k = Argon2id(password = words, salt = "epic-pair/1 words" || net, t = 3, m = 65,536 KiB,
-  p = 1, version 0x13, 32 bytes)`;
+- `k = Argon2id(password = words, salt = "epic-pair/1 words" || net || be64(window), t = 3,
+  m = 65,536 KiB, p = 1, version 0x13, 32 bytes)`;
 - `s = HKDF-Expand(k, "mailbox", 16)`: the seed of a rendezvous mailbox with the keys of 8.1;
 - `key = HKDF-Expand(k, "invite", 32)`;
-- A posts `base64url(ChaCha20-Poly1305(key, nonce = 12 zero bytes, aad = "epic-pair/1 words"
-  || net, invite))` to the rendezvous mailbox on its home relay. The key is used once, so the
-  fixed nonce is safe.
+- A posts `base64url(nonce || ChaCha20-Poly1305(key, nonce, aad = "epic-pair/1 words" || net,
+  invite))`, with `nonce` 12 random bytes, to the rendezvous mailbox on its home relay.
 
 Words are offered only when the home relay is one of the wallet's built-in relays for the network.
-B types them, derives the same keys and drains the rendezvous mailbox on each built-in relay in
-the list's order until one holds the message. B decrypts the invite, acknowledges the message so
-nobody else finds it, and goes on as if it had opened the link (7.2). Words that open nothing
-show "No invite found for these words. Check them, or ask for new ones."
+B types them and derives `k` for the current window and the one before (an invite made near the
+end of a window is still found), and drains the two rendezvous mailboxes on each built-in relay in
+the list's order until one holds a message that opens. B decrypts the invite, acknowledges the
+message so nobody else finds it, and goes on as if it had opened the link (7.2). Words that open
+nothing show "No invite found for these words. Check them, or ask for new ones."
 
-Security: the words find and open the invite, nothing more. Argon2id and the short expiry make
-guessing the mailbox from the words useless (2^40 tries of a 64 MiB hash in 10 minutes), and
-whoever does learn the words is in the position of a leaked invite (C-15): the SAS and the
-commitment still decide.
+Security: the words find and open the invite, nothing more. Argon2id over a salt that changes
+every 10 minutes makes guessing useless: a table of all 2^40 words is good for one window only,
+and two invites share a key only when they draw the same words in the same window. The random
+nonce keeps even those apart. Whoever does learn the words, or reads the invite first, is in the
+position of a leaked invite (C-15): the SAS and the commitment still decide.
 
 #### 7.8 Re-pairing after a restore: the key check
 
-When a new pairing joins an address-book contact that already has a pairing record, the wallet
-that holds the old record (X) asks the other side (Y) whether it can take its old keys back:
+When the user adds a new pairing to an address-book contact that already has a pairing record
+(the app never offers this because of an address a card claims; the user picks the contact), the
+wallet that holds the old record (X) asks the other side (Y) whether it holds the old keys. Each
+step travels over the new pairing: sealed to the peer's new key, signed by the sender's new key,
+to the peer's new mailbox. `nX` and `nY` are the new pairing's sig keys of X and Y; `R_old` is
+X's old record, `cardY_old` the card Y gave X then.
 
-1. X sends over the new pairing (sealed to Y's new key, signed by X's new key, to Y's new
-   mailbox) an envelope of type `06`, body `u16 length || card Y gave X before || X's own current
-   card for that old record`.
-2. Y looks at the card it gave before. If one of Y's records is in that slot with X's old card as
-   its peer card (both invited each other, C-17), or if the slot search of 2.5 finds the slot in a
-   restored wallet, Y takes the old slot back: a record for it with X's old card as peer card, a
-   new `box_salt`, the state of the new pairing, and the slot counter above it. Y then sends a
-   contact update (type `05`) for the old pairing: its card for the old slot with `seq` one above
-   the card it gave before and its new mailbox, sealed to X's old key, signed with the old slot's
-   `sig_sk`, to X's mailbox of the old pairing. Y deletes the new pairing.
-3. X accepts that update by the rules of 8.5 (old sig key, higher seq), keeps the old record with
-   its trust and Verified mark (and marks it Verified if the new pairing was), and deletes the new
-   pairing. Nothing changes for the user: "Anna's keys are back."
-4. If the slot is not found, Y answers type `07`, body `01` (not this wallet), signed with its new
-   key over the new pairing. X moves the old record to `keys-changed` holding both (C-12). With no
-   answer within 24 hours, X does the same.
+1. **Check (type 06).** Body `seq (u32) || tag (32)`, where `seq` is `cardY_old`'s seq and
+   `tag = H("epic-pair/1 keycheck" || cardY_old.hint_key || nY || nX)`. The tag reveals nothing
+   about the old pairing to a peer that does not hold Y's seed, and is bound to this new pairing.
+2. **Search.** Y computes the tag for its own records first (both invited each other, C-17), then
+   for slots 0 to 65,535 (2.5: one HMAC and one hash per slot). No match: Y answers type `07`
+   with body `01` (not this wallet).
+3. **Found (type 07, status 02).** Y makes `cardY_old'`: its card for the found slot with `seq`
+   one above the given one, a mailbox from a new `box_salt` (or its current one, if the record
+   exists), signed with the slot's `sig_sk`. Body `02 || u16 length || cardY_old' || proofY`,
+   `proofY = Sig_old("epic-pair/1 keycheck found" || H(check envelope) || nY || nX ||
+   H(cardY_old'))` by the found slot's `sig_sk`. `H(check envelope)` is over the 06 envelope's
+   bytes as received.
+4. X accepts the found answer only for its open check, once, within 24 hours: `proofY` verifies
+   with `cardY_old`'s sig key, and `cardY_old'` has the same enc, sig and hint keys and a higher
+   seq. X then keeps `R_old` with `cardY_old'` as its peer card, raises it to Verified if the new
+   pairing was Verified, and answers with step 5. An ordinary contact update (05) on the old
+   pairing never completes a check.
+5. **Restored (type 07, status 03).** Body `03 || u16 length || cardX_old || proofX`,
+   `proofX = Sig_old("epic-pair/1 keycheck restored" || H(found envelope) || nX || nY ||
+   H(cardX_old))` by X's old `sig_sk` for `R_old`. X then deletes the new pairing.
+6. Y accepts the restored answer only for the found answer it sent: `proofX` verifies with
+   `cardX_old`'s sig key and `cardX_old` verifies as a card. Y then keeps (or, after a restore,
+   creates) the record for the found slot with `cardX_old` as its peer card, the trust of the new
+   pairing, and the slot counter above the slot, and deletes the new pairing. "Anna's keys are
+   back."
+7. **Not found or no answer.** On a 07 with `01`, or with no found answer within 24 hours, `R_old`
+   stays exactly as it was. The new pairing goes to `keys-changed` (C-12): "Anna's keys changed.
+   This can mean she uses a different wallet now, or someone else is using her name. Check the
+   words again." The user keeps the old record (the new pairing is deleted) or uses the new keys
+   (the old record is deleted).
 
-A wallet answers at most one key check per pairing, and only within 24 hours of that pairing.
+A wallet starts and answers at most one key check per pairing and per slot, and only within 24
+hours of the new pairing. Each proof is made by a key the other side already held, over the
+envelope it answers and both new keys, so neither side adopts a card or a trust level from a
+party that has not shown it holds the old key.
 
+### 8 Mailboxes and the home relay
 
 #### 8.1 Pairing mailboxes
 
@@ -691,9 +732,11 @@ device" and asks "Use your contacts on this device?"; the first device should th
                           (deleted)                                (deleted: "Remove pairing")
 ```
 
-`keys-changed` holds both cards. It seals nothing and accepts no invoices until the user verifies
-again or chooses the old or the new key. It is reached only through the key check of 7.8, when
-the other side's slot is not found. The cases file, C-12, has the details.
+`keys-changed` is a state of the new pairing, reached only through the key check of 7.8 when the
+other side's slot is not found or it does not answer; the old record stays as it was. A new
+pairing in `keys-changed` seals nothing and accepts no invoices until the user keeps the old
+record (the new pairing is deleted) or uses the new keys (the old record is deleted, the new one
+goes on as paired or verified). The cases file, C-12, has the details.
 
 #### 10.3 Limits
 
@@ -711,8 +754,9 @@ carry ids and labels, never keys or secrets.
 #### 10.5 Backup and restore
 
 Pairing records hold no secret: our keys come from the seed, the slot and `box_salt`. LEPIC
-exports the records and the slot counter as a versioned JSON object the app adds to its `.wfeh`
-history payload, and imports them on restore (9.5). A restore with the backup brings every
+exports the records, the slot counter and the network as a versioned JSON object; on import it
+decodes every card again and refuses another network. The app adds the object to its `.wfeh`
+history payload and gives it back on restore (9.5). A restore with the backup brings every
 pairing back unchanged: same keys, same mailboxes, same trust; contacts notice nothing.
 
 A restore without the backup has no records. Re-pairing with a contact that kept its record runs
@@ -727,8 +771,8 @@ days. Pending pairings are not in the backup.
 #### 11.1 Rules
 
 - "Allow invoices from <contact>" is a switch per pairing record, off by default, offered right
-  after pairing when the contact's card says it issues invoices (caps bit 2), preselected for an
-  exchange's invite.
+  after pairing when the contact's card says it issues invoices (caps bit 2). It is never
+  preselected: an invite's kind and name are claims.
 - The switch can be turned on only for a `verified` contact; an unverified one shows "Check the
   words first". Paying is money leaving on a contact's request, so it waits for the one check
   that rules out a swapped invite.
@@ -789,8 +833,9 @@ directions the exchange, which runs reliable servers, does two of the three step
    kit makes an invite (7.1): kind exchange, 15 minutes expiry, home relay = the exchange's own
    relay (with its onion), its fixed pairing inbox. It stores `invite_id → account`. The page shows
    the invite as a QR and as a button that opens `epiccash://pair/1/…` on the same device.
-2. The wallet shows "Pair with Exchange X?" and, below, "Allow Exchange X to request payments"
-   preselected. The user taps Pair. The reply goes to the inbox.
+2. The wallet shows "Pair with Exchange X?" with the name marked as claimed and, below, "Allow
+   Exchange X to request payments", off: the kind and name in an invite are not authenticated, so
+   nothing is preselected from them. The user taps Pair. The reply goes to the inbox.
 3. The kit opens the reply by `invite_id`, binds the reply card's sig key to the account, and sends
    the confirm with its card: mailbox = its shared customer inbox (caps bits 2, 3, 4). The page and
    the wallet both show the SAS; the user compares the two screens and taps "They match" in the
@@ -932,7 +977,8 @@ two-implementation test. Areas under `testdata/vectors/pairing/`:
 | `contact_keys.json` | Raw account key → `root`, `enc_pk`, `sig_pk`, `hint_key`, `box_sk` for slots 0, 1 and 65,535 with fixed `box_salt`s, mainnet and floonet |
 | `reply_keys.json` | Slate ids → `reply_pk` |
 | `mailbox_keys.json` | Codes → mailbox and sender secrets; the `ctr` loop is tested with an injected curve order, since no real input needs `ctr = 01` (probability about 2^-128) |
-| `words.json` | Pairing words → `k`, the rendezvous mailbox secrets, the invite key, and the posted text for a fixed invite |
+| `words.json` | Pairing words and a window → `k`, the rendezvous mailbox secrets, the invite key, and the posted text for a fixed invite and nonce |
+| `keycheck.json` | A full key check between two fixed wallets: tags, the 06, the found and restored answers with their proofs, and the not-found answer |
 | `envelopes.json` | Each type (01 to 07), anonymous and signed, with fixed RNG: bytes, armored text, hint, opened fields |
 | `cards_invites.json` | Card, invite, reply and confirm bytes and their URI forms |
 | `sas.json` | Inputs → four bytes → emoji and names |
@@ -951,8 +997,9 @@ new SAS domain string.
 | Seed restored into a stock wallet | Sealed messages go only to paired LEPIC contacts, into mailboxes a stock wallet never subscribes; the plain fallback resends the same slate | The stock wallet cannot open sealed files; the sender must use the fallback |
 | Replay of a sealed slate or notice | Slates are idempotent on `(slate_id, stage)`; notices on the slate's state; cards on `seq` | none |
 | Replay of a pairing reply | One reply per invite; the code is deleted after the first | none |
-| Guessing pairing words | Argon2id over the words, 10-minute expiry, one acknowledged message; the SAS and commitment still decide (7.7) | none beyond a leaked invite |
-| A false key check (a contact sends a card that is not ours) | The slot search accepts only a card whose keys our seed makes; the old slot's update is signed with its old key; one check per pairing within 24 h | A contact can learn nothing it did not already hold |
+| Guessing pairing words | Argon2id over the words with a salt that changes every 10 minutes, random nonce, 10-minute expiry, one acknowledged message; the SAS and commitment still decide (7.7) | A party that reads the invite first is in the leaked-invite position |
+| A false key check (an impostor re-pairs as a contact, or a MITM of the old pairing interferes) | The check reveals only a tag bound to the new keys; "found" needs a proof by the old key over the check, sent over the new pairing; the restored side adopts the old card only with a proof by its old key; a failed check leaves the old record untouched; one check per pairing and slot within 24 h (7.8) | An impostor learns that the user thought it was the contact |
+| A card QR photographed in person | The first collect moves the mailbox to a new `box_salt` (7.4) | The hint key in the shown card links envelopes to that contact |
 | Forged invoice | Must arrive in the contact's own mailbox, sealed and signed by that contact, with invoices allowed | A contact you allowed can still request; nothing pays without the PIN |
 | Spam or DoS against a service from many paired keys | Each pairing needs a logged-in account and an invite (3 open per account); per-key and global rate limits (13.4); only hint-matched envelopes are opened; revocation | An attacker with many accounts costs the service drains and hint lookups, bounded per message |
 | Flood of address or relay updates | None needed for relay switches (8.3); home relay moves only from services, signed, higher `seq` only, 3 a day per contact, 100 an hour in total (8.5) | none |
@@ -999,7 +1046,7 @@ screens, phone and desktop, in the app's themes.
 | Check the words | Four emoji with their names, large; "They match" (primary), "They don't match" (outline, leads to a warning and Stop pairing), "Skip for now" (Paired, not verified) | The same in a dialog |
 | Contact page | Trust badge; switches "Seal payments" and "Allow invoices" (disabled until verified), each with an info icon (for "Seal payments": "Payments and invoices with Anna are encrypted end to end. Only her wallet can read them."); "Delivered via <home relay>", which turns into a notice when the relay does not answer; Remove pairing | The same in the contact panel |
 | Keys changed | "Anna's keys changed. This can mean she uses a different wallet now, or someone else is using her name. Check the words again." with Check the words, Keep the old keys, Use the new keys | The same |
-| Pair with an exchange | Opened from the exchange's page; the sheet names the site; the check step pre-offers "Allow invoices from Exchange X" | Same; the exchange's page shows the same emoji |
+| Pair with an exchange | Opened from the exchange's page; the sheet names the site as claimed; the check step offers "Allow invoices from Exchange X", off | Same; the exchange's page shows the same emoji |
 | Deposit request | The existing Review invoice layout with "Sealed" and "Verified" chips: "Exchange X requests 250 EPIC", fee, total, Approve with PIN; then a timeline: Paid, Delivered to Exchange X's relay, Posted, confirmations | Same, in the invoices screen |
 | Settings › Wallet › Invoices | The paired contacts with an "Allow invoices" switch each (unverified ones greyed with "Check the words first"), and "Pair with a shop or exchange"; no invoice address and no trusted services | Same |
 | Help | Topics: what pairing is, why check the words, pairing words, invoices from paired contacts, what a restore does | Same |
