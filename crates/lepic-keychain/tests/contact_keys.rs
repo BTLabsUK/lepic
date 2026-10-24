@@ -227,7 +227,15 @@ fn mailbox_keys_depend_on_seed_and_network() {
     assert_ne!(b1.expose_bytes(), f1.expose_bytes());
 }
 
-const SLOTS: [(u32, [u8; 16]); 3] = [(0, [0; 16]), (1, [0x5a; 16]), (SLOT_COUNT - 1, [0xff; 16])];
+/// The slots and salts of the kit's `contact_keys.json`, so the fixture overlaps the vectors.
+const SLOTS: [(u32, [u8; 16]); 3] = [
+    (0, [0; 16]),
+    (1, [0x5a; 16]),
+    (
+        SLOT_COUNT - 1,
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    ),
+];
 const SLATE_IDS: [[u8; 16]; 2] = [
     [0; 16],
     [
