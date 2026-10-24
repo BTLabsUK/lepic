@@ -16,6 +16,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-primitives` | Binary serialization, hashing, transaction, input, output and kernel types, weights and fees, per-network chain parameters. Ported from the node. | none |
 | `lepic-keychain` | Mnemonic to seed, BIP32 derivation, identifiers and paths, switch commitments, proof builders and rewind, seed vault formats, the host app's data file format (`docs/compat/wfeh.md`). | none |
 | `lepic-slate` | Slate domain model, stages and roles, codec trait, legacy V2 and V3 JSON codecs, codec registry, the `ur:epic-slate` QR form of slate text (ADR 0025). | none |
+| `lepic-contact` | Contact pairing formats (RFC 0002): the sealed envelope (HPKE to a contact's X25519 key, signed with its Ed25519 key) and its armor, contact cards, invites, pairing replies and confirms, the SAS. | none |
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context. | disk |
 | `lepic-transport` | Transport traits, transport registry, format policy, the file transport. | disk |
@@ -42,6 +43,7 @@ lepic-crypto      -> (external only)
 lepic-primitives  -> lepic-crypto
 lepic-keychain    -> lepic-crypto, lepic-primitives
 lepic-slate       -> lepic-crypto, lepic-primitives
+lepic-contact     -> (external only)
 lepic-node        -> lepic-primitives, lepic-crypto
 lepic-store       -> lepic-primitives
 lepic-transport   -> lepic-slate
@@ -56,7 +58,7 @@ lepic-ffi         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-foreign
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a
 dev-dependency for its log-capture test helpers. Any other edge is a design change and needs an ADR.
-Pure crates (`crypto`, `primitives`, `keychain`, `slate`) may not depend on Tokio or the filesystem,
+Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `contact`) may not depend on Tokio or the filesystem,
 read a clock, or create their own randomness.
 
 ## Engine and ports

@@ -49,6 +49,7 @@ workspace table:
 | Encoding | bs58 0.5, base64 0.23 | |
 | Mnemonic | bip39 3.0 | |
 | Payment proofs | ed25519-dalek 3.0 | |
+| Sealed envelopes | hpke 0.14 (X25519, HKDF-SHA256, ChaCha20-Poly1305 only), x25519-dalek 3.0 | RFC 0002 |
 | Ids and time | uuid 1.26, jiff 0.2 | |
 | Randomness | rand 0.10, rand_core 0.10, getrandom 0.4 | |
 | Curve | grin_secp256k1zkp from `EpicCash/rust-secp256k1-zkp` at `42fcb29d` | |

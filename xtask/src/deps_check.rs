@@ -20,6 +20,7 @@ pub(crate) const PURE_CRATES: &[&str] = &[
     "lepic-primitives",
     "lepic-keychain",
     "lepic-slate",
+    "lepic-contact",
 ];
 
 /// Runtime, network, storage, logging-output and OS-randomness crates a pure crate may not take
