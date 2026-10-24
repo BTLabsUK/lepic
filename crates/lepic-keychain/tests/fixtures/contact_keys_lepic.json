@@ -6,25 +6,34 @@
         "floonet": {
           "contacts": [
             {
-              "box_public": "02356bbbf7e3bdb88431e492a1a262ebf61129383aad3eac1cf2197c2e324a148b",
-              "contact_id": "00000000000000000000000000000000",
-              "enc_secret": "acfa3ff421a4d5ab9f5dbb5d66f1e55934934254b6354cf29cd57bdd0a4cda8f",
-              "hint_key": "cfc1bf9533588d22e7d19980f8adf1147d02714e5b4ad83273468f5e36249fef",
-              "sig_public": "0bde21e1926544d359531ac8d3db7dc6a35f77d79aef89df6f4e96b010e4857f"
+              "box_public": "03bc3fe7a6c3dd2d8b89c68a91591004a86d5b75d7387ddcfef94b465b95465f71",
+              "box_salt": "00000000000000000000000000000000",
+              "box_secret": "1679b72adb1bfdcaeca840b6824671f3efcfab598e07910f8e9ef2cd00a5b6d7",
+              "enc_public": "0653a6abd049b1026cf714f19eb82dfa3cd0c9ed86190fbf47a2e02869de3604",
+              "enc_secret": "6b58aa1bfd83c6938ba79c9a6e0e83caf4064fe71eb70d42c2996a30c372df36",
+              "hint_key": "38e8096412b4f15a719392bfdae3d340dec473bd7cf553d2471e8556be7d0d53",
+              "sig_public": "da7f5c2ef1db75f79952e9bb1947a6f150b718410459343558df493fb087dc63",
+              "slot": 0
             },
             {
-              "box_public": "03b9d5a1091b6ba7ec9f4dacdb46e32bdf674b30a3b0c2f578dc337e9fb74e7334",
-              "contact_id": "01010101010101010101010101010101",
-              "enc_secret": "63a5c24c394cefdb33eed752104e9dab8d2b5be4a12d92ae3d84b970d4448e80",
-              "hint_key": "0c3f99777ea58c751a12af0d2af7b42ca7989914fdf7957b495eb3542b1d7862",
-              "sig_public": "85219492a40553037231da35c759eeca9cbee30c69203e181ab2eda3e37e7679"
+              "box_public": "02d1f885a31229c995c43d231a9d1f40738c4906ff3d9f4cf2cd4b0f39c91c218d",
+              "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+              "box_secret": "92b18a058d224d44f1385ccfc6a3b7f33779ac77b6d78a5371979a4d2c922d12",
+              "enc_public": "14648199c97a5fb8861a75d077ddaff3aa4958408387064bfcb923ca57db3b5f",
+              "enc_secret": "96293ef9c2ad4b602c20f4da2f7db7b804c0803c130c8a6d2b3ff7a2d8e5cb82",
+              "hint_key": "5b711ee03a42fbeb1ae38a86fe1822acd71b2aee46504c78aba48e2d2dbf8d24",
+              "sig_public": "3656546c9d38b8f0303e034b8b71aae87ff2c7b104023a751a0652a81985ae2d",
+              "slot": 1
             },
             {
-              "box_public": "0304350a55fc66e156b6cf8aad72c9fd148ef0dd32c94dff9f31d4dc7d372496a5",
-              "contact_id": "ffffffffffffffffffffffffffffffff",
-              "enc_secret": "8924ab9437373134918444b54cecfe8a06a736b76e6e6f5e871e55716ec37036",
-              "hint_key": "697b28a6a6e3c216489c144cf6c521cb65d6476850a60ba5c7f4c70dd2d7a719",
-              "sig_public": "a15c239f764f64795b2d566bc491620859865ea6e1d8f1ef131ffbbeab152c17"
+              "box_public": "025d4f067392dac834aadcdf08686d2e842ab36cc24304c5624799563ae50ba448",
+              "box_salt": "ffffffffffffffffffffffffffffffff",
+              "box_secret": "e5d79ea96774798436cd1616e84526dd884e2b0395a21b89b7a91ef18a5573f5",
+              "enc_public": "a38a4fe93fe71592603b19d4645d5f5ca51fcc84bc415d638764d71a727f593b",
+              "enc_secret": "d664aa40facccc832e94538b33969c37a75a0a5d1baa377df08d4f60d13b9b64",
+              "hint_key": "6541e3c8f812c42341204172d6acf0b8a236f50c560249eb13231f115dd243ce",
+              "sig_public": "01145434121e352a1ce5cd89716645b3ead1379f29ccdc6cc40219c87adf5cbe",
+              "slot": 65535
             }
           ],
           "mailboxes": [
@@ -58,25 +67,34 @@
         "mainnet": {
           "contacts": [
             {
-              "box_public": "02127d924ce4f89acd5121a9ba98c084fb19dae8ac2878b6d877f88f4baf3352a5",
-              "contact_id": "00000000000000000000000000000000",
-              "enc_secret": "f340e4bc5378a1ad46dcee04b8dda94055abd2a2db1727ba2ab292277b5f7b04",
-              "hint_key": "e423f8d4d2cdf632a588bbe601d99e0839b7d9cdb3aa0bde24ab7faf70ff72fd",
-              "sig_public": "c2ce7f3ef1a772c52dd657f64b36ffd522e6530ebbe19e4b1241cbbd100d3317"
+              "box_public": "030aa80bc13cbe63b92f3ff261893e1a07d2f845db2c00386f74db31d79fc01534",
+              "box_salt": "00000000000000000000000000000000",
+              "box_secret": "8e5a8e5d41442b1690cd5b12e2801386928928185e7602a88d4f31ac2972e3ef",
+              "enc_public": "89c4b89700d7fcb367e092eea0abd6af5b6aec437f39226ebdb549978deb0925",
+              "enc_secret": "37cc1bc4775c61121c13faefb05c4e3dc164ed5ff24dee45f994bf0daf28b44d",
+              "hint_key": "43a6e52f15f67b4f8212208473179a5d50b19c53e9a45266863bd8d7ad7b8c0e",
+              "sig_public": "92f6260798349f05b3a815d8211a32c03ae666d4d5ad573babbfa6ae02d29ff3",
+              "slot": 0
             },
             {
-              "box_public": "03cf301f3304eee00e6a9610c1fdc16576a295a256e9e53c760232bdfda4914f5f",
-              "contact_id": "01010101010101010101010101010101",
-              "enc_secret": "a7b44146206af3d444b756f9228e8bc8d2de5c8f81a2c700f06c8c158b1570bb",
-              "hint_key": "a918148849bcdd831a9ba1c88adcc9d2107c51ef0e4ccf06866271587516a628",
-              "sig_public": "adad711dbd1f1a656772c0810a7bf2c13b8da2ed9703b77de880aaa9b6d1b6f3"
+              "box_public": "025a1989d0296d85910383b2fb86e9fc8e97e9b97bbb58abbaee25ced823e76f6a",
+              "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+              "box_secret": "96ca44ad8f370b5804b21f436154b1926b93a34dc0d4c30589d7223e0a5b469d",
+              "enc_public": "eebdd10885748611af48faa5ddc31a3bfe49255beb90b1926e8ec50896730613",
+              "enc_secret": "c12eb946612faf04d8d4c42500c8f548dabd170bc6801ff9cce7968948086a21",
+              "hint_key": "8388f05458788c8be102427268ea1339faed1b9a2f5a8d67f322a1ebcd01c2fe",
+              "sig_public": "c76171e961eafc3a20b3a2c6295ec9b3924ba4ec8b55b041875ab42bc2e3abbe",
+              "slot": 1
             },
             {
-              "box_public": "0376a3fce8dc109448ea3395707000266de9b226291aae26b36313c17944c86efa",
-              "contact_id": "ffffffffffffffffffffffffffffffff",
-              "enc_secret": "5790c35563c84148f10e52be65b5b4d5551a1ddadbbfd76d1561d47469204d2d",
-              "hint_key": "a16d37c5574522529f63d3068dd81b4704518da4bd97e613371fc1e159d7875d",
-              "sig_public": "1016a206214f8827799b73152cde9d027e1955e6986478fcc9c8d0077e1f7a0e"
+              "box_public": "03cae16b820a49b7859beb5c5c213ac40890d0a1ddb96ac52354a805534722c99a",
+              "box_salt": "ffffffffffffffffffffffffffffffff",
+              "box_secret": "67f5374dcf5a7d615327d23eb14b284d47e59d4c452b0131e1a410a7fb03478b",
+              "enc_public": "2099d1574afb80ce54e56187e9554ddcbee4468fbe689b029f3dcfa466c6b106",
+              "enc_secret": "bdb91021b2d9fe0234e8187fcbc204ba0d1b4b2badb66b1394969a727f61bba8",
+              "hint_key": "15672206d188ae64ea1b835ff7e7f1936f79d325cecf13d99fd5439fbe1958f9",
+              "sig_public": "fe5108ee40add7f742fefa42be9fb8d411f35b8c092238a8e647d846afed73a8",
+              "slot": 65535
             }
           ],
           "mailboxes": [
@@ -115,25 +133,34 @@
         "floonet": {
           "contacts": [
             {
-              "box_public": "039d548d78c58b39f3f3b11533be843392d3460998d7d8c370c3051c7af41b7663",
-              "contact_id": "00000000000000000000000000000000",
-              "enc_secret": "28e6997043425908f2f1a04acc81177a1849184faa5ac1dc23eb4e7f68e59096",
-              "hint_key": "e960851b8ad57d969799f6fea1d4fe404379838eb0a44620ada86681d343c9fb",
-              "sig_public": "49ae2ed4c6a93b6e3afef185afd38b6f0a47983380a6ccf5fceb2c4d1319e067"
+              "box_public": "02f8b23483019dcd2d79307d65f2488585ed2d9a8a0a089559c1d84244102a2940",
+              "box_salt": "00000000000000000000000000000000",
+              "box_secret": "1eb3d4159f872d7262f170b8712cb856a5dcb2cfedb4ca85d1e2c9f06efcfc8b",
+              "enc_public": "674d323e89a48bba677c027252463ae433232184efb60f4c2f0e1872af243021",
+              "enc_secret": "95a450cf10bd8490b2a4dc87c3f538b1473989430312f56fc6ed58183f3834d6",
+              "hint_key": "edef13f52c7e300b44f2c2b57dcade5ce795bbc5e9284ff40098c8a72a01889a",
+              "sig_public": "242bf3d33e8690ea0c8e8707f0c870f3dbc8b24fe0128f9263d431bb429c94b9",
+              "slot": 0
             },
             {
-              "box_public": "026a4d64e41a563a265ff5c9797feafe5ed23795173134a82d55dc3cdb5b0a748d",
-              "contact_id": "01010101010101010101010101010101",
-              "enc_secret": "66a4d7cd73a90069b415bf7a48a3d277e06633149d0309cd317fb1347b0035cb",
-              "hint_key": "4e8e953a1c68984bdf1d738487b9b1cc8a0575b7644adea37805d6f652285a48",
-              "sig_public": "760ab8bfc61a1bf02895bea3dc40ee6a8f74b48d2a1bb1ccef1f09c8ab3c117c"
+              "box_public": "03ee7c3104d30359c01252676213f379bc036d43216549de4236d501a239f95b00",
+              "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+              "box_secret": "e3175fed4ceeb425ba13087ef17768964be8bdb61e7cd8fbc8399d584ed18720",
+              "enc_public": "440505734f7ba4f9d29b6ee6fa79576327919dee49dfb7a15648d509fb027438",
+              "enc_secret": "f15b1394eefcfd9950a8e7424f516bb383651edfbdc9bf6ec7323778b1466a1f",
+              "hint_key": "c6d9aa4fd7f48d1f8c821b96c141b05d6c8425fea5c2b56653cbb8c0e6f6f19e",
+              "sig_public": "398daabd278881c2c006c2076026ad0a19d54c73ab272c1421e591fcdbc7ccf1",
+              "slot": 1
             },
             {
-              "box_public": "03d191ee2b61e4bfe9b8964294aa03ee53c2ddd1bd1ef2a502bb0df64684a34832",
-              "contact_id": "ffffffffffffffffffffffffffffffff",
-              "enc_secret": "e0cba79510ae1b31dcd623ec8da46be6b0287454bb3a64833f439e7b8327a4e0",
-              "hint_key": "e676bbde9aa642f1bc09298da9dd4676bf2978d07a5fb88b39c527fc83719c9c",
-              "sig_public": "b1fef066dfee20b312b6ada49ce1d91dcc8e8f565f50c02321fe1066622c06c2"
+              "box_public": "02fdb2f119c397252bf9714e7e46c9d35b539985677b2ab87d00987ad433cd387a",
+              "box_salt": "ffffffffffffffffffffffffffffffff",
+              "box_secret": "dffe03117ef46f70034652789f796e608ba2ce679a301165c5f4a3b69b3f6781",
+              "enc_public": "6633f1123b44783665d852d9990b34daf679ba7480399e1235a6f6a07cf07439",
+              "enc_secret": "69e55730443bb8ef64d129a587477c2d218ce3486856c30f5bbe2e76b84fbdfd",
+              "hint_key": "a746f1d554b5ea7e619ca96f556dc845a865ad26c1afc478f13aada10f1d0782",
+              "sig_public": "6efadec326e58b37a826f4381419f25368bbb28dfdb94e1e4187196192e5a553",
+              "slot": 65535
             }
           ],
           "mailboxes": [
@@ -167,25 +194,34 @@
         "mainnet": {
           "contacts": [
             {
-              "box_public": "0264f790b6c4beec043510ff1755ceb0eba769bc5f75736adef7880547d32284d7",
-              "contact_id": "00000000000000000000000000000000",
-              "enc_secret": "3142d0034121ff1861ef49797e240e8e6c5ca743566b8f27409f958bb218e354",
-              "hint_key": "33200c50ca527b6bc0e4139b9262a1c6333df1578e021f33df89ef7d96db2be8",
-              "sig_public": "1e3d2fefb11f9f839932c7ac5806046b20f5fefc5632cf1d7c4013c289699296"
+              "box_public": "0215b0322494b33f9a2fdcaa719c3152f4a650962e96c5fe6408c7f33f2422a0f8",
+              "box_salt": "00000000000000000000000000000000",
+              "box_secret": "f53c68286d1ac11da550a29470977bffbb7f49cdd40a4e2ff87fa93a1ca51708",
+              "enc_public": "443c6590960bc57bea0bc1e46f50d7f79055dc66947f6e6e6008d9544b600a64",
+              "enc_secret": "4e26b713a1c3eaaa52df9953f1a0bff1527422d97c5ec4ba5d553cab6f75736d",
+              "hint_key": "a1f023801452d70f30025df71b71c34f66129e604987fcc995d48fc690484ae3",
+              "sig_public": "49abf33650cbf3cec474c8ea3319673a6b8800aa81cdbd04a1e9eb49a8faeb9d",
+              "slot": 0
             },
             {
-              "box_public": "021cf5e119fa44ad36ec07377ee485cf38bae2318401b1a9788c15dd9f1aa933bf",
-              "contact_id": "01010101010101010101010101010101",
-              "enc_secret": "ae8a35a67fb6ebc1f355b2cda2acdcaf1ea08bc2e13384f3f5507b951cdb12c0",
-              "hint_key": "1b1cb9dc8aa28ce4338a29ea84eaac5cd08807662689bdd54d8efb3c15a76137",
-              "sig_public": "b0f3b72eb096cc3b02d1a3831ecdc0550284dc5a2c606ed29833439a7da2ddf5"
+              "box_public": "027822647695af81b604371e39f2e8bf96895bf33e53b993aef65c5295e7ade5de",
+              "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+              "box_secret": "fe60edcc8b8ace404f4a07171488d18f7ae5a58c24d52d119803f6a65c069b85",
+              "enc_public": "04dba632ea3a3ccc0d9c702a02e82465c933464cf89400ca7d6d681605c06f76",
+              "enc_secret": "3f8edba9e72d2858ea086eae042d7f35cc67b0cf723476d8f2bf511e1d34d035",
+              "hint_key": "eef4d5ec2cfd4e5dbedf07a623e2d86a3cc8ae17e0df9765e9f3c219832dd4a1",
+              "sig_public": "71178568359f6d88ee0b5df6279b2dc4af83f5b049081d9fa9659010dca4df91",
+              "slot": 1
             },
             {
-              "box_public": "02ab61582b0ae003b9a639058f09b1354c9ff21e2b1dd47bd6956d6143442601b6",
-              "contact_id": "ffffffffffffffffffffffffffffffff",
-              "enc_secret": "3a7b36efd3afcf5eb123fa19d3e7adf42965daa55b65a90201d11bcb9735dafc",
-              "hint_key": "94afe5c415b3cf2f45494b29431925958d36caeeb1cae6ef0cabf284d7fcc4eb",
-              "sig_public": "d2a1911f6275d04a82331160d2b121f0c32e6cc2693f0d864fd725cf72cd3b38"
+              "box_public": "03939263e619d6110a3039d6c94f95e9e5793992cafb7a2f16550644396da1858f",
+              "box_salt": "ffffffffffffffffffffffffffffffff",
+              "box_secret": "f54dc064690cf6f8974e1c36d75876c301cf7dcbbc07a44daf269492d6421eed",
+              "enc_public": "9926a6f3a474677dafb3dccd507a7e484021b76d310a315668b1c15344b2221a",
+              "enc_secret": "5ffe18bb29fba869e645cb3104e14f5a10d39a30535488fb3249df1f87d9c7d7",
+              "hint_key": "a588b6431c062c6a6679554cb5ff86ebb4c401900902cfe1db83d54c18902fab",
+              "sig_public": "1ad816c2f772e6e82f11290148874160412e450305c3c296681589ec06d1665c",
+              "slot": 65535
             }
           ],
           "mailboxes": [
@@ -225,25 +261,34 @@
     "floonet": {
       "contacts": [
         {
-          "box_public": "03e01e0b8cda937d8e5d6d800c6dd30a893d355075e4390dbefd75905885761ea0",
-          "contact_id": "00000000000000000000000000000000",
-          "enc_secret": "426ca0ec9658a1a5fb3a1c625618cc0304b61c0d476d1da5c0fbf01064ab877b",
-          "hint_key": "e4fa92c6ed92c1aa416a2ed575ea5a3dc27c6c8bb44bb0e0aca01bbc1173dd21",
-          "sig_public": "4bcdf011b77a6a3975c22f5ad082b72fabc929dba3220ce6d98d31ebe1ff0e66"
+          "box_public": "02beb3ee8e1abf71ed351e365e2be19b8b08bb6b869e469e4434552b5d6edf9dbb",
+          "box_salt": "00000000000000000000000000000000",
+          "box_secret": "299eea012c6b1cf8572553d835a20eac302b9c26e381247ffe2b5e47756365ac",
+          "enc_public": "08af977f92d1ac1793393dfd878f639b14e515c591018a2c8a5314eb251da552",
+          "enc_secret": "a1969277c08a4aa57cd80cad3b761101cca4906f005d037581eb2d4ea108828a",
+          "hint_key": "c21bf45f37c3a546e14396e451bd3b45e19be27d065663acfd73f147873c6dcf",
+          "sig_public": "c9435953949e44245b558de8bbaa550726735e2e51ce49e65a242864d2ccba8a",
+          "slot": 0
         },
         {
-          "box_public": "032b2ebf30a5fc0d3e88001a6826e605a4a95d22d47d78ebfa556b08a87ff3c574",
-          "contact_id": "01010101010101010101010101010101",
-          "enc_secret": "b0344b2da3a0fbf0545a95095187cbae8b153b31c7bb71c2a61a6bf09a27bd8c",
-          "hint_key": "becddade1b4e08e86cb135d1a8011fbbe1ec6d65cc1701929d255be652bf21cd",
-          "sig_public": "efac19fae423334a7ff74e318755108484b585ffffe2241f81d1f47ecd5b69c8"
+          "box_public": "03243c0bd0b796606caf22e8ca6c2fe1640bb8b5985b07412c78dcea03aadb73a4",
+          "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+          "box_secret": "7a545623b2369683ae8e44d58575893fb03f85e09c873fb812bc07e0a162a2fc",
+          "enc_public": "5439d87a841f4d5f96373e29ea321632af84e1aadd08030ce662bf91b7ea736a",
+          "enc_secret": "96030fcc620c0b8a3f0adf1aba0767ff47971bb0159887f51c8581f29c470c85",
+          "hint_key": "0de50dbb089cc9b2867257a604a6efe31e500274530b0eb6195937cfb5e66fb6",
+          "sig_public": "6848588630489a43516aca868f17e53ad8e3f4751431a155835b17ea234c6c10",
+          "slot": 1
         },
         {
-          "box_public": "035496ab4f9ab639a8a244b65337bfdc22a1342df8aba28286bc42653750a1b2af",
-          "contact_id": "ffffffffffffffffffffffffffffffff",
-          "enc_secret": "fa37b2ffe6122b47bf80f7630b24667a1f262beab6ec7b46cf19e840c33019ef",
-          "hint_key": "e4edc6631ca376fdb156a1f8dc0eee855eb68fb328038c37686f8d245bb28f54",
-          "sig_public": "1a3d27c810836929bb7794905bbb4db83393cdd467d9dbea9861e3acd061057f"
+          "box_public": "02fe88b60ca6b5729ae7576c109d83889c0ce76383bfdf1b996ca588222d5cbc56",
+          "box_salt": "ffffffffffffffffffffffffffffffff",
+          "box_secret": "56a07971aa1677cd583ec85a6b28f1ec67a26525f0c1bcc404ee4ad9622336fb",
+          "enc_public": "9a44e58ff48eae400605283f3e32a97bcb01526e2f4fce747f3ca71a69bc2d3a",
+          "enc_secret": "72339413c7cd61702d80061586487214e5da622c702c4f32cbe4be5aaa25de72",
+          "hint_key": "3dcb8a31a949dc83a629033631f67ed558b8c4578554db112ef7f2e7919f7f31",
+          "sig_public": "18de6b7001b2a906562617e1275348ca77e45926b6aa4f05f45d52976d715927",
+          "slot": 65535
         }
       ],
       "mailboxes": [
@@ -277,25 +322,34 @@
     "mainnet": {
       "contacts": [
         {
-          "box_public": "0385c7e3b1ecb1e39240b06fa928ff9e634cfb3166198b1147d940b81e54707537",
-          "contact_id": "00000000000000000000000000000000",
-          "enc_secret": "8f972ba3a4e5edb72df647112026a365c27863983b87c94b7485ab365dee0b10",
-          "hint_key": "24fe9053204567917b5c0fd74422583a3ce1d22481c1b85b7324e75549e9b0dd",
-          "sig_public": "4e77f8e4336e9c7eac095ed442b3233f44fddc2eaf277b75fd02951ac4911103"
+          "box_public": "02ae08fe68df3edc8963830fb0b7de5d0f1f3315fc992ce9c4684be85e75134aba",
+          "box_salt": "00000000000000000000000000000000",
+          "box_secret": "ca6be00828f4c8a07336c61c5d97a3899137290cc67ae953084045d3125c2216",
+          "enc_public": "c73cda633f8318a6b0b92a9760e7aa09bcf847cd90833d089359a8a57c05d14e",
+          "enc_secret": "99536a2845a34900833429ef430caca7e38ef3e52db4019b40f714a5a8094aaa",
+          "hint_key": "7881e36b53c48082637a11c15c1a5366643b2fcfba16b9fd0e1684bf6234cf18",
+          "sig_public": "b8b017ab9d93d4545952ad41fffbf651d742bc57b168d12550d4fec46f60e53b",
+          "slot": 0
         },
         {
-          "box_public": "02eff2d0f13acc8817320af464363f8b153c52faec5c13811d32990a03c8d7341c",
-          "contact_id": "01010101010101010101010101010101",
-          "enc_secret": "1dfb91ef9116200ebee853438524ec04df8d8d2011ba6ca3a962a3891311c1ea",
-          "hint_key": "7cb8d4c266e14d026e184d75d934699da09ac0354a3bd776124833df3e84bba2",
-          "sig_public": "17bde2b6aaed7d66c22b5649e0d435d37e7ff1e5b6055ab5b5ae8864403ebb51"
+          "box_public": "02b8c715944ea4b0498e5741405021fb7b4401c572821180e5bc8145c2a05ea17c",
+          "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+          "box_secret": "2636c12a5f13bdcc9e26cbaceed98385750647ff31a7ccfc0d4d835b253ddb2b",
+          "enc_public": "52de4cce72e64f84de7e8e5f1de2b58666e23aa804017db9a3388c580889d85e",
+          "enc_secret": "84b7b32e27c4bffc1f6b74a85e476986ed944b512b44df22249512904636fe7b",
+          "hint_key": "7ea4449d01457d44fc39d2fd7fce3cc56de2c4a08b20931620a1b40d48320527",
+          "sig_public": "bcff3df027b3a8c5ceed56a2bfb8c9a1aa1c02cfd79426f20ef94f7eec4715cc",
+          "slot": 1
         },
         {
-          "box_public": "027558ddcc41e9f4519477b28d2cfef7f9cde2aaa23dc56211949f706981e286d3",
-          "contact_id": "ffffffffffffffffffffffffffffffff",
-          "enc_secret": "a861830dcb781013a1d5ff11970305515369fddd6f7a70b64448a98ba6294c5c",
-          "hint_key": "aec14a74d77c46a70015fcfdf541396ea123be004ccb93fa75fd4f9f6a433338",
-          "sig_public": "d9f0d213204ebd0c1b2b1b39fad45171e04c4c241aa5d5f88ea202b802f79cad"
+          "box_public": "030a6a29a29c004fa66c085fe382ea75bff74bf66cb1032eb1973cffddb2d17a2a",
+          "box_salt": "ffffffffffffffffffffffffffffffff",
+          "box_secret": "70584a7cb6a731d30c6a8d852eb0902ebfa7edbc8cb36f3f4b2f9739060b431b",
+          "enc_public": "c277c1020c31cd01edf189c65428139749550f860ed84ff8fea39716915be323",
+          "enc_secret": "76bee6f043946d9c580c9c047cd3c8d9d1faf1c771148b5bd0dc6c03d8002576",
+          "hint_key": "694193bda852084d276b1d7b0ea44ac778e0b1fe0798f993aadbfbf6373da136",
+          "sig_public": "8b6e2e0ab954fe155fc50b6539a2f310d3a68bda46061f0da2bda70d875579b9",
+          "slot": 65535
         }
       ],
       "mailboxes": [

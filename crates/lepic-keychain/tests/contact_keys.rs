@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 use lepic_crypto::PublicKey;
 use lepic_keychain::{
-    ContactRoot, Identifier, Keychain, SwitchCommitment, contact_identity_key_id,
-    pairing_mailbox_keys,
+    ContactKeyError, ContactRoot, Identifier, Keychain, SLOT_COUNT, SwitchCommitment,
+    contact_identity_key_id, pairing_mailbox_keys,
 };
 use lepic_primitives::params::Network;
 use serde_json::{Value, json};
@@ -77,11 +77,12 @@ fn keys_are_deterministic_and_separated() {
     let root = keychain()
         .contact_root(&account(), Network::Mainnet)
         .unwrap();
-    let a = root.contact_keys([1; 16]).unwrap();
-    let a2 = root.contact_keys([1; 16]).unwrap();
-    let b = root.contact_keys([2; 16]).unwrap();
+    let a = root.contact_keys(1, [9; 16]).unwrap();
+    let a2 = root.contact_keys(1, [9; 16]).unwrap();
+    let b = root.contact_keys(2, [9; 16]).unwrap();
     assert_eq!(a.expose_enc_secret(), a2.expose_enc_secret());
     assert_eq!(a.sig_public_key(), a2.sig_public_key());
+    assert_eq!(a.box_public_key(), a2.box_public_key());
     assert_ne!(a.expose_enc_secret(), b.expose_enc_secret());
     assert_ne!(a.expose_hint_key(), b.expose_hint_key());
     assert_ne!(a.expose_enc_secret(), a.expose_hint_key());
@@ -92,11 +93,121 @@ fn keys_are_deterministic_and_separated() {
 }
 
 #[test]
+fn box_salt_changes_only_the_mailbox_key() {
+    let root = keychain()
+        .contact_root(&account(), Network::Mainnet)
+        .unwrap();
+    let a = root.contact_keys(5, [1; 16]).unwrap();
+    let b = root.contact_keys(5, [2; 16]).unwrap();
+    assert_eq!(a.expose_enc_secret(), b.expose_enc_secret());
+    assert_eq!(a.sig_public_key(), b.sig_public_key());
+    assert_eq!(a.expose_hint_key(), b.expose_hint_key());
+    assert_ne!(a.box_public_key(), b.box_public_key());
+}
+
+#[test]
+fn hint_key_alone_equals_the_slot_keys_hint_key() {
+    let root = keychain()
+        .contact_root(&account(), Network::Floonet)
+        .unwrap();
+    for slot in [0, 1, 4097, SLOT_COUNT - 1] {
+        let keys = root.contact_keys(slot, [3; 16]).unwrap();
+        assert_eq!(*root.hint_key(slot).unwrap(), *keys.expose_hint_key());
+    }
+}
+
+#[test]
+fn rejects_slots_from_65536() {
+    let root = keychain()
+        .contact_root(&account(), Network::Mainnet)
+        .unwrap();
+    for slot in [SLOT_COUNT, SLOT_COUNT + 1, u32::MAX] {
+        assert_eq!(
+            root.contact_keys(slot, [0; 16]).unwrap_err(),
+            ContactKeyError::SlotOutOfRange { slot }
+        );
+        assert_eq!(
+            root.hint_key(slot).unwrap_err(),
+            ContactKeyError::SlotOutOfRange { slot }
+        );
+    }
+}
+
+#[test]
+fn find_slot_recovers_the_slot_of_a_card() {
+    let root = keychain()
+        .contact_root(&account(), Network::Mainnet)
+        .unwrap();
+    for slot in [0, 31_337, SLOT_COUNT - 1] {
+        let keys = root.contact_keys(slot, [4; 16]).unwrap();
+        let found = root
+            .find_slot(
+                keys.expose_hint_key(),
+                &keys.enc_public_key(),
+                &keys.sig_public_key(),
+            )
+            .unwrap();
+        assert_eq!(found, Some(slot));
+    }
+}
+
+#[test]
+fn find_slot_refuses_cards_of_another_seed_or_mixed_keys() {
+    let root = keychain()
+        .contact_root(&account(), Network::Mainnet)
+        .unwrap();
+    let ours = root.contact_keys(12, [0; 16]).unwrap();
+    let other = ContactRoot::from_raw(&[0x33; 32], Network::Mainnet)
+        .unwrap()
+        .contact_keys(12, [0; 16])
+        .unwrap();
+    let find =
+        |hint: &[u8; 32], enc: &[u8; 32], sig: &[u8; 32]| root.find_slot(hint, enc, sig).unwrap();
+    assert_eq!(
+        find(
+            other.expose_hint_key(),
+            &other.enc_public_key(),
+            &other.sig_public_key()
+        ),
+        None
+    );
+    assert_eq!(
+        find(
+            ours.expose_hint_key(),
+            &other.enc_public_key(),
+            &ours.sig_public_key()
+        ),
+        None
+    );
+    assert_eq!(
+        find(
+            ours.expose_hint_key(),
+            &ours.enc_public_key(),
+            &other.sig_public_key()
+        ),
+        None
+    );
+    let floonet = keychain()
+        .contact_root(&account(), Network::Floonet)
+        .unwrap()
+        .contact_keys(12, [0; 16])
+        .unwrap();
+    assert_eq!(
+        find(
+            floonet.expose_hint_key(),
+            &floonet.enc_public_key(),
+            &floonet.sig_public_key()
+        ),
+        None
+    );
+}
+
+#[test]
 fn debug_output_is_redacted() {
     let root = keychain()
         .contact_root(&account(), Network::Mainnet)
         .unwrap();
-    let keys = root.contact_keys([1; 16]).unwrap();
+    let keys = root.contact_keys(1, [1; 16]).unwrap();
     let reply = root.reply_key([1; 16]).unwrap();
     let shown = format!("{root:?} {keys:?} {reply:?}");
     assert!(shown.contains("redacted"));
@@ -116,7 +227,7 @@ fn mailbox_keys_depend_on_seed_and_network() {
     assert_ne!(b1.expose_bytes(), f1.expose_bytes());
 }
 
-const CONTACT_IDS: [[u8; 16]; 3] = [[0; 16], [1; 16], [0xff; 16]];
+const SLOTS: [(u32, [u8; 16]); 3] = [(0, [0; 16]), (1, [0x5a; 16]), (SLOT_COUNT - 1, [0xff; 16])];
 const SLATE_IDS: [[u8; 16]; 2] = [
     [0; 16],
     [
@@ -130,15 +241,18 @@ fn network_block(raw: &[u8; 32]) -> Value {
     let mut networks = serde_json::Map::new();
     for (network, name) in NETWORKS {
         let root = ContactRoot::from_raw(raw, network).unwrap();
-        let contacts: Vec<Value> = CONTACT_IDS
+        let contacts: Vec<Value> = SLOTS
             .iter()
-            .map(|cid| {
-                let k = root.contact_keys(*cid).unwrap();
+            .map(|(slot, box_salt)| {
+                let k = root.contact_keys(*slot, *box_salt).unwrap();
                 json!({
-                    "contact_id": hex(cid),
+                    "slot": slot,
+                    "box_salt": hex(box_salt),
                     "enc_secret": hex(k.expose_enc_secret()),
+                    "enc_public": hex(&k.enc_public_key()),
                     "sig_public": hex(&k.sig_public_key()),
                     "hint_key": hex(k.expose_hint_key()),
+                    "box_secret": hex(k.expose_box_secret().expose_bytes()),
                     "box_public": hex(&k.box_public_key().to_bytes()),
                 })
             })

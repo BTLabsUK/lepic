@@ -2,8 +2,10 @@
 //! section 8.1.
 //!
 //! Everything here is derived from one 32-byte [`ContactRoot`] that depends only on the seed, the
-//! account and the network, plus a random `contact_id` or the slate id. The pairing mailbox keys
-//! are not seed-derived: they come from a code the pairing parties share.
+//! account and the network, plus a contact's slot (and, for its mailbox, a random salt) or the
+//! slate id. Slots are numbered so a restored wallet can find its keys for a contact again
+//! ([`ContactRoot::find_slot`]). The pairing mailbox keys are not seed-derived: they come from a
+//! code the pairing parties share.
 
 use std::fmt;
 
@@ -15,6 +17,7 @@ use lepic_crypto::{CryptoError, PublicKey, SecretKey};
 use lepic_primitives::params::Network;
 use sha2::Sha256;
 use thiserror::Error;
+use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::identifier::{Identifier, MAX_DEPTH};
@@ -26,12 +29,20 @@ const MAILBOX_SALT: &[u8] = b"epic-pair/1 mailbox";
 /// The second path component of the contact-identity branch.
 const CONTACT_BRANCH: u32 = 2;
 
+/// Slots run from 0 to `SLOT_COUNT - 1`; a wallet that used them all refuses new pairings.
+pub const SLOT_COUNT: u32 = 65_536;
+
+/// Length of the random salt of a contact's mailbox key.
+pub const BOX_SALT_LEN: usize = 16;
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ContactKeyError {
     #[error("key derivation failed")]
     Derivation,
     #[error("no valid secp256k1 key within 256 counter values")]
     NoValidKey,
+    #[error("contact slot {slot} is not below {SLOT_COUNT}")]
+    SlotOutOfRange { slot: u32 },
     #[error("key operation failed")]
     Crypto(#[from] CryptoError),
     #[error("account key derivation failed")]
@@ -113,17 +124,21 @@ impl ContactRoot {
             .map_err(|_| ContactKeyError::Derivation)
     }
 
-    /// The keys for the contact with `contact_id` (RFC 0002 2.2).
-    pub fn contact_keys(&self, contact_id: [u8; 16]) -> Result<ContactKeys, ContactKeyError> {
+    /// The keys for the contact in `slot`, with its mailbox salt `box_salt` (RFC 0002 2.2).
+    pub fn contact_keys(
+        &self,
+        slot: u32,
+        box_salt: [u8; BOX_SALT_LEN],
+    ) -> Result<ContactKeys, ContactKeyError> {
+        let slot_bytes = slot_bytes(slot)?;
         let mut enc_sk = Zeroizing::new([0u8; 32]);
-        self.expand(&[b"enc", &contact_id], &mut enc_sk)?;
+        self.expand(&[b"enc", &slot_bytes], &mut enc_sk)?;
         let mut sig_seed = Zeroizing::new([0u8; 32]);
-        self.expand(&[b"sig", &contact_id], &mut sig_seed)?;
+        self.expand(&[b"sig", &slot_bytes], &mut sig_seed)?;
         let sig_sk = SigningKey::from_bytes(&sig_seed);
-        let mut hint_key = Zeroizing::new([0u8; 32]);
-        self.expand(&[b"hint", &contact_id], &mut hint_key)?;
+        let hint_key = self.hint_key(slot)?;
         let box_sk = first_valid_key(
-            |ctr, out| self.expand(&[b"box", &contact_id, &[ctr]], out),
+            |ctr, out| self.expand(&[b"box", &slot_bytes, &box_salt, &[ctr]], out),
             |bytes| SecretKey::from_bytes(bytes).ok(),
         )?;
         let box_pk = PublicKey::from_secret_key(&box_sk)?;
@@ -134,6 +149,48 @@ impl ContactRoot {
             box_sk,
             box_pk,
         })
+    }
+
+    /// The hint key of `slot` alone: one HMAC, so a restore can scan every slot (RFC 0002 2.5).
+    pub fn hint_key(&self, slot: u32) -> Result<Zeroizing<[u8; 32]>, ContactKeyError> {
+        let mut hint_key = Zeroizing::new([0u8; 32]);
+        self.expand(&[b"hint", &slot_bytes(slot)?], &mut hint_key)?;
+        Ok(hint_key)
+    }
+
+    /// The slot whose keys a contact card holds for us, found from the card's hint key and
+    /// confirmed by its enc and sig keys (RFC 0002 2.5). `None` means the card was made by
+    /// another seed, account or network.
+    pub fn find_slot(
+        &self,
+        card_hint_key: &[u8; 32],
+        card_enc_pk: &[u8; 32],
+        card_sig_pk: &[u8; 32],
+    ) -> Result<Option<u32>, ContactKeyError> {
+        let hkdf =
+            Hkdf::<Sha256>::from_prk(self.0.as_slice()).map_err(|_| ContactKeyError::Derivation)?;
+        let mut hint_key = Zeroizing::new([0u8; 32]);
+        for slot in 0..SLOT_COUNT {
+            hkdf.expand(
+                &[b"hint".as_slice(), &slot.to_be_bytes()].concat(),
+                hint_key.as_mut(),
+            )
+            .map_err(|_| ContactKeyError::Derivation)?;
+            if *hint_key != *card_hint_key {
+                continue;
+            }
+            let slot_bytes = slot_bytes(slot)?;
+            let mut enc_sk = Zeroizing::new([0u8; 32]);
+            self.expand(&[b"enc", &slot_bytes], &mut enc_sk)?;
+            let mut sig_seed = Zeroizing::new([0u8; 32]);
+            self.expand(&[b"sig", &slot_bytes], &mut sig_seed)?;
+            if x25519(*enc_sk, X25519_BASEPOINT_BYTES) == *card_enc_pk
+                && SigningKey::from_bytes(&sig_seed).verifying_key().to_bytes() == *card_sig_pk
+            {
+                return Ok(Some(slot));
+            }
+        }
+        Ok(None)
     }
 
     /// The X25519 secret of the one-time reply key for the slate `slate_id` (RFC 0002 2.3).
@@ -167,6 +224,14 @@ impl fmt::Debug for ReplyKey {
     }
 }
 
+/// `be32(slot)` of a slot below [`SLOT_COUNT`].
+fn slot_bytes(slot: u32) -> Result<[u8; 4], ContactKeyError> {
+    if slot >= SLOT_COUNT {
+        return Err(ContactKeyError::SlotOutOfRange { slot });
+    }
+    Ok(slot.to_be_bytes())
+}
+
 /// The keys of one pairing record. Wiped on drop and never printed.
 pub struct ContactKeys {
     enc_sk: Zeroizing<[u8; 32]>,
@@ -181,6 +246,11 @@ impl ContactKeys {
     /// wiped.
     pub fn expose_enc_secret(&self) -> &[u8; 32] {
         &self.enc_sk
+    }
+
+    /// The X25519 public key the contact seals to.
+    pub fn enc_public_key(&self) -> [u8; 32] {
+        x25519(*self.enc_sk, X25519_BASEPOINT_BYTES)
     }
 
     /// The Ed25519 signing key.
