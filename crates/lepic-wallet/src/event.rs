@@ -76,6 +76,15 @@ pub enum Event {
     /// sender: anyone who knows the payments address can raise this with any id, so the host
     /// must only inform the user, never act on it or treat the sender as trusted.
     UnknownSlate(UnknownSlate),
+    /// A received payment that waited for its sender can never be mined: the inputs of the
+    /// sender's slate were spent by another transaction, and neither its kernel nor its output
+    /// is on chain. Another install of the same wallet, on the same recovery phrase, most
+    /// likely answered the same payment and the sender finalized that answer; the funds then
+    /// reached this wallet's seed through the other install. The payment was ended as a
+    /// cancel ends it, which its [`Event::Transaction`] to `cancelled` reports just before;
+    /// the host should say that another install took this payment and offer a rescan to see
+    /// it. Should the kernel still appear, a later refresh confirms the payment.
+    ReceiveSuperseded(SupersededReceive),
 }
 
 /// Whether the root key is in memory.
@@ -192,6 +201,12 @@ pub struct UnknownSlate {
     pub stage: Stage,
     /// The address the message came from, as the relay reported it.
     pub sender: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SupersededReceive {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

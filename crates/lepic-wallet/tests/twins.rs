@@ -1,6 +1,7 @@
 //! Two installs of one wallet, restored from one recovery phrase, on one Epicbox address of the
-//! mock relay: an answer that one install cannot use is left for the other, and a payment that
-//! both answered ends on the install whose answer the sender did not finalize.
+//! mock relay and one mock node: an answer that one install cannot use is left for the other,
+//! and a payment that both answered ends on the install whose answer the sender did not
+//! finalize.
 
 // Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers
 // that clippy does not treat as test code.
@@ -19,19 +20,23 @@ mod world;
 use std::time::Duration;
 
 use lepic_epicbox::TRANSPORT_ID;
+use lepic_node::LocatedKernel;
 use lepic_node::mock::ChainOutput;
-use lepic_primitives::amount::Amount;
+use lepic_primitives::amount::{Amount, Height};
+use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::stage::Stage;
-use lepic_store::{OutputStatus, TxId, TxState};
+use lepic_store::{OutputStatus, SlateStage, StoreError, TxDirection, TxId, TxState, WalletStore};
 use lepic_transport::transport::Destination;
-use lepic_wallet::Event;
+use lepic_wallet::event::SupersededReceive;
 use lepic_wallet::inbox::{
     InboxSummary, ListenHandle, MAX_TWIN_ANSWERS, TWIN_HOLD, TWIN_REQUEUE_WINDOW,
 };
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
+use lepic_wallet::{Event, ReceiveRequest};
 use tokio::sync::broadcast::Receiver;
-use world::{ACCOUNT, AMOUNT, FUNDING, Party, World, pay_request};
+use uuid::Uuid;
+use world::{ACCOUNT, AMOUNT, FUNDING, Party, TIP, World, pay_request};
 
 fn send_request() -> SendRequest {
     SendRequest {
@@ -394,4 +399,251 @@ fn hold_and_window_fit_the_relay() {
     assert!(TWIN_HOLD > Duration::from_secs(60));
     assert!(TWIN_HOLD < Duration::from_secs(3 * 60));
     assert!(TWIN_REQUEUE_WINDOW <= Duration::from_secs(24 * 60 * 60));
+}
+
+/// The payment `sent` as the sender stored its S1, as the relay hands it to either install.
+fn proposal(world: &World, sent: &SentSlate) -> WireSlate {
+    let slate_id = Uuid::from_bytes(*sent.slate_id.as_bytes());
+    let stored = world
+        .payer
+        .read(|repos| repos.slate(slate_id, SlateStage::Standard1))
+        .unwrap();
+    WireSlate::text(MediaType::JSON, String::from_utf8(stored.bytes).unwrap())
+}
+
+/// Moves the next receive key of `party` past the other install's, as an install with a
+/// history of its own has.
+fn skip_keys(party: &Party) {
+    party
+        .store()
+        .write(|repos| {
+            let mut account = repos.account(ACCOUNT)?.unwrap();
+            account.next_child += 7;
+            repos.put_account(&account)
+        })
+        .map_err(|error: StoreError| error)
+        .unwrap();
+}
+
+/// Mines the transaction the node accepted, in a block above the tip: its inputs are spent,
+/// its kernel is on chain, and so are its outputs unless `with_outputs` is false.
+fn mine_pushed(world: &World, with_outputs: bool) {
+    let pushed = world.node.pushed_transactions();
+    assert_eq!(pushed.len(), 1);
+    let transaction = &pushed[0];
+    let height = Height::new(TIP + 1);
+    world.node.update_chain(|chain| {
+        chain.tip.height = height;
+        for input in transaction.inputs() {
+            for output in &mut chain.outputs {
+                if output.commitment == input.commitment {
+                    output.spent = true;
+                }
+            }
+        }
+        let mut mmr_index = u64::try_from(chain.outputs.len()).unwrap() + 1;
+        if with_outputs {
+            for output in transaction.outputs() {
+                chain.outputs.push(ChainOutput {
+                    commitment: output.commitment,
+                    features: output.features,
+                    proof: output.proof.clone(),
+                    height,
+                    mmr_index,
+                    spent: false,
+                });
+                mmr_index += 1;
+            }
+        }
+        for kernel in transaction.kernels() {
+            chain.kernels.push(LocatedKernel {
+                kernel: *kernel,
+                height,
+                mmr_index,
+            });
+        }
+    });
+}
+
+fn superseded(events: &mut Receiver<Event>) -> Vec<SupersededReceive> {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::ReceiveSuperseded(superseded) => Some(superseded),
+            _ => None,
+        })
+        .collect()
+}
+
+fn incoming(party: &Party) -> (TxId, TxState) {
+    let transactions = party.read(|repos| repos.transactions(ACCOUNT));
+    let incoming: Vec<_> = transactions
+        .iter()
+        .filter(|stored| stored.entry.direction == TxDirection::Incoming)
+        .collect();
+    assert_eq!(incoming.len(), 1, "{transactions:?}");
+    (incoming[0].id, incoming[0].entry.state)
+}
+
+fn unconfirmed_outputs(party: &Party) -> usize {
+    party
+        .read(|repos| repos.outputs(ACCOUNT, None))
+        .iter()
+        .filter(|output| output.status == OutputStatus::Unconfirmed)
+        .count()
+}
+
+fn refresh(world: &World, party: &Party) {
+    world.block_on(party.wallet.refresh()).unwrap();
+}
+
+/// Both installs of the issuer answer one S1; the issuer's answer reaches the sender first.
+/// Each install refreshes once while the sender's inputs are unspent, as a running app does.
+fn answered_twice(world: &World, twin: &Party) -> SentSlate {
+    let sent = send(world);
+    let twin_answer = world
+        .block_on(twin.wallet.receive(
+            TRANSPORT_ID,
+            &proposal(world, &sent),
+            ReceiveRequest::default(),
+        ))
+        .unwrap();
+    assert!(!twin_answer.repeated);
+    assert_eq!(drain(world, &world.issuer).received, 1);
+    refresh(world, twin);
+    refresh(world, &world.issuer);
+    sent
+}
+
+#[test]
+fn the_receive_whose_answer_the_sender_did_not_finalize_is_superseded() {
+    let world = World::new();
+    on_chain(&world, &world.payer);
+    let twin = world.issuer_twin();
+    skip_keys(&twin);
+    let sent = answered_twice(&world, &twin);
+    assert_eq!(drain(&world, &world.payer).finalized, 1);
+    mine_pushed(&world, true);
+    let mut twin_events = twin.wallet.subscribe();
+
+    world.block_on(twin.wallet.refresh()).unwrap();
+
+    let (tx_id, state) = incoming(&twin);
+    assert_eq!(state, TxState::Cancelled);
+    assert_eq!(unconfirmed_outputs(&twin), 0, "its output was dropped");
+    assert_eq!(
+        superseded(&mut twin_events),
+        vec![SupersededReceive {
+            tx_id,
+            slate_id: sent.slate_id,
+        }]
+    );
+    // The install whose answer was finalized confirms it by its output.
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    world.block_on(world.issuer.wallet.refresh()).unwrap();
+    assert_eq!(incoming(&world.issuer).1, TxState::Confirmed);
+    assert!(superseded(&mut issuer_events).is_empty());
+}
+
+#[test]
+fn a_receive_whose_own_output_is_on_chain_is_confirmed_not_superseded() {
+    let world = World::new();
+    on_chain(&world, &world.payer);
+    // Without a history of its own the twin derives the same key, so the sender's
+    // transaction pays the twin's output too.
+    let twin = world.issuer_twin();
+    answered_twice(&world, &twin);
+    assert_eq!(drain(&world, &world.payer).finalized, 1);
+    mine_pushed(&world, true);
+    let mut twin_events = twin.wallet.subscribe();
+
+    world.block_on(twin.wallet.refresh()).unwrap();
+
+    assert_eq!(incoming(&twin).1, TxState::Confirmed);
+    assert!(superseded(&mut twin_events).is_empty());
+}
+
+#[test]
+fn a_receive_whose_kernel_is_on_chain_is_confirmed_not_superseded() {
+    let world = World::new();
+    on_chain(&world, &world.payer);
+    let twin = world.issuer_twin();
+    skip_keys(&twin);
+    answered_twice(&world, &twin);
+    assert_eq!(drain(&world, &world.payer).finalized, 1);
+    // The node reports the kernel and the spent inputs, but not yet the output.
+    mine_pushed(&world, false);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    world.block_on(world.issuer.wallet.refresh()).unwrap();
+
+    assert_eq!(incoming(&world.issuer).1, TxState::Confirmed);
+    assert!(superseded(&mut issuer_events).is_empty());
+}
+
+#[test]
+fn a_receive_whose_inputs_are_unspent_waits_and_costs_no_kernel_lookup() {
+    let world = World::new();
+    on_chain(&world, &world.payer);
+    let twin = world.issuer_twin();
+    skip_keys(&twin);
+    answered_twice(&world, &twin);
+    let mut twin_events = twin.wallet.subscribe();
+    let kernel_lookups = || {
+        world
+            .node
+            .calls()
+            .iter()
+            .filter(|call| call.as_str() == "get_kernel")
+            .count()
+    };
+    let before = kernel_lookups();
+
+    world.block_on(twin.wallet.refresh()).unwrap();
+
+    assert_eq!(incoming(&twin).1, TxState::Received);
+    assert!(superseded(&mut twin_events).is_empty());
+    assert_eq!(kernel_lookups(), before);
+}
+
+#[test]
+fn a_receive_whose_inputs_no_refresh_saw_unspent_is_not_superseded() {
+    let world = World::new();
+    on_chain(&world, &world.payer);
+    let twin = world.issuer_twin();
+    skip_keys(&twin);
+    let sent = send(&world);
+    world
+        .block_on(twin.wallet.receive(
+            TRANSPORT_ID,
+            &proposal(&world, &sent),
+            ReceiveRequest::default(),
+        ))
+        .unwrap();
+    assert_eq!(drain(&world, &world.issuer).received, 1);
+    assert_eq!(drain(&world, &world.payer).finalized, 1);
+    // Mined before the twin looked: its inputs might as well never have been on chain.
+    mine_pushed(&world, true);
+    let mut twin_events = twin.wallet.subscribe();
+
+    refresh(&world, &twin);
+
+    assert_eq!(incoming(&twin).1, TxState::Received);
+    assert!(superseded(&mut twin_events).is_empty());
+}
+
+#[test]
+fn a_node_whose_tip_is_not_past_the_slate_supersedes_nothing() {
+    let world = World::new();
+    on_chain(&world, &world.payer);
+    let twin = world.issuer_twin();
+    skip_keys(&twin);
+    answered_twice(&world, &twin);
+    // A node still syncing below the sender's tip does not hold the inputs yet.
+    spend_everything(&world);
+    let mut twin_events = twin.wallet.subscribe();
+
+    refresh(&world, &twin);
+
+    assert_eq!(incoming(&twin).1, TxState::Received);
+    assert!(superseded(&mut twin_events).is_empty());
 }
