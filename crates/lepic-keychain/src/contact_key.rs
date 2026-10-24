@@ -1,0 +1,297 @@
+//! The contact-identity keys of RFC 0002 sections 2.1 to 2.3, and the pairing mailbox keys of
+//! section 8.1.
+//!
+//! Everything here is derived from one 32-byte [`ContactRoot`] that depends only on the seed, the
+//! account and the network, plus a random `contact_id` or the slate id. The pairing mailbox keys
+//! are not seed-derived: they come from a code the pairing parties share.
+
+use std::fmt;
+
+use blake2::Blake2b256;
+use blake2::digest::{FixedOutput, Update};
+use ed25519_dalek::SigningKey;
+use hkdf::Hkdf;
+use lepic_crypto::{CryptoError, PublicKey, SecretKey};
+use lepic_primitives::params::Network;
+use sha2::Sha256;
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
+
+use crate::identifier::{Identifier, MAX_DEPTH};
+use crate::keychain::{Keychain, KeychainError, SwitchCommitment};
+
+const ROOT_SALT: &[u8] = b"epic-contact/1";
+const MAILBOX_SALT: &[u8] = b"epic-pair/1 mailbox";
+
+/// The second path component of the contact-identity branch.
+const CONTACT_BRANCH: u32 = 2;
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ContactKeyError {
+    #[error("key derivation failed")]
+    Derivation,
+    #[error("no valid secp256k1 key within 256 counter values")]
+    NoValidKey,
+    #[error("key operation failed")]
+    Crypto(#[from] CryptoError),
+    #[error("account key derivation failed")]
+    Keychain(#[from] KeychainError),
+}
+
+/// The path `m/<a>/2/0` of the contact-identity root key under the account at `parent`.
+pub fn contact_identity_key_id(parent: &Identifier) -> Result<Identifier, KeychainError> {
+    let depth = parent.depth();
+    if depth >= MAX_DEPTH {
+        return Err(KeychainError::AddressParentTooDeep { depth });
+    }
+    let mut components = parent.components();
+    if let Some(branch) = components.get_mut(1) {
+        *branch = CONTACT_BRANCH;
+    }
+    if let Some(slot) = components.get_mut(usize::from(depth)) {
+        *slot = 0;
+    }
+    let child_depth = depth
+        .checked_add(1)
+        .ok_or(KeychainError::AddressParentTooDeep { depth })?;
+    Identifier::new(child_depth, components)
+        .map_err(|_| KeychainError::AddressParentTooDeep { depth })
+}
+
+const fn network_byte(network: Network) -> u8 {
+    match network {
+        Network::Mainnet => 0,
+        Network::Floonet => 1,
+    }
+}
+
+impl Keychain {
+    /// The contact-identity root of the account at `parent` on `network` (RFC 0002 2.1).
+    pub fn contact_root(
+        &self,
+        parent: &Identifier,
+        network: Network,
+    ) -> Result<ContactRoot, ContactKeyError> {
+        let id = contact_identity_key_id(parent)?;
+        let raw = self.derive_key(0, &id, SwitchCommitment::None)?;
+        ContactRoot::from_raw(raw.expose_bytes(), network)
+    }
+}
+
+/// The 32-byte contact-identity root. Wiped on drop and never printed.
+pub struct ContactRoot(Zeroizing<[u8; 32]>);
+
+impl ContactRoot {
+    /// The root for a raw account key `raw` (the plain BIP32 output at `m/<a>/2/0`) on `network`:
+    /// `HKDF(salt = "epic-contact/1", ikm = BLAKE2b-256(raw), info = "root" || net)`. This is the
+    /// step [`Keychain::contact_root`] performs after deriving `raw`, exposed so other
+    /// implementations can be checked against it from a raw key alone.
+    pub fn from_raw(raw: &[u8; 32], network: Network) -> Result<Self, ContactKeyError> {
+        let mut state = Blake2b256::default();
+        state.update(raw);
+        let mut hashed = state.finalize_fixed();
+        let hkdf = Hkdf::<Sha256>::new(Some(ROOT_SALT), &hashed);
+        hashed.as_mut_slice().zeroize();
+        let mut root = Zeroizing::new([0u8; 32]);
+        hkdf.expand(
+            &[b"root".as_slice(), &[network_byte(network)]].concat(),
+            root.as_mut(),
+        )
+        .map_err(|_| ContactKeyError::Derivation)?;
+        Ok(Self(root))
+    }
+
+    /// The raw root. Callers must not log it or copy it into memory that is not wiped.
+    pub fn expose_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    fn expand(&self, parts: &[&[u8]], out: &mut [u8; 32]) -> Result<(), ContactKeyError> {
+        let hkdf =
+            Hkdf::<Sha256>::from_prk(self.0.as_slice()).map_err(|_| ContactKeyError::Derivation)?;
+        hkdf.expand(&parts.concat(), out)
+            .map_err(|_| ContactKeyError::Derivation)
+    }
+
+    /// The keys for the contact with `contact_id` (RFC 0002 2.2).
+    pub fn contact_keys(&self, contact_id: [u8; 16]) -> Result<ContactKeys, ContactKeyError> {
+        let mut enc_sk = Zeroizing::new([0u8; 32]);
+        self.expand(&[b"enc", &contact_id], &mut enc_sk)?;
+        let mut sig_seed = Zeroizing::new([0u8; 32]);
+        self.expand(&[b"sig", &contact_id], &mut sig_seed)?;
+        let sig_sk = SigningKey::from_bytes(&sig_seed);
+        let mut hint_key = Zeroizing::new([0u8; 32]);
+        self.expand(&[b"hint", &contact_id], &mut hint_key)?;
+        let box_sk = first_valid_key(
+            |ctr, out| self.expand(&[b"box", &contact_id, &[ctr]], out),
+            |bytes| SecretKey::from_bytes(bytes).ok(),
+        )?;
+        let box_pk = PublicKey::from_secret_key(&box_sk)?;
+        Ok(ContactKeys {
+            enc_sk,
+            sig_sk,
+            hint_key,
+            box_sk,
+            box_pk,
+        })
+    }
+
+    /// The X25519 secret of the one-time reply key for the slate `slate_id` (RFC 0002 2.3).
+    pub fn reply_key(&self, slate_id: [u8; 16]) -> Result<ReplyKey, ContactKeyError> {
+        let mut key = Zeroizing::new([0u8; 32]);
+        self.expand(&[b"reply", &slate_id], &mut key)?;
+        Ok(ReplyKey(key))
+    }
+}
+
+impl fmt::Debug for ContactRoot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ContactRoot([redacted])")
+    }
+}
+
+/// The X25519 secret of a one-time reply key. Wiped on drop and never printed.
+pub struct ReplyKey(Zeroizing<[u8; 32]>);
+
+impl ReplyKey {
+    /// The secret bytes, to be used as an X25519 private key. Callers must not log them or copy
+    /// them into memory that is not wiped.
+    pub fn expose_x25519_secret(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ReplyKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ReplyKey([redacted])")
+    }
+}
+
+/// The keys of one pairing record. Wiped on drop and never printed.
+pub struct ContactKeys {
+    enc_sk: Zeroizing<[u8; 32]>,
+    sig_sk: SigningKey,
+    hint_key: Zeroizing<[u8; 32]>,
+    box_sk: SecretKey,
+    box_pk: PublicKey,
+}
+
+impl ContactKeys {
+    /// The X25519 secret bytes. Callers must not log them or copy them into memory that is not
+    /// wiped.
+    pub fn expose_enc_secret(&self) -> &[u8; 32] {
+        &self.enc_sk
+    }
+
+    /// The Ed25519 signing key.
+    pub fn expose_signing_key(&self) -> &SigningKey {
+        &self.sig_sk
+    }
+
+    pub fn sig_public_key(&self) -> [u8; 32] {
+        self.sig_sk.verifying_key().to_bytes()
+    }
+
+    /// The key that tags envelopes from this contact.
+    pub fn expose_hint_key(&self) -> &[u8; 32] {
+        &self.hint_key
+    }
+
+    pub fn expose_box_secret(&self) -> &SecretKey {
+        &self.box_sk
+    }
+
+    pub fn box_public_key(&self) -> &PublicKey {
+        &self.box_pk
+    }
+}
+
+impl fmt::Debug for ContactKeys {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ContactKeys([redacted])")
+    }
+}
+
+/// The mailbox key pair of a pairing (RFC 0002 8.1): the key messages are read at and the key
+/// they are posted from.
+pub fn pairing_mailbox_keys(
+    seed: [u8; 16],
+    network: Network,
+) -> Result<(SecretKey, SecretKey), ContactKeyError> {
+    let net = network_byte(network);
+    let hkdf = Hkdf::<Sha256>::new(Some(MAILBOX_SALT), &seed);
+    let derive = |label: &[u8]| {
+        first_valid_key(
+            |ctr, out| {
+                hkdf.expand(&[label, &[net, ctr]].concat(), out)
+                    .map_err(|_| ContactKeyError::Derivation)
+            },
+            |bytes| SecretKey::from_bytes(bytes).ok(),
+        )
+    };
+    Ok((derive(b"box")?, derive(b"from")?))
+}
+
+/// The first output for `ctr` from 0 up that `accept` turns into a key.
+fn first_valid_key<K>(
+    mut derive: impl FnMut(u8, &mut [u8; 32]) -> Result<(), ContactKeyError>,
+    accept: impl Fn(&[u8; 32]) -> Option<K>,
+) -> Result<K, ContactKeyError> {
+    for ctr in 0..=u8::MAX {
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        derive(ctr, &mut bytes)?;
+        if let Some(key) = accept(&bytes) {
+            return Ok(key);
+        }
+    }
+    Err(ContactKeyError::NoValidKey)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contact_path_of_default_account() {
+        let parent = Identifier::new(2, [0, 0, 0, 0]).unwrap();
+        let id = contact_identity_key_id(&parent).unwrap();
+        assert_eq!(id, Identifier::new(3, [0, 2, 0, 0]).unwrap());
+        assert_eq!(id.to_bip32_path(), "m/0/2/0");
+    }
+
+    #[test]
+    fn rejects_contact_parent_at_maximum_depth() {
+        let parent = Identifier::new(4, [0, 0, 0, 0]).unwrap();
+        assert_eq!(
+            contact_identity_key_id(&parent),
+            Err(KeychainError::AddressParentTooDeep { depth: 4 })
+        );
+    }
+
+    #[test]
+    fn counter_loop_takes_first_accepted_output() {
+        let mut seen = Vec::new();
+        let key = first_valid_key(
+            |ctr, out| {
+                seen.push(ctr);
+                *out = [ctr; 32];
+                Ok(())
+            },
+            |bytes| (bytes[0] == 3).then_some(bytes[0]),
+        );
+        assert_eq!(key, Ok(3));
+        assert_eq!(seen, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn counter_loop_gives_up_after_256_values() {
+        let key = first_valid_key(|_, _| Ok(()), |_| None::<u8>);
+        assert_eq!(key, Err(ContactKeyError::NoValidKey));
+    }
+
+    #[test]
+    fn counter_loop_passes_up_derivation_errors() {
+        let key = first_valid_key(|_, _| Err(ContactKeyError::Derivation), |_| Some(0u8));
+        assert_eq!(key, Err(ContactKeyError::Derivation));
+    }
+}

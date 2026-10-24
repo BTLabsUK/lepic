@@ -1,0 +1,332 @@
+{
+  "comment": "LEPIC's own output, not independent vectors. The independent Python kit cross-checks it as golden vectors under testdata/vectors/pairing. RFC 0002 2.1-2.3 and 8.1.",
+  "from_raw": [
+    {
+      "networks": {
+        "floonet": {
+          "contacts": [
+            {
+              "box_public": "02356bbbf7e3bdb88431e492a1a262ebf61129383aad3eac1cf2197c2e324a148b",
+              "contact_id": "00000000000000000000000000000000",
+              "enc_secret": "acfa3ff421a4d5ab9f5dbb5d66f1e55934934254b6354cf29cd57bdd0a4cda8f",
+              "hint_key": "cfc1bf9533588d22e7d19980f8adf1147d02714e5b4ad83273468f5e36249fef",
+              "sig_public": "0bde21e1926544d359531ac8d3db7dc6a35f77d79aef89df6f4e96b010e4857f"
+            },
+            {
+              "box_public": "03b9d5a1091b6ba7ec9f4dacdb46e32bdf674b30a3b0c2f578dc337e9fb74e7334",
+              "contact_id": "01010101010101010101010101010101",
+              "enc_secret": "63a5c24c394cefdb33eed752104e9dab8d2b5be4a12d92ae3d84b970d4448e80",
+              "hint_key": "0c3f99777ea58c751a12af0d2af7b42ca7989914fdf7957b495eb3542b1d7862",
+              "sig_public": "85219492a40553037231da35c759eeca9cbee30c69203e181ab2eda3e37e7679"
+            },
+            {
+              "box_public": "0304350a55fc66e156b6cf8aad72c9fd148ef0dd32c94dff9f31d4dc7d372496a5",
+              "contact_id": "ffffffffffffffffffffffffffffffff",
+              "enc_secret": "8924ab9437373134918444b54cecfe8a06a736b76e6e6f5e871e55716ec37036",
+              "hint_key": "697b28a6a6e3c216489c144cf6c521cb65d6476850a60ba5c7f4c70dd2d7a719",
+              "sig_public": "a15c239f764f64795b2d566bc491620859865ea6e1d8f1ef131ffbbeab152c17"
+            }
+          ],
+          "mailboxes": [
+            {
+              "box_public": "03f3930586188714fdedaaef20b626c30977d1492c11bf9e95a4a24b3f3eba238e",
+              "box_secret": "303eae496ff593fc7b74a9c5ccca524f2e6c1a323aea9d6fa11a0e1ec7c51ba1",
+              "from_public": "03a01655e88743395f91f9f34d3ed2236554b5d93c52fe91c5ea8cc0232bc25be0",
+              "from_secret": "f778ef66de3385ddb8e17fa739e03bfeb274041aa410faaa584613a7c975deb3",
+              "seed": "00000000000000000000000000000000"
+            },
+            {
+              "box_public": "024b7b959459d17a37577f4a311272d5a493dc9b7cbb5854275879affc28a605d4",
+              "box_secret": "aeeba4ae3014a4ec213ffa44d01ce2a80c154bc6292e9efd504798f217b7f692",
+              "from_public": "03fb84530424b6d4e05b66e7f613c0877b48b03e9fca1a844139639bcfd8811f7d",
+              "from_secret": "4214d376a2cf84fa6698e950569bb19c1fc65760ea9f08e8fd81fd11547274c7",
+              "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+            }
+          ],
+          "replies": [
+            {
+              "reply_secret": "816df39a6cbef7d8695882a4737a1b4e66f3bd96e73fedf9bcfd2b7f7e572f1f",
+              "slate_id": "00000000000000000000000000000000"
+            },
+            {
+              "reply_secret": "30c0f7e42e3b05cc950af2a82d5572958ecd29e3d2e3a544ead9e479f175926c",
+              "slate_id": "0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "root": "b05885fd87f40e04b7f9e77a83965971ef1f38097707a2d0dacb0f4c7bb8a5c0"
+        },
+        "mainnet": {
+          "contacts": [
+            {
+              "box_public": "02127d924ce4f89acd5121a9ba98c084fb19dae8ac2878b6d877f88f4baf3352a5",
+              "contact_id": "00000000000000000000000000000000",
+              "enc_secret": "f340e4bc5378a1ad46dcee04b8dda94055abd2a2db1727ba2ab292277b5f7b04",
+              "hint_key": "e423f8d4d2cdf632a588bbe601d99e0839b7d9cdb3aa0bde24ab7faf70ff72fd",
+              "sig_public": "c2ce7f3ef1a772c52dd657f64b36ffd522e6530ebbe19e4b1241cbbd100d3317"
+            },
+            {
+              "box_public": "03cf301f3304eee00e6a9610c1fdc16576a295a256e9e53c760232bdfda4914f5f",
+              "contact_id": "01010101010101010101010101010101",
+              "enc_secret": "a7b44146206af3d444b756f9228e8bc8d2de5c8f81a2c700f06c8c158b1570bb",
+              "hint_key": "a918148849bcdd831a9ba1c88adcc9d2107c51ef0e4ccf06866271587516a628",
+              "sig_public": "adad711dbd1f1a656772c0810a7bf2c13b8da2ed9703b77de880aaa9b6d1b6f3"
+            },
+            {
+              "box_public": "0376a3fce8dc109448ea3395707000266de9b226291aae26b36313c17944c86efa",
+              "contact_id": "ffffffffffffffffffffffffffffffff",
+              "enc_secret": "5790c35563c84148f10e52be65b5b4d5551a1ddadbbfd76d1561d47469204d2d",
+              "hint_key": "a16d37c5574522529f63d3068dd81b4704518da4bd97e613371fc1e159d7875d",
+              "sig_public": "1016a206214f8827799b73152cde9d027e1955e6986478fcc9c8d0077e1f7a0e"
+            }
+          ],
+          "mailboxes": [
+            {
+              "box_public": "0397e6ab930689a304b395ae8d36b3b526f55e76675885c9d56b83d6ba5b6effbe",
+              "box_secret": "12fc6ac28d19402bc1ec722b215f1d327bb4b97490dee1880775b6a0571d07b3",
+              "from_public": "0269d6e65c6ce8ab4a9ecdc3e809c7204a2aecc8d7d639ae1e4044dee29caf4f5b",
+              "from_secret": "8b461260d653883f5de41743bc334774d6350db934e0ef0f9f47d29493e09823",
+              "seed": "00000000000000000000000000000000"
+            },
+            {
+              "box_public": "02349a1fc6cc4a47ff4e33acfc85a93a2e4335f4b70ce23d927f518cf02f0fe9d7",
+              "box_secret": "5c14b312f8e2a5d824cb93f6a103271a9e05c4bbde42624dde67746323018b25",
+              "from_public": "02dc637abb4116e6d1017d19cb725ae6a756e0bd4e5d9ceb51b28b147b49f2c3fa",
+              "from_secret": "4f41cde255571e054d988d744f994e139d86e4ead73f44846892b99b89722a8b",
+              "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+            }
+          ],
+          "replies": [
+            {
+              "reply_secret": "322eed8aca329204d4874161e54230f1f533166fa3e9f74ffc56836021727b44",
+              "slate_id": "00000000000000000000000000000000"
+            },
+            {
+              "reply_secret": "0508e7b8591e514df48987a858cb9bbaad66e370002dd5ef4f52ac305d6da40d",
+              "slate_id": "0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "root": "8749d5517f6f34e7508e802e555ccd44f56582518aacbff6013695caf7fbf005"
+        }
+      },
+      "raw": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "networks": {
+        "floonet": {
+          "contacts": [
+            {
+              "box_public": "039d548d78c58b39f3f3b11533be843392d3460998d7d8c370c3051c7af41b7663",
+              "contact_id": "00000000000000000000000000000000",
+              "enc_secret": "28e6997043425908f2f1a04acc81177a1849184faa5ac1dc23eb4e7f68e59096",
+              "hint_key": "e960851b8ad57d969799f6fea1d4fe404379838eb0a44620ada86681d343c9fb",
+              "sig_public": "49ae2ed4c6a93b6e3afef185afd38b6f0a47983380a6ccf5fceb2c4d1319e067"
+            },
+            {
+              "box_public": "026a4d64e41a563a265ff5c9797feafe5ed23795173134a82d55dc3cdb5b0a748d",
+              "contact_id": "01010101010101010101010101010101",
+              "enc_secret": "66a4d7cd73a90069b415bf7a48a3d277e06633149d0309cd317fb1347b0035cb",
+              "hint_key": "4e8e953a1c68984bdf1d738487b9b1cc8a0575b7644adea37805d6f652285a48",
+              "sig_public": "760ab8bfc61a1bf02895bea3dc40ee6a8f74b48d2a1bb1ccef1f09c8ab3c117c"
+            },
+            {
+              "box_public": "03d191ee2b61e4bfe9b8964294aa03ee53c2ddd1bd1ef2a502bb0df64684a34832",
+              "contact_id": "ffffffffffffffffffffffffffffffff",
+              "enc_secret": "e0cba79510ae1b31dcd623ec8da46be6b0287454bb3a64833f439e7b8327a4e0",
+              "hint_key": "e676bbde9aa642f1bc09298da9dd4676bf2978d07a5fb88b39c527fc83719c9c",
+              "sig_public": "b1fef066dfee20b312b6ada49ce1d91dcc8e8f565f50c02321fe1066622c06c2"
+            }
+          ],
+          "mailboxes": [
+            {
+              "box_public": "03f3930586188714fdedaaef20b626c30977d1492c11bf9e95a4a24b3f3eba238e",
+              "box_secret": "303eae496ff593fc7b74a9c5ccca524f2e6c1a323aea9d6fa11a0e1ec7c51ba1",
+              "from_public": "03a01655e88743395f91f9f34d3ed2236554b5d93c52fe91c5ea8cc0232bc25be0",
+              "from_secret": "f778ef66de3385ddb8e17fa739e03bfeb274041aa410faaa584613a7c975deb3",
+              "seed": "00000000000000000000000000000000"
+            },
+            {
+              "box_public": "024b7b959459d17a37577f4a311272d5a493dc9b7cbb5854275879affc28a605d4",
+              "box_secret": "aeeba4ae3014a4ec213ffa44d01ce2a80c154bc6292e9efd504798f217b7f692",
+              "from_public": "03fb84530424b6d4e05b66e7f613c0877b48b03e9fca1a844139639bcfd8811f7d",
+              "from_secret": "4214d376a2cf84fa6698e950569bb19c1fc65760ea9f08e8fd81fd11547274c7",
+              "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+            }
+          ],
+          "replies": [
+            {
+              "reply_secret": "ee98584d52901ba1d3ba12f2209b0239f773585d989a5299e11a390af22e1125",
+              "slate_id": "00000000000000000000000000000000"
+            },
+            {
+              "reply_secret": "afa9ba5643227e25f46a0118ac32ce8fa4031eb271a6ab4e8553e885fa30c6b9",
+              "slate_id": "0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "root": "97d2e07bf8248db84efff0c0d7ef8b8df2fff32dd0e1b70f15ef1a09fb967b8c"
+        },
+        "mainnet": {
+          "contacts": [
+            {
+              "box_public": "0264f790b6c4beec043510ff1755ceb0eba769bc5f75736adef7880547d32284d7",
+              "contact_id": "00000000000000000000000000000000",
+              "enc_secret": "3142d0034121ff1861ef49797e240e8e6c5ca743566b8f27409f958bb218e354",
+              "hint_key": "33200c50ca527b6bc0e4139b9262a1c6333df1578e021f33df89ef7d96db2be8",
+              "sig_public": "1e3d2fefb11f9f839932c7ac5806046b20f5fefc5632cf1d7c4013c289699296"
+            },
+            {
+              "box_public": "021cf5e119fa44ad36ec07377ee485cf38bae2318401b1a9788c15dd9f1aa933bf",
+              "contact_id": "01010101010101010101010101010101",
+              "enc_secret": "ae8a35a67fb6ebc1f355b2cda2acdcaf1ea08bc2e13384f3f5507b951cdb12c0",
+              "hint_key": "1b1cb9dc8aa28ce4338a29ea84eaac5cd08807662689bdd54d8efb3c15a76137",
+              "sig_public": "b0f3b72eb096cc3b02d1a3831ecdc0550284dc5a2c606ed29833439a7da2ddf5"
+            },
+            {
+              "box_public": "02ab61582b0ae003b9a639058f09b1354c9ff21e2b1dd47bd6956d6143442601b6",
+              "contact_id": "ffffffffffffffffffffffffffffffff",
+              "enc_secret": "3a7b36efd3afcf5eb123fa19d3e7adf42965daa55b65a90201d11bcb9735dafc",
+              "hint_key": "94afe5c415b3cf2f45494b29431925958d36caeeb1cae6ef0cabf284d7fcc4eb",
+              "sig_public": "d2a1911f6275d04a82331160d2b121f0c32e6cc2693f0d864fd725cf72cd3b38"
+            }
+          ],
+          "mailboxes": [
+            {
+              "box_public": "0397e6ab930689a304b395ae8d36b3b526f55e76675885c9d56b83d6ba5b6effbe",
+              "box_secret": "12fc6ac28d19402bc1ec722b215f1d327bb4b97490dee1880775b6a0571d07b3",
+              "from_public": "0269d6e65c6ce8ab4a9ecdc3e809c7204a2aecc8d7d639ae1e4044dee29caf4f5b",
+              "from_secret": "8b461260d653883f5de41743bc334774d6350db934e0ef0f9f47d29493e09823",
+              "seed": "00000000000000000000000000000000"
+            },
+            {
+              "box_public": "02349a1fc6cc4a47ff4e33acfc85a93a2e4335f4b70ce23d927f518cf02f0fe9d7",
+              "box_secret": "5c14b312f8e2a5d824cb93f6a103271a9e05c4bbde42624dde67746323018b25",
+              "from_public": "02dc637abb4116e6d1017d19cb725ae6a756e0bd4e5d9ceb51b28b147b49f2c3fa",
+              "from_secret": "4f41cde255571e054d988d744f994e139d86e4ead73f44846892b99b89722a8b",
+              "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+            }
+          ],
+          "replies": [
+            {
+              "reply_secret": "32b4de706ba291ef0e5df6151adb2724e50cf44f0026952577641be2ca7a0cad",
+              "slate_id": "00000000000000000000000000000000"
+            },
+            {
+              "reply_secret": "81586d4fee65045d573d3bfd31ba501079f8a65c5abde3079946a70e9711e08c",
+              "slate_id": "0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "root": "9175c42fa358d7e15dc5da09490cbcf63e8a451294c0d1e4df4f52c7ddc99a4a"
+        }
+      },
+      "raw": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "mnemonic": "pipe stock song coast pair always emotion member joy sting dash theory",
+  "mnemonic_networks": {
+    "floonet": {
+      "contacts": [
+        {
+          "box_public": "03e01e0b8cda937d8e5d6d800c6dd30a893d355075e4390dbefd75905885761ea0",
+          "contact_id": "00000000000000000000000000000000",
+          "enc_secret": "426ca0ec9658a1a5fb3a1c625618cc0304b61c0d476d1da5c0fbf01064ab877b",
+          "hint_key": "e4fa92c6ed92c1aa416a2ed575ea5a3dc27c6c8bb44bb0e0aca01bbc1173dd21",
+          "sig_public": "4bcdf011b77a6a3975c22f5ad082b72fabc929dba3220ce6d98d31ebe1ff0e66"
+        },
+        {
+          "box_public": "032b2ebf30a5fc0d3e88001a6826e605a4a95d22d47d78ebfa556b08a87ff3c574",
+          "contact_id": "01010101010101010101010101010101",
+          "enc_secret": "b0344b2da3a0fbf0545a95095187cbae8b153b31c7bb71c2a61a6bf09a27bd8c",
+          "hint_key": "becddade1b4e08e86cb135d1a8011fbbe1ec6d65cc1701929d255be652bf21cd",
+          "sig_public": "efac19fae423334a7ff74e318755108484b585ffffe2241f81d1f47ecd5b69c8"
+        },
+        {
+          "box_public": "035496ab4f9ab639a8a244b65337bfdc22a1342df8aba28286bc42653750a1b2af",
+          "contact_id": "ffffffffffffffffffffffffffffffff",
+          "enc_secret": "fa37b2ffe6122b47bf80f7630b24667a1f262beab6ec7b46cf19e840c33019ef",
+          "hint_key": "e4edc6631ca376fdb156a1f8dc0eee855eb68fb328038c37686f8d245bb28f54",
+          "sig_public": "1a3d27c810836929bb7794905bbb4db83393cdd467d9dbea9861e3acd061057f"
+        }
+      ],
+      "mailboxes": [
+        {
+          "box_public": "03f3930586188714fdedaaef20b626c30977d1492c11bf9e95a4a24b3f3eba238e",
+          "box_secret": "303eae496ff593fc7b74a9c5ccca524f2e6c1a323aea9d6fa11a0e1ec7c51ba1",
+          "from_public": "03a01655e88743395f91f9f34d3ed2236554b5d93c52fe91c5ea8cc0232bc25be0",
+          "from_secret": "f778ef66de3385ddb8e17fa739e03bfeb274041aa410faaa584613a7c975deb3",
+          "seed": "00000000000000000000000000000000"
+        },
+        {
+          "box_public": "024b7b959459d17a37577f4a311272d5a493dc9b7cbb5854275879affc28a605d4",
+          "box_secret": "aeeba4ae3014a4ec213ffa44d01ce2a80c154bc6292e9efd504798f217b7f692",
+          "from_public": "03fb84530424b6d4e05b66e7f613c0877b48b03e9fca1a844139639bcfd8811f7d",
+          "from_secret": "4214d376a2cf84fa6698e950569bb19c1fc65760ea9f08e8fd81fd11547274c7",
+          "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+        }
+      ],
+      "replies": [
+        {
+          "reply_secret": "1e61b93164e5d85537fe812f11cc79f71cd99b3f1741db11b8f07297ea915fa9",
+          "slate_id": "00000000000000000000000000000000"
+        },
+        {
+          "reply_secret": "213b22cd78794050447ceec7cadf586a1507131d79015b6cea5b32c4cdd53972",
+          "slate_id": "0123456789abcdef0123456789abcdef"
+        }
+      ],
+      "root": "3fb7e26618631be44899929325ec9e087691249729b7e6116983dd55f7cbb7bb"
+    },
+    "mainnet": {
+      "contacts": [
+        {
+          "box_public": "0385c7e3b1ecb1e39240b06fa928ff9e634cfb3166198b1147d940b81e54707537",
+          "contact_id": "00000000000000000000000000000000",
+          "enc_secret": "8f972ba3a4e5edb72df647112026a365c27863983b87c94b7485ab365dee0b10",
+          "hint_key": "24fe9053204567917b5c0fd74422583a3ce1d22481c1b85b7324e75549e9b0dd",
+          "sig_public": "4e77f8e4336e9c7eac095ed442b3233f44fddc2eaf277b75fd02951ac4911103"
+        },
+        {
+          "box_public": "02eff2d0f13acc8817320af464363f8b153c52faec5c13811d32990a03c8d7341c",
+          "contact_id": "01010101010101010101010101010101",
+          "enc_secret": "1dfb91ef9116200ebee853438524ec04df8d8d2011ba6ca3a962a3891311c1ea",
+          "hint_key": "7cb8d4c266e14d026e184d75d934699da09ac0354a3bd776124833df3e84bba2",
+          "sig_public": "17bde2b6aaed7d66c22b5649e0d435d37e7ff1e5b6055ab5b5ae8864403ebb51"
+        },
+        {
+          "box_public": "027558ddcc41e9f4519477b28d2cfef7f9cde2aaa23dc56211949f706981e286d3",
+          "contact_id": "ffffffffffffffffffffffffffffffff",
+          "enc_secret": "a861830dcb781013a1d5ff11970305515369fddd6f7a70b64448a98ba6294c5c",
+          "hint_key": "aec14a74d77c46a70015fcfdf541396ea123be004ccb93fa75fd4f9f6a433338",
+          "sig_public": "d9f0d213204ebd0c1b2b1b39fad45171e04c4c241aa5d5f88ea202b802f79cad"
+        }
+      ],
+      "mailboxes": [
+        {
+          "box_public": "0397e6ab930689a304b395ae8d36b3b526f55e76675885c9d56b83d6ba5b6effbe",
+          "box_secret": "12fc6ac28d19402bc1ec722b215f1d327bb4b97490dee1880775b6a0571d07b3",
+          "from_public": "0269d6e65c6ce8ab4a9ecdc3e809c7204a2aecc8d7d639ae1e4044dee29caf4f5b",
+          "from_secret": "8b461260d653883f5de41743bc334774d6350db934e0ef0f9f47d29493e09823",
+          "seed": "00000000000000000000000000000000"
+        },
+        {
+          "box_public": "02349a1fc6cc4a47ff4e33acfc85a93a2e4335f4b70ce23d927f518cf02f0fe9d7",
+          "box_secret": "5c14b312f8e2a5d824cb93f6a103271a9e05c4bbde42624dde67746323018b25",
+          "from_public": "02dc637abb4116e6d1017d19cb725ae6a756e0bd4e5d9ceb51b28b147b49f2c3fa",
+          "from_secret": "4f41cde255571e054d988d744f994e139d86e4ead73f44846892b99b89722a8b",
+          "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+        }
+      ],
+      "replies": [
+        {
+          "reply_secret": "cc74d42c7abe2ec48e45baaf33b1689f5aecc574e8babaf91f2c027f928fe49c",
+          "slate_id": "00000000000000000000000000000000"
+        },
+        {
+          "reply_secret": "4d5818b3c6bc6e6202a83557ad375a21c3e437272097d82f94c790637c450c8b",
+          "slate_id": "0123456789abcdef0123456789abcdef"
+        }
+      ],
+      "root": "f33cc2b2f49662b5031db6a94f1a3ac85ef3ec01b59d43b1d55a5d43318cac96"
+    }
+  },
+  "path": "m/0/2/0",
+  "raw_key": "571491b3e67bb667c68f8ecf2093c74f97c642895994764d59eba77b8456cde9"
+}
