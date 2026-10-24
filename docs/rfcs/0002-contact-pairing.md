@@ -321,7 +321,8 @@ later version defines them they are rejected as unknown. A card is at most 1,024
 `contact` and `pair` links at most 4,096 characters, the `pair-reply` and `pair-confirm` links
 at most 96 KiB.
 
-Same TLV rules as 3.3. A card from a contact replaces the stored one only when its signature
+Address texts (tags 08, 09, 0A here, and 09, 0A, 0B of the invite) are printable ASCII, `!` to
+`~`, with domains in punycode. Same TLV rules as 3.3. A card from a contact replaces the stored one only when its signature
 verifies with the recorded `sig_pk` and its `seq` is higher. The name is the contact's claim; the
 app shows the user's own label for the contact and the claimed name only as "calls themselves".
 
