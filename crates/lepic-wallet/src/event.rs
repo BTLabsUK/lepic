@@ -65,13 +65,14 @@ pub enum Event {
     /// issued until the host cancels it or it expires. A bounce redelivered before its relay
     /// message was settled raises this again for the same `tx_id`; treat it as the same bounce.
     InvoiceBounced(BouncedInvoice),
-    /// An S2 or an I2 arrived over Epicbox for a slate this wallet's store does not know, and
-    /// was refused for good, as before. Another install of the same wallet, on the same
-    /// recovery phrase and so the same payments address, may have sent the payment or issued
-    /// the invoice it answers; that install never receives it, and the payer's funds stay
-    /// locked until the payer cancels. The host should tell the user. Nothing changed here.
-    /// An answer redelivered before its relay message was settled raises this again for the
-    /// same `slate_id`; treat it as the same answer. Nothing verifies the slate id or the
+    /// An S2 or an I2 arrived over Epicbox for a slate this wallet's store does not know.
+    /// Another install of the same wallet, on the same recovery phrase and so the same
+    /// payments address, may have sent the payment or issued the invoice it answers. The
+    /// message is left on the relay for that install, and requeued for it, for up to
+    /// [`crate::inbox::TWIN_REQUEUE_WINDOW`]; the host should say that the other install must
+    /// be opened to finish the payment. Raised once per answer, when it is first seen, and
+    /// also when it is refused at once because [`crate::inbox::MAX_TWIN_ANSWERS`] others are
+    /// cycling. Nothing changed here. Nothing verifies the slate id or the
     /// sender: anyone who knows the payments address can raise this with any id, so the host
     /// must only inform the user, never act on it or treat the sender as trusted.
     UnknownSlate(UnknownSlate),
