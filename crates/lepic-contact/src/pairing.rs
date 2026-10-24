@@ -216,13 +216,20 @@ pub fn seal_reply<R: CryptoRng>(
     )
 }
 
-/// Opens a pairing reply with the invite's enc key.
+/// Opens a pairing reply with the invite's enc key. A reply is anonymous; a signed one is refused.
 pub fn open_reply(
     envelope: &SealedEnvelope<'_>,
     key: &EncSecretKey,
 ) -> Result<ReplyBody, DecodeError> {
     let opened = envelope.open(key)?;
+    let signed = opened.sender.is_some();
     let body = expect_type(opened, MessageType::PairingReply)?;
+    if signed {
+        return Err(Malformed::Signed {
+            kind: MessageType::PairingReply.byte(),
+        }
+        .into());
+    }
     ReplyBody::decode(&body, envelope.network())
 }
 

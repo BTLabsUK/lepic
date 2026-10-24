@@ -1000,7 +1000,9 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 name = "lepic-contact"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "base64",
+ "chacha20poly1305",
  "ed25519-dalek",
  "hmac",
  "hpke",
@@ -1126,6 +1128,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "x25519-dalek",
  "zeroize",
 ]
 

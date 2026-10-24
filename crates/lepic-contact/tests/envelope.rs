@@ -333,6 +333,12 @@ fn minimal() -> Vec<u8> {
 }
 
 #[test]
+fn a_sender_key_without_a_signature_counts_as_anonymous() {
+    let opened = open_inner(&[minimal(), field(0x08, &[0; 32])].concat()).unwrap();
+    assert_eq!(opened.sender, None);
+}
+
+#[test]
 fn inner_rejections_have_their_own_errors() {
     let cases: Vec<(Vec<u8>, DecodeError)> = vec![
         (
@@ -384,8 +390,12 @@ fn inner_rejections_have_their_own_errors() {
             Malformed::FieldLength { tag: 0x06 }.into(),
         ),
         (
-            [minimal(), field(0x08, &[0; 32])].concat(),
-            Malformed::SenderKeyWithoutSignature.into(),
+            [field(0x01, &[8]), field(0x02, b"{}")].concat(),
+            Malformed::FieldValue { tag: 0x01 }.into(),
+        ),
+        (
+            [minimal(), field(0x08, &[0; 31])].concat(),
+            Malformed::FieldLength { tag: 0x08 }.into(),
         ),
         (
             [minimal(), field(0xff, &[0; 64])].concat(),
@@ -483,9 +493,12 @@ fn the_signature_binds_the_header() {
 fn armor_round_trips_and_reads_quoted_text() {
     let (bob, envelope) = valid_envelope();
     let text = armor(&envelope);
-    assert!(text.starts_with("BEGINEPICSEALED.\n"));
-    assert!(text.ends_with(".\nENDEPICSEALED."));
-    assert!(text.lines().all(|line| line.len() <= 76));
+    let payload = text
+        .strip_prefix("BEGINEPICSEALED. ")
+        .and_then(|rest| rest.strip_suffix(". ENDEPICSEALED."))
+        .unwrap();
+    assert!(payload.lines().all(|line| line.len() <= 76));
+    assert!(payload.lines().count() > 1);
     assert!(looks_sealed(&format!("\n  {text}")));
     assert!(!looks_sealed("{\"version_info\":{}}"));
     assert_eq!(dearmor(&text).unwrap(), envelope);

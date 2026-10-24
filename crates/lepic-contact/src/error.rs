@@ -19,6 +19,8 @@ pub enum DecodeError {
     BadSignature,
     #[error("the envelope cannot be opened with this key")]
     CannotOpen,
+    #[error("signed by another key than the contact's")]
+    KeyChanged,
 }
 
 /// What exactly was wrong with malformed input, for logs and tests.
@@ -56,8 +58,10 @@ pub enum Malformed {
     FieldValue { tag: u8 },
     #[error("pairing body has an invalid value")]
     Body,
-    #[error("sender key without a signature")]
-    SenderKeyWithoutSignature,
+    #[error("message type {kind} must be signed")]
+    Unsigned { kind: u8 },
+    #[error("message type {kind} must be anonymous")]
+    Signed { kind: u8 },
 }
 
 /// Why something could not be built or sealed.
@@ -106,4 +110,17 @@ pub enum SasTableError {
     MissingLine { index: u8 },
     #[error("sas table line {index} is not emoji, tab, name")]
     BadLine { index: u8 },
+}
+
+/// Why pairing words could not be read or used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum WordsError {
+    #[error("the words are not five entries of the table")]
+    Unknown,
+    #[error("no invite opens with these words")]
+    CannotOpen,
+    #[error("stretching the words failed")]
+    Derivation,
+    #[error("sealing the invite failed")]
+    Encryption,
 }

@@ -1242,7 +1242,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "timer",
- "x25519-dalek",
+ "x25519-dalek 2.0.1",
 ]
 
 [[package]]
@@ -1360,7 +1360,7 @@ dependencies = [
  "tokio",
  "tungstenite",
  "uuid",
- "x25519-dalek",
+ "x25519-dalek 2.0.1",
 ]
 
 [[package]]
@@ -2377,6 +2377,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.21",
+ "x25519-dalek 3.0.0",
  "zeroize",
 ]
 
@@ -5452,6 +5453,16 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "zeroize",
+]
+
+[[package]]
+name = "x25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e8131a03190127fb2263afc72b322ecadae46b6ff8c6f399ff5d02f5559af6"
+dependencies = [
+ "curve25519-dalek 5.0.0",
+ "rand_core 0.10.1",
 ]
 
 [[package]]

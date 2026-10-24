@@ -54,16 +54,21 @@ pub enum MessageType {
     PairingReply,
     PairingConfirm,
     ContactUpdate,
+    /// Asks whether the recipient can take back the keys of an older pairing (RFC 0002 7.8).
+    KeyCheck,
+    KeyCheckAnswer,
 }
 
 impl MessageType {
-    fn byte(self) -> u8 {
+    pub(crate) fn byte(self) -> u8 {
         match self {
             Self::Slate => 0x01,
             Self::Notice => 0x02,
             Self::PairingReply => 0x03,
             Self::PairingConfirm => 0x04,
             Self::ContactUpdate => 0x05,
+            Self::KeyCheck => 0x06,
+            Self::KeyCheckAnswer => 0x07,
         }
     }
 
@@ -74,6 +79,8 @@ impl MessageType {
             0x03 => Self::PairingReply,
             0x04 => Self::PairingConfirm,
             0x05 => Self::ContactUpdate,
+            0x06 => Self::KeyCheck,
+            0x07 => Self::KeyCheckAnswer,
             _ => return None,
         })
     }
@@ -144,7 +151,8 @@ impl Content {
 }
 
 /// An opened envelope. `sender` is set exactly when the envelope was signed and the signature
-/// verified with that key; the caller still checks it is the contact's recorded key.
+/// verified with that key; the caller still checks it is the contact's recorded key. Which types
+/// must be signed or anonymous is checked above the envelope, by the openers of each type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opened {
     pub content: Content,
@@ -383,6 +391,25 @@ impl<'a> SealedEnvelope<'a> {
         self.enc
     }
 
+    /// Opens with one candidate key for a contact whose recorded sig key is `expected`: a valid
+    /// signature by another key is [`DecodeError::KeyChanged`] (RFC 0002 3.4). An anonymous
+    /// envelope opens with no sender; whether its type may be anonymous is the caller's check.
+    pub fn open_from(
+        &self,
+        key: &EncSecretKey,
+        expected: &VerifyingKey,
+    ) -> Result<Opened, DecodeError> {
+        let opened = self.open(key)?;
+        if opened
+            .sender
+            .as_ref()
+            .is_some_and(|sender| sender != expected)
+        {
+            return Err(DecodeError::KeyChanged);
+        }
+        Ok(opened)
+    }
+
     /// Opens with one candidate key. Any failure of HPKE is [`DecodeError::CannotOpen`], whatever
     /// step failed; content that opens but is malformed or badly signed has its own error.
     pub fn open(&self, key: &EncSecretKey) -> Result<Opened, DecodeError> {
@@ -446,8 +473,8 @@ fn decode_content(
             })
             .transpose()?,
     ) {
-        (None, None) => None,
-        (Some(_), None) => return Err(Malformed::SenderKeyWithoutSignature.into()),
+        // A sender key without a signature proves nothing, so the envelope counts as anonymous.
+        (None | Some(_), None) => None,
         (None, Some(_)) => {
             return Err(Malformed::MissingField {
                 tag: TAG_SENDER_KEY,

@@ -11,14 +11,15 @@ pub const SEALED_FILE_EXTENSION: &str = "epicsealed";
 const HEADER: &str = "BEGINEPICSEALED";
 const FOOTER: &str = "ENDEPICSEALED";
 const LINE_LEN: usize = 76;
-/// The header, the footer, their periods and the line breaks around the payload.
-const FRAMING_LEN: usize = HEADER.len() + FOOTER.len() + 5;
+/// The header, the footer, their periods and the spaces after them.
+const FRAMING_LEN: usize = HEADER.len() + FOOTER.len() + 4;
 
 fn is_framing_noise(c: char) -> bool {
     matches!(c, '>' | '\n' | '\r' | '\t' | ' ')
 }
 
-/// The armored text of an envelope, its payload broken into lines of 76 characters.
+/// The armored text of an envelope, `BEGINEPICSEALED. <payload>. ENDEPICSEALED.`, its payload
+/// broken into lines of 76 characters.
 pub fn armor(envelope: &[u8]) -> String {
     let payload = encode_checked(envelope);
     let mut text = String::with_capacity(
@@ -28,7 +29,7 @@ pub fn armor(envelope: &[u8]) -> String {
             .saturating_add(FRAMING_LEN),
     );
     text.push_str(HEADER);
-    text.push_str(".\n");
+    text.push_str(". ");
     let mut rest = payload.as_str();
     while !rest.is_empty() {
         let (line, tail) = rest.split_at(rest.len().min(LINE_LEN));
@@ -38,7 +39,7 @@ pub fn armor(envelope: &[u8]) -> String {
         }
         rest = tail;
     }
-    text.push_str(".\n");
+    text.push_str(". ");
     text.push_str(FOOTER);
     text.push('.');
     text

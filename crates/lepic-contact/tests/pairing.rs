@@ -16,6 +16,11 @@ use lepic_contact::{
     PairingLink, RelayHost, ReplyBody, Sas, SealedEnvelope, open_confirm, open_reply,
     pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_reply,
 };
+use lepic_contact::{
+    CardFields, Content, HintRule, KeyCheckBody, KeyCheckStatus, MessageType, open_contact_update,
+    open_key_check, open_key_check_answer, seal, seal_contact_update, seal_key_check,
+    seal_key_check_answer,
+};
 use proptest::prelude::*;
 
 const NET: Network = Network::Floonet;
@@ -489,4 +494,178 @@ proptest! {
         let card = ContactCard::sign(NET, fields, &alice.sig).unwrap();
         prop_assert_eq!(ContactCard::from_link(&card.to_link(), NET).unwrap(), card);
     }
+}
+
+// Key check (RFC 0002 7.8) and contact update.
+
+fn edited_card(side: &Side, name: &str, edit: impl FnOnce(&mut CardFields)) -> ContactCard {
+    let mut fields = side.fields(name);
+    edit(&mut fields);
+    ContactCard::sign(NET, fields, &side.sig).unwrap()
+}
+
+#[test]
+fn key_check_round_trips_and_needs_the_new_peer_key() {
+    // X holds an old pairing with Y and re-paired; X asks over the new pairing.
+    let (x_old, x_new, y_old, y_new) = (Side::new(1), Side::new(11), Side::new(21), Side::new(31));
+    let body = KeyCheckBody {
+        recipient_old_card: y_old.card("Yan", NET),
+        sender_old_card: x_old.card("Xia", NET),
+    };
+    let envelope = seal_key_check(
+        &y_new.card("Yan", NET),
+        &body,
+        &x_new.sig,
+        &mut ScriptedRng::seeded(1),
+    )
+    .unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    assert_eq!(
+        open_key_check(&sealed, &y_new.enc, &x_new.sig.verifying_key()).unwrap(),
+        body
+    );
+    assert_eq!(
+        open_key_check(&sealed, &y_new.enc, &x_old.sig.verifying_key()),
+        Err(DecodeError::KeyChanged)
+    );
+    assert_eq!(
+        KeyCheckBody::decode(&body.encode().unwrap(), NET).unwrap(),
+        body
+    );
+}
+
+#[test]
+fn key_check_bodies_refuse_bad_lengths_and_cards() {
+    let card = Side::new(1).card("Xia", NET);
+    let bytes = card.as_bytes();
+    let length = u16::try_from(bytes.len()).unwrap().to_be_bytes();
+    let cases: Vec<Vec<u8>> = vec![
+        Vec::new(),
+        vec![0, 0],
+        [&[0, 0][..], bytes].concat(),
+        [&length[..], bytes].concat(),
+        [
+            &(u16::try_from(bytes.len()).unwrap() + 1).to_be_bytes()[..],
+            bytes,
+            bytes,
+        ]
+        .concat(),
+        [&length[..], bytes, &bytes[..bytes.len() - 1]].concat(),
+    ];
+    for case in cases {
+        assert_eq!(
+            KeyCheckBody::decode(&case, NET),
+            Err(Malformed::Body.into()),
+            "{case:02x?}"
+        );
+    }
+}
+
+#[test]
+fn key_check_answer_round_trips() {
+    let (x_new, y_new) = (Side::new(11), Side::new(31));
+    let envelope = seal_key_check_answer(
+        &x_new.card("Xia", NET),
+        KeyCheckStatus::NotThisWallet,
+        &y_new.sig,
+        &mut ScriptedRng::seeded(2),
+    )
+    .unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    assert_eq!(
+        open_key_check_answer(&sealed, &x_new.enc, &y_new.sig.verifying_key()).unwrap(),
+        KeyCheckStatus::NotThisWallet
+    );
+}
+
+#[test]
+fn key_check_types_must_be_signed() {
+    let (x, y) = (Side::new(11), Side::new(31));
+    let y_card = y.card("Yan", NET);
+    for (kind, body) in [
+        (MessageType::KeyCheck, Vec::new()),
+        (MessageType::KeyCheckAnswer, vec![1]),
+        (
+            MessageType::ContactUpdate,
+            x.card("Xia", NET).as_bytes().to_vec(),
+        ),
+    ] {
+        let envelope = seal(
+            NET,
+            y_card.enc_key(),
+            HintRule::Contact(&y.hint),
+            &Content::new(kind, body),
+            None,
+            &mut ScriptedRng::seeded(3),
+        )
+        .unwrap();
+        let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+        let peer = x.sig.verifying_key();
+        let error = match kind {
+            MessageType::KeyCheck => open_key_check(&sealed, &y.enc, &peer).err(),
+            MessageType::KeyCheckAnswer => open_key_check_answer(&sealed, &y.enc, &peer).err(),
+            _ => open_contact_update(&sealed, &y.enc, &peer).err(),
+        };
+        assert!(
+            matches!(
+                error,
+                Some(DecodeError::Malformed(Malformed::Unsigned { .. }))
+            ),
+            "{kind:?}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn contact_update_carries_a_card_of_the_signing_key() {
+    let (x, y) = (Side::new(11), Side::new(31));
+    let newer = edited_card(&x, "Xia", |fields| fields.seq = 2);
+    let envelope = seal_contact_update(
+        &y.card("Yan", NET),
+        &newer,
+        &x.sig,
+        &mut ScriptedRng::seeded(4),
+    )
+    .unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    assert_eq!(
+        open_contact_update(&sealed, &y.enc, &x.sig.verifying_key()).unwrap(),
+        newer
+    );
+    assert_eq!(
+        seal_contact_update(
+            &y.card("Yan", NET),
+            &Side::new(41).card("Other", NET),
+            &x.sig,
+            &mut ScriptedRng::seeded(5),
+        ),
+        Err(EncodeError::SigningKeyMismatch)
+    );
+}
+
+#[test]
+fn a_signed_pairing_reply_is_refused() {
+    let alice = Side::new(1);
+    let bob = Side::new(2);
+    let card = alice.card("Alice", NET);
+    let invite = invite_for(&alice, &card, &Nonce::zero());
+    let body = ReplyBody {
+        code: invite.fields().code.clone(),
+        nonce: Nonce::zero(),
+        confirm_code: ConfirmCode::from_bytes([3; 16]),
+        card: bob.card("Bob", NET),
+    };
+    let envelope = seal(
+        NET,
+        &invite.fields().enc_key,
+        HintRule::Invite(invite.id()),
+        &Content::new(MessageType::PairingReply, body.encode()),
+        Some(&bob.sig),
+        &mut ScriptedRng::seeded(6),
+    )
+    .unwrap();
+    assert_eq!(
+        open_reply(&SealedEnvelope::decode(&envelope, NET).unwrap(), &alice.enc),
+        Err(Malformed::Signed { kind: 3 }.into())
+    );
 }
