@@ -263,7 +263,7 @@ async fn serve_control(
                     std::future::pending::<()>().await;
                     return;
                 }
-                Some("ACTIVE") => "250 OK\r\n".to_owned(),
+                Some("ACTIVE" | "NEWNYM") => "250 OK\r\n".to_owned(),
                 _ => {
                     write.write_all(b"250 OK\r\n").await.unwrap();
                     return;
@@ -638,6 +638,7 @@ async fn a_refresh_wakes_tor_and_after_a_network_change_reconnects_it() {
             "SETCONF DisableNetwork=1".to_owned(),
             "SETCONF DisableNetwork=0".to_owned(),
             "GETINFO net/listeners/socks".to_owned(),
+            "SIGNAL NEWNYM".to_owned(),
             "SIGNAL ACTIVE".to_owned(),
         ]
     );

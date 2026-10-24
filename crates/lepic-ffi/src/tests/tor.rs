@@ -206,7 +206,9 @@ async fn serve_control(
                 }
             }
             "TAKEOWNERSHIP" | "RESETCONF" | "SETEVENTS" | "SETCONF" => "250 OK\r\n".to_owned(),
-            "SIGNAL" if line == "SIGNAL ACTIVE" => "250 OK\r\n".to_owned(),
+            "SIGNAL" if line == "SIGNAL ACTIVE" || line == "SIGNAL NEWNYM" => {
+                "250 OK\r\n".to_owned()
+            }
             "DEL_ONION" => {
                 onions.lock().unwrap().remove(words.next().unwrap());
                 "250 OK\r\n".to_owned()
@@ -452,11 +454,12 @@ async fn a_refresh_reaches_the_running_tor_and_keeps_the_onion() {
     pair.bob.refresh_tor(true).await.unwrap();
     let commands = commands.lock().unwrap().clone();
     assert_eq!(
-        commands[commands.len() - 4..],
+        commands[commands.len() - 5..],
         [
             "SETCONF DisableNetwork=1".to_owned(),
             "SETCONF DisableNetwork=0".to_owned(),
             "GETINFO net/listeners/socks".to_owned(),
+            "SIGNAL NEWNYM".to_owned(),
             "SIGNAL ACTIVE".to_owned(),
         ]
     );

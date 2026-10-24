@@ -367,8 +367,8 @@ impl TorProcess {
 
     /// Tells tor the host is back: from a pause, or with another network when
     /// `network_changed`. Tor leaves its dormant state if it was in it; after a network change
-    /// it also closes every connection, whose routes may be gone, and builds new ones; sends in
-    /// progress fail, the onion stays added and tor publishes it again by itself, and the SOCKS
+    /// it also closes every connection, whose routes may be gone, builds new ones on new
+    /// circuits and forgets the onion services that failed meanwhile; sends in progress fail, the onion stays added and tor publishes it again by itself, and the SOCKS
     /// address may change. A bootstrap in progress gets its full stall time again.
     ///
     /// A tor that does not answer in time is ended: the error is the [`FailureKind::Stopped`]
@@ -859,8 +859,11 @@ async fn add_onion(
     Ok(())
 }
 
-/// `SIGNAL ACTIVE`, and after a network change `DisableNetwork` on and off and the new SOCKS
-/// address. An error leaves the connection closed or tor in a state the wallet did not ask
+/// `SIGNAL ACTIVE`, and after a network change `DisableNetwork` on and off, the new SOCKS
+/// address and `SIGNAL NEWNYM`. Turning the network off and on closes the old connections but
+/// keeps what tor learned of onion services while the network was gone: intro points that
+/// failed and directories asked within 15 minutes, which tor would not ask again, so a node or
+/// relay onion stayed unreachable for minutes (android-04). NEWNYM forgets them. An error leaves the connection closed or tor in a state the wallet did not ask
 /// for, so the caller ends tor.
 async fn refresh(
     running: &Running,
@@ -873,6 +876,7 @@ async fn refresh(
         running.control.set_network_enabled(false).await?;
         running.control.set_network_enabled(true).await?;
         socks.set(running.control.socks_address().await?);
+        running.control.signal_newnym().await?;
     }
     running.control.signal_active().await?;
     if !progress.bootstrapped {

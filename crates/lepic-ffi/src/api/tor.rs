@@ -213,8 +213,9 @@ impl EpicWallet {
     /// Tells the wallet's tor that the app is back: call it when the app returns to the
     /// foreground and, with `network_changed`, when the device's network changed (Wi-Fi to
     /// mobile data, or back online). Tor leaves its dormant state, and after a network change
-    /// it drops every connection, whose routes may be gone, and builds new ones: sends over
-    /// Tor in progress then fail, and the onion stays this wallet's and is republished by tor
+    /// it drops every connection, whose routes may be gone, builds new ones and forgets the
+    /// onion services that failed while the network was gone: sends over Tor in progress then
+    /// fail, and the onion stays this wallet's and is republished by tor
     /// itself, so `Ready` is not reported again. A bootstrap in progress gets its full time
     /// again. Returns once tor has taken the commands, in at most about 15 seconds.
     ///

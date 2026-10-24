@@ -650,6 +650,13 @@ impl ControlConnection {
         self.command("SIGNAL ACTIVE").await.map(drop)
     }
 
+    /// `SIGNAL NEWNYM`: new streams get new circuits, and tor forgets what it learned of
+    /// onion services: their descriptors, intro points that failed and the directories it
+    /// asked lately. Tor delays a second one within 10 s, and answers at once.
+    pub async fn signal_newnym(&self) -> Result<(), ControlError> {
+        self.command("SIGNAL NEWNYM").await.map(drop)
+    }
+
     /// `SETCONF DisableNetwork`. Disabling closes every connection but the control ones, the
     /// SOCKS listener included; enabling opens a new SOCKS listener, on another port when it
     /// is `auto`.
