@@ -38,6 +38,7 @@ pub mod selection;
 pub mod self_send;
 pub mod send;
 pub mod state;
+mod twin_answer;
 mod wallet;
 
 pub use account::{Account, AccountError, AccountLabel, DEFAULT_ACCOUNT_LABEL};

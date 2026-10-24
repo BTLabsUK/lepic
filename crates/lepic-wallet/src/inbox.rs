@@ -16,6 +16,12 @@
 //! and settles the message with [`Event::ReplyUndelivered`]; a slate still expired by the tip
 //! alone after one refresh and at the bound is refused.
 //!
+//! An S2 or I2 for a slate this store does not know may belong to another install on the same
+//! recovery phrase, which shares the payments address. It is held for [`TWIN_HOLD`] and then
+//! requeued for that install, posted back to the address as its sender signed it, rather than
+//! refused at once; at most [`MAX_TWIN_ANSWERS`] at a time, for [`TWIN_REQUEUE_WINDOW`], and
+//! only while the inputs it spends are unspent.
+//!
 //! Payments nobody asked for are bounded too: at most [`MAX_OPEN_RECEIPTS_PER_SENDER`] open
 //! receipts per sender key and [`MAX_OPEN_RECEIPTS`] in all (see their docs).
 //!
@@ -65,7 +71,10 @@ use crate::ports::{SecretVault, StoreOpener};
 use crate::receipt_cap::{NoRoom, Sender};
 use crate::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
 use crate::refresh::last_confirmed;
+use crate::twin_answer::{self, Refused, Step};
 use crate::wallet::Wallet;
+
+pub use crate::twin_answer::{MAX_TWIN_ANSWERS, TWIN_HOLD, TWIN_REQUEUE_WINDOW};
 
 /// `epic-wallet` always uses the address key at index 0 of the account.
 const ADDRESS_INDEX: u32 = 0;
@@ -181,6 +190,9 @@ pub struct InboxSummary {
     pub dropped: u32,
     /// Notices accepted from the counterparty of their slate (ADR 0016).
     pub notices: u32,
+    /// Answers for a slate this store does not know, posted back to the address for another
+    /// install of the wallet and acknowledged.
+    pub requeued: u32,
 }
 
 impl InboxSummary {
@@ -194,6 +206,7 @@ impl InboxSummary {
             Handled::Bounced => &mut self.bounced,
             Handled::Dropped => &mut self.dropped,
             Handled::Notice => &mut self.notices,
+            Handled::Requeued => &mut self.requeued,
         };
         *counter = counter.saturating_add(1);
     }
@@ -284,6 +297,7 @@ pub(crate) enum Handled {
     Bounced,
     Dropped,
     Notice,
+    Requeued,
 }
 
 impl Handled {
@@ -295,7 +309,8 @@ impl Handled {
             | Self::Repeated
             | Self::Parked
             | Self::Bounced
-            | Self::Notice => InboxStatus::Processed,
+            | Self::Notice
+            | Self::Requeued => InboxStatus::Processed,
         }
     }
 }
@@ -381,6 +396,10 @@ pub(crate) enum Hold {
     Finalize(#[source] FinalizeError),
     #[error("invoice was not finalized")]
     Invoice(#[source] InvoiceError),
+    #[error("answer for an unknown slate held for another install")]
+    UnknownSlate,
+    #[error("answer for an unknown slate not requeued")]
+    Requeue(#[source] ClientError),
 }
 
 impl From<StoreError> for Hold {
@@ -926,11 +945,14 @@ where
         let handled = loop {
             let try_number = attempt.saturating_add(1);
             let disposition = match listen {
-                None => self.handle(item, pruning, mailbox, try_number).await,
+                None => {
+                    self.handle(subscription, item, pruning, mailbox, try_number)
+                        .await
+                }
                 Some(handle) => tokio::select! {
                     biased;
                     () = handle.abandoned() => return None,
-                    disposition = self.handle(item, pruning, mailbox, try_number) => disposition,
+                    disposition = self.handle(subscription, item, pruning, mailbox, try_number) => disposition,
                 },
             };
             match (disposition, listen) {
@@ -1003,6 +1025,7 @@ where
     /// Handles `item` on its try number `attempt`, counted from 1.
     async fn handle(
         &self,
+        subscription: &Subscription,
         item: &Item,
         pruning: &PruneSchedule,
         mailbox: Mailbox,
@@ -1019,12 +1042,19 @@ where
                 Ok(Handled::Rejected)
             }
             Item::Envelope(envelope, _) => {
-                self.handle_envelope(msg_id.as_deref(), envelope, mailbox, attempt)
+                self.handle_envelope(subscription, msg_id.as_deref(), envelope, mailbox, attempt)
                     .await
             }
         };
         let handled = match outcome {
             Ok(handled) => handled,
+            Err(Hold::UnknownSlate) => {
+                debug!(
+                    msg_id = msg_id.as_deref().unwrap_or(""),
+                    "epicbox message held for another install"
+                );
+                return Disposition::Held;
+            }
             Err(hold) => {
                 warn!(
                     msg_id = msg_id.as_deref().unwrap_or(""),
@@ -1056,6 +1086,7 @@ where
 
     async fn handle_envelope(
         &self,
+        subscription: &Subscription,
         msg_id: Option<&str>,
         envelope: &Envelope,
         mailbox: Mailbox,
@@ -1076,6 +1107,9 @@ where
         match self.apply(msg_id, envelope, mailbox, attempt).await {
             Ok(handled) => Ok(handled),
             Err(Settlement::Hold(hold)) => Err(hold),
+            Err(Settlement::Requeue(answer)) => {
+                self.requeue(subscription, msg_id, envelope, answer).await
+            }
             Err(Settlement::Refuse(refusal)) => {
                 warn!(
                     msg_id = msg_id.unwrap_or(""),
@@ -1128,7 +1162,9 @@ where
                 self.answer(msg_id, attempt, envelope, &slate, reply_to)
                     .await
             }
-            (Stage::S2, Mailbox::Payments) => self.complete(envelope, &slate, reply_to).await,
+            (Stage::S2, Mailbox::Payments) => {
+                self.complete(msg_id, envelope, &slate, reply_to).await
+            }
             (Stage::I1, mailbox) => match self.bounced_invoice(&slate, reply_to).await? {
                 Some(bounced) => {
                     self.record_bounce(bounced).await?;
@@ -1199,8 +1235,14 @@ where
                 }
             }
             Err(error @ InvoiceError::UnknownSlate { .. }) => {
-                self.unknown_slate(payment.id(), Stage::I2, reply_to);
-                Err(Refusal::Invoice(error).into())
+                self.unknown_answer(
+                    msg_id,
+                    payment,
+                    Stage::I2,
+                    reply_to,
+                    Refusal::Invoice(error),
+                )
+                .await
             }
             // The payer may not have heard the withdrawal: the notice sent at the cancel fails
             // while this wallet is offline. The payment is kept for another try while the
@@ -1229,15 +1271,199 @@ where
         }
     }
 
-    /// Tells the host that an answer for a slate this store does not know was refused: it may
+    /// Tells the host that an answer arrived for a slate this store does not know: it may
     /// belong to another install of the same wallet (ADR 0016).
     fn unknown_slate(&self, slate_id: SlateId, stage: Stage, sender: &Destination) {
-        info!(slate_id = %slate_id, stage = stage.as_str(), "answer for an unknown slate refused");
         self.emit(Event::UnknownSlate(UnknownSlate {
             slate_id,
             stage,
             sender: sender.as_str().to_owned(),
         }));
+    }
+
+    /// Settles the message `msg_id` of `answer`, an S2 or I2 for a slate this store does not
+    /// know, as `twin_answer` decides: held, requeued for another install, or refused
+    /// with `refusal`. [`Event::UnknownSlate`] is raised the first time the answer is seen,
+    /// and when it is refused without being held. An answer is requeued only while every input
+    /// it spends is still unspent on chain: once one is spent, the sender's transaction was
+    /// completed elsewhere, or never can be, and the answer is refused. A node that cannot be
+    /// asked does not stop the requeue.
+    async fn unknown_answer(
+        &self,
+        msg_id: Option<&str>,
+        answer: &Slate,
+        stage: Stage,
+        sender: &Destination,
+        refusal: Refusal,
+    ) -> Result<Handled, Settlement> {
+        let slate_id = answer.id();
+        let uuid = Uuid::from_bytes(*slate_id.as_bytes());
+        let arrived = self.first_arrival(msg_id).await?;
+        let step = self
+            .inbox_write(move |repos, now| twin_answer::step(repos, uuid, stage, arrived, now))
+            .await
+            .map_err(Hold::from)?;
+        let first = match step {
+            Step::Hold { first } | Step::Requeue { first } => first,
+            Step::Refuse(_) => false,
+        };
+        if first {
+            info!(
+                slate_id = %slate_id,
+                stage = stage.as_str(),
+                msg_id = msg_id.unwrap_or(""),
+                "answer for an unknown slate held for another install"
+            );
+            self.unknown_slate(slate_id, stage, sender);
+        }
+        match step {
+            Step::Hold { .. } => Err(Hold::UnknownSlate.into()),
+            Step::Requeue { .. } => {
+                if self.inputs_spent(answer).await {
+                    info!(
+                        slate_id = %slate_id,
+                        stage = stage.as_str(),
+                        msg_id = msg_id.unwrap_or(""),
+                        "answer for an unknown slate refused as settled elsewhere"
+                    );
+                    self.inbox_write(move |repos, _| twin_answer::forget(repos, uuid, stage))
+                        .await
+                        .map_err(Hold::from)?;
+                    return Err(refusal.into());
+                }
+                Err(Settlement::Requeue(Requeue {
+                    slate_id,
+                    stage,
+                    refusal,
+                }))
+            }
+            Step::Refuse(Refused::Crowded) => {
+                info!(
+                    slate_id = %slate_id,
+                    stage = stage.as_str(),
+                    msg_id = msg_id.unwrap_or(""),
+                    "answer for an unknown slate refused"
+                );
+                self.unknown_slate(slate_id, stage, sender);
+                Err(refusal.into())
+            }
+            Step::Refuse(Refused::WindowPassed) => {
+                info!(
+                    slate_id = %slate_id,
+                    stage = stage.as_str(),
+                    msg_id = msg_id.unwrap_or(""),
+                    "answer for an unknown slate refused after its requeue window"
+                );
+                Err(refusal.into())
+            }
+        }
+    }
+
+    /// Whether an input `answer` spends is not unspent on chain, as two answers of the node
+    /// agree. `false` when the node cannot be asked.
+    async fn inputs_spent(&self, answer: &Slate) -> bool {
+        let inputs: Vec<_> = answer
+            .inputs()
+            .iter()
+            .map(|input| input.commitment)
+            .collect();
+        if inputs.is_empty() {
+            return false;
+        }
+        let node = &self.ports().node;
+        let mut missing = inputs;
+        for _ in 0..2 {
+            match node.get_outputs(&missing).await {
+                Ok(found) => {
+                    missing.retain(|commitment| {
+                        !found
+                            .iter()
+                            .any(|location| location.commitment == *commitment)
+                    });
+                }
+                Err(error) => {
+                    warn!(error = %ErrorChain(&error), "inputs of an unknown slate not checked");
+                    return false;
+                }
+            }
+            if missing.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Posts the message of `answer` back to the subscription's address for another install,
+    /// then lets it be acknowledged. A post that fails holds the message, until it first
+    /// arrived [`HOLD_PATIENCE`] ago: then it is refused for good, as before this rule.
+    async fn requeue(
+        &self,
+        subscription: &Subscription,
+        msg_id: Option<&str>,
+        envelope: &Envelope,
+        answer: Requeue,
+    ) -> Result<Handled, Hold> {
+        let Requeue {
+            slate_id,
+            stage,
+            refusal,
+        } = answer;
+        let uuid = Uuid::from_bytes(*slate_id.as_bytes());
+        match subscription.requeue(envelope.ack_token()).await {
+            Ok(()) => {
+                let count = self
+                    .inbox_write(move |repos, _| twin_answer::record_requeued(repos, uuid, stage))
+                    .await;
+                let count = match count {
+                    Ok(count) => count,
+                    Err(error) => {
+                        warn!(error = %ErrorChain(&error), "requeue not recorded");
+                        0
+                    }
+                };
+                info!(
+                    slate_id = %slate_id,
+                    stage = stage.as_str(),
+                    msg_id = msg_id.unwrap_or(""),
+                    count,
+                    "answer for an unknown slate requeued for another install"
+                );
+                Ok(Handled::Requeued)
+            }
+            Err(error) => {
+                let arrived = self.first_arrival(msg_id).await?;
+                let now = self.ports().clock.now();
+                if !twin_answer::waited(arrived, now, HOLD_PATIENCE) {
+                    return Err(Hold::Requeue(error));
+                }
+                warn!(
+                    slate_id = %slate_id,
+                    stage = stage.as_str(),
+                    msg_id = msg_id.unwrap_or(""),
+                    error = %ErrorChain(&error),
+                    "answer for an unknown slate not requeued"
+                );
+                warn!(
+                    msg_id = msg_id.unwrap_or(""),
+                    error = %ErrorChain(&refusal),
+                    "epicbox message rejected"
+                );
+                Ok(Handled::Rejected)
+            }
+        }
+    }
+
+    /// When the message `msg_id` first arrived, from its relay inbox entry. `None` for a
+    /// message without a relay id.
+    async fn first_arrival(&self, msg_id: Option<&str>) -> Result<Option<jiff::Timestamp>, Hold> {
+        let Some(msg_id) = msg_id.map(str::to_owned) else {
+            return Ok(None);
+        };
+        let session = self.session()?;
+        Ok(self
+            .blocking(move |_, _| Ok(session.store.read(|repos| repos.inbox(&msg_id))?))
+            .await?
+            .map(|entry| entry.received_at))
     }
 
     fn invoice_finalized(&self, tx_id: TxId, payment: &Slate, finalized_before: bool) -> Handled {
@@ -1327,6 +1553,7 @@ where
     /// repeated; finalizing it again posts only if the first post did not succeed.
     async fn complete(
         &self,
+        msg_id: Option<&str>,
         envelope: &Envelope,
         reply: &Slate,
         reply_to: &Destination,
@@ -1367,8 +1594,8 @@ where
                 }
             }
             Err(error @ FinalizeError::UnknownSlate { .. }) => {
-                self.unknown_slate(reply.id(), Stage::S2, reply_to);
-                Err(Refusal::Finalize(error).into())
+                self.unknown_answer(msg_id, reply, Stage::S2, reply_to, Refusal::Finalize(error))
+                    .await
             }
             Err(error) if finalize_is_permanent(&error) => Err(Refusal::Finalize(error).into()),
             Err(error) => Err(Hold::Finalize(error).into()),
@@ -1512,10 +1739,20 @@ where
     }
 }
 
-/// How a message that was not handled ends: refused for good, or held for redelivery.
+/// How a message that was not handled ends: refused for good, held for redelivery, or
+/// posted back to the address for another install before it is acknowledged.
 pub(crate) enum Settlement {
     Refuse(Refusal),
     Hold(Hold),
+    Requeue(Requeue),
+}
+
+/// An answer for a slate this store does not know, to requeue.
+pub(crate) struct Requeue {
+    slate_id: SlateId,
+    stage: Stage,
+    /// Why it is refused should the requeue fail for good.
+    refusal: Refusal,
 }
 
 impl From<Refusal> for Settlement {

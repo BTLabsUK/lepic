@@ -3,7 +3,8 @@
 //! `docs/compat/node-api.md` (refresh), the state mapping in `docs/compat/states.md`.
 //!
 //! A refresh runs in steps, each stored in its own store transaction: outputs, then kernel
-//! confirmations, then TTL expiry, then the kernel checks that make a send releasable
+//! confirmations, then received payments another transaction superseded, then TTL expiry, then
+//! the kernel checks that make a send releasable
 //! ([`crate::release`]). Every step re-reads what it changes inside its transaction,
 //! so dropping the future between steps, or a send running at the same time, leaves a
 //! consistent store that the next refresh completes.
@@ -37,7 +38,7 @@ use crate::cancel::{drop_holdings, pool_kernels};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
-use crate::event::{Balance, Event};
+use crate::event::{Balance, Event, SlateId, SupersededReceive};
 use crate::finalize::kernel_excess;
 use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
@@ -61,6 +62,9 @@ pub const UNFINALIZED_RECEIVE_BLOCKS: u64 = RELEASED_WATCH_BLOCKS;
 pub(crate) const LAST_CONFIRMED_SETTING: &str = "refresh.last_confirmed_height";
 
 const RECEIVE_SEEN_PREFIX: &str = "refresh.receive_seen.";
+
+/// Set for a received payment once a refresh found every input of its slate unspent.
+const RECEIVE_INPUTS_PREFIX: &str = "refresh.receive_inputs_unspent.";
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -130,6 +134,19 @@ struct RefreshTip {
 
 /// A kernel excess and the height below which the kernel cannot be on chain.
 type KernelAt = (Commitment, Height);
+
+/// A received payment waiting for its sender: the inputs its slate spends, the unconfirmed
+/// outputs it would create here, and the kernel the sender would finalize it to.
+#[derive(Debug, Clone)]
+struct WaitingReceive {
+    tx_id: TxId,
+    slate_id: Uuid,
+    inputs: Vec<Commitment>,
+    outputs: Vec<Commitment>,
+    kernel: Option<KernelAt>,
+    /// A refresh found every input unspent before.
+    inputs_seen: bool,
+}
 
 /// An open transaction whose kernel can confirm it: one with no change output.
 #[derive(Debug, Clone, Copy)]
@@ -206,6 +223,7 @@ where
         let commitments: Vec<Commitment> =
             tracked.iter().map(|(commitment, _)| *commitment).collect();
         let found = self.locate(&commitments, &tracked, &mut tip).await?;
+        let found_outputs: BTreeSet<Commitment> = found.keys().copied().collect();
         let mut summary = RefreshSummary::default();
 
         let outcome = {
@@ -261,6 +279,8 @@ where
                 .await??;
             self.record_changes(&mut summary, changes);
         }
+        self.end_superseded(&session, &found_outputs, &mut tip, now, &mut summary)
+            .await?;
 
         summary.height = tip.height;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
@@ -323,6 +343,135 @@ where
         }
         info!(height = %tip.height, "refresh completed");
         Ok(RefreshOutcome::Refreshed(summary))
+    }
+
+    /// Ends every received payment waiting for its sender that can never be mined: one whose
+    /// kernel is not on chain, whose own outputs are not on chain, and one of whose inputs the
+    /// node no longer holds unspent, as two of its answers agree, after an earlier refresh
+    /// found them all unspent and once the tip is above the height its slate was made at. A
+    /// refresh that finds them all unspent records that for the payment. Its sender completed another
+    /// transaction with those inputs, as when another install of the wallet on the same
+    /// recovery phrase answered the same S1 and the sender finalized that answer. It ends as a
+    /// cancel ends it: its unconfirmed outputs are dropped, its kernel stays watched, and
+    /// [`Event::ReceiveSuperseded`] follows its state change. A kernel found confirms it; an
+    /// output found, which a twin may have created with the same key, already confirmed it in
+    /// the outputs step. The node is asked only when a payment waits for its sender: once for every
+    /// input together, again for the ones missing, then for the kernels of the payments with
+    /// an input spent.
+    async fn end_superseded(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        found_outputs: &BTreeSet<Commitment>,
+        tip: &mut RefreshTip,
+        now: Timestamp,
+        summary: &mut RefreshSummary,
+    ) -> Result<(), RefreshError> {
+        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let mut waiting = {
+            let session = Arc::clone(session);
+            self.blocking(move |_, _| {
+                Ok(session.store.read(|repos| waiting_receives(repos, &codecs)))
+            })
+            .await??
+        };
+        waiting.retain(|receive| {
+            !receive.inputs.is_empty()
+                && !receive
+                    .outputs
+                    .iter()
+                    .any(|output| found_outputs.contains(output))
+        });
+        if waiting.is_empty() {
+            return Ok(());
+        }
+        let inputs: Vec<Commitment> = waiting
+            .iter()
+            .flat_map(|receive| receive.inputs.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let node = &self.ports().node;
+        let mut spent: BTreeSet<Commitment> = inputs.iter().copied().collect();
+        for location in node.get_outputs(&inputs).await? {
+            spent.remove(&location.commitment);
+        }
+        if !spent.is_empty() {
+            let missing: Vec<Commitment> = spent.iter().copied().collect();
+            for location in node.get_outputs(&missing).await? {
+                spent.remove(&location.commitment);
+            }
+        }
+        let mut confirmed = Vec::new();
+        let mut superseded = Vec::new();
+        let mut seen_unspent = Vec::new();
+        for receive in waiting {
+            if !receive.inputs.iter().any(|input| spent.contains(input)) {
+                if !receive.inputs_seen {
+                    seen_unspent.push(receive.tx_id);
+                }
+                continue;
+            }
+            // Inputs never seen unspent may never have been on chain at all, as in a slate
+            // nobody could complete; such a payment ends by its TTL or the unfinalized bound.
+            if !receive.inputs_seen {
+                continue;
+            }
+            // The inputs were confirmed at or below the height the slate was made at, so a node
+            // whose tip is not past it, one still syncing, may simply not have them.
+            let Some((excess, min_height)) = receive.kernel else {
+                continue;
+            };
+            if tip.height <= min_height {
+                continue;
+            }
+            let floor = chain::kernel_floor(min_height, tip.height);
+            let answer = node
+                .get_kernel(&excess, Some(floor), Some(tip.height))
+                .await;
+            match unless_refused(receive.tx_id, answer)? {
+                Some(Some(kernel)) => {
+                    self.cover(tip, kernel.height).await?;
+                    chain::check_kernel_height(kernel.height, floor, tip.height)?;
+                    confirmed.push((receive.tx_id, kernel.height));
+                }
+                Some(None) => superseded.push((receive.tx_id, receive.slate_id, (excess, floor))),
+                None => {}
+            }
+        }
+        if confirmed.is_empty() && superseded.is_empty() && seen_unspent.is_empty() {
+            return Ok(());
+        }
+        let ended_at = tip.height;
+        let session = Arc::clone(session);
+        let (changes, ended) = self
+            .blocking(move |_, _| {
+                Ok(session.store.write(|repos| {
+                    for &tx_id in &seen_unspent {
+                        if repos.transaction(tx_id)?.is_some() {
+                            repos.put_setting(&receive_inputs_key(tx_id), "1")?;
+                        }
+                    }
+                    let mut changes = confirm_all(repos, &confirmed, now)?;
+                    let mut ended = Vec::new();
+                    for &(tx_id, slate_id, watch) in &superseded {
+                        if let Some(change) = supersede(repos, tx_id, watch, ended_at, now)? {
+                            changes.push(change);
+                            ended.push((tx_id, slate_id));
+                        }
+                    }
+                    Ok::<_, RefreshError>((changes, ended))
+                }))
+            })
+            .await??;
+        self.record_changes(summary, changes);
+        for (tx_id, slate_id) in ended {
+            info!(tx_id = %tx_id, slate_id = %slate_id, "received payment superseded");
+            self.emit(Event::ReceiveSuperseded(SupersededReceive {
+                tx_id,
+                slate_id: SlateId::from_bytes(*slate_id.as_bytes()),
+            }));
+        }
+        Ok(())
     }
 
     /// Looks up the kernel of every finalized or posted send that a missing kernel would make
@@ -896,6 +1045,72 @@ fn expiring(
     Ok(expiring)
 }
 
+/// Every incoming payment in state `received` that this wallet answered with an S2, other than
+/// the incoming entry of a send to the wallet itself, with what [`WaitingReceive`] holds. The
+/// inputs are read from the stored S2, which carries the S1's inputs unchanged.
+fn waiting_receives(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+) -> Result<Vec<WaitingReceive>, RefreshError> {
+    let mut waiting = Vec::new();
+    for stored in open_transactions(repos)? {
+        let entry = &stored.entry;
+        if entry.direction != TxDirection::Incoming
+            || entry.state != TxState::Received
+            || entry.transport.as_deref() == Some(SELF.as_str())
+        {
+            continue;
+        }
+        let Some(slate_id) = entry.slate_id else {
+            continue;
+        };
+        let Some(reply) = stored_slate(repos, codecs, stored.id, slate_id, SlateStage::Standard2)?
+        else {
+            continue;
+        };
+        let outputs = repos
+            .outputs_of_transaction(stored.id)?
+            .into_iter()
+            .filter(|output| output.status == OutputStatus::Unconfirmed)
+            .map(|output| output.id.commitment)
+            .collect();
+        waiting.push(WaitingReceive {
+            tx_id: stored.id,
+            slate_id,
+            inputs: reply
+                .inputs()
+                .iter()
+                .map(|input| input.commitment)
+                .collect(),
+            outputs,
+            kernel: pending_kernel(repos, codecs, &stored)?,
+            inputs_seen: repos.setting(&receive_inputs_key(stored.id))?.is_some(),
+        });
+    }
+    Ok(waiting)
+}
+
+/// Ends a superseded received payment as a cancel does, if it still waits for its sender, and
+/// keeps watching its kernel `watch` from `ended_at`.
+fn supersede(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    watch: KernelAt,
+    ended_at: Height,
+    now: Timestamp,
+) -> Result<Option<StateChange>, RefreshError> {
+    let Some(entry) = repos.transaction(tx_id)? else {
+        return Ok(None);
+    };
+    if entry.direction != TxDirection::Incoming || entry.state != TxState::Received {
+        return Ok(None);
+    }
+    let (excess, min_height) = watch;
+    record_watch(repos, tx_id, excess, min_height, ended_at)?;
+    drop_holdings(repos, tx_id, &entry)?;
+    Ok(apply_transition(repos, tx_id, TxState::Cancelled, now)?)
+}
+
 /// The height a received payment with no TTL ends at, if it is one: an incoming `received`
 /// transaction this wallet answered with an S2. The window counts from the first refresh that
 /// saw it, not from the slate's height, which the sender chose.
@@ -952,7 +1167,12 @@ pub(crate) fn forget_receive_seen(
     repos: &mut dyn Repositories,
     tx_id: TxId,
 ) -> Result<(), StoreError> {
-    repos.delete_setting(&receive_seen_key(tx_id))
+    repos.delete_setting(&receive_seen_key(tx_id))?;
+    repos.delete_setting(&receive_inputs_key(tx_id))
+}
+
+fn receive_inputs_key(tx_id: TxId) -> String {
+    format!("{RECEIVE_INPUTS_PREFIX}{tx_id}")
 }
 
 fn receive_seen_key(tx_id: TxId) -> String {

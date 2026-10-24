@@ -76,6 +76,30 @@ depends on it arriving.
   stage and the sender's address. Two installs on one recovery phrase share the payments
   address, so the install that did not make the send or issue the invoice may read the answer
   first; the event lets its host say so. No notice is sent and nothing on the wire changes.
+- Amendment, 26.10.8 (android-12), replacing the refusal above: an install must not acknowledge
+  or delete a message it cannot use, or one for a slate the other install started. The relay
+  hands the oldest unacknowledged message to whichever socket of the address subscribes, and
+  `Made` from either install deletes it for both. So an S2 or I2 for a slate the store does not
+  know, that decrypted and decoded, is held unacknowledged until its message has waited
+  `TWIN_HOLD` (90 s), more than one challenge round of a minute, so the other install is handed
+  it too; the store is checked again on every try. At that bound the message is requeued: posted
+  back to the own address with the same `from`, `str` and sender's `signature`, which is all the
+  relay's `PostSlate` checks, and acknowledged only after the relay accepts the copy, which then
+  waits at the back of the queue. A copy of an answer the other install already settled reaches
+  it as repeated and is acknowledged there. The answer is refused for good and acknowledged, as
+  before, when it was first seen `TWIN_REQUEUE_WINDOW` (24 h) ago, when `MAX_TWIN_ANSWERS` (4)
+  other answers are cycling (one not seen for an hour no longer counts), when the node no longer
+  holds one of its inputs unspent (two answers agree), or when the requeue post still fails
+  three minutes after the message arrived. `Event::UnknownSlate` is raised once per answer.
+  Both installs may also answer one S1, as the relay passes it live to one socket and hands it
+  to the other on its subscribe; the sender finalizes one answer. A refresh ends the other
+  install's receive once an input of its slate is no longer unspent while neither its kernel
+  nor its output is on chain, as a cancel ends it, keeps watching the kernel, and raises
+  `Event::ReceiveSuperseded`. It does so only for a receive whose inputs an earlier refresh
+  found all unspent, and only once the tip is above the height the slate was made at, so a node
+  that is behind, or an S1 whose inputs were never on chain, ends nothing; such a receive still
+  ends at its TTL or after `UNFINALIZED_RECEIVE_BLOCKS`. Nothing new goes on the wire; the
+  requeued copy is a message the sender already signed.
 
 ## Alternatives considered
 

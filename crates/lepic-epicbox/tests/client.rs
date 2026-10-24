@@ -815,3 +815,70 @@ async fn a_message_in_flight_when_the_route_changes_is_acknowledged_once_before_
     );
     bob.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_requeued_message_reaches_another_session_of_the_address_as_signed() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let original = relay.store(
+        &address(ALICE),
+        &address(BOB),
+        &sealed(ALICE, BOB, "answer for the other install"),
+    );
+    let first = client(&relay, BOB).drain().unwrap();
+    let envelope = next(&first).await.unwrap();
+
+    within(LONG, first.requeue(envelope.ack_token()))
+        .await
+        .unwrap();
+    assert_eq!(relay.pending(&address(BOB)), 2);
+    within(LONG, first.acknowledge(envelope.ack_token()))
+        .await
+        .unwrap();
+    first.stop().await.unwrap();
+    assert_eq!(relay.pending(&address(BOB)), 1);
+
+    // The copy carries the sender's own signature, so it opens as the sender's message.
+    let second = client(&relay, BOB).drain().unwrap();
+    let copy = next(&second).await.unwrap();
+    assert_ne!(copy.ack_token().as_str(), original);
+    assert_eq!(text(&copy), "answer for the other install");
+    assert_eq!(
+        copy.reply_to().unwrap().as_str(),
+        address(ALICE).to_string()
+    );
+    within(LONG, second.acknowledge(copy.ack_token()))
+        .await
+        .unwrap();
+    second.stop().await.unwrap();
+    assert_eq!(relay.pending(&address(BOB)), 0);
+}
+
+#[tokio::test]
+async fn requeueing_a_token_not_handed_out_fails() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let id = relay.store(
+        &address(ALICE),
+        &address(BOB),
+        &sealed(ALICE, BOB, "slate one"),
+    );
+    let bob = client(&relay, BOB).listen().unwrap();
+    let envelope = next(&bob).await.unwrap();
+    let result = bob.requeue(&AckToken::new("never-sent".to_owned())).await;
+    assert!(
+        matches!(result, Err(ClientError::NotHandedOut)),
+        "{result:?}"
+    );
+
+    // Once acknowledged, the envelope is no longer handed out.
+    within(LONG, bob.acknowledge(envelope.ack_token()))
+        .await
+        .unwrap();
+    let result = bob.requeue(envelope.ack_token()).await;
+    assert!(
+        matches!(result, Err(ClientError::NotHandedOut)),
+        "{result:?}"
+    );
+    assert_eq!(relay.received("PostSlate"), 0);
+    assert_eq!(relay.deliveries(&id), 1);
+    bob.stop().await.unwrap();
+}

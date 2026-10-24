@@ -65,16 +65,26 @@ pub enum Event {
     /// issued until the host cancels it or it expires. A bounce redelivered before its relay
     /// message was settled raises this again for the same `tx_id`; treat it as the same bounce.
     InvoiceBounced(BouncedInvoice),
-    /// An S2 or an I2 arrived over Epicbox for a slate this wallet's store does not know, and
-    /// was refused for good, as before. Another install of the same wallet, on the same
-    /// recovery phrase and so the same payments address, may have sent the payment or issued
-    /// the invoice it answers; that install never receives it, and the payer's funds stay
-    /// locked until the payer cancels. The host should tell the user. Nothing changed here.
-    /// An answer redelivered before its relay message was settled raises this again for the
-    /// same `slate_id`; treat it as the same answer. Nothing verifies the slate id or the
+    /// An S2 or an I2 arrived over Epicbox for a slate this wallet's store does not know.
+    /// Another install of the same wallet, on the same recovery phrase and so the same
+    /// payments address, may have sent the payment or issued the invoice it answers. The
+    /// message is left on the relay for that install, and requeued for it, for up to
+    /// [`crate::inbox::TWIN_REQUEUE_WINDOW`]; the host should say that the other install must
+    /// be opened to finish the payment. Raised once per answer, when it is first seen, and
+    /// also when it is refused at once because [`crate::inbox::MAX_TWIN_ANSWERS`] others are
+    /// cycling. Nothing changed here. Nothing verifies the slate id or the
     /// sender: anyone who knows the payments address can raise this with any id, so the host
     /// must only inform the user, never act on it or treat the sender as trusted.
     UnknownSlate(UnknownSlate),
+    /// A received payment that waited for its sender can never be mined: the inputs of the
+    /// sender's slate were spent by another transaction, and neither its kernel nor its output
+    /// is on chain. Another install of the same wallet, on the same recovery phrase, most
+    /// likely answered the same payment and the sender finalized that answer; the funds then
+    /// reached this wallet's seed through the other install. The payment was ended as a
+    /// cancel ends it, which its [`Event::Transaction`] to `cancelled` reports just before;
+    /// the host should say that another install took this payment and offer a rescan to see
+    /// it. Should the kernel still appear, a later refresh confirms the payment.
+    ReceiveSuperseded(SupersededReceive),
 }
 
 /// Whether the root key is in memory.
@@ -191,6 +201,12 @@ pub struct UnknownSlate {
     pub stage: Stage,
     /// The address the message came from, as the relay reported it.
     pub sender: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SupersededReceive {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

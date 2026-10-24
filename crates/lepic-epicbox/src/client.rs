@@ -83,6 +83,8 @@ pub enum ClientError {
     Ended,
     #[error("subscription task failed")]
     Task(#[source] tokio::task::JoinError),
+    #[error("message is not handed out by this subscription")]
+    NotHandedOut,
 }
 
 impl From<ClientError> for TransportError {
@@ -300,34 +302,43 @@ impl EpicboxClient {
             relay = %context.settings.endpoint.domain(),
         );
         async move {
-            let started = Instant::now();
             let message = seal(plaintext, to, context.identity.secret())?;
             let frame = ClientFrame::post_slate(context.identity.address(), to, &message);
-            let settings = &context.settings;
-            let mut connection = Connection::open(
-                context.connector.as_ref(),
-                &settings.endpoint,
-                settings.connect_timeout,
-            )
-            .await?;
-            let result = async {
-                connection.greet(WalletMode::Send, settings).await?;
-                let deadline = deadline_after(settings.response_timeout);
-                connection.send_before(&frame, deadline).await?;
-                connection.answer(deadline).await
-            }
-            .await;
-            connection.close().await;
-            let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            match &result {
-                Ok(()) => debug!(elapsed_ms, "epicbox message posted"),
-                Err(error) => warn!(elapsed_ms, error = %ErrorChain(error), "epicbox post failed"),
-            }
-            result
+            post_frame(context, &frame).await
         }
         .instrument(span)
         .await
     }
+}
+
+/// Posts `frame`, a `PostSlate`, on a short connection of its own and waits for the relay's
+/// answer.
+pub(crate) async fn post_frame(
+    context: &ClientContext,
+    frame: &ClientFrame,
+) -> Result<(), ClientError> {
+    let started = Instant::now();
+    let settings = &context.settings;
+    let mut connection = Connection::open(
+        context.connector.as_ref(),
+        &settings.endpoint,
+        settings.connect_timeout,
+    )
+    .await?;
+    let result = async {
+        connection.greet(WalletMode::Send, settings).await?;
+        let deadline = deadline_after(settings.response_timeout);
+        connection.send_before(frame, deadline).await?;
+        connection.answer(deadline).await
+    }
+    .await;
+    connection.close().await;
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match &result {
+        Ok(()) => debug!(elapsed_ms, "epicbox message posted"),
+        Err(error) => warn!(elapsed_ms, error = %ErrorChain(error), "epicbox post failed"),
+    }
+    result
 }
 
 impl fmt::Debug for EpicboxClient {
