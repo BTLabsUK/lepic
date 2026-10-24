@@ -30,7 +30,7 @@ use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location
 use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::details::TransactionDetails;
 use lepic_wallet::epicbox_invoice::{
-    AllowedSender, IncomingInvoice, InvoiceExpiry, InvoiceSweep, PeerInvoiceSupport,
+    IncomingInvoice, InvoiceExpiry, InvoiceSweep, PeerInvoiceSupport,
 };
 use lepic_wallet::event::{Balance, SlateId};
 use lepic_wallet::finalize::{FinalizeError, Posted};
@@ -55,18 +55,16 @@ use zeroize::Zeroizing;
 use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
-    AllowCommand, Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand,
-    HttpListenArgs, ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs,
-    NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
-    SendArgs, SpendArgs, TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand,
-    WalletScanArgs, WordsArg,
+    Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
+    ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, NodeCommand, PayArgs,
+    PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs,
+    TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
 use crate::output::{
-    AccountReport, AddressReport, AllowListReport, AllowRemoveReport, AllowedSenderReport,
-    EpicboxStatusReport, ExpiredReport, FinalizeReport, HttpListenReport, ImportHistoryReport,
-    ImportedReport, InboxReport, InfoReport, InitReport, InvoiceAddressReport,
+    AccountReport, AddressReport, EpicboxStatusReport, ExpiredReport, FinalizeReport,
+    HttpListenReport, ImportHistoryReport, ImportedReport, InboxReport, InfoReport, InitReport,
     InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport, InvoicePayReport, MessageReport,
     NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport, ReceiveReport, Report,
     ResendReport, RestoreReport, ScanReport, SendReport, TorAddressReport, TorListenReport,
@@ -328,20 +326,13 @@ impl<H: Host> Run<'_, H> {
         let opened = self.open().await?;
         let expiry = self.settings.invoice_expiry;
         let (summary, expired) = match command {
-            EpicboxCommand::Drain(args) => {
+            EpicboxCommand::Drain => {
                 let events = opened.wallet.subscribe();
                 // A sweep that cancels an invoice sends its `withdrawn` notice from the
                 // payments address.
                 opened.wallet.epicbox_attach(&opened.epicbox)?;
                 let expired = sweep(&opened.wallet, expiry).await;
-                let summary = if args.invoices {
-                    opened
-                        .wallet
-                        .epicbox_drain_invoices(&opened.epicbox)
-                        .await?
-                } else {
-                    opened.wallet.epicbox_drain(&opened.epicbox).await?
-                };
+                let summary = opened.wallet.epicbox_drain(&opened.epicbox).await?;
                 self.show_invoice_events(events);
                 (summary, expired)
             }
@@ -373,7 +364,6 @@ impl<H: Host> Run<'_, H> {
                     pending_deliveries: pending,
                 }));
             }
-            EpicboxCommand::Allow(command) => return allow(&opened, command),
             EpicboxCommand::Peer(args) => {
                 let capability = match opened.wallet.peer_capability(&args.address)? {
                     PeerInvoiceSupport::Unknown => "unknown",
@@ -383,18 +373,6 @@ impl<H: Host> Run<'_, H> {
                 return Ok(Report::Peer(PeerReport {
                     address: args.address,
                     capability,
-                }));
-            }
-            EpicboxCommand::InvoiceAddress(args) => {
-                let address = if args.rotate {
-                    opened.wallet.rotate_invoice_address(&opened.epicbox)?
-                } else {
-                    opened.wallet.invoice_address(&opened.epicbox)?
-                };
-                return Ok(Report::InvoiceAddress(InvoiceAddressReport {
-                    address: address.to_string(),
-                    index: opened.wallet.invoice_address_index()?,
-                    rotated: args.rotate,
                 }));
             }
         };
@@ -1009,10 +987,9 @@ impl<H: Host> Run<'_, H> {
             InvoiceCommand::Decline(args) => {
                 let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
                 let opened = self.open().await?;
-                opened
-                    .wallet
-                    .decline_invoice(&opened.epicbox, slate_id)
-                    .await?;
+                // The declined notice goes out from the payments address.
+                opened.wallet.epicbox_attach(&opened.epicbox)?;
+                opened.wallet.decline_invoice(slate_id).await?;
                 Ok(Report::InvoiceDecline(InvoiceDeclineReport {
                     slate_id: slate_id.to_string(),
                     state: "declined".to_owned(),
@@ -1706,43 +1683,6 @@ fn parked_invoice_report(invoice: IncomingInvoice) -> ParkedInvoiceReport {
         message: invoice.message,
         received_at: invoice.received_at.to_string(),
         expires_at: invoice.expires_at.to_string(),
-    }
-}
-
-fn allowed_sender_report(sender: AllowedSender) -> AllowedSenderReport {
-    AllowedSenderReport {
-        address: sender.address.to_string(),
-        label: sender.label,
-        added_at: sender.added_at.to_string(),
-    }
-}
-
-fn allow<N: NodeApi + 'static>(
-    opened: &Opened<N>,
-    command: AllowCommand,
-) -> Result<Report, CliError> {
-    match command {
-        AllowCommand::Add(args) => {
-            let sender = opened
-                .wallet
-                .allow_invoice_sender(&args.address.address, &args.label)?;
-            Ok(Report::AllowAdd(allowed_sender_report(sender)))
-        }
-        AllowCommand::Remove(args) => {
-            let removed = opened.wallet.remove_invoice_sender(&args.address)?;
-            Ok(Report::AllowRemove(AllowRemoveReport {
-                address: args.address,
-                removed,
-            }))
-        }
-        AllowCommand::List => Ok(Report::AllowList(AllowListReport {
-            senders: opened
-                .wallet
-                .invoice_senders()?
-                .into_iter()
-                .map(allowed_sender_report)
-                .collect(),
-        })),
     }
 }
 

@@ -11,7 +11,6 @@
 //! ordinary payment to its receiver. The receiver keeps the time of the first report it
 //! accepted, which the host shows for [`POSTED_REPORT_WINDOW`] while the payment waits.
 
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::NodeApi;
 use lepic_slate::model::{Slate, SlateId};
@@ -555,9 +554,9 @@ where
         self.notify_withdrawn(tx_id).await
     }
 
-    /// Tells the issuer of the parked invoice `slate_id` that it was declined, from the invoice
-    /// address it was issued to.
-    pub(crate) async fn notify_declined(&self, epicbox: &EpicboxTransport, slate_id: SlateId) {
+    /// Tells the issuer of the parked invoice `slate_id` that it was declined, from the payments
+    /// address.
+    pub(crate) async fn notify_declined(&self, slate_id: SlateId) {
         let to = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
@@ -575,24 +574,11 @@ where
                 return;
             }
         };
-        let identity = self
-            .invoice_address_index()
-            .map_err(crate::inbox::InboxError::from)
-            .and_then(|index| self.identity_at(epicbox, index));
-        let client = match identity {
-            Ok(identity) => epicbox.client_for(identity),
-            Err(error) => {
-                warn!(slate_id = %slate_id, error = %ErrorChain(&error), "notice not sent");
-                return;
-            }
-        };
         let notice = Notice {
             slate_id,
             kind: NoticeKind::Declined,
         };
-        let _ = self
-            .send_notice(Some(&client as &dyn Outbound), &to, notice)
-            .await;
+        let _ = self.send_notice(None, &to, notice).await;
     }
 
     async fn counterparty_of(

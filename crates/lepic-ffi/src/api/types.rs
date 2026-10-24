@@ -670,7 +670,7 @@ pub enum PeerCapability {
     NoInvoices,
 }
 
-/// A sender whose invoices the invoice address accepts, from `EpicWallet::invoice_senders`.
+/// Retired with the invoice allowlist; `EpicWallet::invoice_senders` never returns one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvoiceSender {
     /// The full address the user added, where payments of its invoices go.
@@ -716,7 +716,7 @@ pub struct PaidInvoice {
     pub fee: u64,
 }
 
-/// What one drain of the invoice address did, from `EpicWallet::drain_invoices`.
+/// Retired with the invoice address; `EpicWallet::drain_invoices` never returns one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvoiceReport {
     /// Invoices from allowed senders stored for the user to pay or decline.
@@ -817,7 +817,7 @@ pub enum TransportConnection {
     Listener,
     /// A one-time drain of the payments address.
     PaymentsDrain,
-    /// A one-time drain of the invoice address.
+    /// Retired with the invoice address; never reported.
     InvoicesDrain,
 }
 

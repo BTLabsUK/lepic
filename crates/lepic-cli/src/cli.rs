@@ -433,19 +433,19 @@ invoice-address` prints on their side; it arrives only once the payer allows you
 or `lepic epicbox drain` finalizes and posts it. An invoice left unpaid for
 invoice_expiry_hours is cancelled by the next listen or drain.")]
     Issue(IssueArgs),
-    /// Pay an invoice parked on the invoice address, or an invoice slate file
+    /// Pay a parked invoice, or an invoice slate file
     #[command(after_help = "\
 The payer types the amount again; an invoice for any other amount is refused. A parked invoice
-is paid over Epicbox to the address its sender was allowed under. For a slate file the reply is
+is paid over Epicbox to its sender. For a slate file the reply is
 written next to it, and the issuer runs `lepic tx finalize` on it. A file whose name is a slate
 id is given with a directory, as in ./<SLATE_ID>.")]
     Pay(PayArgs),
-    /// List the invoices parked on the invoice address, waiting to be paid or declined
+    /// List the parked invoices, waiting to be paid or declined
     #[command(after_help = "\
-`lepic epicbox drain --invoices` fetches new ones. An invoice not paid within
-invoice_expiry_hours of its arrival is deleted by the next drain or listen.")]
+An invoice not paid within invoice_expiry_hours of its arrival is deleted by the next drain or
+listen.")]
     List,
-    /// Decline an invoice parked on the invoice address, so it is never paid
+    /// Decline a parked invoice, so it is never paid
     Decline(SlateIdArg),
 }
 
@@ -493,22 +493,12 @@ pub enum EpicboxCommand {
     /// Stay connected and handle slates as they arrive, until interrupted
     #[command(after_help = "\
 Payments of invoices you issued are finalized and posted as they arrive. Every few minutes,
-and once at the start, invoices left unpaid for invoice_expiry_hours are expired. The invoice
-address is not listened on; `lepic epicbox drain --invoices` reads it.")]
+and once at the start, invoices left unpaid for invoice_expiry_hours are expired.")]
     Listen,
     /// Handle every pending slate once, then disconnect
-    Drain(DrainArgs),
+    Drain,
     /// Show the relay, the address and the deliveries still pending
     Status,
-    /// Choose the senders whose invoices the invoice address accepts
-    #[command(subcommand)]
-    Allow(AllowCommand),
-    /// Show the invoice address, the one to give a service that invoices you
-    #[command(after_help = "\
-The invoice address is derived from the recovery phrase at an index of its own, 1 or higher;
-a restored wallet starts again at 1. Rotating moves to the next index, and invoices sent to
-the old address are no longer read.")]
-    InvoiceAddress(InvoiceAddressArgs),
     /// Show whether a peer is known to pay invoices
     #[command(after_help = "\
 What this wallet learned from the peer's own messages, matched on the key: lepic once a
@@ -522,51 +512,6 @@ pub struct PeerArgs {
     /// Full Epicbox address of the peer
     #[arg(value_name = "ADDRESS")]
     pub address: String,
-}
-
-#[derive(Debug, Args)]
-pub struct DrainArgs {
-    /// Read the invoice address instead of the payments address: park invoices from allowed
-    /// senders and drop everything else unread
-    #[arg(long)]
-    pub invoices: bool,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum AllowCommand {
-    /// Accept invoices from an address, and pay them only to it
-    #[command(after_help = "\
-Invoices are matched on the key of the address, before the @, because the relay vouches for
-the key of a message and never for its domain. Payments always go to the address given here.
-Adding a key again replaces its address and label.")]
-    Add(AllowAddArgs),
-    /// Stop accepting invoices from an address; invoices already parked from it stay
-    Remove(AddressArg),
-    /// List the allowed senders
-    List,
-}
-
-#[derive(Debug, Args)]
-pub struct AllowAddArgs {
-    #[command(flatten)]
-    pub address: AddressArg,
-    /// A name for the sender, shown by `epicbox allow list`
-    #[arg(long, value_name = "TEXT", default_value = "")]
-    pub label: String,
-}
-
-#[derive(Debug, Args)]
-pub struct AddressArg {
-    /// Full Epicbox address of the sender, as it gave it
-    #[arg(value_name = "ADDRESS")]
-    pub address: String,
-}
-
-#[derive(Debug, Args)]
-pub struct InvoiceAddressArgs {
-    /// Move to a new invoice address and abandon the current one
-    #[arg(long)]
-    pub rotate: bool,
 }
 
 #[derive(Debug, Subcommand)]

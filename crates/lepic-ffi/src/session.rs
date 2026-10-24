@@ -1592,7 +1592,6 @@ const fn transport_state(state: EngineTransportState) -> TransportState {
 const fn transport_connection(connection: Connection) -> TransportConnection {
     match connection {
         Connection::PaymentsDrain => TransportConnection::PaymentsDrain,
-        Connection::InvoicesDrain => TransportConnection::InvoicesDrain,
         Connection::Listener => TransportConnection::Listener,
     }
 }

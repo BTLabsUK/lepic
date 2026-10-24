@@ -719,7 +719,7 @@ fn a_drain_beside_a_listener_reports_its_connection_as_its_own() {
                 connection, state, ..
             }) => match connection {
                 Connection::Listener => listener.push(state),
-                _ => drains.push((connection, state)),
+                Connection::PaymentsDrain => drains.push((connection, state)),
             },
             Event::TransportDisconnected(disconnect) => disconnects.push(disconnect.connection),
             _ => {}

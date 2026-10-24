@@ -22,6 +22,7 @@ use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
 use jiff::Timestamp;
 use lepic_crypto::{PublicKey, SecretKey};
+use lepic_epicbox::Connector;
 use lepic_epicbox::mock_relay::MockRelay;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
@@ -35,15 +36,21 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
-use lepic_slate::codec::WireSlate;
+use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_slate::codec::marked_v3::carries_lepic_marker;
+use lepic_slate::codec::{Codec, WireSlate};
+use lepic_slate::stage::Stage;
 use lepic_store::{
-    AccountIndex, ContextKey, KeyId, MemoryStore, OutputRecord, OutputStatus, Repositories,
-    StoreError, WalletStore,
+    AccountIndex, ContextKey, KeyId, MemoryStore, OutputRecord, OutputStatus, PeerCapability,
+    PeerSupport, PendingInvoice, PendingInvoiceStatus, Repositories, StoreError, WalletStore,
 };
 use lepic_transport::error::TransportError;
 use lepic_transport::policy::FormatPolicy;
 use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, TransportId};
+use lepic_transport::transport::{
+    BoxFuture, Destination, Inbound, Outbound, Transport, TransportId,
+};
+use lepic_wallet::inbox::InboxSummary;
 use lepic_wallet::invoice::{InvoiceRequest, IssuedInvoice, PayRequest};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::Delivery;
@@ -52,6 +59,7 @@ use lepic_wallet::{
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use uuid::Uuid;
 
 use crate::support::{TestVault, complete_restore_scan, fixed_time, password};
 
@@ -242,6 +250,7 @@ pub struct Party {
     stores: CountingStores,
     seed: Seed,
     data_dir: PathBuf,
+    relay_connector: Arc<dyn Connector>,
 }
 
 impl Party {
@@ -299,6 +308,7 @@ impl Party {
             stores,
             seed: Seed::from_mnemonic(mnemonic).unwrap(),
             data_dir,
+            relay_connector: relay.connector(),
         }
     }
 
@@ -342,8 +352,47 @@ impl Party {
             .unwrap_or_else(PoisonError::into_inner) = Some(succeeding);
     }
 
-    pub fn invoice_address(&self) -> EpicboxAddress {
-        self.wallet.invoice_address(&self.epicbox).unwrap()
+    /// A client speaking for the wallet's payments address, as the wallet itself would.
+    pub fn client(&self) -> EpicboxClient {
+        let keychain = Keychain::from_seed(&self.seed, Network::Floonet).unwrap();
+        let parent = Identifier::new(2, [0, 0, 0, 0]).unwrap();
+        let secret = keychain.address_key(&parent, 0).unwrap();
+        EpicboxClient::new(
+            settings(),
+            Identity::new(secret, self.address.clone()).unwrap(),
+            self.relay_connector.clone(),
+        )
+    }
+
+    /// Parks `i1`, an invoice from `sender`, as it is parked once it arrived: the store gains
+    /// the invoice and, for a marked I1, the proof that its sender runs LEPIC.
+    pub fn park(&self, sender: &EpicboxAddress, i1: &WireSlate) {
+        let slate = V3JsonCodec::new(Network::Floonet.params().default_base_fee())
+            .decode(i1)
+            .unwrap();
+        let now = self.clock.now();
+        let invoice = PendingInvoice {
+            slate_id: Uuid::from_bytes(*slate.id().as_bytes()),
+            sender_key: sender.key_text(),
+            sender_address: sender.to_string(),
+            received_at: now,
+            status: PendingInvoiceStatus::Parked,
+            codec: "v3".to_owned(),
+            bytes: i1.as_bytes().to_vec(),
+        };
+        let marked = carries_lepic_marker(i1);
+        self.store()
+            .write(|repos| {
+                if marked {
+                    repos.put_peer_capability(&PeerCapability {
+                        key: sender.key_text(),
+                        support: PeerSupport::Lepic,
+                        learned_at: now,
+                    })?;
+                }
+                repos.park_invoice(&invoice)
+            })
+            .unwrap();
     }
 
     /// Adds an unspent coinbase output of `value` at child `child`, mined at height 1, and moves
@@ -384,10 +433,12 @@ pub struct World {
     pub node: MockNode,
     pub issuer: Party,
     pub payer: Party,
+    /// What draining the payer's payments address did before an invoice reached it, for the
+    /// test's next drain to report.
+    carried: Mutex<InboxSummary>,
 }
 
 impl World {
-    /// The payer allows the issuer's payments address on its invoice address.
     pub fn new() -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -407,16 +458,13 @@ impl World {
         let issuer = Party::new(ISSUER_MNEMONIC, "issuer", 1, &node, &relay, &runtime);
         let payer = Party::new(PAYER_MNEMONIC, "payer", 2, &node, &relay, &runtime);
         payer.fund(0, FUNDING);
-        payer
-            .wallet
-            .allow_invoice_sender(&issuer.address.to_string(), "shop")
-            .unwrap();
         Self {
             runtime,
             relay,
             node,
             issuer,
             payer,
+            carried: Mutex::default(),
         }
     }
 
@@ -449,10 +497,60 @@ impl World {
         )
     }
 
-    /// The issuer invoices the payer's invoice address over Epicbox.
+    /// The issuer invoices the payer's payments address over Epicbox, and the payer parks it.
+    /// Messages already waiting for the payer are handled first, so the invoice is at the head
+    /// of its queue; [`World::take_carried`] reports what that did.
     pub fn issue(&self, message: Option<&str>) -> IssuedInvoice {
-        let to = self.payer.invoice_address();
-        self.issue_to(&to, message)
+        if self.relay.pending(&self.payer.address) > 0 {
+            let summary = self
+                .block_on(self.payer.wallet.epicbox_drain(&self.payer.epicbox))
+                .unwrap();
+            let mut carried = self.carried.lock().unwrap_or_else(PoisonError::into_inner);
+            *carried = add(*carried, summary);
+        }
+        let to = self.payer.address.clone();
+        let issued = self.issue_to(&to, message);
+        assert_eq!(self.deliver_invoices(), 1);
+        issued
+    }
+
+    /// Takes the invoices at the head of the payer's payments address off the relay and parks
+    /// each under the address it came from, as delivery to the payer parks them; the first
+    /// message that is not an invoice stops it and stays. Returns how many were parked.
+    pub fn deliver_invoices(&self) -> usize {
+        let client = self.payer.client();
+        let codec = V3JsonCodec::new(Network::Floonet.params().default_base_fee());
+        self.block_on(async {
+            let subscription = client.drain().unwrap();
+            let mut parked = 0;
+            while let Some(envelope) = self.within(subscription.next_envelope()).await.unwrap() {
+                let is_i1 = codec
+                    .decode(envelope.wire())
+                    .is_ok_and(|slate| slate.stage() == Stage::I1);
+                // The relay hands out the next message only once this one is acknowledged.
+                if !is_i1 {
+                    break;
+                }
+                let sender = EpicboxAddress::parse(
+                    envelope.reply_to().unwrap().as_str(),
+                    RelayNetwork::Floonet,
+                )
+                .unwrap();
+                self.payer.park(&sender, envelope.wire());
+                subscription
+                    .acknowledge(envelope.ack_token())
+                    .await
+                    .unwrap();
+                parked += 1;
+            }
+            subscription.stop().await.unwrap();
+            parked
+        })
+    }
+
+    /// What draining the payer before an invoice did since the last call.
+    pub fn take_carried(&self) -> InboxSummary {
+        std::mem::take(&mut *self.carried.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     pub fn issue_to(&self, to: &EpicboxAddress, message: Option<&str>) -> IssuedInvoice {
@@ -516,6 +614,22 @@ impl World {
             Identity::new(key(byte), Self::address_of(byte)).unwrap(),
             self.relay.connector(),
         )
+    }
+}
+
+/// The two summaries counted together.
+pub fn add(a: InboxSummary, b: InboxSummary) -> InboxSummary {
+    InboxSummary {
+        received: a.received + b.received,
+        finalized: a.finalized + b.finalized,
+        repeated: a.repeated + b.repeated,
+        rejected: a.rejected + b.rejected,
+        held: a.held + b.held,
+        parked: a.parked + b.parked,
+        bounced: a.bounced + b.bounced,
+        dropped: a.dropped + b.dropped,
+        notices: a.notices + b.notices,
+        requeued: a.requeued + b.requeued,
     }
 }
 

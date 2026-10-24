@@ -37,10 +37,6 @@ pub enum Report {
     InvoiceList(InvoiceListReport),
     InvoiceDecline(InvoiceDeclineReport),
     Inbox(InboxReport),
-    AllowAdd(AllowedSenderReport),
-    AllowRemove(AllowRemoveReport),
-    AllowList(AllowListReport),
-    InvoiceAddress(InvoiceAddressReport),
     EpicboxStatus(EpicboxStatusReport),
     Peer(PeerReport),
     HttpListen(HttpListenReport),
@@ -350,33 +346,6 @@ pub struct ExpiredReport {
     /// Payments of invoices that were not posted within their TTL; `tx cancel` gives up on
     /// them.
     pub cancellable: Vec<u32>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AllowedSenderReport {
-    pub address: String,
-    pub label: String,
-    pub added_at: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AllowRemoveReport {
-    pub address: String,
-    /// False when the address was not allowed.
-    pub removed: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AllowListReport {
-    pub senders: Vec<AllowedSenderReport>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct InvoiceAddressReport {
-    pub address: String,
-    pub index: u32,
-    /// The address moved to `index` in this command.
-    pub rotated: bool,
 }
 
 /// What `http listen` did before it was stopped.
@@ -904,45 +873,6 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             )?;
             write_expired(out, r.expired.as_ref())
         }
-        Report::AllowAdd(r) => writeln!(out, "Invoices from {} are accepted.", r.address),
-        Report::AllowRemove(r) if r.removed => {
-            writeln!(out, "Invoices from {} are no longer accepted.", r.address)
-        }
-        Report::AllowRemove(r) => writeln!(out, "{} was not allowed.", r.address),
-        Report::AllowList(r) => {
-            if r.senders.is_empty() {
-                return writeln!(
-                    out,
-                    "No senders are allowed; `lepic epicbox allow add <ADDRESS>` adds one."
-                );
-            }
-            for sender in &r.senders {
-                let label = if sender.label.is_empty() {
-                    "-"
-                } else {
-                    &sender.label
-                };
-                writeln!(
-                    out,
-                    "{}  {}  added {}",
-                    sender.address,
-                    printable(label),
-                    short_time(&sender.added_at)
-                )?;
-            }
-            Ok(())
-        }
-        Report::InvoiceAddress(r) => {
-            writeln!(out, "{}", r.address)?;
-            if r.rotated {
-                writeln!(
-                    out,
-                    "Moved to invoice address index {}; the previous address is no longer read.",
-                    r.index
-                )?;
-            }
-            Ok(())
-        }
         Report::HttpListen(r) => writeln!(
             out,
             "Listened on port {} ({}): received {}, repeated {}, refused {}.",
@@ -1368,33 +1298,6 @@ mod tests {
                     "rejected",
                     "repeated",
                 ],
-            ),
-            (
-                Report::AllowAdd(AllowedSenderReport {
-                    address: text("a"),
-                    label: text("l"),
-                    added_at: text("t"),
-                }),
-                vec!["added_at", "address", "label"],
-            ),
-            (
-                Report::AllowRemove(AllowRemoveReport {
-                    address: text("a"),
-                    removed: true,
-                }),
-                vec!["address", "removed"],
-            ),
-            (
-                Report::AllowList(AllowListReport { senders: vec![] }),
-                vec!["senders"],
-            ),
-            (
-                Report::InvoiceAddress(InvoiceAddressReport {
-                    address: text("a"),
-                    index: 1,
-                    rotated: false,
-                }),
-                vec!["address", "index", "rotated"],
             ),
             (
                 Report::EpicboxStatus(EpicboxStatusReport {

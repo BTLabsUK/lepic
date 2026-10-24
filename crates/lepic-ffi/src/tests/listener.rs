@@ -99,42 +99,6 @@ impl Listening {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failing_drain_beside_a_healthy_listener_sends_the_listener_no_disconnect() {
-    let mut listening = Listening::start().await;
-
-    listening.relay.set_refusing(true);
-    assert!(listening.session.drain_invoices().await.is_err());
-    listening.relay.set_refusing(false);
-    listening.session.drain_invoices().await.unwrap();
-
-    assert_eq!(listening.kinds(), [ListenerEventKind::Connected]);
-    assert!(eventually(|| listening.relay.connections() == 1).await);
-    listening.stop().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_drains_connection_does_not_hide_a_listener_outage() {
-    let mut listening = Listening::start().await;
-
-    listening.relay.set_refusing(true);
-    listening.relay.disconnect_all();
-    assert!(eventually(|| listening.count(ListenerEventKind::Disconnected) == 1).await);
-    // The listener waits its backoff before it tries again; the drain is done well within it.
-    listening.relay.set_refusing(false);
-    listening.session.drain_invoices().await.unwrap();
-
-    assert_eq!(
-        listening.kinds(),
-        [
-            ListenerEventKind::Connected,
-            ListenerEventKind::Disconnected
-        ]
-    );
-    assert!(eventually(|| listening.count(ListenerEventKind::Connected) == 2).await);
-    listening.stop().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_payments_drain_while_the_listener_runs_stays_off_the_relay() {
     let mut listening = Listening::start().await;
 

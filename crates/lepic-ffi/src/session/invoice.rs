@@ -1,5 +1,5 @@
-//! Invoices over Epicbox: the invoice address and its allowlist on the payer's side, issuing
-//! on the issuer's side, and the expiry of both.
+//! Invoices over Epicbox: paying and declining parked invoices on the payer's side, issuing on
+//! the issuer's side, and the expiry of both.
 
 use std::time::Duration;
 
@@ -8,7 +8,7 @@ use lepic_primitives::amount::Amount;
 use lepic_store::TxId;
 use lepic_transport::transport::Destination;
 use lepic_wallet::epicbox_invoice::{
-    AllowedSender, IncomingInvoice as EngineIncomingInvoice, InvoiceExpiry, PeerInvoiceSupport,
+    IncomingInvoice as EngineIncomingInvoice, InvoiceExpiry, PeerInvoiceSupport,
 };
 use lepic_wallet::event::SlateId;
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
@@ -17,8 +17,7 @@ use lepic_wallet::send::Delivery;
 use super::{DEFAULT_ACCOUNT, Session, invalid, relay_address};
 use crate::api::error::WalletError;
 use crate::api::types::{
-    IncomingInvoice, InvoiceReport, InvoiceSender, InvoiceSweep, IssuedInvoice, PaidInvoice,
-    PeerCapability, SendOptions,
+    IncomingInvoice, InvoiceSweep, IssuedInvoice, PaidInvoice, PeerCapability, SendOptions,
 };
 
 /// `seconds` as the window after which unpaid invoices expire; `None` is the default day.
@@ -33,14 +32,6 @@ fn slate_id(text: &str) -> Result<SlateId, WalletError> {
     SlateId::parse(text).map_err(|_| invalid("not a slate id"))
 }
 
-fn sender(allowed: AllowedSender) -> InvoiceSender {
-    InvoiceSender {
-        address: allowed.address.to_string(),
-        label: allowed.label,
-        added_at_ms: allowed.added_at.as_millisecond(),
-    }
-}
-
 fn incoming(invoice: EngineIncomingInvoice) -> IncomingInvoice {
     IncomingInvoice {
         slate_id: invoice.slate_id.to_string(),
@@ -53,45 +44,6 @@ fn incoming(invoice: EngineIncomingInvoice) -> IncomingInvoice {
 }
 
 impl Session {
-    pub(crate) fn invoice_address(&self) -> Result<String, WalletError> {
-        Ok(self.engine.invoice_address(&self.epicbox()?)?.to_string())
-    }
-
-    pub(crate) fn invoice_address_index(&self) -> Result<u32, WalletError> {
-        Ok(self.engine.invoice_address_index()?)
-    }
-
-    pub(crate) fn set_invoice_address_index(&self, index: u32) -> Result<(), WalletError> {
-        self.epicbox()?;
-        Ok(self.engine.set_invoice_address_index(index)?)
-    }
-
-    pub(crate) fn rotate_invoice_address(&self) -> Result<String, WalletError> {
-        Ok(self
-            .engine
-            .rotate_invoice_address(&self.epicbox()?)?
-            .to_string())
-    }
-
-    pub(crate) fn invoice_senders(&self) -> Result<Vec<InvoiceSender>, WalletError> {
-        Ok(self
-            .engine
-            .invoice_senders()?
-            .into_iter()
-            .map(sender)
-            .collect())
-    }
-
-    pub(crate) fn allow_invoice_sender(
-        &self,
-        address: &str,
-        label: &str,
-    ) -> Result<InvoiceSender, WalletError> {
-        relay_address(address, self.network)
-            .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
-        Ok(sender(self.engine.allow_invoice_sender(address, label)?))
-    }
-
     pub(crate) fn peer_capability(&self, address: &str) -> Result<PeerCapability, WalletError> {
         relay_address(address, self.network)
             .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
@@ -100,10 +52,6 @@ impl Session {
             PeerInvoiceSupport::Lepic => PeerCapability::Lepic,
             PeerInvoiceSupport::NoInvoices => PeerCapability::NoInvoices,
         })
-    }
-
-    pub(crate) fn remove_invoice_sender(&self, address: &str) -> Result<bool, WalletError> {
-        Ok(self.engine.remove_invoice_sender(address)?)
     }
 
     pub(crate) async fn issue_invoice_epicbox(
@@ -135,20 +83,6 @@ impl Session {
             tx_id: issued.tx_id.0,
             slate_id: issued.slate_id.to_string(),
             amount: issued.amount.value(),
-        })
-    }
-
-    pub(crate) async fn drain_invoices(&self) -> Result<InvoiceReport, WalletError> {
-        let summary = self.engine.epicbox_drain_invoices(&self.epicbox()?).await?;
-        Ok(InvoiceReport {
-            parked: summary.parked,
-            finalized: summary.finalized,
-            repeated: summary.repeated,
-            rejected: summary.rejected,
-            held: summary.held,
-            dropped: summary.dropped,
-            notices: summary.notices,
-            bounced: summary.bounced,
         })
     }
 
@@ -194,10 +128,9 @@ impl Session {
 
     pub(crate) async fn decline_invoice(&self, slate_id: &str) -> Result<(), WalletError> {
         let slate_id = self::slate_id(slate_id)?;
-        Ok(self
-            .engine
-            .decline_invoice(&self.epicbox()?, slate_id)
-            .await?)
+        // The declined notice goes out from the payments address.
+        self.engine.epicbox_attach(&self.epicbox()?)?;
+        Ok(self.engine.decline_invoice(slate_id).await?)
     }
 
     pub(crate) async fn resend_invoice_payment(&self, tx_id: u32) -> Result<(), WalletError> {

@@ -366,14 +366,6 @@ fn a_payment_the_other_install_reads_first_is_left_for_the_issuing_install() {
             world
                 .payer
                 .wallet
-                .epicbox_drain_invoices(&world.payer.epicbox),
-        )
-        .unwrap();
-    world
-        .block_on(
-            world
-                .payer
-                .wallet
                 .pay_parked_invoice(issued.slate_id, pay_request()),
         )
         .unwrap();

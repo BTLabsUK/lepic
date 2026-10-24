@@ -65,13 +65,15 @@ fn notice(kind: &str, slate_id: SlateId) -> String {
 }
 
 impl World {
+    /// Parks the invoices waiting for the payer, then drains its payments address, where the
+    /// issuer's notices arrive.
     fn drain_payer_invoices(&self) -> InboxSummary {
-        self.block_on(
-            self.payer
-                .wallet
-                .epicbox_drain_invoices(&self.payer.epicbox),
-        )
-        .unwrap()
+        let parked = self.deliver_invoices();
+        let mut summary = self
+            .block_on(self.payer.wallet.epicbox_drain(&self.payer.epicbox))
+            .unwrap();
+        summary.parked = u32::try_from(parked).unwrap();
+        world::add(self.take_carried(), summary)
     }
 
     fn drain_issuer(&self) -> InboxSummary {
@@ -92,7 +94,6 @@ impl World {
     /// proof that the other runs LEPIC.
     fn settle_one_invoice(&self) -> (IssuedInvoice, PaidInvoice) {
         let issued = self.issue(None);
-        assert_eq!(self.drain_payer_invoices().parked, 1);
         let paid = self.pay(&issued);
         assert_eq!(self.drain_issuer().finalized, 1);
         (issued, paid)
@@ -156,16 +157,12 @@ impl World {
     }
 
     /// The issuer invoices `peer`, which forwards the I1 unmarked under its own key to the
-    /// payer's invoice address, where it is allowed; the payer pays it to `peer`. Returns the
+    /// payer, where it is parked; the payer pays it to `peer`. Returns the
     /// invoice, the payment and the I2 as `peer` received it.
     fn pay_through(&self, peer: &EpicboxClient, byte: u8) -> (IssuedInvoice, PaidInvoice, String) {
-        self.payer
-            .wallet
-            .allow_invoice_sender(&peer.address().to_string(), "relayed")
-            .unwrap();
         let issued = self.issue_to(peer.address(), None);
         let i1 = self.unmarked_i1(peer);
-        self.post(byte, &self.payer.invoice_address(), &i1, 1);
+        self.post(byte, &self.payer.address, &i1, 1);
         assert_eq!(self.drain_payer_invoices().parked, 1);
         let paid = self.pay(&issued);
         let received = self.drain_peer(peer);
@@ -205,9 +202,7 @@ fn the_payer_receives_posted_with_the_kernel_excess() {
     let pushed = world.node.pushed_transactions();
     assert_eq!(pushed.len(), 1);
     let excess = pushed[0].kernels()[0].excess;
-    // The marked payment proved both of the payer's keys.
-    let invoiced = world.payer.invoice_address().key_text();
-    assert_eq!(world.issuer_capability(&invoiced), Some(PeerSupport::Lepic));
+    // The marked payment proved the payer's key.
     let payments = world.payer.address.key_text();
     assert_eq!(world.issuer_capability(&payments), Some(PeerSupport::Lepic));
     let _ = events(&mut payer_events);
@@ -221,7 +216,7 @@ fn the_payer_receives_posted_with_the_kernel_excess() {
             ..InboxSummary::default()
         }
     );
-    assert_eq!(world.relay.pending(&world.payer.invoice_address()), 0);
+    assert_eq!(world.relay.pending(&world.payer.address), 0);
     assert_eq!(
         notice_events(&mut payer_events),
         vec![Event::InvoicePosted(PostedInvoice {
@@ -245,7 +240,7 @@ fn an_unpaid_payer_receives_withdrawn_for_a_cancelled_invoice() {
     world.settle_one_invoice();
     let issued = world.issue(None);
     let summary = world.drain_payer_invoices();
-    assert_eq!((summary.parked, summary.notices), (1, 1));
+    assert_eq!(summary.notices, 1);
     let mut payer_events = world.payer.wallet.subscribe();
 
     world
@@ -384,7 +379,7 @@ fn a_payment_of_a_withdrawn_invoice_is_kept_while_its_answer_fails() {
 fn a_withdrawn_answer_the_relay_refuses_settles_the_payment_at_once() {
     let world = World::new();
     let issued = withdrawn_offline_with_a_message_behind(&world);
-    world.relay.set_post_refused(&world.payer.invoice_address());
+    world.relay.set_post_refused(&world.payer.address);
 
     let summary = world.drain_issuer();
 
@@ -435,7 +430,7 @@ fn deliveries_to(world: &World, address: &lepic_epicbox::EpicboxAddress) -> usiz
 fn a_listen_gives_up_an_undeliverable_withdrawn_answer_at_the_hold_bound() {
     let world = World::new();
     let issued = withdrawn_offline_with_a_message_behind(&world);
-    let invoiced = world.payer.invoice_address();
+    let invoiced = world.payer.address.clone();
     let before = deliveries_to(&world, &invoiced);
     world.issuer.set_deliveries_failing(true);
 
@@ -621,12 +616,7 @@ fn the_issuer_hears_a_decline_from_the_invoiced_address() {
     let mut issuer_events = world.issuer.wallet.subscribe();
 
     world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .decline_invoice(&world.payer.epicbox, issued.slate_id),
-        )
+        .block_on(world.payer.wallet.decline_invoice(issued.slate_id))
         .unwrap();
     let summary = world.drain_issuer();
 
@@ -651,7 +641,7 @@ fn the_issuer_hears_a_decline_from_the_invoiced_address() {
         .unwrap()
         .state;
     assert_eq!(state, TxState::Received);
-    let invoiced = world.payer.invoice_address().key_text();
+    let invoiced = world.payer.address.clone().key_text();
     assert_eq!(world.issuer_capability(&invoiced), Some(PeerSupport::Lepic));
 }
 
@@ -740,17 +730,11 @@ fn a_notice_from_another_key_is_dropped() {
 
     // On the payer's invoice address, an allowed sender that did not issue the invoice
     // cannot withdraw it.
-    world
-        .payer
-        .wallet
-        .allow_invoice_sender(&World::address_of(8).to_string(), "other")
-        .unwrap();
     let parked = world.issue(None);
-    assert_eq!(world.drain_payer_invoices().parked, 1);
     let mut payer_events = world.payer.wallet.subscribe();
     world.post(
         8,
-        &world.payer.invoice_address(),
+        &world.payer.address,
         &notice("withdrawn", parked.slate_id),
         1,
     );
@@ -866,21 +850,11 @@ fn no_notice_is_posted_to_a_peer_without_proof() {
     assert!(world.drain_peer(&stock).is_empty());
 
     // A payer declining an unmarked invoice from an allowed sender posts nothing.
-    world
-        .payer
-        .wallet
-        .allow_invoice_sender(&World::address_of(7).to_string(), "stock")
-        .unwrap();
-    world.post(7, &world.payer.invoice_address(), &i1, 1);
+    world.post(7, &world.payer.address, &i1, 1);
     assert_eq!(world.drain_payer_invoices().parked, 1);
     let before = posts();
     world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .decline_invoice(&world.payer.epicbox, unanswered.slate_id),
-        )
+        .block_on(world.payer.wallet.decline_invoice(unanswered.slate_id))
         .unwrap();
     assert_eq!(posts(), before);
     assert!(world.drain_peer(&silent).is_empty());
@@ -918,7 +892,7 @@ fn a_posted_notice_with_another_excess_is_dropped() {
         .to_owned()
     };
     let mut payer_events = world.payer.wallet.subscribe();
-    world.post(9, &world.payer.invoice_address(), &posted(other), 1);
+    world.post(9, &world.payer.address, &posted(other), 1);
 
     let summary = world.drain_payer_invoices();
 
@@ -929,11 +903,11 @@ fn a_posted_notice_with_another_excess_is_dropped() {
             ..InboxSummary::default()
         }
     );
-    assert_eq!(world.relay.pending(&world.payer.invoice_address()), 0);
+    assert_eq!(world.relay.pending(&world.payer.address), 0);
     assert!(notice_events(&mut payer_events).is_empty());
 
     // The same sender with the excess the payment implies is heard.
-    world.post(9, &world.payer.invoice_address(), &posted(expected), 1);
+    world.post(9, &world.payer.address, &posted(expected), 1);
     assert_eq!(world.drain_payer_invoices().notices, 1);
     assert_eq!(
         notice_events(&mut payer_events),

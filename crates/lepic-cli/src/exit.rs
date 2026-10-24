@@ -367,10 +367,7 @@ fn inbox_kind(error: &InboxError) -> ErrorKind {
         InboxError::Wallet(error) => wallet_kind(error),
         InboxError::UnknownTransport { .. } | InboxError::NetworkMismatch => ErrorKind::Config,
         InboxError::Subscription(_) | InboxError::Transport(_) => ErrorKind::Transport,
-        InboxError::Address(_) | InboxError::SenderLabel | InboxError::PaymentsAddressIndex => {
-            ErrorKind::Usage
-        }
-        InboxError::InvoiceIndexExhausted => ErrorKind::Rejected,
+        InboxError::Address(_) => ErrorKind::Usage,
         InboxError::InvoiceExpiry => ErrorKind::Config,
         _ => ErrorKind::Internal,
     }
@@ -513,11 +510,6 @@ mod tests {
                     tx_id: lepic_store::TxId(9),
                 }
                 .into(),
-                ErrorKind::Rejected,
-            ),
-            (InboxError::SenderLabel.into(), ErrorKind::Usage),
-            (
-                InboxError::InvoiceIndexExhausted.into(),
                 ErrorKind::Rejected,
             ),
             (CliError::SlateId, ErrorKind::Usage),

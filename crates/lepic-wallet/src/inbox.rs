@@ -148,14 +148,8 @@ pub enum InboxError {
     Transport(#[source] TransportError),
     #[error("epicbox address rejected")]
     Address(#[source] AddressError),
-    #[error("address index 0 is the payments address, not an invoice address")]
-    PaymentsAddressIndex,
-    #[error("no invoice address index is left to rotate to")]
-    InvoiceIndexExhausted,
     #[error("invoice expiry must be positive and at most two days")]
     InvoiceExpiry,
-    #[error("sender label is too long or holds control characters")]
-    SenderLabel,
 }
 
 impl From<StoreError> for InboxError {
@@ -178,14 +172,13 @@ pub struct InboxSummary {
     pub rejected: u32,
     /// Messages left unacknowledged after a transient failure; the relay delivers them again.
     pub held: u32,
-    /// Invoices stored on the invoice address for the user to pay or decline.
+    /// Invoices stored for the user to pay or decline.
     pub parked: u32,
     /// Invoices this wallet issued that the payer sent back unchanged, so it does not pay
     /// invoices.
     pub bounced: u32,
-    /// Messages acknowledged and forgotten: on the invoice address, from a sender that is not
-    /// allowed, never opened, or invoices over the parking caps; on either address, notices
-    /// not from the counterparty of their slate, of an unknown version or type, oversize or
+    /// Messages acknowledged and forgotten: invoices over the parking caps, and notices not
+    /// from the counterparty of their slate, of an unknown version or type, oversize or
     /// malformed.
     pub dropped: u32,
     /// Notices accepted from the counterparty of their slate (ADR 0016).
@@ -202,7 +195,6 @@ impl InboxSummary {
             Handled::Finalized => &mut self.finalized,
             Handled::Repeated => &mut self.repeated,
             Handled::Rejected => &mut self.rejected,
-            Handled::Parked => &mut self.parked,
             Handled::Bounced => &mut self.bounced,
             Handled::Dropped => &mut self.dropped,
             Handled::Notice => &mut self.notices,
@@ -277,15 +269,6 @@ impl Default for ListenHandle {
     }
 }
 
-/// Which of the wallet's addresses a subscription serves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Mailbox {
-    /// Index 0, which accepts payments from anyone.
-    Payments,
-    /// The invoice address, which hears only from allowed senders.
-    Invoices,
-}
-
 /// What became of one message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Handled {
@@ -293,7 +276,6 @@ pub(crate) enum Handled {
     Finalized,
     Repeated,
     Rejected,
-    Parked,
     Bounced,
     Dropped,
     Notice,
@@ -307,7 +289,6 @@ impl Handled {
             Self::Received
             | Self::Finalized
             | Self::Repeated
-            | Self::Parked
             | Self::Bounced
             | Self::Notice
             | Self::Requeued => InboxStatus::Processed,
@@ -367,10 +348,6 @@ pub(crate) enum Refusal {
     Finalize(#[source] FinalizeError),
     #[error("invoice was not finalized")]
     Invoice(#[source] InvoiceError),
-    #[error("invoice comes from a sender that is not allowed")]
-    SenderNotAllowed,
-    #[error("invoice message signature does not verify")]
-    InvoiceMessage(#[source] InvoiceError),
     #[error("sender already has the most open receipts allowed")]
     OpenReceiptsFromSender,
     #[error("open receipts are at the cap and none could be cancelled")]
@@ -750,8 +727,7 @@ where
     ) -> Result<InboxSummary, InboxError> {
         let client = self.inbox_client(epicbox).await?;
         let subscription = client.drain().map_err(InboxError::Subscription)?;
-        self.run_inbox(&subscription, None, backoff(epicbox), Mailbox::Payments)
-            .await
+        self.run_inbox(&subscription, None, backoff(epicbox)).await
     }
 
     /// Holds a relay connection and handles messages as they arrive, until `handle` is stopped:
@@ -773,13 +749,8 @@ where
     ) -> Result<InboxSummary, InboxError> {
         let client = self.inbox_client(epicbox).await?;
         let subscription = client.listen().map_err(InboxError::Subscription)?;
-        self.run_inbox(
-            &subscription,
-            Some(handle),
-            backoff(epicbox),
-            Mailbox::Payments,
-        )
-        .await
+        self.run_inbox(&subscription, Some(handle), backoff(epicbox))
+            .await
     }
 
     /// The attached client for a drain or a listen, after pruning the relay inbox. Pruning runs
@@ -812,17 +783,10 @@ where
         subscription: &Subscription,
         listen: Option<&ListenHandle>,
         backoff: Backoff,
-        mailbox: Mailbox,
     ) -> Result<InboxSummary, InboxError> {
         let consume = async {
             let consumed = self
-                .consume(
-                    subscription,
-                    listen,
-                    backoff,
-                    &PruneSchedule::default(),
-                    mailbox,
-                )
+                .consume(subscription, listen, backoff, &PruneSchedule::default())
                 .await;
             // A failed connection explains a failed consume better than the consume does.
             subscription
@@ -831,10 +795,9 @@ where
                 .map_err(InboxError::Subscription)?;
             consumed
         };
-        let connection = match (listen, mailbox) {
-            (Some(_), _) => Connection::Listener,
-            (None, Mailbox::Payments) => Connection::PaymentsDrain,
-            (None, Mailbox::Invoices) => Connection::InvoicesDrain,
+        let connection = match listen {
+            Some(_) => Connection::Listener,
+            None => Connection::PaymentsDrain,
         };
         let (result, ()) = tokio::join!(consume, self.forward_states(subscription, connection));
         result
@@ -878,7 +841,6 @@ where
         listen: Option<&ListenHandle>,
         backoff: Backoff,
         pruning: &PruneSchedule,
-        mailbox: Mailbox,
     ) -> Result<InboxSummary, InboxError> {
         let mut summary = InboxSummary::default();
         loop {
@@ -918,7 +880,7 @@ where
                 }
             };
             match self
-                .settle(subscription, &item, listen, backoff, pruning, mailbox)
+                .settle(subscription, &item, listen, backoff, pruning)
                 .await
             {
                 Some(handled) => summary.count(handled),
@@ -939,20 +901,16 @@ where
         listen: Option<&ListenHandle>,
         backoff: Backoff,
         pruning: &PruneSchedule,
-        mailbox: Mailbox,
     ) -> Option<Handled> {
         let mut attempt: u32 = 0;
         let handled = loop {
             let try_number = attempt.saturating_add(1);
             let disposition = match listen {
-                None => {
-                    self.handle(subscription, item, pruning, mailbox, try_number)
-                        .await
-                }
+                None => self.handle(subscription, item, pruning, try_number).await,
                 Some(handle) => tokio::select! {
                     biased;
                     () = handle.abandoned() => return None,
-                    disposition = self.handle(subscription, item, pruning, mailbox, try_number) => disposition,
+                    disposition = self.handle(subscription, item, pruning, try_number) => disposition,
                 },
             };
             match (disposition, listen) {
@@ -1028,7 +986,6 @@ where
         subscription: &Subscription,
         item: &Item,
         pruning: &PruneSchedule,
-        mailbox: Mailbox,
         attempt: u32,
     ) -> Disposition {
         let msg_id = item.msg_id().map(str::to_owned);
@@ -1042,7 +999,7 @@ where
                 Ok(Handled::Rejected)
             }
             Item::Envelope(envelope, _) => {
-                self.handle_envelope(subscription, msg_id.as_deref(), envelope, mailbox, attempt)
+                self.handle_envelope(subscription, msg_id.as_deref(), envelope, attempt)
                     .await
             }
         };
@@ -1089,7 +1046,6 @@ where
         subscription: &Subscription,
         msg_id: Option<&str>,
         envelope: &Envelope,
-        mailbox: Mailbox,
         attempt: u32,
     ) -> Result<Handled, Hold> {
         if let Some(msg_id) = msg_id.map(str::to_owned) {
@@ -1104,7 +1060,7 @@ where
                 return Ok(Handled::Repeated);
             }
         }
-        match self.apply(msg_id, envelope, mailbox, attempt).await {
+        match self.apply(msg_id, envelope, attempt).await {
             Ok(handled) => Ok(handled),
             Err(Settlement::Hold(hold)) => Err(hold),
             Err(Settlement::Requeue(answer)) => {
@@ -1125,7 +1081,6 @@ where
         &self,
         msg_id: Option<&str>,
         envelope: &Envelope,
-        mailbox: Mailbox,
         attempt: u32,
     ) -> Result<Handled, Settlement> {
         let reply_to = envelope.reply_to().ok_or(Refusal::NoReplyAddress)?;
@@ -1157,27 +1112,24 @@ where
             .policy()
             .decode(&codecs, envelope.wire())
             .map_err(Refusal::Decode)?;
-        match (slate.stage(), mailbox) {
-            (Stage::S1, Mailbox::Payments) => {
+        match slate.stage() {
+            Stage::S1 => {
                 self.answer(msg_id, attempt, envelope, &slate, reply_to)
                     .await
             }
-            (Stage::S2, Mailbox::Payments) => {
-                self.complete(msg_id, envelope, &slate, reply_to).await
-            }
-            (Stage::I1, mailbox) => match self.bounced_invoice(&slate, reply_to).await? {
+            Stage::S2 => self.complete(msg_id, envelope, &slate, reply_to).await,
+            Stage::I1 => match self.bounced_invoice(&slate, reply_to).await? {
                 Some(bounced) => {
                     self.record_bounce(bounced).await?;
                     Ok(Handled::Bounced)
                 }
-                None if mailbox == Mailbox::Invoices => self.park(envelope, &slate, reply_to).await,
                 None => Err(Refusal::UnsupportedStage { stage: Stage::I1 }.into()),
             },
-            (Stage::I2, _) => {
+            Stage::I2 => {
                 self.complete_invoice(msg_id, attempt, envelope, &slate, reply_to)
                     .await
             }
-            (stage, _) => Err(Refusal::UnsupportedStage { stage }.into()),
+            stage => Err(Refusal::UnsupportedStage { stage }.into()),
         }
     }
 

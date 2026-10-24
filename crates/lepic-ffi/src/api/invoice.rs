@@ -1,11 +1,10 @@
-//! Invoices over Epicbox. A service issues an invoice to the payer's invoice address, the
-//! payer pays it with one call, and the service finalizes and posts.
+//! Invoices over Epicbox. A service issues an invoice, the payer pays it with one call, and the
+//! service finalizes and posts. Nothing that arrives ever pays: paying is always
+//! [`EpicWallet::pay_invoice`].
 //!
-//! The invoice address is the wallet's Epicbox identity at address index 1 or higher, beside
-//! the payments address of [`EpicWallet::epicbox_address`]. It hears only from senders the
-//! user allowed; everything else is acknowledged and dropped unopened. The app reads it with
-//! [`EpicWallet::drain_invoices`]; no listener runs on it. Nothing that arrives ever pays:
-//! paying is always [`EpicWallet::pay_invoice`].
+//! The invoice address and its allowlist are retired (RFC 0002 section 11.5): invoices come only
+//! from paired contacts. Their calls stay in the binding until it is generated again and always
+//! fail with `Unsupported`.
 //!
 //! The two sides tell each other what happened with short notices, which only LEPIC wallets
 //! read: the issuer reports `posted` and `withdrawn`, the payer `declined`. They arrive with
@@ -13,55 +12,44 @@
 //! events, are advisory, and never move funds. A notice goes only to a wallet that proved it
 //! runs LEPIC in an earlier invoice exchange, so a stock wallet is never sent one.
 //!
-//! Every call here except [`EpicWallet::pending_invoices`], [`EpicWallet::peer_capability`]
-//! and the allowlist calls fails with
-//! `Unsupported` when the configuration names no relay, and every call fails with `Locked` on
-//! a locked wallet.
+//! Every call here except [`EpicWallet::pending_invoices`] and [`EpicWallet::peer_capability`]
+//! fails with `Unsupported` when the configuration names no relay, and every call fails with
+//! `Locked` on a locked wallet.
 
-use crate::api::error::WalletError;
+use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     IncomingInvoice, InvoiceReport, InvoiceSender, InvoiceSweep, IssuedInvoice, PaidInvoice,
     PeerCapability, SendOptions,
 };
 use crate::api::wallet::EpicWallet;
 
+fn retired() -> WalletError {
+    WalletError::new(
+        WalletErrorKind::Unsupported,
+        "the invoice address is retired; invoices come from paired contacts",
+    )
+}
+
 impl EpicWallet {
-    /// The invoice address, `<key>@<domain>[:port]`, to give to services that invoice this
-    /// wallet. Its index starts at 1, also after a restore; see
-    /// [`EpicWallet::set_invoice_address_index`].
+    /// Retired with the invoice address; always fails with `Unsupported`.
     pub async fn invoice_address(&self) -> Result<String, WalletError> {
-        self.run("invoice_address", |session| async move {
-            session.invoice_address()
-        })
-        .await
+        Err(retired())
     }
 
-    /// The address index of the invoice address, 1 or higher.
+    /// Retired with the invoice address; always fails with `Unsupported`.
     pub async fn invoice_address_index(&self) -> Result<u32, WalletError> {
-        self.run("invoice_address_index", |session| async move {
-            session.invoice_address_index()
-        })
-        .await
+        Err(retired())
     }
 
-    /// Sets the address index of the invoice address, for example to the one the app kept
-    /// before the wallet was restored from its phrase, which does not record it. Messages to
-    /// the previous invoice address are no longer read. Fails with `InvalidArgument` for 0,
-    /// the payments address.
+    /// Retired with the invoice address; always fails with `Unsupported`.
     pub async fn set_invoice_address_index(&self, index: u32) -> Result<(), WalletError> {
-        self.run("set_invoice_address_index", |session| async move {
-            session.set_invoice_address_index(index)
-        })
-        .await
+        let _ = index;
+        Err(retired())
     }
 
-    /// Moves the invoice address to the next index and returns it. The old address is
-    /// abandoned: messages to it are no longer read, so give the new one to every service.
+    /// Retired with the invoice address; always fails with `Unsupported`.
     pub async fn rotate_invoice_address(&self) -> Result<String, WalletError> {
-        self.run("rotate_invoice_address", |session| async move {
-            session.rotate_invoice_address()
-        })
-        .await
+        Err(retired())
     }
 
     /// What this wallet learned about the peer at `address`, `<key>@<relay>[:port]`, from
@@ -77,44 +65,28 @@ impl EpicWallet {
         .await
     }
 
-    /// The senders the invoice address accepts, in the order they were added.
+    /// Retired with the invoice allowlist; always fails with `Unsupported`.
     pub async fn invoice_senders(&self) -> Result<Vec<InvoiceSender>, WalletError> {
-        self.run("invoice_senders", |session| async move {
-            session.invoice_senders()
-        })
-        .await
+        Err(retired())
     }
 
-    /// Accepts invoices from the service at `address`, the full address it shows,
-    /// `<key>@<relay>[:port]` as `validate_epicbox_address` accepts it.
-    /// Only the key is matched, because the relay vouches for the key of a message and never
-    /// for its relay part; payments of its invoices go to `address` as added. Adding a key
-    /// again replaces its address and label.
-    ///
-    /// Fails with `InvalidArgument` for any other address, and for a `label` longer than 64
-    /// bytes or holding control characters.
+    /// Retired with the invoice allowlist; always fails with `Unsupported`.
     pub async fn allow_invoice_sender(
         &self,
         address: String,
         label: String,
     ) -> Result<InvoiceSender, WalletError> {
-        self.run("allow_invoice_sender", |session| async move {
-            session.allow_invoice_sender(&address, &label)
-        })
-        .await
+        let _ = (address, label);
+        Err(retired())
     }
 
-    /// Stops accepting invoices from the key of `address`, and returns whether it was
-    /// accepted. Invoices it sent that wait already stay. Fails with `InvalidArgument` for an
-    /// address that does not parse on this wallet's chain.
+    /// Retired with the invoice allowlist; always fails with `Unsupported`.
     pub async fn remove_invoice_sender(&self, address: String) -> Result<bool, WalletError> {
-        self.run("remove_invoice_sender", |session| async move {
-            session.remove_invoice_sender(&address)
-        })
-        .await
+        let _ = address;
+        Err(retired())
     }
 
-    /// Issues an invoice for `amount` to the payer's invoice address `address` over Epicbox.
+    /// Issues an invoice for `amount` to the payer at `address` over Epicbox.
     /// The payer pays `amount` plus the fee. Its payment arrives on this wallet's payments
     /// address, where [`EpicWallet::drain_epicbox`] or the listener finalizes and posts it, with
     /// an `InvoiceFinalized` event, and the payer gets a `posted` notice. `message` is signed
@@ -138,16 +110,9 @@ impl EpicWallet {
         .await
     }
 
-    /// Connects to the relay as the invoice address once, handles every pending message and
-    /// disconnects. An invoice from an allowed sender is stored, with an `InvoiceReceived`
-    /// event, before the relay is told it arrived; anything from another sender is dropped
-    /// unopened. Notices from the senders of invoices this wallet holds raise their events. Fails
-    /// as [`EpicWallet::drain_epicbox`] does.
+    /// Retired with the invoice address; always fails with `Unsupported`.
     pub async fn drain_invoices(&self) -> Result<InvoiceReport, WalletError> {
-        self.run("drain_invoices", |session| async move {
-            session.drain_invoices().await
-        })
-        .await
+        Err(retired())
     }
 
     /// The invoices waiting to be paid or declined, oldest first, with when a sweep with
@@ -163,7 +128,7 @@ impl EpicWallet {
     }
 
     /// Pays the waiting invoice `slate_id` and delivers the payment over Epicbox to the
-    /// sender's allowed address, and to the relay the invoice came from when that differs.
+    /// sender's address, and to the relay the invoice came from when that differs.
     /// `amount` is what the user typed: an invoice for any other amount is refused, as
     /// `epic-wallet pay` refuses it. Inputs need `minimum_confirmations`; `message` goes to the
     /// sender signed and `options` choose the inputs and change, as in
@@ -202,8 +167,7 @@ impl EpicWallet {
         .await
     }
 
-    /// Delivers the stored payment `tx_id` of an invoice again, to the sender's allowed
-    /// address and, when it differs, the relay the invoice came from, after
+    /// Delivers the stored payment `tx_id` of an invoice again, to the sender's address and, when it differs, the relay the invoice came from, after
     /// [`EpicWallet::pay_invoice`] failed with `NotDelivered` or nothing came of it. Fails with
     /// `InvalidArgument` for a transaction that is not an undelivered payment of an invoice,
     /// and with `TransportFailed` when the relay fails again.

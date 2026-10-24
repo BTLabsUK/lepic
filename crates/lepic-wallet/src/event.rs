@@ -40,8 +40,7 @@ pub enum Event {
     /// A transport's connection dropped: why, and how long it waits before it tries again.
     /// Follows the [`Event::Transport`] that reports `Disconnected`.
     TransportDisconnected(TransportDisconnect),
-    /// An invoice from an allowed sender was stored on the invoice address, waiting for the
-    /// user to pay or decline it. Nothing was paid.
+    /// An invoice was parked, waiting for the user to pay or decline it. Nothing was paid.
     InvoiceParked(ParkedInvoice),
     /// An invoice this wallet issued was paid and finalized. Its posting shows as
     /// [`Event::Transaction`].
@@ -274,8 +273,6 @@ pub enum Connection {
     Listener,
     /// A one-time drain of the payments address.
     PaymentsDrain,
-    /// A one-time drain of the invoice address.
-    InvoicesDrain,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -221,24 +221,15 @@ fact 3 non-slate payload unacknowledged  PASS      23s  delivered 2 times, refus
 
 LEPIC's behaviour on top of the protocol above; nothing on the wire or the relay changes.
 
-- Invoice address. The address key at index 1 or higher (`m/0/1/<index>`), derived as index 0 is.
-  Only services get it. It runs on its own connection, never re-subscribing a socket as another
-  identity, and the host drains it on demand. Rotating moves to the next index; after a restore
-  the wallet starts at index 1.
-- Allowlist. Entries are full `key@domain[:port]` addresses, matched on the key only, because the
-  relay authenticates the key that signed a message and never its domain. Payments go to the
-  stored entry's address, and also to the address the invoice came from when that names the
-  same key under another relay: the issuer listens where it sent from, and an entry may name a
-  relay it left. Never to another key.
-- Prefilter. On the invoice address, a message whose `from` key is not allowed is answered with
-  `Made` and dropped before the signature check, key agreement, key derivation or decryption, with no
-  inbox row and no store write. An allowed sender's I1 is parked before `Made`. Over the caps on
-  parked invoices, it is acknowledged and dropped.
+- No invoice address. The invoice address (`m/0/1/<index>`, index 1 and up), its allowlist and
+  its prefilter are retired (RFC 0002 section 11.5): a payer parks invoices only from paired
+  contacts, through their mailboxes. An I1 that reaches the payments address is refused, unless
+  it is a bounce (below).
 - Shapes. I1 goes out in the V3 shape, header `3/3/<b>`, and I2 answers in the shape of I1. Both
   carry `"lepic":{"version":1}` as their last top-level key. S1 keeps the V2 shape and carries
   the same key last (see "Ordinary sends between LEPIC wallets").
-- Replies. The payer sends I2 from its payments address to the issuer's allowed address, and to
-  the relay the I1 came from when it differs (a resend does the same; either delivery is enough). The
+- Replies. The payer sends I2 from its payments address to the address the parked invoice names
+  as its sender (a resend does the same). The
   issuer's payments address finalizes an I2 that answers an invoice it issued and still waits for,
   and posts it with `stem`, as for an S2.
 - Bounce. An I1 that arrives with a slate id this wallet issued, from the key it was sent to, and
@@ -254,7 +245,7 @@ ADR 0016 has the reasons; this is the format and who sends what.
   and `slate_id` (hyphenated UUID). `posted` adds `excess`, the kernel excess as 66 hex
   characters. A slate never has a number under `lepic`, which is how a receiver tells the two
   apart.
-- `declined`: payer to issuer, from the payer's current invoice address to the allowed address.
+- `declined`: payer to issuer, from the payer's payments address to the parked invoice's sender.
   `withdrawn`: issuer to payer, on a cancel or an expiry. `posted`: issuer to payer, after the
   paid invoice was pushed. Both go to the address the invoice was issued to. `posted` also goes
   from the sender of an ordinary payment to its receiver, from the payments address, after the

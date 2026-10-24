@@ -395,10 +395,7 @@ impl From<InboxError> for WalletError {
             InboxError::NetworkMismatch
             | InboxError::UnknownTransport { .. }
             | InboxError::Address(_)
-            | InboxError::PaymentsAddressIndex
-            | InboxError::InvoiceIndexExhausted
-            | InboxError::InvoiceExpiry
-            | InboxError::SenderLabel => WalletErrorKind::InvalidArgument,
+            | InboxError::InvoiceExpiry => WalletErrorKind::InvalidArgument,
             InboxError::Subscription(_) | InboxError::Transport(_) => {
                 WalletErrorKind::TransportFailed
             }
@@ -726,17 +723,10 @@ mod tests {
             assert_eq!(mapped.code, kind.code());
             assert!(mapped.message.contains(&message), "{}", mapped.message);
         }
-        for error in [
-            InboxError::PaymentsAddressIndex,
-            InboxError::InvoiceExpiry,
-            InboxError::SenderLabel,
-            InboxError::InvoiceIndexExhausted,
-        ] {
-            assert_eq!(
-                WalletError::from(error).kind,
-                WalletErrorKind::InvalidArgument
-            );
-        }
+        assert_eq!(
+            WalletError::from(InboxError::InvoiceExpiry).kind,
+            WalletErrorKind::InvalidArgument
+        );
     }
 
     #[test]

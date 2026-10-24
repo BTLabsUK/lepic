@@ -1,7 +1,6 @@
-//! Invoices over Epicbox between two LEPIC wallets on the mock relay: the payer's invoice
-//! address parks invoices from allowed senders only and drops the rest unopened, the issuer
-//! finalizes and posts the payment, recognises an invoice a stock wallet sent back, and both
-//! sides expire what was left unpaid.
+//! Invoices over Epicbox between two LEPIC wallets on the mock relay: the payer pays or
+//! declines a parked invoice, the issuer finalizes and posts the payment, recognises an invoice
+//! a stock wallet sent back, and both sides expire what was left unpaid.
 
 // Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
 // treat as test code.
@@ -63,30 +62,10 @@ fn codecs() -> CodecRegistry {
 }
 
 #[test]
-fn an_invoice_from_an_allowed_sender_is_parked_and_acknowledged() {
+fn a_parked_invoice_waits_for_the_user_and_pays_nothing() {
     let world = World::new();
-    let mut events = world.payer.wallet.subscribe();
     let issued = world.issue(Some("order 17"));
-    let invoice_address = world.payer.invoice_address();
-    assert_eq!(world.relay.pending(&invoice_address), 1);
 
-    let summary = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .epicbox_drain_invoices(&world.payer.epicbox),
-        )
-        .unwrap();
-
-    assert_eq!(
-        summary,
-        InboxSummary {
-            parked: 1,
-            ..InboxSummary::default()
-        }
-    );
-    assert_eq!(world.relay.pending(&invoice_address), 0);
     let parked = world.read_parked(&world.payer, issued.slate_id);
     assert_eq!(parked.status, PendingInvoiceStatus::Parked);
     assert_eq!(parked.sender_address, world.issuer.address.to_string());
@@ -104,13 +83,6 @@ fn an_invoice_from_an_allowed_sender_is_parked_and_acknowledged() {
         pending[0].expires_at,
         pending[0].received_at.checked_add(DAY).unwrap()
     );
-    let parked_events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
-        .filter_map(|event| match event {
-            Event::InvoiceParked(parked) => Some(parked.slate_id),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(parked_events, vec![issued.slate_id]);
     // Parking pays nothing.
     assert!(
         world
@@ -152,93 +124,10 @@ fn the_invoice_goes_out_as_v3_with_the_marker() {
 }
 
 #[test]
-fn a_message_from_a_sender_not_allowed_is_dropped_unopened_with_no_store_write() {
-    let world = World::new();
-    let invoice_address = world.payer.invoice_address();
-    let drain = || {
-        world
-            .block_on(
-                world
-                    .payer
-                    .wallet
-                    .epicbox_drain_invoices(&world.payer.epicbox),
-            )
-            .unwrap()
-    };
-    // An empty drain only prunes the relay inbox, which is the baseline.
-    let before = world.payer.writes();
-    assert_eq!(drain(), InboxSummary::default());
-    let baseline = world.payer.writes() - before;
-
-    let msg_ids = world.post(9, &invoice_address, "not a slate", 1);
-    let before = world.payer.writes();
-    let summary = drain();
-
-    assert_eq!(
-        summary,
-        InboxSummary {
-            dropped: 1,
-            ..InboxSummary::default()
-        }
-    );
-    assert_eq!(world.payer.writes() - before, baseline);
-    assert_eq!(world.relay.pending(&invoice_address), 0);
-    assert!(world.payer.read(|repos| repos.inbox(&msg_ids[0])).is_none());
-    assert!(
-        world
-            .payer
-            .read(|repos| repos.pending_invoices())
-            .is_empty()
-    );
-}
-
-#[test]
-fn a_thousand_messages_from_strangers_cost_no_store_write_before_an_allowed_invoice() {
-    let world = World::new();
-    let invoice_address = world.payer.invoice_address();
-    let drain = || {
-        world
-            .block_on(
-                world
-                    .payer
-                    .wallet
-                    .epicbox_drain_invoices(&world.payer.epicbox),
-            )
-            .unwrap()
-    };
-    // Parking one invoice alone gives the writes an allowed invoice costs.
-    world.issue(None);
-    let before = world.payer.writes();
-    assert_eq!(drain().parked, 1);
-    let one_invoice = world.payer.writes() - before;
-
-    world.post(9, &invoice_address, "junk", 1000);
-    let issued = world.issue(None);
-    let before = world.payer.writes();
-    let summary = drain();
-
-    assert_eq!(
-        summary,
-        InboxSummary {
-            parked: 1,
-            dropped: 1000,
-            ..InboxSummary::default()
-        }
-    );
-    assert_eq!(world.payer.writes() - before, one_invoice);
-    assert_eq!(world.relay.pending(&invoice_address), 0);
-    assert_eq!(
-        world.read_parked(&world.payer, issued.slate_id).status,
-        PendingInvoiceStatus::Parked
-    );
-}
-
-#[test]
 fn a_paid_invoice_is_finalized_and_posted_by_the_issuer() {
     let world = World::new();
     let mut events = world.issuer.wallet.subscribe();
     let issued = world.issue(None);
-    world.drain_payer_invoices();
 
     let paid = world
         .block_on(
@@ -307,14 +196,6 @@ fn an_issued_and_a_paid_invoice_are_invoices_on_both_sides() {
         flow(&world.issuer.wallet, issued.tx_id),
         (TxDirection::Incoming, TxFlow::Invoice)
     );
-    world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .epicbox_drain_invoices(&world.payer.epicbox),
-        )
-        .unwrap();
     let paid = world
         .block_on(
             world
@@ -339,18 +220,10 @@ fn an_issued_and_a_paid_invoice_are_invoices_on_both_sides() {
 #[test]
 fn a_payer_is_known_to_run_lepic_after_its_marked_payment() {
     let world = World::new();
-    let payer = world.payer.invoice_address().to_string();
+    let payer = world.payer.address.to_string();
     let capability = || world.issuer.wallet.peer_capability(&payer).unwrap();
     assert_eq!(capability(), PeerInvoiceSupport::Unknown);
     let issued = world.issue(None);
-    world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .epicbox_drain_invoices(&world.payer.epicbox),
-        )
-        .unwrap();
     world
         .block_on(
             world
@@ -558,7 +431,6 @@ fn expiry_deletes_parked_invoices_cancels_issued_ones_and_refuses_late_payments(
     // One invoice the payer pays late, one it never answers.
     let late = world.issue(None);
     let ignored = world.issue(None);
-    world.drain_payer_invoices();
     let before = world.issuer.wallet.balance(world::ACCOUNT).unwrap();
     assert_eq!(before.awaiting_finalization, Amount::ZERO);
     assert_eq!(before.total, Amount::ZERO);
@@ -646,7 +518,6 @@ fn expiry_deletes_parked_invoices_cancels_issued_ones_and_refuses_late_payments(
 fn a_payment_past_its_ttl_is_offered_for_cancel_and_not_expired_by_refresh() {
     let world = World::new();
     let issued = world.issue(None);
-    world.drain_payer_invoices();
     let paid = world
         .block_on(world.payer.wallet.pay_parked_invoice(
             issued.slate_id,
@@ -681,7 +552,6 @@ fn a_payment_past_its_ttl_is_offered_for_cancel_and_not_expired_by_refresh() {
 fn a_stored_payment_is_delivered_again_after_a_failed_delivery() {
     let world = World::new();
     let issued = world.issue(None);
-    world.drain_payer_invoices();
     world.relay.set_refusing(true);
 
     let error = world
@@ -744,15 +614,9 @@ fn a_stored_payment_is_delivered_again_after_a_failed_delivery() {
 fn a_declined_invoice_cannot_be_paid() {
     let world = World::new();
     let issued = world.issue(None);
-    world.drain_payer_invoices();
 
     world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .decline_invoice(&world.payer.epicbox, issued.slate_id),
-        )
+        .block_on(world.payer.wallet.decline_invoice(issued.slate_id))
         .unwrap();
 
     assert_eq!(
@@ -772,234 +636,13 @@ fn a_declined_invoice_cannot_be_paid() {
         "{error:?}"
     );
     assert!(matches!(
-        world.block_on(
-            world
-                .payer
-                .wallet
-                .decline_invoice(&world.payer.epicbox, issued.slate_id)
-        ),
+        world.block_on(world.payer.wallet.decline_invoice(issued.slate_id)),
         Err(InvoiceError::NotParked { .. })
     ));
 }
 
 #[test]
-fn the_invoice_address_is_index_one_until_rotated_and_never_index_zero() {
-    let world = World::new();
-    let wallet = &world.payer.wallet;
-    assert_eq!(wallet.invoice_address_index().unwrap(), 1);
-    let first = world.payer.invoice_address();
-    assert_ne!(first, world.payer.address);
-
-    let rotated = wallet.rotate_invoice_address(&world.payer.epicbox).unwrap();
-
-    assert_ne!(rotated, first);
-    assert_eq!(wallet.invoice_address_index().unwrap(), 2);
-    assert_eq!(world.payer.invoice_address(), rotated);
-    assert!(matches!(
-        wallet.set_invoice_address_index(0),
-        Err(lepic_wallet::inbox::InboxError::PaymentsAddressIndex)
-    ));
-    wallet.set_invoice_address_index(1).unwrap();
-    assert_eq!(world.payer.invoice_address(), first);
-}
-
-#[test]
-fn the_allowlist_matches_on_the_key_and_keeps_the_address_the_user_added() {
-    let world = World::new();
-    let wallet = &world.payer.wallet;
-    let senders = wallet.invoice_senders().unwrap();
-    assert_eq!(senders.len(), 1);
-    assert_eq!(senders[0].address, world.issuer.address);
-    assert_eq!(senders[0].label, "shop");
-
-    assert!(matches!(
-        wallet.allow_invoice_sender("not an address", "x"),
-        Err(lepic_wallet::inbox::InboxError::Address(_))
-    ));
-    for label in ["sh\u{202E}op", "sh\u{200B}op", "sh\u{2066}op", "sh\nop"] {
-        assert!(
-            matches!(
-                wallet.allow_invoice_sender(&world.issuer.address.to_string(), label),
-                Err(lepic_wallet::inbox::InboxError::SenderLabel)
-            ),
-            "{label:?}"
-        );
-    }
-    // The same key under another domain is the same sender.
-    let key = world.issuer.address.key_text();
-    assert!(
-        wallet
-            .remove_invoice_sender(&format!("{key}@elsewhere.test"))
-            .unwrap()
-    );
-    assert!(wallet.invoice_senders().unwrap().is_empty());
-
-    // Once removed, its invoices are dropped unopened.
-    world.issue(None);
-    let summary = world
-        .block_on(wallet.epicbox_drain_invoices(&world.payer.epicbox))
-        .unwrap();
-    assert_eq!(
-        summary,
-        InboxSummary {
-            dropped: 1,
-            ..InboxSummary::default()
-        }
-    );
-}
-
-#[test]
-fn an_invoice_whose_park_write_fails_stays_on_the_relay_until_it_is_parked() {
-    let world = World::new();
-    let issued = world.issue(None);
-    let invoice_address = world.payer.invoice_address();
-    // The drain prunes the relay inbox and records the message as received before it parks.
-    world.payer.fail_write_after(2);
-
-    let summary = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .epicbox_drain_invoices(&world.payer.epicbox),
-        )
-        .unwrap();
-
-    assert_eq!(
-        summary,
-        InboxSummary {
-            held: 1,
-            ..InboxSummary::default()
-        }
-    );
-    assert_eq!(world.relay.pending(&invoice_address), 1);
-    assert!(
-        world
-            .payer
-            .read(|repos| repos.pending_invoices())
-            .is_empty()
-    );
-
-    let summary = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .epicbox_drain_invoices(&world.payer.epicbox),
-        )
-        .unwrap();
-
-    assert_eq!(summary.parked, 1);
-    assert_eq!(world.relay.pending(&invoice_address), 0);
-    assert_eq!(
-        world.read_parked(&world.payer, issued.slate_id).status,
-        PendingInvoiceStatus::Parked
-    );
-}
-
-#[test]
-fn the_payment_goes_to_the_allowed_address_and_to_the_relay_the_invoice_came_from() {
-    let world = World::new();
-    // The issuer's key, allowed under another domain and port than its messages name.
-    let allowed = format!("{}@pay.shop.test:9443", world.issuer.address.key_text());
-    world
-        .payer
-        .wallet
-        .allow_invoice_sender(&allowed, "shop")
-        .unwrap();
-    let issued = world.issue(None);
-    world.drain_payer_invoices();
-
-    assert_eq!(
-        world
-            .read_parked(&world.payer, issued.slate_id)
-            .sender_address,
-        allowed
-    );
-    let pending = world
-        .payer
-        .wallet
-        .pending_invoices(InvoiceExpiry::default())
-        .unwrap();
-    assert_eq!(pending[0].sender.to_string(), allowed);
-    assert_ne!(pending[0].sender, world.issuer.address);
-
-    let paid = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
-        .unwrap();
-
-    assert_eq!(
-        world.payer.read(|repos| repos.counterparty(paid.tx_id)),
-        Some(allowed.clone())
-    );
-    // The allowed entry may name a relay the issuer left; it listens where it sent from.
-    assert_eq!(
-        world.payer.delivered_to(),
-        vec![allowed, world.issuer.address.to_string()]
-    );
-    // The mock relay queues by key, so the issuer gets both copies and finalizes once.
-    assert_eq!(world.relay.pending(&world.issuer.address), 2);
-}
-
-#[test]
-fn a_payment_to_an_issuer_allowed_under_its_own_relay_goes_out_once() {
-    let world = World::new();
-    world
-        .payer
-        .wallet
-        .allow_invoice_sender(&world.issuer.address.to_string(), "shop")
-        .unwrap();
-    let issued = world.issue(None);
-    world.drain_payer_invoices();
-
-    world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
-        .unwrap();
-
-    assert_eq!(
-        world.payer.delivered_to(),
-        vec![world.issuer.address.to_string()]
-    );
-    assert_eq!(world.relay.pending(&world.issuer.address), 1);
-}
-
-#[test]
-fn a_payment_reaches_the_relay_the_invoice_came_from_when_the_allowed_one_fails() {
-    let world = World::new();
-    let allowed = format!("{}@gone.shop.test", world.issuer.address.key_text());
-    world
-        .payer
-        .wallet
-        .allow_invoice_sender(&allowed, "shop")
-        .unwrap();
-    let issued = world.issue(None);
-    world.drain_payer_invoices();
-    world.relay.set_domain_refused("gone.shop.test");
-
-    world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
-        .unwrap();
-
-    assert_eq!(world.relay.pending(&world.issuer.address), 1);
-}
-
-#[test]
-fn the_payments_address_parks_nothing_even_from_an_allowed_sender() {
+fn the_payments_address_parks_no_invoice() {
     let world = World::new();
     world.issue_to(&world.payer.address, None);
 
@@ -1037,67 +680,7 @@ fn the_payments_address_parks_nothing_even_from_an_allowed_sender() {
     );
 }
 
-#[test]
-fn a_resend_goes_to_the_allowed_address_whatever_domain_the_caller_names() {
-    let world = World::new();
-    let allowed = format!("{}@pay.shop.test:9443", world.issuer.address.key_text());
-    world
-        .payer
-        .wallet
-        .allow_invoice_sender(&allowed, "shop")
-        .unwrap();
-    let issued = world.issue(None);
-    world.drain_payer_invoices();
-    world.relay.set_refusing(true);
-    let error = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
-        .unwrap_err();
-    let InvoiceError::PaymentUndelivered { tx_id, .. } = error else {
-        panic!("unexpected error {error:?}");
-    };
-    world.relay.set_refusing(false);
-
-    // The issuer's own address: the same key under the domain its messages name.
-    world
-        .block_on(world.payer.wallet.resend(
-            tx_id,
-            Delivery::Deliver {
-                transport: TRANSPORT_ID,
-                to: Destination::new(world.issuer.address.to_string()),
-            },
-        ))
-        .unwrap();
-
-    // Each attempt goes to the allowed address and to the relay the invoice came from.
-    let origin = world.issuer.address.to_string();
-    assert_eq!(
-        world.payer.delivered_to(),
-        vec![allowed.clone(), origin.clone(), allowed.clone(), origin]
-    );
-    assert_eq!(
-        world.payer.read(|repos| repos.counterparty(tx_id)),
-        Some(allowed)
-    );
-    assert_eq!(world.relay.pending(&world.issuer.address), 2);
-}
-
 impl World {
-    fn drain_payer_invoices(&self) {
-        let summary = self
-            .block_on(
-                self.payer
-                    .wallet
-                    .epicbox_drain_invoices(&self.payer.epicbox),
-            )
-            .unwrap();
-        assert!(summary.parked >= 1, "{summary:?}");
-    }
-
     fn read_parked(
         &self,
         party: &world::Party,
@@ -1115,7 +698,6 @@ fn a_cancelled_payment_has_exactly_its_inputs_spent_to_the_payer_itself() {
     // A second output the payer holds, which the self-send must leave alone.
     world.payer.fund(9, 2 * FUNDING);
     let issued = world.issue(None);
-    world.drain_payer_invoices();
     let paid = world
         .block_on(
             world

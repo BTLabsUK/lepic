@@ -305,10 +305,10 @@ fn soak() {
                         count(&refreshed, &c.refresh_ok, &c.refresh_err, &log, "refresh");
                     }
                     _ = drain.tick() => {
-                        log.line("drain_invoices start");
-                        let drained = session.drain_invoices().await;
-                        count(&drained, &c.drain_ok, &c.drain_err, &log, "drain_invoices");
-                        log.line("drain_invoices end");
+                        log.line("drain_epicbox start");
+                        let drained = session.drain_epicbox().await;
+                        count(&drained, &c.drain_ok, &c.drain_err, &log, "drain_epicbox");
+                        log.line("drain_epicbox end");
                     }
                 }
             }
