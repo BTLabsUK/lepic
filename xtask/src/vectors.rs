@@ -1,6 +1,7 @@
 //! `cargo xtask vectors`: golden vector generation and replay (ADR 0009).
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -12,6 +13,13 @@ const USAGE: &str =
     "usage: cargo xtask vectors generate [--area <area>] | cargo xtask vectors verify";
 
 const VECTOR_TEST: &str = "vectors";
+
+/// RFC 0002 has no upstream implementation; its vectors come from the independent Python kit
+/// (RFC 0002 section 14), found through this variable or at `~/epic-pairing-kit`.
+const PAIRING_AREA: &str = "pairing";
+const PAIRING_KIT_ENV: &str = "EPIC_PAIRING_KIT";
+const PAIRING_KIT_DEFAULT: &str = "epic-pairing-kit";
+const SAS_TABLE: &str = "testdata/sas/emoji-v1.txt";
 
 // Environment that rustup and the outer cargo set for this process. Each one would make the nested
 // build use the product toolchain instead of the one `conformance/rust-toolchain.toml` pins.
@@ -25,15 +33,96 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     }
 }
 
-/// Runs the generator in the conformance workspace; it validates its own arguments.
+/// Runs the generator in the conformance workspace, which validates its own arguments, and the
+/// pairing kit for the pairing area.
 fn generate(root: &Path, args: &[String]) -> Result<()> {
+    let area = args
+        .iter()
+        .position(|arg| arg == "--area")
+        .and_then(|at| args.get(at.saturating_add(1)));
+    if area.is_some_and(|area| area == PAIRING_AREA) {
+        if args.len() != 2 {
+            bail!("usage: cargo xtask vectors generate --area {PAIRING_AREA}");
+        }
+        return generate_pairing(root);
+    }
     let status = generator_command(root, args)
         .status()
         .context("could not start the conformance vector generator")?;
     if !status.success() {
         bail!("vector generation failed");
     }
+    if area.is_none() {
+        generate_pairing(root)?;
+    }
     Ok(())
+}
+
+/// Runs the kit's generator into a fresh directory, then replaces the JSON files of the area with
+/// its output, so files the kit no longer writes disappear.
+fn generate_pairing(root: &Path) -> Result<()> {
+    let kit = pairing_kit_dir(std::env::var_os(PAIRING_KIT_ENV), std::env::var_os("HOME"))?;
+    let staging =
+        std::env::temp_dir().join(format!("lepic-pairing-vectors-{}", std::process::id()));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)
+            .with_context(|| format!("could not clear {}", staging.display()))?;
+    }
+    let status = pairing_command(&kit, &staging, &root.join(SAS_TABLE))
+        .status()
+        .with_context(|| format!("could not start the pairing kit in {}", kit.display()))?;
+    if !status.success() {
+        bail!("pairing vector generation failed");
+    }
+    let target = root.join("testdata/vectors").join(PAIRING_AREA);
+    std::fs::create_dir_all(&target)?;
+    for entry in std::fs::read_dir(&target)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("could not remove {}", path.display()))?;
+        }
+    }
+    for entry in std::fs::read_dir(&staging)? {
+        let path = entry?.path();
+        if let Some(name) = path
+            .file_name()
+            .filter(|_| path.extension().is_some_and(|ext| ext == "json"))
+        {
+            std::fs::copy(&path, target.join(name))
+                .with_context(|| format!("could not copy {}", path.display()))?;
+        }
+    }
+    std::fs::remove_dir_all(&staging)
+        .with_context(|| format!("could not remove {}", staging.display()))?;
+    eprintln!("xtask vectors: wrote {}", target.display());
+    Ok(())
+}
+
+fn pairing_kit_dir(configured: Option<OsString>, home: Option<OsString>) -> Result<PathBuf> {
+    match (configured, home) {
+        (Some(kit), _) => Ok(PathBuf::from(kit)),
+        (None, Some(home)) => Ok(PathBuf::from(home).join(PAIRING_KIT_DEFAULT)),
+        (None, None) => bail!("neither {PAIRING_KIT_ENV} nor HOME is set"),
+    }
+}
+
+/// The kit's own virtual environment when it has one: Argon2id needs its pinned `cryptography`.
+fn pairing_command(kit: &Path, out: &Path, sas_table: &Path) -> Command {
+    let venv = kit.join(".venv/bin/python");
+    let python = if venv.is_file() {
+        venv.into_os_string()
+    } else {
+        OsString::from("python3")
+    };
+    let mut command = Command::new(python);
+    command
+        .current_dir(kit)
+        .args(["-m", "epic_pairing.vectors"])
+        .arg(out)
+        .arg("--sas-table")
+        .arg(sas_table);
+    command
 }
 
 fn generator_command(root: &Path, args: &[String]) -> Command {
@@ -221,10 +310,57 @@ mod tests {
     }
 
     #[test]
+    fn pairing_kit_comes_from_the_variable_or_home() {
+        assert_eq!(
+            pairing_kit_dir(Some("/kit".into()), Some("/home/u".into())).unwrap(),
+            PathBuf::from("/kit")
+        );
+        assert_eq!(
+            pairing_kit_dir(None, Some("/home/u".into())).unwrap(),
+            PathBuf::from("/home/u/epic-pairing-kit")
+        );
+        assert!(pairing_kit_dir(None, None).is_err());
+    }
+
+    #[test]
+    fn pairing_generator_runs_the_kit_module_with_the_sas_table() {
+        let command = pairing_command(
+            Path::new("/no-kit"),
+            Path::new("/out"),
+            Path::new("/repo/testdata/sas/emoji-v1.txt"),
+        );
+        assert_eq!(command.get_program(), "python3");
+        assert_eq!(command.get_current_dir(), Some(Path::new("/no-kit")));
+        let passed: Vec<&OsStr> = command.get_args().collect();
+        assert_eq!(
+            passed,
+            [
+                "-m",
+                "epic_pairing.vectors",
+                "/out",
+                "--sas-table",
+                "/repo/testdata/sas/emoji-v1.txt"
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_unknown_subcommands_and_extra_verify_arguments() {
         let root = Path::new("/nonexistent");
         assert!(run(root, &["regen".to_owned()]).is_err());
         assert!(run(root, &["verify".to_owned(), "--area".to_owned()]).is_err());
         assert!(run(root, &[]).is_err());
+        assert!(
+            run(
+                root,
+                &[
+                    "generate".to_owned(),
+                    "--area".to_owned(),
+                    "pairing".to_owned(),
+                    "--out".to_owned()
+                ]
+            )
+            .is_err()
+        );
     }
 }

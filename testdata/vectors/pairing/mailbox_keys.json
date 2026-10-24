@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "generator": "epic-pairing-kit",
+    "kit_version": "0.2.0",
+    "git_commit": "9e27d32526c68f0e70b225deb3d309fe1d88ce63",
+    "rfc": "0002-contact-pairing",
+    "file": "mailbox_keys.json"
+  },
+  "vectors": [
+    {
+      "kind": "real",
+      "seed": "00000000000000000000000000000000",
+      "net": 0,
+      "invite_id": "df69b4439e77e96e",
+      "pbox_sk": "12fc6ac28d19402bc1ec722b215f1d327bb4b97490dee1880775b6a0571d07b3",
+      "pbox_ctr": 0,
+      "pfrom_sk": "8b461260d653883f5de41743bc334774d6350db934e0ef0f9f47d29493e09823",
+      "pfrom_ctr": 0
+    },
+    {
+      "kind": "real",
+      "seed": "00000000000000000000000000000000",
+      "net": 1,
+      "invite_id": "df69b4439e77e96e",
+      "pbox_sk": "303eae496ff593fc7b74a9c5ccca524f2e6c1a323aea9d6fa11a0e1ec7c51ba1",
+      "pbox_ctr": 0,
+      "pfrom_sk": "f778ef66de3385ddb8e17fa739e03bfeb274041aa410faaa584613a7c975deb3",
+      "pfrom_ctr": 0
+    },
+    {
+      "kind": "real",
+      "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "net": 0,
+      "invite_id": "de83e379da0b96f2",
+      "pbox_sk": "5c14b312f8e2a5d824cb93f6a103271a9e05c4bbde42624dde67746323018b25",
+      "pbox_ctr": 0,
+      "pfrom_sk": "4f41cde255571e054d988d744f994e139d86e4ead73f44846892b99b89722a8b",
+      "pfrom_ctr": 0
+    },
+    {
+      "kind": "real",
+      "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "net": 1,
+      "invite_id": "de83e379da0b96f2",
+      "pbox_sk": "aeeba4ae3014a4ec213ffa44d01ce2a80c154bc6292e9efd504798f217b7f692",
+      "pbox_ctr": 0,
+      "pfrom_sk": "4214d376a2cf84fa6698e950569bb19c1fc65760ea9f08e8fd81fd11547274c7",
+      "pfrom_ctr": 0
+    },
+    {
+      "kind": "synthetic_order",
+      "note": "order replaced by the ctr 00 output to force ctr >= 01; not secp256k1",
+      "seed": "00000000000000000000000000000000",
+      "net": 0,
+      "order": "12fc6ac28d19402bc1ec722b215f1d327bb4b97490dee1880775b6a0571d07b3",
+      "pbox_sk": "08b14999f3e6a9f983c87c2539aa0bb6026df25bd985ff1b43699003f08799bd",
+      "pbox_ctr": 1
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+{
+  "meta": {
+    "generator": "epic-pairing-kit",
+    "kit_version": "0.2.0",
+    "git_commit": "9e27d32526c68f0e70b225deb3d309fe1d88ce63",
+    "rfc": "0002-contact-pairing",
+    "file": "words.json"
+  },
+  "vectors": [
+    {
+      "name": "words_0102030405",
+      "net": 0,
+      "words": "0102030405",
+      "argon2id": {
+        "salt": "657069632d706169722f3120776f72647300",
+        "iterations": 3,
+        "memory_kib": 65536,
+        "lanes": 1,
+        "version": 19,
+        "length": 32
+      },
+      "k": "27174241493401d0b1a3ad3858b621e88021df0c2eed7c9f30bf74a54249c261",
+      "mailbox_seed": "2bf2a3e1af2a6fb9af3ef48b358784df",
+      "rendezvous_mailbox": {
+        "pbox_sk": "b034ab98043766f3f55c2e6ba2d6b20124a98822294ffcf2b8a3484fba94b939",
+        "pbox_ctr": 0,
+        "pfrom_sk": "c4d77d5975a6a5d9b3f961e8a4bbec5b0dfe92837ee365dd27f9edeb2c638196",
+        "pfrom_ctr": 0
+      },
+      "invite_key": "8f89cc380d18a8d74c7a927d7fcfd2115b3704641e8a84a19128628d437c9547",
+      "aad": "657069632d706169722f3120776f72647300",
+      "invite": "010001010200010003000101040005416c696365050008000000006b49d200060010000000000000000000000000000000000700200c8ac2ce49c74dd8336b8092d73978ea62ec58dd66be8a02f881feee09902e5508002089c4b89700d7fcb367e092eea0abd6af5b6aec437f39226ebdb549978deb092509001172656c61792e6578616d706c653a343433",
+      "posted": "Sj4FEWIJX6wWT8b3Ep19WQcLXIyId47Bm02gW348srIBZ_mQPugSQP7iXFJtzkuzRyr8znX5W6s5tee3bQudAAAVdfZD1UjxsYgV-hbJVM2C_h7J5m-J6sqiANO1enojJzCIlaJELdrqDO0SJSzMi9qbdqG9wc9j9VVHC-CFixWlKXJmjqnA09_9QrNzp84nJn8z3YVnZPlhsh5X",
+      "emoji": [
+        "🐰",
+        "🦊",
+        "🐻",
+        "🐯",
+        "🐮"
+      ],
+      "names": [
+        "bunny",
+        "vixen",
+        "bear",
+        "tigress",
+        "heifer"
+      ]
+    },
+    {
+      "name": "words_fffefdfcfb",
+      "net": 0,
+      "words": "fffefdfcfb",
+      "argon2id": {
+        "salt": "657069632d706169722f3120776f72647300",
+        "iterations": 3,
+        "memory_kib": 65536,
+        "lanes": 1,
+        "version": 19,
+        "length": 32
+      },
+      "k": "2155c7e26c57f2e68d2f9a66ff1903527a0a972f8224a6432fa17f211576d903",
+      "mailbox_seed": "d25bc87e6f12f18c4dd1b3dc16a2323f",
+      "rendezvous_mailbox": {
+        "pbox_sk": "af96fae7e83104a2b5e46a7638567b15fd7c32e70de3e534882f32852366eb3f",
+        "pbox_ctr": 0,
+        "pfrom_sk": "d1e6a9d5a1779e69fc84af30dd240336fb802b7f360baf505668ca7fb10c021e",
+        "pfrom_ctr": 0
+      },
+      "invite_key": "57d19b1f59832b433cf38ffd1c99b8bafc43da25337e12207bbcb43902e3213f",
+      "aad": "657069632d706169722f3120776f72647300",
+      "invite": "010001010200010003000101040005416c696365050008000000006b49d200060010000000000000000000000000000000000700200c8ac2ce49c74dd8336b8092d73978ea62ec58dd66be8a02f881feee09902e5508002089c4b89700d7fcb367e092eea0abd6af5b6aec437f39226ebdb549978deb092509001172656c61792e6578616d706c653a343433",
+      "posted": "HRwvxXYgAzIF_471RERxSdddUNZWFK6jvlzHO5oYdo38VspGjtQmKWRB24Vt4-ZYVcO2OJqQjuD2kBFKVqs_z-lRdgQEJJK_fuayBmIWAhDgog4O3Pr5IqSCK0byvRgEmGqEYy1DU2qJjjyj77_2ZuFOO2I9tIsY8lrfMmAPRpY_ujxNsd31XN7hLMcXhaVAZiDuEufMcmCU2QTF",
+      "emoji": [
+        "🧋",
+        "🥥",
+        "🌰",
+        "🥜",
+        "🧇"
+      ],
+      "names": [
+        "boba",
+        "coco",
+        "chestnut",
+        "nuts",
+        "waffle"
+      ]
+    },
+    {
+      "name": "words_0102030405",
+      "net": 1,
+      "words": "0102030405",
+      "argon2id": {
+        "salt": "657069632d706169722f3120776f72647301",
+        "iterations": 3,
+        "memory_kib": 65536,
+        "lanes": 1,
+        "version": 19,
+        "length": 32
+      },
+      "k": "20654e988b856bc53c34998cb241b27770ae4a4f11016f720aabfabfb39f3f24",
+      "mailbox_seed": "ef93980c432c183545ac7e343722103e",
+      "rendezvous_mailbox": {
+        "pbox_sk": "030cf47cb15c2e23fb4118eee68367bbadd859291ddc0502070adff4e29bca31",
+        "pbox_ctr": 0,
+        "pfrom_sk": "2daa3adb2c3e5dbb022dac831d489322de307a856c7cb572915d7ab54437c887",
+        "pfrom_ctr": 0
+      },
+      "invite_key": "5446eaccae6682600bb5c4cc7e30b1eaede14d58768c6fa823dbebbe066889a8",
+      "aad": "657069632d706169722f3120776f72647301",
+      "invite": "010001010200010103000101040005416c696365050008000000006b49d20006001000000000000000000000000000000000070020c2b3677d656023634d708f029163a25b4bf3ce540dc96e88d6ff705e0f1014a50800200653a6abd049b1026cf714f19eb82dfa3cd0c9ed86190fbf47a2e02869de360409001172656c61792e6578616d706c653a343433",
+      "posted": "DqXuLxTsvk5SHFmVsSATb8oGJyiyAPSYSPIqM0LOOb6gu3tWNWnN4R-dNlPuOpb94m9m5XOG1nYUJap2Di2D1GcEPSqqz641CDr1Cqnm6GWmUMtlhn8MtYMtruawTIjwXYjngGu3qVIhHzVKt2MfJw3VeFFiP4-us-rgcR3JpIdhzC7KELlsPKzAZKABq22t1WzAmE_67M_Zwoue",
+      "emoji": [
+        "🐰",
+        "🦊",
+        "🐻",
+        "🐯",
+        "🐮"
+      ],
+      "names": [
+        "bunny",
+        "vixen",
+        "bear",
+        "tigress",
+        "heifer"
+      ]
+    },
+    {
+      "name": "words_fffefdfcfb",
+      "net": 1,
+      "words": "fffefdfcfb",
+      "argon2id": {
+        "salt": "657069632d706169722f3120776f72647301",
+        "iterations": 3,
+        "memory_kib": 65536,
+        "lanes": 1,
+        "version": 19,
+        "length": 32
+      },
+      "k": "f9e80894e6b7198cc579756931dd4e7a41b27c8dd618b62c3f36e1488004753d",
+      "mailbox_seed": "261aa33d61960a3ec1f8d4fcfcde0474",
+      "rendezvous_mailbox": {
+        "pbox_sk": "9d89e71a3cec580bad33f23cb00640b8bf02598b112b87354e8e6b04088e3efb",
+        "pbox_ctr": 0,
+        "pfrom_sk": "764228474851af6c2fec8a22669ab972da5dc55af338060f97ec4e4f3efb84db",
+        "pfrom_ctr": 0
+      },
+      "invite_key": "106baf10b29dc7212b79aef6f6fffbd9c93a72ffb094493eef845808ca8e8b08",
+      "aad": "657069632d706169722f3120776f72647301",
+      "invite": "010001010200010103000101040005416c696365050008000000006b49d20006001000000000000000000000000000000000070020c2b3677d656023634d708f029163a25b4bf3ce540dc96e88d6ff705e0f1014a50800200653a6abd049b1026cf714f19eb82dfa3cd0c9ed86190fbf47a2e02869de360409001172656c61792e6578616d706c653a343433",
+      "posted": "6W1i8I_nfWRbwpBwmNPO9SE8YY47yFfeaPgrPseiYwgt9xsJI6qVR1-bPDFoAe3ntTCd_2xOOoBcZRCrmKKWnsc546gs_2eK6WoeiW1bYtwcVnOp1KaaijCL9dYh-C7iL4HCGcvuq486OFTLeYkqnGbP7HWbZUfDsC909OmO6ud5Xb6JwULW2ILCtXsUL6lEkHIK1dTqlRpLkZEs",
+      "emoji": [
+        "🧋",
+        "🥥",
+        "🌰",
+        "🥜",
+        "🧇"
+      ],
+      "names": [
+        "boba",
+        "coco",
+        "chestnut",
+        "nuts",
+        "waffle"
+      ]
+    }
+  ]
+}

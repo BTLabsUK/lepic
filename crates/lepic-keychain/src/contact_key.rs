@@ -176,7 +176,7 @@ impl ContactRoot {
                 hint_key.as_mut(),
             )
             .map_err(|_| ContactKeyError::Derivation)?;
-            if *hint_key != *card_hint_key {
+            if !equal_in_constant_time(&hint_key, card_hint_key) {
                 continue;
             }
             let slot_bytes = slot_bytes(slot)?;
@@ -222,6 +222,14 @@ impl fmt::Debug for ReplyKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("ReplyKey([redacted])")
     }
+}
+
+/// Compares derived key bytes without stopping at the first difference.
+fn equal_in_constant_time(ours: &[u8; 32], theirs: &[u8; 32]) -> bool {
+    ours.iter()
+        .zip(theirs)
+        .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
 }
 
 /// `be32(slot)` of a slot below [`SLOT_COUNT`].
@@ -351,6 +359,47 @@ mod tests {
         );
         assert_eq!(key, Ok(3));
         assert_eq!(seen, [0, 1, 2, 3]);
+    }
+
+    /// The pairing kit's `synthetic_order` vector: with the curve order replaced by the `ctr = 00`
+    /// output, that output is out of range and the loop must take `ctr = 01`.
+    #[test]
+    fn counter_loop_matches_the_kits_injected_order_vector() {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/pairing/mailbox_keys.json"
+        ))
+        .unwrap();
+        let vectors = document["vectors"].as_array().unwrap();
+        let synthetic: Vec<_> = vectors
+            .iter()
+            .filter(|vector| vector["kind"] == "synthetic_order")
+            .collect();
+        assert!(!synthetic.is_empty());
+        let unhex = |value: &serde_json::Value| -> Vec<u8> {
+            let text = value.as_str().unwrap();
+            (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        for vector in synthetic {
+            let seed = unhex(&vector["seed"]);
+            let order: [u8; 32] = unhex(&vector["order"]).try_into().unwrap();
+            let net = u8::try_from(vector["net"].as_u64().unwrap()).unwrap();
+            let hkdf = Hkdf::<Sha256>::new(Some(MAILBOX_SALT), &seed);
+            let mut last_ctr = None;
+            let key = first_valid_key(
+                |ctr, out| {
+                    last_ctr = Some(ctr);
+                    hkdf.expand(&[b"box".as_slice(), &[net, ctr]].concat(), out)
+                        .map_err(|_| ContactKeyError::Derivation)
+                },
+                |bytes| (*bytes != [0; 32] && *bytes < order).then_some(*bytes),
+            )
+            .unwrap();
+            assert_eq!(key.to_vec(), unhex(&vector["pbox_sk"]));
+            assert_eq!(last_ctr.map(u64::from), vector["pbox_ctr"].as_u64());
+        }
     }
 
     #[test]

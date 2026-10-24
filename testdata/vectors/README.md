@@ -14,7 +14,13 @@ code. Only the generator in `conformance/vectors` writes them; never edit one by
 `cargo xtask vectors generate` runs the generator with the conformance workspace's own toolchain
 (`conformance/rust-toolchain.toml`), not the product toolchain. Without `xtask`, it runs directly:
 `cargo run --manifest-path conformance/Cargo.toml -p vectors -- generate [--area <area>] [--out <dir>]`.
-`vectors list` prints the known areas. Generating an area also deletes JSON files in its directory
+`vectors list` prints the known areas.
+
+The `pairing` area (RFC 0002 section 14) has no upstream implementation. `cargo xtask vectors
+generate --area pairing` runs the independent Python kit instead,
+`python -m epic_pairing.vectors <dir> --sas-table testdata/sas/emoji-v1.txt`, from the kit in
+`$EPIC_PAIRING_KIT` (default `~/epic-pairing-kit`) with its `.venv` Python when present. Its files
+keep the kit's format, `{"meta": {generator, kit_version, git_commit, rfc, file}, "vectors": [...]}`. Generating an area also deletes JSON files in its directory
 that the generator no longer produces.
 
 After generating, review the diff with `git diff testdata/vectors`. A deterministic area must show no
