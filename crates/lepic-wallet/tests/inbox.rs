@@ -25,7 +25,7 @@ use lepic_node::mock::MockFailure;
 use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxDirection, TxState, WalletStore};
 use lepic_transport::transport::{Destination, Inbound, Transport};
 use lepic_wallet::details::{SlateMessage, TxFlow};
-use lepic_wallet::event::TransportState;
+use lepic_wallet::event::{Connection, TransportState, TransportStatus};
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::slate::Role;
@@ -665,6 +665,80 @@ fn finishing_an_idle_listener_returns_promptly_and_reports_the_transport_stopped
     assert_eq!(
         transport_states(&mut events).last(),
         Some(&TransportState::Stopped)
+    );
+}
+
+#[test]
+fn a_drain_beside_a_listener_reports_its_connection_as_its_own() {
+    let world = World::new();
+    let mut events = world.receiver_wallet.subscribe();
+    let handle = ListenHandle::new();
+
+    world.block_on(async {
+        let listen = world
+            .receiver_wallet
+            .epicbox_listen(&world.receiver_epicbox, &handle);
+        let script = async {
+            let mut events = world.receiver_wallet.subscribe();
+            transport_reaches(&mut events, TransportState::Connected).await;
+            world.relay.set_refusing(true);
+            let refused = world
+                .receiver_wallet
+                .epicbox_drain(&world.receiver_epicbox)
+                .await;
+            assert!(
+                matches!(refused, Err(InboxError::Subscription(_))),
+                "{refused:?}"
+            );
+            world.relay.set_refusing(false);
+            within(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+                .await
+                .unwrap();
+            handle.stop();
+        };
+        let (listened, ()) = tokio::join!(listen, script);
+        listened.unwrap();
+    });
+
+    let mut listener = Vec::new();
+    let mut drains = Vec::new();
+    let mut disconnects = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            Event::Transport(TransportStatus {
+                connection, state, ..
+            }) => match connection {
+                Connection::Listener => listener.push(state),
+                _ => drains.push((connection, state)),
+            },
+            Event::TransportDisconnected(disconnect) => disconnects.push(disconnect.connection),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        listener
+            .iter()
+            .filter(|state| **state == TransportState::Connected)
+            .count(),
+        1,
+        "{listener:?}"
+    );
+    assert!(
+        !listener.contains(&TransportState::Disconnected),
+        "{listener:?}"
+    );
+    assert_eq!(listener.last(), Some(&TransportState::Stopped));
+    assert!(drains.contains(&(Connection::PaymentsDrain, TransportState::Disconnected)));
+    assert!(
+        drains
+            .iter()
+            .all(|(connection, _)| *connection == Connection::PaymentsDrain)
+    );
+    assert!(!disconnects.is_empty());
+    assert!(
+        disconnects
+            .iter()
+            .all(|connection| *connection == Connection::PaymentsDrain)
     );
 }
 

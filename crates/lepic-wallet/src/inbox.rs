@@ -55,8 +55,8 @@ use uuid::Uuid;
 use crate::account;
 use crate::error::WalletError;
 use crate::event::{
-    Event, FinalizedInvoice, SlateId, TransportDisconnect, TransportState, TransportStatus,
-    UndeliveredReply, UnknownSlate,
+    Connection, Event, FinalizedInvoice, SlateId, TransportDisconnect, TransportState,
+    TransportStatus, UndeliveredReply, UnknownSlate,
 };
 use crate::finalize::FinalizeError;
 use crate::invoice::InvoiceError;
@@ -812,11 +812,16 @@ where
                 .map_err(InboxError::Subscription)?;
             consumed
         };
-        let (result, ()) = tokio::join!(consume, self.forward_states(subscription));
+        let connection = match (listen, mailbox) {
+            (Some(_), _) => Connection::Listener,
+            (None, Mailbox::Payments) => Connection::PaymentsDrain,
+            (None, Mailbox::Invoices) => Connection::InvoicesDrain,
+        };
+        let (result, ()) = tokio::join!(consume, self.forward_states(subscription, connection));
         result
     }
 
-    async fn forward_states(&self, subscription: &Subscription) {
+    async fn forward_states(&self, subscription: &Subscription, connection: Connection) {
         let mut states = subscription.state();
         let mut last = None;
         loop {
@@ -826,12 +831,14 @@ where
                 last = Some(mapped);
                 self.emit(Event::Transport(TransportStatus {
                     transport: TRANSPORT_ID,
+                    connection,
                     state: mapped,
                 }));
                 if mapped == TransportState::Disconnected {
                     let disconnect = subscription.last_disconnect();
                     self.emit(Event::TransportDisconnected(TransportDisconnect {
                         transport: TRANSPORT_ID,
+                        connection,
                         reason: disconnect.as_ref().map_or_else(
                             || "connection ended".to_owned(),
                             |disconnect| disconnect.reason.clone(),

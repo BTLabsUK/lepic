@@ -88,7 +88,10 @@ pub async fn transport_reaches(events: &mut broadcast::Receiver<Event>, wanted: 
 pub fn transport_states(events: &mut broadcast::Receiver<Event>) -> Vec<TransportState> {
     let mut states = Vec::new();
     while let Ok(event) = events.try_recv() {
-        if let Event::Transport(TransportStatus { transport, state }) = event {
+        if let Event::Transport(TransportStatus {
+            transport, state, ..
+        }) = event
+        {
             assert_eq!(transport, TRANSPORT_ID);
             states.push(state);
         }

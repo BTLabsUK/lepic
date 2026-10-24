@@ -222,6 +222,7 @@ pub struct SyncProgress {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportDisconnect {
     pub transport: TransportId,
+    pub connection: Connection,
     /// What ended the connection, as the transport reports it. No secrets.
     pub reason: String,
     /// The wait before the next attempt; `None` when the transport does not retry.
@@ -231,7 +232,21 @@ pub struct TransportDisconnect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportStatus {
     pub transport: TransportId,
+    pub connection: Connection,
     pub state: TransportState,
+}
+
+/// Which of a transport's connections an event is about. A drain opens its own short-lived
+/// connection beside a running listener, so a host that shows the listener's health must read
+/// only the listener's events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Connection {
+    /// The connection held while the wallet listens on its payments address.
+    Listener,
+    /// A one-time drain of the payments address.
+    PaymentsDrain,
+    /// A one-time drain of the invoice address.
+    InvoicesDrain,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
