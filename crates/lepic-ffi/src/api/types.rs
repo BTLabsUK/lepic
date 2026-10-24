@@ -271,6 +271,13 @@ pub struct TransactionDetails {
     /// Whether `release_transaction` may release the send now. A refresh at or above
     /// `releasable_from` missed its kernel; the release asks the node once more.
     pub releasable: bool,
+    /// A send waiting for its answer whose slate no delivery attempt got to the other party
+    /// yet: every attempt failed, or none finished, as when the app was killed before the
+    /// first. Show it as not delivered and offer
+    /// [`crate::api::wallet::EpicWallet::resend_epicbox`] (or the resend of the transport it
+    /// used). Also `true` while the send call that makes it is still running; `false` once an
+    /// attempt delivered it, and for any other transaction.
+    pub undelivered: bool,
     /// The parties' messages whose signatures verify, in the order the parties joined, as the
     /// latest stored stage of the slate carries them. Empty for a restored output.
     pub messages: Vec<SlateMessage>,

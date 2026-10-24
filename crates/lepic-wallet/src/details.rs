@@ -8,8 +8,8 @@ use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
 use lepic_store::{
-    AccountIndex, ChainCheck, ImportedKind, Repositories, SlateStage, StoreError,
-    StoredTransaction, TxId, TxState, WalletStore,
+    AccountIndex, ChainCheck, ImportedKind, OutboxStatus, Repositories, SlateStage, StoreError,
+    StoredTransaction, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::transport::Destination;
 use tracing::instrument;
@@ -68,6 +68,11 @@ pub struct TransactionDetails {
     /// For an entry a scan stored for an output it found with no record, which scan it was and
     /// how it is dated. `None` for any other, and for one stored before this was recorded.
     pub found: Option<ScanFound>,
+    /// A send waiting for its answer whose slate no delivery attempt got to the other party
+    /// yet: every attempt failed, or none finished, as when the process ended before the
+    /// first. Nothing answers it until it is resent. Also `true` while the first attempt
+    /// still runs; `false` once an attempt delivered it, and for any other transaction.
+    pub undelivered: bool,
 }
 
 /// What an imported transaction carries beyond its log entry.
@@ -219,7 +224,9 @@ fn details(
         TxOrigin::Wallet | TxOrigin::Imported => None,
     };
     let release = release_check(repos, codecs, &transaction)?.ok();
+    let undelivered = undelivered(repos, &transaction)?;
     Ok(TransactionDetails {
+        undelivered,
         origin,
         found,
         imported: record.map(|record| ImportedDetails {
@@ -240,6 +247,24 @@ fn details(
         flow,
         transaction,
     })
+}
+
+/// A delivered slate leaves no pending outbox entry of its own behind, so a pending one means no
+/// attempt got through.
+fn undelivered(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+) -> Result<bool, StoreError> {
+    let entry = &transaction.entry;
+    let (TxDirection::Outgoing, TxState::Sent, Some(slate_id)) =
+        (entry.direction, entry.state, entry.slate_id)
+    else {
+        return Ok(false);
+    };
+    Ok(repos
+        .outbox(OutboxStatus::Pending)?
+        .iter()
+        .any(|stored| stored.entry.slate_id == slate_id))
 }
 
 /// A transaction stores stages of one flow only, so any stored invoice stage makes it an

@@ -1180,6 +1180,28 @@ impl Session {
         Ok(sent_tx(&sent))
     }
 
+    pub(crate) async fn resend_epicbox(&self, tx_id: u32) -> Result<(), WalletError> {
+        let epicbox = self.epicbox()?;
+        let details = self.engine.transaction_details(TxId(tx_id)).await?;
+        let to = details
+            .counterparty
+            .filter(|_| {
+                details.transaction.entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
+            })
+            .ok_or_else(|| invalid("transaction is not a send over epicbox"))?;
+        self.engine.epicbox_attach(&epicbox)?;
+        Ok(self
+            .engine
+            .resend(
+                TxId(tx_id),
+                Delivery::Deliver {
+                    transport: TRANSPORT_ID,
+                    to,
+                },
+            )
+            .await?)
+    }
+
     pub(crate) async fn drain_epicbox(&self) -> Result<InboxReport, WalletError> {
         let epicbox = self.epicbox()?;
         // The listener subscribes the same address and gets every stored message itself; a
@@ -1452,6 +1474,7 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
         ttl_cutoff_height: details.ttl_cutoff_height.map(Height::value),
         releasable_from: details.releasable_from.map(Height::value),
         releasable: details.releasable,
+        undelivered: details.undelivered,
         messages: details
             .messages
             .iter()
@@ -1967,6 +1990,7 @@ mod tests {
             confirmed_at: Some(confirmed),
             releasable_from: Some(Height::new(1_444)),
             releasable: true,
+            undelivered: true,
             messages: vec![lepic_wallet::details::SlateMessage {
                 role: lepic_wallet::slate::Role::Receiver,
                 text: "got it".to_owned(),
@@ -2005,6 +2029,7 @@ mod tests {
                 ttl_cutoff_height: Some(360),
                 releasable_from: Some(1_444),
                 releasable: true,
+                undelivered: true,
                 messages: vec![SlateMessage {
                     role: crate::api::types::SlateRole::Receiver,
                     text: "got it".to_owned(),

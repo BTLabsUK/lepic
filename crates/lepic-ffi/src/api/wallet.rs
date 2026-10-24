@@ -1089,6 +1089,20 @@ impl EpicWallet {
         .await
     }
 
+    /// Delivers the slate of send `tx_id` again over Epicbox, to the address it was sent to,
+    /// after [`EpicWallet::send_epicbox`] failed with `TransportFailed` or
+    /// [`TransactionDetails::undelivered`] says no attempt got through. The listener or a
+    /// drain finalizes and posts it when the answer arrives; a wallet that answered the slate
+    /// before answers it again the same way. Fails with `InvalidArgument` when `tx_id` is not
+    /// a send over Epicbox waiting for its answer, and with `TransportFailed` when the relay fails
+    /// again.
+    pub async fn resend_epicbox(&self, tx_id: u32) -> Result<(), WalletError> {
+        self.run("resend_epicbox", |session| async move {
+            session.resend_epicbox(tx_id).await
+        })
+        .await
+    }
+
     /// Connects to the relay once, handles every pending message and disconnects: the call for
     /// background work. While the listener runs it does nothing and reports nothing handled,
     /// as the listener receives the same messages.

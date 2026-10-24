@@ -17,6 +17,7 @@ mod node;
 mod outputs;
 mod password;
 mod push;
+mod resend;
 mod scan;
 mod selection;
 mod self_send;

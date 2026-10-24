@@ -501,6 +501,10 @@ async fn lock_during_an_http_delivery_leaves_a_resendable_send_to_a_fresh_handle
         (waiting.tx_id, waiting.status),
         (sent.tx_id, TxStatus::Sent)
     );
+    assert!(
+        waiting.undelivered,
+        "no attempt got through before the lock"
+    );
     let events = Events::default();
     let port = listen(&pair.bob, &events).await;
     let resent = reopened
@@ -508,6 +512,7 @@ async fn lock_during_an_http_delivery_leaves_a_resendable_send_to_a_fresh_handle
         .await
         .unwrap();
     assert!(resent.posted);
+    assert!(!reopened.transaction(sent.tx_id).await.unwrap().undelivered);
     assert_eq!(pair.chain.pushed_count(), 1);
     assert_eq!(events.last().kind, HttpListenerEventKind::Received);
 }

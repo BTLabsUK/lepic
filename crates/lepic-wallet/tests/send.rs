@@ -384,6 +384,43 @@ fn a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it() {
 }
 
 #[test]
+fn a_send_is_undelivered_while_every_attempt_failed() {
+    let sender = Sender::new();
+    let undelivered = |tx_id| {
+        sender
+            .harness
+            .block_on(sender.wallet.transaction_details(tx_id))
+            .unwrap()
+            .undelivered
+    };
+    let error = sender
+        .harness
+        .block_on(sender.wallet.send(request(AMOUNT), to("nobody")))
+        .unwrap_err();
+    let SendError::Undelivered { tx_id, .. } = error else {
+        panic!("{error:?}");
+    };
+    assert!(undelivered(tx_id));
+
+    sender
+        .harness
+        .block_on(sender.wallet.resend(tx_id, to(PEER)))
+        .unwrap();
+    assert!(!undelivered(tx_id));
+
+    let other = Sender::new();
+    let delivered = other
+        .harness
+        .block_on(other.wallet.send(request(AMOUNT), to(PEER)))
+        .unwrap();
+    let details = other
+        .harness
+        .block_on(other.wallet.transaction_details(delivered.tx_id))
+        .unwrap();
+    assert!(!details.undelivered);
+}
+
+#[test]
 fn resend_refuses_a_transaction_that_is_not_waiting_for_delivery() {
     let sender = Sender::new();
     let unknown = sender
