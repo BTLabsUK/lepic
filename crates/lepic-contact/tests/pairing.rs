@@ -13,7 +13,7 @@ use lepic_contact::{
     CARD_FORMAT, Capabilities, Commitment, ConfirmBody, ConfirmCode, ConfirmStatus, ContactCard,
     ContactKind, ContactName, DecodeError, EncodeError, Hint, Invite, InviteFields, InviteId,
     MAX_CARD_LEN, MAX_INVITE_LEN, MailboxAddress, Malformed, Network, Nonce, PairingCode,
-    PairingLink, RelayHost, ReplyBody, SealedEnvelope, open_confirm, open_reply,
+    PairingLink, RelayHost, ReplyBody, Sas, SealedEnvelope, open_confirm, open_reply,
     pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_reply,
 };
 use proptest::prelude::*;
@@ -281,7 +281,7 @@ fn invite_rejections_have_their_own_errors() {
 // The pairing flow.
 
 #[test]
-fn online_pairing_exchanges_cards_and_nonces() {
+fn online_pairing_reaches_the_same_sas_on_both_sides() {
     let (alice, bob) = (Side::new(1), Side::new(11));
     let card_a = alice.card("Alice", NET);
     let card_b = bob.card("Bob", NET);
@@ -321,6 +321,10 @@ fn online_pairing_exchanges_cards_and_nonces() {
     let got_confirm = open_confirm(&sealed, &bob.enc).unwrap();
     assert_eq!(got_confirm, confirm);
     assert!(got_confirm.matches_invite(&invite));
+
+    let sas_a = Sas::compute(NET, &card_a, &got.card, &na, &got.nonce);
+    let sas_b = Sas::compute(NET, &got_confirm.card, &card_b, &got_confirm.nonce, &nb);
+    assert_eq!(sas_a, sas_b);
 }
 
 #[test]

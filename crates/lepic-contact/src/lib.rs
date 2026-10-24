@@ -13,6 +13,7 @@ mod keys;
 mod link;
 mod network;
 mod pairing;
+mod sas;
 mod text;
 mod tlv;
 
@@ -33,6 +34,7 @@ pub use pairing::{
     PairingCode, PairingLink, ReplyBody, open_confirm, open_reply, pairing_envelope_from_link,
     pairing_envelope_link, seal_confirm, seal_reply,
 };
+pub use sas::{Sas, SasSymbol, symbol};
 pub use text::{
     ContactName, MAX_HOST_LEN, MAX_MAILBOX_LEN, MAX_NAME_LEN, MAX_REFERENCE_LEN, MailboxAddress,
     Reference, RelayHost,
