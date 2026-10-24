@@ -7,4 +7,5 @@ pub mod origin;
 pub mod registry;
 pub mod role;
 pub mod stage;
+pub mod ur_slate;
 pub mod validate;
