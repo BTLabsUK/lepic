@@ -1,5 +1,6 @@
 use std::fmt;
 
+use ed25519_dalek::VerifyingKey;
 use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -49,6 +50,10 @@ impl EncSecretKey {
         // A clamped non-zero scalar times the base point has the large prime order.
         EncPublicKey(x25519(self.0, X25519_BASEPOINT_BYTES))
     }
+
+    pub(crate) fn expose_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
 impl fmt::Debug for EncSecretKey {
@@ -75,6 +80,15 @@ impl fmt::Debug for HintKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("HintKey(<redacted>)")
     }
+}
+
+/// An Ed25519 public key read from input: a valid point that is not of small order.
+pub(crate) fn verifying_key(bytes: &[u8; 32]) -> Result<VerifyingKey, KeyError> {
+    let key = VerifyingKey::from_bytes(bytes).map_err(|_| KeyError::InvalidVerifyingKey)?;
+    if key.is_weak() {
+        return Err(KeyError::InvalidVerifyingKey);
+    }
+    Ok(key)
 }
 
 #[cfg(test)]

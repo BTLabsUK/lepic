@@ -1,0 +1,304 @@
+//! Pairing secrets and the reply and confirm messages (RFC 0002 7.1 to 7.3).
+
+use std::fmt;
+
+use ed25519_dalek::SigningKey;
+use rand_core::CryptoRng;
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use crate::card::ContactCard;
+use crate::envelope::{Content, MessageType, Opened, SealedEnvelope, seal};
+use crate::error::{DecodeError, EncodeError, Malformed};
+use crate::hash::{first8, sha256};
+use crate::hint::HintRule;
+use crate::invite::Invite;
+use crate::keys::EncSecretKey;
+use crate::link::{LinkKind, decode_link, encode_link};
+use crate::network::Network;
+
+const ID_DOMAIN: &[u8] = b"epic-pair/1 id";
+const COMMIT_DOMAIN: &[u8] = b"epic-pair/1 commit";
+
+/// A reply or confirm envelope is a card and a few fixed fields; this bounds its link.
+pub const MAX_PAIRING_ENVELOPE_LEN: usize = 4096;
+
+macro_rules! secret_bytes {
+    ($name:ident, $len:literal) => {
+        #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+        pub struct $name([u8; $len]);
+
+        impl $name {
+            pub fn from_bytes(bytes: [u8; $len]) -> Self {
+                Self(bytes)
+            }
+
+            pub fn expose_bytes(&self) -> &[u8; $len] {
+                &self.0
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(concat!(stringify!($name), "(<redacted>)"))
+            }
+        }
+    };
+}
+
+secret_bytes!(PairingCode, 16);
+secret_bytes!(Nonce, 16);
+secret_bytes!(ConfirmCode, 16);
+
+impl Nonce {
+    /// The nonce both sides use for an in-person pairing.
+    pub fn zero() -> Self {
+        Self([0; 16])
+    }
+}
+
+/// `H("epic-pair/1 id" || code)[0..8]`: names an invite and is the hint of its replies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InviteId([u8; 8]);
+
+impl InviteId {
+    pub fn from_code(code: &PairingCode) -> Self {
+        Self(first8(&sha256(&[ID_DOMAIN, code.expose_bytes()])))
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 8] {
+        &self.0
+    }
+}
+
+/// `H("epic-pair/1 commit" || nA || H(cardA))`: binds the inviter to its nonce and card before
+/// the invitee chooses its own nonce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Commitment([u8; 32]);
+
+impl Commitment {
+    pub fn new(nonce: &Nonce, card: &ContactCard) -> Self {
+        Self(sha256(&[
+            COMMIT_DOMAIN,
+            nonce.expose_bytes(),
+            &card.digest(),
+        ]))
+    }
+
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// The invitee's answer: `code || nB || rc || cardB`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyBody {
+    pub code: PairingCode,
+    pub nonce: Nonce,
+    /// Derives the confirm mailbox.
+    pub confirm_code: ConfirmCode,
+    pub card: ContactCard,
+}
+
+impl ReplyBody {
+    pub fn encode(&self) -> Vec<u8> {
+        let card = self.card.as_bytes();
+        let mut bytes = Vec::with_capacity(card.len().saturating_add(48));
+        bytes.extend_from_slice(self.code.expose_bytes());
+        bytes.extend_from_slice(self.nonce.expose_bytes());
+        bytes.extend_from_slice(self.confirm_code.expose_bytes());
+        bytes.extend_from_slice(card);
+        bytes
+    }
+
+    pub fn decode(bytes: &[u8], network: Network) -> Result<Self, DecodeError> {
+        let (code, rest) = bytes.split_first_chunk().ok_or(Malformed::Truncated)?;
+        let (nonce, rest) = rest.split_first_chunk().ok_or(Malformed::Truncated)?;
+        let (confirm_code, card) = rest.split_first_chunk().ok_or(Malformed::Truncated)?;
+        Ok(Self {
+            code: PairingCode::from_bytes(*code),
+            nonce: Nonce::from_bytes(*nonce),
+            confirm_code: ConfirmCode::from_bytes(*confirm_code),
+            card: ContactCard::decode(card, network)?,
+        })
+    }
+}
+
+/// The inviter's answer to a reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmStatus {
+    Accepted,
+    AlreadyUsed,
+    Expired,
+    CancelledByInviter,
+}
+
+impl ConfirmStatus {
+    fn byte(self) -> u8 {
+        match self {
+            Self::Accepted => 0x01,
+            Self::AlreadyUsed => 0x02,
+            Self::Expired => 0x03,
+            Self::CancelledByInviter => 0x04,
+        }
+    }
+
+    fn from_byte(byte: u8) -> Option<Self> {
+        Some(match byte {
+            0x01 => Self::Accepted,
+            0x02 => Self::AlreadyUsed,
+            0x03 => Self::Expired,
+            0x04 => Self::CancelledByInviter,
+            _ => return None,
+        })
+    }
+}
+
+/// The inviter's confirm: `nA || cardA || status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmBody {
+    pub nonce: Nonce,
+    pub card: ContactCard,
+    pub status: ConfirmStatus,
+}
+
+impl ConfirmBody {
+    pub fn encode(&self) -> Vec<u8> {
+        let card = self.card.as_bytes();
+        let mut bytes = Vec::with_capacity(card.len().saturating_add(17));
+        bytes.extend_from_slice(self.nonce.expose_bytes());
+        bytes.extend_from_slice(card);
+        bytes.push(self.status.byte());
+        bytes
+    }
+
+    pub fn decode(bytes: &[u8], network: Network) -> Result<Self, DecodeError> {
+        let (nonce, rest) = bytes.split_first_chunk().ok_or(Malformed::Truncated)?;
+        let (status, card) = rest.split_last().ok_or(Malformed::Truncated)?;
+        let status = ConfirmStatus::from_byte(*status).ok_or(Malformed::Body)?;
+        Ok(Self {
+            nonce: Nonce::from_bytes(*nonce),
+            card: ContactCard::decode(card, network)?,
+            status,
+        })
+    }
+
+    /// The invitee's check: the revealed nonce and card match the invite's commitment, and the
+    /// card's enc key is the one the reply was sealed to. A mismatch means the invite was changed
+    /// on the way.
+    pub fn matches_invite(&self, invite: &Invite) -> bool {
+        Commitment::new(&self.nonce, &self.card) == invite.fields().commit
+            && self.card.enc_key() == &invite.fields().enc_key
+    }
+}
+
+/// Seals the invitee's reply to the invite's enc key: anonymous, hinted with the invite id.
+pub fn seal_reply<R: CryptoRng>(
+    invite: &Invite,
+    body: &ReplyBody,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    let network = invite.network();
+    if body.card.network() != network {
+        return Err(EncodeError::WrongNetwork);
+    }
+    let content = Content::new(MessageType::PairingReply, body.encode());
+    seal(
+        network,
+        &invite.fields().enc_key,
+        HintRule::Invite(invite.id()),
+        &content,
+        None,
+        rng,
+    )
+}
+
+/// Opens a pairing reply with the invite's enc key.
+pub fn open_reply(
+    envelope: &SealedEnvelope<'_>,
+    key: &EncSecretKey,
+) -> Result<ReplyBody, DecodeError> {
+    let opened = envelope.open(key)?;
+    let body = expect_type(opened, MessageType::PairingReply)?;
+    ReplyBody::decode(&body, envelope.network())
+}
+
+/// Seals the inviter's confirm to the invitee's card, signed with the inviter's sig key for this
+/// contact, which must be the key in `body.card`.
+pub fn seal_confirm<R: CryptoRng>(
+    invitee: &ContactCard,
+    body: &ConfirmBody,
+    signer: &SigningKey,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    let network = invitee.network();
+    if body.card.network() != network {
+        return Err(EncodeError::WrongNetwork);
+    }
+    if signer.verifying_key() != *body.card.sig_key() {
+        return Err(EncodeError::SigningKeyMismatch);
+    }
+    let content = Content::new(MessageType::PairingConfirm, body.encode());
+    seal(
+        network,
+        invitee.enc_key(),
+        invitee.hint_rule(),
+        &content,
+        Some(signer),
+        rng,
+    )
+}
+
+/// Opens a pairing confirm with the invitee's enc key for this contact. The envelope must be
+/// signed by the sig key of the card it carries.
+pub fn open_confirm(
+    envelope: &SealedEnvelope<'_>,
+    key: &EncSecretKey,
+) -> Result<ConfirmBody, DecodeError> {
+    let opened = envelope.open(key)?;
+    let sender = opened.sender;
+    let body = ConfirmBody::decode(
+        &expect_type(opened, MessageType::PairingConfirm)?,
+        envelope.network(),
+    )?;
+    match sender {
+        Some(sender) if sender == *body.card.sig_key() => Ok(body),
+        Some(_) => Err(DecodeError::BadSignature),
+        None => Err(Malformed::MissingField { tag: 0x08 }.into()),
+    }
+}
+
+fn expect_type(opened: Opened, kind: MessageType) -> Result<Vec<u8>, DecodeError> {
+    if opened.content.kind != kind {
+        return Err(Malformed::FieldValue { tag: 0x01 }.into());
+    }
+    Ok(opened.content.body)
+}
+
+/// `epiccash://pair-reply/1/...` or `epiccash://pair-confirm/1/...` for an envelope sent by hand.
+pub fn pairing_envelope_link(kind: PairingLink, envelope: &[u8]) -> String {
+    encode_link(kind.link_kind(), envelope)
+}
+
+/// The envelope bytes in a hand-sent pairing link.
+pub fn pairing_envelope_from_link(text: &str, kind: PairingLink) -> Result<Vec<u8>, DecodeError> {
+    decode_link(text, kind.link_kind(), MAX_PAIRING_ENVELOPE_LEN)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingLink {
+    Reply,
+    Confirm,
+}
+
+impl PairingLink {
+    fn link_kind(self) -> LinkKind {
+        match self {
+            Self::Reply => LinkKind::PairReply,
+            Self::Confirm => LinkKind::PairConfirm,
+        }
+    }
+}
