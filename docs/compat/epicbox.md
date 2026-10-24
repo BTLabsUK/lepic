@@ -100,6 +100,17 @@ and decrypt, then decode the slate.
   stored, and do not hold a delivered message across many challenge intervals.
 - Live pass-through delivers the newly posted message; a fresh subscription delivers the oldest
   pending one.
+- Messages queue per address key, not per socket. Every socket that subscribes for the address,
+  including another install on the same recovery phrase, is handed the oldest message not yet
+  acknowledged, even while another socket holds it, and `Made` from any of them marks it handled
+  for all. The resend and discard counters are per socket: three subscribes answered `Ok` while
+  a message is in flight make a resend round, the round counter is not reset by `Made`, and
+  three rounds discard every unacknowledged message of the address (`app_mongo.js` `subscribe`,
+  `made`).
+- `PostSlate` checks only that `signature` verifies over `str` for the key in `from` and that
+  both addresses parse; the queue is the key in `str.destination`. A client may therefore post a
+  message it received back to its own address unchanged, with the original sender's `from`,
+  `str` and `signature`; the copy is a new message at the back of the queue.
 
 ## Robustness the client must provide
 
