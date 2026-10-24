@@ -402,6 +402,10 @@ bytes` and the cards ordered by sig key for the SAS. Both screens show the SAS; 
 match" makes the contact Verified on that phone, because the camera saw the other phone. No
 network is used, so this works Offline.
 
+There is no invite, so no shared home relay: each card's mailbox (tag 08) is on the relay its
+owner uses when it shows the card (a service's card names its inbox), each side delivers to the
+other's tag 08 and collects its own mailbox there. The record keeps both relays.
+
 A one-way scan (B scans A's invite QR, the invite of 7.1 shown as a QR) is an online pairing whose
 first message went by camera. When only one phone has a camera, or neither, "Use words instead"
 shows pairing words (7.7) for the other to type.
