@@ -268,7 +268,8 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 
 ### C-19 Contact deletion and re-adding
 
-- **What happens.** "Remove pairing" deletes the record, our keys stop being used, the mailboxes
+- **What happens.** "Remove pairing" deletes the record and any pending pairing for it, our keys
+  stop being used, the mailboxes
   are no longer drained, pending invoices from the contact are deleted. The contact is not told
   (a removal message would tell an attacker that guessed a pairing). Its envelopes now find no
   key: over files "sealed for another wallet"; in its mailbox nobody reads them. Adding again is

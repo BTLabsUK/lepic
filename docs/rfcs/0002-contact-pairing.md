@@ -100,7 +100,7 @@ No other key is derived from path `m/<a>/2/*`; a later key family takes `m/<a>/2
 
 #### 2.2 Keys for one contact
 
-Each pairing has a `contact_id`, 16 random bytes chosen by the side that creates the record (A
+`HKDF-Expand` below uses `root` itself as the PRK. Each pairing has a `contact_id`, 16 random bytes chosen by the side that creates the record (A
 when it makes the invite or shows its card, B when it answers). It is not secret. From it:
 
 | Key | Derivation | Use |
@@ -152,7 +152,9 @@ twin install on the same seed can open the answer too.
 
 - The 16-byte header (magic to hint) is the HPKE associated data. `info` is
   `"epic-seal/1" || net || suite`. Single-shot `SealBase` and `OpenBase` (RFC 9180 section 6).
-- Encapsulation randomness comes from the caller's RNG, as for every pure function in LEPIC.
+- Encapsulation randomness comes from the caller's RNG, as for every pure function in LEPIC: the
+  ephemeral key pair is `DeriveKeyPair(ikm)` (RFC 9180 section 7.1.3) with 32 bytes of RNG output
+  as `ikm`, so a fixed RNG gives the same envelope in every implementation.
 - The sender must reject a recipient key that is all zeros or of small order (the X25519 output
   would be all zeros; RFC 9180 section 7.1.4 makes `DH` fail).
 - Bounds: the whole envelope is at most 1 MiB. Decoding rejects truncation, trailing bytes, an
@@ -177,8 +179,8 @@ what that means on each channel.
 #### 3.3 Inner content
 
 A sequence of fields, each `tag (u8) || length (u16) || value`, tags strictly increasing, no tag
-twice, unknown tags rejected below `0x80` and ignored from `0x80` up (room for later optional
-fields). The signature is last.
+twice, unknown tags rejected below `0x80` and ignored from `0x80` to `0xFE` (room for later
+optional fields, covered by the signature). The signature, tag `FF`, is last.
 
 | Tag | Name | Value | Rules |
 |---|---|---|---|
@@ -189,14 +191,14 @@ fields). The signature is last.
 | `05` | reference | ≤ 64 bytes UTF-8 | A service's own reference (deposit or withdrawal id). Shown; never trusted for crediting |
 | `06` | expires | u64 unix seconds | When the sender stops honouring it (invoices and withdrawals). Advisory, see 12.6 |
 | `07` | card | bytes | The sender's current contact card (section 6), so every message refreshes delivery addresses |
-| `08` | sender key | 32 | The sender's Ed25519 `sig_pk` for this contact. Required when tag `09` is present |
-| `09` | signature | 64 | Ed25519 by `sig_sk` over the signing input below. Last |
+| `08` | sender key | 32 | The sender's Ed25519 `sig_pk` for this contact. Required when tag `FF` is present |
+| `FF` | signature | 64 | Ed25519 by `sig_sk` over the signing input below. Last |
 
 Signing input: `"epic-seal/1 sig" || header (16 bytes) || recipient X25519 public key || every
-inner field before tag 09, exactly as encoded`. The recipient key binds the signature to this
+inner field before tag FF, exactly as encoded`. The recipient key binds the signature to this
 recipient, so a contact cannot re-seal our signed message to a third party.
 
-An envelope is signed (tags 08 and 09) between paired contacts and anonymous otherwise. An
+An envelope is signed (tags 08 and FF) between paired contacts and anonymous otherwise. An
 anonymous envelope authenticates nothing; a slate inside one is trusted only as the slate itself
 proves (it answers a slate this wallet started, or its partial signatures verify).
 
@@ -205,7 +207,7 @@ proves (it answers a slate this wallet started, or its partial signatures verify
 1. Decode the header; reject the other network or an unknown version or suite.
 2. Find candidate keys by hint (3.2); none means "not for this install".
 3. `OpenBase`; failure with every candidate is "cannot open".
-4. Decode the fields (3.3). If tag 09 is present, verify it with tag 08's key. A signed
+4. Decode the fields (3.3). If tag FF is present, verify it with tag 08's key. A signed
    envelope opened with a contact's `enc_sk` must be signed by that contact's recorded `sig_pk`;
    any other key is a "key changed" event (cases file, C-12), never a silent accept.
 5. Hand the body to its type's handler. Slates go to the existing V3 decoder and engine.
@@ -288,7 +290,9 @@ app shows the user's own label for the contact and the claimed name only as "cal
 
 #### 6.2 Text and QR form
 
-`epiccash://contact/1/<base64url of card || H(H(card))[0..4]>`. About 330 characters, a version
+`epiccash://contact/1/<base64url of card || H(H(card))[0..4]>`. Every `epiccash://` form in this
+RFC (`contact`, `pair`, `pair-reply`, `pair-confirm`) appends the same 4-byte checksum to its
+payload before base64url. About 330 characters, a version
 10 to 12 QR code at medium error correction. In-person pairing shows this card (section 7.4).
 
 ### 7 Pairing
@@ -319,7 +323,7 @@ payload as a code to paste into Contacts › Paste invite, for apps that do not 
 
 A keeps a pending pairing: `contact_id`, `code`, `nA`, `cardA`, expiry, mailbox relay. Default
 expiry 24 hours; the user may choose 1 hour or 7 days; services use 15 minutes. One invite pairs
-one contact.
+one contact. `invite_id` is unique among a wallet's pending pairings.
 
 #### 7.2 Reply
 
@@ -388,7 +392,7 @@ the way; "Skip" → `paired` (shown as "Paired, not verified", trust on first us
 | Field | Notes |
 |---|---|
 | `contact_id` | Ours. Derives our keys for the contact |
-| peer card | The latest verified card: keys, hint key, addresses, caps, seq |
+| peer card | The latest verified card: keys, hint key, addresses, caps, seq. Absent while `pending-invite` |
 | state | `pending-invite`, `pending-reply`, `paired`, `verified`, `keys-changed` (cases C-12) |
 | `verified_at` | When the SAS was confirmed |
 | `allow_invoices` | Default off. Section 11 |
@@ -403,7 +407,8 @@ the way; "Skip" → `paired` (shown as "Paired, not verified", trust on first us
 
 For a 16-byte seed `s` (`code` for the reply mailbox, `rc` for the confirm mailbox):
 
-- `pbox_sk = HKDF(salt = "epic-pair/1 mailbox", ikm = s, info = "box" || net || ctr)` read as a
+- `pbox_sk = HKDF(salt = "epic-pair/1 mailbox", ikm = s, info = "box" || net || ctr)`, in that
+  byte order, read as a
   secp256k1 scalar; `ctr` is a byte from `00` up, taking the first output that is a valid key.
 - `pfrom_sk` the same with info `"from"`. Messages to the mailbox are posted from `pfrom_sk`'s
   address, so the relay sees an ordinary message between two unknown keys.
@@ -794,7 +799,7 @@ two-implementation test. Areas under `testdata/vectors/pairing/`:
 | `hpke_rfc9180_a2.json` | RFC 9180 Appendix A.2 base-mode vectors, copied from the RFC |
 | `contact_keys.json` | Seed phrase → `root`, `enc_pk`, `sig_pk`, `hint_key` for three `contact_id`s, mainnet and floonet |
 | `reply_keys.json` | Slate ids → `reply_pk` |
-| `mailbox_keys.json` | Codes → mailbox and sender addresses, including a code that needs `ctr = 01` |
+| `mailbox_keys.json` | Codes → mailbox and sender secrets and addresses; the `ctr` loop is tested with an injected curve order, since no real input needs `ctr = 01` (probability about 2^-128) |
 | `envelopes.json` | Each type, anonymous and signed, with fixed RNG: bytes, armored text, hint, opened fields |
 | `cards_invites.json` | Card, invite, reply and confirm bytes and their URI forms |
 | `sas.json` | Inputs → four bytes → emoji and names |
