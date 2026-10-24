@@ -15,7 +15,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-crypto` | Safe boundary over the pinned secp256k1-zkp wrapper: commitments, Bulletproofs, aggregate signatures, ECDSA, ECDH. Validates every length and key before the call. | none |
 | `lepic-primitives` | Binary serialization, hashing, transaction, input, output and kernel types, weights and fees, per-network chain parameters. Ported from the node. | none |
 | `lepic-keychain` | Mnemonic to seed, BIP32 derivation, identifiers and paths, switch commitments, proof builders and rewind, seed vault formats, the host app's data file format (`docs/compat/wfeh.md`). | none |
-| `lepic-slate` | Slate domain model, stages and roles, codec trait, legacy V2 and V3 JSON codecs, codec registry. | none |
+| `lepic-slate` | Slate domain model, stages and roles, codec trait, legacy V2 and V3 JSON codecs, codec registry, the `ur:epic-slate` QR form of slate text (ADR 0025). | none |
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context. | disk |
 | `lepic-transport` | Transport traits, transport registry, format policy, the file transport. | disk |
