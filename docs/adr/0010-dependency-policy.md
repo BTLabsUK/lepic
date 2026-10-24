@@ -18,7 +18,8 @@ project. LEPIC starts fresh and must stay current.
   Actions.
 - `cargo deny` checks advisories, licenses, sources and bans in CI. Allowed licenses: Apache-2.0, MIT,
   BSD-2/3-Clause, ISC, Unicode-3.0, Zlib, CC0-1.0, MPL-2.0 (file-level), CDLA-Permissive-2.0 (the bundled Mozilla root certificates in
-  `webpki-roots`). Allowed git source: the pinned
+  `webpki-roots`), BlueOak-1.0.0 (`minicbor`, the CBOR library of the `ur` crate, ADR 0024).
+  Allowed git source: the pinned
   secp256k1-zkp wrapper.
 - The `fuzz/` workspace is test tooling that never ships, so it may also use NCSA-licensed fuzzing
   crates such as `libfuzzer-sys`, set directly in `fuzz/Cargo.toml`.

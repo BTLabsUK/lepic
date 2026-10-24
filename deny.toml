@@ -20,6 +20,7 @@ allow = [
   "CC0-1.0",
   "MPL-2.0",
   "CDLA-Permissive-2.0",
+  "BlueOak-1.0.0",
 ]
 confidence-threshold = 0.9
 # MPL-2.0 is allowed ahead of need by ADR 0010.
@@ -43,6 +44,8 @@ skip = [
   { crate = "digest@0.10.7", reason = "md-5 0.10 in flutter_rust_bridge_macros" },
   { crate = "block-buffer@0.10.4", reason = "digest 0.10 of flutter_rust_bridge_macros" },
   { crate = "crypto-common@0.1.7", reason = "digest 0.10 of flutter_rust_bridge_macros" },
+  { crate = "bitcoin_hashes@0.14.101", reason = "bip39 3.0 uses bitcoin_hashes 0.14, ur 0.5 uses 1.x" },
+  { crate = "bitcoin-internals@0.6.0", reason = "bitcoin_hashes 1.2 uses it beside bitcoin-consensus-encoding's 0.7" },
   { crate = "syn@2.0.119", reason = "proc-macro crates not yet on syn 3" },
 ]
 wildcards = "deny"

@@ -11,9 +11,12 @@ publish.workspace = true
 ed25519-dalek.workspace = true
 lepic-crypto.workspace = true
 lepic-primitives.workspace = true
+minicbor = { workspace = true, features = ["alloc"] }
+miniz_oxide = { workspace = true, features = ["with-alloc"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror.workspace = true
+ur.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
