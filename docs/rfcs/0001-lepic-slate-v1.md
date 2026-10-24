@@ -3,6 +3,8 @@
 Status: draft, awaiting the operator's decision OD-5
 Date: 2026-10-02
 Proposes: ADR 0012. Implemented by X-02 (codec) and X-03 (packs, text transport, capabilities).
+Amended by: RFC 0002 for encryption (a dedicated per-contact key instead of D1's payment-proof key,
+and its own sealed envelope around V3 JSON).
 
 ## TL;DR
 
