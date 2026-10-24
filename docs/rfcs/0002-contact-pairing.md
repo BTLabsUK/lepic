@@ -292,8 +292,8 @@ app shows the user's own label for the contact and the claimed name only as "cal
 
 `epiccash://contact/1/<base64url of card || H(H(card))[0..4]>`. Every `epiccash://` form in this
 RFC (`contact`, `pair`, `pair-reply`, `pair-confirm`) appends the same 4-byte checksum to its
-payload before base64url. About 330 characters, a version
-10 to 12 QR code at medium error correction. In-person pairing shows this card (section 7.4).
+payload before base64url. About 400 characters (470 with every
+optional field), a version 11 to 13 QR code at medium error correction. In-person pairing shows this card (section 7.4).
 
 ### 7 Pairing
 
@@ -375,7 +375,7 @@ sas = H("epic-pair/1 sas" || net || H(cardA) || H(cardB) || nA || nB)[0..4]
 `cardA` is the inviter's card (in person: the card with the lower sig key). Each of the four bytes
 indexes the 256-entry SAS table `testdata/sas/emoji-v1.txt` (an emoji and a name of one or two
 syllables per line; names never appear in the BIP39 English list, so nobody is asked to read seed
-words aloud). The app shows `🐼 panda · 🚀 rocket · 🌵 cactus · 🎻 violin`, with names large
+words aloud). The app shows `🐱 kitty · 🦊 vixen · 🍩 donut · 🎻 fiddle`, with names large
 enough to read on a call.
 
 Security: A commits to `nA` and its card before B chooses `nB`, and reveals `nA` only after B's
