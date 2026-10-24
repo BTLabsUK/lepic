@@ -477,6 +477,32 @@ async fn a_refresh_reaches_the_running_tor_and_keeps_the_onion() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_network_turns_the_running_tor_off_until_the_next_refresh() {
+    let (pair, network) = tor_pair().await;
+    pair.bob.tor_network_lost().await.unwrap();
+    let (events, commands) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+
+    let before = commands.lock().unwrap().len();
+    pair.bob.tor_network_lost().await.unwrap();
+    assert_eq!(
+        commands.lock().unwrap()[before..],
+        ["SETCONF DisableNetwork=1".to_owned()]
+    );
+    pair.bob.refresh_tor(true).await.unwrap();
+    assert_eq!(
+        commands.lock().unwrap().last().map(String::as_str),
+        Some("SIGNAL ACTIVE")
+    );
+    assert!(commands.lock().unwrap()[before..].contains(&"SETCONF DisableNetwork=0".to_owned()));
+    assert_eq!(pair.bob.tor_status().kind, TorStatusKind::Ready);
+    assert!(events.find(TorEventKind::Failed).is_none());
+
+    pair.bob.lock();
+    events.wait_for(TorEventKind::Stopped).await;
+    pair.bob.tor_network_lost().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_tor_frees_the_slot_for_a_new_start_and_a_wallet_runs_one_tor() {
     let (pair, network) = tor_pair().await;
     let (events, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;

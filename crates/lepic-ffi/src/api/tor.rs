@@ -231,6 +231,23 @@ impl EpicWallet {
         .await
     }
 
+    /// Tells the wallet's tor that the device has no network: call it when the device's
+    /// network goes (airplane mode, no signal). Tor turns its network off at once and makes no
+    /// connection attempt until the next [`EpicWallet::refresh_tor`], which turns it on again
+    /// whatever its `network_changed`; attempts made without a network would mark the relays
+    /// tor enters the Tor network through as unreachable, and slow its return for minutes.
+    /// Sends over Tor in progress fail. Does nothing when no tor runs, while the wallet is
+    /// locked, or while tor is still being started (a network turned off would stall it).
+    ///
+    /// A tor that does not answer is ended, as by [`EpicWallet::refresh_tor`]: the call fails
+    /// with `TorNotRunning`.
+    pub async fn tor_network_lost(&self) -> Result<(), WalletError> {
+        self.run("tor_network_lost", |session| async move {
+            session.tor_network_lost().await
+        })
+        .await
+    }
+
     /// Turns Epicbox over Tor on or off (ADR 0021); it is on when the wallet opens. While it is
     /// on and the wallet's tor runs, the connection to the wallet's Epicbox relay goes through
     /// tor: to the relay's onion when one is known, else to its domain through the Tor network.
