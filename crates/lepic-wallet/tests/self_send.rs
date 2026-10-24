@@ -144,6 +144,43 @@ fn a_self_send_reports_itself_and_never_a_received_payment() {
 }
 
 #[test]
+fn each_entry_of_a_self_send_lists_the_outputs_it_made() {
+    let sender = Sender::new();
+    let sent = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .self_send(options(), split(3), Propagation::Fluff),
+        )
+        .unwrap();
+
+    let made_by = |tx_id| {
+        let mut made: Vec<_> = sender
+            .outputs()
+            .into_iter()
+            .filter(|output| output.status == Unconfirmed && output.tx == Some(tx_id))
+            .map(|output| output.id.commitment)
+            .collect();
+        made.sort_unstable_by_key(|commitment| *commitment.as_bytes());
+        made
+    };
+    let listed = |tx_id| {
+        let mut commits = sender
+            .harness
+            .block_on(sender.wallet.transaction_details(tx_id))
+            .unwrap()
+            .output_commits;
+        commits.sort_unstable_by_key(|commitment| *commitment.as_bytes());
+        commits
+    };
+    let (change, received) = (made_by(sent.tx_id), made_by(sent.received_tx_id));
+    assert_eq!((change.len(), received.len()), (2, 1));
+    assert_eq!(listed(sent.tx_id), change);
+    assert_eq!(listed(sent.received_tx_id), received);
+}
+
+#[test]
 fn a_consolidation_merges_every_spendable_output_into_one() {
     let sender = Sender::new();
     sender.fund(1, 2 * FUNDING);

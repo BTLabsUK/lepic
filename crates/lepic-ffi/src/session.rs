@@ -1503,6 +1503,12 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             },
             dated_by_block: found.dated_by_block,
         }),
+        output_commits: details
+            .output_commits
+            .iter()
+            .copied()
+            .map(|commitment| commitment.to_hex())
+            .collect(),
     }
 }
 
@@ -1963,6 +1969,9 @@ mod tests {
         let keychain = Keychain::from_mnemonic(phrase, Network::Floonet).unwrap();
         let id = Identifier::new(3, [0, 0, 7, 0]).unwrap();
         let excess = keychain.commit(5, &id, SwitchCommitment::Regular).unwrap();
+        let output = keychain
+            .commit(400, &id, SwitchCommitment::Regular)
+            .unwrap();
         let created = Timestamp::from_millisecond(1_790_000_000_123).unwrap();
         let confirmed = Timestamp::from_millisecond(1_790_000_600_456).unwrap();
         let slate_id = "0436430c-2b02-624c-2032-570501212b0e";
@@ -2008,6 +2017,7 @@ mod tests {
                 during: EngineFoundDuring::Restore,
                 dated_by_block: true,
             }),
+            output_commits: vec![output],
         };
 
         assert_eq!(
@@ -2047,6 +2057,7 @@ mod tests {
                     during: FoundDuring::Restore,
                     dated_by_block: true,
                 }),
+                output_commits: vec![output.to_hex()],
             }
         );
         let hex = excess.to_hex();

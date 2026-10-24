@@ -57,6 +57,9 @@ const GENESIS_SCANNED_SETTING: &str = "scan.genesis_completed";
 
 /// Prefix of the setting that records, per entry, how a scan stored it.
 const FOUND_PREFIX: &str = "scan.found.";
+/// Prefix of the setting that records, per entry, the commitment of the output a scan stored
+/// it for. The output's own link moves to the transaction that spends it, this one stays.
+const FOUND_OUTPUT_PREFIX: &str = "scan.found_output.";
 
 /// Label prefix `epic-wallet` gives an account that a restore finds outputs of.
 const RESTORED_ACCOUNT_LABEL: &str = "account";
@@ -333,6 +336,21 @@ pub(crate) fn scan_found(
         .and_then(|text| ScanFound::decode(&text)))
 }
 
+fn found_output_key(tx_id: TxId) -> String {
+    format!("{FOUND_OUTPUT_PREFIX}{tx_id}")
+}
+
+/// The commitment of the output the scan stored the entry `tx_id` for. `None` for an entry no
+/// scan stored, and for one stored before this was recorded.
+pub(crate) fn found_output(
+    repos: &dyn Repositories,
+    tx_id: TxId,
+) -> Result<Option<Commitment>, StoreError> {
+    Ok(repos
+        .setting(&found_output_key(tx_id))?
+        .and_then(|hex| Commitment::from_hex(&hex).ok()))
+}
+
 /// Records that the entry `tx_id` a scan stored is now dated by its output's block.
 pub(crate) fn record_dated_by_block(
     repos: &mut dyn Repositories,
@@ -357,7 +375,8 @@ pub(crate) fn delete_found_entry(
     tx_id: TxId,
 ) -> Result<(), StoreError> {
     repos.delete_transaction(tx_id)?;
-    repos.delete_setting(&found_key(tx_id))
+    repos.delete_setting(&found_key(tx_id))?;
+    repos.delete_setting(&found_output_key(tx_id))
 }
 
 /// A page of the node's unspent outputs, with the checkpoint stored with it and the tip the
@@ -996,6 +1015,7 @@ fn restore_missing(
             })?;
             repos.set_confirmed_height(tx, output.height)?;
             repos.put_setting(&found_key(tx), found.encode())?;
+            repos.put_setting(&found_output_key(tx), &output.id.commitment.to_hex())?;
             tx
         }
     };

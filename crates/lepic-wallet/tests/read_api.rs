@@ -379,6 +379,58 @@ fn transactions_are_listed_newest_first_with_counterparty_ttl_and_confirmation()
 }
 
 #[test]
+fn a_send_lists_its_change_in_its_details_also_once_another_send_spends_it() {
+    let sender = Sender::new();
+    let request = request(Amount::new(AMOUNT), SelectionStrategy::Smallest);
+    let first = sender
+        .harness
+        .block_on(sender.wallet.send(request.clone(), to_peer()))
+        .unwrap();
+    let change = sender
+        .outputs()
+        .into_iter()
+        .find(|output| output.status == OutputStatus::Unconfirmed)
+        .unwrap();
+    let commits = |tx_id| {
+        sender
+            .harness
+            .block_on(sender.wallet.transaction_details(tx_id))
+            .unwrap()
+            .output_commits
+    };
+    assert_eq!(commits(first.tx_id), vec![change.id.commitment]);
+
+    sender.harness.node.update_chain(|chain| {
+        chain.outputs.push(on_chain(&change, TIP + 1));
+        chain.tip.height = Height::new(TIP + 1);
+    });
+    sender.harness.block_on(sender.wallet.refresh()).unwrap();
+    let second = sender
+        .harness
+        .block_on(sender.wallet.send(request, to_peer()))
+        .unwrap();
+
+    let spent = sender
+        .outputs()
+        .into_iter()
+        .find(|output| output.id.commitment == change.id.commitment)
+        .unwrap();
+    assert_eq!(
+        (spent.status, spent.tx),
+        (OutputStatus::Locked, Some(second.tx_id))
+    );
+    assert_eq!(commits(first.tx_id), vec![change.id.commitment]);
+    let second_change: Vec<_> = sender
+        .outputs()
+        .into_iter()
+        .filter(|output| output.status == OutputStatus::Unconfirmed)
+        .map(|output| output.id.commitment)
+        .collect();
+    assert_eq!(second_change.len(), 1);
+    assert_eq!(commits(second.tx_id), second_change);
+}
+
+#[test]
 fn a_refresh_whose_tip_is_held_reports_the_balance_that_balance_reads() {
     let sender = Sender::new();
     let funding = sender.outputs().remove(0);

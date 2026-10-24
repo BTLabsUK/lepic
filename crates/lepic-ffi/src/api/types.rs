@@ -291,6 +291,12 @@ pub struct TransactionDetails {
     /// For origin `FoundByScan`: which scan found it and how it is dated. `None` for any other
     /// origin, and for an entry a scan stored before LEPIC recorded this.
     pub found: Option<ScanFound>,
+    /// Hex of the commitments of the outputs the transaction created for this wallet, change
+    /// included, spent or not. The same after the outputs are spent, and for an output a scan
+    /// found, the same after a restore finds it again. For an imported entry, and for one a
+    /// scan stored before LEPIC recorded this, only the outputs no transaction has spent yet.
+    /// Empty when the wallet stores none, as for a cancelled send.
+    pub output_commits: Vec<String>,
 }
 
 /// Which scan stored an entry for an output it found with no record.

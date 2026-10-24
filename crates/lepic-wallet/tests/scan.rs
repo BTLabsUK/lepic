@@ -882,6 +882,63 @@ fn details_of_a_restored_output_show_its_height_and_no_kernel() {
 }
 
 #[test]
+fn details_of_a_restored_output_keep_its_commitment_once_spent_and_after_another_restore() {
+    let (harness, wallet, _) = scanned();
+    let (again, again_wallet, _) = scanned();
+    let restored = snapshot(&harness).outputs;
+    assert!(!restored.is_empty());
+    let commits_of = |harness: &Harness, wallet: &support::TestWallet, tx: TxId| {
+        harness
+            .block_on(wallet.transaction_details(tx))
+            .unwrap()
+            .output_commits
+    };
+    for output in &restored {
+        let tx = output.tx.unwrap();
+        assert_eq!(
+            commits_of(&harness, &wallet, tx),
+            vec![output.id.commitment]
+        );
+        let found_again = snapshot(&again)
+            .outputs
+            .into_iter()
+            .find(|other| other.id.commitment == output.id.commitment)
+            .unwrap();
+        assert_eq!(
+            commits_of(&again, &again_wallet, found_again.tx.unwrap()),
+            vec![output.id.commitment],
+            "a restore finds the same output under the same commitment"
+        );
+    }
+
+    // A send that spends the output takes over its link, as `send` stores its inputs.
+    let output = &restored[0];
+    write(&harness, |repos| {
+        let spender = repos.insert_transaction(&TransactionEntry {
+            account: output.account,
+            direction: TxDirection::Outgoing,
+            state: TxState::Confirmed,
+            slate_id: None,
+            transport: None,
+            amount_credited: Amount::ZERO,
+            amount_debited: output.amount,
+            fee: None,
+            created_at: fixed_time(),
+            updated_at: fixed_time(),
+        })?;
+        repos.put_output(&OutputRecord {
+            status: OutputStatus::Spent,
+            tx: Some(spender),
+            ..output.clone()
+        })
+    });
+    assert_eq!(
+        commits_of(&harness, &wallet, output.tx.unwrap()),
+        vec![output.id.commitment]
+    );
+}
+
+#[test]
 fn a_repair_leaves_alone_what_a_send_or_receive_makes_while_it_runs() {
     let (harness, wallet, vector) = scanned();
     wallet.close();

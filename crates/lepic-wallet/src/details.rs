@@ -23,7 +23,7 @@ use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
 use crate::refresh::{final_kernel, legacy_codecs, stored_slate, ttl_cutoff};
 use crate::release::release_check;
-use crate::scan::{ScanFound, scan_found};
+use crate::scan::{ScanFound, found_output, scan_found};
 use crate::wallet::Wallet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +73,14 @@ pub struct TransactionDetails {
     /// first. Nothing answers it until it is resent. Also `true` while the first attempt
     /// still runs; `false` once an attempt delivered it, and for any other transaction.
     pub undelivered: bool,
+    /// The outputs the transaction created for this wallet, change included, that the wallet
+    /// stores, spent or not. For a transaction made here, read from the slate stage this
+    /// wallet built, in its order, without the outputs of the stage it answered; for an output
+    /// a scan found, its commitment, which a restore finds again. Both stay the same once the
+    /// outputs are spent. Otherwise, as for an imported entry, the outputs the store links to
+    /// it by commitment, which leave it once a transaction spends them. Empty when none is
+    /// stored, as for a cancelled send whose change was dropped.
+    pub output_commits: Vec<Commitment>,
 }
 
 /// What an imported transaction carries beyond its log entry.
@@ -225,7 +233,9 @@ fn details(
     };
     let release = release_check(repos, codecs, &transaction)?.ok();
     let undelivered = undelivered(repos, &transaction)?;
+    let output_commits = output_commits(repos, codecs, &transaction, flow)?;
     Ok(TransactionDetails {
+        output_commits,
         undelivered,
         origin,
         found,
@@ -265,6 +275,61 @@ fn undelivered(
         .outbox(OutboxStatus::Pending)?
         .iter()
         .any(|stored| stored.entry.slate_id == slate_id))
+}
+
+/// A store link to a transaction does not say whether it created or spends the output, and
+/// moves to the spender, so a stored slate decides first: each party adds its own outputs to
+/// the stage it builds. A self-send stores both parties' stages under one slate id.
+fn output_commits(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    transaction: &StoredTransaction,
+    flow: TxFlow,
+) -> Result<Vec<Commitment>, StoreError> {
+    let tx_id = transaction.id;
+    let entry = &transaction.entry;
+    if let Some(slate_id) = entry.slate_id {
+        let (built, answered) = match (flow, entry.direction) {
+            (TxFlow::Payment, TxDirection::Outgoing) => (SlateStage::Standard1, None),
+            (TxFlow::Payment, TxDirection::Incoming) => {
+                (SlateStage::Standard2, Some(SlateStage::Standard1))
+            }
+            (TxFlow::Invoice, TxDirection::Incoming) => (SlateStage::Invoice1, None),
+            (TxFlow::Invoice, TxDirection::Outgoing) => {
+                (SlateStage::Invoice2, Some(SlateStage::Invoice1))
+            }
+        };
+        if let Some(slate) = stored_slate(repos, codecs, tx_id, slate_id, built)? {
+            let answered = match answered {
+                Some(stage) => stored_slate(repos, codecs, tx_id, slate_id, stage)?,
+                None => None,
+            };
+            let theirs = |commitment: &Commitment| {
+                answered.as_ref().is_some_and(|slate| {
+                    slate
+                        .outputs()
+                        .iter()
+                        .any(|output| output.commitment == *commitment)
+                })
+            };
+            let mut commits = Vec::new();
+            for output in slate.outputs() {
+                if !theirs(&output.commitment)
+                    && repos.output(output.commitment.as_bytes())?.is_some()
+                {
+                    commits.push(output.commitment);
+                }
+            }
+            return Ok(commits);
+        }
+    }
+    let mut commits: Vec<Commitment> = found_output(repos, tx_id)?.into_iter().collect();
+    for output in repos.outputs_of_transaction(tx_id)? {
+        if !commits.contains(&output.id.commitment) {
+            commits.push(output.id.commitment);
+        }
+    }
+    Ok(commits)
 }
 
 /// A transaction stores stages of one flow only, so any stored invoice stage makes it an
