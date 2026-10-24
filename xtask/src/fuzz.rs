@@ -48,6 +48,7 @@ const TARGETS: &[&str] = &[
     "wallet_seed",
     "notice_classify",
     "ffi_inspect_slate",
+    "ur_slate_decode",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -370,6 +371,7 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
             seeds.extend(NOTICE_SEEDS.iter().map(|notice| notice.as_bytes().to_vec()));
         }
         "vault_file" => seeds.extend(vault_seeds()),
+        "ur_slate_decode" => seeds.extend(ur_slate_seeds(root)?),
         "wallet_seed" => {
             for vector in read_area(&vectors, "keys", "wallet_seed_")? {
                 seeds.extend(text_fields(&vector, "file"));
@@ -455,6 +457,26 @@ const NOTICE_SEEDS: &[&str] = &[
     "{}",
     "a message\u{202E}with\tcontrols",
 ];
+
+/// The reviewed `ur:epic-slate` snapshot: each code in it, its parts one per line, whole and
+/// with only its first part.
+fn ur_slate_seeds(root: &Path) -> Result<Vec<Vec<u8>>> {
+    let path = root.join("crates/lepic-slate/tests/snapshots/ur_slate__small_encodings.snap");
+    let snapshot = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let body = snapshot
+        .splitn(3, "---\n")
+        .nth(2)
+        .with_context(|| format!("{} has no snapshot body", path.display()))?;
+    let mut seeds = Vec::new();
+    for code in body.split("\n\n") {
+        let code = code.trim();
+        if let Some(first) = code.lines().next() {
+            seeds.push(first.as_bytes().to_vec());
+            seeds.push(code.as_bytes().to_vec());
+        }
+    }
+    Ok(seeds)
+}
 
 fn vault_seeds() -> Vec<Vec<u8>> {
     [(8u32, 1u32, 1u32), (64 * 1024, 3, 1)]

@@ -129,3 +129,10 @@ path = "fuzz_targets/ffi_inspect_slate.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "ur_slate_decode"
+path = "fuzz_targets/ur_slate_decode.rs"
+test = false
+doc = false
+bench = false
