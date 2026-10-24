@@ -15,6 +15,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.13"
+lepic-contact = { path = "../crates/lepic-contact" }
 lepic-crypto = { path = "../crates/lepic-crypto" }
 lepic-epicbox = { path = "../crates/lepic-epicbox" }
 lepic-ffi = { path = "../crates/lepic-ffi" }
@@ -24,6 +25,7 @@ lepic-primitives = { path = "../crates/lepic-primitives" }
 lepic-slate = { path = "../crates/lepic-slate" }
 lepic-transport = { path = "../crates/lepic-transport" }
 lepic-wallet = { path = "../crates/lepic-wallet" }
+rand_core = { version = "0.10.1", default-features = false }
 
 [lints.rust]
 unsafe_code = "deny"
@@ -133,6 +135,34 @@ bench = false
 [[bin]]
 name = "ur_slate_decode"
 path = "fuzz_targets/ur_slate_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seal_open"
+path = "fuzz_targets/seal_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "contact_card"
+path = "fuzz_targets/contact_card.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pair_invite"
+path = "fuzz_targets/pair_invite.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "armor_sealed"
+path = "fuzz_targets/armor_sealed.rs"
 test = false
 doc = false
 bench = false

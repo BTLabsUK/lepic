@@ -49,6 +49,10 @@ const TARGETS: &[&str] = &[
     "notice_classify",
     "ffi_inspect_slate",
     "ur_slate_decode",
+    "seal_open",
+    "contact_card",
+    "pair_invite",
+    "armor_sealed",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -377,6 +381,36 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                 seeds.extend(text_fields(&vector, "file"));
             }
         }
+        "seal_open" => {
+            let samples = contact_samples(root)?;
+            seeds.extend(
+                hex_fields(&samples, "bytes")
+                    .iter()
+                    .map(|envelope| prefixed(&[0], envelope)),
+            );
+            seeds.extend(
+                text_fields(&samples, "name")
+                    .iter()
+                    .map(|body| prefixed(&[1], body)),
+            );
+        }
+        "contact_card" => {
+            let samples = contact_samples(root)?;
+            let cards = values_of(&samples, "cards")
+                .into_iter()
+                .filter_map(Value::as_array)
+                .flatten()
+                .filter_map(|card| decode_hex(card.as_str()?.as_bytes()));
+            seeds.extend(cards);
+            seeds.extend(text_fields(&samples, "contact"));
+        }
+        "pair_invite" => {
+            let samples = contact_samples(root)?;
+            seeds.extend(hex_fields(&samples, "invite"));
+            seeds.extend(text_fields(&samples, "pair"));
+            seeds.extend(text_fields(&samples, "pair_reply"));
+        }
+        "armor_sealed" => seeds.extend(text_fields(&contact_samples(root)?, "armored")),
         other => bail!("no seed rule for fuzz target `{other}`"),
     }
     if seeds.is_empty() {
@@ -493,6 +527,21 @@ fn vault_seeds() -> Vec<Vec<u8>> {
         })
         .collect()
 }
+
+/// The JSON body of the lepic-contact samples snapshot: envelopes, cards, an invite and links
+/// sealed with a fixed RNG. The snapshot's front matter ends at its second `---` line.
+fn contact_samples(root: &Path) -> Result<Value> {
+    let path = root.join(CONTACT_SAMPLES);
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
+    let body = text
+        .splitn(3, "---\n")
+        .nth(2)
+        .with_context(|| format!("{} has no snapshot front matter", path.display()))?;
+    serde_json::from_str(body).with_context(|| format!("could not parse {}", path.display()))
+}
+
+const CONTACT_SAMPLES: &str = "crates/lepic-contact/tests/snapshots/samples__samples.snap";
 
 fn prefixed(prefix: &[u8], bytes: &[u8]) -> Vec<u8> {
     let mut seed = prefix.to_vec();
