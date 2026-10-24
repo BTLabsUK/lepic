@@ -7,6 +7,10 @@
 //! slate signature covers the key: it proves a capability, never anything about the slate. It
 //! shares the id `legacy-v3`, because on the wire it is a V3 slate; a registry holds either it
 //! or [`V3JsonCodec`].
+//!
+//! Given a 32-byte X25519 reply public key it writes `"lepic":{"version":1,"reply":"<hex>"}`
+//! instead (RFC 0002 section 5); [`lepic_marker_reply_key`] reads it back. The key
+//! authenticates nothing.
 
 use serde::Deserialize;
 
@@ -19,14 +23,75 @@ use crate::validate::check_size;
 /// What follows the last key of the V3 object.
 const MARKER: &str = ",\"lepic\":{\"version\":1}";
 
+/// The X25519 u-coordinates of small order, as libsodium's blacklist lists them (little-endian):
+/// 0, 1, the two points of order 8, and the three encodings of p-1, p and p+1. [`is_small_order`]
+/// compares after clearing bit 255, which X25519 ignores, so the non-canonical variants of the
+/// same points are covered too.
+const SMALL_ORDER: [[u8; 32]; 7] = [
+    [0; 32],
+    [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ],
+    [
+        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
+        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
+        0xb8, 0x00,
+    ],
+    [
+        0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef,
+        0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
+        0x11, 0x57,
+    ],
+    p_plus(0xec),
+    p_plus(0xed),
+    p_plus(0xee),
+];
+
+/// The 32 bytes `ec ff .. ff 7f` with the first byte `first`.
+const fn p_plus(first: u8) -> [u8; 32] {
+    let mut bytes = [0xff; 32];
+    bytes[0] = first;
+    bytes[31] = 0x7f;
+    bytes
+}
+
+fn is_small_order(key: &[u8; 32]) -> bool {
+    let mut masked = *key;
+    if let Some(last) = masked.last_mut() {
+        *last &= 0x7f;
+    }
+    SMALL_ORDER.contains(&masked)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarkedV3JsonCodec {
     v3: V3JsonCodec,
+    reply_key: Option<[u8; 32]>,
 }
 
 impl MarkedV3JsonCodec {
     pub const fn new(v3: V3JsonCodec) -> Self {
-        Self { v3 }
+        Self {
+            v3,
+            reply_key: None,
+        }
+    }
+
+    /// The codec writing `reply_key`, an X25519 public key, into the marker.
+    pub const fn with_reply_key(mut self, reply_key: [u8; 32]) -> Self {
+        self.reply_key = Some(reply_key);
+        self
+    }
+}
+
+fn marker_text(reply_key: Option<&[u8; 32]>) -> String {
+    match reply_key {
+        None => MARKER.to_owned(),
+        Some(key) => {
+            let hex: String = key.iter().map(|byte| format!("{byte:02x}")).collect();
+            format!(",\"lepic\":{{\"version\":1,\"reply\":\"{hex}\"}}")
+        }
     }
 }
 
@@ -50,7 +115,7 @@ impl Codec for MarkedV3JsonCodec {
         let marked = plain
             .as_text()
             .and_then(|text| text.strip_suffix('}'))
-            .map(|body| format!("{body}{MARKER}}}"));
+            .map(|body| format!("{body}{}}}", marker_text(self.reply_key.as_ref())));
         Ok(marked.map_or(plain, |text| WireSlate::text(MediaType::JSON, text)))
     }
 }
@@ -77,6 +142,56 @@ pub fn carries_lepic_marker(wire: &WireSlate) -> bool {
     text.trim_start().starts_with('{')
         && serde_json::from_str::<Probe>(text)
             .is_ok_and(|probe| probe.lepic.is_some_and(|marker| marker.version >= 1))
+}
+
+/// The reply public key in the LEPIC marker of `wire`, if the marker has a `reply` of exactly 64
+/// lowercase hex digits that is neither all zero nor of small order. Anything else gives `None`,
+/// so the answer goes plain.
+pub fn lepic_marker_reply_key(wire: &WireSlate) -> Option<[u8; 32]> {
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        lepic: Option<Marker>,
+    }
+    #[derive(Deserialize)]
+    struct Marker {
+        version: u64,
+        #[serde(default)]
+        reply: Option<String>,
+    }
+    if check_size(wire).is_err() {
+        return None;
+    }
+    let text = wire.as_text()?;
+    if !text.trim_start().starts_with('{') {
+        return None;
+    }
+    let marker = serde_json::from_str::<Probe>(text).ok()?.lepic?;
+    if marker.version < 1 {
+        return None;
+    }
+    let key = decode_reply_hex(marker.reply.as_deref()?)?;
+    (!is_small_order(&key)).then_some(key)
+}
+
+fn decode_reply_hex(hex: &str) -> Option<[u8; 32]> {
+    fn nibble(digit: u8) -> Option<u8> {
+        match digit {
+            b'0'..=b'9' => digit.checked_sub(b'0'),
+            b'a'..=b'f' => digit.checked_sub(b'a')?.checked_add(10),
+            _ => None,
+        }
+    }
+    let digits = hex.as_bytes();
+    if digits.len() != 64 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    let (pairs, _) = digits.as_chunks::<2>();
+    for (byte, [high, low]) in key.iter_mut().zip(pairs) {
+        *byte = nibble(*high)?.checked_mul(16)?.checked_add(nibble(*low)?)?;
+    }
+    Some(key)
 }
 
 #[cfg(test)]
@@ -177,5 +292,116 @@ mod tests {
             MediaType::JSON,
             vec![0xff]
         )));
+    }
+
+    fn reply_wire(reply: &Value) -> WireSlate {
+        let mut value: Value = serde_json::from_str(text(&vector_wire(VECTORS[0]))).unwrap();
+        value["lepic"] = json!({"version": 1, "reply": reply});
+        WireSlate::text(MediaType::JSON, serde_json::to_string(&value).unwrap())
+    }
+
+    const KEY: [u8; 32] = [0x42; 32];
+
+    #[test]
+    fn reply_key_is_written_last_and_read_back() {
+        let codec = MarkedV3JsonCodec::new(v3()).with_reply_key(KEY);
+        let slate = v3().decode(&vector_wire(VECTORS[0])).unwrap();
+        let wire = codec.encode(&slate, &CONTEXT).unwrap();
+        let plain = v3().encode(&slate, &CONTEXT).unwrap();
+        let body = text(&plain).strip_suffix('}').unwrap();
+        assert_eq!(
+            text(&wire),
+            format!(
+                "{body},\"lepic\":{{\"version\":1,\"reply\":\"{}\"}}}}",
+                "42".repeat(32)
+            )
+        );
+        assert!(carries_lepic_marker(&wire));
+        assert_eq!(lepic_marker_reply_key(&wire), Some(KEY));
+        assert_eq!(codec.decode(&wire).unwrap(), slate);
+    }
+
+    #[test]
+    fn marker_without_a_reply_key_reads_none() {
+        let slate = v3().decode(&vector_wire(VECTORS[0])).unwrap();
+        let marked = MarkedV3JsonCodec::new(v3())
+            .encode(&slate, &CONTEXT)
+            .unwrap();
+        assert_eq!(lepic_marker_reply_key(&marked), None);
+        assert_eq!(lepic_marker_reply_key(&vector_wire(VECTORS[0])), None);
+    }
+
+    #[test]
+    fn malformed_reply_hex_reads_none() {
+        let good = "42".repeat(32);
+        assert_eq!(lepic_marker_reply_key(&reply_wire(&json!(good))), Some(KEY));
+        for bad in [
+            json!("zz".repeat(32)),
+            json!("4G".repeat(32)),
+            json!("AB".repeat(32)),
+            json!(format!("{good}0")),
+            json!(format!(" {good}")),
+            json!("42"),
+            json!(""),
+            json!(42),
+            Value::Null,
+        ] {
+            assert_eq!(lepic_marker_reply_key(&reply_wire(&bad)), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn wrong_length_reply_reads_none() {
+        for len in [62, 66, 128] {
+            assert_eq!(
+                lepic_marker_reply_key(&reply_wire(&json!("4a".repeat(len / 2)))),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn all_zero_reply_reads_none() {
+        assert_eq!(
+            lepic_marker_reply_key(&reply_wire(&json!("00".repeat(32)))),
+            None
+        );
+    }
+
+    #[test]
+    fn small_order_replies_read_none() {
+        for point in SMALL_ORDER {
+            let hex: String = point.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(
+                lepic_marker_reply_key(&reply_wire(&json!(hex))),
+                None,
+                "{hex}"
+            );
+            // The same point with the bit X25519 ignores set.
+            let mut high = point;
+            high[31] |= 0x80;
+            let hex: String = high.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(
+                lepic_marker_reply_key(&reply_wire(&json!(hex))),
+                None,
+                "{hex}"
+            );
+        }
+    }
+
+    #[test]
+    fn reply_in_a_marker_of_version_zero_or_a_non_object_reads_none() {
+        let mut value: Value = serde_json::from_str(text(&vector_wire(VECTORS[0]))).unwrap();
+        value["lepic"] = json!({"version": 0, "reply": "42".repeat(32)});
+        let wire = WireSlate::text(MediaType::JSON, serde_json::to_string(&value).unwrap());
+        assert_eq!(lepic_marker_reply_key(&wire), None);
+        assert_eq!(
+            lepic_marker_reply_key(&WireSlate::binary(MediaType::JSON, vec![0xff])),
+            None
+        );
+        assert_eq!(
+            lepic_marker_reply_key(&WireSlate::text(MediaType::JSON, "[1]".to_owned())),
+            None
+        );
     }
 }
