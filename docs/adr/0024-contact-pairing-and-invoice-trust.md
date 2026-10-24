@@ -19,9 +19,11 @@ fresh key per message, on keys kept apart from the Epicbox, Tor and payment-proo
 
 Adopt RFC 0002:
 
-- A contact-identity branch from the seed (`m/<a>/2/0`, then HKDF), and per contact a random
-  `contact_id` that derives an X25519 key, an Ed25519 key, a hint key and an Epicbox mailbox key.
-  None of these is the Epicbox, Tor or payment-proof key.
+- A contact-identity branch from the seed (`m/<a>/2/0`, then HKDF), and per contact a numbered
+  slot that derives an X25519 key, an Ed25519 key and a hint key, plus a random salt for its
+  Epicbox mailbox key. None of these is the Epicbox, Tor or payment-proof key. Pairing records
+  go into the `.wfeh` backup; without it, re-pairing finds the old slot, so a restore never
+  changes a contact's keys.
 - A sealed envelope: HPKE base mode, suite `0x0020`/`0x0001`/`0x0003`, a versioned 16-byte
   header, an 8-byte recipient hint, Ed25519-signed inner fields between paired contacts,
   armored as `BEGINEPICSEALED. … ENDEPICSEALED.` and stored as `.epicsealed` files. It wraps the
@@ -29,8 +31,8 @@ Adopt RFC 0002:
   payment-proof key) for the envelope; the `lepic.v1` binary slate stays under OD-5.
 - The LEPIC marker carries a one-time reply key on every S1 and I1, so a LEPIC receiver seals its
   answer with no setup.
-- Pairing in person by QR, or online by a one-time invite and throwaway Epicbox mailboxes derived
-  from the invite, with an inviter commitment and a 32-bit SAS shown as four emoji with names.
+- Pairing in person by QR, or online by a one-time invite (a link, or five pairing words that
+  find it) and throwaway Epicbox mailboxes derived from the invite, with an inviter commitment and a 32-bit SAS shown as four emoji with names.
 - A home relay per pairing, where each side has a per-contact mailbox; all of the relationship's
   messages go there, collected by one-off drains on open and in the foreground. A user's own relay
   switch needs no message.

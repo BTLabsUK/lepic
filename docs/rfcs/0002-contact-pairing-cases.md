@@ -21,15 +21,15 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 | C-08 | Push registered on one relay while pairing on another | Push stays on the wallet's address; pairing mailboxes never use push; contact mailboxes use push only where their home relay has it |
 | C-09 | Tor on, off or Tor only | Mailbox drains and posts follow the wallet's Epicbox route; onion used when given; a relay unreachable over Tor falls back to the by-hand links |
 | C-10 | Offline | Online pairing and collecting are unavailable; in-person QR pairing and sealed files work |
-| C-11 | Two devices on one seed | Different `contact_id`s, so different keys and mailboxes; the pairing lives on the device that paired |
-| C-12 | Restore from seed; a contact's keys change | Records come back from the `.wfeh` backup; without it, re-pair; the contact sees "Keys changed" and trust resets |
+| C-11 | Two devices on one seed | Different slots (random start) and always different mailboxes (`box_salt`); the pairing lives on the device that paired |
+| C-12 | Restore from seed; a contact's keys change | With the `.wfeh` backup nothing changes; without it, re-pairing finds the old slot and the same keys come back; "Keys changed" only for another seed |
 | C-13 | Seed later used in a stock wallet | Sealed files cannot be opened there; "Send as plain instead" resends the same slate, never a second payment |
 | C-14 | Invite expired | Both apps refuse it; the inviter makes a new one |
 | C-15 | Invite used twice, forwarded or leaked | First valid reply wins; later ones get "already used"; the SAS and the claimed name expose an impostor |
 | C-16 | B answers after A deleted the invite | A ignores the reply; B times out after 1 hour with "No answer from A" |
-| C-17 | Both invite each other at once | Two independent pairings; the second one completed is offered as a duplicate and merged |
+| C-17 | Both invite each other at once | Two pairings; the key check (7.8) folds the newer into the older one |
 | C-18 | SAS mismatch | The pairing is deleted on that side, the other side is told, nothing is trusted |
-| C-19 | Contact deleted, then added again | Deleting removes the pairing and its mailboxes; adding again is a new pairing with new keys |
+| C-19 | Contact deleted, then added again | Deleting removes the pairing and its mailboxes; pairing again finds the old slot if the contact kept its record |
 | C-20 | Invoice trust revoked while an invoice is pending | Unpaid invoices from the contact are deleted; a paid one finishes; new ones are dropped |
 | C-21 | Paired contact also an address-book contact; contacts with several addresses | The pairing attaches to one address-book entry; duplicates are offered for merge; addresses are hints, keys are identity |
 | C-22 | A shop or exchange pairing with many customers | Shared inbox with fixed hints, indexed lookups, per-key and global rate limits, invites bound to accounts |
@@ -38,11 +38,13 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 | C-25 | Withdrawn and declined notices with sealing | Sealed and signed in the contact mailbox; ADR 0016 rules otherwise; signed withdrawn on a paid invoice auto-cancels |
 | C-26 | Clock skew | Only expiries use clocks; 10 minutes of tolerance; the inviter's clock decides |
 | C-27 | App killed mid-pairing | Pending pairings are stored; draining resumes on the next open |
-| C-28 | Partial scans; camera denied | QR checksums reject partial reads; "Show code" and "Paste code" replace the camera |
+| C-28 | Partial scans; camera denied | QR checksums reject partial reads; pairing words and "Enter link or words" replace the camera |
 | C-29 | Downgrade: forcing plain, stripping the marker | Paired sends seal by policy; plain only by the user's choice; stripping a reply key yields today's plain answer |
 | C-30 | An older LEPIC without the feature | Plain answers; invites ignored; sealed files refused clearly; the fallback resends plain |
 | C-31 | Epic Pay and the reply key in the marker | Unverified; tested in V-15 before release, and the marker can be left off file S1 if it fails |
 | C-32 | Relay or address update floods | Not possible for relay switches; service moves are rate-limited on both sides |
+| C-33 | Pairing words typed wrong, guessed or used twice | Nothing found; guessing is useless; first use takes the invite |
+| C-34 | Epicbox switched off | No relay traffic; in-person and by-hand pairing and sealed files work; mailboxes pause |
 
 ## Relays
 
@@ -160,37 +162,46 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 
 ### C-11 Two devices on one seed
 
-- **What happens.** Both derive the same `root`, but every pairing uses a random `contact_id`, so
-  the two devices never share contact keys or mailboxes (9.5). A pairing lives on the device
-  that made it. Only one device answers an invite: the one where the user tapped it. If the user
-  taps the same invite on both, A accepts the first reply and answers the second with status 02;
-  the second device shows "This invite was already used". The ack rules of the 26.10.8 amendment
-  are not needed for mailboxes, because no mailbox is shared; they still apply to the ordinary
-  payments address. Restoring a backup with pairings onto the second device while the first
-  still runs makes both drain the same mailboxes; the app imports them as "on another device"
-  and asks before using them (9.5).
+- **What happens.** Both derive the same `root`. Each install keeps its own slot counter, and a
+  store without a counter starts at a random slot (2.2), so the two devices rarely pick the same
+  slot; their mailboxes always differ because `box_salt` is random. When they do meet in a slot,
+  the two contacts of that slot see the same keys for this wallet; each envelope still reaches the
+  right record, chosen by the sender's signing key (3.4), and nothing is mixed up. A pairing lives
+  on the device that made it. Only one device answers an invite: the one where the user tapped it.
+  If the user taps the same invite on both, A accepts the first reply and answers the second with
+  status 02; the second device shows "This invite was already used". Restoring a backup with
+  pairings onto the second device while the first still runs makes both drain the same
+  mailboxes; the app imports them as "on another device" and asks before using them (9.5).
 - **User sees.** Contacts paired on the phone are not on the desktop unless restored from a
   backup there; then "Use your contacts on this device? Your other device should stop using
   them."
-- **Test.** engine: two wallets on one seed pair with different contacts; their keys and
-  mailboxes differ; the same invite opened twice yields one pairing and one status 02.
+- **Test.** engine: two wallets on one seed pair with different contacts; their mailboxes differ;
+  forced into one slot, envelopes from each contact reach the right record; the same invite
+  opened twice yields one pairing and one status 02.
 
 ### C-12 Restore from seed, re-pairing, and a contact's keys changing
 
-- **What happens.** The `.wfeh` backup carries the pairing records (10.5); with it, keys and
-  mailboxes come back unchanged and nothing changes for contacts. Without it, the contacts are
-  gone; the user re-pairs and gets new keys. The contact's wallet sees a new pairing whose card
-  names the same ordinary payments address or the same app contact as an existing pairing, or
-  the user re-pairs from that contact's page: the record goes to `keys-changed` holding both
-  cards. A key never changes any other way: a card or envelope signed by another key is never a
-  silent update.
-- In `keys-changed`: nothing is sealed to either key without asking, invoices are not accepted,
-  and "Allow invoices" and Verified are reset, so an impostor who re-pairs as the contact
-  inherits nothing.
-- **User sees.** "Anna's keys changed. This happens when she reinstalls or restores her wallet.
-  Verify again" with the SAS check, or "Keep the old keys" and "Use the new keys".
-- **Test.** engine: restore with the backup → same keys, contacts unaffected; without → new keys,
-  the peer's record goes to `keys-changed` with trust reset; verifying moves it to `verified`.
+- **What happens.** With the `.wfeh` backup (10.5) the records and the slot counter come back:
+  same keys, same mailboxes, same trust, and contacts notice nothing. Without it, the user
+  re-pairs (in person, by invite or by words) and attaches the new pairing to the same contact
+  on the other side; that side holds the old record and runs the key check (7.8). The restored
+  wallet finds its old slot (2.5), takes it back and sends a contact update signed with the old
+  key; the contact keeps its old record with its trust and Verified mark, and the new pairing
+  is folded away. The keys are the same as before the restore; only the restored side's own
+  switches for that contact start at their defaults, and its mailbox is new.
+- Only when the slot is not found (the other wallet uses another seed) does the old record go to
+  `keys-changed`, holding both cards. Then nothing is sealed to either key without asking,
+  invoices are not accepted, and "Allow invoices" and Verified are reset, so an impostor who
+  re-pairs as the contact inherits nothing. A key never changes any other way: a card or envelope
+  signed by another key is never a silent update.
+- **User sees.** After a re-pair that finds the slot: "Anna's keys are back." When it does not:
+  "Anna's keys changed. This can mean she uses a different wallet now, or someone else is using
+  her name. Check the words again." with "Check the words", "Keep the old keys" and "Use the new
+  keys".
+- **Test.** engine: restore with the backup → the same keys and pairings, the contact
+  unaffected; restore without the backup, re-pair → the same keys, the contact's record and trust
+  kept, no `keys-changed`; re-pair with a wallet of another seed → `keys-changed` with trust
+  reset, and verifying moves it to `verified`; no answer within 24 h → `keys-changed`.
 
 ### C-13 A seed later used in a stock wallet
 
@@ -243,12 +254,11 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 
 ### C-17 Both invite each other at once
 
-- **What happens.** Two invites, two independent pairings, each with its own keys. Whichever
-  completes second finds a record with the same peer card name and app contact and asks to keep
-  one. The other is removed on both sides at the next envelope (a pairing that receives nothing
-  for 90 days just lapses as 9.4 says).
-- **User sees.** "You're already paired with Anna. Keep the newer pairing?"
-- **Test.** engine: cross invites complete; the duplicate prompt is raised once.
+- **What happens.** Two invites, two pairings. When the second one completes and joins the same
+  address-book contact, the key check (7.8) runs: the other side finds the old slot among its own
+  records and folds the newer pairing into the older one. Nothing is asked.
+- **User sees.** One contact, paired once.
+- **Test.** engine: cross invites complete; one record remains on each side, with the older keys.
 
 ## SAS
 
@@ -269,14 +279,15 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 ### C-19 Contact deletion and re-adding
 
 - **What happens.** "Remove pairing" deletes the record and any pending pairing for it, our keys
-  stop being used, the mailboxes
-  are no longer drained, pending invoices from the contact are deleted. The contact is not told
-  (a removal message would tell an attacker that guessed a pairing). Its envelopes now find no
-  key: over files "sealed for another wallet"; in its mailbox nobody reads them. Adding again is
-  a new pairing with new keys; the contact sees C-12's "Keys changed" if it kept the old record.
+  stop being used, the mailboxes are no longer drained, pending invoices from the contact are
+  deleted. The slot stays used. The contact is not told (a removal message would tell an attacker
+  that guessed a pairing). Its envelopes now find no record: over files "sealed for another
+  wallet"; in its mailbox nobody reads them. Pairing again with a contact that kept its record
+  runs the key check (7.8) and takes the old slot back, so the contact sees no change; a contact
+  that removed its record too simply has a new pairing.
 - **User sees.** "Remove the pairing with Anna? Sealed payments and invoices from Anna will stop."
 - **Test.** engine: after removal, the mailbox is not drained and a sealed file from the contact
-  is unopenable; re-pairing leads the peer to `keys-changed`.
+  is unopenable; pairing again with the contact that kept its record restores the old slot.
 
 ### C-20 Revoking invoice trust while an invoice is pending
 
@@ -287,17 +298,20 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 - **Test.** engine: two parked and one paid invoice; switch off; two deleted and declined, the
   paid one completes.
 
-### C-21 A paired contact who is also an address-based contact, and multi-address contacts
+### C-21 A paired contact who is also an address-book contact, and multi-address contacts
 
-- **What happens.** The address book stays in the app's history (the `Contact` type); a pairing
-  record points to one entry (`app_contact`). After pairing, the app offers to attach it to an
-  existing entry whose ordinary address equals the card's payments address, or to a new entry.
-  An entry has at most one pairing. A second pairing that names the same entry goes through
-  C-12 or C-17. Addresses on an entry are hints for plain sends; the pairing's mailbox is not
-  shown as an address and never typed by users.
+- **What happens.** The address book stays in the app (the `Contact` type); a pairing record
+  points to one entry (`app_contact`). After pairing, the app offers to attach it to an existing
+  entry whose Epicbox address equals the card's payments address, or to a new entry. An entry has
+  at most one pairing. A second pairing that joins the same entry runs the key check (7.8).
+  Entries hold at most one address per method: one Epicbox, one Link · HTTP, one Link · Tor, no
+  lists. The card's payments address fills the Epicbox address of a new entry; it replaces a
+  different one only after the user agrees. The pairing's mailbox is never shown as an address and
+  never typed by users. For an unpaired entry no address changes on its own.
 - **User sees.** "Anna is already in your contacts. Add the pairing to her?" The contact page shows
   "Paired" or "Verified" with the trust switches.
-- **Test.** app: attaching, the merge prompt, and one pairing per entry.
+- **Test.** app: attaching, the existing-entry offer, one pairing per entry, one address per
+  method.
 
 ## Invoices
 
@@ -361,9 +375,9 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 ### C-28 Partial scans; camera denied
 
 - **What happens.** A QR code either decodes completely or not at all, and the payload's checksum
-  rejects a corrupted read. If the camera is denied or missing, the card and invite screens show
-  "Show code" (the text form) and "Paste code".
-- **User sees.** "Allow the camera to scan, or paste the code instead."
+  rejects a corrupted read. If the camera is denied or missing, the pairing screens offer pairing
+  words (7.7) and "Enter link or words", which takes a pasted link or typed words.
+- **User sees.** "Allow the camera to scan, or use words instead."
 - **Test.** unit: a flipped byte fails the checksum with its own error. app: the denied-camera
   path.
 
@@ -412,3 +426,27 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 - **User sees.** Nothing.
 - **Test.** engine and kit: 10 updates from one contact in an hour → 3 applied; an equal or lower
   `seq` ignored; an update signed by another key dropped.
+
+## Added with the review of the mocks
+
+### C-33 Pairing words typed wrong, guessed, or used twice
+
+- **What happens.** Wrong words derive another mailbox, which holds nothing; B drains each
+  built-in relay once and stops. Guessing is useless (7.7). The first B that opens the words
+  acknowledges the message, so a second finds nothing; a B that already has the invite goes on
+  as for a leaked invite (C-15). Words for an invite on a relay that is not built in are never
+  offered.
+- **User sees.** "No invite found for these words. Check them, or ask for new ones."
+- **Test.** unit: the words vectors (`words.json`). engine: wrong words find nothing after one
+  drain per built-in relay; the right words open the invite and pairing completes; a second use
+  finds nothing.
+
+### C-34 Epicbox switched off
+
+- **What happens.** As 8.7: no relay connections; in-person and by-hand pairing and sealed files
+  work; collecting, contact invoices and the outbox pause and resume when Epicbox is on again.
+- **User sees.** "Paused while Epicbox is off" on the contact page and in Settings › Invoices;
+  "Pair online" offers only the by-hand links.
+- **Test.** engine: with Epicbox off, drains and outbox posts return the off error without
+  connecting; in-person pairing completes; the outbox posts after Epicbox is on.
+
