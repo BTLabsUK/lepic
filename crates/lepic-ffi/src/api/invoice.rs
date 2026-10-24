@@ -163,9 +163,10 @@ impl EpicWallet {
     }
 
     /// Pays the waiting invoice `slate_id` and delivers the payment over Epicbox to the
-    /// sender's allowed address. `amount` is what the user typed: an invoice for any other
-    /// amount is refused, as `epic-wallet pay` refuses it. Inputs need `minimum_confirmations`;
-    /// `message` goes to the sender signed and `options` choose the inputs and change, as in
+    /// sender's allowed address, and to the relay the invoice came from when that differs.
+    /// `amount` is what the user typed: an invoice for any other amount is refused, as
+    /// `epic-wallet pay` refuses it. Inputs need `minimum_confirmations`; `message` goes to the
+    /// sender signed and `options` choose the inputs and change, as in
     /// [`EpicWallet::create_send_slate`].
     ///
     /// Fails with `InvoiceNotFound` when no invoice with that id waits, `AmountMismatch`,
@@ -202,7 +203,8 @@ impl EpicWallet {
     }
 
     /// Delivers the stored payment `tx_id` of an invoice again, to the sender's allowed
-    /// address, after [`EpicWallet::pay_invoice`] failed with `NotDelivered`. Fails with
+    /// address and, when it differs, the relay the invoice came from, after
+    /// [`EpicWallet::pay_invoice`] failed with `NotDelivered` or nothing came of it. Fails with
     /// `InvalidArgument` for a transaction that is not an undelivered payment of an invoice,
     /// and with `TransportFailed` when the relay fails again.
     pub async fn resend_invoice_payment(&self, tx_id: u32) -> Result<(), WalletError> {

@@ -218,6 +218,26 @@ struct Arrival {
     bytes: Vec<u8>,
     /// The I1 carried the LEPIC marker, so its sender runs LEPIC.
     marked: bool,
+    /// The address the I1 came from: the sender's key under the relay it sent from.
+    origin: EpicboxAddress,
+}
+
+/// Prefix of the setting that keeps, per parked invoice, the address its I1 came from when
+/// that names the allowed key under another relay than the allowed address does.
+const ORIGIN_PREFIX: &str = "invoice.origin.";
+
+fn origin_key(slate_id: Uuid) -> String {
+    format!("{ORIGIN_PREFIX}{slate_id}")
+}
+
+/// The address the I1 of parked invoice `slate_id` came from, when it differs from the
+/// allowed address its payment goes to. Same key, another relay: the issuer listens where it
+/// sent the invoice from, which the allowed entry may no longer name.
+pub(crate) fn invoice_origin(
+    repos: &dyn Repositories,
+    slate_id: Uuid,
+) -> Result<Option<String>, StoreError> {
+    repos.setting(&origin_key(slate_id))
 }
 
 fn park_stored(
@@ -231,6 +251,8 @@ fn park_stored(
     if arrival.marked {
         record_lepic(repos, arrival.sender_key.clone(), now)?;
     }
+    let allowed_at = EpicboxAddress::parse(&allowed.address, arrival.origin.network()).ok();
+    let origin = (allowed_at.as_ref() != Some(&arrival.origin)).then(|| arrival.origin.to_string());
     let invoice = PendingInvoice {
         slate_id: arrival.slate_id,
         sender_key: arrival.sender_key,
@@ -248,7 +270,12 @@ fn park_stored(
         });
     }
     match repos.park_invoice(&invoice) {
-        Ok(()) => Ok(Parking::Parked),
+        Ok(()) => {
+            if let Some(origin) = origin {
+                repos.put_setting(&origin_key(invoice.slate_id), &origin)?;
+            }
+            Ok(Parking::Parked)
+        }
         Err(StoreError::InvoiceCapReached { .. }) => Ok(Parking::Full),
         Err(error) => Err(error),
     }
@@ -563,9 +590,10 @@ where
     }
 
     /// Pays the parked invoice `slate_id`, as [`Wallet::pay_invoice`] pays an I1, and delivers
-    /// the I2 over Epicbox to the sender's allowed address. The payment carries
-    /// [`DEFAULT_PAYMENT_TTL_BLOCKS`] when `request.ttl_blocks` is `None`. The invoice is marked
-    /// paid in the same store transaction that stores the payment.
+    /// the I2 over Epicbox to the sender's allowed address, and to the address the invoice came
+    /// from when it names that key under another relay; either delivery is enough. The payment
+    /// carries [`DEFAULT_PAYMENT_TTL_BLOCKS`] when `request.ttl_blocks` is `None`. The invoice
+    /// is marked paid in the same store transaction that stores the payment.
     ///
     /// Fails with [`InvoiceError::NotParked`] when no invoice with the slate id waits to be
     /// paid, as [`Wallet::pay_invoice`] does, and with [`InvoiceError::PaymentUndelivered`]
@@ -597,6 +625,15 @@ where
         let i1 = epicbox_decode(&codecs, &WireSlate::binary(MediaType::JSON, parked.bytes))
             .map_err(InvoiceError::Decode)?;
         let to = Destination::new(parked.sender_address);
+        let session = self.session()?;
+        let origin = self
+            .blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| invoice_origin(repos, slate_uuid))?)
+            })
+            .await?
+            .map(Destination::new);
         request.ttl_blocks = request.ttl_blocks.or(Some(DEFAULT_PAYMENT_TTL_BLOCKS));
         let paid = self
             .pay_decoded(TRANSPORT_ID, i1, request, Some(to.clone()))
@@ -610,12 +647,23 @@ where
             .ok_or(InvoiceError::CannotDeliver {
                 transport: TRANSPORT_ID,
             })?;
-        outbound.deliver(&to, &paid.reply).await.map_err(|source| {
-            InvoiceError::PaymentUndelivered {
-                tx_id: paid.tx_id,
-                slate_id,
-                source,
+        let delivered = outbound.deliver(&to, &paid.reply).await;
+        // The issuer listens where it sent the invoice from; the allowed entry may name the
+        // same key under a relay it left. Either delivery is enough.
+        let delivered = match origin {
+            Some(origin) => {
+                let also = outbound.deliver(&origin, &paid.reply).await;
+                if let Err(error) = &also {
+                    debug!(error = %error, "payment not delivered to the invoice's relay");
+                }
+                delivered.or(also)
             }
+            None => delivered,
+        };
+        delivered.map_err(|source| InvoiceError::PaymentUndelivered {
+            tx_id: paid.tx_id,
+            slate_id,
+            source,
         })?;
         info!("slate sent");
         Ok(paid)
@@ -788,6 +836,7 @@ where
                 .unwrap_or_default(),
             bytes: envelope.wire().as_bytes().to_vec(),
             marked: carries_lepic_marker(envelope.wire()),
+            origin: from.clone(),
         };
         let parking = self
             .inbox_write(move |repos, now| park_stored(repos, arrival, now))
@@ -852,6 +901,7 @@ fn delete_expired_parked(
     for invoice in repos.pending_invoices()? {
         if invoice.status != PendingInvoiceStatus::Paid && invoice.received_at <= cutoff {
             repos.delete_pending_invoice(invoice.slate_id)?;
+            repos.delete_setting(&origin_key(invoice.slate_id))?;
             deleted.push(invoice.slate_id);
         }
     }

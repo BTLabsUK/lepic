@@ -178,14 +178,17 @@ LEPIC's behaviour on top of the protocol above; nothing on the wire or the relay
   the wallet starts at index 1.
 - Allowlist. Entries are full `key@domain[:port]` addresses, matched on the key only, because the
   relay authenticates the key that signed a message and never its domain. Payments go to the
-  stored entry's address, never to a message's `from`.
+  stored entry's address, and also to the address the invoice came from when that names the
+  same key under another relay: the issuer listens where it sent from, and an entry may name a
+  relay it left. Never to another key.
 - Prefilter. On the invoice address, a message whose `from` key is not allowed is answered with
   `Made` and dropped before the signature check, key agreement, key derivation or decryption, with no
   inbox row and no store write. An allowed sender's I1 is parked before `Made`. Over the caps on
   parked invoices, it is acknowledged and dropped.
 - Shapes. I1 goes out in the V3 shape, header `3/3/<b>`, and I2 answers in the shape of I1. Both
   carry `"lepic":{"version":1}` as their last top-level key. S1 keeps the V2 shape.
-- Replies. The payer sends I2 from its payments address to the issuer's allowed address. The
+- Replies. The payer sends I2 from its payments address to the issuer's allowed address, and to
+  the relay the I1 came from when it differs (a resend does the same; either delivery is enough). The
   issuer's payments address finalizes an I2 that answers an invoice it issued and still waits for,
   and posts it with `stem`, as for an S2.
 - Bounce. An I1 that arrives with a slate id this wallet issued, from the key it was sent to, and

@@ -122,6 +122,8 @@ struct RelayState {
     unroutable: HashSet<String>,
     /// Keys of addresses whose posts are answered `InvalidRequest`.
     post_refused: HashSet<String>,
+    /// Relay domains whose posts are answered `InvalidRequest`, whatever the key.
+    domains_refused: HashSet<String>,
     stalling: bool,
     stalled: Vec<DuplexStream>,
     unanswered: HashSet<Unanswered>,
@@ -147,6 +149,7 @@ impl MockRelay {
                     messages: Vec::new(),
                     refusing: false,
                     unroutable: HashSet::new(),
+                    domains_refused: HashSet::new(),
                     post_refused: HashSet::new(),
                     stalling: false,
                     stalled: Vec::new(),
@@ -190,6 +193,14 @@ impl MockRelay {
     pub fn set_unroutable(&self, address: &EpicboxAddress) {
         self.update(|state| {
             state.unroutable.insert(address.key_text());
+        });
+    }
+
+    /// Answers posts to any address under relay `domain` with `InvalidRequest`, as the relay
+    /// does when forwarding to a domain that does not answer.
+    pub fn set_domain_refused(&self, domain: &str) {
+        self.update(|state| {
+            state.domains_refused.insert(domain.to_owned());
         });
     }
 
@@ -740,7 +751,9 @@ impl RelayState {
         if self.unroutable.contains(&recipient.key_text()) {
             return;
         }
-        if self.post_refused.contains(&recipient.key_text()) {
+        if self.post_refused.contains(&recipient.key_text())
+            || self.domains_refused.contains(recipient.domain().as_str())
+        {
             self.send(
                 id,
                 error("InvalidRequest", "Error forward slate to foreign epicbox."),

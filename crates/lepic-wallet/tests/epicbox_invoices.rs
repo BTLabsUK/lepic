@@ -898,7 +898,7 @@ fn an_invoice_whose_park_write_fails_stays_on_the_relay_until_it_is_parked() {
 }
 
 #[test]
-fn the_payment_goes_to_the_allowed_address_not_to_the_sender_named_in_the_message() {
+fn the_payment_goes_to_the_allowed_address_and_to_the_relay_the_invoice_came_from() {
     let world = World::new();
     // The issuer's key, allowed under another domain and port than its messages name.
     let allowed = format!("{}@pay.shop.test:9443", world.issuer.address.key_text());
@@ -935,9 +935,66 @@ fn the_payment_goes_to_the_allowed_address_not_to_the_sender_named_in_the_messag
 
     assert_eq!(
         world.payer.read(|repos| repos.counterparty(paid.tx_id)),
-        Some(allowed)
+        Some(allowed.clone())
     );
-    // The relay queues by key, so the issuer still receives it.
+    // The allowed entry may name a relay the issuer left; it listens where it sent from.
+    assert_eq!(
+        world.payer.delivered_to(),
+        vec![allowed, world.issuer.address.to_string()]
+    );
+    // The mock relay queues by key, so the issuer gets both copies and finalizes once.
+    assert_eq!(world.relay.pending(&world.issuer.address), 2);
+}
+
+#[test]
+fn a_payment_to_an_issuer_allowed_under_its_own_relay_goes_out_once() {
+    let world = World::new();
+    world
+        .payer
+        .wallet
+        .allow_invoice_sender(&world.issuer.address.to_string(), "shop")
+        .unwrap();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+
+    assert_eq!(
+        world.payer.delivered_to(),
+        vec![world.issuer.address.to_string()]
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 1);
+}
+
+#[test]
+fn a_payment_reaches_the_relay_the_invoice_came_from_when_the_allowed_one_fails() {
+    let world = World::new();
+    let allowed = format!("{}@gone.shop.test", world.issuer.address.key_text());
+    world
+        .payer
+        .wallet
+        .allow_invoice_sender(&allowed, "shop")
+        .unwrap();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world.relay.set_domain_refused("gone.shop.test");
+
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+
     assert_eq!(world.relay.pending(&world.issuer.address), 1);
 }
 
@@ -1016,15 +1073,17 @@ fn a_resend_goes_to_the_allowed_address_whatever_domain_the_caller_names() {
         ))
         .unwrap();
 
+    // Each attempt goes to the allowed address and to the relay the invoice came from.
+    let origin = world.issuer.address.to_string();
     assert_eq!(
         world.payer.delivered_to(),
-        vec![allowed.clone(), allowed.clone()]
+        vec![allowed.clone(), origin.clone(), allowed.clone(), origin]
     );
     assert_eq!(
         world.payer.read(|repos| repos.counterparty(tx_id)),
         Some(allowed)
     );
-    assert_eq!(world.relay.pending(&world.issuer.address), 1);
+    assert_eq!(world.relay.pending(&world.issuer.address), 2);
 }
 
 impl World {
