@@ -35,9 +35,9 @@ Signed-off-by: Full Name <email>
 ```
 
 - Types: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `build`, `ci`, `chore`, `revert`.
-- Scopes: `primitives`, `crypto`, `keychain`, `slate`, `node`, `store`, `transport`, `epicbox`,
-  `wallet`, `telemetry`, `ffi`, `cli`, `xtask`, `conformance`, `fuzz`, `interop`, `deps`, `ci`, `docs`,
-  `repo`. Omit the scope only when a change spans the whole repository.
+- Scopes: `primitives`, `crypto`, `keychain`, `slate`, `contact`, `node`, `store`, `transport`,
+  `epicbox`, `wallet`, `telemetry`, `ffi`, `cli`, `xtask`, `conformance`, `fuzz`, `interop`, `deps`,
+  `ci`, `docs`, `repo`. Omit the scope only when a change spans the whole repository.
 - Description: imperative mood, lowercase first word, no trailing period. The whole subject line is
   at most 72 characters.
 - Body: why the change exists and what it affects, including any effect on wire formats, stored
