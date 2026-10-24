@@ -160,6 +160,23 @@ the raw probe output under `.work/logs/<time>/probes/`.
    `I1`, header `3/3/6` and no TTL. With `ttl_cutoff_height` set to `"1440"`, it decoded the same way
    with a TTL of 1440.
 
+6. One socket drains several addresses in turn. A socket greeted as a sender (`wallet_mode`
+   `send`) may subscribe as one address, take and acknowledge every pending message (`Made`, then
+   a fresh `Subscribe` signed over the challenge the relay sends after it), and, once a subscribe
+   is answered `Ok`, subscribe as the next address with the latest challenge and drain that one.
+   In the run two addresses with two messages each were drained this way in both modes, with every
+   `Made` answered `Ok` and no error in send mode. Such a socket is never an address's live
+   listener, so a message posted while it runs is not passed through to it: the late message for
+   each address stayed pending and a later drain on a fresh socket collected it. On a listener
+   socket the late message for the earlier address was passed through, and `Made` signed by that
+   address was refused (`InvalidSignature`, fact 4), so it too stayed pending. The relay's
+   "message in flight" flag belongs to the socket, not the address (`app_mongo.js` `subscribe`
+   checks `ws.process_slate`): with a message for the first address unacknowledged, a subscribe as
+   the second was answered `Ok` and its message was not handed out. Its resend and discard
+   counters also follow the socket, and discarding deletes the queue of the address subscribed
+   last. A mailbox drain therefore greets as a sender, acknowledges each message before it
+   subscribes again, and moves to a new socket after leaving a message unacknowledged.
+
 Recorded run on 2026-10-04 (`drover lock lepic-acceptance -- interop/acceptance/run.sh --probes --no-build --lepic
 target/debug/lepic`, after `cargo build -p lepic-cli`):
 
@@ -177,6 +194,27 @@ fact 5 policy decodes a marked V3 invoice PASS       0s  legacy-v3 I1 header 3/3
 fact 3 non-slate payload unacknowledged  PASS      24s  delivered 2 times, refused as no slate each time, never acknowledged
 
 6 of 6 steps passed
+```
+
+Fact 6 was added in a run on 2026-10-24 (`drover lock lepic-acceptance --
+interop/acceptance/run.sh --probes --no-build --lepic interop/.work/bin/lepic`, the stack's own
+build of `lepic`). The tree was dirty only with the fact 6 text of this page:
+
+```
+lepic: lepic 0.1.0 at interop/.work/bin/lepic
+tree: 2baafccf-dirty
+
+Step                                     Result   Time  Detail
+----                                     ------   ----  ------
+setup and funding                        PASS      27s  probe esZjFjrvRnqem2q8z4i372hYZsyx2pFJgmc2hiwkGmwPcvpj6n9Q@localhost:3423, stock listener esZ1aCarpVBX36x4x4Jee5Pgi8ziJGQC975DwtjNZM4RhY2vqenM@localhost:3423
+fact 4 relay sessions and addresses      PASS       2s  one socket serves the last subscribed address only; two sockets serve two; relay source names TooManySubscriptions 0 times
+fact 6 one socket drains mailboxes in turn PASS      14s  2+2 messages drained on one socket in send and listener mode; late messages wait for the next drain; listener socket gets the earlier key's late message, unackable; a kept message stops the socket serving the next key
+fact 1, 2 stock listener bounces a V3 I1 PASS       2s  I1 952d4163-8e86-4093-9203-aab0fd192b29 acknowledged, not recorded, posted back identical except the marker, which is gone
+fact 2 stock reply drops the marker      PASS       1s  V3 S1 with marker answered with a V3 S2 without it; acknowledged after the bounce
+fact 5 policy decodes a marked V3 invoice PASS       1s  legacy-v3 I1 header 3/3/6, TTL read as 1440
+fact 3 non-slate payload unacknowledged  PASS      23s  delivered 2 times, refused as no slate each time, never acknowledged
+
+7 of 7 steps passed
 ```
 
 ## Invoices between LEPIC wallets
