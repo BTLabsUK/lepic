@@ -602,7 +602,7 @@ impl std::fmt::Debug for PushSignature {
 }
 
 /// What one Epicbox drain did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InboxReport {
     /// Payments signed and answered.
     pub received: u32,

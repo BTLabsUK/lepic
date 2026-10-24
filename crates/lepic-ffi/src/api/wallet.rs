@@ -1090,7 +1090,8 @@ impl EpicWallet {
     }
 
     /// Connects to the relay once, handles every pending message and disconnects: the call for
-    /// background work.
+    /// background work. While the listener runs it does nothing and reports nothing handled,
+    /// as the listener receives the same messages.
     pub async fn drain_epicbox(&self) -> Result<InboxReport, WalletError> {
         self.run("drain_epicbox", |session| async move {
             session.drain_epicbox().await

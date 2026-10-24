@@ -1,5 +1,5 @@
 //! The Epicbox listener's stream beside drains: a drain's connection never reads as the
-//! listener's.
+//! listener's, and a payments drain stays off the relay while the listener runs.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,7 +8,7 @@ use lepic_epicbox::mock_relay::MockRelay;
 
 use super::{Fixture, eventually};
 use crate::api::secret_store::AppSecretStore;
-use crate::api::types::{ListenerEvent, ListenerEventKind, WalletConfig};
+use crate::api::types::{InboxReport, ListenerEvent, ListenerEventKind, WalletConfig};
 use crate::node::NodeSecret;
 use crate::session::{SeedOrigin, Session};
 
@@ -132,4 +132,18 @@ async fn a_drains_connection_does_not_hide_a_listener_outage() {
     );
     assert!(eventually(|| listening.count(ListenerEventKind::Connected) == 2).await);
     listening.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_payments_drain_while_the_listener_runs_stays_off_the_relay() {
+    let mut listening = Listening::start().await;
+
+    let report = listening.session.drain_epicbox().await.unwrap();
+
+    assert_eq!(report, InboxReport::default());
+    assert_eq!(listening.relay.received("subscribe"), 1);
+    assert_eq!(listening.kinds(), [ListenerEventKind::Connected]);
+    listening.stop().await;
+    listening.session.drain_epicbox().await.unwrap();
+    assert_eq!(listening.relay.received("subscribe"), 2);
 }

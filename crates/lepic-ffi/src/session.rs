@@ -1178,7 +1178,13 @@ impl Session {
     }
 
     pub(crate) async fn drain_epicbox(&self) -> Result<InboxReport, WalletError> {
-        let summary = self.engine.epicbox_drain(&self.epicbox()?).await?;
+        let epicbox = self.epicbox()?;
+        // The listener subscribes the same address and gets every stored message itself; a
+        // second connection beside it would only handle them twice.
+        if self.listener_running() {
+            return Ok(InboxReport::default());
+        }
+        let summary = self.engine.epicbox_drain(&epicbox).await?;
         Ok(InboxReport {
             received: summary.received,
             finalized: summary.finalized,
