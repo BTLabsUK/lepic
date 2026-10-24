@@ -166,3 +166,10 @@ path = "fuzz_targets/armor_sealed.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "pair_words"
+path = "fuzz_targets/pair_words.rs"
+test = false
+doc = false
+bench = false
