@@ -35,4 +35,5 @@ mod pin;
 mod session;
 #[cfg(test)]
 mod tests;
+mod ur_slate;
 mod vault_port;

@@ -578,6 +578,75 @@ fn inspect_slate_refuses_text_that_is_no_slate() {
     }
 }
 
+/// The slate JSON of a slate vector.
+fn vector_slate(vector: &str) -> String {
+    let vector: serde_json::Value = serde_json::from_str(vector).unwrap();
+    vector["expected"]["json"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_slate_read_from_its_qr_codes_inspects_as_the_text() {
+    use crate::api::types::SlateStage;
+    use crate::api::wallet::{decode_ur_slate, encode_ur_slate, inspect_slate};
+    let json = vector_slate(include_str!(
+        "../../../testdata/vectors/slates/send_file_plain_s1_file.json"
+    ));
+    let parts = encode_ur_slate(json.clone(), 200).unwrap();
+    let partial = decode_ur_slate(parts[..3].to_vec()).unwrap();
+    assert!(!partial.complete);
+    assert_eq!((partial.received_fragments, partial.fragment_count), (3, 7));
+    let progress = decode_ur_slate(parts).unwrap();
+    assert!(progress.complete);
+    assert_eq!(progress.received_fragments, 7);
+    let decoded = progress.json.unwrap();
+    assert_eq!(decoded, json);
+    assert_eq!(
+        inspect_slate(decoded, Chain::Floonet).unwrap().stage,
+        SlateStage::S1
+    );
+}
+
+#[test]
+fn qr_code_refusals_have_their_own_kinds() {
+    use crate::api::wallet::{decode_ur_slate, encode_ur_slate};
+    let s1 = encode_ur_slate(r#"{"a":"1"}"#.to_owned(), 200).unwrap();
+    let long = encode_ur_slate(format!("\"{}\"", "ab".repeat(300)), 16).unwrap();
+    let cases = [
+        (
+            vec!["https://example.org".to_owned()],
+            WalletErrorKind::NotUrCode,
+        ),
+        (
+            vec!["UR:BYTES/AEAEAEAE".to_owned()],
+            WalletErrorKind::ForeignUrCode,
+        ),
+        (
+            vec![s1[0].clone(), long[0].clone()],
+            WalletErrorKind::MixedUrCodes,
+        ),
+        (
+            vec!["UR:EPIC-SLATE/AEAE".to_owned()],
+            WalletErrorKind::InvalidUrCode,
+        ),
+        (vec![s1[0].clone(); 1025], WalletErrorKind::UrCodeTooLarge),
+    ];
+    for (parts, expected) in cases {
+        assert_eq!(kind(decode_ur_slate(parts)), expected);
+    }
+    assert_eq!(
+        kind(encode_ur_slate("slate".to_owned(), 200)),
+        WalletErrorKind::InvalidSlate
+    );
+    assert_eq!(
+        kind(encode_ur_slate("{}".to_owned(), 8)),
+        WalletErrorKind::InvalidArgument
+    );
+    assert_eq!(
+        kind(encode_ur_slate(format!("\"{}\"", "a".repeat(70_000)), 200)),
+        WalletErrorKind::UrCodeTooLarge
+    );
+}
+
 #[test]
 fn normalized_phrase_is_built_in_one_buffer() {
     let typed = "  Abandon\tABANDON\n  art ";

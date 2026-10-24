@@ -550,6 +550,19 @@ pub struct SlateInfo {
     pub messages: Vec<SlateMessage>,
 }
 
+/// How far the QR parts scanned so far got, from `decode_ur_slate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrSlateProgress {
+    /// Set once every fragment is recovered; `json` then holds the slate text.
+    pub complete: bool,
+    /// Fragments recovered so far, from pure parts and fountain parts.
+    pub received_fragments: u32,
+    /// Fragments of the code; 0 when no part was given.
+    pub fragment_count: u32,
+    /// The slate JSON text, not yet checked as a slate: pass it to `inspect_slate`.
+    pub json: Option<String>,
+}
+
 /// Progress of `EpicWallet::scan`.
 #[derive(Debug, Clone)]
 pub struct ScanProgress {

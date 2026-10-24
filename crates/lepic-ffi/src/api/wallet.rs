@@ -21,6 +21,7 @@ use zeroize::Zeroizing;
 
 use crate::inspect;
 use crate::pin;
+use crate::ur_slate;
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::LepicRuntime;
@@ -28,8 +29,8 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, LegacyImport, ListenerEvent, ListenerEventKind,
     NodeTip, PushSignature, ReceivedSlate, RefreshProgress, ScanProgress, SelfSentTx, SendOptions,
-    SentTx, Slate, SlateInfo, TransactionDetails, WalletConfig, WalletEvent, WalletOutput,
-    WalletSummary,
+    SentTx, Slate, SlateInfo, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
+    WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -60,6 +61,29 @@ pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
 /// `chain` sets the minimum fee a slate must pay. Fails with `InvalidSlate`.
 pub fn inspect_slate(json: String, chain: Chain) -> Result<SlateInfo, WalletError> {
     guard("inspect_slate", || inspect::inspect(json, chain.network()))
+}
+
+/// The slate text `json` as the QR texts of an animated `ur:epic-slate` code
+/// (`docs/compat/ur-epic-slate.md`), uppercase for the QR alphanumeric mode. Show them in a
+/// loop, in order. `max_fragment_len` bounds each part's payload in bytes, 16 to 1024; 200 fits
+/// a typical part into a version 11 QR code at level L. A slate that fits one fragment is a single
+/// code. Nothing is encrypted: whoever sees the screen can read the slate. Fails with
+/// `InvalidSlate` for empty or non-JSON text, `InvalidArgument` for a fragment length outside
+/// the limits, and `UrCodeTooLarge` for text over 64 KiB or more than 256 fragments.
+pub fn encode_ur_slate(json: String, max_fragment_len: u32) -> Result<Vec<String>, WalletError> {
+    guard("encode_ur_slate", || {
+        ur_slate::encode(json, max_fragment_len)
+    })
+}
+
+/// Reads the distinct QR texts scanned so far, in any order and case; pass all of them on each
+/// call. Holds no state. Once `complete`, `json` is the slate text, not yet checked as a slate.
+/// Fails with `NotUrCode` or `ForeignUrCode` when a scan is not a slate code (drop that scan
+/// and keep the others), `MixedUrCodes` for parts of two codes (start over with the newest
+/// scan), `InvalidUrCode` for a damaged code or an unknown version, and `UrCodeTooLarge` for
+/// more than 1024 parts or text past the limits.
+pub fn decode_ur_slate(parts: Vec<String>) -> Result<UrSlateProgress, WalletError> {
+    guard("decode_ur_slate", move || ur_slate::decode(&parts))
 }
 
 /// True when `store` holds a wallet vault.

@@ -119,6 +119,19 @@ pub enum WalletErrorKind {
     /// The payer's answer changed a field of the invoice this wallet issued: the amount, the
     /// lock height, the offset, the issuer's outputs or its data. Nothing was finalized or posted.
     InvoiceChanged,
+    /// The scanned QR code is not a slate code at all, for example an address or a web link.
+    /// Drop that scan and keep the parts scanned before it.
+    NotUrCode,
+    /// The scanned QR code is a uniform resource of another type, such as another wallet's
+    /// transaction code. Drop that scan and keep the parts scanned before it.
+    ForeignUrCode,
+    /// The scanned parts belong to two different slate codes. Start over with the newest scan.
+    MixedUrCodes,
+    /// A slate code is damaged or of a newer version than this LEPIC reads.
+    InvalidUrCode,
+    /// The slate is too large to show as QR codes, or scanned parts exceed what one code
+    /// holds. Use a file instead.
+    UrCodeTooLarge,
 }
 
 impl WalletErrorKind {
@@ -168,6 +181,11 @@ impl WalletErrorKind {
             Self::InvoiceAlreadyPaid => 48,
             Self::InvoiceLockedAboveTip => 49,
             Self::InvoiceChanged => 50,
+            Self::NotUrCode => 51,
+            Self::ForeignUrCode => 52,
+            Self::MixedUrCodes => 53,
+            Self::InvalidUrCode => 54,
+            Self::UrCodeTooLarge => 55,
         }
     }
 }
@@ -519,6 +537,11 @@ mod tests {
             (K::InvoiceAlreadyPaid, 48),
             (K::InvoiceLockedAboveTip, 49),
             (K::InvoiceChanged, 50),
+            (K::NotUrCode, 51),
+            (K::ForeignUrCode, 52),
+            (K::MixedUrCodes, 53),
+            (K::InvalidUrCode, 54),
+            (K::UrCodeTooLarge, 55),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
