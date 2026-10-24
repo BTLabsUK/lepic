@@ -207,7 +207,8 @@ CREATE TABLE contacts (
     account INTEGER NOT NULL,
     slot INTEGER NOT NULL,
     box_salt BLOB NOT NULL,
-    sas BLOB
+    sas BLOB,
+    own_card BLOB NOT NULL
 );
 CREATE INDEX contacts_hint_key ON contacts (peer_hint_key);
 CREATE INDEX contacts_slot ON contacts (account, slot);
@@ -250,7 +251,8 @@ CREATE TABLE pairings (
     our_mailbox TEXT NOT NULL,
     peer_mailbox TEXT,
     state TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    invite BLOB NOT NULL
 );
 CREATE INDEX pairings_expires ON pairings (expires_at);
 

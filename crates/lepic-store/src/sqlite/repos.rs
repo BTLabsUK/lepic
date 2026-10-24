@@ -1257,7 +1257,7 @@ fn decode_card(
 const CONTACT_COLUMNS: &str = "contact_id, card, peer_sig_key, peer_enc_key, peer_hint_key, \
     card_seq, kind, claimed_name, alt_card, alt_sig_key, alt_enc_key, alt_hint_key, alt_seq, \
     alt_kind, alt_name, label, state, verified_at, allow_invoices, seal, last_sealed_in, \
-    app_contact, imported_from_backup, created_at, updated_at, account, slot, box_salt, sas";
+    app_contact, imported_from_backup, created_at, updated_at, account, slot, box_salt, sas, own_card";
 
 fn decode_contact(row: &Row<'_>) -> Result<ContactRecord, StoreError> {
     let record = Record::Contact;
@@ -1285,11 +1285,12 @@ fn decode_contact(row: &Row<'_>) -> Result<ContactRecord, StoreError> {
             .get::<_, Option<Vec<u8>>>(28)?
             .map(|sas| fixed(&sas, record, "sas"))
             .transpose()?,
+        own_card: row.get(29)?,
     })
 }
 
 const PAIRING_COLUMNS: &str = "pairing_id, role, contact_id, sealed, invite_id, expires_at, \
-    our_mailbox, peer_mailbox, state, created_at";
+    our_mailbox, peer_mailbox, state, created_at, invite";
 
 impl SqliteRepos<'_> {
     fn contact_where(
@@ -1328,6 +1329,7 @@ impl SqliteRepos<'_> {
             peer_mailbox: row.get(7)?,
             state: decode_code(&state, PairingState::from_code, record, "state")?,
             created_at: timestamp_from_column(row.get(9)?, record, "created at")?,
+            invite: row.get(10)?,
         })
     }
 
@@ -1442,12 +1444,13 @@ impl ContactRepository for SqliteRepos<'_> {
             i64::from(contact.slot).into(),
             contact.box_salt.to_vec().into(),
             contact.sas.map(|sas| sas.to_vec()).into(),
+            contact.own_card.clone().into(),
         ]);
         self.conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO contacts ({CONTACT_COLUMNS}) VALUES \
                  (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
-                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)"
+                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)"
             ),
             rusqlite::params_from_iter(values),
         )?;
@@ -1669,7 +1672,7 @@ impl ContactRepository for SqliteRepos<'_> {
         self.conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO pairings ({PAIRING_COLUMNS}) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
             ),
             params![
                 id,
@@ -1682,6 +1685,7 @@ impl ContactRepository for SqliteRepos<'_> {
                 pairing.peer_mailbox,
                 pairing.state.code(),
                 timestamp_to_column(pairing.created_at)?,
+                pairing.invite,
             ],
         )?;
         Ok(())

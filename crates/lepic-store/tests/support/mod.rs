@@ -209,6 +209,7 @@ pub fn contact(n: u8, second: i64) -> ContactRecord {
         slot: u32::from(n),
         box_salt: [n.wrapping_add(50); 16],
         sas: Some([n, 1, 2, 3]),
+        own_card: vec![n; 60],
         peer: Some(peer_card(n)),
         alternate: None,
         label: format!("contact {n}"),
@@ -263,6 +264,7 @@ pub fn pairing(n: u8, second: i64) -> PendingPairing {
         peer_mailbox: None,
         state: PairingState::PendingInvite,
         created_at: time(second),
+        invite: vec![n; 40],
     }
 }
 

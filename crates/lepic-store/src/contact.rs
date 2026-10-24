@@ -157,6 +157,8 @@ pub struct ContactRecord {
     pub slot: u32,
     /// The salt of our mailbox key for the contact.
     pub box_salt: [u8; BOX_SALT_LEN],
+    /// Our card for the contact as we last gave it, in its exact signed bytes.
+    pub own_card: Vec<u8>,
     /// The latest verified card. `None` while an invite waits for its reply.
     pub peer: Option<PeerCard>,
     /// The card of the new keys while the state is [`ContactState::KeysChanged`]; `peer` keeps
@@ -276,6 +278,8 @@ pub struct PendingPairing {
     pub peer_mailbox: Option<String>,
     pub state: PairingState,
     pub created_at: Timestamp,
+    /// The invite in its exact bytes: the inviter's own, or the one the invitee answered.
+    pub invite: Vec<u8>,
 }
 
 /// Local id of a stored outbox entry, assigned by the store.
@@ -630,6 +634,7 @@ mod tests {
             peer_mailbox: None,
             state: PairingState::PendingInvite,
             created_at: Timestamp::from_second(1).unwrap(),
+            invite: vec![8; 40],
         };
         let sealed = seal_secrets(&key, &pairing).unwrap();
         let opened = open_secrets(&key, pairing.pairing_id, &pairing.invite_id, &sealed).unwrap();

@@ -51,6 +51,7 @@ struct Entry {
     slot: u32,
     box_salt: String,
     sas: Option<String>,
+    own_card: String,
     label: String,
     state: String,
     verified_at: Option<String>,
@@ -199,6 +200,7 @@ pub fn export_contacts<R: ContactRepository + ?Sized>(repos: &R) -> Result<Strin
             slot: contact.slot,
             box_salt: to_hex(&contact.box_salt),
             sas: contact.sas.as_ref().map(|sas| to_hex(sas)),
+            own_card: to_hex(&contact.own_card),
             label: contact.label.clone(),
             state: contact.state.code().to_owned(),
             verified_at: contact.verified_at.map(|time| time.to_string()),
@@ -248,6 +250,7 @@ fn record_from(entry: &Entry) -> Result<(ContactRecord, Option<ContactMailbox>),
             .as_deref()
             .map(|sas| from_hex_fixed(sas, "sas"))
             .transpose()?,
+        own_card: from_hex(&entry.own_card, "own card")?,
         peer: Some(card_from(&entry.peer)?),
         alternate: entry.alternate.as_ref().map(card_from).transpose()?,
         label: entry.label.clone(),
