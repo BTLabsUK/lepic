@@ -64,7 +64,7 @@ use crate::api::types::{
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
-use crate::node::{Node, NodeSecret, node_error};
+use crate::node::{BackendCache, BackendKey, Node, NodeBackend, NodeSecret, node_error};
 use crate::vault_port::{
     AppVault, SharedStorage, VAULT_KEY, VAULT_NEXT_KEY, VaultBytes, decode, vault_error,
 };
@@ -198,6 +198,8 @@ pub(crate) struct Session {
     /// Hosts reached at an onion through tor, with TLS for the host: the built-in table until
     /// the app sets its own. Shared by every connection of the session that goes through tor.
     pub(crate) onion_routes: Arc<OnionRoutes>,
+    /// The backend [`Session::node_tip_for`] asked last.
+    node_tips: BackendCache<NodeBackend>,
     #[cfg(test)]
     tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
     /// Makes the next listen fail before it subscribes.
@@ -400,6 +402,7 @@ impl Session {
             node_tor,
             tor_expected: AtomicBool::new(false),
             onion_routes,
+            node_tips: BackendCache::default(),
             #[cfg(test)]
             tor_timings: Mutex::default(),
             #[cfg(test)]
@@ -1780,11 +1783,18 @@ impl Session {
         node_secret: &NodeSecret,
     ) -> Result<NodeTip, WalletError> {
         self.ensure_unlocked()?;
-        let node =
-            self.runtime
-                .nodes
-                .client(config, node_secret, &self.node_tor, &self.onion_routes)?;
-        ask_node_tip(&node).await
+        let over_tor = *self.node_tor.active().borrow();
+        let backend =
+            self.node_tips
+                .get_or_build(BackendKey::new(config, node_secret, over_tor), || {
+                    self.runtime.nodes.backend(
+                        config,
+                        node_secret,
+                        &self.node_tor,
+                        &self.onion_routes,
+                    )
+                })?;
+        ask_node_tip(&self.runtime.nodes.client_over(backend)).await
     }
 }
 

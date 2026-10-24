@@ -2,7 +2,7 @@
 //! to an in-process scripted chain.
 
 use std::io;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use lepic_epicbox::tunnel::OnionRoutes;
@@ -98,6 +98,53 @@ impl NodeSecret {
     }
 }
 
+/// The backend last built to ask a node other than the session's own, kept so a poll of the
+/// same node reuses its open connections instead of a new TLS handshake each time. A request
+/// for another URL, secret or tor mode replaces it, so a connection opened directly never
+/// carries a request meant for tor, or the other way round.
+pub(crate) struct BackendCache<T>(Mutex<Option<(BackendKey, T)>>);
+
+impl<T> Default for BackendCache<T> {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+#[derive(PartialEq, Eq)]
+pub(crate) struct BackendKey {
+    url: String,
+    secret: Zeroizing<Option<String>>,
+    over_tor: bool,
+}
+
+impl BackendKey {
+    pub(crate) fn new(config: &WalletConfig, secret: &NodeSecret, over_tor: bool) -> Self {
+        Self {
+            url: config.node_url.clone(),
+            secret: secret.0.clone(),
+            over_tor,
+        }
+    }
+}
+
+impl<T: Clone> BackendCache<T> {
+    pub(crate) fn get_or_build(
+        &self,
+        key: BackendKey,
+        build: impl FnOnce() -> Result<T, WalletError>,
+    ) -> Result<T, WalletError> {
+        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((cached, backend)) = slot.as_ref()
+            && *cached == key
+        {
+            return Ok(backend.clone());
+        }
+        let backend = build()?;
+        *slot = Some((key, backend.clone()));
+        Ok(backend)
+    }
+}
+
 impl NodeFactory {
     /// A client for the node `config` names, authenticating with `secret`.
     pub(crate) fn client(
@@ -107,8 +154,13 @@ impl NodeFactory {
         tor: &Arc<RelayTor>,
         routes: &Arc<OnionRoutes>,
     ) -> Result<Node, WalletError> {
-        let backend = SwitchableBackend::new(self.backend(config, secret, tor, routes)?);
-        Ok(NodeClient::new(backend, self.policy()))
+        Ok(self.client_over(self.backend(config, secret, tor, routes)?))
+    }
+
+    /// A client of its own over `backend`, which clones share: what the client has seen of the
+    /// chain starts afresh, the connections do not.
+    pub(crate) fn client_over(&self, backend: NodeBackend) -> Node {
+        NodeClient::new(SwitchableBackend::new(backend), self.policy())
     }
 
     /// The backend for the node `config` names: `InvalidArgument` for a URL that is not one
@@ -375,6 +427,83 @@ mod refusal_tests {
             epicbox_domain: String::new(),
             epicbox_port: 443,
         }
+    }
+
+    /// A node that answers every request on a kept-alive connection, and counts the
+    /// connections it accepted.
+    async fn counting_node() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&accepted);
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buffer = vec![0u8; 8192];
+                    let body = br#"{"id":1,"jsonrpc":"2.0","result":{"Ok":null}}"#;
+                    while stream.read(&mut buffer).await.is_ok_and(|read| read > 0) {
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                             content-length: {}\r\n\r\n",
+                            body.len()
+                        );
+                        stream.write_all(head.as_bytes()).await.unwrap();
+                        stream.write_all(body).await.unwrap();
+                    }
+                });
+            }
+        });
+        (url, accepted)
+    }
+
+    #[tokio::test]
+    async fn the_cached_backend_asks_the_same_node_again_on_its_open_connection() {
+        let (url, accepted) = counting_node().await;
+        let tor = Arc::new(RelayTor::new(true));
+        let routes = Arc::new(OnionRoutes::default());
+        let mut config = config(&url);
+        let secret = NodeSecret::take(&mut config);
+        let cache = BackendCache::default();
+
+        for _ in 0..3 {
+            let backend = cache
+                .get_or_build(BackendKey::new(&config, &secret, false), || {
+                    NodeFactory::Http.backend(&config, &secret, &tor, &routes)
+                })
+                .unwrap();
+            backend.post("/v2/foreign", b"{}".to_vec()).await.unwrap();
+        }
+
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn another_url_secret_or_tor_mode_builds_a_new_backend() {
+        let cache = BackendCache::default();
+        let builds = std::cell::Cell::new(0);
+        let ask = |url: &str, secret: Option<&str>, over_tor: bool| {
+            let mut config = WalletConfig {
+                node_api_secret: secret.map(str::to_owned),
+                ..config(url)
+            };
+            let secret = NodeSecret::take(&mut config);
+            cache
+                .get_or_build(BackendKey::new(&config, &secret, over_tor), || {
+                    builds.set(builds.get() + 1);
+                    Ok(builds.get())
+                })
+                .unwrap()
+        };
+
+        assert_eq!(ask("https://a.example", None, false), 1);
+        assert_eq!(ask("https://a.example", None, false), 1);
+        assert_eq!(ask("https://a.example", Some("secret"), false), 2);
+        assert_eq!(ask("https://a.example", Some("secret"), true), 3);
+        assert_eq!(ask("https://b.example", Some("secret"), true), 4);
+        assert_eq!(ask("https://a.example", None, false), 5);
     }
 
     #[test]
