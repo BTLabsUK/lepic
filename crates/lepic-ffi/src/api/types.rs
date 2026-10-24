@@ -844,16 +844,23 @@ pub enum WalletEventKind {
     /// it is never a `Transaction` event with `to` `received`; the posting and confirmation
     /// of both of its transactions follow as `Transaction`.
     SelfSend,
-    /// An answer arrived over Epicbox for a slate this wallet does not know and was refused:
-    /// `slate_id`, `slate_stage` (`S2`, the answer to a send, or `I2`, the payment of an
-    /// invoice) and `sender` are set. Another install of the same wallet, on the same recovery
-    /// phrase, may have made that send or issued that invoice; it will never receive this
-    /// answer, so tell the user to finish it there or have the other side cancel and send
-    /// again. Nothing changed here. An answer redelivered because its relay message was not
-    /// settled raises this again; treat a repeat for the same `slate_id` as one. Nothing
+    /// An answer arrived over Epicbox for a slate this wallet does not know: `slate_id`,
+    /// `slate_stage` (`S2`, the answer to a send, or `I2`, the payment of an invoice) and
+    /// `sender` are set. Another install of the same wallet, on the same recovery phrase, may
+    /// have made that send or issued that invoice. The answer is left on the relay and
+    /// requeued for that install for up to a day, so tell the user to open it there to finish
+    /// the payment. Nothing changed here. Raised once per answer; treat a repeat for the same
+    /// `slate_id` as one. Nothing
     /// verifies `slate_id` or `sender`: anyone who knows the payments address can raise this
     /// with any id. Only inform the user; never act on it or show the sender as trusted.
     UnknownSlate,
+    /// A received payment that waited for its sender can never complete and was ended as a
+    /// cancel ends it: `tx_id` and `slate_id` are set, after the `Transaction` event that
+    /// moved it to `Cancelled`. The sender's inputs were spent by another transaction, most
+    /// likely the answer another install of this wallet, on the same recovery phrase, gave
+    /// to the same payment. Tell the user that another install took this payment and offer a
+    /// rescan to see it in the balance.
+    ReceiveSuperseded,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its

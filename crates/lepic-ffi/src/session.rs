@@ -1673,6 +1673,11 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             slate_stage: Some(unknown.stage.as_str().to_owned()),
             ..WalletEvent::of(WalletEventKind::UnknownSlate)
         },
+        Event::ReceiveSuperseded(superseded) => WalletEvent {
+            tx_id: Some(superseded.tx_id.0),
+            slate_id: Some(superseded.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::ReceiveSuperseded)
+        },
         _ => return None,
     })
 }
@@ -2148,6 +2153,21 @@ mod tests {
             assert_eq!(event.sender.as_deref(), Some(sender));
             assert_eq!(event.tx_id, None);
         }
+    }
+
+    #[test]
+    fn a_superseded_receive_is_its_own_event_with_its_transaction() {
+        use lepic_wallet::event::{SlateId, SupersededReceive};
+        let slate_id = SlateId::from_bytes([5; 16]);
+        let event = wallet_event(&Event::ReceiveSuperseded(SupersededReceive {
+            tx_id: TxId(6),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(event.kind, WalletEventKind::ReceiveSuperseded);
+        assert_eq!(event.tx_id, Some(6));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
+        assert_eq!(event.sender, None);
     }
 
     #[test]
