@@ -205,6 +205,10 @@ pub fn peer_card(n: u8) -> PeerCard {
 pub fn contact(n: u8, second: i64) -> ContactRecord {
     ContactRecord {
         contact_id: contact_id(n),
+        account: AccountIndex(0),
+        slot: u32::from(n),
+        box_salt: [n.wrapping_add(50); 16],
+        sas: Some([n, 1, 2, 3]),
         peer: Some(peer_card(n)),
         alternate: None,
         label: format!("contact {n}"),

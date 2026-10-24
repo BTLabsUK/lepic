@@ -106,14 +106,14 @@ fn check_v4_seed(store: &SqliteStore) {
     // The invoice allowlist is gone; the contact tables take its place.
     let conn = store.conn.lock().unwrap();
     let tables: Vec<String> = conn
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('allowed_peers', 'contacts', 'pairings', 'contact_outbox', 'contact_mailboxes')")
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('allowed_peers', 'contacts', 'pairings', 'contact_outbox', 'contact_mailboxes', 'contact_slot_counters')")
         .unwrap()
         .query_map([], |row| row.get(0))
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
     assert!(!tables.iter().any(|name| name == "allowed_peers"));
-    assert_eq!(tables.len(), 4);
+    assert_eq!(tables.len(), 5);
     drop(conn);
     assert_eq!(
         capability.map(|capability| capability.support),
@@ -124,6 +124,12 @@ fn check_v4_seed(store: &SqliteStore) {
 
 fn check_v6_seed(store: &SqliteStore) {
     assert!(store.read(|repos| repos.contacts()).unwrap().is_empty());
+    assert!(
+        store
+            .read(|repos| repos.contact_slot_counters())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 fn check_v5_seed(store: &SqliteStore) {

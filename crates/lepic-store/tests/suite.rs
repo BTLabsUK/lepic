@@ -14,14 +14,15 @@ use jiff::Timestamp;
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_store::{
-    AccountIndex, AccountRecord, ChainCheck, ContactCap, ContactOutboxState, ContactState,
-    ContextKey, ImportSummary, ImportedKind, ImportedMessage, ImportedOutput, ImportedOutputStatus,
-    ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex, InvoiceCap, MAX_CONTACTS,
-    MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER,
-    MAX_PENDING_PAIRINGS, OpenReceipt, OutboxEntry, OutboxId, OutboxStatus, OutputStatus,
-    PairingId, PairingState, ParticipantId, PeerCapability, PeerSupport, PendingInvoiceStatus,
-    PrivateContext, Record, Repositories, SealMode, SlateStage, StoreError, TransactionEntry,
-    TxDirection, TxId, TxState, WalletStore, export_contacts, import_contacts,
+    AccountIndex, AccountRecord, CONTACT_SLOT_COUNT, ChainCheck, ContactCap, ContactOutboxState,
+    ContactState, ContextKey, ImportSummary, ImportedKind, ImportedMessage, ImportedOutput,
+    ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex,
+    InvoiceCap, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES,
+    MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt, OutboxEntry, OutboxId,
+    OutboxStatus, OutputStatus, PairingId, PairingState, ParticipantId, PeerCapability,
+    PeerSupport, PendingInvoiceStatus, PrivateContext, Record, Repositories, SealMode, SlateStage,
+    StoreError, TransactionEntry, TxDirection, TxId, TxState, WalletStore, export_contacts,
+    import_contacts,
 };
 use uuid::Uuid;
 
@@ -1182,6 +1183,95 @@ fn contacts_stop_at_the_cap<B: Backend>() {
     write(store, |repos| repos.put_contact(&first)).unwrap();
 }
 
+fn slots_count_up_per_account_from_the_callers_start<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let (first, second) = (AccountIndex(0), AccountIndex(1));
+    let taken = write(store, |repos| {
+        assert_eq!(repos.contact_slot_counter(first)?, None);
+        Ok(vec![
+            repos.take_contact_slot(first, 31_000)?,
+            // The start only applies while the account has no counter.
+            repos.take_contact_slot(first, 5)?,
+            repos.take_contact_slot(second, 0)?,
+        ])
+    })
+    .unwrap();
+    assert_eq!(taken, vec![31_000, 31_001, 0]);
+    read(store, |repos| {
+        assert_eq!(repos.contact_slot_counter(first)?, Some(31_002));
+        assert_eq!(
+            repos.contact_slot_counters()?,
+            vec![(first, 31_002), (second, 1)]
+        );
+        Ok(())
+    })
+    .unwrap();
+    // A slot taken back lifts the counter above it; a lower value changes nothing.
+    write(store, |repos| {
+        repos.raise_contact_slot_counter(second, 9)?;
+        repos.raise_contact_slot_counter(second, 3)?;
+        repos.raise_contact_slot_counter(AccountIndex(2), 4)
+    })
+    .unwrap();
+    read(store, |repos| {
+        assert_eq!(repos.contact_slot_counter(second)?, Some(9));
+        assert_eq!(repos.contact_slot_counter(AccountIndex(2))?, Some(4));
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn slots_run_out_at_65536<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let account = AccountIndex(0);
+    let last = write(store, |repos| {
+        repos.take_contact_slot(account, CONTACT_SLOT_COUNT - 1)
+    })
+    .unwrap();
+    assert_eq!(last, CONTACT_SLOT_COUNT - 1);
+    let error = write(store, |repos| repos.take_contact_slot(account, 0)).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::ContactCapReached {
+            cap: ContactCap::Slots
+        }
+    ));
+    for start in [CONTACT_SLOT_COUNT, u32::MAX] {
+        let error = write(store, |repos| {
+            repos.take_contact_slot(AccountIndex(1), start)
+        })
+        .unwrap_err();
+        assert!(matches!(error, StoreError::OutOfRange { .. }), "{start}");
+    }
+    let error = write(store, |repos| {
+        repos.raise_contact_slot_counter(account, CONTACT_SLOT_COUNT + 1)
+    })
+    .unwrap_err();
+    assert!(matches!(error, StoreError::OutOfRange { .. }));
+    let mut record = contact(1, 1);
+    record.slot = CONTACT_SLOT_COUNT;
+    let error = write(store, |repos| repos.put_contact(&record)).unwrap_err();
+    assert!(matches!(error, StoreError::OutOfRange { .. }));
+}
+
+fn twin_records_share_a_slot_but_not_a_peer_key<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let one = contact(1, 1);
+    let mut twin = contact(2, 2);
+    twin.slot = one.slot;
+    twin.box_salt = one.box_salt;
+    write(store, |repos| {
+        repos.put_contact(&one)?;
+        repos.put_contact(&twin)
+    })
+    .unwrap();
+    let stored = read(store, |repos| repos.contacts()).unwrap();
+    assert_eq!(stored, vec![one, twin]);
+}
+
 fn mailboxes_need_their_contact_and_go_with_it<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
@@ -1432,10 +1522,17 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
     let mut waiting = contact(3, 3);
     waiting.peer = None;
     waiting.state = ContactState::PendingInvite;
+    let mut twin = contact(4, 4);
+    twin.slot = verified.slot;
+    twin.box_salt = [0xee; 16];
+    twin.sas = None;
     write(source.store(), |repos| {
         repos.put_contact(&verified)?;
         repos.put_contact(&changed)?;
         repos.put_contact(&waiting)?;
+        repos.put_contact(&twin)?;
+        repos.raise_contact_slot_counter(AccountIndex(0), 40)?;
+        repos.raise_contact_slot_counter(AccountIndex(3), 7)?;
         repos.put_contact_mailbox(&contact_mailbox(1))?;
         repos.put_pending_pairing(&pairing(3, 3))
     })
@@ -1456,7 +1553,7 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
     assert_eq!(
         summary,
         ImportSummary {
-            imported: 0,
+            imported: 1,
             skipped_existing: 1,
             skipped_conflict: 1
         }
@@ -1467,7 +1564,7 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
     assert_eq!(
         summary,
         ImportSummary {
-            imported: 2,
+            imported: 3,
             ..ImportSummary::default()
         }
     );
@@ -1476,7 +1573,16 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
         expected.imported_from_backup = true;
         let mut expected_changed = changed.clone();
         expected_changed.imported_from_backup = true;
-        assert_eq!(repos.contacts()?, vec![expected, expected_changed]);
+        let mut expected_twin = twin.clone();
+        expected_twin.imported_from_backup = true;
+        assert_eq!(
+            repos.contacts()?,
+            vec![expected, expected_changed, expected_twin]
+        );
+        assert_eq!(
+            repos.contact_slot_counters()?,
+            vec![(AccountIndex(0), 40), (AccountIndex(3), 7)]
+        );
         let mut mailbox = contact_mailbox(1);
         mailbox.backoff = Vec::new();
         assert_eq!(repos.contact_mailbox(contact_id(1))?, Some(mailbox));
@@ -1492,14 +1598,18 @@ fn contact_backup_rejects_unknown_versions_and_malformed_records<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
     let newer = write(store, |repos| {
-        import_contacts(repos, "{\"version\":2,\"contacts\":[]}")
+        import_contacts(
+            repos,
+            "{\"version\":2,\"contacts\":[],\"slot_counters\":[]}",
+        )
     })
     .unwrap_err();
     assert!(matches!(newer, StoreError::UnsupportedBackup { found: 2 }));
     for bad in [
         "not json",
         "{\"version\":1}",
-        "{\"version\":1,\"contacts\":[{}]}",
+        "{\"version\":1,\"contacts\":[],\"slot_counters\":[{}]}",
+        "{\"version\":1,\"contacts\":[{}],\"slot_counters\":[]}",
     ] {
         let error = write(store, |repos| import_contacts(repos, bad)).unwrap_err();
         assert!(
@@ -1514,7 +1624,10 @@ fn contact_backup_rejects_unknown_versions_and_malformed_records<B: Backend>() {
         );
     }
     let empty = write(store, |repos| {
-        import_contacts(repos, "{\"version\":1,\"contacts\":[]}")
+        import_contacts(
+            repos,
+            "{\"version\":1,\"contacts\":[],\"slot_counters\":[]}",
+        )
     })
     .unwrap();
     assert_eq!(empty, ImportSummary::default());
@@ -1800,6 +1913,9 @@ for_each_backend!(
     pending_pairings_stop_at_the_cap,
     contact_outbox_lists_due_entries_and_follows_a_home_relay_move,
     contact_backup_round_trips_without_secrets_and_flags_imports,
+    slots_count_up_per_account_from_the_callers_start,
+    slots_run_out_at_65536,
+    twin_records_share_a_slot_but_not_a_peer_key,
     contact_backup_rejects_unknown_versions_and_malformed_records,
     peer_capability_is_replaced_by_later_evidence,
     imported_transactions_round_trip_and_are_replaced,

@@ -12,6 +12,7 @@ use jiff::Timestamp;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::account::AccountIndex;
 use crate::context::{self, ContextKey, SealFailure};
 use crate::encoding::{stored_enum, timestamp_to_column};
 use crate::error::{Record, StoreError};
@@ -30,6 +31,15 @@ pub const CONTACT_ID_LEN: usize = 16;
 /// Length of the invite id.
 pub const INVITE_ID_LEN: usize = 8;
 
+/// Slots run below this bound (RFC 0002 2.2); a counter that reached it hands out no more.
+pub const CONTACT_SLOT_COUNT: u32 = 65_536;
+
+/// Length of the random salt of a contact's mailbox key.
+pub const BOX_SALT_LEN: usize = 16;
+
+/// Length of the SAS kept to show the check again.
+pub const SAS_LEN: usize = 4;
+
 /// Length of a key in a peer card.
 pub const CARD_KEY_LEN: usize = 32;
 
@@ -38,6 +48,8 @@ pub const CARD_KEY_LEN: usize = 32;
 pub enum ContactCap {
     Contacts,
     PendingPairings,
+    /// Every slot of the account was handed out.
+    Slots,
 }
 
 impl fmt::Display for ContactCap {
@@ -45,11 +57,13 @@ impl fmt::Display for ContactCap {
         f.write_str(match self {
             Self::Contacts => "contacts",
             Self::PendingPairings => "pending pairings",
+            Self::Slots => "contact slots",
         })
     }
 }
 
-/// Our id for a contact. It derives our keys for the contact, so it never changes.
+/// Our local id for a contact record. Never sent and never used to derive keys: those come from
+/// the record's account, slot and box salt.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ContactId(pub [u8; CONTACT_ID_LEN]);
 
@@ -136,6 +150,13 @@ impl fmt::Debug for PeerCard {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContactRecord {
     pub contact_id: ContactId,
+    /// The account whose contact-identity root derives our keys for the contact.
+    pub account: AccountIndex,
+    /// Our slot for the contact (RFC 0002 2.2). Not unique: twin installs on one seed, or a slot
+    /// taken back by the key check, may share it with another record.
+    pub slot: u32,
+    /// The salt of our mailbox key for the contact.
+    pub box_salt: [u8; BOX_SALT_LEN],
     /// The latest verified card. `None` while an invite waits for its reply.
     pub peer: Option<PeerCard>,
     /// The card of the new keys while the state is [`ContactState::KeysChanged`]; `peer` keeps
@@ -144,6 +165,8 @@ pub struct ContactRecord {
     /// The user's own name for the contact.
     pub label: String,
     pub state: ContactState,
+    /// The SAS of the pairing, kept so the check can be shown again.
+    pub sas: Option<[u8; SAS_LEN]>,
     pub verified_at: Option<Timestamp>,
     pub allow_invoices: bool,
     pub seal: SealMode,
@@ -323,8 +346,29 @@ pub trait ContactRepository {
     /// The contacts whose invoices are accepted, oldest first.
     fn contacts_allowing_invoices(&self) -> Result<Vec<ContactRecord>, StoreError>;
 
+    /// Every account's slot counter, by account.
+    fn contact_slot_counters(&self) -> Result<Vec<(AccountIndex, u32)>, StoreError>;
+
+    /// The next slot the account would hand out, or `None` while it has none.
+    fn contact_slot_counter(&self, account: AccountIndex) -> Result<Option<u32>, StoreError>;
+
+    /// Hands out the account's next slot and raises the counter past it. Without a counter the
+    /// account starts at `start`, which the caller picks at random (RFC 0002 2.2). Fails with
+    /// [`StoreError::ContactCapReached`] when the counter reached [`CONTACT_SLOT_COUNT`], and
+    /// with [`StoreError::OutOfRange`] when `start` is not below it.
+    fn take_contact_slot(&mut self, account: AccountIndex, start: u32) -> Result<u32, StoreError>;
+
+    /// Raises the account's counter to at least `next`, so a slot taken back by the key check or
+    /// restored from a backup is never handed out again. A lower value changes nothing; a value
+    /// above [`CONTACT_SLOT_COUNT`] fails with [`StoreError::OutOfRange`].
+    fn raise_contact_slot_counter(
+        &mut self,
+        account: AccountIndex,
+        next: u32,
+    ) -> Result<(), StoreError>;
+
     /// Removes the contact with its mailbox and outbox entries, and returns whether it was
-    /// stored. A pairing in progress for it stays.
+    /// stored. A pairing in progress for it stays, and its slot stays used.
     fn delete_contact(&mut self, id: ContactId) -> Result<bool, StoreError>;
 
     /// Inserts the mailbox, or replaces the contact's one with its backoff. Fails with
@@ -393,6 +437,9 @@ pub trait ContactRepository {
 
 /// Rejects timestamps the SQLite backend could not hold, so both backends accept the same data.
 pub(crate) fn check_contact(contact: &ContactRecord) -> Result<(), StoreError> {
+    if contact.slot >= CONTACT_SLOT_COUNT {
+        return Err(StoreError::OutOfRange { field: "slot" });
+    }
     timestamp_to_column(contact.created_at)?;
     timestamp_to_column(contact.updated_at)?;
     for time in [contact.verified_at, contact.last_sealed_in]
@@ -400,6 +447,35 @@ pub(crate) fn check_contact(contact: &ContactRecord) -> Result<(), StoreError> {
         .flatten()
     {
         timestamp_to_column(time)?;
+    }
+    Ok(())
+}
+
+/// The slot a counter at `next` hands out, and the counter after it.
+pub(crate) fn next_slot(next: u32) -> Result<(u32, u32), StoreError> {
+    if next >= CONTACT_SLOT_COUNT {
+        return Err(StoreError::ContactCapReached {
+            cap: ContactCap::Slots,
+        });
+    }
+    Ok((next, next.saturating_add(1)))
+}
+
+/// A counter may stand at most at [`CONTACT_SLOT_COUNT`], once every slot was handed out.
+pub(crate) fn check_slot_counter(next: u32) -> Result<(), StoreError> {
+    if next > CONTACT_SLOT_COUNT {
+        return Err(StoreError::OutOfRange {
+            field: "slot counter",
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn check_slot_start(start: u32) -> Result<(), StoreError> {
+    if start >= CONTACT_SLOT_COUNT {
+        return Err(StoreError::OutOfRange {
+            field: "slot start",
+        });
     }
     Ok(())
 }

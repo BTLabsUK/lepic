@@ -52,6 +52,7 @@ struct State {
     pending_invoices: BTreeMap<[u8; 16], SealedInvoice>,
     peer_capabilities: BTreeMap<String, PeerCapability>,
     contacts: BTreeMap<ContactId, ContactRecord>,
+    contact_slot_counters: BTreeMap<AccountIndex, u32>,
     contact_mailboxes: BTreeMap<ContactId, ContactMailbox>,
     pairings: BTreeMap<PairingId, SealedPairing>,
     contact_outbox: BTreeMap<ContactOutboxId, ContactOutboxEntry>,
@@ -847,6 +848,47 @@ impl ContactRepository for MemoryRepos<'_> {
 
     fn contacts_allowing_invoices(&self) -> Result<Vec<ContactRecord>, StoreError> {
         Ok(self.contacts_where(|contact| contact.allow_invoices))
+    }
+
+    fn contact_slot_counters(&self) -> Result<Vec<(AccountIndex, u32)>, StoreError> {
+        Ok(self
+            .state
+            .contact_slot_counters
+            .iter()
+            .map(|(account, next)| (*account, *next))
+            .collect())
+    }
+
+    fn contact_slot_counter(&self, account: AccountIndex) -> Result<Option<u32>, StoreError> {
+        Ok(self.state.contact_slot_counters.get(&account).copied())
+    }
+
+    fn take_contact_slot(&mut self, account: AccountIndex, start: u32) -> Result<u32, StoreError> {
+        contact::check_slot_start(start)?;
+        let current = self
+            .state
+            .contact_slot_counters
+            .get(&account)
+            .copied()
+            .unwrap_or(start);
+        let (slot, next) = contact::next_slot(current)?;
+        self.state.contact_slot_counters.insert(account, next);
+        Ok(slot)
+    }
+
+    fn raise_contact_slot_counter(
+        &mut self,
+        account: AccountIndex,
+        next: u32,
+    ) -> Result<(), StoreError> {
+        contact::check_slot_counter(next)?;
+        let counter = self
+            .state
+            .contact_slot_counters
+            .entry(account)
+            .or_insert(next);
+        *counter = (*counter).max(next);
+        Ok(())
     }
 
     fn delete_contact(&mut self, id: ContactId) -> Result<bool, StoreError> {

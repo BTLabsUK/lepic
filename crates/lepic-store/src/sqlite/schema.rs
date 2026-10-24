@@ -174,8 +174,9 @@ CREATE INDEX imported_outputs_status ON imported_outputs (status);
 CREATE INDEX imported_outputs_tx ON imported_outputs (tx_id);
 ";
 
-/// Paired contacts with their mailboxes, pairings in progress and the contact outbox. The invoice
-/// allowlist goes: invoice trust now lives on the contact (`allow_invoices`).
+/// Paired contacts with their mailboxes, pairings in progress, the contact outbox and the slot
+/// counter of each account. The invoice allowlist goes: invoice trust now lives on the contact
+/// (`allow_invoices`).
 const V6: &str = "
 CREATE TABLE contacts (
     contact_id BLOB PRIMARY KEY,
@@ -202,9 +203,19 @@ CREATE TABLE contacts (
     app_contact TEXT,
     imported_from_backup INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    account INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    box_salt BLOB NOT NULL,
+    sas BLOB
 );
 CREATE INDEX contacts_hint_key ON contacts (peer_hint_key);
+CREATE INDEX contacts_slot ON contacts (account, slot);
+
+CREATE TABLE contact_slot_counters (
+    account INTEGER PRIMARY KEY,
+    next_slot INTEGER NOT NULL
+);
 CREATE INDEX contacts_allow_invoices ON contacts (created_at) WHERE allow_invoices = 1;
 
 CREATE TABLE contact_mailboxes (

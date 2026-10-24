@@ -27,11 +27,11 @@ mod transaction;
 
 pub use account::{AccountIndex, AccountRecord, AccountRepository};
 pub use contact::{
-    CARD_KEY_LEN, CONTACT_ID_LEN, ContactCap, ContactId, ContactKind, ContactMailbox,
-    ContactOutboxEntry, ContactOutboxId, ContactOutboxState, ContactRecord, ContactRepository,
-    ContactState, INVITE_ID_LEN, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PairingId, PairingRole,
-    PairingSecrets, PairingState, PeerCard, PendingPairing, PreviousHome, RelayBackoff, SealMode,
-    StoredContactOutbox,
+    BOX_SALT_LEN, CARD_KEY_LEN, CONTACT_ID_LEN, CONTACT_SLOT_COUNT, ContactCap, ContactId,
+    ContactKind, ContactMailbox, ContactOutboxEntry, ContactOutboxId, ContactOutboxState,
+    ContactRecord, ContactRepository, ContactState, INVITE_ID_LEN, MAX_CONTACTS,
+    MAX_PENDING_PAIRINGS, PairingId, PairingRole, PairingSecrets, PairingState, PeerCard,
+    PendingPairing, PreviousHome, RelayBackoff, SAS_LEN, SealMode, StoredContactOutbox,
 };
 #[cfg(feature = "sqlite")]
 pub use contact_backup::{CONTACT_BACKUP_VERSION, ImportSummary, export_contacts, import_contacts};

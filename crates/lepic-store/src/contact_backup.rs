@@ -1,14 +1,17 @@
 //! Export and import of pairing records for the app's `.wfeh` history payload (RFC 0002 10.5).
 //!
-//! The document is `{"version":1,"contacts":[...]}` with bytes in lowercase hex and times as
-//! RFC 3339. It holds no secret: pairings in progress, outbox entries and relay backoff are not
-//! exported, and a contact still waiting for its reply is left out because nothing could finish
-//! it. A record restored from it is flagged [`ContactRecord::imported_from_backup`], because the
+//! The document is `{"version":1,"contacts":[...],"slot_counters":[...]}` with bytes in
+//! lowercase hex and times as RFC 3339. The records keep their account, slot and box salt, so a
+//! restore derives the same keys and mailboxes, and the counters keep a restored wallet from
+//! handing out a slot twice. It holds no secret: pairings in progress, outbox entries and relay
+//! backoff are not exported, and a contact still waiting for its reply is left out because
+//! nothing could finish it. A record restored from it is flagged [`ContactRecord::imported_from_backup`], because the
 //! pairing may also live on the device the backup came from (cases C-11).
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::account::AccountIndex;
 use crate::contact::{
     ContactId, ContactKind, ContactMailbox, ContactRecord, ContactRepository, ContactState,
     PeerCard, PreviousHome, SealMode,
@@ -32,11 +35,22 @@ pub struct ImportSummary {
 struct Document {
     version: u64,
     contacts: Vec<Entry>,
+    slot_counters: Vec<CounterEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CounterEntry {
+    account: u32,
+    next_slot: u32,
 }
 
 #[derive(Serialize, Deserialize)]
 struct Entry {
     contact_id: String,
+    account: u32,
+    slot: u32,
+    box_salt: String,
+    sas: Option<String>,
     label: String,
     state: String,
     verified_at: Option<String>,
@@ -181,6 +195,10 @@ pub fn export_contacts<R: ContactRepository + ?Sized>(repos: &R) -> Result<Strin
         let mailbox = repos.contact_mailbox(contact.contact_id)?;
         contacts.push(Entry {
             contact_id: to_hex(&contact.contact_id.0),
+            account: contact.account.0,
+            slot: contact.slot,
+            box_salt: to_hex(&contact.box_salt),
+            sas: contact.sas.as_ref().map(|sas| to_hex(sas)),
             label: contact.label.clone(),
             state: contact.state.code().to_owned(),
             verified_at: contact.verified_at.map(|time| time.to_string()),
@@ -195,9 +213,18 @@ pub fn export_contacts<R: ContactRepository + ?Sized>(repos: &R) -> Result<Strin
             mailbox: mailbox.as_ref().map(mailbox_entry),
         });
     }
+    let slot_counters = repos
+        .contact_slot_counters()?
+        .into_iter()
+        .map(|(account, next_slot)| CounterEntry {
+            account: account.0,
+            next_slot,
+        })
+        .collect();
     serde_json::to_string(&Document {
         version: CONTACT_BACKUP_VERSION,
         contacts,
+        slot_counters,
     })
     .map_err(|_| corrupt("backup"))
 }
@@ -213,6 +240,14 @@ fn record_from(entry: &Entry) -> Result<(ContactRecord, Option<ContactMailbox>),
     let contact_id = ContactId(from_hex_fixed(&entry.contact_id, "contact id")?);
     let record = ContactRecord {
         contact_id,
+        account: AccountIndex(entry.account),
+        slot: entry.slot,
+        box_salt: from_hex_fixed(&entry.box_salt, "box salt")?,
+        sas: entry
+            .sas
+            .as_deref()
+            .map(|sas| from_hex_fixed(sas, "sas"))
+            .transpose()?,
         peer: Some(card_from(&entry.peer)?),
         alternate: entry.alternate.as_ref().map(card_from).transpose()?,
         label: entry.label.clone(),
@@ -255,9 +290,9 @@ fn record_from(entry: &Entry) -> Result<(ContactRecord, Option<ContactMailbox>),
     Ok((record, mailbox))
 }
 
-/// Restores the records of `json` that the store does not hold yet, flagged as imported. Run it
-/// inside one store write: a malformed record, an unsupported version or a reached contact cap
-/// fails the whole import.
+/// Restores the records of `json` that the store does not hold yet, flagged as imported, and
+/// raises the slot counters to the backup's. Run it inside one store write: a malformed record,
+/// an unsupported version or a reached contact cap fails the whole import.
 pub fn import_contacts<R: ContactRepository + ?Sized>(
     repos: &mut R,
     json: &str,
@@ -268,9 +303,14 @@ pub fn import_contacts<R: ContactRepository + ?Sized>(
             found: document.version,
         });
     }
+    for counter in &document.slot_counters {
+        repos.raise_contact_slot_counter(AccountIndex(counter.account), counter.next_slot)?;
+    }
     let mut summary = ImportSummary::default();
     for entry in &document.contacts {
         let (record, mailbox) = record_from(entry)?;
+        // Every slot in the backup was used on the seed, whether or not its record is imported.
+        repos.raise_contact_slot_counter(record.account, record.slot.saturating_add(1))?;
         if repos.contact(record.contact_id)?.is_some() {
             summary.skipped_existing = summary.skipped_existing.saturating_add(1);
             continue;

@@ -1257,7 +1257,7 @@ fn decode_card(
 const CONTACT_COLUMNS: &str = "contact_id, card, peer_sig_key, peer_enc_key, peer_hint_key, \
     card_seq, kind, claimed_name, alt_card, alt_sig_key, alt_enc_key, alt_hint_key, alt_seq, \
     alt_kind, alt_name, label, state, verified_at, allow_invoices, seal, last_sealed_in, \
-    app_contact, imported_from_backup, created_at, updated_at";
+    app_contact, imported_from_backup, created_at, updated_at, account, slot, box_salt, sas";
 
 fn decode_contact(row: &Row<'_>) -> Result<ContactRecord, StoreError> {
     let record = Record::Contact;
@@ -1278,6 +1278,13 @@ fn decode_contact(row: &Row<'_>) -> Result<ContactRecord, StoreError> {
         imported_from_backup: row.get(22)?,
         created_at: timestamp_from_column(row.get(23)?, record, "created at")?,
         updated_at: timestamp_from_column(row.get(24)?, record, "updated at")?,
+        account: AccountIndex(decode_u32(row.get(25)?, record, "account")?),
+        slot: decode_u32(row.get(26)?, record, "slot")?,
+        box_salt: fixed(&row.get::<_, Vec<u8>>(27)?, record, "box salt")?,
+        sas: row
+            .get::<_, Option<Vec<u8>>>(28)?
+            .map(|sas| fixed(&sas, record, "sas"))
+            .transpose()?,
     })
 }
 
@@ -1431,12 +1438,16 @@ impl ContactRepository for SqliteRepos<'_> {
             contact.imported_from_backup.into(),
             timestamp_to_column(contact.created_at)?.into(),
             timestamp_to_column(contact.updated_at)?.into(),
+            i64::from(contact.account.0).into(),
+            i64::from(contact.slot).into(),
+            contact.box_salt.to_vec().into(),
+            contact.sas.map(|sas| sas.to_vec()).into(),
         ]);
         self.conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO contacts ({CONTACT_COLUMNS}) VALUES \
                  (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
-                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"
+                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)"
             ),
             rusqlite::params_from_iter(values),
         )?;
@@ -1484,6 +1495,53 @@ impl ContactRepository for SqliteRepos<'_> {
 
     fn contacts_allowing_invoices(&self) -> Result<Vec<ContactRecord>, StoreError> {
         self.contact_where("allow_invoices = 1", [])
+    }
+
+    fn contact_slot_counters(&self) -> Result<Vec<(AccountIndex, u32)>, StoreError> {
+        self.collect(
+            "SELECT account, next_slot FROM contact_slot_counters ORDER BY account",
+            [],
+            |row| {
+                Ok((
+                    AccountIndex(decode_u32(row.get(0)?, Record::Contact, "account")?),
+                    decode_u32(row.get(1)?, Record::Contact, "slot counter")?,
+                ))
+            },
+        )
+    }
+
+    fn contact_slot_counter(&self, account: AccountIndex) -> Result<Option<u32>, StoreError> {
+        self.first(
+            "SELECT next_slot FROM contact_slot_counters WHERE account = ?1",
+            [i64::from(account.0)],
+            |row| decode_u32(row.get(0)?, Record::Contact, "slot counter"),
+        )
+    }
+
+    fn take_contact_slot(&mut self, account: AccountIndex, start: u32) -> Result<u32, StoreError> {
+        contact::check_slot_start(start)?;
+        let current = self.contact_slot_counter(account)?.unwrap_or(start);
+        let (slot, next) = contact::next_slot(current)?;
+        self.conn.execute(
+            "INSERT INTO contact_slot_counters (account, next_slot) VALUES (?1, ?2) \
+             ON CONFLICT (account) DO UPDATE SET next_slot = excluded.next_slot",
+            params![i64::from(account.0), i64::from(next)],
+        )?;
+        Ok(slot)
+    }
+
+    fn raise_contact_slot_counter(
+        &mut self,
+        account: AccountIndex,
+        next: u32,
+    ) -> Result<(), StoreError> {
+        contact::check_slot_counter(next)?;
+        self.conn.execute(
+            "INSERT INTO contact_slot_counters (account, next_slot) VALUES (?1, ?2) \
+             ON CONFLICT (account) DO UPDATE SET next_slot = max(next_slot, excluded.next_slot)",
+            params![i64::from(account.0), i64::from(next)],
+        )?;
+        Ok(())
     }
 
     fn delete_contact(&mut self, id: ContactId) -> Result<bool, StoreError> {
