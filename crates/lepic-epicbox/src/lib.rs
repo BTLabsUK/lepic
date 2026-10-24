@@ -6,6 +6,7 @@ mod client_inbox;
 mod crypto;
 mod frame;
 mod json;
+mod mailbox;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
 mod prefilter;
@@ -36,6 +37,11 @@ pub use frame::{
     RelayMessageId, SlateFrame, WalletMode,
 };
 pub use json::JsonProblem;
+pub use mailbox::{
+    DEFAULT_DRAIN_TIMEOUT, DrainLimits, DrainReport, Handled, MAX_MAILBOXES_PER_DRAIN,
+    MAX_MESSAGES_PER_MAILBOX, MailboxClient, MailboxContent, MailboxEnd, MailboxError,
+    MailboxHandler, MailboxMessage, MailboxReport,
+};
 pub use prefilter::{Admission, Prefilter};
 pub use push::{MAX_PUSH_TOKEN_LEN, PushAction, PushError, PushRequest};
 pub use session::{

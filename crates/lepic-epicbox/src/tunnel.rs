@@ -320,8 +320,28 @@ impl TunnelConnector {
     /// onion the relay names in its discovery document, asked once per connector, else the
     /// relay's own domain and port.
     pub async fn dial_target(&self, endpoint: &RelayEndpoint) -> DialTarget {
+        self.dial_target_given(endpoint, None).await
+    }
+
+    /// As [`Self::dial_target`], with `given`, an onion a contact named for the relay, used
+    /// when the relay has no onion route and `given` is a valid onion host. Discovery is then
+    /// not asked.
+    pub async fn dial_target_given(
+        &self,
+        endpoint: &RelayEndpoint,
+        given: Option<&DialTarget>,
+    ) -> DialTarget {
         if let Some(target) = self.routes.route(endpoint) {
             return target;
+        }
+        if let Some(onion) = given {
+            if onion.port != 0 && self.tunnel.is_onion(&onion.host.to_ascii_lowercase()) {
+                return DialTarget {
+                    host: onion.host.to_ascii_lowercase(),
+                    port: onion.port,
+                };
+            }
+            debug!("epicbox onion given for the relay is not valid, ignored");
         }
         let key = (
             endpoint.domain().as_str().to_ascii_lowercase(),
@@ -390,26 +410,42 @@ impl fmt::Debug for TunnelConnector {
     }
 }
 
+impl TunnelConnector {
+    async fn connect_given(
+        &self,
+        endpoint: &RelayEndpoint,
+        onion: Option<&DialTarget>,
+    ) -> io::Result<Box<dyn RelayStream>> {
+        if !self.tunnelled(endpoint) {
+            return self.direct.connect(endpoint).await;
+        }
+        endpoint
+            .check_security()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let target = self.dial_target_given(endpoint, onion).await;
+        debug!(
+            onion = target.host.ends_with(".onion"),
+            "epicbox relay through tor"
+        );
+        let stream = self.tunnel.open(&target.host, target.port).await?;
+        self.direct.secure(endpoint, stream).await
+    }
+}
+
 impl Connector for TunnelConnector {
     fn connect<'a>(
         &'a self,
         endpoint: &'a RelayEndpoint,
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
-        Box::pin(async move {
-            if !self.tunnelled(endpoint) {
-                return self.direct.connect(endpoint).await;
-            }
-            endpoint
-                .check_security()
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-            let target = self.dial_target(endpoint).await;
-            debug!(
-                onion = target.host.ends_with(".onion"),
-                "epicbox relay through tor"
-            );
-            let stream = self.tunnel.open(&target.host, target.port).await?;
-            self.direct.secure(endpoint, stream).await
-        })
+        Box::pin(self.connect_given(endpoint, None))
+    }
+
+    fn connect_to_onion<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+        onion: &'a DialTarget,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(self.connect_given(endpoint, Some(onion)))
     }
 
     fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
@@ -625,6 +661,80 @@ mod tests {
             .await;
         assert!(connector.connect(&endpoint).await.is_err());
         assert_eq!(tunnel.opened(), [(onion, 8443)]);
+    }
+
+    #[tokio::test]
+    async fn an_onion_given_for_the_relay_is_dialled_without_asking_discovery() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        let endpoint = relay("relay.example", 443);
+        let given = DialTarget {
+            host: format!("{}.ONION", "b".repeat(56)),
+            port: 9443,
+        };
+        assert!(connector.connect_to_onion(&endpoint, &given).await.is_err());
+        assert_eq!(
+            tunnel.opened(),
+            [(format!("{}.onion", "b".repeat(56)), 9443)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_built_in_onion_wins_over_a_given_one() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        let given = DialTarget {
+            host: format!("{}.onion", "b".repeat(56)),
+            port: 443,
+        };
+        let _ = connector
+            .connect_to_onion(&relay("flooepicbox.btlabs.uk", 443), &given)
+            .await;
+        assert_eq!(tunnel.opened(), [(ONION.to_owned(), 443)]);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_given_onion_is_ignored() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        let endpoint = relay("relay.example", 443);
+        connector.remember(&endpoint, None).await;
+        for given in [
+            DialTarget {
+                host: "evil.example".to_owned(),
+                port: 443,
+            },
+            DialTarget {
+                host: format!("{}.onion", "b".repeat(56)),
+                port: 0,
+            },
+        ] {
+            let _ = connector.connect_to_onion(&endpoint, &given).await;
+        }
+        let exit = ("relay.example".to_owned(), 443);
+        assert_eq!(tunnel.opened(), [exit.clone(), exit]);
+    }
+
+    #[tokio::test]
+    async fn a_given_onion_is_not_used_while_the_tunnel_is_inactive() {
+        let tunnel = Arc::new(FakeTunnel::new(false));
+        let connector = connector(&tunnel);
+        let endpoint = RelayEndpoint::new(
+            Domain::parse("relay.example").unwrap(),
+            Some(80),
+            Security::Plain,
+        );
+        let given = DialTarget {
+            host: format!("{}.onion", "b".repeat(56)),
+            port: 443,
+        };
+        let error = connector
+            .connect_to_onion(&endpoint, &given)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(tunnel.opened().is_empty());
     }
 
     #[tokio::test]

@@ -351,7 +351,7 @@ impl fmt::Debug for EpicboxClient {
     }
 }
 
-fn seal(
+pub(crate) fn seal(
     plaintext: &str,
     to: &EpicboxAddress,
     sender: &SecretKey,

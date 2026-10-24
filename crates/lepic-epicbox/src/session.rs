@@ -22,6 +22,7 @@ use tracing::{debug, info, warn};
 use crate::address::{DEFAULT_PORT, Domain};
 use crate::client::{Awaiting, ClientError, ClientSettings};
 use crate::frame::{ClientFrame, MAX_FRAME_LEN, RelayFrame, WalletMode};
+use crate::tunnel::DialTarget;
 
 /// The port of a relay reached without TLS when the address names none, as `epic-wallet` does.
 pub const DEFAULT_PLAIN_PORT: u16 = 80;
@@ -107,6 +108,18 @@ pub trait Connector: Send + Sync {
         &'a self,
         endpoint: &'a RelayEndpoint,
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>>;
+
+    /// A byte stream to `endpoint` that goes to `onion` when this connector reaches the relay
+    /// through a tunnel and knows no onion of its own for it. A connector without a tunnel
+    /// connects as [`Connector::connect`] does.
+    fn connect_to_onion<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+        onion: &'a DialTarget,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        let _ = onion;
+        self.connect(endpoint)
+    }
 
     /// The limit for the handshakes of a connection to `endpoint`, given the configured one.
     fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
@@ -378,7 +391,7 @@ impl Connection {
     }
 
     /// The next frame, or a timeout naming what was awaited.
-    async fn receive_before(
+    pub(crate) async fn receive_before(
         &mut self,
         deadline: Instant,
         awaiting: Awaiting,
