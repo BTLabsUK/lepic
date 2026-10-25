@@ -686,6 +686,17 @@ is newer than what the contact last saw, signed. The app shows "Sealed for Anna"
 a send to a paired contact goes to its payments address as today, unless the user chooses "Send
 through Anna's mailbox", which posts the envelope to the contact mailbox.
 
+A contact mailbox carries only sealed envelopes (11.2), so the mailbox path does not ask the
+`seal` switch: it needs a pairing that is `paired` or `verified`, not `keys-changed`, and the
+contact's caps bit 0. `seal` governs the file and paste methods only. This holds for every slate
+the wallet posts to a contact mailbox, and it is how a contact known only by its pairing, with
+no payments address, is paid: the wallet checks the contact before it locks any input, builds
+the S1, and queues it in the outbox. The S2 comes back by collecting and is finalized only when
+it arrives from the contact the S1 went to; the host learns it from `ContactPaymentFinalized`
+with the contact, transaction and slate ids. A contact that never answers leaves the send
+waiting; cancelling it unlocks the inputs, and a late S2 is refused. While such a send waits,
+the contact counts as having something pending for the foreground tick (8.4).
+
 #### 9.2 Receiving
 
 A sealed file or paste opens (3.4). The slate goes to the engine as if it arrived plain over that
@@ -762,8 +773,9 @@ per mailbox per drain, 50 mailboxes per collecting cycle.
 
 `PairingReplied`, `PairingConfirmed`, `PairingFailed{reason}`, `ContactUpdated`,
 `ContactKeysRestored`, `ContactKeysChanged`, `SealedReceived`, `SealedUnopenable`, `InvoiceFromContact`,
-`WithdrawalFromContact`, `HomeRelayUnreachable`, `OutboxDelivered`, `OutboxStuck`, and the existing
-`InvoiceFinalized` for a contact's payment. Event fields carry ids and labels, never keys or
+`WithdrawalFromContact`, `HomeRelayUnreachable`, `OutboxDelivered`, `OutboxStuck`,
+`ContactPaymentFinalized` for the contact's answer to a send through its mailbox (9.1), and the
+existing `InvoiceFinalized` for a contact's payment. Event fields carry ids and labels, never keys or
 secrets. `SealedUnopenable` is raised at most once per contact per cycle. A collect also returns
 the pairings that ended and why.
 
