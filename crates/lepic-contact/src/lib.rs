@@ -23,8 +23,8 @@ pub use armor::{MAX_ARMOR_LEN, SEALED_FILE_EXTENSION, armor, dearmor, looks_seal
 pub use card::{CARD_FORMAT, Capabilities, CardFields, ContactCard, ContactKind, MAX_CARD_LEN};
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use envelope::{
-    Content, ENVELOPE_VERSION, MAGIC, MAX_ENVELOPE_LEN, MessageType, Opened, Purpose, SUITE,
-    SealedEnvelope, seal,
+    Content, ENVELOPE_VERSION, HEADER_LEN, MAGIC, MAX_ENVELOPE_LEN, MessageType, Opened, Purpose,
+    SUITE, SealedEnvelope, decode_content, seal,
 };
 pub use error::{
     DecodeError, EncodeError, KeyError, Malformed, SasTableError, TextError, WordsError,
@@ -32,19 +32,20 @@ pub use error::{
 pub use hint::{Hint, HintRule};
 pub use invite::{INVITE_FORMAT, Invite, InviteFields, MAX_INVITE_LEN};
 pub use keycheck::{
-    KeyCheckBody, KeyCheckStatus, open_contact_update, open_key_check, open_key_check_answer,
-    seal_contact_update, seal_key_check, seal_key_check_answer,
+    KeyCheck, KeyCheckAnswer, KeyCheckProof, accept_found, accept_restored, key_check_tag,
+    open_contact_update, open_key_check, open_key_check_answer, seal_contact_update, seal_found,
+    seal_key_check, seal_not_found, seal_restored,
 };
 pub use keys::{EncPublicKey, EncSecretKey, HintKey};
 pub use network::Network;
 pub use pairing::{
-    Commitment, ConfirmBody, ConfirmCode, ConfirmStatus, InviteId, MAX_PAIRING_ENVELOPE_LEN, Nonce,
-    PairingCode, PairingLink, ReplyBody, open_confirm, open_reply, pairing_envelope_from_link,
-    pairing_envelope_link, seal_confirm, seal_reply,
+    Commitment, Confirm, ConfirmBody, ConfirmCode, InviteId, MAX_PAIRING_ENVELOPE_LEN, Nonce,
+    PairingCode, PairingLink, Refusal, ReplyBody, open_confirm, open_reply,
+    pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_refusal, seal_reply,
 };
 pub use sas::{Sas, SasSymbol, symbol};
 pub use text::{
     ContactName, MAX_HOST_LEN, MAX_MAILBOX_LEN, MAX_NAME_LEN, MAX_REFERENCE_LEN, MailboxAddress,
     Reference, RelayHost,
 };
-pub use words::{MAX_POSTED_LEN, PairingWords, WORD_COUNT, WordsKey};
+pub use words::{MAX_POSTED_LEN, PairingWords, WORD_COUNT, WordsKey, WordsWindow};

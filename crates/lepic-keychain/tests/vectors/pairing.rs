@@ -1,8 +1,8 @@
 //! Replays the RFC 0002 key vectors in `testdata/vectors/pairing`, written by the independent
 //! pairing kit: contact roots and slot keys, the slot search, one-time reply keys, and the
-//! pairing mailbox keys of codes and of pairing words.
+//! pairing mailbox keys of codes and of pairing words, and the key check's tag and slot search.
 
-use lepic_keychain::{ContactRoot, pairing_mailbox_keys};
+use lepic_keychain::{ContactRoot, key_check_tag, pairing_mailbox_keys};
 use lepic_primitives::params::Network;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -11,8 +11,8 @@ use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 use super::{bytes, hex};
 
 pub(crate) const KIT_GENERATOR: &str = "epic-pairing-kit";
-pub(crate) const KIT_VERSION: &str = "0.2.0";
-pub(crate) const KIT_COMMIT: &str = "9e27d32526c68f0e70b225deb3d309fe1d88ce63";
+pub(crate) const KIT_VERSION: &str = "0.3.0";
+pub(crate) const KIT_COMMIT: &str = "1b3a07f170f2951c90a46a4c9938e66d184f411f";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -144,5 +144,37 @@ fn pairing_words_rendezvous_mailboxes_match_the_kit() {
             &vector["net"],
             &vector["rendezvous_mailbox"],
         );
+    }
+}
+
+/// The kit's key check between X and Y: the keys of both pairings come from the raw keys and
+/// slots, Y's old card holds the hint key the tag is made from, and Y's slot search finds it.
+#[test]
+fn pairing_key_check_tag_and_slot_search_match_the_kit() {
+    for vector in vectors("keycheck.json") {
+        let net = network(&vector["net"]);
+        let x = ContactRoot::from_raw(&array(&vector["x_raw"]), net).unwrap();
+        let y = ContactRoot::from_raw(&array(&vector["y_raw"]), net).unwrap();
+        let slot = |key: &str| u32::try_from(vector[key].as_u64().unwrap()).unwrap();
+        let sig = |root: &ContactRoot, key: &str| {
+            root.contact_keys(slot(key), [0; 16])
+                .unwrap()
+                .sig_public_key()
+        };
+        let n_x = sig(&x, "x_new_slot");
+        let n_y = sig(&y, "y_new_slot");
+        assert_eq!(hex(&n_x), vector["nX"]);
+        assert_eq!(hex(&n_y), vector["nY"]);
+
+        let y_old_hint = y.hint_key(slot("y_old_slot")).unwrap();
+        let y_old_card = hex(&bytes(&vector["y_old_card"]));
+        assert!(y_old_card.contains(&hex(&*y_old_hint)), "{y_old_card}");
+        let tag = key_check_tag(&y_old_hint, &n_y, &n_x);
+        assert_eq!(hex(&tag), vector["tag"]);
+
+        let found = y.find_slot_by_tag(&tag, &n_y, &n_x).unwrap();
+        assert_eq!(found.map(u64::from), vector["found_slot"].as_u64());
+        assert_eq!(found, Some(slot("y_old_slot")));
+        assert_eq!(x.find_slot_by_tag(&tag, &n_y, &n_x).unwrap(), None);
     }
 }

@@ -2,17 +2,20 @@
 //! optionally signed with the sender's Ed25519 key for this contact. The signature is tag 0xFF,
 //! so optional fields from 0x80 up sit before it and are signed too.
 
+use std::fmt;
+
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hpke::aead::ChaCha20Poly1305;
 use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
 use hpke::{Deserializable, Kem, OpModeR, OpModeS, Serializable};
 use rand_core::CryptoRng;
+use zeroize::Zeroizing;
 
 use crate::card::ContactCard;
 use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::hint::{Hint, HintRule};
-use crate::keys::{EncPublicKey, EncSecretKey, verifying_key};
+use crate::keys::{EncPublicKey, EncSecretKey, sig_key};
 use crate::network::Network;
 use crate::text::Reference;
 use crate::tlv::{Fields, Writer};
@@ -24,7 +27,7 @@ pub const ENVELOPE_VERSION: u8 = 1;
 pub const SUITE: u8 = 1;
 pub const MAX_ENVELOPE_LEN: usize = 1024 * 1024;
 
-pub(crate) const HEADER_LEN: usize = 16;
+pub const HEADER_LEN: usize = 16;
 const ENC_LEN: usize = 32;
 const AEAD_TAG_LEN: usize = 16;
 const MIN_ENVELOPE_LEN: usize = HEADER_LEN + ENC_LEN + AEAD_TAG_LEN;
@@ -121,8 +124,9 @@ impl Purpose {
     }
 }
 
-/// The inner content of an envelope, without the signature fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The inner content of an envelope, without the signature fields. `Debug` shows the body's
+/// length, never its bytes: a pairing reply's body holds the invite's code.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Content {
     pub kind: MessageType,
     pub body: Vec<u8>,
@@ -134,6 +138,20 @@ pub struct Content {
     pub expires: Option<u64>,
     /// The sender's current card for this contact.
     pub card: Option<ContactCard>,
+}
+
+impl fmt::Debug for Content {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Content")
+            .field("kind", &self.kind)
+            .field("body_len", &self.body.len())
+            .field("reply_key", &self.reply_key)
+            .field("purpose", &self.purpose)
+            .field("reference", &self.reference.is_some())
+            .field("expires", &self.expires)
+            .field("card", &self.card)
+            .finish()
+    }
 }
 
 impl Content {
@@ -241,7 +259,7 @@ pub fn seal<R: CryptoRng>(
         .try_into()
         .map_err(|_| EncodeError::Encapsulation)?;
     let header = header(network, &hint_rule.hint(recipient, &enc));
-    let inner = encode_content(content, &header, recipient, signer)?;
+    let inner = Zeroizing::new(encode_content(content, &header, recipient, signer)?);
     let ciphertext = context
         .seal(&inner, &header)
         .map_err(|_| EncodeError::Encryption)?;
@@ -417,20 +435,25 @@ impl<'a> SealedEnvelope<'a> {
             .map_err(|_| DecodeError::CannotOpen)?;
         let encapped = <SealKem as Kem>::EncappedKey::from_bytes(self.enc)
             .map_err(|_| DecodeError::CannotOpen)?;
-        let inner = hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, SealKem>(
-            &OpModeR::Base,
-            &secret,
-            &encapped,
-            &info(self.network),
-            self.ciphertext,
-            self.header,
-        )
-        .map_err(|_| DecodeError::CannotOpen)?;
+        let inner = Zeroizing::new(
+            hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, SealKem>(
+                &OpModeR::Base,
+                &secret,
+                &encapped,
+                &info(self.network),
+                self.ciphertext,
+                self.header,
+            )
+            .map_err(|_| DecodeError::CannotOpen)?,
+        );
         decode_content(&inner, self.network, self.header, &key.public_key())
     }
 }
 
-fn decode_content(
+/// The inner fields of an envelope with `header`, sealed to `recipient`, as [`SealedEnvelope::open`]
+/// reads them once HPKE has opened the ciphertext: the TLV fields, the card, and the signature.
+/// The pure decode entry point for fuzzing; callers open envelopes with [`SealedEnvelope::open`].
+pub fn decode_content(
     bytes: &[u8],
     network: Network,
     header: &[u8; HEADER_LEN],
@@ -482,9 +505,7 @@ fn decode_content(
             .into());
         }
         (Some(key), Some(signature)) => {
-            let key = verifying_key(&key).map_err(|_| Malformed::FieldValue {
-                tag: TAG_SENDER_KEY,
-            })?;
+            let key = sig_key(&key)?;
             let input = signing_input(header, recipient, fields.signed_prefix());
             key.verify_strict(&input, &Signature::from_bytes(&signature))
                 .map_err(|_| DecodeError::BadSignature)?;

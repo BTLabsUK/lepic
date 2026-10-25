@@ -4,7 +4,7 @@ use std::fmt;
 
 use ed25519_dalek::SigningKey;
 use rand_core::CryptoRng;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::card::ContactCard;
 use crate::envelope::{Content, MessageType, Opened, SealedEnvelope, seal};
@@ -104,9 +104,10 @@ pub struct ReplyBody {
 }
 
 impl ReplyBody {
-    pub fn encode(&self) -> Vec<u8> {
+    /// The body bytes, which hold the invite's code and so are wiped on drop.
+    pub fn encode(&self) -> Zeroizing<Vec<u8>> {
         let card = self.card.as_bytes();
-        let mut bytes = Vec::with_capacity(card.len().saturating_add(48));
+        let mut bytes = Zeroizing::new(Vec::with_capacity(card.len().saturating_add(48)));
         bytes.extend_from_slice(self.code.expose_bytes());
         bytes.extend_from_slice(self.nonce.expose_bytes());
         bytes.extend_from_slice(self.confirm_code.expose_bytes());
@@ -127,19 +128,20 @@ impl ReplyBody {
     }
 }
 
-/// The inviter's answer to a reply.
+const STATUS_ACCEPTED: u8 = 0x01;
+
+/// Why the inviter did not accept a reply (RFC 0002 7.3). A refusal is advisory: it carries no
+/// key or nonce of the inviter, and nothing is stored or trusted because of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfirmStatus {
-    Accepted,
+pub enum Refusal {
     AlreadyUsed,
     Expired,
     CancelledByInviter,
 }
 
-impl ConfirmStatus {
+impl Refusal {
     fn byte(self) -> u8 {
         match self {
-            Self::Accepted => 0x01,
             Self::AlreadyUsed => 0x02,
             Self::Expired => 0x03,
             Self::CancelledByInviter => 0x04,
@@ -148,7 +150,6 @@ impl ConfirmStatus {
 
     fn from_byte(byte: u8) -> Option<Self> {
         Some(match byte {
-            0x01 => Self::Accepted,
             0x02 => Self::AlreadyUsed,
             0x03 => Self::Expired,
             0x04 => Self::CancelledByInviter,
@@ -157,12 +158,12 @@ impl ConfirmStatus {
     }
 }
 
-/// The inviter's confirm: `nA || cardA || status`.
+/// The inviter's accepted confirm: `nA || cardA || 01`, with `cardA` the exact card the invite
+/// committed to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmBody {
     pub nonce: Nonce,
     pub card: ContactCard,
-    pub status: ConfirmStatus,
 }
 
 impl ConfirmBody {
@@ -171,19 +172,8 @@ impl ConfirmBody {
         let mut bytes = Vec::with_capacity(card.len().saturating_add(17));
         bytes.extend_from_slice(self.nonce.expose_bytes());
         bytes.extend_from_slice(card);
-        bytes.push(self.status.byte());
+        bytes.push(STATUS_ACCEPTED);
         bytes
-    }
-
-    pub fn decode(bytes: &[u8], network: Network) -> Result<Self, DecodeError> {
-        let (nonce, rest) = bytes.split_first_chunk().ok_or(Malformed::Truncated)?;
-        let (status, card) = rest.split_last().ok_or(Malformed::Truncated)?;
-        let status = ConfirmStatus::from_byte(*status).ok_or(Malformed::Body)?;
-        Ok(Self {
-            nonce: Nonce::from_bytes(*nonce),
-            card: ContactCard::decode(card, network)?,
-            status,
-        })
     }
 
     /// The invitee's check: the revealed nonce and card match the invite's commitment, and the
@@ -192,6 +182,35 @@ impl ConfirmBody {
     pub fn matches_invite(&self, invite: &Invite) -> bool {
         Commitment::new(&self.nonce, &self.card) == invite.fields().commit
             && self.card.enc_key() == &invite.fields().enc_key
+    }
+}
+
+/// An opened confirm: accepted (signed, with the inviter's nonce and card) or refused
+/// (anonymous, one status byte).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Confirm {
+    Accepted(Box<ConfirmBody>),
+    Refused(Refusal),
+}
+
+impl Confirm {
+    /// A one-byte body is a refusal; anything longer is an accepted confirm ending in `01`.
+    /// Whether the envelope was signed as its kind needs is [`open_confirm`]'s check.
+    pub fn decode(bytes: &[u8], network: Network) -> Result<Self, DecodeError> {
+        if let [status] = bytes {
+            return Refusal::from_byte(*status)
+                .map(Self::Refused)
+                .ok_or_else(|| Malformed::Body.into());
+        }
+        let (nonce, rest) = bytes.split_first_chunk().ok_or(Malformed::Body)?;
+        let (status, card) = rest.split_last().ok_or(Malformed::Body)?;
+        if *status != STATUS_ACCEPTED || card.is_empty() {
+            return Err(Malformed::Body.into());
+        }
+        Ok(Self::Accepted(Box::new(ConfirmBody {
+            nonce: Nonce::from_bytes(*nonce),
+            card: ContactCard::decode(card, network)?,
+        })))
     }
 }
 
@@ -205,15 +224,17 @@ pub fn seal_reply<R: CryptoRng>(
     if body.card.network() != network {
         return Err(EncodeError::WrongNetwork);
     }
-    let content = Content::new(MessageType::PairingReply, body.encode());
-    seal(
+    let mut content = Content::new(MessageType::PairingReply, body.encode().to_vec());
+    let sealed = seal(
         network,
         &invite.fields().enc_key,
         HintRule::Invite(invite.id()),
         &content,
         None,
         rng,
-    )
+    );
+    content.body.zeroize();
+    sealed
 }
 
 /// Opens a pairing reply with the invite's enc key. A reply is anonymous; a signed one is refused.
@@ -223,7 +244,7 @@ pub fn open_reply(
 ) -> Result<ReplyBody, DecodeError> {
     let opened = envelope.open(key)?;
     let signed = opened.sender.is_some();
-    let body = expect_type(opened, MessageType::PairingReply)?;
+    let body = Zeroizing::new(expect_type(opened, MessageType::PairingReply)?);
     if signed {
         return Err(Malformed::Signed {
             kind: MessageType::PairingReply.byte(),
@@ -233,8 +254,8 @@ pub fn open_reply(
     ReplyBody::decode(&body, envelope.network())
 }
 
-/// Seals the inviter's confirm to the invitee's card, signed with the inviter's sig key for this
-/// contact, which must be the key in `body.card`.
+/// Seals the inviter's accepted confirm to the invitee's card, signed with the inviter's sig key
+/// for this contact, which must be the key in `body.card`.
 pub fn seal_confirm<R: CryptoRng>(
     invitee: &ContactCard,
     body: &ConfirmBody,
@@ -259,22 +280,44 @@ pub fn seal_confirm<R: CryptoRng>(
     )
 }
 
-/// Opens a pairing confirm with the invitee's enc key for this contact. The envelope must be
-/// signed by the sig key of the card it carries.
+/// Seals a refusal to the replier's card: anonymous, one status byte, nothing of the inviter's.
+pub fn seal_refusal<R: CryptoRng>(
+    invitee: &ContactCard,
+    refusal: Refusal,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    let content = Content::new(MessageType::PairingConfirm, vec![refusal.byte()]);
+    seal(
+        invitee.network(),
+        invitee.enc_key(),
+        invitee.hint_rule(),
+        &content,
+        None,
+        rng,
+    )
+}
+
+/// Opens a pairing confirm with the invitee's enc key for this contact. An accepted confirm must
+/// be signed by the sig key of the card it carries, and the caller still checks
+/// [`ConfirmBody::matches_invite`]; a refusal must be anonymous. A signed refusal and an
+/// anonymous acceptance are malformed.
 pub fn open_confirm(
     envelope: &SealedEnvelope<'_>,
     key: &EncSecretKey,
-) -> Result<ConfirmBody, DecodeError> {
+) -> Result<Confirm, DecodeError> {
     let opened = envelope.open(key)?;
     let sender = opened.sender;
-    let body = ConfirmBody::decode(
+    let confirm = Confirm::decode(
         &expect_type(opened, MessageType::PairingConfirm)?,
         envelope.network(),
     )?;
-    match sender {
-        Some(sender) if sender == *body.card.sig_key() => Ok(body),
-        Some(_) => Err(DecodeError::BadSignature),
-        None => Err(Malformed::MissingField { tag: 0x08 }.into()),
+    let kind = MessageType::PairingConfirm.byte();
+    match (&confirm, sender) {
+        (Confirm::Accepted(body), Some(sender)) if sender == *body.card.sig_key() => Ok(confirm),
+        (Confirm::Accepted(_), Some(_)) => Err(DecodeError::BadSignature),
+        (Confirm::Accepted(_), None) => Err(Malformed::Unsigned { kind }.into()),
+        (Confirm::Refused(_), None) => Ok(confirm),
+        (Confirm::Refused(_), Some(_)) => Err(Malformed::Signed { kind }.into()),
     }
 }
 

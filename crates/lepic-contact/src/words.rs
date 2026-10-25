@@ -8,6 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Tag};
+use rand_core::CryptoRng;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::{SasTableError, WordsError};
@@ -26,7 +27,37 @@ const ARGON2_MEMORY_KIB: u32 = 65_536;
 const ARGON2_LANES: u32 = 1;
 const KEY_LEN: usize = 32;
 const TAG_LEN: usize = 16;
-const NONCE: [u8; 12] = [0; 12];
+const NONCE_LEN: usize = 12;
+const WINDOW_SECONDS: u64 = 600;
+
+/// `floor(unix seconds / 600)`: the 10-minute window an invite was made in, part of the Argon2id
+/// salt so a table of all words is good for one window only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WordsWindow(u64);
+
+impl WordsWindow {
+    /// The window A uses when it makes the invite at `unix_seconds`.
+    pub fn at(unix_seconds: u64) -> Self {
+        Self(unix_seconds / WINDOW_SECONDS)
+    }
+
+    /// The windows B tries at `unix_seconds`, in order: the current one and the one before, so an
+    /// invite made near the end of a window is still found.
+    pub fn to_try(unix_seconds: u64) -> impl Iterator<Item = Self> {
+        let current = Self::at(unix_seconds);
+        [Some(current), current.0.checked_sub(1).map(Self)]
+            .into_iter()
+            .flatten()
+    }
+
+    pub fn from_value(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn value(self) -> u64 {
+        self.0
+    }
+}
 
 /// Five random bytes, each an index into the SAS table. Wiped on drop and never printed.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
@@ -61,8 +92,9 @@ impl PairingWords {
         ]))
     }
 
-    /// `k = Argon2id(words, salt = "epic-pair/1 words" || net, t = 3, m = 64 MiB, p = 1)`.
-    pub fn stretch(&self, network: Network) -> Result<WordsKey, WordsError> {
+    /// `k = Argon2id(words, salt = "epic-pair/1 words" || net || be64(window), t = 3,
+    /// m = 64 MiB, p = 1)`.
+    pub fn stretch(&self, network: Network, window: WordsWindow) -> Result<WordsKey, WordsError> {
         let params = Params::new(
             ARGON2_MEMORY_KIB,
             ARGON2_ITERATIONS,
@@ -72,7 +104,7 @@ impl PairingWords {
         .map_err(|_| WordsError::Derivation)?;
         let mut key = Zeroizing::new([0u8; KEY_LEN]);
         Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-            .hash_password_into(&self.0, &aad(network), key.as_mut_slice())
+            .hash_password_into(&self.0, &salt(network, window), key.as_mut_slice())
             .map_err(|_| WordsError::Derivation)?;
         Ok(WordsKey(key))
     }
@@ -119,6 +151,14 @@ fn fold(typed: &str) -> String {
     folded
 }
 
+fn salt(network: Network, window: WordsWindow) -> [u8; 26] {
+    let mut salt = [0u8; 26];
+    let (aad_part, window_part) = salt.split_at_mut(18);
+    aad_part.copy_from_slice(&aad(network));
+    window_part.copy_from_slice(&window.0.to_be_bytes());
+    salt
+}
+
 fn aad(network: Network) -> [u8; 18] {
     let mut aad = [0u8; 18];
     let (domain, net) = aad.split_at_mut(DOMAIN.len());
@@ -152,46 +192,66 @@ impl WordsKey {
         seed
     }
 
-    /// The text A posts to the rendezvous mailbox for `invite`.
-    pub fn seal_invite(&self, invite: &Invite) -> Result<String, WordsError> {
-        let mut sealed = invite.as_bytes().to_vec();
+    /// The text A posts to the rendezvous mailbox for `invite`:
+    /// `base64url(nonce || ChaCha20-Poly1305(key, nonce, aad, invite))`, with the 12-byte nonce
+    /// drawn from `rng`.
+    pub fn seal_invite<R: CryptoRng>(
+        &self,
+        invite: &Invite,
+        rng: &mut R,
+    ) -> Result<String, WordsError> {
+        let mut nonce = [0u8; NONCE_LEN];
+        rng.fill_bytes(&mut nonce);
+        let mut sealed = Zeroizing::new(invite.as_bytes().to_vec());
         let tag = self
             .cipher()
             .encrypt_inout_detached(
-                &NONCE.into(),
+                &nonce.into(),
                 &aad(invite.network()),
                 sealed.as_mut_slice().into(),
             )
             .map_err(|_| WordsError::Encryption)?;
-        sealed.extend_from_slice(&tag);
-        Ok(URL_SAFE_NO_PAD.encode(sealed))
+        let mut posted = Vec::with_capacity(
+            NONCE_LEN
+                .saturating_add(sealed.len())
+                .saturating_add(TAG_LEN),
+        );
+        posted.extend_from_slice(&nonce);
+        posted.extend_from_slice(&sealed);
+        posted.extend_from_slice(&tag);
+        Ok(URL_SAFE_NO_PAD.encode(posted))
     }
 
     /// The invite bytes in posted text. Any failure is [`WordsError::CannotOpen`]; decoding the
-    /// invite is the caller's next step.
+    /// invite is the caller's next step. The invite holds its pairing code, so the caller wipes
+    /// the bytes once decoded.
     pub fn open_invite(&self, network: Network, text: &str) -> Result<Vec<u8>, WordsError> {
         let text = text.trim_matches(is_space);
         if text.chars().count() > MAX_POSTED_LEN {
             return Err(WordsError::CannotOpen);
         }
-        let mut sealed = URL_SAFE_NO_PAD
+        let posted = URL_SAFE_NO_PAD
             .decode(text)
             .map_err(|_| WordsError::CannotOpen)?;
-        let split = sealed
+        let (nonce, rest) = posted
+            .split_first_chunk::<NONCE_LEN>()
+            .ok_or(WordsError::CannotOpen)?;
+        let split = rest
             .len()
             .checked_sub(TAG_LEN)
             .ok_or(WordsError::CannotOpen)?;
-        let tag = Tag::try_from(sealed.split_off(split).as_slice())
-            .map_err(|_| WordsError::CannotOpen)?;
+        let (ciphertext, tag) = rest.split_at_checked(split).ok_or(WordsError::CannotOpen)?;
+        let tag = Tag::try_from(tag).map_err(|_| WordsError::CannotOpen)?;
+        let mut sealed = Zeroizing::new(ciphertext.to_vec());
         self.cipher()
             .decrypt_inout_detached(
-                &NONCE.into(),
+                &(*nonce).into(),
                 &aad(network),
                 sealed.as_mut_slice().into(),
                 &tag,
             )
             .map_err(|_| WordsError::CannotOpen)?;
-        Ok(sealed)
+        Ok(sealed.to_vec())
     }
 
     /// `HKDF-Expand(k, info, 32)`: with `k` as the PRK, the first output block is
@@ -259,6 +319,29 @@ mod tests {
             PairingWords::parse(&[name, name, name, name, ""]).unwrap_err(),
             WordsError::Unknown
         );
+    }
+
+    #[test]
+    fn windows_to_try_are_the_current_and_the_previous() {
+        let tried: Vec<u64> = WordsWindow::to_try(1_800_000_123)
+            .map(WordsWindow::value)
+            .collect();
+        assert_eq!(tried, [3_000_000, 2_999_999]);
+        assert_eq!(WordsWindow::at(1_800_000_000).value(), 3_000_000);
+        assert_eq!(WordsWindow::at(1_799_999_999).value(), 2_999_999);
+        let first: Vec<u64> = WordsWindow::to_try(599).map(WordsWindow::value).collect();
+        assert_eq!(first, [0]);
+    }
+
+    #[test]
+    fn salt_ends_in_the_window() {
+        let salt = salt(
+            Network::Floonet,
+            WordsWindow::from_value(0x0102_0304_0506_0708),
+        );
+        assert_eq!(&salt[..17], DOMAIN);
+        assert_eq!(salt[17], 1);
+        assert_eq!(salt[18..], [1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]

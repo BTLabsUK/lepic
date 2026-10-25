@@ -1,5 +1,9 @@
 //! The pairing invite (RFC 0002 7.1) and its `epiccash://pair/1/` link.
 
+use std::fmt;
+
+use zeroize::{Zeroize, Zeroizing};
+
 use crate::card::ContactKind;
 use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::keys::EncPublicKey;
@@ -43,11 +47,30 @@ pub struct InviteFields {
     pub onion: Option<RelayHost>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An invite and its exact bytes, which hold the pairing code: wiped on drop, and `Debug` shows
+/// only their length.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Invite {
     network: Network,
     fields: InviteFields,
     bytes: Vec<u8>,
+}
+
+impl Drop for Invite {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+    }
+}
+
+impl fmt::Debug for Invite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Invite")
+            .field("network", &self.network)
+            .field("kind", &self.fields.kind)
+            .field("expires", &self.fields.expires)
+            .field("len", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Invite {
@@ -136,7 +159,8 @@ impl Invite {
     }
 
     pub fn from_link(text: &str, network: Network) -> Result<Self, DecodeError> {
-        Self::decode(&decode_link(text, LinkKind::Pair, MAX_INVITE_LEN)?, network)
+        let bytes = Zeroizing::new(decode_link(text, LinkKind::Pair, MAX_INVITE_LEN)?);
+        Self::decode(&bytes, network)
     }
 
     pub fn to_link(&self) -> String {

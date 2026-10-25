@@ -25,6 +25,7 @@ use crate::keychain::{Keychain, KeychainError, SwitchCommitment};
 
 const ROOT_SALT: &[u8] = b"epic-contact/1";
 const MAILBOX_SALT: &[u8] = b"epic-pair/1 mailbox";
+const KEY_CHECK_DOMAIN: &[u8] = b"epic-pair/1 keycheck";
 
 /// The depth of an account's own path `m/<a>/0`.
 const ACCOUNT_DEPTH: u8 = 2;
@@ -32,7 +33,9 @@ const ACCOUNT_DEPTH: u8 = 2;
 /// The second path component of the contact-identity branch.
 const CONTACT_BRANCH: u32 = 2;
 
-/// Slots run from 0 to `SLOT_COUNT - 1`; a wallet that used them all refuses new pairings.
+/// A slot is any u32. A wallet keeps its slots below `SLOT_COUNT`, the range the slot searches
+/// cover, and refuses new pairings once it used them all; a service never searches and may use
+/// the whole range.
 pub const SLOT_COUNT: u32 = 65_536;
 
 /// Length of the random salt of a contact's mailbox key.
@@ -44,8 +47,6 @@ pub enum ContactKeyError {
     Derivation,
     #[error("no valid secp256k1 key within 256 counter values")]
     NoValidKey,
-    #[error("contact slot {slot} is not below {SLOT_COUNT}")]
-    SlotOutOfRange { slot: u32 },
     #[error("key operation failed")]
     Crypto(#[from] CryptoError),
     #[error("account key derivation failed")]
@@ -133,7 +134,7 @@ impl ContactRoot {
         slot: u32,
         box_salt: [u8; BOX_SALT_LEN],
     ) -> Result<ContactKeys, ContactKeyError> {
-        let slot_bytes = slot_bytes(slot)?;
+        let slot_bytes = slot.to_be_bytes();
         let mut enc_sk = Zeroizing::new([0u8; 32]);
         self.expand(&[b"enc", &slot_bytes], &mut enc_sk)?;
         let mut sig_seed = Zeroizing::new([0u8; 32]);
@@ -157,7 +158,7 @@ impl ContactRoot {
     /// The hint key of `slot` alone: one HMAC, so a restore can scan every slot (RFC 0002 2.5).
     pub fn hint_key(&self, slot: u32) -> Result<Zeroizing<[u8; 32]>, ContactKeyError> {
         let mut hint_key = Zeroizing::new([0u8; 32]);
-        self.expand(&[b"hint", &slot_bytes(slot)?], &mut hint_key)?;
+        self.expand(&[b"hint", &slot.to_be_bytes()], &mut hint_key)?;
         Ok(hint_key)
     }
 
@@ -182,7 +183,7 @@ impl ContactRoot {
             if !equal_in_constant_time(&hint_key, card_hint_key) {
                 continue;
             }
-            let slot_bytes = slot_bytes(slot)?;
+            let slot_bytes = slot.to_be_bytes();
             let mut enc_sk = Zeroizing::new([0u8; 32]);
             self.expand(&[b"enc", &slot_bytes], &mut enc_sk)?;
             let mut sig_seed = Zeroizing::new([0u8; 32]);
@@ -190,6 +191,31 @@ impl ContactRoot {
             if x25519(*enc_sk, X25519_BASEPOINT_BYTES) == *card_enc_pk
                 && SigningKey::from_bytes(&sig_seed).verifying_key().to_bytes() == *card_sig_pk
             {
+                return Ok(Some(slot));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The slot below [`SLOT_COUNT`] whose hint key gives the key check `tag` for the new
+    /// pairing's sig keys `n_y` (ours) and `n_x` (RFC 0002 7.8 step 2). `None` means no slot of
+    /// this seed, account and network made the card the check names.
+    pub fn find_slot_by_tag(
+        &self,
+        tag: &[u8; 32],
+        n_y: &[u8; 32],
+        n_x: &[u8; 32],
+    ) -> Result<Option<u32>, ContactKeyError> {
+        let hkdf =
+            Hkdf::<Sha256>::from_prk(self.0.as_slice()).map_err(|_| ContactKeyError::Derivation)?;
+        let mut hint_key = Zeroizing::new([0u8; 32]);
+        for slot in 0..SLOT_COUNT {
+            hkdf.expand(
+                &[b"hint".as_slice(), &slot.to_be_bytes()].concat(),
+                hint_key.as_mut(),
+            )
+            .map_err(|_| ContactKeyError::Derivation)?;
+            if equal_in_constant_time(&key_check_tag(&hint_key, n_y, n_x), tag) {
                 return Ok(Some(slot));
             }
         }
@@ -235,12 +261,18 @@ fn equal_in_constant_time(ours: &[u8; 32], theirs: &[u8; 32]) -> bool {
         == 0
 }
 
-/// `be32(slot)` of a slot below [`SLOT_COUNT`].
-fn slot_bytes(slot: u32) -> Result<[u8; 4], ContactKeyError> {
-    if slot >= SLOT_COUNT {
-        return Err(ContactKeyError::SlotOutOfRange { slot });
-    }
-    Ok(slot.to_be_bytes())
+/// `H("epic-pair/1 keycheck" || hint_key || nY || nX)` (RFC 0002 7.8): names the old slot whose
+/// card had `hint_key` without revealing it, bound to the new pairing's sig keys `n_y` (of the
+/// side that may hold the slot) and `n_x`.
+pub fn key_check_tag(hint_key: &[u8; 32], n_y: &[u8; 32], n_x: &[u8; 32]) -> [u8; 32] {
+    use sha2::Digest as _;
+    Sha256::new()
+        .chain_update(KEY_CHECK_DOMAIN)
+        .chain_update(hint_key)
+        .chain_update(n_y)
+        .chain_update(n_x)
+        .finalize()
+        .into()
 }
 
 /// The keys of one pairing record. Wiped on drop and never printed.

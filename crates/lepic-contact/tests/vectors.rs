@@ -1,7 +1,8 @@
 //! Replays the RFC 0002 vectors in `testdata/vectors/pairing`, written by the independent pairing
 //! kit (RFC 0002 section 14): the HPKE suite against RFC 9180 A.2.1, envelopes of every type sealed
-//! with a fixed ephemeral key, cards, invites, replies and confirms, the SAS, pairing words, and
-//! every malformed input with the typed error it must give.
+//! with a fixed ephemeral key, cards, invites, replies, confirms and refusals, the SAS, pairing
+//! words, the key check with its proofs, and every malformed input with the typed error it must
+//! give.
 
 // Helpers outside `#[test]` functions are test code too and may unwrap, index and panic.
 #![allow(
@@ -21,18 +22,20 @@ use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
 use hpke::{Deserializable, Kem, OpModeR, OpModeS, Serializable};
 use lepic_contact::{
-    ConfirmBody, ConfirmStatus, ContactCard, Content, DecodeError, EncSecretKey, Hint, HintKey,
-    HintRule, Invite, InviteId, Malformed, MessageType, Network, Nonce, PairingCode, PairingLink,
-    PairingWords, Purpose, ReplyBody, Sas, SealedEnvelope, SigningKey, VerifyingKey, WordsError,
-    WordsKey, armor, dearmor, open_confirm, open_contact_update, open_key_check,
+    Confirm, ConfirmBody, ContactCard, Content, DecodeError, EncSecretKey, Hint, HintKey, HintRule,
+    Invite, InviteId, KeyCheck, KeyCheckAnswer, Malformed, MessageType, Network, Nonce,
+    PairingCode, PairingLink, PairingWords, Purpose, Refusal, ReplyBody, Sas, SealedEnvelope,
+    SigningKey, VerifyingKey, WordsError, WordsKey, WordsWindow, accept_found, accept_restored,
+    armor, dearmor, key_check_tag, open_confirm, open_contact_update, open_key_check,
     open_key_check_answer, open_reply, pairing_envelope_from_link, pairing_envelope_link, seal,
-    seal_confirm, seal_reply,
+    seal_confirm, seal_found, seal_key_check, seal_not_found, seal_refusal, seal_reply,
+    seal_restored,
 };
 use serde_json::Value;
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
-const KIT_VERSION: &str = "0.2.0";
-const KIT_COMMIT: &str = "9e27d32526c68f0e70b225deb3d309fe1d88ce63";
+const KIT_VERSION: &str = "0.3.0";
+const KIT_COMMIT: &str = "1b3a07f170f2951c90a46a4c9938e66d184f411f";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -364,6 +367,7 @@ fn cards_sign_and_link_byte_for_byte() {
 fn pairings_replay_byte_for_byte() {
     let keys = signing_keys();
     let mut pairings = 0;
+    let mut refusals = 0;
     for vector in vectors("cards_invites.json") {
         if vector["kind"] != "pairing" {
             continue;
@@ -445,7 +449,6 @@ fn pairings_replay_byte_for_byte() {
         let confirm_body = ConfirmBody {
             nonce: n_a.clone(),
             card: card_a.clone(),
-            status: ConfirmStatus::Accepted,
         };
         assert_eq!(
             to_hex(&confirm_body.encode()),
@@ -470,14 +473,43 @@ fn pairings_replay_byte_for_byte() {
             &invitee_enc,
         )
         .unwrap();
-        assert_eq!(opened, confirm_body);
-        assert!(opened.matches_invite(&invite));
+        assert_eq!(opened, Confirm::Accepted(Box::new(confirm_body.clone())));
+        assert!(confirm_body.matches_invite(&invite));
+
+        // The refusal of envelopes.json is sealed to the person scenario's invitee.
+        if label == "person" {
+            let record = envelope_vector("confirm_refusal_used_anonymous", net);
+            let refusal = seal_refusal(
+                &card_b,
+                Refusal::AlreadyUsed,
+                &mut ScriptedRng::new(&bytes(&record["eph_ikm"])),
+            )
+            .unwrap();
+            assert_eq!(to_hex(&refusal), record["envelope"], "{label}");
+            assert_eq!(
+                open_confirm(
+                    &SealedEnvelope::decode(&refusal, net).unwrap(),
+                    &invitee_enc
+                )
+                .unwrap(),
+                Confirm::Refused(Refusal::AlreadyUsed)
+            );
+            refusals += 1;
+        }
 
         let sas = Sas::compute(net, &card_a, &card_b, &n_a, &n_b);
         assert_eq!(to_hex(sas.as_bytes()), vector["sas"], "{label}");
         pairings += 1;
     }
     assert!(pairings > 0);
+    assert_eq!(refusals, 2, "one refusal per network");
+}
+
+fn envelope_vector(name: &str, net: Network) -> Value {
+    vectors("envelopes.json")
+        .into_iter()
+        .find(|vector| vector["name"] == name && network(&vector["net"]) == net)
+        .unwrap_or_else(|| panic!("no envelope {name}"))
 }
 
 #[test]
@@ -533,8 +565,17 @@ fn pairing_words_match_the_kit() {
         assert_eq!(argon2["lanes"], 1);
         assert_eq!(argon2["version"], 19);
         assert_eq!(argon2["length"], 32);
-        assert_eq!(argon2["salt"], vector["aad"]);
-        let key = words.stretch(net).unwrap();
+        let window = WordsWindow::from_value(vector["window"].as_u64().unwrap());
+        let unix = vector["unix"].as_u64().unwrap();
+        assert_eq!(WordsWindow::at(unix), window, "{name}");
+        assert_eq!(WordsWindow::to_try(unix).next(), Some(window), "{name}");
+        let salt = format!(
+            "{}{}",
+            text(&vector["aad"]),
+            to_hex(&window.value().to_be_bytes())
+        );
+        assert_eq!(argon2["salt"], salt, "{name}");
+        let key = words.stretch(net, window).unwrap();
         assert_eq!(to_hex(key.expose_bytes()), vector["k"], "{name}");
         assert_eq!(
             to_hex(&*key.mailbox_seed()),
@@ -543,16 +584,226 @@ fn pairing_words_match_the_kit() {
         );
 
         let invite = Invite::decode(&bytes(&vector["invite"]), net).unwrap();
-        assert_eq!(
-            key.seal_invite(&invite).unwrap(),
-            text(&vector["posted"]),
-            "{name}"
-        );
+        let nonce = bytes(&vector["nonce"]);
+        assert_eq!(nonce.len(), 12);
+        let posted = key
+            .seal_invite(&invite, &mut ScriptedRng::new(&nonce))
+            .unwrap();
+        assert_eq!(posted, text(&vector["posted"]), "{name}");
         assert_eq!(
             key.open_invite(net, text(&vector["posted"])).unwrap(),
             invite.as_bytes()
         );
+        // The invite opens only with the key of the window it was made in.
+        let before = WordsWindow::from_value(window.value() - 1);
+        assert_eq!(
+            words
+                .stretch(net, before)
+                .unwrap()
+                .open_invite(net, &posted),
+            Err(WordsError::CannotOpen)
+        );
     }
+}
+
+/// The contact root the kit recorded for a raw account key on a network.
+fn contact_root(raw: &Value, net: &Value) -> [u8; 32] {
+    let vector = vectors("contact_keys.json")
+        .into_iter()
+        .find(|vector| vector["raw"] == *raw && vector["net"] == *net)
+        .unwrap_or_else(|| panic!("no root for {raw} on {net}"));
+    array(&vector["root"])
+}
+
+/// `HKDF-Expand(prk, info, 32)`: the first block, `HMAC(prk, info || 01)`.
+fn expand(prk: &[u8; 32], info: &[u8]) -> [u8; 32] {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac = <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(prk).unwrap();
+    mac.update(info);
+    mac.update(&[1]);
+    mac.finalize().into_bytes().into()
+}
+
+/// The enc secret, signing key and hint key of `slot` under `root` (RFC 0002 2.2).
+fn slot_keys(root: &[u8; 32], slot: &Value) -> (EncSecretKey, SigningKey, HintKey) {
+    let slot = u32::try_from(slot.as_u64().unwrap()).unwrap().to_be_bytes();
+    let derive = |label: &[u8]| expand(root, &[label, &slot].concat());
+    (
+        EncSecretKey::from_bytes(derive(b"enc")),
+        SigningKey::from_bytes(&derive(b"sig")),
+        HintKey::from_bytes(derive(b"hint")),
+    )
+}
+
+/// The ikm the kit draws a named case's ephemeral key from, checked against the recorded key.
+fn eph_rng(case: &str, net: &Value, recorded_sk: &Value) -> ScriptedRng {
+    use sha2::Digest;
+    let net = u8::try_from(net.as_u64().unwrap()).unwrap();
+    let ikm: [u8; 32] = sha2::Sha256::new()
+        .chain_update(b"epic-vectors/1 eph ")
+        .chain_update(case.as_bytes())
+        .chain_update([net])
+        .finalize()
+        .into();
+    let (sk, _) = X25519HkdfSha256::derive_keypair(&ikm);
+    assert_eq!(sk.to_bytes().to_vec(), bytes(recorded_sk), "{case}");
+    ScriptedRng::new(&ikm)
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+/// The kit's key check between X and Y, end to end: every envelope sealed again byte for byte
+/// with the kit's ephemeral keys, opened by the other side, and every proof accepted.
+#[test]
+fn key_checks_replay_byte_for_byte() {
+    let mut checked = 0;
+    for vector in vectors("keycheck.json") {
+        let net_value = &vector["net"];
+        let net = network(net_value);
+        let root_x = contact_root(&vector["x_raw"], net_value);
+        let root_y = contact_root(&vector["y_raw"], net_value);
+        let (x_new_enc, x_new_sig, _) = slot_keys(&root_x, &vector["x_new_slot"]);
+        let (_, x_old_sig, _) = slot_keys(&root_x, &vector["x_old_slot"]);
+        let (y_new_enc, y_new_sig, _) = slot_keys(&root_y, &vector["y_new_slot"]);
+        let (_, y_old_sig, y_old_hint) = slot_keys(&root_y, &vector["y_old_slot"]);
+        let card = |key: &str| ContactCard::decode(&bytes(&vector[key]), net).unwrap();
+        let (x_old_card, x_new_card) = (card("x_old_card"), card("x_new_card"));
+        let (y_old_card, y_new_card) = (card("y_old_card"), card("y_new_card"));
+        let y_refreshed = card("y_refreshed_card");
+        assert_eq!(*x_old_card.sig_key(), x_old_sig.verifying_key());
+        assert_eq!(*y_old_card.sig_key(), y_old_sig.verifying_key());
+        assert_eq!(x_new_card.enc_key(), &x_new_enc.public_key());
+        assert_eq!(y_new_card.enc_key(), &y_new_enc.public_key());
+        assert_eq!(y_old_card.fields().hint_key, y_old_hint);
+        assert_eq!(y_old_card.fields().seq, 3);
+        assert_eq!(y_refreshed.fields().seq, 4);
+
+        let (n_x, n_y) = (x_new_sig.verifying_key(), y_new_sig.verifying_key());
+        assert_eq!(*x_new_card.sig_key(), n_x);
+        assert_eq!(*y_new_card.sig_key(), n_y);
+        assert_eq!(to_hex(n_x.as_bytes()), vector["nX"]);
+        assert_eq!(to_hex(n_y.as_bytes()), vector["nY"]);
+        let tag = key_check_tag(&y_old_hint, &n_y, &n_x);
+        assert_eq!(to_hex(&tag), vector["tag"]);
+        assert_eq!(vector["found_slot"], vector["y_old_slot"]);
+
+        // 1. X checks.
+        let eph = &vector["eph"];
+        let check = seal_key_check(
+            &y_new_card,
+            &y_old_card,
+            &x_new_sig,
+            &mut eph_rng("keycheck/check", net_value, &eph["check"]),
+        )
+        .unwrap();
+        assert_eq!(to_hex(&check), vector["check"]);
+        let opened = open_key_check(
+            &SealedEnvelope::decode(&check, net).unwrap(),
+            &y_new_enc,
+            &n_x,
+        )
+        .unwrap();
+        assert_eq!(opened, KeyCheck { seq: 3, tag });
+        assert_eq!(to_hex(&opened.encode()), vector["check_body"]);
+
+        // 3. Y found the slot and proves it with the old slot key.
+        let found = seal_found(
+            &x_new_card,
+            &y_new_sig,
+            &check,
+            &y_refreshed,
+            &y_old_sig,
+            &mut eph_rng("keycheck/found", net_value, &eph["found"]),
+        )
+        .unwrap();
+        assert_eq!(to_hex(&found), vector["found"]);
+        let answer = open_key_check_answer(
+            &SealedEnvelope::decode(&found, net).unwrap(),
+            &x_new_enc,
+            &n_y,
+        )
+        .unwrap();
+        let KeyCheckAnswer::Found(proof) = &answer else {
+            panic!("not a found answer: {answer:?}");
+        };
+        assert_eq!(proof.card_bytes(), y_refreshed.as_bytes());
+        assert_eq!(to_hex(proof.proof()), vector["found_proof"]);
+        let found_message = [
+            &b"epic-pair/1 keycheck found"[..],
+            &sha256(&check),
+            n_y.as_bytes(),
+            n_x.as_bytes(),
+            &sha256(y_refreshed.as_bytes()),
+        ]
+        .concat();
+        assert_eq!(to_hex(&found_message), vector["found_message"]);
+
+        // 4. X accepts it.
+        assert_eq!(
+            accept_found(&answer, &check, &n_y, &n_x, &y_old_card).unwrap(),
+            y_refreshed
+        );
+
+        // 5. X answers restored with its old card and a proof by its old key.
+        let restored = seal_restored(
+            &y_new_card,
+            &x_new_sig,
+            &found,
+            &x_old_card,
+            &x_old_sig,
+            &mut eph_rng("keycheck/restored", net_value, &eph["restored"]),
+        )
+        .unwrap();
+        assert_eq!(to_hex(&restored), vector["restored"]);
+        let answer = open_key_check_answer(
+            &SealedEnvelope::decode(&restored, net).unwrap(),
+            &y_new_enc,
+            &n_x,
+        )
+        .unwrap();
+        let KeyCheckAnswer::Restored(proof) = &answer else {
+            panic!("not a restored answer: {answer:?}");
+        };
+        assert_eq!(to_hex(proof.proof()), vector["restored_proof"]);
+        let restored_message = [
+            &b"epic-pair/1 keycheck restored"[..],
+            &sha256(&found),
+            n_x.as_bytes(),
+            n_y.as_bytes(),
+            &sha256(x_old_card.as_bytes()),
+        ]
+        .concat();
+        assert_eq!(to_hex(&restored_message), vector["restored_message"]);
+
+        // 6. Y accepts it.
+        assert_eq!(
+            accept_restored(&answer, &found, &n_x, &n_y, net).unwrap(),
+            x_old_card
+        );
+
+        // Or: Y did not find the slot.
+        let not_found = seal_not_found(
+            &x_new_card,
+            &y_new_sig,
+            &mut eph_rng("keycheck/not_found", net_value, &eph["not_found"]),
+        )
+        .unwrap();
+        assert_eq!(to_hex(&not_found), vector["not_found"]);
+        assert_eq!(
+            open_key_check_answer(
+                &SealedEnvelope::decode(&not_found, net).unwrap(),
+                &x_new_enc,
+                &n_y
+            )
+            .unwrap(),
+            KeyCheckAnswer::NotFound
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 2);
 }
 
 /// Whether `error` is the typed error LEPIC gives for the kit's error code `code`.
@@ -605,8 +856,14 @@ fn decode_error_matches(code: &str, error: &DecodeError) -> bool {
         "uri_prefix" => matches!(error, D::Malformed(M::LinkPrefix)),
         "key_check_bad" => matches!(
             error,
-            D::Malformed(M::Unsigned { .. } | M::Body | M::FieldValue { tag: 0x01 })
+            D::KeyCheckNotProven
+                | D::Malformed(M::Unsigned { .. } | M::Body | M::FieldValue { tag: 0x01 })
         ),
+        "reply_bad" => matches!(
+            error,
+            D::Malformed(M::Body | M::Signed { .. } | M::Unsigned { .. })
+        ),
+        "weak_sig_key" => matches!(error, D::WeakSigKey),
         _ => false,
     }
 }
@@ -668,11 +925,17 @@ fn open_malformed(vector: &Value, input: &[u8], text: &str) -> DecodeError {
         "contact_update" => {
             sealed().and_then(|sealed| open_contact_update(&sealed, &key(), &peer()).map(drop))
         }
+        "confirm" => sealed().and_then(|sealed| open_confirm(&sealed, &key()).map(drop)),
         other => panic!("unknown malformed kind {other}"),
     };
     outcome
         .err()
         .unwrap_or_else(|| panic!("{} was accepted", vector["name"]))
+}
+
+/// The window the kit's malformed words cases use unless they name another.
+fn words_vector_window() -> u64 {
+    vectors("words.json")[0]["window"].as_u64().unwrap()
 }
 
 fn text_kind(vector: &Value) -> &str {
@@ -691,8 +954,11 @@ fn every_malformed_input_gives_its_typed_error() {
             assert_eq!(code, "words_cannot_open", "{name}");
             let net = network(&vector["net"]);
             let words = PairingWords::from_bytes(array(&vector["words"]));
+            let window = vector
+                .get("window")
+                .map_or(words_vector_window(), |window| window.as_u64().unwrap());
             let error = words
-                .stretch(net)
+                .stretch(net, WordsWindow::from_value(window))
                 .unwrap()
                 .open_invite(net, &input_text)
                 .unwrap_err();

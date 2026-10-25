@@ -21,6 +21,10 @@ pub enum DecodeError {
     CannotOpen,
     #[error("signed by another key than the contact's")]
     KeyChanged,
+    #[error("a sig key is not a canonical point or is of small order")]
+    WeakSigKey,
+    #[error("the key check answer does not prove the old key")]
+    KeyCheckNotProven,
 }
 
 /// What exactly was wrong with malformed input, for logs and tests.
@@ -86,7 +90,7 @@ pub enum EncodeError {
 pub enum KeyError {
     #[error("x25519 public key is of small order")]
     SmallOrder,
-    #[error("ed25519 public key is not a valid point or is weak")]
+    #[error("ed25519 public key is not a canonical point or is of small order")]
     InvalidVerifyingKey,
 }
 

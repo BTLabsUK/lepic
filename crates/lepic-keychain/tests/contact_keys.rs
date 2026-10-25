@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 use lepic_crypto::PublicKey;
 use lepic_keychain::{
-    ContactKeyError, ContactRoot, Identifier, Keychain, SLOT_COUNT, SwitchCommitment,
-    contact_identity_key_id, pairing_mailbox_keys,
+    ContactRoot, Identifier, Keychain, SLOT_COUNT, SwitchCommitment, contact_identity_key_id,
+    key_check_tag, pairing_mailbox_keys,
 };
 use lepic_primitives::params::Network;
 use serde_json::{Value, json};
@@ -117,20 +117,56 @@ fn hint_key_alone_equals_the_slot_keys_hint_key() {
 }
 
 #[test]
-fn rejects_slots_from_65536() {
+fn derives_keys_for_any_u32_slot() {
     let root = keychain()
         .contact_root(&account(), Network::Mainnet)
         .unwrap();
+    let below = root.contact_keys(SLOT_COUNT - 1, [0; 16]).unwrap();
     for slot in [SLOT_COUNT, SLOT_COUNT + 1, u32::MAX] {
-        assert_eq!(
-            root.contact_keys(slot, [0; 16]).unwrap_err(),
-            ContactKeyError::SlotOutOfRange { slot }
-        );
-        assert_eq!(
-            root.hint_key(slot).unwrap_err(),
-            ContactKeyError::SlotOutOfRange { slot }
-        );
+        let keys = root.contact_keys(slot, [0; 16]).unwrap();
+        assert_eq!(*root.hint_key(slot).unwrap(), *keys.expose_hint_key());
+        assert_ne!(keys.sig_public_key(), below.sig_public_key());
     }
+}
+
+#[test]
+fn slot_searches_cover_only_the_wallet_range() {
+    let root = keychain()
+        .contact_root(&account(), Network::Mainnet)
+        .unwrap();
+    let (n_y, n_x) = ([5; 32], [6; 32]);
+    let keys = root.contact_keys(SLOT_COUNT, [0; 16]).unwrap();
+    let tag = key_check_tag(keys.expose_hint_key(), &n_y, &n_x);
+    assert_eq!(root.find_slot_by_tag(&tag, &n_y, &n_x).unwrap(), None);
+    assert_eq!(
+        root.find_slot(
+            keys.expose_hint_key(),
+            &keys.enc_public_key(),
+            &keys.sig_public_key()
+        )
+        .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn find_slot_by_tag_recovers_the_slot_for_these_new_keys_only() {
+    let root = keychain()
+        .contact_root(&account(), Network::Floonet)
+        .unwrap();
+    let (n_y, n_x) = ([5; 32], [6; 32]);
+    for slot in [0, 31_337, SLOT_COUNT - 1] {
+        let hint_key = root.hint_key(slot).unwrap();
+        let tag = key_check_tag(&hint_key, &n_y, &n_x);
+        assert_eq!(root.find_slot_by_tag(&tag, &n_y, &n_x).unwrap(), Some(slot));
+        assert_eq!(root.find_slot_by_tag(&tag, &n_x, &n_y).unwrap(), None);
+        assert_eq!(root.find_slot_by_tag(&tag, &n_y, &[7; 32]).unwrap(), None);
+    }
+    let other = keychain()
+        .contact_root(&account(), Network::Mainnet)
+        .unwrap();
+    let tag = key_check_tag(&root.hint_key(9).unwrap(), &n_y, &n_x);
+    assert_eq!(other.find_slot_by_tag(&tag, &n_y, &n_x).unwrap(), None);
 }
 
 #[test]

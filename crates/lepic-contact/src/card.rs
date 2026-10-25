@@ -1,11 +1,13 @@
 //! The self-signed contact card (RFC 0002 section 6) and its `epiccash://contact/1/` link.
 
+use std::fmt;
+
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::hash::sha256;
 use crate::hint::HintRule;
-use crate::keys::{EncPublicKey, HintKey, verifying_key};
+use crate::keys::{EncPublicKey, HintKey, sig_key};
 use crate::link::{LinkKind, decode_link, encode_link};
 use crate::network::Network;
 use crate::text::{ContactName, MailboxAddress, RelayHost};
@@ -110,11 +112,23 @@ pub struct CardFields {
 }
 
 /// A card whose self-signature verified, with the exact bytes it was read from or written as.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `Debug` shows no keys or addresses, only the kind, `seq` and length.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ContactCard {
     network: Network,
     fields: CardFields,
     bytes: Vec<u8>,
+}
+
+impl fmt::Debug for ContactCard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContactCard")
+            .field("network", &self.network)
+            .field("kind", &self.fields.kind)
+            .field("seq", &self.fields.seq)
+            .field("len", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ContactCard {
@@ -188,8 +202,7 @@ impl ContactCard {
         let name = ContactName::try_from(fields.require(TAG_NAME)?).map_err(|_| value(TAG_NAME))?;
         let enc_key = EncPublicKey::from_bytes(fields.require_array(TAG_ENC_KEY)?)
             .map_err(|_| value(TAG_ENC_KEY))?;
-        let sig_key =
-            verifying_key(&fields.require_array(TAG_SIG_KEY)?).map_err(|_| value(TAG_SIG_KEY))?;
+        let sig_key = sig_key(&fields.require_array(TAG_SIG_KEY)?)?;
         let hint_key = HintKey::from_bytes(fields.require_array(TAG_HINT_KEY)?);
         let mailbox = MailboxAddress::try_from(fields.require(TAG_MAILBOX)?)
             .map_err(|_| value(TAG_MAILBOX))?;

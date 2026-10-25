@@ -4,7 +4,7 @@ use ed25519_dalek::VerifyingKey;
 use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::error::KeyError;
+use crate::error::{DecodeError, KeyError};
 
 /// Any clamped scalar sends exactly the small-order points to the all-zero output.
 const SMALL_ORDER_PROBE: [u8; 32] = [0x01; 32];
@@ -82,13 +82,20 @@ impl fmt::Debug for HintKey {
     }
 }
 
-/// An Ed25519 public key read from input: a valid point that is not of small order.
+/// An Ed25519 public key read from input (RFC 0002 3.3, 6.1): the canonical encoding of a point
+/// that is not of small order. Signatures under a small-order key can be forged, and the kit
+/// refuses non-canonical encodings, so both are refused before any verification.
 pub(crate) fn verifying_key(bytes: &[u8; 32]) -> Result<VerifyingKey, KeyError> {
     let key = VerifyingKey::from_bytes(bytes).map_err(|_| KeyError::InvalidVerifyingKey)?;
-    if key.is_weak() {
+    if key.is_weak() || key.to_edwards().compress().as_bytes() != bytes {
         return Err(KeyError::InvalidVerifyingKey);
     }
     Ok(key)
+}
+
+/// A sig key read from a card, an envelope or a key check proof.
+pub(crate) fn sig_key(bytes: &[u8; 32]) -> Result<VerifyingKey, DecodeError> {
+    verifying_key(bytes).map_err(|_| DecodeError::WeakSigKey)
 }
 
 #[cfg(test)]
@@ -140,6 +147,50 @@ mod tests {
                 "{point:02x?}"
             );
         }
+    }
+
+    /// Small-order Ed25519 points: the identity, the point of order 2, and those of order 4 and 8.
+    const SMALL_ORDER_ED25519: [[u8; 32]; 4] = [
+        {
+            let mut identity = [0; 32];
+            identity[0] = 1;
+            identity
+        },
+        {
+            let mut order_two = [0xff; 32];
+            order_two[0] = 0xec;
+            order_two[31] = 0x7f;
+            order_two
+        },
+        [0; 32],
+        [
+            0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10,
+            0x67, 0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77,
+            0x92, 0xac, 0x03, 0x7a,
+        ],
+    ];
+
+    #[test]
+    fn refuses_small_order_and_non_canonical_sig_keys() {
+        for point in SMALL_ORDER_ED25519 {
+            assert_eq!(
+                sig_key(&point).unwrap_err(),
+                DecodeError::WeakSigKey,
+                "{point:02x?}"
+            );
+        }
+        let good = ed25519_dalek::SigningKey::from_bytes(&[9; 32]).verifying_key();
+        assert_eq!(sig_key(good.as_bytes()), Ok(good));
+        // The identity with the sign bit set: x = 0 has no negative.
+        let mut negative_zero = [0; 32];
+        negative_zero[0] = 1;
+        negative_zero[31] = 0x80;
+        assert_eq!(sig_key(&negative_zero), Err(DecodeError::WeakSigKey));
+        // y = p + 3, a point of large order: dalek reduces y, the kit refuses y >= p.
+        let mut unreduced = [0xff; 32];
+        unreduced[0] = 0xf0;
+        unreduced[31] = 0x7f;
+        assert_eq!(sig_key(&unreduced), Err(DecodeError::WeakSigKey));
     }
 
     #[test]

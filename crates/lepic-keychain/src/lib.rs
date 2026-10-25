@@ -15,7 +15,7 @@ pub use app_data::AppDataError;
 pub use bip32::{Bip32Error, ChainCode, ChildNumber, ExtKeyVersion, ExtendedPrivKey, Fingerprint};
 pub use contact_key::{
     BOX_SALT_LEN, ContactKeyError, ContactKeys, ContactRoot, ReplyKey, SLOT_COUNT,
-    contact_identity_key_id, pairing_mailbox_keys,
+    contact_identity_key_id, key_check_tag, pairing_mailbox_keys,
 };
 pub use identifier::{Identifier, IdentifierError};
 pub use keychain::{Keychain, KeychainError, SwitchCommitment};

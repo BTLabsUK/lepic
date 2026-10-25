@@ -10,16 +10,16 @@ mod common;
 
 use common::{ScriptedRng, Side};
 use lepic_contact::{
-    CARD_FORMAT, Capabilities, Commitment, ConfirmBody, ConfirmCode, ConfirmStatus, ContactCard,
+    CARD_FORMAT, Capabilities, Commitment, Confirm, ConfirmBody, ConfirmCode, ContactCard,
     ContactKind, ContactName, DecodeError, EncodeError, Hint, Invite, InviteFields, InviteId,
     MAX_CARD_LEN, MAX_INVITE_LEN, MailboxAddress, Malformed, Network, Nonce, PairingCode,
-    PairingLink, RelayHost, ReplyBody, Sas, SealedEnvelope, open_confirm, open_reply,
-    pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_reply,
+    PairingLink, Refusal, RelayHost, ReplyBody, Sas, SealedEnvelope, open_confirm, open_reply,
+    pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_refusal, seal_reply,
 };
 use lepic_contact::{
-    CardFields, Content, HintRule, KeyCheckBody, KeyCheckStatus, MessageType, open_contact_update,
-    open_key_check, open_key_check_answer, seal, seal_contact_update, seal_key_check,
-    seal_key_check_answer,
+    CardFields, Content, HintRule, KeyCheck, KeyCheckAnswer, MessageType, accept_found,
+    accept_restored, key_check_tag, open_contact_update, open_key_check, open_key_check_answer,
+    seal, seal_contact_update, seal_found, seal_key_check, seal_not_found, seal_restored,
 };
 use proptest::prelude::*;
 
@@ -314,7 +314,6 @@ fn online_pairing_reaches_the_same_sas_on_both_sides() {
     let confirm = ConfirmBody {
         nonce: na.clone(),
         card: card_a.clone(),
-        status: ConfirmStatus::Accepted,
     };
     let confirm_envelope =
         seal_confirm(&got.card, &confirm, &alice.sig, &mut ScriptedRng::seeded(2)).unwrap();
@@ -323,8 +322,10 @@ fn online_pairing_reaches_the_same_sas_on_both_sides() {
     let confirm_envelope = pairing_envelope_from_link(&link, PairingLink::Confirm).unwrap();
     let sealed = SealedEnvelope::decode(&confirm_envelope, NET).unwrap();
     assert_eq!(sealed.hint(), Hint::contact(&bob.hint, sealed.enc()));
-    let got_confirm = open_confirm(&sealed, &bob.enc).unwrap();
-    assert_eq!(got_confirm, confirm);
+    let Confirm::Accepted(got_confirm) = open_confirm(&sealed, &bob.enc).unwrap() else {
+        panic!("not accepted");
+    };
+    assert_eq!(*got_confirm, confirm);
     assert!(got_confirm.matches_invite(&invite));
 
     let sas_a = Sas::compute(NET, &card_a, &got.card, &na, &got.nonce);
@@ -341,7 +342,6 @@ fn a_changed_invite_fails_the_commitment() {
     let confirm = ConfirmBody {
         nonce: na.clone(),
         card: card_a.clone(),
-        status: ConfirmStatus::Accepted,
     };
     assert!(confirm.matches_invite(&honest));
 
@@ -369,7 +369,6 @@ fn a_confirm_must_be_signed_by_its_card() {
     let confirm = ConfirmBody {
         nonce: Nonce::zero(),
         card: alice.card("Alice", NET),
-        status: ConfirmStatus::AlreadyUsed,
     };
     assert_eq!(
         seal_confirm(&card_b, &confirm, &mallory.sig, &mut ScriptedRng::seeded(2)),
@@ -390,7 +389,7 @@ fn a_confirm_must_be_signed_by_its_card() {
     let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
     assert_eq!(
         open_confirm(&sealed, &bob.enc).err(),
-        Some(Malformed::MissingField { tag: 0x08 }.into())
+        Some(Malformed::Unsigned { kind: 4 }.into())
     );
     // Signed by a key other than the card's.
     let envelope = lepic_contact::seal(
@@ -414,27 +413,84 @@ fn a_confirm_must_be_signed_by_its_card() {
     );
 }
 
+/// A confirm body sealed to `card_b`, signed by `signer` or anonymous.
+fn confirm_envelope(card_b: &ContactCard, body: Vec<u8>, signer: Option<&Side>) -> Vec<u8> {
+    seal(
+        NET,
+        card_b.enc_key(),
+        card_b.hint_rule(),
+        &Content::new(MessageType::PairingConfirm, body),
+        signer.map(|side| &side.sig),
+        &mut ScriptedRng::seeded(7),
+    )
+    .unwrap()
+}
+
 #[test]
-fn pairing_body_rejections() {
-    let alice = Side::new(1);
-    let card = alice.card("Alice", NET);
-    assert_eq!(
-        ReplyBody::decode(&[0; 47], NET).err(),
-        Some(Malformed::Truncated.into())
-    );
-    let mut confirm = ConfirmBody {
+fn a_refusal_is_one_anonymous_status_byte() {
+    let bob = Side::new(11);
+    let card_b = bob.card("Bob", NET);
+    for (refusal, byte) in [
+        (Refusal::AlreadyUsed, 2),
+        (Refusal::Expired, 3),
+        (Refusal::CancelledByInviter, 4),
+    ] {
+        let envelope = seal_refusal(&card_b, refusal, &mut ScriptedRng::seeded(8)).unwrap();
+        let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+        assert_eq!(sealed.hint(), Hint::contact(&bob.hint, sealed.enc()));
+        let opened = sealed.open(&bob.enc).unwrap();
+        assert_eq!(opened.content.body, [byte]);
+        assert_eq!(opened.sender, None);
+        assert_eq!(opened.content.card, None);
+        assert_eq!(
+            open_confirm(&sealed, &bob.enc).unwrap(),
+            Confirm::Refused(refusal)
+        );
+    }
+}
+
+#[test]
+fn confirms_refuse_signed_refusals_anonymous_acceptances_and_bad_statuses() {
+    let (alice, bob) = (Side::new(1), Side::new(11));
+    let card_b = bob.card("Bob", NET);
+    let accepted = ConfirmBody {
         nonce: Nonce::zero(),
-        card,
-        status: ConfirmStatus::Expired,
+        card: alice.card("Alice", NET),
     }
     .encode();
-    *confirm.last_mut().unwrap() = 9;
+    let open = |envelope: Vec<u8>| {
+        open_confirm(&SealedEnvelope::decode(&envelope, NET).unwrap(), &bob.enc).err()
+    };
     assert_eq!(
-        ConfirmBody::decode(&confirm, NET).err(),
-        Some(Malformed::Body.into())
+        open(confirm_envelope(&card_b, vec![2], Some(&alice))),
+        Some(Malformed::Signed { kind: 4 }.into())
     );
     assert_eq!(
-        ConfirmBody::decode(&[0; 16], NET).err(),
+        open(confirm_envelope(&card_b, accepted.clone(), None)),
+        Some(Malformed::Unsigned { kind: 4 }.into())
+    );
+    let mut wrong_status = accepted.clone();
+    *wrong_status.last_mut().unwrap() = 2;
+    for body in [
+        vec![1],
+        vec![0],
+        vec![5],
+        Vec::new(),
+        vec![0; 17],
+        wrong_status,
+    ] {
+        assert_eq!(
+            open(confirm_envelope(&card_b, body.clone(), Some(&alice))),
+            Some(Malformed::Body.into()),
+            "{body:02x?}"
+        );
+    }
+}
+
+#[test]
+fn pairing_body_rejections() {
+    assert_eq!(
+        ReplyBody::decode(&[0; 47], NET).err(),
         Some(Malformed::Truncated.into())
     );
     assert_eq!(
@@ -466,6 +522,16 @@ fn secrets_do_not_print() {
         "PairingCode(<redacted>)"
     );
     assert_eq!(format!("{:?}", Nonce::zero()), "Nonce(<redacted>)");
+    let alice = Side::new(1);
+    let invite = invite_for(&alice, &alice.card("Alice", NET), &Nonce::zero());
+    let shown = format!("{invite:?}");
+    assert!(
+        shown.contains(&format!("len: {}", invite.as_bytes().len())),
+        "{shown}"
+    );
+    for hidden in ["192", "c0", "Alice", "epicbox"] {
+        assert!(!shown.contains(hidden), "{hidden} in {shown}");
+    }
 }
 
 proptest! {
@@ -504,78 +570,313 @@ fn edited_card(side: &Side, name: &str, edit: impl FnOnce(&mut CardFields)) -> C
     ContactCard::sign(NET, fields, &side.sig).unwrap()
 }
 
-#[test]
-fn key_check_round_trips_and_needs_the_new_peer_key() {
-    // X holds an old pairing with Y and re-paired; X asks over the new pairing.
-    let (x_old, x_new, y_old, y_new) = (Side::new(1), Side::new(11), Side::new(21), Side::new(31));
-    let body = KeyCheckBody {
-        recipient_old_card: y_old.card("Yan", NET),
-        sender_old_card: x_old.card("Xia", NET),
-    };
-    let envelope = seal_key_check(
-        &y_new.card("Yan", NET),
-        &body,
-        &x_new.sig,
+/// One side of a key check: its card and keys for the old and for the new pairing.
+struct Party {
+    old: Side,
+    new: Side,
+    old_card: ContactCard,
+    new_card: ContactCard,
+}
+
+impl Party {
+    fn new(old: u8, new: u8, name: &str) -> Self {
+        let (old, new) = (Side::new(old), Side::new(new));
+        let old_card = edited_card(&old, name, |fields| fields.seq = 3);
+        let new_card = new.card(name, NET);
+        Self {
+            old,
+            new,
+            old_card,
+            new_card,
+        }
+    }
+}
+
+/// X sends the check for its old record with Y; returns the 06 bytes.
+fn check_from(x: &Party, y: &Party) -> Vec<u8> {
+    seal_key_check(
+        &y.new_card,
+        &y.old_card,
+        &x.new.sig,
         &mut ScriptedRng::seeded(1),
     )
+    .unwrap()
+}
+
+/// Y answers found with its old slot's card at seq 4.
+fn found_from(y: &Party, x: &Party, check: &[u8]) -> (Vec<u8>, ContactCard) {
+    let refreshed = edited_card(&y.old, "Yan", |fields| fields.seq = 4);
+    let found = seal_found(
+        &x.new_card,
+        &y.new.sig,
+        check,
+        &refreshed,
+        &y.old.sig,
+        &mut ScriptedRng::seeded(2),
+    )
     .unwrap();
+    (found, refreshed)
+}
+
+fn opened_answer(envelope: &[u8], to: &Side, from: &Side) -> KeyCheckAnswer {
+    open_key_check_answer(
+        &SealedEnvelope::decode(envelope, NET).unwrap(),
+        &to.enc,
+        &from.sig.verifying_key(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn key_check_reveals_only_a_tag_bound_to_the_new_pairing() {
+    let (x, y) = (Party::new(1, 11, "Xia"), Party::new(21, 31, "Yan"));
+    let envelope = check_from(&x, &y);
     let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    let check = open_key_check(&sealed, &y.new.enc, &x.new.sig.verifying_key()).unwrap();
+    let (n_x, n_y) = (x.new.sig.verifying_key(), y.new.sig.verifying_key());
     assert_eq!(
-        open_key_check(&sealed, &y_new.enc, &x_new.sig.verifying_key()).unwrap(),
-        body
+        check,
+        KeyCheck {
+            seq: 3,
+            tag: key_check_tag(&y.old.hint, &n_y, &n_x)
+        }
     );
+    assert_ne!(check.tag, key_check_tag(&y.old.hint, &n_x, &n_y));
+    assert_eq!(KeyCheck::decode(&check.encode()).unwrap(), check);
+    let opened = sealed.open(&y.new.enc).unwrap();
+    assert_eq!(opened.content.body.len(), 36);
+    assert_eq!(opened.content.card, None);
     assert_eq!(
-        open_key_check(&sealed, &y_new.enc, &x_old.sig.verifying_key()),
+        open_key_check(&sealed, &y.new.enc, &x.old.sig.verifying_key()),
         Err(DecodeError::KeyChanged)
-    );
-    assert_eq!(
-        KeyCheckBody::decode(&body.encode().unwrap(), NET).unwrap(),
-        body
     );
 }
 
 #[test]
-fn key_check_bodies_refuse_bad_lengths_and_cards() {
-    let card = Side::new(1).card("Xia", NET);
-    let bytes = card.as_bytes();
-    let length = u16::try_from(bytes.len()).unwrap().to_be_bytes();
-    let cases: Vec<Vec<u8>> = vec![
-        Vec::new(),
-        vec![0, 0],
-        [&[0, 0][..], bytes].concat(),
-        [&length[..], bytes].concat(),
-        [
-            &(u16::try_from(bytes.len()).unwrap() + 1).to_be_bytes()[..],
-            bytes,
-            bytes,
-        ]
-        .concat(),
-        [&length[..], bytes, &bytes[..bytes.len() - 1]].concat(),
-    ];
-    for case in cases {
+fn key_check_bodies_are_exactly_36_bytes() {
+    for length in [0, 4, 35, 37] {
         assert_eq!(
-            KeyCheckBody::decode(&case, NET),
+            KeyCheck::decode(&vec![0; length]),
             Err(Malformed::Body.into()),
-            "{case:02x?}"
+            "{length}"
         );
     }
 }
 
 #[test]
-fn key_check_answer_round_trips() {
-    let (x_new, y_new) = (Side::new(11), Side::new(31));
-    let envelope = seal_key_check_answer(
-        &x_new.card("Xia", NET),
-        KeyCheckStatus::NotThisWallet,
-        &y_new.sig,
-        &mut ScriptedRng::seeded(2),
+fn a_found_answer_with_its_proof_completes_the_check_both_ways() {
+    let (x, y) = (Party::new(1, 11, "Xia"), Party::new(21, 31, "Yan"));
+    let (n_x, n_y) = (x.new.sig.verifying_key(), y.new.sig.verifying_key());
+    let check = check_from(&x, &y);
+    let (found, refreshed) = found_from(&y, &x, &check);
+    let answer = opened_answer(&found, &x.new, &y.new);
+    assert_eq!(
+        accept_found(&answer, &check, &n_y, &n_x, &y.old_card).unwrap(),
+        refreshed
+    );
+
+    let restored = seal_restored(
+        &y.new_card,
+        &x.new.sig,
+        &found,
+        &x.old_card,
+        &x.old.sig,
+        &mut ScriptedRng::seeded(3),
     )
     .unwrap();
-    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    let answer = opened_answer(&restored, &y.new, &x.new);
     assert_eq!(
-        open_key_check_answer(&sealed, &x_new.enc, &y_new.sig.verifying_key()).unwrap(),
-        KeyCheckStatus::NotThisWallet
+        accept_restored(&answer, &found, &n_x, &n_y, NET).unwrap(),
+        x.old_card
     );
+}
+
+#[test]
+fn a_found_answer_is_refused_without_the_old_keys_proof() {
+    let (x, y) = (Party::new(1, 11, "Xia"), Party::new(21, 31, "Yan"));
+    let mallory = Party::new(41, 51, "Yan");
+    let (n_x, n_y) = (x.new.sig.verifying_key(), y.new.sig.verifying_key());
+    let check = check_from(&x, &y);
+    let (found, _) = found_from(&y, &x, &check);
+    let answer = opened_answer(&found, &x.new, &y.new);
+
+    // The proof covers the check it answers and both new keys.
+    let other_check = check_from(&x, &mallory);
+    let not_proven = Err(DecodeError::KeyCheckNotProven);
+    assert_eq!(
+        accept_found(&answer, &other_check, &n_y, &n_x, &y.old_card),
+        not_proven
+    );
+    assert_eq!(
+        accept_found(&answer, &check, &n_x, &n_y, &y.old_card),
+        not_proven
+    );
+    // A party without the old slot key cannot answer found for it, even with a valid card.
+    let (forged, _) = found_from(&mallory, &x, &check);
+    let forged = opened_answer(&forged, &x.new, &mallory.new);
+    assert_eq!(
+        accept_found(
+            &forged,
+            &check,
+            &mallory.new.sig.verifying_key(),
+            &n_x,
+            &y.old_card
+        ),
+        not_proven
+    );
+    // Y's own refreshed card, seen elsewhere, with a proof by another key.
+    let refreshed = edited_card(&y.old, "Yan", |fields| fields.seq = 4);
+    let length = u16::try_from(refreshed.as_bytes().len())
+        .unwrap()
+        .to_be_bytes();
+    let body = [&[2][..], &length, refreshed.as_bytes(), &[9; 64]].concat();
+    let replayed = KeyCheckAnswer::decode(&body).unwrap();
+    assert_eq!(
+        accept_found(&replayed, &check, &n_y, &n_x, &y.old_card),
+        not_proven
+    );
+    // Not-found and restored answers never complete a check.
+    assert_eq!(
+        accept_found(&KeyCheckAnswer::NotFound, &check, &n_y, &n_x, &y.old_card),
+        not_proven
+    );
+    assert_eq!(
+        accept_restored(&answer, &found, &n_x, &n_y, NET),
+        not_proven
+    );
+}
+
+#[test]
+fn a_found_card_needs_the_same_keys_and_a_higher_seq() {
+    let (x, y) = (Party::new(1, 11, "Xia"), Party::new(21, 31, "Yan"));
+    let (n_x, n_y) = (x.new.sig.verifying_key(), y.new.sig.verifying_key());
+    let check = check_from(&x, &y);
+    let other = Side::new(61);
+    for refreshed in [
+        edited_card(&y.old, "Yan", |fields| fields.seq = 3),
+        edited_card(&y.old, "Yan", |fields| fields.seq = 2),
+        edited_card(&y.old, "Yan", |fields| {
+            fields.seq = 4;
+            fields.enc_key = other.enc_pk();
+        }),
+        edited_card(&y.old, "Yan", |fields| {
+            fields.seq = 4;
+            fields.hint_key = other.hint.clone();
+        }),
+    ] {
+        let found = seal_found(
+            &x.new_card,
+            &y.new.sig,
+            &check,
+            &refreshed,
+            &y.old.sig,
+            &mut ScriptedRng::seeded(2),
+        )
+        .unwrap();
+        let answer = opened_answer(&found, &x.new, &y.new);
+        assert_eq!(
+            accept_found(&answer, &check, &n_y, &n_x, &y.old_card),
+            Err(DecodeError::KeyCheckNotProven),
+            "{:?}",
+            refreshed.fields().seq
+        );
+    }
+    assert_eq!(
+        seal_found(
+            &x.new_card,
+            &y.new.sig,
+            &check,
+            &y.old_card,
+            &y.new.sig,
+            &mut ScriptedRng::seeded(2),
+        ),
+        Err(EncodeError::SigningKeyMismatch)
+    );
+}
+
+#[test]
+fn a_restored_answer_needs_a_proof_by_the_cards_own_key() {
+    let (x, y) = (Party::new(1, 11, "Xia"), Party::new(21, 31, "Yan"));
+    let mallory = Party::new(41, 51, "Xia");
+    let (n_x, n_y) = (x.new.sig.verifying_key(), y.new.sig.verifying_key());
+    let check = check_from(&x, &y);
+    let (found, _) = found_from(&y, &x, &check);
+    // Mallory proves its own card, not X's old one; Y adopts only what the proof covers.
+    let restored = seal_restored(
+        &y.new_card,
+        &x.new.sig,
+        &found,
+        &mallory.old_card,
+        &mallory.old.sig,
+        &mut ScriptedRng::seeded(3),
+    )
+    .unwrap();
+    let answer = opened_answer(&restored, &y.new, &x.new);
+    assert_eq!(
+        accept_restored(&answer, &found, &n_x, &n_y, NET).unwrap(),
+        mallory.old_card
+    );
+    // The proof covers the found answer it answers and both new keys.
+    let (other_found, _) = found_from(&y, &mallory, &check);
+    assert_eq!(
+        accept_restored(&answer, &other_found, &n_x, &n_y, NET),
+        Err(DecodeError::KeyCheckNotProven)
+    );
+    assert_eq!(
+        accept_restored(&answer, &found, &n_y, &n_x, NET),
+        Err(DecodeError::KeyCheckNotProven)
+    );
+    assert_eq!(
+        seal_restored(
+            &y.new_card,
+            &x.new.sig,
+            &found,
+            &x.old_card,
+            &x.new.sig,
+            &mut ScriptedRng::seeded(3),
+        ),
+        Err(EncodeError::SigningKeyMismatch)
+    );
+}
+
+#[test]
+fn key_check_answers_round_trip_and_refuse_bad_bodies() {
+    let (x, y) = (Party::new(1, 11, "Xia"), Party::new(21, 31, "Yan"));
+    let not_found = seal_not_found(&x.new_card, &y.new.sig, &mut ScriptedRng::seeded(2)).unwrap();
+    assert_eq!(
+        opened_answer(&not_found, &x.new, &y.new),
+        KeyCheckAnswer::NotFound
+    );
+    let (found, _) = found_from(&y, &x, &check_from(&x, &y));
+    let answer = opened_answer(&found, &x.new, &y.new);
+    let encoded = answer.encode().unwrap();
+    assert_eq!(KeyCheckAnswer::decode(&encoded).unwrap(), answer);
+
+    let card = y.old_card.as_bytes();
+    let length = u16::try_from(card.len()).unwrap().to_be_bytes();
+    let with = |status: u8, length: &[u8], card: &[u8], proof: usize| {
+        [&[status][..], length, card, &vec![7; proof]].concat()
+    };
+    for body in [
+        Vec::new(),
+        vec![1, 0],
+        vec![0],
+        vec![4],
+        vec![2],
+        vec![2, 0],
+        with(2, &[0, 0], &[], 64),
+        with(2, &length, card, 63),
+        with(2, &length, card, 65),
+        with(3, &length, &card[1..], 64),
+        with(1, &length, card, 64),
+    ] {
+        assert_eq!(
+            KeyCheckAnswer::decode(&body),
+            Err(Malformed::Body.into()),
+            "{body:02x?}"
+        );
+    }
+    assert!(KeyCheckAnswer::decode(&with(3, &length, card, 64)).is_ok());
 }
 
 #[test]
@@ -583,7 +884,7 @@ fn key_check_types_must_be_signed() {
     let (x, y) = (Side::new(11), Side::new(31));
     let y_card = y.card("Yan", NET);
     for (kind, body) in [
-        (MessageType::KeyCheck, Vec::new()),
+        (MessageType::KeyCheck, vec![0; 36]),
         (MessageType::KeyCheckAnswer, vec![1]),
         (
             MessageType::ContactUpdate,
@@ -659,7 +960,7 @@ fn a_signed_pairing_reply_is_refused() {
         NET,
         &invite.fields().enc_key,
         HintRule::Invite(invite.id()),
-        &Content::new(MessageType::PairingReply, body.encode()),
+        &Content::new(MessageType::PairingReply, body.encode().to_vec()),
         Some(&bob.sig),
         &mut ScriptedRng::seeded(6),
     )

@@ -13,10 +13,10 @@ mod common;
 
 use common::{ScriptedRng, Side, to_hex};
 use lepic_contact::{
-    Commitment, ConfirmBody, ConfirmCode, ConfirmStatus, ContactKind, ContactName, Content,
-    EncSecretKey, Invite, InviteFields, MessageType, Network, Nonce, PairingCode, PairingLink,
-    Purpose, Reference, RelayHost, ReplyBody, Sas, SealedEnvelope, armor, pairing_envelope_link,
-    seal, seal_confirm, seal_reply,
+    Commitment, ConfirmBody, ConfirmCode, ContactKind, ContactName, Content, EncSecretKey, Invite,
+    InviteFields, MessageType, Network, Nonce, PairingCode, PairingLink, Purpose, Reference,
+    RelayHost, ReplyBody, Sas, SealedEnvelope, armor, pairing_envelope_link, seal, seal_confirm,
+    seal_reply,
 };
 use serde_json::{Value, json};
 
@@ -121,7 +121,6 @@ fn samples() {
         &ConfirmBody {
             nonce: na.clone(),
             card: card_a.clone(),
-            status: ConfirmStatus::Accepted,
         },
         &alice.sig,
         &mut ScriptedRng::seeded(5),

@@ -442,11 +442,12 @@ fn a_bad_signature_or_weak_sender_key_is_refused() {
         Some(DecodeError::BadSignature)
     );
 
-    let weak = [minimal(), field(0x08, &[0; 32]), field(0xff, &[0; 64])].concat();
-    assert_eq!(
-        open_inner(&weak).err(),
-        Some(Malformed::FieldValue { tag: 0x08 }.into())
-    );
+    let mut identity = [0; 32];
+    identity[0] = 1;
+    for key in [[0; 32], identity] {
+        let weak = [minimal(), field(0x08, &key), field(0xff, &[0; 64])].concat();
+        assert_eq!(open_inner(&weak).err(), Some(DecodeError::WeakSigKey));
+    }
 }
 
 #[test]
@@ -629,6 +630,23 @@ proptest! {
             let _ = sealed.open(&bob.enc);
         }
         let _ = dearmor(&String::from_utf8_lossy(&bytes));
+    }
+}
+
+#[test]
+fn content_and_cards_print_lengths_not_bytes() {
+    let alice = Side::new(1);
+    let card = alice.card("Alice", NET);
+    let mut content = Content::new(MessageType::PairingReply, vec![0xab; 40]);
+    content.card = Some(card.clone());
+    let shown = format!("{content:?} {card:?}");
+    assert!(shown.contains("body_len: 40"), "{shown}");
+    assert!(
+        shown.contains(&format!("len: {}", card.as_bytes().len())),
+        "{shown}"
+    );
+    for secret in ["171, 171", "Alice", "epicbox"] {
+        assert!(!shown.contains(secret), "{secret} in {shown}");
     }
 }
 

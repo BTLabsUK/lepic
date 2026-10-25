@@ -52,6 +52,49 @@ fn no_name_is_a_bip39_word() {
     assert!(clashes.is_empty(), "{clashes:?}");
 }
 
+/// Whether `a` becomes `b` by inserting, deleting or replacing at most one letter.
+fn within_one_edit(a: &str, b: &str) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    match long.len() - short.len() {
+        0 => {
+            short
+                .bytes()
+                .zip(long.bytes())
+                .filter(|(x, y)| x != y)
+                .count()
+                <= 1
+        }
+        1 => (0..long.len()).any(|skip| {
+            long.bytes()
+                .enumerate()
+                .filter(|(index, _)| *index != skip)
+                .map(|(_, byte)| byte)
+                .eq(short.bytes())
+        }),
+        _ => false,
+    }
+}
+
+#[test]
+fn no_two_names_are_one_edit_apart() {
+    assert!(within_one_edit("bat", "rat"));
+    assert!(within_one_edit("pine", "pie"));
+    assert!(!within_one_edit("bear", "pint"));
+    let names: Vec<&str> = TABLE
+        .lines()
+        .map(|line| line.split_once('\t').unwrap().1)
+        .collect();
+    let mut close = Vec::new();
+    for (index, first) in names.iter().enumerate() {
+        for second in &names[index + 1..] {
+            if within_one_edit(first, second) {
+                close.push(format!("{first}/{second}"));
+            }
+        }
+    }
+    assert!(close.is_empty(), "{close:?}");
+}
+
 #[test]
 fn no_emoji_needs_a_variation_selector_or_skin_tone() {
     for line in TABLE.lines() {
