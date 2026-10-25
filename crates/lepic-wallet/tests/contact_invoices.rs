@@ -765,3 +765,59 @@ fn a_parked_invoice_is_paid_only_while_its_contact_is_trusted() {
             .is_none()
     );
 }
+
+/// Declining one invoice from a contact deletes it and tells the contact with a sealed
+/// `declined`; an invoice that does not wait cannot be declined.
+#[test]
+fn one_contact_invoice_is_declined_and_the_contact_told() {
+    let world = World::new();
+    let (shop_side, _) = world.pair_for_invoices(ContactKind::Exchange);
+    let declined = world.invoice_contact(shop_side, "declined");
+    let kept = world.invoice_contact(shop_side, "kept");
+    world.collect(&world.payer);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_decline_invoice(declined.slate_id),
+        )
+        .unwrap();
+    assert!(matches!(
+        world.block_on(
+            world
+                .payer
+                .wallet
+                .contact_decline_invoice(declined.slate_id)
+        ),
+        Err(lepic_wallet::contact::ContactError::Invoice(
+            lepic_wallet::invoice::InvoiceError::NotParked { .. }
+        ))
+    ));
+    let left: Vec<_> = world
+        .block_on(world.payer.wallet.contact_invoices())
+        .unwrap()
+        .into_iter()
+        .map(|invoice| invoice.slate_id)
+        .collect();
+    assert_eq!(left, vec![kept.slate_id]);
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contacts_outbox_deliver(&relays(&world.payer)),
+        )
+        .unwrap();
+    world.collect(&world.issuer);
+    let told: Vec<_> = events(&mut issuer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::InvoiceDeclined(declined) => Some(declined.tx_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told, vec![declined.tx_id]);
+}

@@ -680,6 +680,43 @@ where
         Ok(())
     }
 
+    /// Declines one invoice parked from a contact (RFC 0002 11.1): it is deleted and never paid,
+    /// and a sealed `declined` for it is queued for the contact's mailbox, posted by the next
+    /// outbox run or collecting cycle.
+    ///
+    /// Fails with [`ContactError::Invoice`] carrying [`InvoiceError::NotParked`] when no unpaid
+    /// invoice from a contact with that id waits, and as the store does.
+    #[instrument(skip_all, fields(wallet = %self.config().name, slate_id = %slate_id))]
+    pub async fn contact_decline_invoice(&self, slate_id: SlateId) -> Result<(), ContactError> {
+        let session = self.session()?;
+        let slate_uuid = uuid(slate_id);
+        let contact_id = self
+            .contact_work(move |_, _| {
+                session.store.write(|repos| {
+                    let parked = repos
+                        .pending_invoice(slate_uuid)?
+                        .is_some_and(|invoice| invoice.status == PendingInvoiceStatus::Parked);
+                    let Some(contact_id) = slate_contact(repos, slate_uuid)?.filter(|_| parked)
+                    else {
+                        return Err(ContactError::Invoice(InvoiceError::NotParked { slate_id }));
+                    };
+                    repos.delete_pending_invoice(slate_uuid)?;
+                    repos.delete_setting(&format!("{INVOICE_PREFIX}{slate_uuid}"))?;
+                    Ok(contact_id)
+                })
+            })
+            .await?;
+        info!("contact invoice declined");
+        self.queue_contact_notice(
+            contact_id,
+            Notice {
+                slate_id,
+                kind: NoticeKind::Declined,
+            },
+        )
+        .await
+    }
+
     /// Declines and deletes every unpaid invoice parked from the contact (RFC 0002 11.1), each
     /// with a sealed `declined`. Returns how many.
     pub(crate) async fn decline_contact_invoices(
