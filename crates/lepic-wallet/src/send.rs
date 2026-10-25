@@ -919,6 +919,12 @@ fn stored_s1_for_delivery(
     else {
         return Err(not_resendable);
     };
+    // A slate exchanged with a paired contact goes again only through its outbox, sealed.
+    if matches!(delivery, Delivery::Deliver { .. })
+        && crate::contact::slate_contact(repos, slate_uuid)?.is_some()
+    {
+        return Err(not_resendable);
+    }
     let Some(stored) = repos
         .slate(slate_uuid, SlateStage::Standard1)?
         .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())

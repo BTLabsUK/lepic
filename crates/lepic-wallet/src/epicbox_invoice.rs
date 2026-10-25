@@ -234,7 +234,9 @@ where
         })
     }
 
-    /// The parked invoices, oldest first, with when `expiry` deletes them. Fails with [`WalletError::Locked`].
+    /// The invoices parked on the payments address, oldest first, with when `expiry` deletes
+    /// them; invoices from paired contacts are listed by `contact_invoices` only. Fails with
+    /// [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub fn pending_invoices(
         &self,
@@ -243,9 +245,16 @@ where
         let network = self.config().network;
         let codecs = stored_codecs(network);
         let session = self.session()?;
-        let parked = session
-            .store
-            .read(|repos| Ok::<_, WalletError>(repos.pending_invoices()?))?;
+        // Invoices from paired contacts are listed by `contact_invoices` only.
+        let parked = session.store.read(|repos| {
+            let mut parked = Vec::new();
+            for invoice in repos.pending_invoices()? {
+                if crate::contact::slate_contact(repos, invoice.slate_id)?.is_none() {
+                    parked.push(invoice);
+                }
+            }
+            Ok::<_, WalletError>(parked)
+        })?;
         Ok(parked
             .into_iter()
             .filter(|invoice| invoice.status == PendingInvoiceStatus::Parked)
@@ -368,7 +377,8 @@ where
     /// sender proved that it runs LEPIC, it is sent a `declined` notice from the payments
     /// address; the notice is advisory, so a failure to send it is logged and not returned.
     /// Fails with [`InvoiceError::NotParked`] when no invoice with the slate id waits to be
-    /// paid.
+    /// paid, or when it came from a paired contact: decline those with
+    /// `contact_decline_invoice`.
     #[instrument(skip_all, fields(wallet = %self.config().name, slate_id = %slate_id))]
     pub async fn decline_invoice(&self, slate_id: SlateId) -> Result<(), InvoiceError> {
         self.decline_parked(slate_id)?;
@@ -380,6 +390,10 @@ where
     fn decline_parked(&self, slate_id: SlateId) -> Result<(), InvoiceError> {
         let session = self.session()?;
         session.store.write(|repos| {
+            // A contact's invoice is declined with `contact_decline_invoice` only.
+            if crate::contact::slate_contact(repos, uuid(slate_id))?.is_some() {
+                return Err(InvoiceError::NotParked { slate_id });
+            }
             match repos.set_pending_invoice_status(uuid(slate_id), PendingInvoiceStatus::Declined) {
                 Ok(()) => Ok(()),
                 Err(StoreError::NotFound { .. } | StoreError::InvalidStatus { .. }) => {

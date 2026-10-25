@@ -983,3 +983,43 @@ fn the_outbox_forgets_entries_whose_transaction_ended() {
     );
     assert_eq!(world.collect(&world.issuer).messages, 0);
 }
+
+/// Only the contact calls act on a contact's invoice: the payments-address calls neither list,
+/// pay nor decline it, and its payment is never delivered again outside the outbox.
+#[test]
+fn address_invoice_calls_never_act_on_a_contact_invoice() {
+    let world = World::new();
+    let (shop_side, _) = world.pair_for_invoices(ContactKind::Exchange);
+    let unpaid = world.invoice_contact(shop_side, "unpaid");
+    let to_pay = world.invoice_contact(shop_side, "paid");
+    world.collect(&world.payer);
+    let wallet = &world.payer.wallet;
+
+    assert!(
+        wallet
+            .pending_invoices(lepic_wallet::epicbox_invoice::InvoiceExpiry::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        world.block_on(wallet.pay_parked_invoice(unpaid.slate_id, pay_request())),
+        Err(lepic_wallet::invoice::InvoiceError::NotParked { .. })
+    ));
+    assert!(matches!(
+        world.block_on(wallet.decline_invoice(unpaid.slate_id)),
+        Err(lepic_wallet::invoice::InvoiceError::NotParked { .. })
+    ));
+    assert_eq!(world.block_on(wallet.contact_invoices()).unwrap().len(), 2);
+
+    let paid = world.pay_contact(&to_pay);
+    assert!(matches!(
+        world.block_on(wallet.resend(
+            paid.tx_id,
+            Delivery::Deliver {
+                transport: lepic_epicbox::TRANSPORT_ID,
+                to: lepic_transport::transport::Destination::new(world.issuer.address.to_string()),
+            },
+        )),
+        Err(lepic_wallet::send::SendError::NotResendable { .. })
+    ));
+}
