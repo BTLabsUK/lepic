@@ -15,6 +15,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.13"
+ed25519-dalek = { version = "3.0.0", default-features = false }
 lepic-contact = { path = "../crates/lepic-contact" }
 lepic-crypto = { path = "../crates/lepic-crypto" }
 lepic-epicbox = { path = "../crates/lepic-epicbox" }
@@ -170,6 +171,20 @@ bench = false
 [[bin]]
 name = "pair_words"
 path = "fuzz_targets/pair_words.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope_inner"
+path = "fuzz_targets/envelope_inner.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pair_answers"
+path = "fuzz_targets/pair_answers.rs"
 test = false
 doc = false
 bench = false

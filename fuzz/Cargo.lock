@@ -1094,6 +1094,7 @@ dependencies = [
 name = "lepic-fuzz"
 version = "0.0.0"
 dependencies = [
+ "ed25519-dalek",
  "lepic-contact",
  "lepic-crypto",
  "lepic-epicbox",

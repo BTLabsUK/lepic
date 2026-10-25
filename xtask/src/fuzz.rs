@@ -54,6 +54,8 @@ const TARGETS: &[&str] = &[
     "pair_invite",
     "armor_sealed",
     "pair_words",
+    "envelope_inner",
+    "pair_answers",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -437,6 +439,40 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                 }
             }
         }
+        "envelope_inner" => {
+            let envelopes = read_pairing(&vectors, "envelopes.json")?;
+            for inner in hex_fields(&envelopes, "inner") {
+                for mode in [0, 1, 2, 3] {
+                    seeds.insert(prefixed(&[mode], &inner));
+                }
+            }
+        }
+        "pair_answers" => {
+            let pairings = read_pairing(&vectors, "cards_invites.json")?;
+            for body in [
+                hex_fields(&pairings, "confirm_body"),
+                hex_fields(&pairings, "reply_body"),
+            ]
+            .concat()
+            {
+                seeds.insert(prefixed(&[0], &body));
+            }
+            seeds.insert(prefixed(&[0], &[2]));
+            let checks = read_pairing(&vectors, "keycheck.json")?;
+            for body in hex_fields(&checks, "check_body") {
+                seeds.insert(prefixed(&[1], &body));
+            }
+            seeds.insert(prefixed(&[2], &[1]));
+            let cards = hex_fields(&checks, "y_refreshed_card");
+            let proofs = hex_fields(&checks, "found_proof");
+            for (card, proof) in cards.iter().zip(&proofs) {
+                let length = u16::try_from(card.len())?.to_be_bytes();
+                for status in [2, 3] {
+                    let body = [&[status][..], &length, card, proof].concat();
+                    seeds.insert(prefixed(&[2], &body));
+                }
+            }
+        }
         other => bail!("no seed rule for fuzz target `{other}`"),
     }
     if seeds.is_empty() {
@@ -568,6 +604,14 @@ fn contact_samples(root: &Path) -> Result<Value> {
 }
 
 const CONTACT_SAMPLES: &str = "crates/lepic-contact/tests/snapshots/samples__samples.snap";
+
+/// One of the pairing kit's vector files.
+fn read_pairing(vectors: &Path, file: &str) -> Result<Value> {
+    let path = vectors.join("pairing").join(file);
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("could not parse {}", path.display()))
+}
 
 fn prefixed(prefix: &[u8], bytes: &[u8]) -> Vec<u8> {
     let mut seed = prefix.to_vec();
