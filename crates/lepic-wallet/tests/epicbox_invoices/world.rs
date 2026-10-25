@@ -273,6 +273,9 @@ impl Party {
                 failing: Arc::clone(&deliveries_failing),
             }))
             .unwrap();
+        transports
+            .register(Box::new(lepic_transport::file::FileTransport::new()))
+            .unwrap();
         let stores = CountingStores::default();
         let clock = TestClock(Arc::new(Mutex::new(fixed_time())));
         let data_dir = PathBuf::from(format!("/{name}"));

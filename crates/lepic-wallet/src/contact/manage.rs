@@ -18,7 +18,11 @@ fn kind(kind: lepic_store::ContactKind) -> ContactKind {
     }
 }
 
-pub(crate) fn view(record: &ContactRecord, home_relay: Option<String>) -> ContactView {
+pub(crate) fn view(
+    record: &ContactRecord,
+    home_relay: Option<String>,
+    now: jiff::Timestamp,
+) -> ContactView {
     ContactView {
         contact_id: record.contact_id,
         account: record.account,
@@ -35,6 +39,7 @@ pub(crate) fn view(record: &ContactRecord, home_relay: Option<String>) -> Contac
         app_contact: record.app_contact.clone(),
         home_relay,
         imported_from_backup: record.imported_from_backup,
+        lapsed: super::sealed::lapsed(record, now),
         created_at: record.created_at,
     }
 }
@@ -60,7 +65,8 @@ where
     /// [`crate::WalletError::Locked`] and as the store does.
     pub async fn contacts(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.session()?;
-        self.contact_work(move |_, _| {
+        self.contact_work(move |ports, _| {
+            let now = ports.clock.now();
             Ok(session.store.read(|repos| {
                 let mut views = Vec::new();
                 for record in repos.contacts()? {
@@ -70,7 +76,7 @@ where
                     let home = repos
                         .contact_mailbox(record.contact_id)?
                         .map(|mailbox| mailbox.home_relay);
-                    views.push(view(&record, home));
+                    views.push(view(&record, home, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -81,13 +87,14 @@ where
     /// One paired contact. Fails with [`ContactError::UnknownContact`].
     pub async fn contact(&self, contact_id: ContactId) -> Result<ContactView, ContactError> {
         let session = self.session()?;
-        self.contact_work(move |_, _| {
+        self.contact_work(move |ports, _| {
+            let now = ports.clock.now();
             session.store.read(|repos| {
                 let record = paired(repos, contact_id)?;
                 let home = repos
                     .contact_mailbox(contact_id)?
                     .map(|mailbox| mailbox.home_relay);
-                Ok(view(&record, home))
+                Ok(view(&record, home, now))
             })
         })
         .await

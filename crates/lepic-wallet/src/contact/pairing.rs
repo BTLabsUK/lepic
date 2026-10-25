@@ -638,7 +638,7 @@ where
                         backoff: Vec::new(),
                     })?;
                     debug!(peer_relay = %peer_relay, "in-person pairing stored");
-                    Ok(super::manage::view(&record, Some(host_text(&home))))
+                    Ok(super::manage::view(&record, Some(host_text(&home)), now))
                 })
             })
             .await?;

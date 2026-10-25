@@ -12,12 +12,13 @@
     clippy::arithmetic_side_effects
 )]
 
+#[path = "pairing/helpers.rs"]
+mod helpers;
 mod support;
 #[path = "epicbox_invoices/world.rs"]
 mod world;
 
-use std::time::Duration;
-
+use helpers::{HOUR, MINUTE, accept, events, invite_request, relays};
 use lepic_contact::{
     ContactCard, ContactKind, EncSecretKey, Invite, InviteFields, Network as ContactNetwork,
     PairingLink, SealedEnvelope, open_reply, pairing_envelope_from_link, seal_reply,
@@ -27,102 +28,12 @@ use lepic_epicbox::{Domain, Network as RelayNetwork, RelayEndpoint, Security};
 use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::contact::{
-    AcceptRequest, CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry,
-    InviteRequest, LinkOutcome, PairingFailure, RelayMode, SasDecision,
+    CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry, InviteRequest,
+    LinkOutcome, PairingFailure, RelayMode, SasDecision,
 };
 use lepic_wallet::event::{ContactEvent, FailedPairing};
 use rand::SeedableRng;
-use tokio::sync::broadcast::Receiver;
 use world::{Party, World};
-
-const HOUR: Duration = Duration::from_secs(60 * 60);
-const MINUTE: Duration = Duration::from_secs(60);
-
-fn relays(party: &Party) -> ContactRelays {
-    ContactRelays {
-        epicbox: party.epicbox.clone(),
-        built_in: Vec::new(),
-        mode: RelayMode::Online,
-    }
-}
-
-fn invite_request(name: &str) -> InviteRequest {
-    InviteRequest {
-        account: AccountIndex(0),
-        name: name.to_owned(),
-        kind: ContactKind::Person,
-        expiry: InviteExpiry::OneDay,
-        offer_words: false,
-    }
-}
-
-fn accept(link: &str, name: &str, by_hand: bool) -> AcceptRequest {
-    AcceptRequest {
-        link: link.to_owned(),
-        account: AccountIndex(0),
-        name: name.to_owned(),
-        by_hand,
-    }
-}
-
-fn events(receiver: &mut Receiver<Event>) -> Vec<Event> {
-    std::iter::from_fn(|| receiver.try_recv().ok()).collect()
-}
-
-impl World {
-    fn invite(&self, party: &Party, name: &str) -> String {
-        self.block_on(
-            party
-                .wallet
-                .pairing_invite(&relays(party), invite_request(name)),
-        )
-        .unwrap()
-        .link
-    }
-
-    fn collect(&self, party: &Party) -> lepic_wallet::contact::CollectReport {
-        self.block_on(
-            party
-                .wallet
-                .contacts_collect(&relays(party), CollectTrigger::Open),
-        )
-        .unwrap()
-    }
-
-    /// The issuer invites, the payer answers through the relay, and both collect.
-    fn pair_by_link(&self) -> (ContactId, ContactId) {
-        let link = self.invite(&self.issuer, "Anna");
-        let answered = self
-            .block_on(
-                self.payer
-                    .wallet
-                    .pairing_accept(&relays(&self.payer), accept(&link, "Ben", false)),
-            )
-            .unwrap();
-        assert!(answered.posted);
-        assert_eq!(self.collect(&self.issuer).paired, 1);
-        assert_eq!(self.collect(&self.payer).paired, 1);
-        let issuer_contact = self.only_contact(&self.issuer);
-        assert_eq!(answered.contact_id, self.only_contact(&self.payer));
-        (issuer_contact, answered.contact_id)
-    }
-
-    fn only_contact(&self, party: &Party) -> ContactId {
-        let contacts = self.block_on(party.wallet.contacts()).unwrap();
-        assert_eq!(contacts.len(), 1, "{contacts:?}");
-        contacts[0].contact_id
-    }
-
-    fn sas(&self, party: &Party, contact: ContactId) -> Vec<&'static str> {
-        self.block_on(party.wallet.contact(contact))
-            .unwrap()
-            .sas
-            .unwrap()
-            .iter()
-            .map(|symbol| symbol.name)
-            .collect()
-    }
-}
 
 #[test]
 fn two_wallets_pair_by_link_through_the_relay_and_see_one_sas() {

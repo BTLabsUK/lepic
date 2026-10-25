@@ -11,6 +11,7 @@ mod keys;
 mod manage;
 mod pairing;
 mod relay;
+mod sealed;
 
 use std::time::Duration;
 
@@ -28,6 +29,7 @@ pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
     InviteRequest, LinkOutcome, SasDecision,
 };
+pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
 
 /// How long an inviter keeps draining its reply mailbox after the invite expired, for the clock
 /// skew of RFC 0002 C-26. Also the skew an invitee allows an invite's expiry.
@@ -93,6 +95,9 @@ pub struct ContactView {
     pub home_relay: Option<String>,
     /// The record came from a backup and may also live on another device (RFC 0002 9.5).
     pub imported_from_backup: bool,
+    /// No envelope from the contact opened in [`SEAL_LAPSE`]: a sealed send should warn that
+    /// the contact needs LEPIC to open it (RFC 0002 9.4).
+    pub lapsed: bool,
     pub created_at: Timestamp,
 }
 
@@ -149,6 +154,27 @@ pub enum ContactError {
     /// Pairing words are not offered yet.
     #[error("pairing words are not available")]
     WordsUnavailable,
+    /// Sealing is off for the contact, or its card says it cannot open sealed files.
+    #[error("the contact does not take sealed slates")]
+    SealOff,
+    #[error("no such transaction with a slate")]
+    UnknownTransaction,
+    /// No key of this wallet matches, or the signer is not the contact of the key that matched:
+    /// the text was sealed for another wallet or install.
+    #[error("sealed for another wallet or install")]
+    NotForThisInstall,
+    #[error("the sealed text cannot be opened")]
+    CannotOpen,
+    #[error("the sealed text holds no slate")]
+    NotASlate,
+    #[error("a slate at stage {0} is not taken here")]
+    Stage(lepic_slate::stage::Stage),
+    #[error("slate was not received")]
+    Receive(#[source] crate::receive::ReceiveError),
+    #[error("invoice was not handled")]
+    Invoice(#[source] crate::invoice::InvoiceError),
+    #[error("slate was not finalized")]
+    Finalize(#[source] crate::finalize::FinalizeError),
 }
 
 impl From<StoreError> for ContactError {

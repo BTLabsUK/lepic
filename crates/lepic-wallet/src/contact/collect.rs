@@ -538,7 +538,7 @@ where
 
     /// Replaces the contact's card with `card` when its sequence number is higher and, for a
     /// contact update, while the update limits allow it.
-    async fn refresh_card(
+    pub(crate) async fn refresh_card(
         &self,
         contact_id: ContactId,
         card: ContactCard,
@@ -582,7 +582,7 @@ where
         Ok(())
     }
 
-    async fn mark_sealed_in(&self, contact_id: ContactId) -> Result<(), ContactError> {
+    pub(crate) async fn mark_sealed_in(&self, contact_id: ContactId) -> Result<(), ContactError> {
         let session = self.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
