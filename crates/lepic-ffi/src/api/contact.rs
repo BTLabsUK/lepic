@@ -6,9 +6,12 @@
 //! be allowed to send invoices; nothing from a contact ever pays without the user. Contacts
 //! belong to the default account. Contact ids are 32 lowercase hex characters.
 //!
-//! Nothing secret crosses: calls take links, armored text and names, and return public card
-//! details, the words check and states. The one secret the app sees is an invite link: whoever
-//! has it can pair as the contact until it is used or expires, so share it and never store it.
+//! Nothing else secret crosses: calls take links, armored text and names, and return public
+//! card details, the words check and states. Two secrets reach the app (ADR 0014): an invite
+//! link and its pairing words. Whoever has either can pair as the contact until the invite is
+//! used or expires, so the app shows and shares them, and never stores or logs them; the
+//! types holding them do not show them in `Debug`. Reply and confirm links are sealed to the
+//! other side, and card links are public.
 //!
 //! Calls that take a [`ContactRelayMode`] reach relays through the wallet's Epicbox relay and
 //! the home relays of contacts; with `Offline` or `EpicboxOff` the ones that must connect fail
@@ -41,8 +44,9 @@ impl EpicWallet {
     ///
     /// With `offer_words` the invite lasts 10 minutes and is also posted under five pairing
     /// words, returned in `words`, for the other side to type; that needs `Online` and fails
-    /// with `PairingWordsUnavailable` unless the wallet's relay is a built-in one, and with
-    /// `TransportFailed` when the post fails, the invite staying pending until it expires.
+    /// with `ContactsOffline` or `EpicboxOff` before anything is stored, with
+    /// `PairingWordsUnavailable` unless the wallet's relay is a built-in one, and with
+    /// `TransportFailed` when the post fails, the invite then withdrawn.
     ///
     /// Fails with `InvalidContactName` for a `name` a card cannot carry, and with `Io` when 64
     /// pairings are pending.
@@ -266,7 +270,9 @@ impl EpicWallet {
         .await
     }
 
-    /// Sets the user's own name for a contact. Fails with `ContactNotFound`.
+    /// Sets the user's own name for a contact; an empty label clears it. A label follows the
+    /// rule of card names: at most 48 bytes, no control or hidden formatting characters. Fails
+    /// with `InvalidContactName` for another label and with `ContactNotFound`.
     pub async fn contact_set_label(
         &self,
         contact_id: String,
@@ -308,7 +314,8 @@ impl EpicWallet {
 
     /// Attaches a pairing to the app's address-book entry `app_contact`, an id the app
     /// chooses, or detaches it with `None`. Attaching a new pairing to an entry that has one
-    /// already is when to offer [`EpicWallet::contact_key_check`]. Fails with
+    /// already is when to offer [`EpicWallet::contact_key_check`]. The id is at most 256 bytes
+    /// with no control characters. Fails with `InvalidContactName` for another id and with
     /// `ContactNotFound`.
     pub async fn contact_attach(
         &self,
@@ -590,10 +597,11 @@ impl EpicWallet {
         .await
     }
 
-    /// "Send again": posts the outbox entry `id` once more, whatever its state. The contact
-    /// treats a repeat as the same message.
+    /// "Send again": posts the outbox entry `id` once more, delivered or stuck, while its
+    /// payment still waits for the contact. The contact treats a repeat as the same message.
     ///
-    /// Fails with `NoSlateToSend` for an id the outbox does not hold, `ContactsOffline` or
+    /// Fails with `NoSlateToSend` for an id the outbox does not hold or whose transaction
+    /// finished, was cancelled or expired, `ContactsOffline` or
     /// `EpicboxOff`, and `TransportFailed` when the relay fails.
     pub async fn contact_outbox_resend(
         &self,
@@ -635,8 +643,10 @@ impl EpicWallet {
     /// same keys, mailboxes and trust, marked as possibly living on another device too.
     /// Pairings this wallet holds already are kept as they are.
     ///
-    /// Fails with `InvalidArgument` or `Io` for a document this build cannot read or that is
-    /// for the other network; nothing is imported then.
+    /// Fails with `InvalidArgument` for a document over 32 MiB, and with `InvalidArgument` or
+    /// `Io` for a document this build cannot read or that is for the other network; nothing is
+    /// imported then. A pairing whose keys this wallet's seed does not derive is skipped as a
+    /// conflict.
     pub async fn contacts_import(
         &self,
         document: String,

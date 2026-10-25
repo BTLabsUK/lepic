@@ -688,6 +688,8 @@ impl Session {
         incoming: String,
         reply: String,
     ) -> Result<Option<String>, WalletError> {
+        bounded(&incoming, MAX_SEALED_TEXT, "slate")?;
+        bounded(&reply, MAX_SEALED_TEXT, "slate")?;
         let incoming = WireSlate::text(lepic_wallet::slate::MediaType::JSON, incoming);
         let reply = WireSlate::text(lepic_wallet::slate::MediaType::JSON, reply);
         Ok(self.engine.sealed_answer_to_marker(&incoming, &reply)?)

@@ -523,7 +523,9 @@ impl From<ContactError> for WalletError {
             ref other => match other {
                 E::Offline => K::ContactsOffline,
                 E::EpicboxOff => K::EpicboxOff,
-                E::NetworkMismatch | E::RelayAddress => K::InvalidArgument,
+                E::NetworkMismatch | E::RelayAddress | E::TooLarge { .. } => K::InvalidArgument,
+                // Text the user gave; data the wallet stored itself that fails to read is
+                // StoredData, a defect, and maps to Other below.
                 E::Decode(_) => K::InvalidPairingText,
                 E::Name(_) => K::InvalidContactName,
                 E::InviteExpired => K::InviteExpired,
@@ -896,6 +898,7 @@ mod tests {
             (E::WordsNotFound, K::PairingWordsNotFound),
             (E::DoesNotPayInvoices, K::ContactRefusesInvoices),
             (E::NetworkMismatch, K::InvalidArgument),
+            (E::TooLarge { max: 1 }, K::InvalidArgument),
             (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),
             (
                 E::Invoice(InvoiceError::NotParked {

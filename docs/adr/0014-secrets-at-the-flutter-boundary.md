@@ -2,7 +2,8 @@
 
 Status: accepted
 Date: 2026-10-03 (amended the same day to name the PIN variant, to state what the sealed text
-protects, and to list the PIN key and the node API secret)
+protects, and to list the PIN key and the node API secret; amended 2026-10-25 to list the contact
+pairing invite link and pairing words, RFC 0002)
 Supersedes: the "no secrets cross the boundary" line of ADR 0007.
 
 ## Context
@@ -23,6 +24,13 @@ Dart strings cannot be wiped, so every crossing must be deliberate and as rare a
   value written as `lepic.pin-key` when a PIN wallet is created and read at each PIN attempt. During
   a PIN change the new key is kept as `lepic.pin-key-pending`, with a digest of the new sealed text,
   until `confirm_pin_change`. The binding passes both to the store and to nothing else.
+- Out of Rust and into it, for contact pairing (RFC 0002): an invite link (`epiccash://pair/1/`)
+  and its five pairing words. Out, from `pairing_invite` and `pairing_find_words`, for display and
+  sharing only; in, as the user typed, pasted or scanned them, to `pairing_preview`,
+  `pairing_accept` and `pairing_find_words`. Either lets its holder pair as the contact until the
+  invite is used or expires, so the app never stores or logs them, and the binding's types that
+  hold them leave them out of `Debug`. Reply and confirm links are sealed to the other side and
+  card links are public; they are not secrets.
 - Never out of Rust: seed bytes, private keys, blinding factors, nonces, the wallet password, vault
   keys. A wallet password generated for PIN unlock is created, sealed and used inside Rust; Dart holds
   only the sealed text.

@@ -779,7 +779,8 @@ pub struct ContactView {
 
 /// A new invite, from `EpicWallet::pairing_invite`. `link` lets anyone who sees it pair as
 /// this contact until it is used or expires: share it, show it as a QR code, never store it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The words are as secret as the link. `Debug` shows neither.
+#[derive(Clone, PartialEq, Eq)]
 pub struct PairingInvite {
     pub contact_id: String,
     /// `epiccash://pair/1/...`.
@@ -803,11 +804,31 @@ pub struct InvitePreview {
 }
 
 /// An invite found by its pairing words, from `EpicWallet::pairing_find_words`. Answer it
-/// with `link`; do not store it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// with `link`; do not store it. `Debug` does not show the link.
+#[derive(Clone, PartialEq, Eq)]
 pub struct FoundInvite {
     pub link: String,
     pub preview: InvitePreview,
+}
+
+impl std::fmt::Debug for PairingInvite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairingInvite")
+            .field("contact_id", &self.contact_id)
+            .field("link", &"<redacted>")
+            .field("expires_at_ms", &self.expires_at_ms)
+            .field("words", &format_args!("<{} redacted>", self.words.len()))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for FoundInvite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FoundInvite")
+            .field("link", &"<redacted>")
+            .field("preview", &self.preview)
+            .finish()
+    }
 }
 
 /// An answered invite, from `EpicWallet::pairing_accept`.

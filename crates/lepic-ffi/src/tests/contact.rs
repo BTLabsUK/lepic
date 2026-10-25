@@ -400,6 +400,12 @@ async fn a_pending_invite_is_listed_until_cancelled() {
         )
         .await
         .unwrap();
+    // The link is a secret: Debug never shows it.
+    let shown = format!("{invite:?}");
+    assert!(
+        !shown.contains("epiccash:") && !shown.contains(&invite.link),
+        "{shown}"
+    );
     let pending = anna.pairings_pending().await.unwrap();
     assert_eq!(pending.len(), 1);
     assert!(pending[0].inviter);
@@ -840,5 +846,28 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
             contact_id: late.contact_id,
             reason: PairingFailureReason::Refused,
         }]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn labels_follow_the_name_rule_and_marker_texts_are_bounded() {
+    let mut world = World::new();
+    let anna = world.wallet().await;
+    let ben = world.wallet().await;
+    let (anna_side, _) = pair(&anna, &ben).await;
+    assert_eq!(
+        kind(
+            anna.contact_set_label(anna_side.clone(), "Ben\u{202E}gnp.exe".to_owned())
+                .await
+        ),
+        WalletErrorKind::InvalidContactName
+    );
+    anna.contact_set_label(anna_side, "Ben".to_owned())
+        .await
+        .unwrap();
+    let huge = "x".repeat(5 * 1024 * 1024);
+    assert_eq!(
+        kind(anna.sealed_answer_to_marker(huge, "{}".to_owned()).await),
+        WalletErrorKind::InvalidPairingText
     );
 }
