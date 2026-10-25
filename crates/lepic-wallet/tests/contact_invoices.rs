@@ -593,3 +593,117 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
     assert!(own.fields().mailbox.as_str().ends_with("@relay2.test:80"));
     assert_eq!(own.fields().seq, 2);
 }
+
+/// The party's keys for its contact `contact`, as the wallet derives them.
+fn keys_for(party: &Party, contact: ContactId) -> lepic_keychain::ContactKeys {
+    let record = party.read(|repos| repos.contact(contact)).unwrap();
+    party
+        .keychain()
+        .contact_root(
+            &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
+            lepic_primitives::params::Network::Floonet,
+        )
+        .unwrap()
+        .contact_keys(record.slot, record.box_salt)
+        .unwrap()
+}
+
+/// Seals `content` from the party to its contact `contact`, signed, and posts it from the
+/// party's mailbox for that contact to the contact's.
+fn post_signed(world: &World, party: &Party, contact: ContactId, content: &Content) {
+    let keys = keys_for(party, contact);
+    let signer = SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+    let record = party.read(|repos| repos.contact(contact)).unwrap();
+    let peer = ContactCard::decode(&record.peer.unwrap().bytes, ContactNetwork::Floonet).unwrap();
+    let envelope = seal(
+        ContactNetwork::Floonet,
+        peer.enc_key(),
+        peer.hint_rule(),
+        content,
+        Some(&signer),
+        &mut rand::rngs::StdRng::seed_from_u64(21),
+    )
+    .unwrap();
+    let mailbox = party.read(|repos| repos.contact_mailbox(contact)).unwrap();
+    let from = Identity::new(
+        keys.expose_box_secret().clone(),
+        EpicboxAddress::parse(&mailbox.our_mailbox, RelayNetwork::Floonet).unwrap(),
+    )
+    .unwrap();
+    let to = EpicboxAddress::parse(&mailbox.peer_mailbox, RelayNetwork::Floonet).unwrap();
+    world
+        .block_on(
+            MailboxClient::new(world::settings(), world.relay.connector()).post(
+                &from,
+                &to,
+                &armor(&envelope),
+            ),
+        )
+        .unwrap();
+}
+
+/// R2-03: a paired contact names the issuer's payments address as its mailbox and sends a
+/// signed `withdrawn` for an invoice the payer paid to that issuer over plain Epicbox. A notice
+/// from a contact counts only for a slate exchanged with that contact, so nothing is cancelled.
+#[test]
+fn a_contact_notice_counts_only_for_slates_exchanged_with_that_contact() {
+    let world = World::new();
+    let issued = world.issue(None);
+    let paid = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+    let mallory = world.stranger();
+    let (on_mallory, on_payer) = world.pair(&mallory, &world.payer);
+    // Mallory's card now names the issuer's payments address as her mailbox.
+    let keys = keys_for(&mallory, on_mallory);
+    let signer = SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+    let record = mallory.read(|repos| repos.contact(on_mallory)).unwrap();
+    let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
+    let mut fields = own.fields().clone();
+    fields.seq += 1;
+    fields.mailbox = lepic_contact::MailboxAddress::new(&world.issuer.address.to_string()).unwrap();
+    let card = ContactCard::sign(ContactNetwork::Floonet, fields, &signer).unwrap();
+    post_signed(
+        &world,
+        &mallory,
+        on_mallory,
+        &Content::new(MessageType::ContactUpdate, card.as_bytes().to_vec()),
+    );
+    world.collect(&world.payer);
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.contact_mailbox(on_payer))
+            .unwrap()
+            .peer_mailbox,
+        world.issuer.address.to_string()
+    );
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    let notice = lepic_wallet::notice::Notice {
+        slate_id: issued.slate_id,
+        kind: lepic_wallet::notice::NoticeKind::Withdrawn,
+    };
+    post_signed(
+        &world,
+        &mallory,
+        on_mallory,
+        &Content::new(
+            MessageType::Notice,
+            notice.encode().as_text().unwrap().as_bytes().to_vec(),
+        ),
+    );
+    world.collect(&world.payer);
+
+    assert_eq!(world.tx_state(&world.payer, paid.tx_id), TxState::Sent);
+    assert!(
+        !events(&mut payer_events)
+            .iter()
+            .any(|event| matches!(event, Event::InvoiceWithdrawn(_)))
+    );
+}

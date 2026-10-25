@@ -16,8 +16,8 @@ use lepic_node::NodeApi;
 use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    PeerCapability, PeerSupport, PendingInvoiceStatus, Repositories, SlateStage, StoreError,
-    TxDirection, TxId, TxState, WalletStore,
+    ContactId, PeerCapability, PeerSupport, PendingInvoiceStatus, Repositories, SlateStage,
+    StoreError, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Destination, Outbound, Transport};
@@ -98,25 +98,39 @@ pub(crate) fn record_lepic(
     })
 }
 
-/// The transaction over Epicbox for `slate_id` in `direction` that stored `stage`, when its
-/// counterparty is the peer with `from`.
+/// Who a notice is from.
+#[derive(Debug, Clone)]
+pub(crate) enum NoticeFrom {
+    /// The Epicbox key a plain notice came from.
+    Epicbox(String),
+    /// The paired contact whose signed envelope carried it. Only the contact the slate was
+    /// exchanged with counts; its mailbox, which it chooses itself, never decides (RFC 0002 3.4).
+    Contact(ContactId),
+}
+
+/// The transaction for `slate_id` in `direction` that stored `stage`, when it was exchanged
+/// with `from`: over Epicbox with that counterparty key, or with that paired contact.
 fn transaction_with(
     repos: &dyn Repositories,
     slate_id: Uuid,
     direction: TxDirection,
     stage: SlateStage,
-    from: &str,
+    from: &NoticeFrom,
     network: RelayNetwork,
 ) -> Result<Option<(TxId, TxState)>, StoreError> {
     let Some(stored) = repos.transaction_by_slate(slate_id, direction)? else {
         return Ok(None);
     };
-    let exchanged = stored.entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
-        || crate::contact::slate_contact(repos, slate_id)?.is_some();
-    if !exchanged
-        || repos.slate(slate_id, stage)?.is_none()
-        || counterparty_key(repos, stored.id, network)?.as_deref() != Some(from)
-    {
+    let contact = crate::contact::slate_contact(repos, slate_id)?;
+    let exchanged = match from {
+        NoticeFrom::Epicbox(key) => {
+            contact.is_none()
+                && stored.entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
+                && counterparty_key(repos, stored.id, network)?.as_deref() == Some(key.as_str())
+        }
+        NoticeFrom::Contact(id) => contact == Some(*id),
+    };
+    if !exchanged || repos.slate(slate_id, stage)?.is_none() {
         return Ok(None);
     }
     Ok(Some((stored.id, stored.entry.state)))
@@ -127,7 +141,7 @@ fn apply_notice(
     codecs: &CodecRegistry,
     network: RelayNetwork,
     notice: Notice,
-    from: String,
+    from: NoticeFrom,
     now: jiff::Timestamp,
 ) -> Result<Effect, StoreError> {
     let slate_id = uuid(notice.slate_id);
@@ -167,8 +181,10 @@ fn apply_notice(
         },
         NoticeKind::Withdrawn => withdraw(repos, slate_id, &from, network)?,
     };
-    if !matches!(effect, Effect::Dropped) {
-        record_lepic(repos, from, now)?;
+    if let NoticeFrom::Epicbox(key) = from
+        && !matches!(effect, Effect::Dropped)
+    {
+        record_lepic(repos, key, now)?;
     }
     Ok(effect)
 }
@@ -211,7 +227,7 @@ fn report_posted(
     network: RelayNetwork,
     slate_id: Uuid,
     excess: lepic_crypto::Commitment,
-    from: &str,
+    from: &NoticeFrom,
     now: jiff::Timestamp,
 ) -> Result<Effect, StoreError> {
     let Some((tx_id, state)) = transaction_with(
@@ -243,13 +259,20 @@ fn report_posted(
 fn withdraw(
     repos: &mut dyn Repositories,
     slate_id: Uuid,
-    from: &str,
+    from: &NoticeFrom,
     network: RelayNetwork,
 ) -> Result<Effect, StoreError> {
-    if let Some(parked) = repos.pending_invoice(slate_id)?
-        && parked.sender_key == from
-        && parked.status != PendingInvoiceStatus::Paid
-    {
+    let parked_by_sender = match (repos.pending_invoice(slate_id)?, from) {
+        (Some(parked), NoticeFrom::Epicbox(key)) => {
+            parked.sender_key == *key && parked.status != PendingInvoiceStatus::Paid
+        }
+        (Some(parked), NoticeFrom::Contact(id)) => {
+            crate::contact::slate_contact(repos, slate_id)? == Some(*id)
+                && parked.status != PendingInvoiceStatus::Paid
+        }
+        (None, _) => false,
+    };
+    if parked_by_sender {
         repos.delete_pending_invoice(slate_id)?;
         return Ok(Effect::Withdrawn { tx_id: None });
     }
@@ -345,9 +368,10 @@ where
         reply_to: &Destination,
     ) -> Result<Handled, Hold> {
         let network = relay_network(self.config().network);
-        let Some(from) = key_of(reply_to.as_str(), network) else {
+        let Some(key) = key_of(reply_to.as_str(), network) else {
             return Ok(Handled::Dropped);
         };
+        let from = NoticeFrom::Epicbox(key);
         let codecs = stored_codecs(self.config().network);
         let effect = self
             .inbox_write(move |repos, now| apply_notice(repos, &codecs, network, notice, from, now))
@@ -482,14 +506,15 @@ where
         .flatten()
     }
 
-    /// Applies a notice a paired contact sent sealed, with `from` the key of the contact's
-    /// mailbox as the counterparty, and raises its event. Returns the payment to cancel for a
-    /// `withdrawn` of an invoice this wallet paid.
+    /// Applies a notice the paired contact `contact_id` sent sealed and signed, for a slate
+    /// exchanged with that contact only, and raises its event. Returns the payment to cancel
+    /// for a `withdrawn` of an invoice this wallet paid.
     pub(crate) async fn apply_contact_notice(
         &self,
         notice: Notice,
-        from: String,
+        contact_id: ContactId,
     ) -> Result<Option<TxId>, Hold> {
+        let from = NoticeFrom::Contact(contact_id);
         let network = relay_network(self.config().network);
         let codecs = stored_codecs(self.config().network);
         let effect = self

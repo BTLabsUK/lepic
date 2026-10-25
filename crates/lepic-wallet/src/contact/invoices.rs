@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use lepic_contact::{Capabilities, ContactCard, Content, MessageType, Purpose, seal};
-use lepic_epicbox::EpicboxAddress;
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -132,12 +131,10 @@ pub(crate) fn slate_contact(
         .and_then(|text| contact_from_hex(&text)))
 }
 
-/// The key text of a contact's mailbox: what the notice rules of ADR 0016 match a
-/// counterparty by.
-fn mailbox_key(address: &str, network: lepic_epicbox::Network) -> Option<String> {
-    EpicboxAddress::parse(address, network)
-        .ok()
-        .map(|address| address.key_text())
+/// The sender key a contact's parked invoices are stored and capped under: the contact, never
+/// the mailbox its card names, which the contact chooses.
+fn contact_sender_key(contact_id: ContactId) -> String {
+    format!("contact:{}", hex(&contact_id.0))
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -528,7 +525,6 @@ where
         reference: Option<String>,
         expires: Option<u64>,
     ) -> Result<(), ContactError> {
-        let network = crate::inbox::relay_network(self.config().network);
         let contact_id = record.contact_id;
         let session = self.session()?;
         let slate_uuid = uuid(slate.id());
@@ -546,9 +542,8 @@ where
                     let mailbox = repos
                         .contact_mailbox(contact_id)?
                         .ok_or(ContactError::UnknownContact)?;
-                    let Some(sender_key) = mailbox_key(&mailbox.peer_mailbox, network) else {
-                        return Ok(false);
-                    };
+                    // The parking cap counts per contact, never per mailbox the contact names.
+                    let sender_key = contact_sender_key(contact_id);
                     if repos.pending_invoice(slate_uuid)?.is_some() {
                         return Ok(false);
                     }
@@ -609,23 +604,7 @@ where
         let Payload::Notice(notice) = classify_text(text) else {
             return Ok(Handled::Stored);
         };
-        let network = crate::inbox::relay_network(self.config().network);
-        let contact_id = record.contact_id;
-        let session = self.session()?;
-        let from = {
-            let session = std::sync::Arc::clone(&session);
-            self.contact_work(move |_, _| {
-                Ok(session
-                    .store
-                    .read(|repos| repos.contact_mailbox(contact_id))?
-                    .and_then(|mailbox| mailbox_key(&mailbox.peer_mailbox, network)))
-            })
-            .await?
-        };
-        let Some(from) = from else {
-            return Ok(Handled::Stored);
-        };
-        let Ok(effect) = self.apply_contact_notice(notice, from).await else {
+        let Ok(effect) = self.apply_contact_notice(notice, record.contact_id).await else {
             return Ok(Handled::Later);
         };
         if let Some(tx_id) = effect {
