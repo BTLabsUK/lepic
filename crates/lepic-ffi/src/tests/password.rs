@@ -1,12 +1,15 @@
-//! Changing a wallet's password, also when the app stops or its store fails part way.
+//! Changing a wallet's password, and resetting a forgotten one from the recovery phrase, also
+//! when the app stops or its store fails part way.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use super::{FAILURES_KEY, Fixture, PIN, kind};
-use crate::api::error::WalletErrorKind;
+use super::http::EPIC;
+use super::{FAILURES_KEY, Fixture, PENDING_KEY, PIN, PIN_KEY, kind};
+use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::secret_store::{AppSecretStore, SecretReply};
-use crate::api::wallet::{EpicWallet, delete_wallet};
+use crate::api::types::Chain;
+use crate::api::wallet::{EpicWallet, delete_wallet, reset_password};
 use crate::vault_port::{VAULT_KEY, VAULT_NEXT_KEY};
 
 const OLD: &str = "old password";
@@ -407,4 +410,194 @@ async fn delete_wallet_removes_an_unfinished_password_change() {
 
     assert_eq!(store.get(VAULT_KEY), None);
     assert_eq!(store.get(VAULT_NEXT_KEY), None);
+}
+
+/// A valid phrase of no wallet in these tests.
+const OTHER_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
+                            abandon abandon abandon about";
+
+async fn reset(fixture: &Fixture, store: &FaultyStore, phrase: &str) -> Result<(), WalletError> {
+    reset_password(
+        &fixture.runtime,
+        fixture.config(),
+        &store.app_store(),
+        phrase.to_owned(),
+        NEW.to_owned(),
+    )
+    .await
+}
+
+/// A wallet created with `OLD` whose 10 EPIC a scan found, closed again; with its phrase.
+async fn funded(fixture: &Fixture, store: &FaultyStore) -> String {
+    let wallet = create(fixture, &store.app_store()).await;
+    let phrase = wallet.mnemonic(OLD.to_owned()).await.unwrap();
+    fixture
+        .chain
+        .fund(phrase.clone(), Chain::Floonet, 10 * EPIC, 0)
+        .unwrap();
+    fixture.chain.set_height(20);
+    wallet.session().scan_to_tip().await;
+    assert_eq!(wallet.transactions().await.unwrap().len(), 1);
+    phrase
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reset_with_the_phrase_opens_with_the_new_password_and_keeps_the_history() {
+    let fixture = Fixture::new();
+    let store = FaultyStore::default();
+    let phrase = funded(&fixture, &store).await;
+    store
+        .app_store()
+        .write(FAILURES_KEY, "5".to_owned())
+        .await
+        .unwrap();
+
+    // Typed as a user may type it.
+    reset(&fixture, &store, &format!("  {}\n", phrase.to_uppercase()))
+        .await
+        .unwrap();
+
+    assert_eq!(store.get(VAULT_NEXT_KEY), None);
+    assert_eq!(store.get(FAILURES_KEY), None);
+    assert!(!opens(&fixture, &store, OLD).await);
+    let wallet = EpicWallet::open(
+        &fixture.runtime,
+        fixture.config(),
+        &store.app_store(),
+        NEW.to_owned(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(wallet.mnemonic(NEW.to_owned()).await.unwrap(), phrase);
+    assert_eq!(wallet.transactions().await.unwrap().len(), 1);
+    let outputs = wallet.outputs().await.unwrap();
+    assert_eq!(
+        outputs.iter().map(|output| output.value).collect::<Vec<_>>(),
+        [10 * EPIC]
+    );
+    assert!(!wallet.restore_scan_required().await.unwrap());
+}
+
+#[tokio::test]
+async fn a_reset_with_another_or_an_invalid_phrase_changes_nothing() {
+    let fixture = Fixture::new();
+    let store = FaultyStore::default();
+    drop(create(&fixture, &store.app_store()).await);
+    let vault = store.get(VAULT_KEY);
+
+    assert_eq!(
+        kind(reset(&fixture, &store, OTHER_PHRASE).await),
+        WalletErrorKind::PhraseMismatch
+    );
+    assert_eq!(
+        kind(reset(&fixture, &store, "abandon abandon").await),
+        WalletErrorKind::InvalidMnemonic
+    );
+    let short = reset_password(
+        &fixture.runtime,
+        fixture.config(),
+        &store.app_store(),
+        OTHER_PHRASE.to_owned(),
+        "short".to_owned(),
+    )
+    .await;
+    assert_eq!(kind(short), WalletErrorKind::InvalidArgument);
+
+    assert_eq!(store.get(VAULT_KEY), vault);
+    assert_eq!(store.get(VAULT_NEXT_KEY), None);
+    assert!(opens(&fixture, &store, OLD).await);
+}
+
+#[tokio::test]
+async fn a_reset_is_refused_while_the_wallet_is_open() {
+    let fixture = Fixture::new();
+    let store = FaultyStore::default();
+    let wallet = create(&fixture, &store.app_store()).await;
+    let phrase = wallet.mnemonic(OLD.to_owned()).await.unwrap();
+    let vault = store.get(VAULT_KEY);
+
+    let busy = reset(&fixture, &store, &phrase).await;
+
+    assert_eq!(kind(busy), WalletErrorKind::WalletBusy);
+    assert_eq!(store.get(VAULT_KEY), vault);
+    drop(wallet);
+    assert!(opens(&fixture, &store, OLD).await);
+}
+
+#[tokio::test]
+async fn a_reset_without_a_wallet_database_is_refused_and_writes_nothing() {
+    let fixture = Fixture::new();
+    let store = FaultyStore::default();
+
+    let refused = reset(&fixture, &store, OTHER_PHRASE).await;
+
+    assert_eq!(kind(refused), WalletErrorKind::WalletNotFound);
+    assert_eq!(store.get(VAULT_KEY), None);
+    assert!(
+        !fixture
+            .dir
+            .path()
+            .join(lepic_wallet::DATABASE_FILE)
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn a_reset_turns_a_pin_wallet_into_one_opened_by_the_new_password() {
+    let fixture = Fixture::new();
+    let store = FaultyStore::default();
+    let created = fixture.create_with_pin(&store.app_store(), PIN).await;
+    let phrase = created
+        .wallet
+        .mnemonic_with_pin(PIN.to_owned(), created.sealed_password.clone())
+        .await
+        .unwrap();
+    let sealed = created.sealed_password.clone();
+    drop(created);
+
+    reset(&fixture, &store, &phrase).await.unwrap();
+
+    for key in [PIN_KEY, PENDING_KEY, FAILURES_KEY] {
+        assert_eq!(store.get(key), None, "{key}");
+    }
+    assert!(opens(&fixture, &store, NEW).await);
+    let by_pin = fixture
+        .open_with_pin(&store.app_store(), PIN, &sealed)
+        .await;
+    assert_eq!(kind(by_pin), WalletErrorKind::SecretStore);
+}
+
+/// Every point a stop can fall on leaves a wallet that opens, with the new password once the
+/// reset returned success, and a second reset finishes one that stopped.
+#[tokio::test]
+async fn a_stop_at_any_step_of_a_reset_leaves_a_wallet_that_opens() {
+    for mutations in 0..=6 {
+        let fixture = Fixture::new();
+        let store = FaultyStore::default();
+        let wallet = create(&fixture, &store.app_store()).await;
+        let phrase = wallet.mnemonic(OLD.to_owned()).await.unwrap();
+        drop(wallet);
+        store.cut_after(mutations);
+
+        let reset_result = reset(&fixture, &store, &phrase).await;
+
+        let (old, new) = passwords_after_restart(&fixture, &store).await;
+        assert!(
+            old || new,
+            "after {mutations} writes neither password opens"
+        );
+        if reset_result.is_ok() {
+            assert!(new && !old, "after {mutations} writes");
+        }
+        let again = store.after_restart();
+        reset(&fixture, &again, &phrase).await.unwrap();
+        assert!(
+            opens(&fixture, &again, NEW).await,
+            "after {mutations} writes"
+        );
+        assert!(
+            !opens(&fixture, &again, OLD).await,
+            "after {mutations} writes"
+        );
+    }
 }

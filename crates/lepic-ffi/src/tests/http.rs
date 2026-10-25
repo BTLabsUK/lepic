@@ -65,6 +65,12 @@ async fn session_on(
     )
 }
 
+impl Pair {
+    pub(super) const fn runtime(&self) -> &LepicRuntime {
+        &self._runtime
+    }
+}
+
 /// Opens a fresh handle on Alice's wallet, as the app does after a lock.
 async fn reopen_alice(pair: &Pair) -> Arc<Session> {
     let fresh = session_on(&pair._runtime, &pair.dirs[0], pair.alice.store().clone()).await;

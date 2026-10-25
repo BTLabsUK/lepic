@@ -7,7 +7,7 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
 use crate::api::types::{Chain, WalletConfig};
-use crate::api::wallet::{EpicWallet, PinWallet, delete_wallet};
+use crate::api::wallet::{EpicWallet, PinWallet, delete_wallet, wallet_fingerprint};
 use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
 
@@ -15,6 +15,7 @@ mod contact;
 mod http;
 mod invoice;
 mod listener;
+mod live_restore;
 mod node;
 mod outputs;
 mod password;
@@ -819,6 +820,67 @@ async fn an_imported_wallet_seed_gives_the_wallet_of_its_phrase() {
     assert_eq!(
         wallet.mnemonic("password".to_owned()).await.unwrap(),
         phrase
+    );
+}
+
+/// One fingerprint for "the same wallet": what an open wallet's database stores equals what
+/// the phrase alone gives, for a created, a restored and an imported wallet.
+#[tokio::test]
+async fn the_fingerprint_of_a_phrase_is_the_one_its_wallet_stores() {
+    let created = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let wallet = EpicWallet::create(
+        &created.runtime,
+        created.config(),
+        &store,
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    let phrase = wallet.mnemonic("password".to_owned()).await.unwrap();
+    let fingerprint = wallet.fingerprint().await.unwrap();
+    assert_eq!(
+        wallet_fingerprint(format!(" {} ", phrase.to_uppercase()), Chain::Floonet).unwrap(),
+        fingerprint
+    );
+
+    let restored = Fixture::new();
+    let wallet = EpicWallet::create(
+        &restored.runtime,
+        restored.config(),
+        &AppSecretStore::in_memory(),
+        Some(phrase),
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(wallet.fingerprint().await.unwrap(), fingerprint);
+
+    let imported = Fixture::new();
+    let (file, file_password, _, vector_phrase) = wallet_seed_vector();
+    let wallet = EpicWallet::import_wallet_seed(
+        &imported.runtime,
+        imported.config(),
+        &AppSecretStore::in_memory(),
+        file,
+        file_password,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    let vector_fingerprint = wallet.fingerprint().await.unwrap();
+    assert_eq!(
+        wallet_fingerprint(vector_phrase, Chain::Floonet).unwrap(),
+        vector_fingerprint
+    );
+    assert_ne!(vector_fingerprint, fingerprint);
+    assert_eq!(
+        kind(wallet_fingerprint(
+            "abandon abandon".to_owned(),
+            Chain::Floonet
+        )),
+        WalletErrorKind::InvalidMnemonic
     );
 }
 

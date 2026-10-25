@@ -1,5 +1,6 @@
 //! Scans through the binding: the result the last event carries, the `delete_unconfirmed`
-//! repair, and cancelling a scan that waits on the node.
+//! repair, cancelling a scan that waits on the node, and the start of a scan while a restore
+//! scan is pending.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,14 +29,147 @@ impl Progress {
 }
 
 async fn scan(session: &Session, delete_unconfirmed: bool) -> ScanResult {
+    scan_from(session, None, delete_unconfirmed)
+        .await
+        .result
+        .unwrap()
+}
+
+/// The last event of a completed scan from `start_height`.
+async fn scan_from(
+    session: &Session,
+    start_height: Option<u64>,
+    delete_unconfirmed: bool,
+) -> ScanProgress {
     let progress = Progress::default();
     session
-        .scan(None, delete_unconfirmed, progress.report())
+        .scan(start_height, delete_unconfirmed, progress.report())
         .await
         .unwrap();
     let last = progress.last();
     assert!(last.finished);
-    last.result.unwrap()
+    last
+}
+
+/// A wallet restored from `session`'s phrase into a new directory, on the pair's chain.
+async fn restored_from(
+    pair: &super::http::Pair,
+    session: &Session,
+) -> (tempfile::TempDir, Session) {
+    let phrase = session.recovery_phrase(password()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = WalletConfig {
+        data_dir: dir.path().to_string_lossy().into_owned(),
+        chain: Chain::Floonet,
+        node_url: "http://127.0.0.1:1".to_owned(),
+        node_api_secret: None,
+        epicbox_domain: String::new(),
+        epicbox_port: 443,
+    };
+    let secret = crate::node::NodeSecret::take(&mut config);
+    let restored = Session::new(
+        &pair.runtime().inner,
+        &config,
+        &secret,
+        AppSecretStore::in_memory(),
+    )
+    .await
+    .unwrap();
+    restored
+        .create(SeedOrigin::Phrase(Zeroizing::new(phrase)), password())
+        .await
+        .unwrap();
+    (dir, restored)
+}
+
+/// The fix for a restore from a block height: that scan finds the outputs above it, and the
+/// next scan without a start goes back to genesis, not to shortly before the last scan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restore_scanned_from_a_height_refuses_outputs_until_a_scan_without_one_completes() {
+    let pair = funded_pair().await;
+    pair.chain.set_height(300);
+    let (_dir, bob) = restored_from(&pair, &pair.bob).await;
+    assert!(bob.restore_scan_required().unwrap());
+
+    let from_height = scan_from(&bob, Some(250), false).await;
+    assert_eq!(from_height.result.unwrap().start_height, 250);
+    assert!(bob.restore_scan_required().unwrap());
+    let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
+    let refused = bob.receive_slate(slate.json.clone()).await;
+    assert_eq!(
+        refused.unwrap_err().kind,
+        WalletErrorKind::RestoreScanRequired
+    );
+
+    let result = scan(&bob, false).await;
+
+    assert_eq!(
+        result.start_height, 0,
+        "a pending restore scan starts at genesis"
+    );
+    assert!(!bob.restore_scan_required().unwrap());
+    assert!(bob.receive_slate(slate.json).await.is_ok());
+    let next = scan(&bob, false).await;
+    assert_eq!(
+        next.start_height, 200,
+        "then 100 blocks before the last scan again"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scan_from_height_zero_also_ends_the_restore_scan() {
+    let pair = funded_pair().await;
+    pair.chain.set_height(300);
+    let (_dir, alice) = restored_from(&pair, &pair.alice).await;
+    scan_from(&alice, Some(250), false).await;
+
+    let last = scan_from(&alice, Some(0), false).await;
+
+    let result = last.result.unwrap();
+    assert_eq!((result.start_height, result.found), (0, 1));
+    assert!(!alice.restore_scan_required().unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_restore_scan_is_finished_by_the_next_scan_without_a_start() {
+    let pair = funded_pair().await;
+    pair.chain.set_height(300);
+    let (_dir, alice) = restored_from(&pair, &pair.alice).await;
+    let alice = Arc::new(alice);
+    pair.chain.set_node_stalled(true);
+    let running = {
+        let alice = Arc::clone(&alice);
+        let report = Progress::default().report();
+        tokio::spawn(async move { alice.scan(None, false, report).await })
+    };
+    assert!(eventually(|| pair.chain.stalled_node_calls() > 0).await);
+    alice.cancel_scan();
+    let ended = tokio::time::timeout(Duration::from_secs(3), running)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ended.unwrap_err().kind, WalletErrorKind::Cancelled);
+    pair.chain.set_node_stalled(false);
+    assert!(alice.restore_scan_required().unwrap());
+
+    let result = scan(&alice, false).await;
+
+    assert_eq!((result.start_height, result.found), (0, 1));
+    assert!(!alice.restore_scan_required().unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_above_the_tip_is_reported_as_skipped_and_the_restore_scan_stays_pending() {
+    let pair = funded_pair().await;
+    let (_dir, alice) = restored_from(&pair, &pair.alice).await;
+
+    let last = scan_from(&alice, Some(1_000), false).await;
+
+    assert!(last.message.contains("skipped"), "{}", last.message);
+    let result = last.result.unwrap();
+    assert!(result.start_height > result.end_height);
+    assert_eq!(result.found, 0);
+    assert!(alice.restore_scan_required().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

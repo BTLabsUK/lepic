@@ -411,8 +411,8 @@ pub enum LegacyImportStatus {
     AlreadyImported,
     /// The folder holds no wallet database.
     NoHistory,
-    /// The wallet was made by an epic-wallet older than 3.3 (GUI 5.3 or older), whose
-    /// database is not read. The scan restores its funds.
+    /// The folder holds an older wallet database format, from an epic-wallet older than 3.3,
+    /// which is not read. The scan restores its funds.
     OldFormat,
     /// The database is encrypted, damaged or not an epic-wallet database.
     Unreadable,
@@ -584,7 +584,9 @@ pub struct ScanProgress {
     pub result: Option<ScanResult>,
 }
 
-/// What a completed `EpicWallet::scan` did. Counts are outputs of this wallet.
+/// What a completed `EpicWallet::scan` did. Counts are outputs of this wallet. A
+/// `start_height` above `end_height` means the start was above the chain tip and nothing was
+/// scanned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanResult {
     pub start_height: u64,

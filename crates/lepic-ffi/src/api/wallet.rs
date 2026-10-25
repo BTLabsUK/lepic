@@ -128,6 +128,66 @@ pub async fn delete_wallet(
         .await
 }
 
+/// Gives the wallet in `config.data_dir` a new vault in `store`, sealed under `new_password`,
+/// for a user who forgot the password: the seed of `mnemonic` is stored, once the database
+/// shows the phrase is this wallet's. The database, with its transaction history, labels and
+/// outputs, is kept as it is; no scan is needed. The PIN key and failure count are removed, as
+/// [`delete_wallet`] removes them, so a wallet from [`EpicWallet::create_with_pin`] opens with
+/// `new_password` afterwards; drop its sealed password. Call it with the wallet closed.
+///
+/// The new vault is written and read back as `lepic.vault-next` before it replaces
+/// `lepic.vault`, as [`EpicWallet::change_password`] describes, so the store never lacks a
+/// vault that opens: if the app stops part way, the old password or the new one opens the
+/// wallet, and calling this again finishes the reset.
+///
+/// Fails, with nothing changed, with `InvalidArgument` when `new_password` has fewer than eight
+/// characters, `InvalidMnemonic`, `PhraseMismatch` when the database belongs to another seed,
+/// `ForeignWallet` when it belongs to another chain, `WalletNotFound` when the directory holds
+/// no database a wallet has used (nothing to check the phrase against: delete the wallet with
+/// [`delete_wallet`] and restore it), `WalletBusy` while a wallet on the directory is open in
+/// any runtime, and `DamagedDatabase` as [`EpicWallet::open`] does; with `SecretStore` when the
+/// store fails while the vault is replaced, which leaves the old or the new password working.
+pub async fn reset_password(
+    runtime: &LepicRuntime,
+    config: WalletConfig,
+    store: &AppSecretStore,
+    mnemonic: String,
+    new_password: String,
+) -> Result<(), WalletError> {
+    let mut config = config;
+    let node_secret = NodeSecret::take(&mut config);
+    let mnemonic = Zeroizing::new(mnemonic);
+    let new_password = Zeroizing::new(new_password);
+    let inner = Arc::clone(&runtime.inner);
+    let store = store.clone();
+    runtime
+        .inner
+        .boundary
+        .run("reset_password", async move {
+            let password = self::new_password(new_password)?;
+            session::reset_password(&inner, &config, &node_secret, &store, mnemonic, password).await
+        })
+        .await
+}
+
+/// The fingerprint of the wallet of `mnemonic` on `chain`: the value its database stores and
+/// [`EpicWallet::fingerprint`] returns, as lowercase hex. It tells whether a phrase belongs to
+/// a wallet the app already has without opening it. It is no secret, but it identifies the
+/// wallet, so keep it with the wallet's other data, not in logs. Case and extra whitespace are
+/// ignored; fails with `InvalidMnemonic`.
+#[frb(sync)]
+pub fn wallet_fingerprint(mnemonic: String, chain: Chain) -> Result<String, WalletError> {
+    guard("wallet_fingerprint", || {
+        let phrase = normalize_phrase(&Zeroizing::new(mnemonic));
+        let seed = Seed::from_mnemonic(&phrase)
+            .map_err(|error| WalletError::from(lepic_wallet::WalletError::Mnemonic(error)))?;
+        Ok(lepic_wallet::lifecycle::seed_fingerprint(
+            &seed,
+            chain.network(),
+        )?)
+    })
+}
+
 /// The configured node's tip, version, readiness and tip block time, without opening a
 /// wallet. Fails with `NodeUnreachable` when the tip or version cannot be had; readiness and
 /// the block time are `None` when only they fail.
@@ -392,7 +452,8 @@ impl EpicWallet {
     /// one shorter than `create` accepts today. Fails with `WrongPassword`, `WalletNotFound`
     /// when `store` holds no vault, `ForeignWallet` and `WalletBusy`, and with
     /// `DamagedDatabase` when the database was damaged and has just been set aside: open again
-    /// to rebuild it, then `scan`.
+    /// to rebuild it, then `scan` without a start height, which then starts at genesis, to the
+    /// end; [`EpicWallet::restore_scan_required`] says when it has.
     ///
     /// Every attempt is counted in `store` as `lepic.pin-failures`, and waits, as
     /// [`EpicWallet::open_with_pin`] describes; a right password clears the count. Attempts of
@@ -643,6 +704,29 @@ impl EpicWallet {
         .await
     }
 
+    /// Whether the wallet's database was rebuilt from its seed, by a restore from the phrase or
+    /// a `wallet.seed`, or by an open after a damaged or missing database, and no scan from
+    /// genesis has completed since. While it is, the wallet refuses every new output: receiving,
+    /// the change of a send and invoices fail with `RestoreScanRequired`. A [`EpicWallet::scan`]
+    /// without a start height starts at genesis while it is, and ends it when it completes.
+    pub async fn restore_scan_required(&self) -> Result<bool, WalletError> {
+        self.run("restore_scan_required", |session| async move {
+            session.restore_scan_required()
+        })
+        .await
+    }
+
+    /// The fingerprint of the wallet's seed that its database stores, as lowercase hex: the
+    /// value [`wallet_fingerprint`] gives for its recovery phrase. It is no secret, but it
+    /// identifies the wallet, so keep it with the wallet's other data, not in logs.
+    pub async fn fingerprint(&self) -> Result<String, WalletError> {
+        self.run(
+            "fingerprint",
+            |session| async move { session.fingerprint() },
+        )
+        .await
+    }
+
     /// The default account's balance. With `refresh` it first updates outputs and
     /// transactions from the node. Without, it answers from what the wallet stored at its last
     /// refresh or scan, without the node, also before the first refresh of this handle, with
@@ -875,10 +959,18 @@ impl EpicWallet {
     }
 
     /// Scans the chain for this wallet's outputs from `start_height`, or, by default, from
-    /// shortly before the last completed scan (the whole chain after a restore), streaming
-    /// progress until an event with `finished`, which carries its `result`. A failure
-    /// ends the stream with its [`WalletError`] as the stream's error; a cancelled scan ends it
-    /// with `Cancelled`.
+    /// shortly before the last completed scan, streaming progress until an event with
+    /// `finished`, which carries its `result`. A failure ends the stream with its
+    /// [`WalletError`] as the stream's error; a cancelled scan ends it with `Cancelled`.
+    ///
+    /// While [`EpicWallet::restore_scan_required`] is true, a scan without `start_height`
+    /// starts at genesis, so it resumes a restore scan that stopped, and once it completes the
+    /// wallet creates outputs again. `Some(0)` scans from genesis too and ends the restore scan
+    /// the same way. A scan from a higher `start_height` finds the outputs above it, for a
+    /// balance soon after a restore from a known height, but leaves the restore scan pending:
+    /// run one without `start_height` after it. A `start_height` above the chain tip scans
+    /// nothing: the last event's message says the scan was skipped, and its `result` has a
+    /// `start_height` above its `end_height`.
     ///
     /// With `delete_unconfirmed` the scan also runs the repair of `epic-wallet scan
     /// --delete_unconfirmed` and always starts from the beginning of the chain, so

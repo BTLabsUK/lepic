@@ -181,6 +181,9 @@ pub enum WalletErrorKind {
     InvalidPairingWords,
     /// The contact's wallet says it does not pay invoices. Nothing was sent.
     ContactRefusesInvoices,
+    /// The recovery phrase given to `reset_password` belongs to another wallet than the
+    /// database in the wallet directory. Nothing was changed.
+    PhraseMismatch,
     /// The invoice was made for another network, or its heights are wrong: its time to live
     /// ends further ahead than any issuer sets it, or it was made at a height the chain cannot
     /// have reached. Nothing was paid or stored.
@@ -257,6 +260,7 @@ impl WalletErrorKind {
             Self::PairingWordsNotFound => 71,
             Self::InvalidPairingWords => 72,
             Self::ContactRefusesInvoices => 73,
+            Self::PhraseMismatch => 74,
             Self::InvoiceNotForThisChain => 75,
         }
     }
@@ -671,6 +675,7 @@ mod tests {
             (K::PairingWordsNotFound, 71),
             (K::InvalidPairingWords, 72),
             (K::ContactRefusesInvoices, 73),
+            (K::PhraseMismatch, 74),
             (K::InvoiceNotForThisChain, 75),
         ];
         for (kind, code) in expected {

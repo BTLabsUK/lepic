@@ -917,10 +917,17 @@ impl Session {
         }
         let cancel = ScanCancel::new();
         let _running = ScanSlot::claim(&self.scan, cancel.clone())?;
+        // Only a scan from genesis completes a restore scan, so while one is pending a scan
+        // without a start begins there, where a stopped one resumes, as `lepic wallet scan`
+        // does.
+        let start = match start_height {
+            Some(0) => ScanStart::Genesis,
+            Some(height) => ScanStart::Height(Height::new(height)),
+            None if self.engine.restore_scan_required()? => ScanStart::Genesis,
+            None => ScanStart::LastScanned,
+        };
         let options = ScanOptions {
-            start: start_height.map_or(ScanStart::LastScanned, |height| {
-                ScanStart::Height(Height::new(height))
-            }),
+            start,
             delete_unconfirmed,
             ..ScanOptions::update(self.network)
         };
@@ -941,11 +948,24 @@ impl Session {
         };
         let summary = result?;
         info!(height = %summary.end_height, "scan reported");
+        let mut last = scan_progress(summary.end_height.value(), summary.end_height.value(), true);
+        // The engine skips a start above the tip without scanning or storing anything.
+        if summary.start_height > summary.end_height {
+            last.message = "scan skipped: the start height is above the chain tip".to_owned();
+        }
         progress(ScanProgress {
             result: Some(scan_result(&summary)),
-            ..scan_progress(summary.end_height.value(), summary.end_height.value(), true)
+            ..last
         });
         Ok(())
+    }
+
+    pub(crate) fn restore_scan_required(&self) -> Result<bool, WalletError> {
+        Ok(self.engine.restore_scan_required()?)
+    }
+
+    pub(crate) fn fingerprint(&self) -> Result<String, WalletError> {
+        Ok(self.engine.fingerprint()?)
     }
 
     pub(crate) fn cancel_scan(&self) {
@@ -1987,6 +2007,51 @@ pub(crate) async fn delete_wallet(
     store.delete(VAULT_NEXT_KEY).await?;
     crate::pin::forget(store).await?;
     info!("wallet deleted");
+    Ok(())
+}
+
+/// Seals the seed of `phrase` under `password` as the vault in `store`, once the database in
+/// `config.data_dir` is shown to be that seed's; the database is left as it is.
+pub(crate) async fn reset_password(
+    runtime: &Arc<RuntimeInner>,
+    config: &WalletConfig,
+    node_secret: &NodeSecret,
+    store: &AppSecretStore,
+    phrase: Zeroizing<String>,
+    password: Zeroizing<String>,
+) -> Result<(), WalletError> {
+    let no_database = || {
+        WalletError::new(
+            WalletErrorKind::WalletNotFound,
+            "the wallet directory holds no wallet database to check the phrase against",
+        )
+    };
+    // Holds the directory, so no wallet on it opens while the vault is replaced.
+    let session = Session::new(runtime, config, node_secret, store.clone()).await?;
+    let database = session.data_dir.join(DATABASE_FILE);
+    if !tokio::fs::try_exists(&database)
+        .await
+        .map_err(|error| io("checking the wallet database", &error))?
+    {
+        return Err(no_database());
+    }
+    let phrase = normalize_phrase(&phrase);
+    let seed = match session.engine.check_phrase(&phrase).await {
+        Ok(Some(seed)) => seed,
+        Ok(None) => return Err(no_database()),
+        Err(lepic_wallet::WalletError::ForeignDatabase) => {
+            return Err(WalletError::new(
+                WalletErrorKind::PhraseMismatch,
+                "the recovery phrase is not the phrase of this wallet",
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let vault = password_change::seal_seed(seed, password.clone(), runtime.kdf).await?;
+    password_change::install(store, vault, password).await?;
+    crate::pin::forget(store).await?;
+    drop(session);
+    info!("wallet password reset");
     Ok(())
 }
 

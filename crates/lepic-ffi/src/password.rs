@@ -1,5 +1,6 @@
 //! Changing the password of a password wallet: the vault in the app's store is re-encrypted
-//! under the new password without ever leaving the store without a vault that opens.
+//! under the new password without ever leaving the store without a vault that opens. A reset
+//! after a forgotten password installs a new vault holding the seed the same way.
 //!
 //! The new vault is written to `lepic.vault-next` first and read back, then written over
 //! `lepic.vault`, and only then is `lepic.vault-next` deleted. Whatever step a stop interrupts,
@@ -8,7 +9,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use lepic_keychain::{KdfParams, MemoryVaultStorage, SecretStore as _, Vault};
+use lepic_keychain::{KdfParams, MemoryVaultStorage, SecretStore as _, Seed, Vault};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use tracing::warn;
@@ -86,6 +87,33 @@ pub(crate) async fn replace(
         Ok(vault)
     })
     .await?;
+    install(store, vault, new).await
+}
+
+/// A new vault holding only `seed`, as a new wallet's does, sealed under `password` with `kdf`.
+pub(crate) async fn seal_seed(
+    seed: Seed,
+    password: Zeroizing<String>,
+    kdf: KdfParams,
+) -> Result<MemoryVault, WalletError> {
+    blocking(move || {
+        let mut vault = Vault::create(MemoryVaultStorage::new(), rng()?, password.as_bytes(), kdf)
+            .map_err(|error| {
+                WalletError::from(lepic_wallet::WalletError::from(vault_error(error)))
+            })?;
+        lepic_wallet::lifecycle::put_seed(&mut vault, &seed)?;
+        Ok(vault)
+    })
+    .await
+}
+
+/// Makes `vault`, sealed under `new`, the stored vault in place of whatever is stored, in the
+/// steps the module describes. Fails as [`replace`] does.
+pub(crate) async fn install(
+    store: &AppSecretStore,
+    vault: MemoryVault,
+    new: Zeroizing<String>,
+) -> Result<(), WalletError> {
     let text = vault
         .storage()
         .contents()
