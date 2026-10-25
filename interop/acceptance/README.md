@@ -9,7 +9,10 @@ covers both directions over Epicbox and slate files, a signed message each way o
 `wallet scan`, import of an `epic-wallet` `wallet.seed`, and the
 exit codes of common mistakes. Last, lepic invoices a second lepic wallet over Epicbox: the
 payer allows the service, parks the invoice from its invoice address and pays it once, the
-service finalizes, and the payer's drain shows the `posted` receipt. A stock `epic-wallet`
+service finalizes, and the payer's drain shows the `posted` receipt. Then lepic sends to that wallet over
+Epicbox while it listens: both slates carry the LEPIC marker, and the listener reports the
+payment as posted by its sender seconds after the sender's push, before it confirms; a stock
+`epic-wallet` receiver is recorded as nothing and sent no notice. A stock `epic-wallet`
 listener sends lepic's invoice back unpaid; lepic counts it as bounced, records that peer as not
 paying invoices (read from its store, which no command shows), sends it no notice when the
 invoice is cancelled, and pays it over Epicbox afterwards. It then prints a pass or fail table and

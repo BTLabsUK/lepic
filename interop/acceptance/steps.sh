@@ -227,6 +227,10 @@ step_send_over_epicbox() {
     EPICBOX_SEND_TX="${tx_id}"
     summary="$(drain_until finalized 1 120)" || fail "lepic finalized nothing: ${summary}" || return 1
     confirm_both "${tx_id}" "${slate_id}" || return 1
+    # lepic's S1 carried the marker; the stock reply did not, so the stock wallet is not
+    # recorded as running lepic and is sent no notice.
+    [[ "$(unmade_for "${PEER_KEY}")" == 0 ]] || fail "a message for the stock wallet is unacknowledged" || return 1
+    [[ -z "$(lepic_peer_support "${PEER_KEY}")" ]] || fail "lepic recorded the stock wallet as a peer" || return 1
     EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 1.5) - fee))
     check_lepic_total || return 1
     local messages
@@ -628,6 +632,60 @@ step_invoice_lepic_over_epicbox() {
     DETAIL="I1 parked from an allowed sender, paid once, finalized by the service; posted receipt; ${slate_id} confirmed"
 }
 
+# lepic sends to the second lepic wallet over Epicbox while that wallet listens. Both slates
+# carry the marker, so after the push the sender tells the receiver, which shows the payment as
+# reported posted within seconds and long before the chain confirms it.
+step_send_to_lepic_over_epicbox() {
+    local payer_address
+    payer_address="$(payer wallet address | jq -r .address)" || fail "payer wallet address failed" || return 1
+    # Started without the lepic_env function, so $! is lepic itself and the Ctrl-C reaches it.
+    env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
+        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" "${LEPIC_BIN}" --data-dir "${STATE_DIR}/payer" \
+        epicbox listen >"${STATE_DIR}/payer-listen.out" 2>"${STATE_DIR}/payer-listen.err" </dev/null &
+    local listen_pid=$!
+    wait_until "the payer listening" 30 grep -q "connected to the relay" "${STATE_DIR}/payer-listen.err" ||
+        { kill -INT "${listen_pid}" 2>/dev/null; fail "the payer's listen did not connect"; } || return 1
+    wait_until "lepic spendable" 180 lepic_spendable_at_least "$(to_units 0.5)" ||
+        { kill -INT "${listen_pid}"; fail "lepic has no spendable funds"; } || return 1
+    local sent tx_id slate_id fee summary
+    sent="$(lepic tx send 0.4 --to "${payer_address}")" ||
+        { kill -INT "${listen_pid}"; fail "lepic send to the payer failed"; } || return 1
+    tx_id="$(jq -r .tx_id <<<"${sent}")"
+    slate_id="$(jq -r .slate_id <<<"${sent}")"
+    fee="$(to_units "$(jq -r .fee <<<"${sent}")")"
+    summary="$(drain_until finalized 1 120)" ||
+        { kill -INT "${listen_pid}"; fail "lepic finalized nothing: ${summary}"; } || return 1
+    local posted_at="${EPOCHREALTIME}"
+    wait_until "the payer's posted report" 30 grep -q "payment ${slate_id} reported posted by its sender" \
+        "${STATE_DIR}/payer-listen.err"
+    local reported=$? reported_at="${EPOCHREALTIME}"
+    # The listen holds the payer's data directory; `tx show` reads the store without a refresh,
+    # so the payment still waits for the chain after it stopped.
+    kill -INT "${listen_pid}"
+    wait "${listen_pid}" || true
+    cat "${STATE_DIR}/payer-listen.err" >>"${RUN_LOG}"
+    ((reported == 0)) || fail "the payer heard nothing: $(tail -5 "${STATE_DIR}/payer-listen.err")" || return 1
+    local payer_tx shown
+    payer_tx="$(payer tx list | jq -r --arg id "${slate_id}" '.transactions[] | select(.slate_id == $id) | .tx_id')"
+    shown="$(payer tx show "${payer_tx}")"
+    jq -e '.state == "received" and (.sender_reported_posted_at | type) == "string"' <<<"${shown}" >/dev/null ||
+        fail "payer tx show: ${shown}" || return 1
+    [[ "$(lepic_peer_support "$(payer wallet address | jq -r .address | cut -d@ -f1)")" == lepic ]] ||
+        fail "lepic did not record the payer as running lepic" || return 1
+    local seconds
+    seconds="$(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.1f}")' "${posted_at}" "${reported_at}")"
+
+    wait_until "lepic tx ${tx_id} confirmed" 180 lepic_tx_confirmed "${tx_id}" ||
+        fail "lepic tx ${tx_id} is $(lepic_tx_state "${tx_id}"), not confirmed" || return 1
+    wait_until "payer tx ${payer_tx} confirmed" 180 payer_tx_confirmed "${payer_tx}" ||
+        fail "the payer's tx ${payer_tx} did not confirm" || return 1
+    [[ "$(payer tx show "${payer_tx}" | jq -r '.sender_reported_posted_at // "none"')" == none ]] ||
+        fail "the report is still shown after confirmation" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 0.4) - fee))
+    check_lepic_total || return 1
+    DETAIL="S1 and S2 marked; the listening receiver reported ${slate_id} posted ${seconds}s after the sender's drain returned; confirmed"
+}
+
 # A stock epic-wallet listener sends an invoice straight back; lepic counts it as bounced,
 # records that the peer does not pay invoices, and sends it no notice. The listener keeps
 # acknowledging: a payment after the bounce goes through.
@@ -687,5 +745,6 @@ STEPS=(
     "wallet import-seed:step_import_seed"
     "a second lepic wallet funded by file:step_fund_payer"
     "lepic invoices lepic by epicbox:step_invoice_lepic_over_epicbox"
+    "lepic sends to lepic by epicbox, posted notice:step_send_to_lepic_over_epicbox"
     "epic-wallet bounces an epicbox invoice:step_stock_listener_bounces_invoice"
 )
