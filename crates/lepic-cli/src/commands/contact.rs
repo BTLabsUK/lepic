@@ -73,6 +73,19 @@ fn purpose(purpose: PurposeArg) -> Purpose {
     }
 }
 
+/// How the CLI names a contact: the user's label, else what the contact calls itself, in
+/// quotes, else its id.
+fn contact_name(view: Option<&ContactView>, id: ContactId) -> String {
+    match view {
+        Some(view) if !view.label.is_empty() => view.label.clone(),
+        Some(ContactView {
+            claimed_name: Some(claimed),
+            ..
+        }) => format!("\"{claimed}\""),
+        _ => format!("contact {id}"),
+    }
+}
+
 fn failure_name(reason: PairingFailure) -> &'static str {
     match reason {
         PairingFailure::Expired => "expired",
@@ -471,33 +484,45 @@ impl<H: Host> Run<'_, H> {
                         },
                     )
                     .await?;
+                let view = wallet.contact(id).await.ok();
                 Report::ContactInvoiceIssue(ContactInvoiceIssueReport {
                     contact_id: id.to_string(),
+                    contact_name: contact_name(view.as_ref(), id),
                     tx_id: issued.tx_id.0,
                     slate_id: issued.slate_id.to_string(),
                     amount: format_amount(issued.amount),
                 })
             }
-            ContactCommand::Invoices => Report::ContactInvoices(ContactInvoiceListReport {
-                invoices: wallet
-                    .contact_invoices()
-                    .await?
-                    .into_iter()
-                    .map(|invoice| ContactInvoiceReport {
-                        slate_id: invoice.slate_id.to_string(),
-                        contact_id: invoice.contact_id.to_string(),
-                        amount: format_amount(invoice.amount),
-                        purpose: invoice.purpose.map(purpose_name),
-                        reference: invoice.reference,
-                        received_at: invoice.received_at.to_string(),
-                        same_amount: invoice
-                            .same_amount
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect(),
-                    })
-                    .collect(),
-            }),
+            ContactCommand::Invoices => {
+                let contacts = wallet.contacts().await?;
+                let view = |id: ContactId| contacts.iter().find(|view| view.contact_id == id);
+                Report::ContactInvoices(ContactInvoiceListReport {
+                    invoices: wallet
+                        .contact_invoices()
+                        .await?
+                        .into_iter()
+                        .map(|invoice| ContactInvoiceReport {
+                            slate_id: invoice.slate_id.to_string(),
+                            contact_id: invoice.contact_id.to_string(),
+                            contact_name: contact_name(
+                                view(invoice.contact_id),
+                                invoice.contact_id,
+                            ),
+                            verified: view(invoice.contact_id)
+                                .is_some_and(|view| view.state == ContactState::Verified),
+                            amount: format_amount(invoice.amount),
+                            purpose: invoice.purpose.map(purpose_name),
+                            reference: invoice.reference,
+                            received_at: invoice.received_at.to_string(),
+                            same_amount: invoice
+                                .same_amount
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect(),
+                        })
+                        .collect(),
+                })
+            }
             ContactCommand::PayInvoice(args) => {
                 let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
                 let amount: Amount = parse_amount(&args.amount)?;

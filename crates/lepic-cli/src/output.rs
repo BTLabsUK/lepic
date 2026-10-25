@@ -486,6 +486,8 @@ pub struct ContactKeyCheckReport {
 #[derive(Debug, Serialize)]
 pub struct ContactInvoiceIssueReport {
     pub contact_id: String,
+    /// The user's label for the contact, else what it calls itself, in quotes.
+    pub contact_name: String,
     pub tx_id: u32,
     pub slate_id: String,
     pub amount: String,
@@ -495,6 +497,10 @@ pub struct ContactInvoiceIssueReport {
 pub struct ContactInvoiceReport {
     pub slate_id: String,
     pub contact_id: String,
+    /// The user's label for the contact, else what it calls itself, in quotes.
+    pub contact_name: String,
+    /// Whether the contact's SAS was checked.
+    pub verified: bool,
     pub amount: String,
     pub purpose: Option<&'static str>,
     pub reference: Option<String>,
@@ -1212,8 +1218,10 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         ),
         Report::ContactInvoiceIssue(r) => writeln!(
             out,
-            "Transaction {} asks contact {} for {} EPIC; the invoice waits in its mailbox.",
-            r.tx_id, r.contact_id, r.amount
+            "Transaction {} asks {} for {} EPIC; the invoice waits in its mailbox.",
+            r.tx_id,
+            printable(&r.contact_name),
+            r.amount
         ),
         Report::ContactInvoices(r) => {
             if r.invoices.is_empty() {
@@ -1222,10 +1230,19 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             for invoice in &r.invoices {
                 writeln!(
                     out,
-                    "{}  {} EPIC from contact {}{}",
+                    "{}  {} EPIC from {}{}{}{}",
                     invoice.slate_id,
                     invoice.amount,
-                    invoice.contact_id,
+                    printable(&invoice.contact_name),
+                    if invoice.verified {
+                        " (verified)"
+                    } else {
+                        " (not verified)"
+                    },
+                    invoice
+                        .purpose
+                        .map(|purpose| format!(", {purpose}"))
+                        .unwrap_or_default(),
                     invoice
                         .reference
                         .as_deref()
@@ -1806,11 +1823,12 @@ mod tests {
             (
                 Report::ContactInvoiceIssue(ContactInvoiceIssueReport {
                     contact_id: text("c"),
+                    contact_name: text("n"),
                     tx_id: 1,
                     slate_id: text("s"),
                     amount: text("1"),
                 }),
-                vec!["amount", "contact_id", "slate_id", "tx_id"],
+                vec!["amount", "contact_id", "contact_name", "slate_id", "tx_id"],
             ),
             (
                 Report::ContactInvoices(ContactInvoiceListReport { invoices: vec![] }),
@@ -1959,6 +1977,33 @@ mod tests {
                 "json output changed"
             );
         }
+    }
+
+    #[test]
+    fn contact_invoices_name_the_contact_and_say_what_they_are_for() {
+        let invoice = |name: &str, verified| ContactInvoiceReport {
+            slate_id: text("s"),
+            contact_id: text("c"),
+            contact_name: name.to_owned(),
+            verified,
+            amount: text("2.5"),
+            purpose: Some("deposit"),
+            reference: Some(text("order 7")),
+            received_at: text("t"),
+            same_amount: vec![],
+        };
+        let shown = render(
+            &Report::ContactInvoices(ContactInvoiceListReport {
+                invoices: vec![invoice("Exchange X", true), invoice("\"Shop\"", false)],
+            }),
+            OutputFormat::Human,
+        )
+        .to_string();
+        assert!(
+            shown.contains("s  2.5 EPIC from Exchange X (verified), deposit, reference order 7"),
+            "{shown}"
+        );
+        assert!(shown.contains("from \"Shop\" (not verified)"), "{shown}");
     }
 
     #[test]
