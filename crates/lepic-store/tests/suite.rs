@@ -1377,6 +1377,34 @@ fn updates_keep_a_contacts_mailbox_backoff_and_outbox<B: Backend>() {
     .unwrap();
 }
 
+fn seen_envelopes_are_remembered_and_forgotten_by_age<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let at = |second: i64| Timestamp::from_second(second).unwrap();
+    write(store, |repos| {
+        repos.remember_envelope(&[1; 32], at(10))?;
+        repos.remember_envelope(&[2; 32], at(20))?;
+        // Seen again: the time moves on.
+        repos.remember_envelope(&[1; 32], at(30))
+    })
+    .unwrap();
+    read(store, |repos| {
+        assert!(repos.envelope_seen(&[1; 32])?);
+        assert!(repos.envelope_seen(&[2; 32])?);
+        assert!(!repos.envelope_seen(&[3; 32])?);
+        Ok(())
+    })
+    .unwrap();
+    let forgotten = write(store, |repos| repos.forget_envelopes_before(at(25))).unwrap();
+    assert_eq!(forgotten, 1);
+    read(store, |repos| {
+        assert!(repos.envelope_seen(&[1; 32])?);
+        assert!(!repos.envelope_seen(&[2; 32])?);
+        Ok(())
+    })
+    .unwrap();
+}
+
 fn pairings_round_trip_with_their_secrets_and_are_found_by_invite<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
@@ -2055,6 +2083,7 @@ for_each_backend!(
     contacts_stop_at_the_cap,
     mailboxes_need_their_contact_and_go_with_it,
     updates_keep_a_contacts_mailbox_backoff_and_outbox,
+    seen_envelopes_are_remembered_and_forgotten_by_age,
     pairings_round_trip_with_their_secrets_and_are_found_by_invite,
     pairing_secrets_cannot_be_read_without_the_key,
     pending_pairings_stop_at_the_cap,

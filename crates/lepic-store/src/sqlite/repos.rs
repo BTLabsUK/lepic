@@ -1865,4 +1865,27 @@ impl ContactRepository for SqliteRepos<'_> {
         )?;
         Ok(())
     }
+
+    fn envelope_seen(&self, hash: &[u8; 32]) -> Result<bool, StoreError> {
+        self.exists(
+            "SELECT EXISTS (SELECT 1 FROM contact_seen WHERE hash = ?1)",
+            [&hash[..]],
+        )
+    }
+
+    fn remember_envelope(&mut self, hash: &[u8; 32], at: Timestamp) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO contact_seen (hash, seen_at) VALUES (?1, ?2) \
+             ON CONFLICT (hash) DO UPDATE SET seen_at = excluded.seen_at",
+            params![&hash[..], timestamp_to_column(at)?],
+        )?;
+        Ok(())
+    }
+
+    fn forget_envelopes_before(&mut self, cutoff: Timestamp) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM contact_seen WHERE seen_at < ?1",
+            [timestamp_to_column(cutoff)?],
+        )?)
+    }
 }

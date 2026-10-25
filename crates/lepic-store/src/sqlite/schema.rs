@@ -275,10 +275,22 @@ CREATE INDEX contact_outbox_contact ON contact_outbox (contact_id);
 DROP TABLE allowed_peers;
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
+/// The hashes of envelopes taken from contact and pairing mailboxes, for deduplication; they
+/// were one JSON setting before.
+const V7: &str = "
+CREATE TABLE contact_seen (
+    hash BLOB PRIMARY KEY,
+    seen_at INTEGER NOT NULL
+);
+CREATE INDEX contact_seen_at ON contact_seen (seen_at);
+
+DELETE FROM settings WHERE key = 'contact.seen';
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

@@ -437,6 +437,16 @@ pub trait ContactRepository {
 
     /// Removes the entry if it is stored.
     fn delete_contact_outbox(&mut self, id: ContactOutboxId) -> Result<(), StoreError>;
+
+    /// Whether an envelope with this hash was taken from a contact or pairing mailbox before
+    /// (RFC 0002 8.2: the wallet deduplicates by the envelope's hash).
+    fn envelope_seen(&self, hash: &[u8; 32]) -> Result<bool, StoreError>;
+
+    /// Records that an envelope with this hash was taken at `at`.
+    fn remember_envelope(&mut self, hash: &[u8; 32], at: Timestamp) -> Result<(), StoreError>;
+
+    /// Forgets the envelopes taken before `cutoff`, and returns how many.
+    fn forget_envelopes_before(&mut self, cutoff: Timestamp) -> Result<usize, StoreError>;
 }
 
 /// Rejects timestamps the SQLite backend could not hold, so both backends accept the same data.

@@ -56,6 +56,7 @@ struct State {
     contact_mailboxes: BTreeMap<ContactId, ContactMailbox>,
     pairings: BTreeMap<PairingId, SealedPairing>,
     contact_outbox: BTreeMap<ContactOutboxId, ContactOutboxEntry>,
+    seen_envelopes: BTreeMap<[u8; 32], Timestamp>,
     invoice_address_index: Option<InvoiceAddressIndex>,
     imported_transactions: BTreeMap<TxId, ImportedTransaction>,
     imported_outputs: BTreeMap<CommitmentBytes, ImportedOutput>,
@@ -1070,5 +1071,21 @@ impl ContactRepository for MemoryRepos<'_> {
     fn delete_contact_outbox(&mut self, id: ContactOutboxId) -> Result<(), StoreError> {
         self.state.contact_outbox.remove(&id);
         Ok(())
+    }
+
+    fn envelope_seen(&self, hash: &[u8; 32]) -> Result<bool, StoreError> {
+        Ok(self.state.seen_envelopes.contains_key(hash))
+    }
+
+    fn remember_envelope(&mut self, hash: &[u8; 32], at: Timestamp) -> Result<(), StoreError> {
+        crate::encoding::timestamp_to_column(at)?;
+        self.state.seen_envelopes.insert(*hash, at);
+        Ok(())
+    }
+
+    fn forget_envelopes_before(&mut self, cutoff: Timestamp) -> Result<usize, StoreError> {
+        let before = self.state.seen_envelopes.len();
+        self.state.seen_envelopes.retain(|_, at| *at >= cutoff);
+        Ok(before.saturating_sub(self.state.seen_envelopes.len()))
     }
 }

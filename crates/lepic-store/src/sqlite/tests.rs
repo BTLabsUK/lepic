@@ -124,12 +124,22 @@ fn check_v4_seed(store: &SqliteStore) {
 
 fn check_v6_seed(store: &SqliteStore) {
     assert!(store.read(|repos| repos.contacts()).unwrap().is_empty());
+    // The seen set moved to its own table.
+    assert_eq!(
+        store.read(|repos| repos.setting("contact.seen")).unwrap(),
+        None
+    );
     assert!(
         store
             .read(|repos| repos.contact_slot_counters())
             .unwrap()
             .is_empty()
     );
+}
+
+fn check_v7_seed(store: &SqliteStore) {
+    check_v6_seed(store);
+    assert!(!store.read(|repos| repos.envelope_seen(&[1; 32])).unwrap());
 }
 
 fn check_v5_seed(store: &SqliteStore) {
@@ -193,8 +203,13 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 6,
-        seed: "",
+        seed: "INSERT INTO settings (key, value) VALUES ('contact.seen', '{}');",
         check: check_v6_seed,
+    },
+    UpgradeCase {
+        from: 7,
+        seed: "",
+        check: check_v7_seed,
     },
 ];
 

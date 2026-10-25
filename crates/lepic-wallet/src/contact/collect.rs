@@ -80,13 +80,9 @@ const SHOWN_CARD_LIFETIME: Duration = Duration::from_secs(60 * 60);
 /// Envelopes seen are remembered as long as a relay keeps a message, and a little longer.
 const SEEN_LIFETIME: Duration = Duration::from_secs(8 * 24 * 60 * 60);
 
-/// The most envelope hashes remembered.
-const MAX_SEEN: usize = 4096;
-
 /// Relays with fewer distinct contact mailboxes than this are drained in full on every tick.
 const FEW_RELAYS: usize = 3;
 
-const SEEN_KEY: &str = "contact.seen";
 const IN_PERSON_PREFIX: &str = "contact.inperson.";
 const OLD_SALT_PREFIX: &str = "contact.oldsalt.";
 
@@ -128,9 +124,6 @@ struct Mailbox {
 struct Backoffs(BTreeMap<String, (u32, i64)>);
 
 #[derive(Default, Serialize, Deserialize)]
-struct Seen(BTreeMap<String, i64>);
-
-#[derive(Default, Serialize, Deserialize)]
 struct Updates {
     per_contact: BTreeMap<String, Vec<i64>>,
     all: Vec<i64>,
@@ -158,11 +151,8 @@ fn write_json<T: Serialize>(
     repos.put_setting(key, &text)
 }
 
-fn envelope_hash(envelope: &[u8]) -> String {
-    Blake2b256::digest(envelope)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+fn envelope_hash(envelope: &[u8]) -> [u8; 32] {
+    Blake2b256::digest(envelope).into()
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -248,6 +238,7 @@ where
         }
         self.tend_key_checks().await?;
         self.prune_outbox().await?;
+        self.forget_old_envelopes().await?;
         self.move_in_person_mailboxes(relays).await?;
         let mailboxes = self.mailboxes_to_collect(relays, trigger).await?;
         let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();
@@ -510,39 +501,34 @@ where
     }
 
     /// Whether an envelope with `hash` was handled before.
-    async fn seen_before(&self, hash: String) -> Result<bool, ContactError> {
+    async fn seen_before(&self, hash: [u8; 32]) -> Result<bool, ContactError> {
         let session = self.session()?;
-        self.contact_work(move |_, _| {
-            let seen: Seen = session.store.read(|repos| read_json(repos, SEEN_KEY))?;
-            Ok(seen.0.contains_key(&hash))
+        self.contact_work(move |_, _| Ok(session.store.read(|repos| repos.envelope_seen(&hash))?))
+            .await
+    }
+
+    /// Remembers that an envelope with `hash` was handled.
+    async fn remember(&self, hash: [u8; 32]) -> Result<(), ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |ports, _| {
+            let now = ports.clock.now();
+            Ok(session
+                .store
+                .write(|repos| repos.remember_envelope(&hash, now))?)
         })
         .await
     }
 
-    /// Remembers that an envelope with `hash` was handled, forgetting the oldest beyond the
-    /// bounds.
-    async fn remember(&self, hash: String) -> Result<(), ContactError> {
+    /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer.
+    async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
         let session = self.session()?;
         self.contact_work(move |ports, _| {
-            let now = ports.clock.now().as_second();
-            let oldest = now.saturating_sub(i64::try_from(SEEN_LIFETIME.as_secs()).unwrap_or(0));
-            Ok(session.store.write(|repos| {
-                let mut seen: Seen = read_json(repos, SEEN_KEY)?;
-                seen.0.retain(|_, at| *at >= oldest);
-                while seen.0.len() >= MAX_SEEN {
-                    let Some(first) = seen
-                        .0
-                        .iter()
-                        .min_by_key(|(_, at)| **at)
-                        .map(|(key, _)| key.clone())
-                    else {
-                        break;
-                    };
-                    seen.0.remove(&first);
-                }
-                seen.0.insert(hash, now);
-                write_json(repos, SEEN_KEY, &seen)
-            })?)
+            let now = ports.clock.now();
+            let cutoff = now.checked_sub(SEEN_LIFETIME).unwrap_or(now);
+            session
+                .store
+                .write(|repos| repos.forget_envelopes_before(cutoff))?;
+            Ok(())
         })
         .await
     }
@@ -973,7 +959,7 @@ where
 {
     async fn take(&mut self, job: Job, envelope: &[u8]) -> Result<Handled, ContactError> {
         let hash = envelope_hash(envelope);
-        if self.wallet.seen_before(hash.clone()).await? {
+        if self.wallet.seen_before(hash).await? {
             return Ok(Handled::Stored);
         }
         let handled = match job {
