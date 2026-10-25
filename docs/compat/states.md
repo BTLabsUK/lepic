@@ -156,6 +156,9 @@ that a payer never releases the inputs of a payment its issuer posted in time, t
 margin of 10 blocks, as many as a peer's slate height may lead the tip, on each side of the
 cutoff, the earlier of the I2's and the one the issuer issued:
 
+- A LEPIC payer refuses to pay an I1 from 10 blocks before its cutoff on, and nothing is
+  stored, so it never signs a payment the issuer would refuse and never locks inputs for one;
+  the refusal names that height as the cutoff reached.
 - The issuer refuses to finalize a payment from 10 blocks before the cutoff on, also when the
   I2 drops the TTL or moves it later; the refusal names that height as the cutoff reached.
 - The issuer refuses to post a finalized payment again, after a failed post, from the cutoff

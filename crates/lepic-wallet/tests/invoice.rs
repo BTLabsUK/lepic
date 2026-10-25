@@ -453,22 +453,22 @@ fn an_invoice_issued_with_a_ttl_carries_its_cutoff_to_the_payers_i2() {
 fn a_payers_later_ttl_is_cut_to_the_cutoff_the_invoice_was_issued_with() {
     let flow = flow_issued_with_ttl(
         None,
-        Some(2),
+        Some(MARGIN_TTL),
         PayRequest {
-            ttl_blocks: Some(10),
+            ttl_blocks: Some(MARGIN_TTL + 10),
             ..request()
         },
     );
 
     let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
-    assert_eq!(i2["ttl_cutoff_height"], (TIP + 2).to_string());
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + MARGIN_TTL).to_string());
 }
 
 #[test]
 fn a_payers_earlier_ttl_is_kept() {
     let flow = flow_issued_with_ttl(
         None,
-        Some(10),
+        Some(MARGIN_TTL),
         PayRequest {
             ttl_blocks: Some(2),
             ..request()
@@ -734,18 +734,41 @@ fn paying_refuses_a_slate_that_is_not_an_invoice() {
     assert!(other.read(|repos| repos.transactions(ACCOUNT)).is_empty());
 }
 
+/// An I1 in the V3 shape with a version 3 header, which the file method reads with its TTL,
+/// with its cutoff set to `cutoff`.
+fn with_cutoff(i1: &WireSlate, cutoff: u64) -> WireSlate {
+    tampered(i1, |slate| {
+        slate["version_info"]["version"] = Value::from(3);
+        slate["version_info"]["orig_version"] = Value::from(3);
+        slate["ttl_cutoff_height"] = Value::from(cutoff.to_string());
+        slate["payment_proof"] = Value::Null;
+    })
+}
+
 #[test]
 fn paying_refuses_an_invoice_past_its_ttl() {
     let node = node();
     let issuer = Party::new(ISSUER_MNEMONIC, &node);
     issuer.issue(AMOUNT, None).unwrap();
-    // An I1 in the V3 shape with a version 3 header, which the file method reads with its TTL.
-    let i1 = tampered(&issuer.delivered().unwrap(), |slate| {
-        slate["version_info"]["version"] = Value::from(3);
-        slate["version_info"]["orig_version"] = Value::from(3);
-        slate["ttl_cutoff_height"] = Value::from(TIP.to_string());
-        slate["payment_proof"] = Value::Null;
-    });
+    let i1 = with_cutoff(&issuer.delivered().unwrap(), TIP);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(matches!(error, InvoiceError::Expired { .. }), "{error:?}");
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn paying_refuses_an_invoice_from_the_margin_before_its_ttl() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    // The issuer would refuse to finalize a payment from here on.
+    let i1 = with_cutoff(
+        &issuer.delivered().unwrap(),
+        TIP + INVOICE_TTL_MARGIN_BLOCKS,
+    );
     let payer = payer(&node, FUNDING);
 
     let error = payer.pay(&i1, request()).unwrap_err();
@@ -756,6 +779,26 @@ fn paying_refuses_an_invoice_past_its_ttl() {
         "{error:?}"
     );
     assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn pays_an_invoice_one_block_before_the_margin_before_its_ttl() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = with_cutoff(
+        &issuer.delivered().unwrap(),
+        TIP + INVOICE_TTL_MARGIN_BLOCKS + 1,
+    );
+    let payer = payer(&node, FUNDING);
+
+    let paid = payer.pay(&i1, request()).unwrap();
+
+    let i2: Value = serde_json::from_str(paid.reply.as_text().unwrap()).unwrap();
+    assert_eq!(
+        i2["ttl_cutoff_height"],
+        (TIP + INVOICE_TTL_MARGIN_BLOCKS + 1).to_string()
+    );
 }
 
 /// The I1 an issuer delivered, as the file method reads it with its TTL, with `ttl_cutoff_height`
@@ -855,7 +898,8 @@ fn paying_calls_a_request_expired_as_long_ago_as_the_lag_bound_expired() {
 
     assert!(
         matches!(error, InvoiceError::Expired { cutoff: at, tip }
-            if at == Height::new(cutoff) && tip == Height::new(MAINNET_TIP)),
+            if at == Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS)
+                && tip == Height::new(MAINNET_TIP)),
         "{error:?}"
     );
     let below = tampered(&i1, |slate| {
@@ -882,7 +926,8 @@ fn paying_calls_a_recently_expired_request_expired() {
     let error = payer.pay(&i1, request()).unwrap_err();
 
     assert!(
-        matches!(error, InvoiceError::Expired { cutoff: at, .. } if at == Height::new(cutoff)),
+        matches!(error, InvoiceError::Expired { cutoff: at, .. }
+            if at == Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS)),
         "{error:?}"
     );
 }

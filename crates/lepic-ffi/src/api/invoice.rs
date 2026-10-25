@@ -21,11 +21,11 @@ impl EpicWallet {
     /// `message` goes to the payer signed with the invoice, cut to its first 256 bytes on a
     /// character boundary.
     ///
-    /// The I1 carries a time to live of 1,440 blocks, a day, from the node's tip: a payer
-    /// refuses the invoice from then on and a refresh here expires it unpaid. This wallet
-    /// refuses to finalize a payment of it from 10 blocks before then, and to retry a failed
-    /// post of one from then on, so a payer whose node runs ahead never releases a payment
-    /// this wallet posted.
+    /// The I1 carries a time to live of 1,440 blocks, a day, from the node's tip, and a refresh
+    /// here expires it unpaid from then on. A LEPIC payer refuses the invoice, and this wallet
+    /// refuses to finalize a payment of it, from 10 blocks before then; this wallet refuses to
+    /// retry a failed post of one from then on, so a payer whose node runs ahead never releases
+    /// a payment this wallet posted.
     ///
     /// Fails with `InvalidArgument` for an amount of 0 and `NodeUnreachable` when the node's
     /// tip cannot be read; nothing is stored then.
@@ -68,7 +68,7 @@ impl EpicWallet {
     ///
     /// Fails with `InvalidSlate` for text that is not an I1 or whose message signature does not
     /// verify, `AmountMismatch`, `InvoiceAlreadyPaid` for an invoice this wallet paid before,
-    /// `PaymentExpired` when the chain reached the invoice's time to live,
+    /// `PaymentExpired` from 10 blocks before the invoice's time to live,
     /// `InvoiceNotForThisChain` when the invoice was made for another network or at a wrong
     /// height, `InvoiceLockedAboveTip`, `NotEnoughFunds` and `NodeUnreachable`. Nothing is
     /// stored then. A payment the issuer never finalizes, for example the second payment of one

@@ -92,7 +92,7 @@ The reader refuses, with distinct errors:
 A code says nothing of its age or its network; the slate inside does, through its TTL. An I1
 the binding issues (`issue_invoice_slate`, `issue_invoice_file`) carries a TTL cutoff 1,440
 blocks, a day, above the issuer's tip, as the binding's sends carry their limit. A LEPIC payer
-refuses one whose cutoff the chain has reached (`PaymentExpired`) and one whose cutoff lies
+refuses one from 10 blocks before its cutoff (`PaymentExpired`) and one whose cutoff lies
 more than 2,880 blocks above its tip (`InvoiceNotForThisChain`), which a request from a
 network with a longer chain has. A floonet request read on mainnet has its cutoff millions of
 blocks below the tip; one whose cutoff lies more than 525,600 blocks, a year, below the tip is

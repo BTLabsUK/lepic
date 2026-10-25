@@ -90,8 +90,9 @@ pub const MAX_INVOICE_TTL_LEAD_BLOCKS: u64 = 2 * INVOICE_TTL_BLOCKS;
 /// millions of blocks below the tip; that one was not made for this chain.
 pub const MAX_INVOICE_TTL_LAG_BLOCKS: u64 = 365 * INVOICE_TTL_BLOCKS;
 
-/// Blocks before an invoice payment's TTL cutoff from which its issuer no longer finalizes it,
-/// and blocks after the cutoff before its payer releases the payment's inputs. Issuer and payer
+/// Blocks before an invoice's TTL cutoff from which a payer no longer pays it and its issuer no
+/// longer finalizes a payment of it, and blocks after the cutoff before the payer releases the
+/// payment's inputs. Issuer and payer
 /// read their tips from different nodes, which may stand a few blocks apart: without the
 /// margin, a payment finalized and posted just below the cutoff by the issuer's node could be
 /// released by a payer whose node reached the cutoff before the transaction reached its pool,
@@ -421,11 +422,6 @@ pub(crate) fn check_messages(slate: &Slate) -> Result<(), InvoiceError> {
     Ok(())
 }
 
-/// Refuses a slate once the node's current tip reaches its cutoff.
-fn check_ttl(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
-    check_cutoff(slate.ttl_cutoff_height(), tip)
-}
-
 /// Refuses once the node's current tip reaches `cutoff`.
 fn check_cutoff(cutoff: Option<Height>, tip: Height) -> Result<(), InvoiceError> {
     match cutoff {
@@ -435,7 +431,8 @@ fn check_cutoff(cutoff: Option<Height>, tip: Height) -> Result<(), InvoiceError>
 }
 
 /// Refuses an invoice whose TTL cutoff lies more than [`MAX_INVOICE_TTL_LAG_BLOCKS`] below the
-/// node's tip, before [`check_ttl`] would call it expired. An invoice without a TTL passes.
+/// node's tip, before [`check_margin_ttl`] would call it expired. An invoice without a TTL
+/// passes.
 fn check_ttl_lag(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
     let Some(cutoff) = slate.ttl_cutoff_height() else {
         return Ok(());
@@ -450,9 +447,9 @@ fn check_ttl_lag(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
     Ok(())
 }
 
-/// The height from which the issuer refuses to finalize a payment whose TTL cutoff is
-/// `cutoff`: [`INVOICE_TTL_MARGIN_BLOCKS`] before it.
-fn last_finalize_cutoff(cutoff: Height) -> Height {
+/// The height from which the payer refuses to pay an invoice whose TTL cutoff is `cutoff`, and
+/// the issuer to finalize a payment of it: [`INVOICE_TTL_MARGIN_BLOCKS`] before it.
+fn margin_cutoff(cutoff: Height) -> Height {
     cutoff
         .checked_sub_blocks(INVOICE_TTL_MARGIN_BLOCKS)
         .unwrap_or(Height::ZERO)
@@ -476,10 +473,10 @@ pub(crate) fn earliest_cutoff(first: Option<Height>, second: Option<Height>) -> 
     }
 }
 
-/// Refuses to finalize a payment once the node's tip comes within
+/// Refuses to pay an invoice or finalize a payment once the node's tip comes within
 /// [`INVOICE_TTL_MARGIN_BLOCKS`] of `cutoff`, reporting that height as the cutoff reached.
-fn check_finalize_ttl(cutoff: Option<Height>, tip: Height) -> Result<(), InvoiceError> {
-    match cutoff.map(last_finalize_cutoff) {
+fn check_margin_ttl(cutoff: Option<Height>, tip: Height) -> Result<(), InvoiceError> {
+    match cutoff.map(margin_cutoff) {
         Some(cutoff) if tip >= cutoff => Err(InvoiceError::Expired { cutoff, tip }),
         _ => Ok(()),
     }
@@ -854,7 +851,7 @@ fn finalize_stored(
     // The payer may drop or move the cutoff in its I2: a version 2 header loses it, and
     // upstream's payer replaces it with its own. The one this wallet issued still holds.
     let issued = env.decode_stored(issued)?.with_origin(None);
-    check_finalize_ttl(
+    check_margin_ttl(
         earliest_cutoff(i2.ttl_cutoff_height(), issued.ttl_cutoff_height()),
         env.tip,
     )?;
@@ -996,8 +993,9 @@ where
     /// Asks the node for its tip, which becomes the slate height and the base of
     /// `request.ttl_blocks`. Fails with [`InvoiceError::AmountMismatch`] when the invoice asks
     /// for another amount than `request.amount`, [`InvoiceError::AlreadyPaid`] for an invoice
-    /// this wallet paid before, [`InvoiceError::Expired`] when the tip has reached the
-    /// invoice's TTL cutoff, [`InvoiceError::TtlTooFarAhead`] when that cutoff lies more than
+    /// this wallet paid before, [`InvoiceError::Expired`] once the tip comes within
+    /// [`INVOICE_TTL_MARGIN_BLOCKS`] of the invoice's TTL cutoff, the height it reports as the
+    /// cutoff, [`InvoiceError::TtlTooFarAhead`] when that cutoff lies more than
     /// [`MAX_INVOICE_TTL_LEAD_BLOCKS`] above the tip, [`InvoiceError::TtlTooFarBehind`] when it
     /// lies more than [`MAX_INVOICE_TTL_LAG_BLOCKS`] below it, [`InvoiceError::LockedUntil`]
     /// when its kernel lock height is above the tip, [`InvoiceError::AheadOfTip`] when its
@@ -1063,7 +1061,9 @@ where
             .height;
         let limit = self.check_plausible_tip(&session, tip).await?;
         check_ttl_lag(&i1, tip)?;
-        check_ttl(&i1, tip)?;
+        // The issuer would refuse to finalize a payment signed from here on, which would only
+        // keep this wallet's inputs locked until the payment expires.
+        check_margin_ttl(i1.ttl_cutoff_height(), tip)?;
         check_ttl_lead(&i1, tip)?;
         check_lock(&i1, tip)?;
         check_height(&i1, limit)?;
