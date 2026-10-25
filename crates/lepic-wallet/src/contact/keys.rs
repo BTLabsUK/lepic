@@ -120,3 +120,23 @@ pub(crate) fn our_card(
 pub(crate) fn signing_key(keys: &ContactKeys) -> SigningKey {
     SigningKey::from_bytes(&keys.expose_signing_key().to_bytes())
 }
+
+/// The public key of the one-time reply key for the slate `slate_id` this wallet starts in
+/// `account` (RFC 0002 2.3), for the LEPIC marker. `None` when it cannot be derived; the slate
+/// then goes out without one and its answer comes back plain.
+pub(crate) fn reply_public_key(
+    keychain: &Keychain,
+    network: Network,
+    account: AccountIndex,
+    slate_id: [u8; 16],
+) -> Option<[u8; 32]> {
+    let root = keychain
+        .contact_root(&parent_key_id(account).ok()?, network)
+        .ok()?;
+    let reply = root.reply_key(slate_id).ok()?;
+    Some(
+        *EncSecretKey::from_bytes(*reply.expose_x25519_secret())
+            .public_key()
+            .as_bytes(),
+    )
+}

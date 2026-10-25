@@ -44,6 +44,7 @@ use lepic_store::{
     TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
+use lepic_transport::file::FILE;
 use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Transport, TransportId};
@@ -294,13 +295,21 @@ fn legacy_codecs(base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
 }
 
 /// The codecs invoice stages go out with over `transport`: over Epicbox the V3 shape carries
-/// the LEPIC marker, so a reply that keeps it proves the peer runs LEPIC.
-fn invoice_codecs(transport: TransportId, base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
+/// the LEPIC marker, so a reply that keeps it proves the peer runs LEPIC. A file or paste I1
+/// carries the marker with `reply_key`, so a LEPIC payer can answer sealed (RFC 0002 5).
+fn invoice_codecs(
+    transport: TransportId,
+    base_fee: Fee,
+    reply_key: Option<[u8; 32]>,
+) -> Result<CodecRegistry, InvoiceError> {
     let v3 = V3JsonCodec::new(base_fee);
-    if transport == EPICBOX {
-        codecs_with(Box::new(MarkedV3JsonCodec::new(v3)), base_fee)
-    } else {
-        codecs_with(Box::new(v3), base_fee)
+    match reply_key {
+        _ if transport == EPICBOX => codecs_with(Box::new(MarkedV3JsonCodec::new(v3)), base_fee),
+        Some(key) if transport == FILE => codecs_with(
+            Box::new(MarkedV3JsonCodec::new(v3).with_reply_key(key)),
+            base_fee,
+        ),
+        _ => codecs_with(Box::new(v3), base_fee),
     }
 }
 
@@ -471,8 +480,14 @@ fn issue_stored(
     )?;
     let slate = built.slate;
     let context = encode_context(env.network, &slate);
+    let reply_key = crate::contact::reply_public_key(
+        env.keychain,
+        env.network,
+        request.account,
+        *slate.id().as_bytes(),
+    );
     let wire = encode_with(
-        &invoice_codecs(transport.id(), env.base_fee())?,
+        &invoice_codecs(transport.id(), env.base_fee(), reply_key)?,
         new_invoice_encoding(transport, &slate, &context),
         &slate,
         &context,
@@ -578,7 +593,7 @@ fn pay_stored(
     let context = encode_context(env.network, &slate);
     let encoding = policy.for_reply(&slate, &context);
     let reply = encode_with(
-        &invoice_codecs(transport, env.base_fee())?,
+        &invoice_codecs(transport, env.base_fee(), None)?,
         encoding,
         &slate,
         &context,

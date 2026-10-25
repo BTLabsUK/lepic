@@ -49,7 +49,13 @@ fn codec() -> V3JsonCodec {
 impl World {
     /// The payer sends `AMOUNT` and writes the plain S1 to a file; returns the transaction.
     fn payer_sends(&self) -> TxId {
+        self.payer_sends_file().0
+    }
+
+    /// The payer sends `AMOUNT` by file; returns the transaction and the file's slate.
+    fn payer_sends_file(&self) -> (TxId, WireSlate) {
         let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s1.tx");
         let sent = self
             .block_on(self.payer.wallet.send(
                 SendRequest {
@@ -59,11 +65,12 @@ impl World {
                 },
                 Delivery::Export {
                     transport: FILE,
-                    to: Location::File(dir.path().join("s1.tx")),
+                    to: Location::File(path.clone()),
                 },
             ))
             .unwrap();
-        sent.tx_id
+        let text = std::fs::read_to_string(&path).unwrap();
+        (sent.tx_id, WireSlate::text(MediaType::JSON, text))
     }
 
     fn stored(&self, party: &world::Party, tx_id: TxId, stage: SlateStage) -> WireSlate {
@@ -326,4 +333,40 @@ fn a_contact_not_heard_from_in_ninety_days_is_lapsed_and_seal_off_refuses() {
         world.block_on(world.payer.wallet.contact_seal_slate(ben_side, tx_id, None)),
         Err(ContactError::SealOff)
     ));
+}
+
+#[test]
+fn a_file_s1_carries_the_reply_key_and_its_answer_comes_back_sealed() {
+    let world = World::new();
+    let (tx_id, file) = world.payer_sends_file();
+    assert!(
+        lepic_slate::codec::marked_v3::lepic_marker_reply_key(&file).is_some(),
+        "{}",
+        file.as_text().unwrap()
+    );
+
+    let received = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .receive(FILE, &file, ReceiveRequest::default()),
+        )
+        .unwrap();
+    let answer = world
+        .issuer
+        .wallet
+        .sealed_answer_to_marker(&file, &received.reply)
+        .unwrap()
+        .expect("a sealed answer");
+
+    let finalized = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .sealed_finalize(&answer, Propagation::Fluff),
+        )
+        .unwrap();
+    assert_eq!(finalized.tx_id, tx_id);
 }

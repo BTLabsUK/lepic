@@ -34,6 +34,7 @@ use lepic_primitives::tx::TransactionBody;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::marked_v2::MarkedV2JsonCodec;
+use lepic_slate::codec::marked_v3::MarkedV3JsonCodec;
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, ProofAddressError, SlateError};
 use lepic_slate::model::{
@@ -49,6 +50,7 @@ use lepic_store::{
     TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
+use lepic_transport::file::FILE;
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, Location, Transport, TransportId};
 use rand_core::CryptoRng;
@@ -549,14 +551,38 @@ fn transport<'a>(
 
 /// The S1 as the transport sends a new slate.
 fn encode_for_delivery(
-    transports: &TransportRegistry,
+    env: &SendEnvironment<'_>,
     delivery: &Delivery,
     slate: &Slate,
-    base_fee: Fee,
+    account: AccountIndex,
     context: &EncodeContext,
 ) -> Result<WireSlate, SendError> {
-    let policy = transport(transports, delivery)?.policy();
-    let codecs = delivery_codecs(delivery.transport(), base_fee);
+    let base_fee = env.base_fee();
+    let policy = transport(env.transports, delivery)?.policy();
+    // A file or paste S1 carries the reply key in the LEPIC marker, so a LEPIC receiver can
+    // answer sealed (RFC 0002 5); stock wallets ignore the extra key.
+    let reply_key = (delivery.transport() == FILE)
+        .then(|| {
+            crate::contact::reply_public_key(
+                env.keychain,
+                env.network,
+                account,
+                *slate.id().as_bytes(),
+            )
+        })
+        .flatten();
+    let codecs = match reply_key {
+        Some(key) => {
+            let mut codecs = CodecRegistry::new();
+            // Registration fails only for a duplicate id, and these ids differ.
+            let _ = codecs.register(Box::new(
+                MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_reply_key(key),
+            ));
+            let _ = codecs.register(Box::new(V2JsonCodec::new(base_fee)));
+            codecs
+        }
+        None => delivery_codecs(delivery.transport(), base_fee),
+    };
     Ok(policy.encode_new_slate(&codecs, slate, context)?)
 }
 
@@ -579,6 +605,7 @@ struct StoredS1 {
 /// What the store transaction of a send or resend runs with, so it needs no `Ports`.
 struct SendEnvironment<'a> {
     transports: &'a TransportRegistry,
+    keychain: &'a Keychain,
     network: Network,
     now: Timestamp,
 }
@@ -653,10 +680,10 @@ fn create_s1(
         randomness,
     )?;
     let wire = encode_for_delivery(
-        env.transports,
+        env,
         delivery,
         &built.slate,
-        base_fee,
+        request.account,
         &built.encode_context,
     )?;
     record_counterparty(repos, built.tx_id, delivery)?;
@@ -914,10 +941,10 @@ fn stored_s1_for_delivery(
         );
     let slate = slate.with_origin(None);
     let wire = encode_for_delivery(
-        env.transports,
+        env,
         delivery,
         &slate,
-        base_fee,
+        entry.account,
         &EncodeContext {
             block_header_version,
         },
@@ -1046,6 +1073,7 @@ where
             .blocking(move |ports, config| {
                 let env = SendEnvironment {
                     transports: &ports.transports,
+                    keychain: &session.keychain,
                     network: config.network,
                     now: ports.clock.now(),
                 };
@@ -1104,6 +1132,7 @@ where
             .blocking(move |ports, config| {
                 let env = SendEnvironment {
                     transports: &ports.transports,
+                    keychain: &session.keychain,
                     network: config.network,
                     now: ports.clock.now(),
                 };

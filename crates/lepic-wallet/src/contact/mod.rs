@@ -25,6 +25,7 @@ use thiserror::Error;
 use crate::error::WalletError;
 
 pub use collect::{CollectReport, CollectTrigger};
+pub(crate) use keys::reply_public_key;
 pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
     InviteRequest, LinkOutcome, SasDecision,
