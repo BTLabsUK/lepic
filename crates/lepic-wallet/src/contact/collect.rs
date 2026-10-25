@@ -245,6 +245,7 @@ where
             }));
         }
         self.tend_key_checks().await?;
+        self.prune_outbox().await?;
         self.move_in_person_mailboxes(relays).await?;
         let mailboxes = self.mailboxes_to_collect(relays, trigger).await?;
         let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();

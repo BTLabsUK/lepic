@@ -13,7 +13,7 @@ use lepic_slate::model::SlateId;
 use lepic_slate::stage::Stage;
 use lepic_store::{
     ContactId, ContactRecord, ContactState, PendingInvoice, PendingInvoiceStatus, Repositories,
-    SlateStage, StoreError, TxId, WalletStore,
+    SlateStage, StoreError, TxDirection, TxId, WalletStore,
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::Destination;
@@ -493,6 +493,13 @@ where
                 Ok(Handled::Stored)
             }
             Stage::S1 => {
+                if !self
+                    .contact_receipt_room(contact_id, uuid(slate.id()))
+                    .await?
+                {
+                    debug!("payment from a contact over the open receipt caps dropped");
+                    return Ok(Handled::Stored);
+                }
                 let received = match self.receive(FILE, &wire, ReceiveRequest::default()).await {
                     Ok(received) => received,
                     Err(ReceiveError::Node(_) | ReceiveError::Wallet(_)) => {
@@ -544,6 +551,49 @@ where
             },
             _ => Ok(Handled::Stored),
         }
+    }
+
+    /// Whether a new S1 `slate_id` from the contact fits the open receipt caps the inbox keeps
+    /// for senders (RFC 0002 12.5): at most [`crate::inbox::MAX_OPEN_RECEIPTS_PER_SENDER`] open
+    /// from this contact and [`crate::inbox::MAX_OPEN_RECEIPTS`] from all contacts. One received
+    /// before always fits, so its stored S2 goes back again.
+    async fn contact_receipt_room(
+        &self,
+        contact_id: ContactId,
+        slate_id: Uuid,
+    ) -> Result<bool, ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session.store.read(|repos| {
+                if repos
+                    .transaction_by_slate(slate_id, TxDirection::Incoming)?
+                    .is_some()
+                {
+                    return Ok::<_, StoreError>(true);
+                }
+                let mut from_contact = 0usize;
+                let mut from_contacts = 0usize;
+                for receipt in repos.open_receipts(FILE.as_str())? {
+                    let Some(slate) = repos
+                        .transaction(receipt.id)?
+                        .and_then(|entry| entry.slate_id)
+                    else {
+                        continue;
+                    };
+                    match slate_contact(repos, slate)? {
+                        Some(other) if other == contact_id => {
+                            from_contact = from_contact.saturating_add(1);
+                            from_contacts = from_contacts.saturating_add(1);
+                        }
+                        Some(_) => from_contacts = from_contacts.saturating_add(1),
+                        None => {}
+                    }
+                }
+                Ok(from_contact < crate::inbox::MAX_OPEN_RECEIPTS_PER_SENDER
+                    && from_contacts < crate::inbox::MAX_OPEN_RECEIPTS)
+            })?)
+        })
+        .await
     }
 
     async fn park_contact_invoice(

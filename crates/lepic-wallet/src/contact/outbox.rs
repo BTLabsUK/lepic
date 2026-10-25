@@ -36,6 +36,10 @@ const RETRY: [Duration; 4] = [
 /// An entry undelivered this long is stuck (RFC 0002 12.4).
 pub const OUTBOX_STUCK_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// A delivered entry is kept this long, as long as the relay keeps its message, unless its
+/// transaction ended sooner.
+const DELIVERED_KEPT: Duration = lepic_epicbox::RELAY_RETENTION;
+
 /// A payment delivered this long ago and not posted yet is shown so (RFC 0002 12.4).
 pub const NOT_POSTED_AFTER: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -186,6 +190,50 @@ where
             debug!(count = report.delivered, "contact outbox run");
         }
         Ok(report)
+    }
+
+    /// Deletes outbox entries nothing waits for any more: delivered ones older than the relay
+    /// keeps messages, and any whose transaction confirmed, was cancelled or expired.
+    pub(crate) async fn prune_outbox(&self) -> Result<(), ContactError> {
+        let session = self.session()?;
+        let pruned = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                Ok(session.store.write(|repos| {
+                    let mut pruned = 0usize;
+                    for record in repos.contacts()? {
+                        for stored in repos.contact_outbox(record.contact_id)? {
+                            let entry = &stored.entry;
+                            let old = entry.state == ContactOutboxState::Delivered
+                                && entry
+                                    .delivered_at
+                                    .and_then(|at| at.checked_add(DELIVERED_KEPT).ok())
+                                    .is_some_and(|end| end <= now);
+                            let mut ended = false;
+                            for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
+                                if let Some(tx) =
+                                    repos.transaction_by_slate(entry.slate_id, direction)?
+                                {
+                                    ended |= matches!(
+                                        tx.entry.state,
+                                        TxState::Confirmed | TxState::Cancelled | TxState::Expired
+                                    );
+                                }
+                            }
+                            if old || ended {
+                                repos.delete_contact_outbox(stored.id)?;
+                                pruned = pruned.saturating_add(1);
+                            }
+                        }
+                    }
+                    Ok::<_, StoreError>(pruned)
+                })?)
+            })
+            .await?;
+        if pruned > 0 {
+            debug!(count = pruned, "contact outbox pruned");
+        }
+        Ok(())
     }
 
     /// Posts an outbox entry again, whatever its state: "Send again" for a payment the contact

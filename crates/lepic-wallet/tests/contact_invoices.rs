@@ -563,6 +563,14 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
     assert!(mailbox.our_mailbox.ends_with("@relay2.test:80"));
     let previous = mailbox.previous.unwrap();
     assert_eq!(previous.relay, "relay.test:80");
+    // Our new card went to the shop at once, in a contact update.
+    let outbox = world.payer.read(|repos| repos.contact_outbox(ben_side));
+    assert!(
+        outbox
+            .iter()
+            .any(|stored| stored.entry.destination.ends_with("@relay2.test:80")),
+        "{outbox:?}"
+    );
     // Both mailboxes are collected while the old one is kept.
     let report = world
         .block_on(
@@ -592,14 +600,6 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
     let own = ContactCard::decode(&own, ContactNetwork::Floonet).unwrap();
     assert!(own.fields().mailbox.as_str().ends_with("@relay2.test:80"));
     assert_eq!(own.fields().seq, 2);
-    // And went to the shop at once, in a contact update.
-    let outbox = world.payer.read(|repos| repos.contact_outbox(ben_side));
-    assert!(
-        outbox
-            .iter()
-            .any(|stored| stored.entry.destination.ends_with("@relay2.test:80")),
-        "{outbox:?}"
-    );
 }
 
 /// R2-05: a service's update may not move its home relay to an IP address or another port
@@ -898,4 +898,88 @@ fn one_contact_invoice_is_declined_and_the_contact_told() {
         })
         .collect();
     assert_eq!(told, vec![declined.tx_id]);
+}
+
+/// The payer sends an S1 for `AMOUNT` through its contact's mailbox.
+fn send_through_mailbox(
+    world: &World,
+    relays: &ContactRelays,
+    contact: ContactId,
+) -> lepic_store::TxId {
+    let sent = world
+        .block_on(world.payer.wallet.send(
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+            },
+            Delivery::Export {
+                transport: lepic_transport::file::FILE,
+                to: lepic_transport::transport::Location::File(
+                    tempfile::tempdir().unwrap().keep().join("s1.tx"),
+                ),
+            },
+        ))
+        .unwrap();
+    world
+        .block_on(world.payer.wallet.contact_post_slate(
+            relays,
+            contact,
+            sent.tx_id,
+            Some(Purpose::Withdrawal),
+        ))
+        .unwrap();
+    sent.tx_id
+}
+
+/// R2-06: a contact's S1s fall under the open receipt caps the inbox keeps per sender.
+#[test]
+fn payments_from_one_contact_stop_at_the_open_receipt_cap() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    for child in 1..=11 {
+        world.payer.fund(child, world::FUNDING);
+    }
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    for _ in 0..11 {
+        send_through_mailbox(&world, &relays(&world.payer), ben_side);
+    }
+
+    world.collect(&world.issuer);
+
+    let received = events(&mut issuer_events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::WithdrawalFromContact(_)))
+        .count();
+    assert_eq!(received, lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER);
+}
+
+/// R2-06: an outbox entry whose transaction ended is deleted, never sent.
+#[test]
+fn the_outbox_forgets_entries_whose_transaction_ended() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let offline = ContactRelays {
+        mode: RelayMode::Offline,
+        ..relays(&world.payer)
+    };
+    let tx_id = send_through_mailbox(&world, &offline, ben_side);
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.contact_outbox(ben_side))
+            .len(),
+        1
+    );
+    world.block_on(world.payer.wallet.cancel(tx_id)).unwrap();
+
+    world.collect(&world.payer);
+
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.contact_outbox(ben_side))
+            .is_empty()
+    );
+    assert_eq!(world.collect(&world.issuer).messages, 0);
 }
