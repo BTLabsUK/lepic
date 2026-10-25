@@ -537,6 +537,10 @@ where
             },
             Stage::I2 => match self.finalize_invoice(FILE, &wire, Propagation::Stem).await {
                 Ok(finalized) => {
+                    self.emit(Event::InvoiceFinalized(crate::event::FinalizedInvoice {
+                        tx_id: finalized.tx_id,
+                        slate_id: finalized.slate.id(),
+                    }));
                     if let Some(kernel) = finalized.transaction.kernels().first() {
                         self.notify_posted(finalized.tx_id, finalized.slate.id(), kernel.excess)
                             .await;

@@ -1052,3 +1052,25 @@ fn send_again_refuses_a_cancelled_payment() {
         Err(lepic_wallet::contact::ContactError::UnknownTransaction)
     ));
 }
+
+/// The issuer hears that a contact paid its invoice, as for one paid over Epicbox.
+#[test]
+fn a_paid_contact_invoice_raises_invoice_finalized_on_the_issuer() {
+    let world = World::new();
+    let (shop_side, _) = world.pair_for_invoices(ContactKind::Exchange);
+    let issued = world.invoice_contact(shop_side, "paid");
+    world.collect(&world.payer);
+    world.pay_contact(&issued);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    world.collect(&world.issuer);
+
+    let finalized: Vec<_> = events(&mut issuer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::InvoiceFinalized(finalized) => Some((finalized.tx_id, finalized.slate_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finalized, vec![(issued.tx_id, issued.slate_id)]);
+}
