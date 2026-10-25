@@ -301,7 +301,7 @@ where
                         record.box_salt,
                     )?;
                     let sealed = SealedEnvelope::decode(&check_envelope, net)
-                        .map_err(ContactError::Decode)?;
+                        .map_err(ContactError::StoredData)?;
                     let Ok(check) = open_key_check(&sealed, &enc_secret(&keys), new_peer.sig_key())
                     else {
                         return Ok(None);
@@ -363,7 +363,7 @@ where
                     let refreshed = match &existing {
                         Some(old) => {
                             let own = ContactCard::decode(&old.own_card, net)
-                                .map_err(ContactError::Decode)?;
+                                .map_err(ContactError::StoredData)?;
                             let mut fields = own.fields().clone();
                             fields.seq = check.seq.max(fields.seq).saturating_add(1);
                             ContactCard::sign(net, fields, &signing_key(&old_keys))
@@ -371,7 +371,7 @@ where
                         }
                         None => {
                             let own = ContactCard::decode(&record.own_card, net)
-                                .map_err(ContactError::Decode)?;
+                                .map_err(ContactError::StoredData)?;
                             let home = EpicboxAddress::parse(
                                 own.fields().mailbox.as_str(),
                                 relay_network(network),
@@ -451,7 +451,7 @@ where
             record.slot,
             record.box_salt,
         )?;
-        let sealed = SealedEnvelope::decode(envelope, net).map_err(ContactError::Decode)?;
+        let sealed = SealedEnvelope::decode(envelope, net).map_err(ContactError::StoredData)?;
         let Ok(answer) = open_key_check_answer(&sealed, &enc_secret(&keys), new_peer.sig_key())
         else {
             return Ok(Handled::Stored);
@@ -539,8 +539,8 @@ where
                         new_record.slot,
                         new_record.box_salt,
                     )?;
-                    let own_old =
-                        ContactCard::decode(&old.own_card, net).map_err(ContactError::Decode)?;
+                    let own_old = ContactCard::decode(&old.own_card, net)
+                        .map_err(ContactError::StoredData)?;
                     let envelope = seal_restored(
                         &new_peer,
                         &signing_key(&new_keys),
@@ -684,7 +684,7 @@ where
                     }
                     kept.updated_at = now;
                     repos.put_contact(&kept)?;
-                    let own = ContactCard::decode(&card, net).map_err(ContactError::Decode)?;
+                    let own = ContactCard::decode(&card, net).map_err(ContactError::StoredData)?;
                     let peer_mailbox = old_card.fields().mailbox.as_str().to_owned();
                     // A kept record keeps its home relay; a record made again takes the new
                     // pairing's, where its card's mailbox is.
@@ -822,5 +822,5 @@ fn card_of(
     net: lepic_contact::Network,
 ) -> Result<ContactCard, ContactError> {
     let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
-    ContactCard::decode(&peer.bytes, net).map_err(ContactError::Decode)
+    ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)
 }

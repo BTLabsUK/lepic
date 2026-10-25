@@ -387,7 +387,7 @@ where
                 for pending in repos.pending_pairings()? {
                     let invite =
                         lepic_contact::Invite::decode(&pending.invite, contact_network(network))
-                            .map_err(ContactError::Decode)?;
+                            .map_err(ContactError::StoredData)?;
                     let home = endpoint_for(invite.fields().home_relay.as_str(), &relays)?;
                     let (seed, job) = match pending.role {
                         PairingRole::Inviter => {
@@ -760,7 +760,7 @@ where
                             relay.port(),
                         );
                         let own = ContactCard::decode(&record.own_card, net)
-                            .map_err(ContactError::Decode)?;
+                            .map_err(ContactError::StoredData)?;
                         let mut own_fields = own.fields().clone();
                         own_fields.mailbox = lepic_contact::MailboxAddress::new(&ours.to_string())
                             .map_err(ContactError::Name)?;
@@ -854,7 +854,7 @@ where
                         )?;
                         let ours = box_identity(&keys, network, &home)?;
                         let own = ContactCard::decode(&record.own_card, net)
-                            .map_err(ContactError::Decode)?;
+                            .map_err(ContactError::StoredData)?;
                         let mut fields = own.fields().clone();
                         fields.mailbox =
                             lepic_contact::MailboxAddress::new(&ours.address().to_string())
@@ -863,8 +863,8 @@ where
                         let signer = super::keys::signing_key(&keys);
                         let card = ContactCard::sign(net, fields, &signer)
                             .map_err(ContactError::Encode)?;
-                        let peer_card =
-                            ContactCard::decode(&peer.bytes, net).map_err(ContactError::Decode)?;
+                        let peer_card = ContactCard::decode(&peer.bytes, net)
+                            .map_err(ContactError::StoredData)?;
                         let envelope = lepic_contact::seal_contact_update(
                             &peer_card, &card, &signer, &mut rng,
                         )

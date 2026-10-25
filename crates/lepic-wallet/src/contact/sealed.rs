@@ -204,7 +204,7 @@ where
                         .ok_or(ContactError::UnknownContact)?;
                     let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
                     let card =
-                        ContactCard::decode(&peer.bytes, net).map_err(ContactError::Decode)?;
+                        ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
                     check_sealable(&record, &card)?;
                     let entry = repos
                         .transaction(tx_id)?
@@ -215,8 +215,8 @@ where
                     let stored = repos
                         .slate(slate_id, stage)?
                         .ok_or(ContactError::UnknownTransaction)?;
-                    let own =
-                        ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
+                    let own = ContactCard::decode(&record.own_card, net)
+                        .map_err(ContactError::StoredData)?;
                     let keys = contact_keys(
                         &session.keychain,
                         network,
@@ -267,7 +267,7 @@ where
         purpose: Option<Purpose>,
     ) -> Result<(), ContactError> {
         let armored = self.contact_seal_slate(contact_id, tx_id, purpose).await?;
-        let envelope = dearmor(&armored).map_err(ContactError::Decode)?;
+        let envelope = dearmor(&armored).map_err(ContactError::StoredData)?;
         let session = self.session()?;
         let (slate_id, stage) = self
             .contact_work(move |_, _| {
@@ -539,10 +539,10 @@ where
                             .contact(contact_id)?
                             .ok_or(ContactError::UnknownContact)?;
                         let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
-                        let card =
-                            ContactCard::decode(&peer.bytes, net).map_err(ContactError::Decode)?;
+                        let card = ContactCard::decode(&peer.bytes, net)
+                            .map_err(ContactError::StoredData)?;
                         let own = ContactCard::decode(&record.own_card, net)
-                            .map_err(ContactError::Decode)?;
+                            .map_err(ContactError::StoredData)?;
                         let keys = contact_keys(
                             &session.keychain,
                             network,

@@ -228,7 +228,7 @@ where
             })
             .await?;
         let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
-        let card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::Decode)?;
+        let card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
         if !card.fields().caps.contains(Capabilities::PAYS_INVOICES) {
             return Err(ContactError::DoesNotPayInvoices);
         }
@@ -453,8 +453,8 @@ where
         let network = self.config().network;
         let net = contact_network(network);
         let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
-        let card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::Decode)?;
-        let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
+        let card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
+        let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
         let session = self.session()?;
         let keys = contact_keys(
             &session.keychain,

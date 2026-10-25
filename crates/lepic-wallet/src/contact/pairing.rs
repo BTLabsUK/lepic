@@ -397,7 +397,7 @@ where
         info!("pairing invite made");
         if offer_words {
             let invite = Invite::from_link(&offer.link, contact_network(network))
-                .map_err(ContactError::Decode)?;
+                .map_err(ContactError::StoredData)?;
             match self.post_invite_words(relays, &invite, &words_home).await {
                 Ok(words) => offer.words = Some(words),
                 Err(error) => {
@@ -663,7 +663,7 @@ where
                         return Err(ContactError::UnknownContact);
                     }
                     let own = ContactCard::decode(&record.own_card, contact_network(network))
-                        .map_err(ContactError::Decode)?;
+                        .map_err(ContactError::StoredData)?;
                     refuse_known_card(repos, &peer, &own)?;
                     let sas = Sas::in_person(contact_network(network), &own, &peer);
                     record.peer = Some(peer_card(&peer));
@@ -744,8 +744,8 @@ where
         // The inviter tells the invitee, whose confirm may still wait on the relay.
         if let Some((rc, invite, peer)) = tell {
             let net = contact_network(self.config().network);
-            let card = ContactCard::decode(&peer, net).map_err(ContactError::Decode)?;
-            let invite = Invite::decode(&invite, net).map_err(ContactError::Decode)?;
+            let card = ContactCard::decode(&peer, net).map_err(ContactError::StoredData)?;
+            let invite = Invite::decode(&invite, net).map_err(ContactError::StoredData)?;
             let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
             self.post_refusal(
                 relays,
@@ -897,7 +897,7 @@ where
             debug!("pairing reply with another code dropped");
             return Ok(Taken::Ignored);
         }
-        let invite = Invite::decode(&pending.invite, net).map_err(ContactError::Decode)?;
+        let invite = Invite::decode(&pending.invite, net).map_err(ContactError::StoredData)?;
         let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
         let onion_text = invite.fields().onion.as_ref().map(RelayHost::as_str);
         let peer = reply.card.clone();
@@ -939,10 +939,15 @@ where
                     let mut record = repos
                         .contact(contact_id)?
                         .ok_or(ContactError::UnknownPairing)?;
-                    let own =
-                        ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
-                    if refuse_known_card(repos, &peer, &own).is_err() {
-                        return Ok(Decision::Known(may_refuse(repos, pairing_id)?));
+                    let own = ContactCard::decode(&record.own_card, net)
+                        .map_err(ContactError::StoredData)?;
+                    // Only a card already held is refused as known; a store error is an error.
+                    match refuse_known_card(repos, &peer, &own) {
+                        Ok(()) => {}
+                        Err(ContactError::AlreadyPaired) => {
+                            return Ok(Decision::Known(may_refuse(repos, pairing_id)?));
+                        }
+                        Err(error) => return Err(error),
                     }
                     let n_a = Nonce::from_bytes(n_a);
                     let sas = Sas::compute(net, &own, &peer, &n_a, &n_b);
@@ -1085,8 +1090,8 @@ where
             }
             Err(_) => return Ok(Taken::Ignored),
         };
-        let invite = Invite::decode(&pending.invite, net).map_err(ContactError::Decode)?;
-        let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
+        let invite = Invite::decode(&pending.invite, net).map_err(ContactError::StoredData)?;
+        let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
         let pairing_id = pending.pairing_id;
         if !confirm.matches_invite(&invite) {
             self.contact_work(move |_, _| {

@@ -215,6 +215,10 @@ pub enum ContactError {
     Invoice(#[source] crate::invoice::InvoiceError),
     #[error("slate was not finalized")]
     Finalize(#[source] crate::finalize::FinalizeError),
+    /// A card, invite or envelope this wallet stored or made itself could not be read: damaged
+    /// data, not the user's input.
+    #[error("data this wallet stored could not be read")]
+    StoredData(#[source] lepic_contact::DecodeError),
     /// A key check is allowed once per pairing and per slot, within a day of the new pairing.
     #[error("no key check is allowed for these pairings now")]
     KeyCheckRefused,

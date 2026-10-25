@@ -176,7 +176,7 @@ where
                         continue;
                     };
                     let invite = lepic_contact::Invite::decode(&pending.invite, net)
-                        .map_err(ContactError::Decode)?;
+                        .map_err(ContactError::StoredData)?;
                     views.push(PendingPairingView {
                         contact_id: record.contact_id,
                         role: pending.role,
