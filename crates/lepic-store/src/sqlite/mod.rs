@@ -62,7 +62,8 @@ impl SqliteStore {
     /// when it exists and without setting anything aside: `None` when there is no database, and
     /// [`StoreError::Damaged`] when the file is not one or fails `quick_check`, with it and its
     /// log files left where they are. For a caller that must leave a damaged wallet as it
-    /// found it.
+    /// found it. It opens read-write, as recovery needs: a hot `-journal` may be rolled back
+    /// and a `-shm` file created, but no file is moved.
     pub fn open_existing(path: &Path, key: ContextKey) -> Result<Option<Self>, StoreError> {
         if !path.try_exists().map_err(io("look for the database"))? {
             return Ok(None);
