@@ -359,6 +359,9 @@ where
         let network = self.config().network;
         let session = self.session()?;
         let slate_uuid = uuid(slate_id);
+        // The trust check and the payment take one turn of the contact engine, so no
+        // collecting cycle can end the contact's trust between them.
+        let turn = self.contact_turn().await;
         let (parked, contact_id) = self
             .contact_work(move |_, _| {
                 session.store.read(|repos| {
@@ -401,6 +404,7 @@ where
             &paid.reply,
         )
         .await?;
+        drop(turn);
         self.deliver_soon(relays).await;
         info!(tx_id = %paid.tx_id, "contact invoice paid");
         Ok(paid)
