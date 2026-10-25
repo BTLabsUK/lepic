@@ -101,8 +101,9 @@ const DEFAULT_STRATEGY: EngineStrategy = EngineStrategy::Smallest;
 
 /// Blocks, a day of them, after which this wallet neither finalizes nor posts an app send and
 /// expires it if unanswered. File slates carry it as their TTL too, so the receiver refuses to
-/// sign past it.
-const SEND_TTL_BLOCKS: u64 = 1_440;
+/// sign past it. An invoice the app issues carries it as its TTL, so a payer refuses a request
+/// a day old and the payment of one that is never finalized is released.
+const APP_TTL_BLOCKS: u64 = lepic_wallet::invoice::INVOICE_TTL_BLOCKS;
 
 /// The most change outputs a send may ask for; each one costs a range proof.
 const MAX_CHANGE_OUTPUTS: usize = 10;
@@ -964,7 +965,7 @@ impl Session {
             minimum_confirmations,
             message,
             strategy: DEFAULT_STRATEGY,
-            local_ttl_blocks: Some(SEND_TTL_BLOCKS),
+            local_ttl_blocks: Some(APP_TTL_BLOCKS),
             ..SendRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
         }
     }
@@ -997,7 +998,7 @@ impl Session {
         options: Option<SendOptions>,
     ) -> Result<SendRequest, WalletError> {
         Ok(SendRequest {
-            ttl_blocks: Some(SEND_TTL_BLOCKS),
+            ttl_blocks: Some(APP_TTL_BLOCKS),
             ..Self::send_request_with(amount, minimum_confirmations, message, options)?
         })
     }
@@ -2452,12 +2453,12 @@ mod tests {
     #[test]
     fn app_sends_carry_a_local_limit_and_file_sends_a_ttl_too() {
         let request = Session::send_request_with(1, 1, None, None).unwrap();
-        assert_eq!(request.local_ttl_blocks, Some(SEND_TTL_BLOCKS));
+        assert_eq!(request.local_ttl_blocks, Some(APP_TTL_BLOCKS));
         assert_eq!(request.ttl_blocks, None);
 
         let file = Session::file_send_request(1, 1, None, None).unwrap();
-        assert_eq!(file.local_ttl_blocks, Some(SEND_TTL_BLOCKS));
-        assert_eq!(file.ttl_blocks, Some(SEND_TTL_BLOCKS));
-        assert_eq!(SEND_TTL_BLOCKS, 1_440);
+        assert_eq!(file.local_ttl_blocks, Some(APP_TTL_BLOCKS));
+        assert_eq!(file.ttl_blocks, Some(APP_TTL_BLOCKS));
+        assert_eq!(APP_TTL_BLOCKS, 1_440);
     }
 }

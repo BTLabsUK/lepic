@@ -11387,6 +11387,7 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             63 => crate::api::error::WalletErrorKind::PairingWordsNotFound,
             64 => crate::api::error::WalletErrorKind::InvalidPairingWords,
             65 => crate::api::error::WalletErrorKind::ContactRefusesInvoices,
+            66 => crate::api::error::WalletErrorKind::InvoiceNotForThisChain,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -14456,6 +14457,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::PairingWordsNotFound => 63.into_dart(),
             Self::InvalidPairingWords => 64.into_dart(),
             Self::ContactRefusesInvoices => 65.into_dart(),
+            Self::InvoiceNotForThisChain => 66.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -16620,6 +16622,7 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::PairingWordsNotFound => 63,
                 crate::api::error::WalletErrorKind::InvalidPairingWords => 64,
                 crate::api::error::WalletErrorKind::ContactRefusesInvoices => 65,
+                crate::api::error::WalletErrorKind::InvoiceNotForThisChain => 66,
                 _ => {
                     unimplemented!("");
                 }

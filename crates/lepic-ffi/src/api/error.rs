@@ -181,6 +181,10 @@ pub enum WalletErrorKind {
     InvalidPairingWords,
     /// The contact's wallet says it does not pay invoices. Nothing was sent.
     ContactRefusesInvoices,
+    /// The invoice was made for another network, or its heights are wrong: its time to live
+    /// ends further ahead than any issuer sets it, or it was made at a height the chain cannot
+    /// have reached. Nothing was paid or stored.
+    InvoiceNotForThisChain,
 }
 
 impl WalletErrorKind {
@@ -253,6 +257,7 @@ impl WalletErrorKind {
             Self::PairingWordsNotFound => 71,
             Self::InvalidPairingWords => 72,
             Self::ContactRefusesInvoices => 73,
+            Self::InvoiceNotForThisChain => 75,
         }
     }
 }
@@ -493,8 +498,10 @@ impl From<InvoiceError> for WalletError {
             | E::InvalidTransaction(_)
             | E::Slate(_)
             | E::Encode(_)
-            | E::Unrepresentable(_)
-            | E::AheadOfTip { .. } => WalletErrorKind::InvalidSlate,
+            | E::Unrepresentable(_) => WalletErrorKind::InvalidSlate,
+            E::AheadOfTip { .. } | E::TtlTooFarAhead { .. } => {
+                WalletErrorKind::InvoiceNotForThisChain
+            }
             E::AlreadyPaid { .. } | E::AlreadyFinalized { .. } => {
                 WalletErrorKind::InvoiceAlreadyPaid
             }
@@ -664,6 +671,7 @@ mod tests {
             (K::PairingWordsNotFound, 71),
             (K::InvalidPairingWords, 72),
             (K::ContactRefusesInvoices, 73),
+            (K::InvoiceNotForThisChain, 75),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -811,7 +819,21 @@ mod tests {
                     height: lepic_primitives::amount::Height::new(99),
                     limit: lepic_primitives::amount::Height::new(4),
                 },
-                WalletErrorKind::InvalidSlate,
+                WalletErrorKind::InvoiceNotForThisChain,
+            ),
+            (
+                InvoiceError::TtlTooFarAhead {
+                    cutoff: lepic_primitives::amount::Height::new(3_771_440),
+                    limit: lepic_primitives::amount::Height::new(2_884),
+                },
+                WalletErrorKind::InvoiceNotForThisChain,
+            ),
+            (
+                InvoiceError::Expired {
+                    cutoff: lepic_primitives::amount::Height::new(2_240),
+                    tip: lepic_primitives::amount::Height::new(3_770_000),
+                },
+                WalletErrorKind::PaymentExpired,
             ),
             (
                 InvoiceError::Selection(SelectionError::NotEnoughFunds {

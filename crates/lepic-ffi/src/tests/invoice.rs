@@ -154,6 +154,51 @@ async fn an_invoice_by_text_is_paid_finalized_and_posted() {
     assert_eq!(world.chain.pushed_count(), 1);
 }
 
+/// `json` with its TTL cutoff set to `cutoff`, as the V3 shape writes it.
+fn with_ttl_cutoff(json: &str, cutoff: u64) -> String {
+    let mut slate: serde_json::Value = serde_json::from_str(json).unwrap();
+    slate["ttl_cutoff_height"] = serde_json::Value::String(cutoff.to_string());
+    slate.to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_invoice_lives_a_day_and_one_for_another_chain_is_refused() {
+    let mut world = World::new();
+    let shop = world.wallet().await;
+    let ben = world.funded().await;
+
+    let before = ben.transactions().await.unwrap().len();
+    let i1 = shop.issue_invoice_slate(2 * EPIC, None).await.unwrap();
+    let slate: serde_json::Value = serde_json::from_str(&i1.json).unwrap();
+    assert_eq!(slate["ttl_cutoff_height"], "1460", "tip 20 plus a day");
+
+    // A mainnet request read on floonet: its cutoff lies far above this chain's tip.
+    assert_eq!(
+        kind(
+            ben.pay_invoice_slate(
+                with_ttl_cutoff(&i1.json, 3_771_440),
+                2 * EPIC,
+                1,
+                None,
+                None
+            )
+            .await
+        ),
+        WalletErrorKind::InvoiceNotForThisChain
+    );
+    assert_eq!(ben.transactions().await.unwrap().len(), before);
+
+    let paid = ben
+        .pay_invoice_slate(i1.json, 2 * EPIC, 1, None, None)
+        .await
+        .unwrap();
+    let i2: serde_json::Value = serde_json::from_str(&paid.json).unwrap();
+    assert_eq!(
+        i2["ttl_cutoff_height"], "1460",
+        "the payer keeps the issuer's"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_answer_finalizes_only_an_invoice_this_wallet_issued_unchanged() {
     let mut world = World::new();

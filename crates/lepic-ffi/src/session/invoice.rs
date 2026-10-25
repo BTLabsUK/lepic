@@ -11,7 +11,7 @@ use lepic_wallet::epicbox_invoice::InvoiceExpiry;
 use lepic_wallet::invoice::InvoiceRequest;
 use lepic_wallet::send::Delivery;
 
-use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid, transport_error};
+use super::{APP_TTL_BLOCKS, DEFAULT_ACCOUNT, ScratchFile, Session, invalid, transport_error};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{InvoiceSweep, IssuedInvoice, PaidInvoiceSlate, SendOptions, Slate};
 
@@ -54,7 +54,7 @@ impl Session {
                     account: DEFAULT_ACCOUNT,
                     amount: Amount::new(amount),
                     message,
-                    ttl_blocks: None,
+                    ttl_blocks: Some(APP_TTL_BLOCKS),
                 },
                 Delivery::Export {
                     transport: FILE,
