@@ -14,7 +14,8 @@ use lepic_epicbox::{EpicboxAddress, RelayEndpoint};
 use lepic_node::NodeApi;
 use lepic_store::{
     AccountIndex, ContactId, ContactMailbox, ContactRecord, ContactState, PairingId, PairingRole,
-    PairingSecrets, PairingState, PeerCard, PendingPairing, Repositories, SealMode, WalletStore,
+    PairingSecrets, PairingState, PeerCard, PendingPairing, Repositories, SealMode, StoreError,
+    WalletStore,
 };
 use tracing::{debug, info, instrument, warn};
 
@@ -909,11 +910,17 @@ where
                         return Ok(match stored.and_then(|text| unhex(&text)) {
                             // The reply that paired, taken again: its confirm goes out again.
                             Some(envelope) if same_peer => Decision::Again(envelope),
-                            _ => Decision::Refuse(Refusal::AlreadyUsed),
+                            _ => Decision::Refuse(
+                                Refusal::AlreadyUsed,
+                                may_refuse(repos, pairing_id)?,
+                            ),
                         });
                     };
                     if unix_seconds(now) >= expires {
-                        return Ok(Decision::Refuse(Refusal::Expired));
+                        return Ok(Decision::Refuse(
+                            Refusal::Expired,
+                            may_refuse(repos, pairing_id)?,
+                        ));
                     }
                     let mut record = repos
                         .contact(contact_id)?
@@ -921,7 +928,7 @@ where
                     let own =
                         ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
                     if refuse_known_card(repos, &peer, &own).is_err() {
-                        return Ok(Decision::Known);
+                        return Ok(Decision::Known(may_refuse(repos, pairing_id)?));
                     }
                     let n_a = Nonce::from_bytes(n_a);
                     let sas = Sas::compute(net, &own, &peer, &n_a, &n_b);
@@ -962,9 +969,9 @@ where
             .await?;
         let (envelope, first) = match decision {
             Decision::Drop => return Ok(Taken::Ignored),
-            Decision::Known => {
+            Decision::Known(tell) => {
                 warn!("pairing reply from a contact already paired refused");
-                if !by_hand {
+                if tell && !by_hand {
                     self.post_refusal(
                         relays,
                         &reply.card,
@@ -977,9 +984,9 @@ where
                 }
                 return Ok(Taken::Failed);
             }
-            Decision::Refuse(refusal) => {
+            Decision::Refuse(refusal, tell) => {
                 debug!("pairing reply refused");
-                if !by_hand {
+                if tell && !by_hand {
                     self.post_refusal(relays, &reply.card, rc, &home, onion_text, refusal)
                         .await;
                 }
@@ -1197,9 +1204,11 @@ fn take_slot(
 enum Decision {
     /// The pairing is gone.
     Drop,
-    /// The reply's card is one this wallet already pairs with, or its own.
-    Known,
-    Refuse(Refusal),
+    /// The reply's card is one this wallet already pairs with, or its own; whether the
+    /// refusal is still sent.
+    Known(bool),
+    /// Refused; whether the refusal is still sent.
+    Refuse(Refusal, bool),
     /// The reply that paired, taken again; its stored confirm.
     Again(Vec<u8>),
     /// Paired now; the confirm to send.
@@ -1207,6 +1216,30 @@ enum Decision {
 }
 
 const CONFIRM_PREFIX: &str = "contact.confirm.";
+const REFUSALS_PREFIX: &str = "contact.refusals.";
+
+/// Refusals one invite sends at most, so a leaked invite cannot make the inviter post to
+/// mailboxes of the repliers' choosing without end (RFC 0002 C-15).
+const MAX_REFUSALS_PER_INVITE: u32 = 3;
+
+/// The setting that counts the refusals an invite sent, until its pairing ends.
+pub(crate) fn refusals_key(pairing_id: PairingId) -> String {
+    format!("{REFUSALS_PREFIX}{}", hex(&pairing_id.0))
+}
+
+/// Counts one more refusal for the invite, and returns whether it may still be sent.
+fn may_refuse(repos: &mut dyn Repositories, pairing_id: PairingId) -> Result<bool, StoreError> {
+    let key = refusals_key(pairing_id);
+    let sent = repos
+        .setting(&key)?
+        .and_then(|text| text.parse::<u32>().ok())
+        .unwrap_or(0);
+    if sent >= MAX_REFUSALS_PER_INVITE {
+        return Ok(false);
+    }
+    repos.put_setting(&key, &sent.saturating_add(1).to_string())?;
+    Ok(true)
+}
 
 /// The setting that keeps an inviter's confirm until its pairing ends.
 pub(crate) fn confirm_key(pairing_id: PairingId) -> String {

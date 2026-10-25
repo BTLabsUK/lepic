@@ -1878,3 +1878,70 @@ fn junk_in_a_contact_mailbox_raises_one_event_a_cycle() {
         .collect();
     assert_eq!(told, vec![anna_side]);
 }
+
+/// R2-12: a used invite answers later replies with at most three refusals, so a leaked invite
+/// does not make the inviter post to mailboxes of the repliers' choosing without end.
+#[test]
+fn a_used_invite_sends_at_most_three_refusals() {
+    let world = World::new();
+    let link = world.invite(&world.issuer, "Anna");
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    assert_eq!(world.collect(&world.issuer).paired, 1);
+    let invite = Invite::from_link(&link, ContactNetwork::Floonet).unwrap();
+    let stranger = world.stranger();
+    let shown = world
+        .block_on(stranger.wallet.pairing_show_card(
+            &relays(&stranger),
+            CardRequest {
+                account: AccountIndex(0),
+                name: "Cleo".to_owned(),
+                kind: ContactKind::Person,
+            },
+        ))
+        .unwrap();
+    let card = ContactCard::from_link(&shown.link, ContactNetwork::Floonet).unwrap();
+    let (reply_box, reply_from) = pairing_identities(*invite.fields().code.expose_bytes());
+    let client = lepic_epicbox::MailboxClient::new(world::settings(), world.relay.connector());
+    let codes: Vec<[u8; 16]> = (0..5u8).map(|n| [40 + n; 16]).collect();
+    for (n, rc) in (0u8..).zip(&codes) {
+        let body = lepic_contact::ReplyBody {
+            code: invite.fields().code.clone(),
+            nonce: lepic_contact::Nonce::from_bytes([n; 16]),
+            confirm_code: lepic_contact::ConfirmCode::from_bytes(*rc),
+            card: card.clone(),
+        };
+        let reply = seal_reply(
+            &invite,
+            &body,
+            &mut rand::rngs::StdRng::seed_from_u64(50 + u64::from(n)),
+        )
+        .unwrap();
+        world
+            .block_on(client.post(
+                &reply_from,
+                reply_box.address(),
+                &lepic_contact::armor(&reply),
+            ))
+            .unwrap();
+    }
+
+    world.collect(&world.issuer);
+
+    let mut refused = 0;
+    for rc in codes {
+        let (confirm_box, _) = pairing_identities(rc);
+        let mut collected = Collected(Vec::new());
+        world
+            .block_on(client.drain_once(&[confirm_box], &mut collected))
+            .unwrap();
+        refused += collected.0.len();
+    }
+    assert_eq!(refused, 3);
+}
