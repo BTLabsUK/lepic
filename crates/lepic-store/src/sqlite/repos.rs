@@ -1402,6 +1402,33 @@ fn contact_outbox_id_column(id: ContactOutboxId) -> Result<i64, StoreError> {
     i64::try_from(id.0).map_err(|_| StoreError::OutOfRange { field: "outbox id" })
 }
 
+/// An insert of `columns` into `table` that updates the row in place when `key` is taken. Never
+/// `INSERT OR REPLACE`: with foreign keys on, a replace deletes the old row first, and the delete
+/// cascades to the contact's mailbox, backoff and outbox.
+fn upsert(table: &str, columns: &str, key: &str) -> String {
+    let names: Vec<&str> = columns.split(',').map(str::trim).collect();
+    let values = (1..=names.len())
+        .map(|at| format!("?{at}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let keys: Vec<&str> = key.split(',').map(str::trim).collect();
+    let updates = names
+        .iter()
+        .filter(|name| !keys.contains(name))
+        .map(|name| format!("{name} = excluded.{name}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO {table} ({columns}) VALUES ({values}) \
+         ON CONFLICT ({key}) DO UPDATE SET {updates}"
+    )
+}
+
+const MAILBOX_COLUMNS: &str = "contact_id, peer_mailbox, our_mailbox, home_relay, onion, \
+    prev_relay, prev_peer_mailbox, prev_our_mailbox, prev_until";
+
+const BACKOFF_COLUMNS: &str = "contact_id, relay, next_try_at, failures";
+
 impl ContactRepository for SqliteRepos<'_> {
     fn put_contact(&mut self, contact: &ContactRecord) -> Result<(), StoreError> {
         contact::check_contact(contact)?;
@@ -1447,11 +1474,7 @@ impl ContactRepository for SqliteRepos<'_> {
             contact.own_card.clone().into(),
         ]);
         self.conn.execute(
-            &format!(
-                "INSERT OR REPLACE INTO contacts ({CONTACT_COLUMNS}) VALUES \
-                 (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
-                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)"
-            ),
+            &upsert("contacts", CONTACT_COLUMNS, "contact_id"),
             rusqlite::params_from_iter(values),
         )?;
         Ok(())
@@ -1561,9 +1584,7 @@ impl ContactRepository for SqliteRepos<'_> {
         let id = &mailbox.contact_id.0[..];
         let previous = mailbox.previous.as_ref();
         self.conn.execute(
-            "INSERT OR REPLACE INTO contact_mailboxes (contact_id, peer_mailbox, our_mailbox, \
-                 home_relay, onion, prev_relay, prev_peer_mailbox, prev_our_mailbox, prev_until)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            &upsert("contact_mailboxes", MAILBOX_COLUMNS, "contact_id"),
             params![
                 id,
                 mailbox.peer_mailbox,
@@ -1582,8 +1603,11 @@ impl ContactRepository for SqliteRepos<'_> {
         )?;
         for backoff in &mailbox.backoff {
             self.conn.execute(
-                "INSERT OR REPLACE INTO contact_relay_backoff (contact_id, relay, next_try_at, failures)
-                 VALUES (?1, ?2, ?3, ?4)",
+                &upsert(
+                    "contact_relay_backoff",
+                    BACKOFF_COLUMNS,
+                    "contact_id, relay",
+                ),
                 params![
                     id,
                     backoff.relay,
@@ -1670,10 +1694,7 @@ impl ContactRepository for SqliteRepos<'_> {
         }
         let sealed = contact::seal_secrets(self.key, pairing)?;
         self.conn.execute(
-            &format!(
-                "INSERT OR REPLACE INTO pairings ({PAIRING_COLUMNS}) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
-            ),
+            &upsert("pairings", PAIRING_COLUMNS, "pairing_id"),
             params![
                 id,
                 pairing.role.code(),

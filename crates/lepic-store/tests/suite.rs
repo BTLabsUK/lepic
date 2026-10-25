@@ -1322,6 +1322,61 @@ fn mailboxes_need_their_contact_and_go_with_it<B: Backend>() {
     .unwrap();
 }
 
+/// Updating a contact, its mailbox or its pairing changes that row in place: the contact's
+/// mailbox, relay backoff and outbox entries survive, as they would not if the row were
+/// deleted and inserted again with its cascades.
+fn updates_keep_a_contacts_mailbox_backoff_and_outbox<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    write(store, |repos| {
+        repos.put_contact(&contact(1, 1))?;
+        repos.put_contact_mailbox(&contact_mailbox(1))?;
+        repos.put_pending_pairing(&pairing(1, 1))?;
+        repos.enqueue_contact_outbox(&contact_outbox_entry(1, 5))?;
+        Ok(())
+    })
+    .unwrap();
+
+    let mut verified = contact(1, 1);
+    verified.state = ContactState::Verified;
+    verified.verified_at = Some(Timestamp::from_second(2).unwrap());
+    verified.allow_invoices = true;
+    verified.label = "Anna".to_owned();
+    let mut moved = contact_mailbox(1);
+    moved.peer_mailbox = "peer1@relay.example:8443".to_owned();
+    let mut answered = pairing(1, 1);
+    answered.state = PairingState::PendingReply;
+    write(store, |repos| {
+        repos.put_contact(&verified)?;
+        repos.put_pending_pairing(&answered)?;
+        repos.put_contact(&verified)
+    })
+    .unwrap();
+    read(store, |repos| {
+        assert_eq!(repos.contact(contact_id(1))?, Some(verified.clone()));
+        assert_eq!(
+            repos.contact_mailbox(contact_id(1))?,
+            Some(contact_mailbox(1))
+        );
+        assert_eq!(repos.contact_outbox(contact_id(1))?.len(), 1);
+        assert_eq!(
+            repos.pending_pairing(PairingId([1; 16]))?.unwrap().state,
+            PairingState::PendingReply
+        );
+        Ok(())
+    })
+    .unwrap();
+
+    write(store, |repos| repos.put_contact_mailbox(&moved)).unwrap();
+    read(store, |repos| {
+        assert_eq!(repos.contact_mailbox(contact_id(1))?, Some(moved.clone()));
+        assert_eq!(repos.contact_outbox(contact_id(1))?.len(), 1);
+        assert_eq!(repos.contact(contact_id(1))?, Some(verified.clone()));
+        Ok(())
+    })
+    .unwrap();
+}
+
 fn pairings_round_trip_with_their_secrets_and_are_found_by_invite<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
@@ -1999,6 +2054,7 @@ for_each_backend!(
     put_contact_replaces_by_id_and_keeps_the_peer_key_unique,
     contacts_stop_at_the_cap,
     mailboxes_need_their_contact_and_go_with_it,
+    updates_keep_a_contacts_mailbox_backoff_and_outbox,
     pairings_round_trip_with_their_secrets_and_are_found_by_invite,
     pairing_secrets_cannot_be_read_without_the_key,
     pending_pairings_stop_at_the_cap,
