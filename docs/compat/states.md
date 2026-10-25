@@ -23,7 +23,7 @@ own state (`lepic-wallet`'s `state` module).
 | outgoing `posted` | `TxSentCreated`, or `TxSentMempool` once seen in the mempool | false | posting to the node |
 | outgoing `confirmed` | `TxSent` | true | a refresh finding one of its outputs on chain, or the kernel of a watched transaction (below) |
 | outgoing `cancelled` | `TxSentCancelled` | false | the owner's cancel, or the owner's release of a finalized or posted send the network never took |
-| outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height, or the send's wallet-local cutoff when that is earlier, once the node holds no kernel the peer could have completed |
+| outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height, or the send's wallet-local cutoff when that is earlier, or 10 blocks past the cutoff for an invoice payment, once the node holds no kernel the peer could have completed |
 | incoming `received` | `TxReceived` | false | receiving S1 (S2 returned), or issuing an invoice (I1) |
 | incoming `finalized` | `TxReceived`, with the transaction stored | false | the invoice issuer finalizing I3 |
 | incoming `posted` | `TxReceived`, or `TxReceivedMempool` once seen in the mempool | false | the invoice issuer posting |
@@ -140,15 +140,32 @@ I2 or S2, which hold every input, output and the final offset.
   invoice 1,440 blocks), so the request comes from another network, whose chain is longer, or
   from a wrong height. The second day allows for an issuer's node ahead of the payer's.
   Upstream does not check it.
+- Paying an I1 whose TTL cutoff lies more than 525,600 blocks, a year, below the node's tip is
+  refused as made for another network, not as expired, and nothing is stored: a floonet request
+  read on mainnet has its cutoff millions of blocks below the tip, while nobody pays a real
+  request a year after it expired. One that expired more recently is refused as expired.
 
 A received payment with no TTL, which every V2 slate is, would otherwise stay `received` for
 ever. A refresh records the tip at which it first sees one, not the slate's height, which the
 sender chose, and expires it 10,080 blocks later under the rules above. An issued invoice
 (`received` with no S2) is not ended this way; one issued with a TTL expires at its cutoff like
-any slate with a TTL, and the issuer refuses a payment from that height on even when the I2
-drops the TTL or moves it later. A payer's I2 keeps the issuer's cutoff, or its own when that
-is earlier, so a payment the issuer never finalizes, for example the second payment of one
-request, expires at the same height under the rules above.
+any slate with a TTL. A payer's I2 keeps the issuer's cutoff, or its own when that is earlier.
+
+Issuer and payer read their tips from different nodes, which may stand a few blocks apart. So
+that a payer never releases the inputs of a payment its issuer posted in time, the two keep a
+margin of 10 blocks, as many as a peer's slate height may lead the tip, on each side of the
+cutoff, the earlier of the I2's and the one the issuer issued:
+
+- The issuer refuses to finalize a payment from 10 blocks before the cutoff on, also when the
+  I2 drops the TTL or moves it later; the refusal names that height as the cutoff reached.
+- The issuer refuses to post a finalized payment again, after a failed post, from the cutoff
+  itself on, by finalizing again or by `post`. That leaves the margin after the cutoff to an
+  issuer's node behind the payer's, and a post retried this late is not worth the risk.
+- The payer's refresh expires a payment, for example the second payment of one request, which
+  the issuer never finalizes, 10 blocks after the cutoff, under the rules above. The Epicbox
+  sweep lists one as cancellable from the same height.
+
+An invoice without a TTL has no margin and no limit on posting.
 
 The state machine does not know the direction of a transaction. Which side may take a step, for
 example that only an invoice issuer finalizes an incoming transaction, is enforced by the stages
@@ -168,8 +185,8 @@ none to transactions.
   owner's cancel does: its output and private context are dropped, so a late I2 is refused.
 - A payment over Epicbox carries a TTL, 1440 blocks unless the payer sets one. A refresh does not
   expire it at its cutoff, unlike other open transactions, because the issuer may have posted it.
-  Once a confirmed height reaches the cutoff with the kernel neither in the node's pool nor on its
-  chain, the sweep lists it as cancellable, and the user decides.
+  Once a confirmed height is 10 blocks past the cutoff with the kernel neither in the node's pool
+  nor on its chain, the sweep lists it as cancellable, and the user decides.
 
 ## Output states
 

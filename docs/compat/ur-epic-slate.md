@@ -94,9 +94,16 @@ the binding issues (`issue_invoice_slate`, `issue_invoice_file`) carries a TTL c
 blocks, a day, above the issuer's tip, as the binding's sends carry their limit. A LEPIC payer
 refuses one whose cutoff the chain has reached (`PaymentExpired`) and one whose cutoff lies
 more than 2,880 blocks above its tip (`InvoiceNotForThisChain`), which a request from a
-network with a longer chain has; nothing is stored either way. A floonet request read on
-mainnet has a cutoff far below the tip, so it is refused as expired. An I1 without a TTL, from
-an older app or the CLI, is paid as before. The issuer refuses a payment from its cutoff on.
+network with a longer chain has. A floonet request read on mainnet has its cutoff millions of
+blocks below the tip; one whose cutoff lies more than 525,600 blocks, a year, below the tip is
+refused as `InvoiceNotForThisChain` too, and one that expired more recently as
+`PaymentExpired`. Nothing is stored in any of these cases. An I1 without a TTL, from an older
+app or the CLI, is paid as before.
+
+The issuer refuses to finalize a payment from 10 blocks before the cutoff on and to retry a
+failed post from the cutoff on, and the payer releases a payment its node holds no kernel of
+10 blocks after the cutoff, so nodes a few blocks apart never let a payer spend inputs its issuer posted
+(`states.md`).
 
 ## Worked example
 
