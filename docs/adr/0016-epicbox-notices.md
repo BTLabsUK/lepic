@@ -101,6 +101,42 @@ depends on it arriving.
   ends at its TTL or after `UNFINALIZED_RECEIVE_BLOCKS`. Nothing new goes on the wire; the
   requeued copy is a message the sender already signed.
 
+- Amendment, W-31: `posted` for ordinary sends. The receiver of an ordinary payment over
+  Epicbox otherwise learns that the sender finished it only when a scan finds the kernel. The
+  sender now tells it, with the `posted` notice and format above, once it pushed the
+  transaction.
+  - Proof. A new S1 over Epicbox goes out in the V2 shape with the marker as its last
+    top-level key; no other transport changes. A receiver that finds the marker on an S1
+    records the key it came from as running LEPIC and answers with an S2 in the same shape
+    with the marker; an S1 without it gets the unmarked S2 as before. The sender records the
+    receiver as running LEPIC when a marked S2 comes from the key the send went to; an S2 from
+    any other key proves nothing. Stock `epic-wallet` `v4.0.2` and `v4.1.0` read the marked
+    V2 S1 and drop the key when they answer, so a stock sender never sees it in a reply and a
+    stock receiver is never sent a notice.
+  - Sending. After the push that finalizing an S2 in a listen or drain makes, to a counterparty
+    proven to run LEPIC, from the payments address, best effort and not retried. An S2 that
+    arrives again for a posted transaction pushes nothing and sends nothing. A host's later
+    post of the transaction sends nothing, so no notice reaches the relay outside a listen or
+    drain the host started, and a host that turned its Epicbox method off is obeyed.
+  - Accepting, after the invoice rule for the same slate id finds no payment: an incoming
+    transaction over Epicbox under the slate id, with its S2 stored, whose counterparty key is
+    the notice's `from`, and an `excess` equal to the kernel excess that S2 implies; anything
+    else is acknowledged and dropped. For a payment still waiting for its sender, the first
+    such notice stores the time it arrived (the setting `notice.posted_reported.<slate_id>`)
+    and raises `Event::PaymentPosted`; a repeat, and a notice for a payment that is confirmed
+    or ended, is noted with no event. So a replay or a stream of copies costs one event per
+    payment.
+  - Effect. Advisory: the notice changes no state and moves nothing. The wallet asks the node
+    nothing on it; the host refreshes, which is the chain check that confirms the payment.
+    `TransactionDetails::sender_reported_posted_at` reports the stored time while the payment
+    waits and the report is younger than `POSTED_REPORT_WINDOW` (one hour), after which the
+    chain has answered whatever the notice said. The row stays, one per received payment
+    whose sender reported it, and is read only for a payment that waits.
+  - An older LEPIC build knows `posted` only for invoices, finds no payment, and acknowledges
+    and drops it. On two installs of one recovery phrase the install that did not answer the
+    S1 holds no S2 and drops the notice, which the relay then deletes for both; the other
+    install's refresh still confirms the payment.
+
 ## Alternatives considered
 
 - Notices as a new slate stage or a field in a slate: a stock listener would act on or reject a

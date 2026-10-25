@@ -197,7 +197,8 @@ LEPIC's behaviour on top of the protocol above; nothing on the wire or the relay
   inbox row and no store write. An allowed sender's I1 is parked before `Made`. Over the caps on
   parked invoices, it is acknowledged and dropped.
 - Shapes. I1 goes out in the V3 shape, header `3/3/<b>`, and I2 answers in the shape of I1. Both
-  carry `"lepic":{"version":1}` as their last top-level key. S1 keeps the V2 shape.
+  carry `"lepic":{"version":1}` as their last top-level key. S1 keeps the V2 shape and carries
+  the same key last (see "Ordinary sends between LEPIC wallets").
 - Replies. The payer sends I2 from its payments address to the issuer's allowed address, and to
   the relay the I1 came from when it differs (a resend does the same; either delivery is enough). The
   issuer's payments address finalizes an I2 that answers an invoice it issued and still waits for,
@@ -217,12 +218,36 @@ ADR 0016 has the reasons; this is the format and who sends what.
   apart.
 - `declined`: payer to issuer, from the payer's current invoice address to the allowed address.
   `withdrawn`: issuer to payer, on a cancel or an expiry. `posted`: issuer to payer, after the
-  paid invoice was pushed. Both go to the address the invoice was issued to.
+  paid invoice was pushed. Both go to the address the invoice was issued to. `posted` also goes
+  from the sender of an ordinary payment to its receiver, from the payments address, after the
+  sender pushed it.
 - Sent only to a key proven to run LEPIC: one whose marked I1 was parked, whose marked I2 for an
-  issued invoice was finalized (which also proves the key the invoice went to), or whose notice
-  was accepted. A key that sent an issued I1 back unchanged never gets one.
+  issued invoice was finalized (which also proves the key the invoice went to), whose marked S1
+  was answered, whose marked S2 came from the key its send went to, or whose notice was
+  accepted. A key that sent an issued I1 back unchanged never gets one.
 - Accepted only from the recorded counterparty of the slate, and for `posted` only with the
-  excess the payment implies. Every other notice, one of another version or an unknown type, and
+  excess the payment implies: the I2 for an invoice this wallet paid, the stored S2 for a
+  payment it received. Every other notice, one of another version or an unknown type, and
   one over 512 bytes, is acknowledged and dropped.
 - Advisory: a notice moves no funds. `withdrawn` deletes an unpaid parked invoice and reports a
   paid one for the host to offer a cancel; `posted` and `declined` are reported only.
+
+## Ordinary sends between LEPIC wallets
+
+LEPIC's behaviour for sends; the slate is the one `epic-wallet` sends, plus one key.
+
+- S1 over Epicbox goes out in the V2 shape, as before, with `"lepic":{"version":1}` as its last
+  top-level key. Over files and the foreign API nothing changes.
+- A receiver answers a marked S1 with an S2 in the same shape that carries the key, and an S1
+  without it with an S2 without it. Stock `epic-wallet` `v4.0.2` and `v4.1.0` read the Epicbox
+  payload as an untagged `VersionedSlate` (`libwallet/src/tx_proof.rs`), whose `SlateV2`
+  (`libwallet/src/slate_versions/v2.rs`) refuses no unknown key, and write their S2 from their
+  own struct, so a stock receiver answers a marked S1 with an unmarked S2 (fact 2 shows the
+  same for V3).
+- The key proves, under the Epicbox signature, that the key it came from runs LEPIC: the S1's
+  sender, and the S2's sender when that is the key the send went to.
+- After the push that completes a send to a proven receiver, the sender posts `posted` with the
+  kernel excess to the address the send went to. The receiver takes it as the notices section
+  above says, and shows it as the sender's report while the payment waits; only the chain
+  confirms the payment.
+
