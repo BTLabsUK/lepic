@@ -9431,6 +9431,7 @@ impl SseDecode for crate::api::types::ContactView {
         let mut var_homeRelay = <Option<String>>::sse_decode(deserializer);
         let mut var_importedFromBackup = <bool>::sse_decode(deserializer);
         let mut var_lapsed = <bool>::sse_decode(deserializer);
+        let mut var_lastSealedInMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_createdAtMs = <i64>::sse_decode(deserializer);
         return crate::api::types::ContactView {
             contact_id: var_contactId,
@@ -9446,6 +9447,7 @@ impl SseDecode for crate::api::types::ContactView {
             home_relay: var_homeRelay,
             imported_from_backup: var_importedFromBackup,
             lapsed: var_lapsed,
+            last_sealed_in_ms: var_lastSealedInMs,
             created_at_ms: var_createdAtMs,
         };
     }
@@ -12486,6 +12488,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ContactView {
             self.home_relay.into_into_dart().into_dart(),
             self.imported_from_backup.into_into_dart().into_dart(),
             self.lapsed.into_into_dart().into_dart(),
+            self.last_sealed_in_ms.into_into_dart().into_dart(),
             self.created_at_ms.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -14960,6 +14963,7 @@ impl SseEncode for crate::api::types::ContactView {
         <Option<String>>::sse_encode(self.home_relay, serializer);
         <bool>::sse_encode(self.imported_from_backup, serializer);
         <bool>::sse_encode(self.lapsed, serializer);
+        <Option<i64>>::sse_encode(self.last_sealed_in_ms, serializer);
         <i64>::sse_encode(self.created_at_ms, serializer);
     }
 }

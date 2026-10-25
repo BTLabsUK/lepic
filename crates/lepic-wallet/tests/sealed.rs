@@ -91,6 +91,11 @@ impl World {
 fn a_payment_goes_sealed_and_signed_both_ways_and_is_attributed() {
     let world = World::new();
     let (anna_side, ben_side) = world.pair_by_link();
+    // Paired, but nothing sealed from the contact opened yet.
+    let view = world
+        .block_on(world.issuer.wallet.contact(anna_side))
+        .unwrap();
+    assert_eq!(view.last_sealed_in, None);
     let tx_id = world.payer_sends();
 
     let sealed = world
@@ -143,11 +148,12 @@ fn a_payment_goes_sealed_and_signed_both_ways_and_is_attributed() {
 
     assert_eq!(finalized.tx_id, tx_id);
     assert_eq!(world.node.pushed_transactions().len(), 1);
-    // Opening the contact's envelopes marks it heard from.
+    // Opening the contact's envelopes marks it heard from, and says when.
     let view = world
         .block_on(world.issuer.wallet.contact(anna_side))
         .unwrap();
     assert!(!view.lapsed);
+    assert!(view.last_sealed_in.is_some());
 }
 
 #[test]

@@ -194,6 +194,7 @@ fn view(view: EngineContactView) -> ContactView {
         home_relay: view.home_relay,
         imported_from_backup: view.imported_from_backup,
         lapsed: view.lapsed,
+        last_sealed_in_ms: view.last_sealed_in.map(ms),
         created_at_ms: ms(view.created_at),
     }
 }

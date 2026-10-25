@@ -136,6 +136,9 @@ pub struct ContactView {
     /// No envelope from the contact opened in [`SEAL_LAPSE`]: a sealed send should warn that
     /// the contact needs LEPIC to open it (RFC 0002 9.4).
     pub lapsed: bool,
+    /// When an envelope from the contact was last opened, if ever: of a contact's several
+    /// pairings, the one it uses is the one heard from last.
+    pub last_sealed_in: Option<Timestamp>,
     pub created_at: Timestamp,
 }
 

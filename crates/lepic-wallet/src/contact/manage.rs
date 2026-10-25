@@ -42,6 +42,7 @@ pub(crate) fn view(
         home_relay,
         imported_from_backup: record.imported_from_backup,
         lapsed: super::sealed::lapsed(record, now),
+        last_sealed_in: record.last_sealed_in,
         created_at: record.created_at,
     }
 }

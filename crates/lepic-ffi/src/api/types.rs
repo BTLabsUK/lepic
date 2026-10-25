@@ -788,6 +788,10 @@ pub struct ContactView {
     /// Nothing sealed from the contact opened for 90 days: warn before a sealed send that the
     /// contact needs LEPIC to open it.
     pub lapsed: bool,
+    /// When an envelope from the contact was last opened (Unix milliseconds), if ever: of the
+    /// pairings attached to one address-book contact, the one heard from last is the one the
+    /// contact still uses.
+    pub last_sealed_in_ms: Option<i64>,
     pub created_at_ms: i64,
 }
 
