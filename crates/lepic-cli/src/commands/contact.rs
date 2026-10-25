@@ -28,7 +28,7 @@ use crate::output::{
     ContactFailureReport, ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport,
     ContactInvoiceListReport, ContactInvoiceReport, ContactKeyCheckReport, ContactLinkReport,
     ContactListReport, ContactPreviewReport, ContactRemoveReport, ContactReport,
-    ContactSlateReport, InvoicePayReport, Report,
+    ContactSlateReport, InvoiceDeclineReport, InvoicePayReport, Report,
 };
 
 /// Contacts belong to the default account.
@@ -547,6 +547,15 @@ impl<H: Host> Run<'_, H> {
                     transport: "contact".to_owned(),
                     destination: contact,
                     reply_file: None,
+                })
+            }
+            ContactCommand::Decline(args) => {
+                let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
+                wallet.contact_decline_invoice(slate_id).await?;
+                wallet.contacts_outbox_deliver(&relays).await?;
+                Report::InvoiceDecline(InvoiceDeclineReport {
+                    slate_id: slate_id.to_string(),
+                    state: "declined".to_owned(),
                 })
             }
             ContactCommand::Export(args) => {

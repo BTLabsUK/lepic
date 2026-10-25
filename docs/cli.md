@@ -535,7 +535,8 @@ reply or confirm link sent by hand. In person, each side runs `contact show-card
 `contact scan-card <ID> <LINK>` with the other's card.
 
 `contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
-`contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`.
+`contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`
+or `contact decline <SLATE_ID>`, which tells the contact.
 `contact invoice <ID> <AMOUNT>` invoices a contact. `contact collect` also sends what the outbox
 holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in a backup.
 

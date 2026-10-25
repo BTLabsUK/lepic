@@ -1072,7 +1072,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             if r.invoices.is_empty() {
                 return writeln!(
                     out,
-                    "No invoices are waiting; `lepic epicbox drain --invoices` fetches new ones."
+                    "No invoices are waiting; requests from paired contacts arrive with \
+                     `lepic contact collect` and wait in `lepic contact invoices`."
                 );
             }
             for invoice in &r.invoices {
@@ -2169,8 +2170,8 @@ mod tests {
         );
         let empty = Report::InvoiceList(InvoiceListReport { invoices: vec![] });
         assert!(
-            render(&empty, OutputFormat::Human).contains("epicbox drain --invoices"),
-            "empty list names the drain"
+            render(&empty, OutputFormat::Human).contains("contact invoices"),
+            "empty list names where contact requests wait"
         );
     }
 

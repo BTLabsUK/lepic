@@ -91,6 +91,7 @@ fn the_tree_has_every_planned_command() {
         "contact invoice",
         "contact invoices",
         "contact pay-invoice",
+        "contact decline",
         "contact export",
         "contact import",
         "contact key-check",

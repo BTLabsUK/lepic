@@ -628,6 +628,8 @@ with `lepic contact accept`.")]
     Invoices,
     /// Pay an invoice parked from a contact
     PayInvoice(ContactPayArgs),
+    /// Decline an invoice parked from a contact; the contact is told
+    Decline(ContactSlateIdArg),
     /// Write the pairing records to a file, for a backup
     Export(ContactExportArgs),
     /// Restore pairing records from a backup file
@@ -900,6 +902,13 @@ pub struct ContactPayArgs {
     pub message: MessageArg,
     #[command(flatten)]
     pub spend: SpendArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactSlateIdArg {
+    /// Slate id of the invoice, as `contact invoices` shows it
+    #[arg(value_name = "SLATE_ID")]
+    pub slate_id: String,
 }
 
 #[derive(Debug, Args)]

@@ -49,8 +49,9 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         }
         CliError::Invoice(InvoiceError::NotParked { .. }) => {
             return Some(
-                "`lepic invoice list` shows the invoices waiting to be paid, and `lepic epicbox \
-                 drain --invoices` fetches new ones"
+                "`lepic invoice list` shows the invoices waiting to be paid; a request from a \
+                 paired contact is in `lepic contact invoices`, paid with `lepic contact \
+                 pay-invoice` or declined with `lepic contact decline`"
                     .to_owned(),
             );
         }
