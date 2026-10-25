@@ -775,35 +775,8 @@ where
         request: InvoiceRequest,
         delivery: Delivery,
     ) -> Result<IssuedInvoice, InvoiceError> {
-        let session = self.session()?;
         delivering(&self.ports().transports, &delivery)?;
-        let tip = self
-            .ports()
-            .node
-            .get_tip()
-            .await
-            .map_err(InvoiceError::Node)?
-            .height;
-        self.check_plausible_tip(&session, tip).await?;
-        let target = delivery.clone();
-        let (tx_id, slate, wire) = self
-            .blocking(move |ports, config| {
-                let env = InvoiceEnvironment {
-                    keychain: &session.keychain,
-                    network: config.network,
-                    tip,
-                    now: ports.clock.now(),
-                };
-                let issued = delivering(&ports.transports, &target).and_then(|transport| {
-                    let randomness = I1Randomness::draw(&mut **ports.rng.lock())
-                        .map_err(InvoiceError::Signing)?;
-                    session.store.write(|repos| {
-                        issue_stored(repos, &env, transport, &target, &request, randomness)
-                    })
-                });
-                Ok(issued)
-            })
-            .await??;
+        let (tx_id, slate, wire) = self.issue_unsent(request, delivery.clone()).await?;
         let span = Span::current();
         span.record("tx_id", tx_id.0);
         span.record("slate_id", tracing::field::display(slate.id()));
@@ -835,6 +808,43 @@ where
             slate_id: slate.id(),
             amount: slate.amount(),
         })
+    }
+
+    /// Issues and stores an invoice as [`Wallet::issue_invoice`] does, encoded for the
+    /// transport of `delivery` and recording its destination, without delivering it.
+    pub(crate) async fn issue_unsent(
+        &self,
+        request: InvoiceRequest,
+        delivery: Delivery,
+    ) -> Result<(TxId, Slate, WireSlate), InvoiceError> {
+        let session = self.session()?;
+        registered(&self.ports().transports, delivery.transport())?;
+        let tip = self
+            .ports()
+            .node
+            .get_tip()
+            .await
+            .map_err(InvoiceError::Node)?
+            .height;
+        self.check_plausible_tip(&session, tip).await?;
+        self.blocking(move |ports, config| {
+            let env = InvoiceEnvironment {
+                keychain: &session.keychain,
+                network: config.network,
+                tip,
+                now: ports.clock.now(),
+            };
+            let issued =
+                registered(&ports.transports, delivery.transport()).and_then(|transport| {
+                    let randomness = I1Randomness::draw(&mut **ports.rng.lock())
+                        .map_err(InvoiceError::Signing)?;
+                    session.store.write(|repos| {
+                        issue_stored(repos, &env, transport, &delivery, &request, randomness)
+                    })
+                });
+            Ok(issued)
+        })
+        .await?
     }
 
     /// Pays the issuer's I1, which arrived over `transport`: checks it, selects inputs from

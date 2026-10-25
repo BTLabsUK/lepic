@@ -232,6 +232,43 @@ where
         Ok(armored)
     }
 
+    /// Sends the slate this wallet last wrote for `tx_id` through the contact's mailbox (RFC 0002
+    /// 9.1, "Send through Anna's mailbox"; 12.5 for a withdrawal): sealed as
+    /// [`Wallet::contact_seal_slate`] seals it, queued in the outbox, and posted once when relays
+    /// may be reached. The answer comes back to our mailbox and is taken by collecting.
+    ///
+    /// Fails as [`Wallet::contact_seal_slate`] does.
+    #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
+    pub async fn contact_post_slate(
+        &self,
+        relays: &super::ContactRelays,
+        contact_id: ContactId,
+        tx_id: TxId,
+        purpose: Option<Purpose>,
+    ) -> Result<(), ContactError> {
+        let armored = self.contact_seal_slate(contact_id, tx_id, purpose).await?;
+        let envelope = dearmor(&armored).map_err(ContactError::Decode)?;
+        let session = self.session()?;
+        let (slate_id, stage) = self
+            .contact_work(move |_, _| {
+                session.store.write(|repos| {
+                    let entry = repos
+                        .transaction(tx_id)?
+                        .ok_or(ContactError::UnknownTransaction)?;
+                    let slate_id = entry.slate_id.ok_or(ContactError::UnknownTransaction)?;
+                    let stage = outgoing_stage(repos, slate_id, entry.direction)?
+                        .ok_or(ContactError::UnknownTransaction)?;
+                    super::invoices::link_slate(repos, slate_id, contact_id)?;
+                    Ok((slate_id, stage))
+                })
+            })
+            .await?;
+        self.enqueue_for_contact(contact_id, slate_id, stage, &envelope)
+            .await?;
+        self.deliver_soon(relays).await;
+        Ok(())
+    }
+
     /// Opens sealed text from a file or a paste (RFC 0002 3.4 and 9.2). The hint finds the key:
     /// ours for a paired contact, or the reply key of a slate this wallet started. A signed
     /// envelope is attributed to the contact whose recorded key signed it; a newer card in it

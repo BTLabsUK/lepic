@@ -111,7 +111,9 @@ fn transaction_with(
     let Some(stored) = repos.transaction_by_slate(slate_id, direction)? else {
         return Ok(None);
     };
-    if stored.entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+    let exchanged = stored.entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
+        || crate::contact::slate_contact(repos, slate_id)?.is_some();
+    if !exchanged
         || repos.slate(slate_id, stage)?.is_none()
         || counterparty_key(repos, stored.id, network)?.as_deref() != Some(from)
     {
@@ -279,8 +281,10 @@ fn withdrawal_target(
     let Some(slate_id) = entry.slate_id else {
         return Ok(None);
     };
+    let over_epicbox = entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
+        || crate::contact::slate_contact(repos, slate_id)?.is_some();
     if entry.direction != TxDirection::Incoming
-        || entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+        || !over_epicbox
         || repos.slate(slate_id, SlateStage::Invoice1)?.is_none()
         || repos.slate(slate_id, SlateStage::Invoice3)?.is_some()
     {
@@ -465,6 +469,70 @@ where
         }
     }
 
+    /// The paired contact the slate was exchanged with, if any.
+    async fn contact_of_slate(&self, slate_id: SlateId) -> Option<lepic_store::ContactId> {
+        let session = self.session().ok()?;
+        self.blocking(move |_, _| {
+            Ok(session
+                .store
+                .read(|repos| crate::contact::slate_contact(repos, uuid(slate_id)))?)
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Applies a notice a paired contact sent sealed, with `from` the key of the contact's
+    /// mailbox as the counterparty, and raises its event. Returns the payment to cancel for a
+    /// `withdrawn` of an invoice this wallet paid.
+    pub(crate) async fn apply_contact_notice(
+        &self,
+        notice: Notice,
+        from: String,
+    ) -> Result<Option<TxId>, Hold> {
+        let network = relay_network(self.config().network);
+        let codecs = stored_codecs(self.config().network);
+        let effect = self
+            .inbox_write(move |repos, now| apply_notice(repos, &codecs, network, notice, from, now))
+            .await?;
+        let slate_id = notice.slate_id;
+        let (event, cancel) = match effect {
+            Effect::Dropped | Effect::Noted => (None, None),
+            Effect::Posted { tx_id, excess } => (
+                Some(Event::InvoicePosted(PostedInvoice {
+                    tx_id,
+                    slate_id,
+                    excess,
+                })),
+                None,
+            ),
+            Effect::PaymentPosted { tx_id, excess } => (
+                Some(Event::PaymentPosted(PostedPayment {
+                    tx_id,
+                    slate_id,
+                    excess,
+                })),
+                None,
+            ),
+            Effect::Declined { tx_id } => (
+                Some(Event::InvoiceDeclined(DeclinedInvoice { tx_id, slate_id })),
+                None,
+            ),
+            Effect::Withdrawn { tx_id } => (
+                Some(Event::InvoiceWithdrawn(WithdrawnInvoice {
+                    slate_id,
+                    tx_id,
+                })),
+                tx_id,
+            ),
+        };
+        if let Some(event) = event {
+            info!(slate_id = %slate_id, "notice received");
+            self.emit(event);
+        }
+        Ok(cancel)
+    }
+
     /// Tells the payer that the paid invoice `tx_id` was pushed with `excess`.
     pub(crate) async fn notify_posted(
         &self,
@@ -605,6 +673,16 @@ where
         notice: Notice,
     ) -> Result<(), Hold> {
         let slate_id = notice.slate_id;
+        if let Some(contact_id) = self.contact_of_slate(slate_id).await {
+            // Exchanges with a paired contact keep their notices in its mailbox, sealed.
+            return self
+                .queue_contact_notice(contact_id, notice)
+                .await
+                .map_err(|error| {
+                    warn!(slate_id = %slate_id, error = %ErrorChain(&error), "notice not queued");
+                    Hold::Withheld
+                });
+        }
         let network = relay_network(self.config().network);
         let Some(key) = key_of(to.as_str(), network) else {
             debug!(slate_id = %slate_id, "notice not sent to a destination that is no address");

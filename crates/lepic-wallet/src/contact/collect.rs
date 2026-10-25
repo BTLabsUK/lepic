@@ -9,8 +9,8 @@ use blake2::digest::Digest;
 use jiff::Timestamp;
 use lepic_contact::{ContactCard, MessageType, SealedEnvelope, dearmor, looks_sealed};
 use lepic_epicbox::{
-    Handled, Identity, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxError, MailboxHandler,
-    MailboxMessage, RelayEndpoint,
+    EpicboxAddress, Handled, Identity, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxError,
+    MailboxHandler, MailboxMessage, RelayEndpoint,
 };
 use lepic_node::NodeApi;
 use lepic_store::{
@@ -29,7 +29,7 @@ use super::{
     UPDATES_PER_HOUR,
 };
 use crate::event::{ContactEvent, Event, FailedPairing, UnreachableRelay};
-use crate::inbox::ErrorChain;
+use crate::inbox::{ErrorChain, relay_network};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
@@ -70,6 +70,9 @@ const BACKOFF: [Duration; 4] = [
 
 /// Contacts that had something in the last day count as active for the foreground tick.
 const ACTIVE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// After a service moved its home relay, its old one is drained this long (RFC 0002 8.5).
+const PREVIOUS_HOME_KEPT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// A card shown in person and never scanned back is forgotten after this.
 const SHOWN_CARD_LIFETIME: Duration = Duration::from_secs(60 * 60);
@@ -225,6 +228,7 @@ where
             report.paired = report.paired.saturating_add(handler.paired);
         }
         debug!(count = report.mailboxes, "contact mailboxes collected");
+        self.deliver_soon(relays).await;
         Ok(report)
     }
 
@@ -338,6 +342,11 @@ where
                         continue;
                     };
                     let home = endpoint_for(&mailbox.home_relay, &relays)?;
+                    if let Some(previous) = mailbox.previous.filter(|previous| previous.until > now)
+                    {
+                        let old = endpoint_for(&previous.relay, &relays)?;
+                        contacts.push((record.clone(), old, None));
+                    }
                     contacts.push((record, home, mailbox.onion));
                 }
                 if trigger == CollectTrigger::Foreground {
@@ -525,11 +534,23 @@ where
             self.refresh_card(contact_id, card, limited).await?;
         }
         self.mark_sealed_in(contact_id).await?;
+        let record = {
+            let session = self.session()?;
+            self.contact_work(move |_, _| {
+                Ok(session.store.read(|repos| repos.contact(contact_id))?)
+            })
+            .await?
+        };
+        let Some(record) = record else {
+            return Ok(Handled::Stored);
+        };
         Ok(match opened.content.kind {
             MessageType::ContactUpdate => Handled::Stored,
-            // TODO(W-29): sealed slates and notices from contacts are taken by the sealed send
-            // and invoice engines; until then they stay on the relay.
-            MessageType::Slate | MessageType::Notice => Handled::Later,
+            MessageType::Slate => self.take_contact_slate(&record, opened.content).await?,
+            MessageType::Notice => {
+                self.take_contact_notice(&record, &opened.content.body)
+                    .await?
+            }
             // TODO(W-28): the key check waits for the revised messages of RFC 0002 7.8.
             MessageType::KeyCheck | MessageType::KeyCheckAnswer => Handled::Stored,
             MessageType::PairingReply | MessageType::PairingConfirm => Handled::Stored,
@@ -548,10 +569,10 @@ where
         let network = self.config().network;
         let updated = self
             .contact_work(move |ports, _| {
-                let now = ports.clock.now().as_second();
-                Ok(session.store.write(|repos| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
                     let Some(mut record) = repos.contact(contact_id)? else {
-                        return Ok::<_, StoreError>(false);
+                        return Ok(false);
                     };
                     let Some(peer) = &record.peer else {
                         return Ok(false);
@@ -560,19 +581,70 @@ where
                     if card.sig_key().to_bytes() != peer.sig_key || fields.seq <= peer.seq {
                         return Ok(false);
                     }
-                    if limited && !within_update_limits(repos, contact_id, now)? {
+                    if limited && !within_update_limits(repos, contact_id, now.as_second())? {
                         debug!("contact update over the limits dropped");
                         return Ok(false);
                     }
                     record.peer = Some(peer_card(&card));
-                    repos.put_contact(&record)?;
-                    if let Some(mut mailbox) = repos.contact_mailbox(contact_id)? {
-                        mailbox.peer_mailbox = fields.mailbox.as_str().to_owned();
-                        repos.put_contact_mailbox(&mailbox)?;
+                    let Some(mut mailbox) = repos.contact_mailbox(contact_id)? else {
+                        repos.put_contact(&record)?;
+                        return Ok(true);
+                    };
+                    let peer_mailbox = fields.mailbox.as_str().to_owned();
+                    if peer_mailbox != mailbox.peer_mailbox {
+                        repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
                     }
-                    debug!(network = ?network, "contact card refreshed");
+                    let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
+                        .map_err(|_| ContactError::RelayAddress)?;
+                    let new_home = format!(
+                        "{}:{}",
+                        relay.domain(),
+                        relay.port().unwrap_or(lepic_epicbox::DEFAULT_PORT)
+                    );
+                    // A service moves its home relay with an update; people re-pair instead
+                    // (RFC 0002 8.5).
+                    let service = fields.kind != lepic_contact::ContactKind::Person;
+                    if service && new_home != mailbox.home_relay {
+                        let keys = contact_keys(
+                            &session.keychain,
+                            network,
+                            record.account,
+                            record.slot,
+                            record.box_salt,
+                        )?;
+                        let ours = EpicboxAddress::new(
+                            *keys.box_public_key(),
+                            relay_network(network),
+                            relay.domain().clone(),
+                            relay.port(),
+                        );
+                        let own = ContactCard::decode(&record.own_card, contact_network(network))
+                            .map_err(ContactError::Decode)?;
+                        let mut own_fields = own.fields().clone();
+                        own_fields.mailbox = lepic_contact::MailboxAddress::new(&ours.to_string())
+                            .map_err(ContactError::Name)?;
+                        own_fields.seq = own_fields.seq.saturating_add(1);
+                        let signer = super::keys::signing_key(&keys);
+                        record.own_card =
+                            ContactCard::sign(contact_network(network), own_fields, &signer)
+                                .map_err(ContactError::Encode)?
+                                .as_bytes()
+                                .to_vec();
+                        mailbox.previous = Some(lepic_store::PreviousHome {
+                            relay: mailbox.home_relay.clone(),
+                            peer_mailbox: mailbox.peer_mailbox.clone(),
+                            our_mailbox: mailbox.our_mailbox.clone(),
+                            until: now.checked_add(PREVIOUS_HOME_KEPT).unwrap_or(now),
+                        });
+                        mailbox.home_relay = new_home;
+                        mailbox.our_mailbox = ours.to_string();
+                        info!("contact home relay moved");
+                    }
+                    mailbox.peer_mailbox = peer_mailbox;
+                    repos.put_contact(&record)?;
+                    repos.put_contact_mailbox(&mailbox)?;
                     Ok(true)
-                })?)
+                })
             })
             .await?;
         if updated {

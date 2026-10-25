@@ -304,6 +304,18 @@ where
             .await?
             .filter(|invoice| invoice.status == PendingInvoiceStatus::Parked)
             .ok_or(InvoiceError::NotParked { slate_id })?;
+        let session = self.session()?;
+        let from_contact = self
+            .blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| crate::contact::slate_contact(repos, slate_uuid))?)
+            })
+            .await?;
+        if from_contact.is_some() {
+            // A contact's invoice is paid sealed, through Wallet::contact_pay_invoice.
+            return Err(InvoiceError::NotParked { slate_id });
+        }
         let codecs = stored_codecs(network);
         let i1 = epicbox_decode(&codecs, &WireSlate::binary(MediaType::JSON, parked.bytes))
             .map_err(InvoiceError::Decode)?;
@@ -549,7 +561,8 @@ fn issued_unpaid_before(
             else {
                 continue;
             };
-            if entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+            if (entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+                && crate::contact::slate_contact(repos, slate_uuid)?.is_none())
                 || entry.created_at > cutoff
                 || repos.slate(slate_uuid, SlateStage::Invoice1)?.is_none()
             {
@@ -601,7 +614,8 @@ pub(crate) fn epicbox_invoice_payment(
     else {
         return Ok(None);
     };
-    if entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+    if (entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+        && crate::contact::slate_contact(repos, slate_uuid)?.is_none())
         || repos.slate(slate_uuid, SlateStage::Invoice2)?.is_none()
     {
         return Ok(None);

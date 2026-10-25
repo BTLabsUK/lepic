@@ -237,6 +237,30 @@ LEPIC's behaviour on top of the protocol above; nothing on the wire or the relay
   acknowledged and ignored, and the peer is recorded as not paying invoices.
 - Nothing in the inbox pays. Paying a parked I1 is a host call that names the invoiced amount.
 
+## Contact mailboxes (RFC 0002)
+
+LEPIC-only use of ordinary relay messages; nothing on the wire or the relay changes.
+
+- Mailboxes. Each side of a pairing reads a mailbox of its own on the pairing's home relay,
+  `box_pk@<home relay>`, with a key derived from the seed, the pairing's slot and a random salt.
+  It is drained with one-off connections that greet the relay as a sender (fact 6), never by the
+  listener, and acknowledged only after a message's effect is stored. Messages to it are posted
+  from the sender's own mailbox key, so the relay sees two per-contact keys.
+- Payload. The Epicbox plaintext is the armored sealed envelope (`BEGINEPICSEALED. ...`). A plain
+  payload, an anonymous envelope, or one signed by any key but the contact's is acknowledged and
+  dropped.
+- Invoices. An I1 parks only from a verified contact the user allows invoices from; its payment
+  (I2) goes back sealed through the outbox to the contact's mailbox, never over the payments
+  address. S1 from a contact (a withdrawal) is received and its S2 goes back the same way. Notices
+  (`posted`, `declined`, `withdrawn`) for these slates travel sealed in the mailboxes, type `02`;
+  a `withdrawn` for a paid invoice cancels the payment.
+- Outbox. Entries are stored, posted at once and retried after 30 s, 2 min, 10 min, then every
+  30 min and on every collecting cycle, to the home relay whatever relay the wallet uses; after a
+  day undelivered they stop as stuck.
+- Home relay moves. A newer card from a shop or exchange whose mailbox names another relay moves
+  this side's mailbox there too; the old one is drained for 7 days and queued entries follow the
+  new address. People re-pair instead.
+
 ## Notices between LEPIC wallets
 
 ADR 0016 has the reasons; this is the format and who sends what.

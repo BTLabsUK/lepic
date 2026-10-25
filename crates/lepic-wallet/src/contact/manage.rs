@@ -149,8 +149,9 @@ where
     }
 
     /// Turns invoices from a contact on or off (RFC 0002 11.1). Only a verified contact may send
-    /// invoices: turning them on for another fails with [`ContactError::NotVerified`]. Fails
-    /// with [`ContactError::UnknownContact`].
+    /// invoices: turning them on for another fails with [`ContactError::NotVerified`]. Turning
+    /// them off deletes the contact's unpaid parked invoices and queues a sealed `declined` for
+    /// each; a paid one finishes. Fails with [`ContactError::UnknownContact`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn contact_set_allow_invoices(
         &self,
@@ -166,6 +167,10 @@ where
         })
         .await?;
         info!("contact invoices switched");
+        if !allow {
+            let declined = self.decline_contact_invoices(contact_id).await?;
+            info!(count = declined, "parked contact invoices declined");
+        }
         Ok(())
     }
 

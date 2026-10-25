@@ -101,6 +101,45 @@ pub enum Event {
     ContactUpdated(ContactEvent),
     /// A home relay did not answer; collecting from it backs off (RFC 0002 8.4).
     HomeRelayUnreachable(UnreachableRelay),
+    /// A verified contact that may send invoices sent one; it is parked for the user to pay or
+    /// decline. Nothing was paid.
+    InvoiceFromContact(ContactInvoiceEvent),
+    /// A contact sent a withdrawal (an S1 with purpose withdrawal); it was received and the
+    /// answer queued for the contact's mailbox.
+    WithdrawalFromContact(ContactSlateEvent),
+    /// An outbox entry reached the contact's home relay.
+    OutboxDelivered(OutboxNews),
+    /// An outbox entry could not be delivered for a day and stopped retrying; the host offers
+    /// "Send again". Funds unlock as for any unfinished payment.
+    OutboxStuck(OutboxNews),
+}
+
+/// An invoice a contact sent, with what the contact says about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactInvoiceEvent {
+    pub contact_id: lepic_store::ContactId,
+    pub slate_id: SlateId,
+    pub amount: Amount,
+    pub purpose: Option<lepic_contact::Purpose>,
+    pub reference: Option<String>,
+    /// Unix seconds; advisory.
+    pub expires: Option<u64>,
+}
+
+/// A slate from a contact that the wallet received.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContactSlateEvent {
+    pub contact_id: lepic_store::ContactId,
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    pub amount: Amount,
+}
+
+/// An outbox entry an event is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutboxNews {
+    pub contact_id: lepic_store::ContactId,
+    pub slate_id: SlateId,
 }
 
 /// A contact an event is about.

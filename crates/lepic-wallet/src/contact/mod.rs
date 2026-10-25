@@ -7,8 +7,10 @@
 //! Nothing here touches the wallet's payments address, its listener or the node.
 
 mod collect;
+mod invoices;
 mod keys;
 mod manage;
+mod outbox;
 mod pairing;
 mod relay;
 mod sealed;
@@ -16,7 +18,7 @@ mod sealed;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use lepic_contact::{ContactKind, SasSymbol};
+
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{MailboxError, RelayEndpoint};
 use lepic_store::{AccountIndex, ContactId, ContactState, PairingId, SealMode, StoreError};
@@ -25,7 +27,12 @@ use thiserror::Error;
 use crate::error::WalletError;
 
 pub use collect::{CollectReport, CollectTrigger};
+pub(crate) use invoices::slate_contact;
+pub use invoices::{ContactInvoice, InvoiceDetails, SAME_AMOUNT_WINDOW};
 pub(crate) use keys::reply_public_key;
+/// The contact formats a host names in these calls.
+pub use lepic_contact::{ContactKind, Purpose, Refusal, SasSymbol};
+pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
 pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
     InviteRequest, LinkOutcome, SasDecision,
@@ -178,6 +185,9 @@ pub enum ContactError {
     Invoice(#[source] crate::invoice::InvoiceError),
     #[error("slate was not finalized")]
     Finalize(#[source] crate::finalize::FinalizeError),
+    /// The contact's card says it does not pay invoices.
+    #[error("the contact does not pay invoices")]
+    DoesNotPayInvoices,
 }
 
 impl From<StoreError> for ContactError {
