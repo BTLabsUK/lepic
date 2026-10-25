@@ -218,7 +218,7 @@ where
         let removed = self
             .contact_work(move |_, _| {
                 Ok(session.store.write(|repos| {
-                    let pending = repos.delete_pending_pairing(pairing_id_of(contact_id))?;
+                    let pending = super::pairing::end_pending(repos, pairing_id_of(contact_id))?;
                     super::invoices::drop_contact_invoices(repos, contact_id)?;
                     let record = repos.delete_contact(contact_id)?;
                     Ok::<_, StoreError>(pending || record)

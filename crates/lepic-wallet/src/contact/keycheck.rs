@@ -763,7 +763,7 @@ where
                                 entry.entry.state != lepic_store::ContactOutboxState::Queued
                             })
                         {
-                            repos.delete_pending_pairing(pairing_id_of(id))?;
+                            super::pairing::end_pending(repos, pairing_id_of(id))?;
                             drop_contact_invoices(repos, id)?;
                             repos.delete_contact(id)?;
                             repos.delete_setting(&key(FOLD_PREFIX, id))?;

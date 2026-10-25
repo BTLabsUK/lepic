@@ -2026,3 +2026,37 @@ fn a_backup_restores_only_this_seeds_records_with_mailboxes_from_the_cards() {
     assert_eq!(summary.imported, 0);
     assert!(stranger.read(|repos| repos.contacts()).is_empty());
 }
+
+/// R3-02: a pairing that ends leaves nothing of it behind: the confirm kept for a repeat goes
+/// with the pending pairing.
+#[test]
+fn an_ended_pairing_keeps_no_confirm() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    let pending = world.issuer.read(|repos| repos.pending_pairings());
+    assert_eq!(pending.len(), 1);
+    let hex: String = pending[0]
+        .pairing_id
+        .0
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let confirm = format!("contact.confirm.{hex}");
+    assert!(world.issuer.read(|repos| repos.setting(&confirm)).is_some());
+
+    world
+        .block_on(world.issuer.wallet.pairing_sas(
+            &relays(&world.issuer),
+            anna_side,
+            SasDecision::Mismatch,
+        ))
+        .unwrap();
+
+    assert!(
+        world
+            .issuer
+            .read(|repos| repos.pending_pairings())
+            .is_empty()
+    );
+    assert_eq!(world.issuer.read(|repos| repos.setting(&confirm)), None);
+}

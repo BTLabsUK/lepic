@@ -224,7 +224,8 @@ where
     }
 
     /// Deletes outbox entries nothing waits for any more: delivered ones older than the relay
-    /// keeps messages, and any whose transaction confirmed, was cancelled or expired.
+    /// keeps messages, stuck ones of no transaction as old, and any whose transaction
+    /// confirmed, was cancelled or expired.
     pub(crate) async fn prune_outbox(&self) -> Result<(), ContactError> {
         let session = self.session()?;
         let pruned = self
@@ -240,18 +241,27 @@ where
                                     .delivered_at
                                     .and_then(|at| at.checked_add(DELIVERED_KEPT).ok())
                                     .is_some_and(|end| end <= now);
+                            let stale = entry.state == ContactOutboxState::Stuck
+                                && entry
+                                    .created_at
+                                    .checked_add(DELIVERED_KEPT)
+                                    .is_ok_and(|end| end <= now);
                             let mut ended = false;
+                            let mut of_transaction = false;
                             for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
                                 if let Some(tx) =
                                     repos.transaction_by_slate(entry.slate_id, direction)?
                                 {
+                                    of_transaction = true;
                                     ended |= matches!(
                                         tx.entry.state,
                                         TxState::Confirmed | TxState::Cancelled | TxState::Expired
                                     );
                                 }
                             }
-                            if old || ended {
+                            // A stuck entry of no transaction, such as a contact update,
+                            // goes once the relay would have dropped it anyway.
+                            if old || ended || (stale && !of_transaction) {
                                 repos.delete_contact_outbox(stored.id)?;
                                 pruned = pruned.saturating_add(1);
                             }

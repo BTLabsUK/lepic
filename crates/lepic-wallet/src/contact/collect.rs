@@ -327,9 +327,7 @@ where
                     if deadline.is_some_and(|deadline| deadline > now) {
                         continue;
                     }
-                    repos.delete_pending_pairing(pending.pairing_id)?;
-                    repos.delete_setting(&super::pairing::confirm_key(pending.pairing_id))?;
-                    repos.delete_setting(&super::pairing::refusals_key(pending.pairing_id))?;
+                    super::pairing::end_pending(repos, pending.pairing_id)?;
                     let paired = repos
                         .contact(pending.contact_id)?
                         .is_some_and(|record| record.peer.is_some());

@@ -724,7 +724,7 @@ where
                         }
                         SasDecision::Mismatch => {
                             let pending = repos.pending_pairing(pairing_id_of(contact_id))?;
-                            repos.delete_pending_pairing(pairing_id_of(contact_id))?;
+                            end_pending(repos, pairing_id_of(contact_id))?;
                             super::invoices::drop_contact_invoices(repos, contact_id)?;
                             repos.delete_contact(contact_id)?;
                             let tell = pending
@@ -1069,7 +1069,7 @@ where
                 let pairing_id = pending.pairing_id;
                 self.contact_work(move |_, _| {
                     session.store.write(|repos| {
-                        repos.delete_pending_pairing(pairing_id)?;
+                        end_pending(repos, pairing_id)?;
                         repos.delete_contact(contact_id)?;
                         Ok(())
                     })
@@ -1091,7 +1091,7 @@ where
         if !confirm.matches_invite(&invite) {
             self.contact_work(move |_, _| {
                 session.store.write(|repos| {
-                    repos.delete_pending_pairing(pairing_id)?;
+                    end_pending(repos, pairing_id)?;
                     repos.delete_contact(contact_id)?;
                     Ok(())
                 })
@@ -1136,7 +1136,7 @@ where
                         previous: None,
                         backoff: Vec::new(),
                     })?;
-                    repos.delete_pending_pairing(pairing_id)?;
+                    end_pending(repos, pairing_id)?;
                     Ok(())
                 })
             })
@@ -1241,6 +1241,17 @@ const MAX_REFUSALS_PER_INVITE: u32 = 3;
 /// The setting that counts the refusals an invite sent, until its pairing ends.
 pub(crate) fn refusals_key(pairing_id: PairingId) -> String {
     format!("{REFUSALS_PREFIX}{}", hex(&pairing_id.0))
+}
+
+/// Ends a pairing in progress: the pending pairing, its kept confirm and its refusal count go
+/// together. Returns whether the pending pairing was stored.
+pub(crate) fn end_pending(
+    repos: &mut dyn Repositories,
+    pairing_id: PairingId,
+) -> Result<bool, StoreError> {
+    repos.delete_setting(&confirm_key(pairing_id))?;
+    repos.delete_setting(&refusals_key(pairing_id))?;
+    repos.delete_pending_pairing(pairing_id)
 }
 
 /// Counts one more refusal for the invite, and returns whether it may still be sent.
