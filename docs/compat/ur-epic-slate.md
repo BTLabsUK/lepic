@@ -87,6 +87,17 @@ The reader refuses, with distinct errors:
   UTF-8 or not JSON;
 - more text than the limits allow, including a payload that inflates past 64 KiB.
 
+## Age and network
+
+A code says nothing of its age or its network; the slate inside does, through its TTL. An I1
+the binding issues (`issue_invoice_slate`, `issue_invoice_file`) carries a TTL cutoff 1,440
+blocks, a day, above the issuer's tip, as the binding's sends carry their limit. A LEPIC payer
+refuses one whose cutoff the chain has reached (`PaymentExpired`) and one whose cutoff lies
+more than 2,880 blocks above its tip (`InvoiceNotForThisChain`), which a request from a
+network with a longer chain has; nothing is stored either way. A floonet request read on
+mainnet has a cutoff far below the tip, so it is refused as expired. An I1 without a TTL, from
+an older app or the CLI, is paid as before. The issuer refuses a payment from its cutoff on.
+
 ## Worked example
 
 The S1 and S2 of the `send_file_plain` slate vectors (`testdata/vectors/slates`), at three

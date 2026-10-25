@@ -135,11 +135,20 @@ I2 or S2, which hold every input, output and the final offset.
   goes on.
 - Receiving an S1 or paying an I1 whose height is more than 10 blocks above the node's tip is
   refused, and nothing is stored. Upstream does not check the height.
+- Paying an I1 whose TTL cutoff lies more than 2,880 blocks, two days, above the node's tip is
+  refused, and nothing is stored: no issuer sets one that far ahead (the binding gives an
+  invoice 1,440 blocks), so the request comes from another network, whose chain is longer, or
+  from a wrong height. The second day allows for an issuer's node ahead of the payer's.
+  Upstream does not check it.
 
 A received payment with no TTL, which every V2 slate is, would otherwise stay `received` for
 ever. A refresh records the tip at which it first sees one, not the slate's height, which the
 sender chose, and expires it 10,080 blocks later under the rules above. An issued invoice
-(`received` with no S2) is not ended this way.
+(`received` with no S2) is not ended this way; one issued with a TTL expires at its cutoff like
+any slate with a TTL, and the issuer refuses a payment from that height on even when the I2
+drops the TTL or moves it later. A payer's I2 keeps the issuer's cutoff, or its own when that
+is earlier, so a payment the issuer never finalizes, for example the second payment of one
+request, expires at the same height under the rules above.
 
 The state machine does not know the direction of a transaction. Which side may take a step, for
 example that only an invoice issuer finalizes an incoming transaction, is enforced by the stages
