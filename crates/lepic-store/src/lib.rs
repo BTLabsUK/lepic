@@ -34,7 +34,9 @@ pub use contact::{
     PendingPairing, PreviousHome, RelayBackoff, SAS_LEN, SealMode, StoredContactOutbox,
 };
 #[cfg(feature = "sqlite")]
-pub use contact_backup::{CONTACT_BACKUP_VERSION, ImportSummary, export_contacts, import_contacts};
+pub use contact_backup::{
+    CONTACT_BACKUP_VERSION, CardReader, ImportSummary, export_contacts, import_contacts,
+};
 pub use context::{CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 pub use error::{DatabaseError, Record, StoreError};
 pub use imported::{

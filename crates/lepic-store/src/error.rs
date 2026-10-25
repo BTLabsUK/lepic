@@ -111,6 +111,8 @@ pub enum StoreError {
     ContactCapReached { cap: ContactCap },
     #[error("contact backup is version {found}, which this build cannot read")]
     UnsupportedBackup { found: u64 },
+    #[error("contact backup is for the other network")]
+    BackupOfOtherNetwork,
     #[error("operating system randomness is unavailable")]
     Randomness(#[source] getrandom::Error),
     #[error("store is unusable after a panic in another thread")]

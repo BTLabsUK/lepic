@@ -13,13 +13,14 @@ mod support;
 use jiff::Timestamp;
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
+use lepic_primitives::params::Network;
 use lepic_store::{
     AccountIndex, AccountRecord, CONTACT_SLOT_COUNT, ChainCheck, ContactCap, ContactOutboxState,
     ContactState, ContextKey, ImportSummary, ImportedKind, ImportedMessage, ImportedOutput,
     ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex,
     InvoiceCap, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES,
     MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt, OutboxEntry, OutboxId,
-    OutboxStatus, OutputStatus, PairingId, PairingState, ParticipantId, PeerCapability,
+    OutboxStatus, OutputStatus, PairingId, PairingState, ParticipantId, PeerCapability, PeerCard,
     PeerSupport, PendingInvoiceStatus, PrivateContext, Record, Repositories, SealMode, SlateStage,
     StoreError, TransactionEntry, TxDirection, TxId, TxState, WalletStore, export_contacts,
     import_contacts,
@@ -1509,6 +1510,26 @@ fn contact_outbox_lists_due_entries_and_follows_a_home_relay_move<B: Backend>() 
     );
 }
 
+/// Reads the support module's stand-in cards the way the wallet reads real ones: peer cards
+/// `c0 n de ad` and own cards of 60 equal bytes. Anything else does not decode.
+fn read_test_card(bytes: &[u8]) -> Option<PeerCard> {
+    match bytes {
+        [0xc0, n, 0xde, 0xad] => Some(peer_card(*n)),
+        [n, rest @ ..] if rest.len() == 59 && rest.iter().all(|byte| byte == n) => Some(PeerCard {
+            bytes: bytes.to_vec(),
+            ..peer_card(*n)
+        }),
+        _ => None,
+    }
+}
+
+fn import<R: lepic_store::ContactRepository + ?Sized>(
+    repos: &mut R,
+    json: &str,
+) -> Result<ImportSummary, StoreError> {
+    import_contacts(repos, json, Network::Floonet, &read_test_card)
+}
+
 fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
     let source = B::create(context_key(1));
     let mut verified = contact(1, 1);
@@ -1537,8 +1558,11 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
         repos.put_pending_pairing(&pairing(3, 3))
     })
     .unwrap();
-    let json = read(source.store(), |repos| export_contacts(repos)).unwrap();
-    assert!(json.starts_with("{\"version\":1,\"contacts\":["));
+    let json = read(source.store(), |repos| {
+        export_contacts(repos, Network::Floonet)
+    })
+    .unwrap();
+    assert!(json.starts_with("{\"version\":1,\"network\":\"floonet\",\"contacts\":["));
     assert!(!json.contains("pairing") && !json.contains("secret"));
 
     let target = B::create(context_key(2));
@@ -1549,7 +1573,7 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
     let mut conflicting = contact(5, 5);
     conflicting.peer = Some(peer_card(1));
     write(target.store(), |repos| repos.put_contact(&conflicting)).unwrap();
-    let summary = write(target.store(), |repos| import_contacts(repos, &json)).unwrap();
+    let summary = write(target.store(), |repos| import(repos, &json)).unwrap();
     assert_eq!(
         summary,
         ImportSummary {
@@ -1560,7 +1584,7 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
     );
 
     let clean = B::create(context_key(3));
-    let summary = write(clean.store(), |repos| import_contacts(repos, &json)).unwrap();
+    let summary = write(clean.store(), |repos| import(repos, &json)).unwrap();
     assert_eq!(
         summary,
         ImportSummary {
@@ -1588,7 +1612,7 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
         assert_eq!(repos.contact_mailbox(contact_id(1))?, Some(mailbox));
         assert!(repos.pending_pairings()?.is_empty());
         // The restored store exports the same document.
-        assert_eq!(export_contacts(repos)?.len(), json.len());
+        assert_eq!(export_contacts(repos, Network::Floonet)?, json);
         Ok(())
     })
     .unwrap();
@@ -1598,9 +1622,9 @@ fn contact_backup_rejects_unknown_versions_and_malformed_records<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
     let newer = write(store, |repos| {
-        import_contacts(
+        import(
             repos,
-            "{\"version\":2,\"contacts\":[],\"slot_counters\":[]}",
+            "{\"version\":2,\"network\":\"floonet\",\"contacts\":[],\"slot_counters\":[]}",
         )
     })
     .unwrap_err();
@@ -1608,10 +1632,11 @@ fn contact_backup_rejects_unknown_versions_and_malformed_records<B: Backend>() {
     for bad in [
         "not json",
         "{\"version\":1}",
-        "{\"version\":1,\"contacts\":[],\"slot_counters\":[{}]}",
-        "{\"version\":1,\"contacts\":[{}],\"slot_counters\":[]}",
+        "{\"version\":1,\"contacts\":[],\"slot_counters\":[]}",
+        "{\"version\":1,\"network\":\"floonet\",\"contacts\":[],\"slot_counters\":[{}]}",
+        "{\"version\":1,\"network\":\"floonet\",\"contacts\":[{}],\"slot_counters\":[]}",
     ] {
-        let error = write(store, |repos| import_contacts(repos, bad)).unwrap_err();
+        let error = write(store, |repos| import(repos, bad)).unwrap_err();
         assert!(
             matches!(
                 error,
@@ -1624,13 +1649,79 @@ fn contact_backup_rejects_unknown_versions_and_malformed_records<B: Backend>() {
         );
     }
     let empty = write(store, |repos| {
-        import_contacts(
+        import(
             repos,
-            "{\"version\":1,\"contacts\":[],\"slot_counters\":[]}",
+            "{\"version\":1,\"network\":\"floonet\",\"contacts\":[],\"slot_counters\":[]}",
         )
     })
     .unwrap();
     assert_eq!(empty, ImportSummary::default());
+}
+
+fn contact_backup_refuses_the_other_network<B: Backend>() {
+    let source = B::create(context_key(1));
+    write(source.store(), |repos| repos.put_contact(&contact(1, 1))).unwrap();
+    let json = read(source.store(), |repos| {
+        export_contacts(repos, Network::Mainnet)
+    })
+    .unwrap();
+    let target = B::create(context_key(2));
+    let error = write(target.store(), |repos| import(repos, &json)).unwrap_err();
+    assert!(
+        matches!(error, StoreError::BackupOfOtherNetwork),
+        "{error:?}"
+    );
+    assert!(
+        read(target.store(), |repos| repos.contacts())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+fn contact_backup_takes_card_fields_from_the_card_bytes<B: Backend>() {
+    let source = B::create(context_key(1));
+    let mut stale = contact(1, 1);
+    // An index that no longer matches its bytes is not exported as such.
+    stale.peer = Some(PeerCard {
+        seq: 9,
+        claimed_name: "renamed".to_owned(),
+        ..peer_card(1)
+    });
+    write(source.store(), |repos| repos.put_contact(&stale)).unwrap();
+    let json = read(source.store(), |repos| {
+        export_contacts(repos, Network::Floonet)
+    })
+    .unwrap();
+    assert!(
+        !json.contains("renamed") && !json.contains("sig_key"),
+        "{json}"
+    );
+
+    let target = B::create(context_key(2));
+    write(target.store(), |repos| import(repos, &json)).unwrap();
+    let restored = read(target.store(), |repos| repos.contact(contact_id(1)))
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.peer, Some(peer_card(1)));
+
+    // A card the wallet cannot read fails the whole import.
+    for unreadable in [
+        json.replace("c001dead", "c001beef"),
+        json.replace(&"01".repeat(60), &"01".repeat(59)),
+    ] {
+        let fresh = B::create(context_key(3));
+        let error = write(fresh.store(), |repos| import(repos, &unreadable)).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                StoreError::Corrupt {
+                    record: Record::Contact,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+    }
 }
 
 fn peer_capability_is_replaced_by_later_evidence<B: Backend>() {
@@ -1917,6 +2008,8 @@ for_each_backend!(
     slots_run_out_at_65536,
     twin_records_share_a_slot_but_not_a_peer_key,
     contact_backup_rejects_unknown_versions_and_malformed_records,
+    contact_backup_refuses_the_other_network,
+    contact_backup_takes_card_fields_from_the_card_bytes,
     peer_capability_is_replaced_by_later_evidence,
     imported_transactions_round_trip_and_are_replaced,
     imported_records_need_their_transaction_and_bounded_messages,

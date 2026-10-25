@@ -1,20 +1,24 @@
 //! Export and import of pairing records for the app's `.wfeh` history payload (RFC 0002 10.5).
 //!
-//! The document is `{"version":1,"contacts":[...],"slot_counters":[...]}` with bytes in
-//! lowercase hex and times as RFC 3339. The records keep their account, slot and box salt, so a
-//! restore derives the same keys and mailboxes, and the counters keep a restored wallet from
-//! handing out a slot twice. It holds no secret: pairings in progress, outbox entries and relay
+//! The document is `{"version":1,"network":"mainnet","contacts":[...],"slot_counters":[...]}`
+//! with bytes in lowercase hex and times as RFC 3339. The records keep their account, slot and
+//! box salt, so a restore derives the same keys and mailboxes, and the counters keep a restored
+//! wallet from handing out a slot twice. Cards are kept as their bytes only: on import every card
+//! is decoded again by the caller's [`CardReader`] and its keys, seq, kind and name come from
+//! that decoding, never from the document. The `.wfeh` key is the same on both networks, so the
+//! document names its network and an import refuses the other one. It holds no secret: pairings in progress, outbox entries and relay
 //! backoff are not exported, and a contact still waiting for its reply is left out because
 //! nothing could finish it. A record restored from it is flagged [`ContactRecord::imported_from_backup`], because the
 //! pairing may also live on the device the backup came from (cases C-11).
 
 use jiff::Timestamp;
+use lepic_primitives::params::Network;
 use serde::{Deserialize, Serialize};
 
 use crate::account::AccountIndex;
 use crate::contact::{
-    ContactId, ContactKind, ContactMailbox, ContactRecord, ContactRepository, ContactState,
-    PeerCard, PreviousHome, SealMode,
+    ContactId, ContactMailbox, ContactRecord, ContactRepository, ContactState, PeerCard,
+    PreviousHome, SealMode,
 };
 use crate::error::{Record, StoreError};
 
@@ -31,9 +35,14 @@ pub struct ImportSummary {
     pub skipped_conflict: usize,
 }
 
+/// Decodes card bytes for the backup's network and verifies their signature, as the wallet does
+/// with `lepic-contact`; `None` refuses them. The store cannot read cards itself.
+pub type CardReader<'a> = dyn Fn(&[u8]) -> Option<PeerCard> + 'a;
+
 #[derive(Serialize, Deserialize)]
 struct Document {
     version: u64,
+    network: String,
     contacts: Vec<Entry>,
     slot_counters: Vec<CounterEntry>,
 }
@@ -69,12 +78,6 @@ struct Entry {
 #[derive(Serialize, Deserialize)]
 struct CardEntry {
     card: String,
-    sig_key: String,
-    enc_key: String,
-    hint_key: String,
-    seq: u32,
-    kind: String,
-    name: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -144,25 +147,24 @@ fn optional_time(text: Option<&str>, field: &'static str) -> Result<Option<Times
 fn card_entry(card: &PeerCard) -> CardEntry {
     CardEntry {
         card: to_hex(&card.bytes),
-        sig_key: to_hex(&card.sig_key),
-        enc_key: to_hex(&card.enc_key),
-        hint_key: to_hex(&card.hint_key),
-        seq: card.seq,
-        kind: card.kind.code().to_owned(),
-        name: card.claimed_name.clone(),
     }
 }
 
-fn card_from(entry: &CardEntry) -> Result<PeerCard, StoreError> {
-    Ok(PeerCard {
-        bytes: from_hex(&entry.card, "card")?,
-        sig_key: from_hex_fixed(&entry.sig_key, "sig key")?,
-        enc_key: from_hex_fixed(&entry.enc_key, "enc key")?,
-        hint_key: from_hex_fixed(&entry.hint_key, "hint key")?,
-        seq: entry.seq,
-        kind: ContactKind::from_code(&entry.kind).ok_or_else(|| corrupt("kind"))?,
-        claimed_name: entry.name.clone(),
-    })
+/// The card of `entry` as `read_card` decodes it; the decoded bytes must be the stored ones.
+fn card_from(entry: &CardEntry, read_card: &CardReader<'_>) -> Result<PeerCard, StoreError> {
+    let bytes = from_hex(&entry.card, "card")?;
+    let card = read_card(&bytes).ok_or_else(|| corrupt("card"))?;
+    if card.bytes != bytes {
+        return Err(corrupt("card"));
+    }
+    Ok(card)
+}
+
+fn network_code(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "mainnet",
+        Network::Floonet => "floonet",
+    }
 }
 
 fn mailbox_entry(mailbox: &ContactMailbox) -> MailboxEntry {
@@ -180,8 +182,11 @@ fn mailbox_entry(mailbox: &ContactMailbox) -> MailboxEntry {
     }
 }
 
-/// Serialises the paired contacts of the store, oldest first.
-pub fn export_contacts<R: ContactRepository + ?Sized>(repos: &R) -> Result<String, StoreError> {
+/// Serialises the paired contacts of the store, oldest first, for `network`.
+pub fn export_contacts<R: ContactRepository + ?Sized>(
+    repos: &R,
+    network: Network,
+) -> Result<String, StoreError> {
     let mut contacts = Vec::new();
     for contact in repos.contacts()? {
         if matches!(
@@ -225,13 +230,17 @@ pub fn export_contacts<R: ContactRepository + ?Sized>(repos: &R) -> Result<Strin
         .collect();
     serde_json::to_string(&Document {
         version: CONTACT_BACKUP_VERSION,
+        network: network_code(network).to_owned(),
         contacts,
         slot_counters,
     })
     .map_err(|_| corrupt("backup"))
 }
 
-fn record_from(entry: &Entry) -> Result<(ContactRecord, Option<ContactMailbox>), StoreError> {
+fn record_from(
+    entry: &Entry,
+    read_card: &CardReader<'_>,
+) -> Result<(ContactRecord, Option<ContactMailbox>), StoreError> {
     let state = ContactState::from_code(&entry.state).ok_or_else(|| corrupt("state"))?;
     if matches!(
         state,
@@ -240,6 +249,10 @@ fn record_from(entry: &Entry) -> Result<(ContactRecord, Option<ContactMailbox>),
         return Err(corrupt("state"));
     }
     let contact_id = ContactId(from_hex_fixed(&entry.contact_id, "contact id")?);
+    let own_card = from_hex(&entry.own_card, "own card")?;
+    if read_card(&own_card).is_none() {
+        return Err(corrupt("own card"));
+    }
     let record = ContactRecord {
         contact_id,
         account: AccountIndex(entry.account),
@@ -250,9 +263,13 @@ fn record_from(entry: &Entry) -> Result<(ContactRecord, Option<ContactMailbox>),
             .as_deref()
             .map(|sas| from_hex_fixed(sas, "sas"))
             .transpose()?,
-        own_card: from_hex(&entry.own_card, "own card")?,
-        peer: Some(card_from(&entry.peer)?),
-        alternate: entry.alternate.as_ref().map(card_from).transpose()?,
+        own_card,
+        peer: Some(card_from(&entry.peer, read_card)?),
+        alternate: entry
+            .alternate
+            .as_ref()
+            .map(|alternate| card_from(alternate, read_card))
+            .transpose()?,
         label: entry.label.clone(),
         state,
         verified_at: optional_time(entry.verified_at.as_deref(), "verified at")?,
@@ -294,11 +311,15 @@ fn record_from(entry: &Entry) -> Result<(ContactRecord, Option<ContactMailbox>),
 }
 
 /// Restores the records of `json` that the store does not hold yet, flagged as imported, and
-/// raises the slot counters to the backup's. Run it inside one store write: a malformed record,
-/// an unsupported version or a reached contact cap fails the whole import.
+/// raises the slot counters to the backup's. Every card, ours and the peer's, is read with
+/// `read_card` for `network`. Run it inside one store write: a backup of the other network, a
+/// card that does not read, a malformed record, an unsupported version or a reached contact cap
+/// fails the whole import.
 pub fn import_contacts<R: ContactRepository + ?Sized>(
     repos: &mut R,
     json: &str,
+    network: Network,
+    read_card: &CardReader<'_>,
 ) -> Result<ImportSummary, StoreError> {
     let document: Document = serde_json::from_str(json).map_err(|_| corrupt("backup"))?;
     if document.version != CONTACT_BACKUP_VERSION {
@@ -306,12 +327,15 @@ pub fn import_contacts<R: ContactRepository + ?Sized>(
             found: document.version,
         });
     }
+    if document.network != network_code(network) {
+        return Err(StoreError::BackupOfOtherNetwork);
+    }
     for counter in &document.slot_counters {
         repos.raise_contact_slot_counter(AccountIndex(counter.account), counter.next_slot)?;
     }
     let mut summary = ImportSummary::default();
     for entry in &document.contacts {
-        let (record, mailbox) = record_from(entry)?;
+        let (record, mailbox) = record_from(entry, read_card)?;
         // Every slot in the backup was used on the seed, whether or not its record is imported.
         repos.raise_contact_slot_counter(record.account, record.slot.saturating_add(1))?;
         if repos.contact(record.contact_id)?.is_some() {
