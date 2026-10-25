@@ -968,6 +968,10 @@ pub struct SealedSlateView {
     pub reference: Option<String>,
     /// Unix seconds; advisory.
     pub expires: Option<u64>,
+    /// The messages whose signatures verify, in the order the participants joined, as
+    /// `TransactionDetails.messages` shows them: control characters, bidirectional formatting
+    /// and zero-width characters removed. Written by the other side; show them as quoted text.
+    pub messages: Vec<SlateMessage>,
 }
 
 /// A sealed S1 received or a sealed I1 paid, with the answer to send back.
@@ -994,6 +998,10 @@ pub struct ContactInvoiceView {
     pub reference: Option<String>,
     /// Unix seconds; advisory.
     pub expires: Option<u64>,
+    /// The issuer's message, only when its signature verifies, with control characters,
+    /// bidirectional formatting and zero-width characters removed. Written by the contact;
+    /// show it as quoted text.
+    pub message: Option<String>,
     pub received_at_ms: i64,
     /// Other waiting invoices for the same amount from the same contact within 10 minutes:
     /// warn before paying twice.
@@ -1218,7 +1226,7 @@ pub enum WalletEventKind {
     ContactKeysChanged,
     /// A verified contact that may send invoices sent one; it waits in `contact_invoices`:
     /// `contact_id`, `slate_id`, `amount` and, when the contact gave them, `purpose`,
-    /// `reference` and `expires` are set. Nothing was paid.
+    /// `reference`, `expires` and `message` are set. Nothing was paid.
     InvoiceFromContact,
     /// A contact's withdrawal arrived and was received; the answer is queued for the contact:
     /// `contact_id`, `tx_id`, `slate_id` and `amount` are set.
@@ -1273,6 +1281,8 @@ pub struct WalletEvent {
     pub reference: Option<String>,
     /// Unix seconds; advisory.
     pub expires: Option<u64>,
+    /// For `InvoiceFromContact`, the issuer's message as `ContactInvoiceView.message` gives it.
+    pub message: Option<String>,
 }
 
 impl WalletEvent {
@@ -1302,6 +1312,7 @@ impl WalletEvent {
             purpose: None,
             reference: None,
             expires: None,
+            message: None,
         }
     }
 }

@@ -57,6 +57,9 @@ pub struct ContactInvoice {
     pub purpose: Option<Purpose>,
     pub reference: Option<String>,
     pub expires: Option<u64>,
+    /// The issuer's message, only when its signature verifies, made safe to display by
+    /// [`crate::epicbox_invoice::display_message`].
+    pub message: Option<String>,
     pub received_at: Timestamp,
     /// Other parked invoices from the same contact for the same amount received within
     /// [`SAME_AMOUNT_WINDOW`]: ask "Pay both?" before a second payment.
@@ -316,6 +319,7 @@ where
                     purpose: note.purpose.and_then(purpose_of),
                     reference: note.reference,
                     expires: note.expires,
+                    message: crate::epicbox_invoice::issuer_message(&slate),
                     received_at: invoice.received_at,
                     same_amount: Vec::new(),
                 })
@@ -732,6 +736,7 @@ where
                 purpose,
                 reference,
                 expires,
+                message: crate::epicbox_invoice::issuer_message(slate),
             }));
         }
         Ok(())

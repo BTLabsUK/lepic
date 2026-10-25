@@ -536,7 +536,7 @@ fn epicbox_decode(
 }
 
 /// The issuer's message of an I1, when its signature verifies, for display.
-fn issuer_message(slate: &Slate) -> Option<String> {
+pub(crate) fn issuer_message(slate: &Slate) -> Option<String> {
     slate.participants().find_map(|(_, participant)| {
         let message = participant.message.as_ref()?;
         verify_message(message, &participant.public_blind_excess)

@@ -9033,6 +9033,7 @@ impl SseDecode for crate::api::types::ContactInvoiceView {
         let mut var_purpose = <Option<crate::api::types::SlatePurpose>>::sse_decode(deserializer);
         let mut var_reference = <Option<String>>::sse_decode(deserializer);
         let mut var_expires = <Option<u64>>::sse_decode(deserializer);
+        let mut var_message = <Option<String>>::sse_decode(deserializer);
         let mut var_receivedAtMs = <i64>::sse_decode(deserializer);
         let mut var_sameAmount = <Vec<String>>::sse_decode(deserializer);
         return crate::api::types::ContactInvoiceView {
@@ -9042,6 +9043,7 @@ impl SseDecode for crate::api::types::ContactInvoiceView {
             purpose: var_purpose,
             reference: var_reference,
             expires: var_expires,
+            message: var_message,
             received_at_ms: var_receivedAtMs,
             same_amount: var_sameAmount,
         };
@@ -10441,6 +10443,7 @@ impl SseDecode for crate::api::types::SealedSlateView {
         let mut var_purpose = <Option<crate::api::types::SlatePurpose>>::sse_decode(deserializer);
         let mut var_reference = <Option<String>>::sse_decode(deserializer);
         let mut var_expires = <Option<u64>>::sse_decode(deserializer);
+        let mut var_messages = <Vec<crate::api::types::SlateMessage>>::sse_decode(deserializer);
         return crate::api::types::SealedSlateView {
             contact_id: var_contactId,
             stage: var_stage,
@@ -10450,6 +10453,7 @@ impl SseDecode for crate::api::types::SealedSlateView {
             purpose: var_purpose,
             reference: var_reference,
             expires: var_expires,
+            messages: var_messages,
         };
     }
 }
@@ -11059,6 +11063,7 @@ impl SseDecode for crate::api::types::WalletEvent {
         let mut var_purpose = <Option<crate::api::types::SlatePurpose>>::sse_decode(deserializer);
         let mut var_reference = <Option<String>>::sse_decode(deserializer);
         let mut var_expires = <Option<u64>>::sse_decode(deserializer);
+        let mut var_message = <Option<String>>::sse_decode(deserializer);
         return crate::api::types::WalletEvent {
             kind: var_kind,
             session: var_session,
@@ -11084,6 +11089,7 @@ impl SseDecode for crate::api::types::WalletEvent {
             purpose: var_purpose,
             reference: var_reference,
             expires: var_expires,
+            message: var_message,
         };
     }
 }
@@ -12013,6 +12019,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ContactInvoiceView {
             self.purpose.into_into_dart().into_dart(),
             self.reference.into_into_dart().into_dart(),
             self.expires.into_into_dart().into_dart(),
+            self.message.into_into_dart().into_dart(),
             self.received_at_ms.into_into_dart().into_dart(),
             self.same_amount.into_into_dart().into_dart(),
         ]
@@ -13341,6 +13348,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::SealedSlateView {
             self.purpose.into_into_dart().into_dart(),
             self.reference.into_into_dart().into_dart(),
             self.expires.into_into_dart().into_dart(),
+            self.messages.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -14076,6 +14084,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEvent {
             self.purpose.into_into_dart().into_dart(),
             self.reference.into_into_dart().into_dart(),
             self.expires.into_into_dart().into_dart(),
+            self.message.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -14482,6 +14491,7 @@ impl SseEncode for crate::api::types::ContactInvoiceView {
         <Option<crate::api::types::SlatePurpose>>::sse_encode(self.purpose, serializer);
         <Option<String>>::sse_encode(self.reference, serializer);
         <Option<u64>>::sse_encode(self.expires, serializer);
+        <Option<String>>::sse_encode(self.message, serializer);
         <i64>::sse_encode(self.received_at_ms, serializer);
         <Vec<String>>::sse_encode(self.same_amount, serializer);
     }
@@ -15652,6 +15662,7 @@ impl SseEncode for crate::api::types::SealedSlateView {
         <Option<crate::api::types::SlatePurpose>>::sse_encode(self.purpose, serializer);
         <Option<String>>::sse_encode(self.reference, serializer);
         <Option<u64>>::sse_encode(self.expires, serializer);
+        <Vec<crate::api::types::SlateMessage>>::sse_encode(self.messages, serializer);
     }
 }
 
@@ -16223,6 +16234,7 @@ impl SseEncode for crate::api::types::WalletEvent {
         <Option<crate::api::types::SlatePurpose>>::sse_encode(self.purpose, serializer);
         <Option<String>>::sse_encode(self.reference, serializer);
         <Option<u64>>::sse_encode(self.expires, serializer);
+        <Option<String>>::sse_encode(self.message, serializer);
     }
 }
 

@@ -400,7 +400,7 @@ fn messages(
     Ok(Vec::new())
 }
 
-fn verified_messages(slate: &Slate) -> Vec<SlateMessage> {
+pub(crate) fn verified_messages(slate: &Slate) -> Vec<SlateMessage> {
     slate
         .participants()
         .filter_map(|(role, participant)| {

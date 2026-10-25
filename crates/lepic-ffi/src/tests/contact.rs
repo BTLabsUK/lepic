@@ -16,7 +16,7 @@ use crate::api::testing::MockChain;
 use crate::api::types::{
     Chain, CollectTrigger, ContactKind, ContactRelayMode, FailedPairing, InviteExpiry,
     KeysDecision, OutboxState, PairingFailureReason, PairingLinkOutcome, PairingState, SasDecision,
-    SealState, SlatePurpose, SlateStage, WalletConfig,
+    SealState, SlateMessage, SlatePurpose, SlateRole, SlateStage, WalletConfig,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -596,7 +596,10 @@ async fn a_sealed_payment_is_opened_received_and_finalized_by_paste() {
     let ben = world.wallet().await;
     let (anna_side, ben_side) = pair(&anna, &ben).await;
 
-    let slate = anna.create_send_slate(EPIC, 1, None, None).await.unwrap();
+    let slate = anna
+        .create_send_slate(EPIC, 1, Some("lunch".to_owned()), None)
+        .await
+        .unwrap();
     let sealed = anna
         .contact_seal_slate(anna_side.clone(), slate.tx_id, None)
         .await
@@ -621,6 +624,13 @@ async fn a_sealed_payment_is_opened_received_and_finalized_by_paste() {
     assert_eq!(opened.slate_id, slate.slate_id);
     assert_eq!(opened.amount, EPIC);
     assert_eq!(opened.purpose, Some(SlatePurpose::Payment));
+    assert_eq!(
+        opened.messages,
+        vec![SlateMessage {
+            role: SlateRole::Sender,
+            text: "lunch".to_owned(),
+        }]
+    );
     assert_eq!(
         kind(ben.sealed_finalize(sealed.clone()).await),
         WalletErrorKind::InvalidSlate
@@ -713,7 +723,7 @@ async fn a_contacts_invoice_waits_and_is_declined_or_paid() {
         anna.contact_issue_invoice(
             anna_side.clone(),
             2 * EPIC,
-            None,
+            Some("deposit".to_owned()),
             SlatePurpose::DepositRequest,
             Some(reference.to_owned()),
             None,
@@ -731,6 +741,7 @@ async fn a_contacts_invoice_waits_and_is_declined_or_paid() {
     assert_eq!(invoices[0].contact_id, ben_side);
     assert_eq!(invoices[0].purpose, Some(SlatePurpose::DepositRequest));
     assert_eq!(invoices[0].reference.as_deref(), Some("order-1"));
+    assert_eq!(invoices[0].message.as_deref(), Some("deposit"));
 
     ben.contact_decline_invoice(first.slate_id.clone())
         .await

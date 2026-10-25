@@ -1278,3 +1278,82 @@ fn a_contact_cannot_take_over_another_payment_by_its_slate_id() {
         None
     );
 }
+
+/// The payer sees the issuer's message on a contact invoice only when its signature verifies,
+/// made safe to display.
+#[test]
+fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
+    let world = World::new();
+    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let mut payer_events = world.payer.wallet.subscribe();
+    let signed = world
+        .block_on(world.issuer.wallet.contact_issue_invoice(
+            &relays(&world.issuer),
+            shop_side,
+            InvoiceRequest {
+                account: ACCOUNT,
+                amount: Amount::new(AMOUNT),
+                message: Some("deposit\u{202E} 17".to_owned()),
+            },
+            InvoiceDetails {
+                purpose: Purpose::DepositRequest,
+                reference: None,
+                expires: None,
+            },
+        ))
+        .unwrap();
+
+    // An I1 whose message text changed after it was signed, sealed by the contact itself.
+    let file = tempfile::tempdir().unwrap().keep().join("i1.tx");
+    let unsigned = world
+        .block_on(world.issuer.wallet.issue_invoice(
+            InvoiceRequest {
+                account: ACCOUNT,
+                amount: Amount::new(AMOUNT),
+                message: Some("refund 9".to_owned()),
+            },
+            Delivery::Export {
+                transport: lepic_transport::file::FILE,
+                to: lepic_transport::transport::Location::File(file.clone()),
+            },
+        ))
+        .unwrap();
+    let tampered = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace("refund 9", "refund 8");
+    post_signed(
+        &world,
+        &world.issuer,
+        shop_side,
+        &Content {
+            purpose: Some(Purpose::Request),
+            ..Content::new(MessageType::Slate, tampered.into_bytes())
+        },
+    );
+    world.collect(&world.payer);
+
+    let parked = world
+        .block_on(world.payer.wallet.contact_invoices())
+        .unwrap();
+    assert_eq!(parked.len(), 2);
+    let message_of = |slate_id| {
+        parked
+            .iter()
+            .find(|invoice| invoice.slate_id == slate_id)
+            .unwrap()
+            .message
+            .clone()
+    };
+    assert_eq!(message_of(signed.slate_id).as_deref(), Some("deposit 17"));
+    assert_eq!(message_of(unsigned.slate_id), None);
+    assert!(parked.iter().all(|invoice| invoice.contact_id == ben_side));
+    let announced: Vec<_> = events(&mut payer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::InvoiceFromContact(invoice) => Some((invoice.slate_id, invoice.message)),
+            _ => None,
+        })
+        .collect();
+    assert!(announced.contains(&(signed.slate_id, Some("deposit 17".to_owned()))));
+    assert!(announced.contains(&(unsigned.slate_id, None)));
+}

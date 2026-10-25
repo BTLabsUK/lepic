@@ -1724,6 +1724,7 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             purpose: invoice.purpose.map(contact::slate_purpose),
             reference: invoice.reference.clone(),
             expires: invoice.expires,
+            message: invoice.message.clone(),
             ..WalletEvent::of(WalletEventKind::InvoiceFromContact)
         },
         Event::WithdrawalFromContact(slate) => {

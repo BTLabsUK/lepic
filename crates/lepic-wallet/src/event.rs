@@ -139,6 +139,8 @@ pub struct ContactInvoiceEvent {
     pub reference: Option<String>,
     /// Unix seconds; advisory.
     pub expires: Option<u64>,
+    /// The issuer's message, only when its signature verifies, made safe to display.
+    pub message: Option<String>,
 }
 
 /// A slate from a contact that the wallet received.

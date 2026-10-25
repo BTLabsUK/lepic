@@ -49,6 +49,8 @@ pub struct SealedSlate {
     pub reference: Option<String>,
     /// When the sender stops honouring the slate, in unix seconds; advisory.
     pub expires: Option<u64>,
+    /// The slate's messages whose signatures verify, as transaction details show them.
+    pub messages: Vec<crate::details::SlateMessage>,
 }
 
 /// How an answer goes back on the channel its slate came by.
@@ -369,6 +371,7 @@ where
                 .reference
                 .map(|reference| reference.as_str().to_owned()),
             expires: content.expires,
+            messages: crate::details::verified_messages(&slate),
         })
     }
 

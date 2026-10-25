@@ -23,8 +23,8 @@ use crate::api::types::{
     InvitePreview, IssuedInvoice, KeysDecision, OutboxEntryView, OutboxReport, OutboxState,
     PaidInvoice, PairingAnswer, PairingCard, PairingFailureReason, PairingInvite,
     PairingLinkOutcome, PairingLinkResult, PairingState, PendingPairingView, SasDecision, SasEntry,
-    SealState, SealedAnswer, SealedSlateView, SendOptions, SlatePurpose, SlateStage, WalletEvent,
-    WalletEventKind,
+    SealState, SealedAnswer, SealedSlateView, SendOptions, SlateMessage, SlatePurpose, SlateStage,
+    WalletEvent, WalletEventKind,
 };
 
 /// The longest sealed text taken from the app: a slate with its envelope and armor fits many
@@ -635,6 +635,14 @@ impl Session {
             purpose: sealed.purpose.map(slate_purpose),
             reference: sealed.reference,
             expires: sealed.expires,
+            messages: sealed
+                .messages
+                .iter()
+                .map(|message| SlateMessage {
+                    role: message.role.into(),
+                    text: message.text.clone(),
+                })
+                .collect(),
         })
     }
 
@@ -760,6 +768,7 @@ impl Session {
                 purpose: invoice.purpose.map(slate_purpose),
                 reference: invoice.reference,
                 expires: invoice.expires,
+                message: invoice.message,
                 received_at_ms: ms(invoice.received_at),
                 same_amount: invoice
                     .same_amount
@@ -932,12 +941,14 @@ mod tests {
             purpose: Some(Purpose::DepositRequest),
             reference: Some("order-1".to_owned()),
             expires: Some(99),
+            message: Some("for order 1".to_owned()),
         }));
         assert_eq!(invoice.kind, WalletEventKind::InvoiceFromContact);
         assert_eq!(invoice.amount, Some(5));
         assert_eq!(invoice.purpose, Some(SlatePurpose::DepositRequest));
         assert_eq!(invoice.reference.as_deref(), Some("order-1"));
         assert_eq!(invoice.expires, Some(99));
+        assert_eq!(invoice.message.as_deref(), Some("for order 1"));
 
         let slate = ContactSlateEvent {
             contact_id,
