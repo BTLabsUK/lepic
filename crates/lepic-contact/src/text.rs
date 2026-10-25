@@ -53,8 +53,10 @@ fn is_format(c: char) -> bool {
         .is_ok()
 }
 
+/// Control and format characters, and the line and paragraph separators (categories Zl and Zp),
+/// which break a name over lines when it is shown.
 fn is_hidden(c: char) -> bool {
-    c.is_control() || is_format(c)
+    c.is_control() || is_format(c) || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
 fn displayable(text: &str, max: usize) -> Result<(), TextError> {
@@ -190,6 +192,8 @@ mod tests {
             ("a\u{FEFF}", 1),
             ("a\tb", 1),
             ("a\nb", 1),
+            ("a\u{2028}b", 1),
+            ("\u{2029}ab", 0),
         ] {
             assert_eq!(
                 ContactName::new(name),

@@ -12,7 +12,7 @@ use super::{bytes, hex};
 
 pub(crate) const KIT_GENERATOR: &str = "epic-pairing-kit";
 pub(crate) const KIT_VERSION: &str = "0.3.0";
-pub(crate) const KIT_COMMIT: &str = "1b3a07f170f2951c90a46a4c9938e66d184f411f";
+pub(crate) const KIT_COMMIT: &str = "8e79dc1262691c95a08ede386ca96efd28b803c4";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
