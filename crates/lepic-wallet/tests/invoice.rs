@@ -17,7 +17,7 @@ use invoice_harness::{ACCOUNT, FUNDING, ISSUER_MNEMONIC, PAYER_MNEMONIC, Party};
 use lepic_crypto::SecretKey;
 use lepic_keychain::Identifier;
 use lepic_node::mock::{ChainOutput, ChainState, MockFailure, MockNode};
-use lepic_node::{LocatedKernel, NodeVersion, Tip};
+use lepic_node::{LocatedKernel, NodeVersion, Propagation, Tip};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::params::Network;
@@ -36,9 +36,11 @@ use lepic_store::{
 use lepic_transport::file::FilePolicy;
 use lepic_transport::policy::FormatPolicy;
 use lepic_wallet::event::{Balance, TransactionState};
+use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::invoice::{
-    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, INVOICE_TTL_BLOCKS, InvoiceError,
-    InvoiceField, MAX_INVOICE_TTL_LEAD_BLOCKS, PayRequest, build_i1, build_i2, build_i3,
+    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, INVOICE_TTL_BLOCKS,
+    INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, InvoiceField, MAX_INVOICE_TTL_LEAD_BLOCKS, PayRequest,
+    build_i1, build_i2, build_i3,
 };
 use lepic_wallet::refresh::BalanceCategory;
 use lepic_wallet::selection::SelectionStrategy;
@@ -49,6 +51,10 @@ use uuid::Uuid;
 
 const AMOUNT: u64 = 300_000_000;
 const TIP: u64 = 4;
+
+/// A TTL two blocks longer than the issuer's margin: the issuer finalizes a payment of it at
+/// `TIP + 1` and refuses it from `TIP + 2`.
+const MARGIN_TTL: u64 = INVOICE_TTL_MARGIN_BLOCKS + 2;
 
 fn node() -> MockNode {
     MockNode::from_chain(ChainState::new(
@@ -402,13 +408,13 @@ fn a_payers_ttl_reaches_the_issuer_over_the_file_method() {
     let flow = flow(
         None,
         PayRequest {
-            ttl_blocks: Some(2),
+            ttl_blocks: Some(MARGIN_TTL),
             ..request()
         },
     );
     // The payer raised the version 2 header of the I1 to 3, so the issuer reads the TTL.
     let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
-    assert_eq!(i2["ttl_cutoff_height"], "6");
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + MARGIN_TTL).to_string());
     assert_eq!(i2["version_info"]["version"], 3);
     assert_eq!(i2["version_info"]["orig_version"], 3);
     flow.node
@@ -418,24 +424,24 @@ fn a_payers_ttl_reaches_the_issuer_over_the_file_method() {
 
     assert_eq!(
         finalized.slate.ttl_cutoff_height(),
-        Some(Height::new(TIP + 2))
+        Some(Height::new(TIP + MARGIN_TTL))
     );
     assert_eq!(flow.state(), TxState::Posted);
 }
 
 #[test]
 fn an_invoice_issued_with_a_ttl_carries_its_cutoff_to_the_payers_i2() {
-    let flow = flow_issued_with_ttl(None, Some(10), request());
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
 
     let i1: Value = serde_json::from_str(flow.i1.as_text().unwrap()).unwrap();
-    assert_eq!(i1["ttl_cutoff_height"], (TIP + 10).to_string());
+    assert_eq!(i1["ttl_cutoff_height"], (TIP + MARGIN_TTL).to_string());
     // A payer that sets no TTL of its own keeps the issuer's.
     let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
-    assert_eq!(i2["ttl_cutoff_height"], (TIP + 10).to_string());
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + MARGIN_TTL).to_string());
     let finalized = flow.issuer.finalize(&flow.i2).unwrap();
     assert_eq!(
         finalized.slate.ttl_cutoff_height(),
-        Some(Height::new(TIP + 10))
+        Some(Height::new(TIP + MARGIN_TTL))
     );
 }
 
@@ -470,8 +476,8 @@ fn a_payers_earlier_ttl_is_kept() {
 }
 
 #[test]
-fn finalizing_refuses_a_payment_past_the_issued_cutoff_when_the_i2_drops_it() {
-    let flow = flow_issued_with_ttl(None, Some(2), request());
+fn finalizing_refuses_a_payment_from_the_margin_before_the_issued_cutoff_when_the_i2_drops_it() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
     // Read under a version 2 header, the I2 loses its TTL, as `epic-wallet`'s file method
     // loses it.
     let i2 = tampered(&flow.i2, |slate| {
@@ -492,8 +498,8 @@ fn finalizing_refuses_a_payment_past_the_issued_cutoff_when_the_i2_drops_it() {
 }
 
 #[test]
-fn finalizing_refuses_a_payment_past_the_issued_cutoff_when_the_i2_moves_it_later() {
-    let flow = flow_issued_with_ttl(None, Some(2), request());
+fn finalizing_refuses_a_payment_from_the_margin_before_the_issued_cutoff_when_the_i2_moves_it() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
     let i2 = tampered(&flow.i2, |slate| {
         slate["ttl_cutoff_height"] = Value::from((TIP + 100).to_string());
     });
@@ -510,12 +516,109 @@ fn finalizing_refuses_a_payment_past_the_issued_cutoff_when_the_i2_moves_it_late
 }
 
 #[test]
-fn finalizing_takes_a_payment_one_block_before_the_issued_cutoff() {
-    let flow = flow_issued_with_ttl(None, Some(2), request());
+fn finalizing_refuses_a_payment_from_the_margin_before_the_issued_cutoff() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    let cutoff = TIP + MARGIN_TTL;
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS);
+    });
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    // The error names the height the issuer stopped at, the margin before the cutoff.
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff: stopped, tip }
+            if stopped == Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS) && tip == stopped),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_refuses_a_payment_one_block_before_the_issued_cutoff() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
     flow.node
-        .update_chain(|chain| chain.tip.height = Height::new(TIP + 1));
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + MARGIN_TTL - 1));
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(matches!(error, InvoiceError::Expired { .. }), "{error:?}");
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_takes_a_payment_one_block_before_the_margin_before_the_issued_cutoff() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    let cutoff = TIP + MARGIN_TTL;
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS - 1);
+    });
 
     flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
+/// A flow whose invoice was issued with [`MARGIN_TTL`] and finalized at `TIP`, where the node
+/// refused the post.
+fn finalized_not_posted() -> Flow {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+    assert!(matches!(error, InvoiceError::NotPosted { .. }), "{error:?}");
+    assert_eq!(flow.state(), TxState::Finalized);
+    flow
+}
+
+#[test]
+fn a_failed_post_is_retried_until_the_cutoff_inside_the_margin() {
+    let flow = finalized_not_posted();
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + MARGIN_TTL - 1));
+
+    flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+    assert_eq!(flow.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn a_failed_post_is_not_retried_from_the_cutoff() {
+    let flow = finalized_not_posted();
+    let cutoff = Height::new(TIP + MARGIN_TTL);
+    flow.node.update_chain(|chain| chain.tip.height = cutoff);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff: at, tip } if at == cutoff && tip == cutoff),
+        "{error:?}"
+    );
+    let error = flow
+        .issuer
+        .block_on(flow.issuer.wallet.post(flow.tx_id, Propagation::Stem))
+        .unwrap_err();
+    assert!(
+        matches!(error, FinalizeError::Expired { cutoff: at, .. } if at == cutoff),
+        "{error:?}"
+    );
+
+    assert_eq!(flow.state(), TxState::Finalized);
+    assert!(flow.node.pushed_transactions().is_empty());
+}
+
+#[test]
+fn a_failed_post_of_an_invoice_issued_without_a_ttl_is_retried_late() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    flow.issuer.finalize(&flow.i2).unwrap_err();
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + INVOICE_TTL_BLOCKS));
+
+    flow.issuer
+        .block_on(flow.issuer.wallet.post(flow.tx_id, Propagation::Stem))
+        .unwrap();
 
     assert_eq!(flow.state(), TxState::Posted);
 }
@@ -923,11 +1026,11 @@ fn finalizing_refuses_a_payer_message_whose_signature_does_not_verify() {
 }
 
 #[test]
-fn finalizing_refuses_an_i2_past_its_ttl() {
+fn finalizing_refuses_an_i2_from_the_margin_before_the_payers_cutoff() {
     let flow = flow(
         None,
         PayRequest {
-            ttl_blocks: Some(2),
+            ttl_blocks: Some(MARGIN_TTL),
             ..request()
         },
     );

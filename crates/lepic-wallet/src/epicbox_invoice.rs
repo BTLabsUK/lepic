@@ -34,7 +34,7 @@ use crate::cancel::pool_holds;
 use crate::error::WalletError;
 use crate::event::{BouncedInvoice, Event, ExpiredInvoice};
 use crate::inbox::{Hold, InboxError, relay_network};
-use crate::invoice::{InvoiceError, PaidInvoice, PayRequest};
+use crate::invoice::{InvoiceError, PaidInvoice, PayRequest, payer_release_height};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
 use crate::refresh::{final_kernel, last_confirmed, legacy_codecs, ttl_cutoff};
@@ -592,7 +592,8 @@ fn issued_unpaid_before(
 }
 
 /// Payments of invoices over Epicbox, still waiting for the issuer, whose TTL a confirmed
-/// height has reached, with the kernel to look up.
+/// height has passed by [`crate::invoice::INVOICE_TTL_MARGIN_BLOCKS`], with the kernel to look
+/// up.
 fn payments_past_ttl(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -607,7 +608,7 @@ fn payments_past_ttl(
                 continue;
             };
             let past = ttl_cutoff(repos, codecs, stored.id, slate_uuid)?
-                .is_some_and(|cutoff| confirmed >= cutoff);
+                .is_some_and(|cutoff| confirmed >= payer_release_height(cutoff));
             if !past {
                 continue;
             }

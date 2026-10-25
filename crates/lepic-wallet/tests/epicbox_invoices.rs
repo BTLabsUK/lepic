@@ -33,7 +33,7 @@ use lepic_wallet::details::TxFlow;
 use lepic_wallet::epicbox_invoice::{InvoiceExpiry, PeerInvoiceSupport};
 use lepic_wallet::event::BouncedInvoice;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
-use lepic_wallet::invoice::{InvoiceError, PayRequest};
+use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, PayRequest};
 use lepic_wallet::selection::SelectionOptions;
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
@@ -527,9 +527,20 @@ fn a_payment_past_its_ttl_is_offered_for_cancel_and_not_expired_by_refresh() {
             },
         ))
         .unwrap();
+    // It is offered from the issuer's margin past its cutoff, not before.
+    let offered_at = TIP + 2 + INVOICE_TTL_MARGIN_BLOCKS;
     world
         .node
-        .update_chain(|chain| chain.tip.height = Height::new(TIP + 3));
+        .update_chain(|chain| chain.tip.height = Height::new(offered_at - 1));
+    world.block_on(world.payer.wallet.refresh()).unwrap();
+    let sweep = world
+        .block_on(world.payer.wallet.sweep_invoices(InvoiceExpiry::default()))
+        .unwrap();
+    assert!(sweep.cancellable.is_empty(), "{sweep:?}");
+
+    world
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(offered_at));
     world.block_on(world.payer.wallet.refresh()).unwrap();
 
     let sweep = world

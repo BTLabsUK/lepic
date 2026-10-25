@@ -49,6 +49,7 @@ use uuid::Uuid;
 
 use crate::account;
 use crate::error::WalletError;
+use crate::invoice::earliest_cutoff;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::release::record_finalized;
 use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version};
@@ -695,12 +696,23 @@ fn postable(
         TxDirection::Incoming => SlateStage::Invoice3,
     };
     let finalized = stored_final(repos, base_fee, slate_id, stage)?.ok_or(not_postable)?;
-    // Only a send has a cutoff here; an invoice's payer may expect its issuer to post late.
+    // An invoice's cutoff is the earlier of its I3's and the one it was issued with; the payer
+    // of one without a TTL may expect its issuer to post late.
     let cutoff = match entry.direction {
         TxDirection::Outgoing => {
             effective_cutoff(repos, tx_id, finalized.slate.ttl_cutoff_height())?
         }
-        TxDirection::Incoming => None,
+        TxDirection::Incoming => {
+            let issued = repos
+                .slate(slate_id, SlateStage::Invoice1)?
+                .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
+                .map(|stored| decode_stored(base_fee, stored))
+                .transpose()?;
+            earliest_cutoff(
+                finalized.slate.ttl_cutoff_height(),
+                issued.and_then(|slate| slate.ttl_cutoff_height()),
+            )
+        }
     };
     Ok((finalized, cutoff))
 }
@@ -809,8 +821,9 @@ where
     /// with a cutoff, the earlier of its slate's TTL cutoff and the local cutoff of
     /// [`crate::send::SendRequest::local_ttl_blocks`], has the node's tip asked for, and is
     /// refused with [`FinalizeError::Expired`] once the tip reaches it, also when it was posted
-    /// before. A node whose pool already holds the transaction counts as having accepted it.
-    /// When the node refuses the push, the kernel is looked up; one already on chain gives
+    /// before. So is an invoice this wallet issued, at the earlier of its I3's TTL cutoff and
+    /// the one it was issued with. A node whose pool already holds the transaction counts as
+    /// having accepted it. When the node refuses the push, the kernel is looked up; one already on chain gives
     /// [`Posted::AlreadyOnChain`], and the next refresh confirms the transaction.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn post(

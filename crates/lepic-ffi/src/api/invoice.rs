@@ -22,8 +22,10 @@ impl EpicWallet {
     /// character boundary.
     ///
     /// The I1 carries a time to live of 1,440 blocks, a day, from the node's tip: a payer
-    /// refuses the invoice from then on, this wallet refuses to finalize a payment of it, and a
-    /// refresh expires it unpaid.
+    /// refuses the invoice from then on and a refresh here expires it unpaid. This wallet
+    /// refuses to finalize a payment of it from 10 blocks before then, and to retry a failed
+    /// post of one from then on, so a payer whose node runs ahead never releases a payment
+    /// this wallet posted.
     ///
     /// Fails with `InvalidArgument` for an amount of 0 and `NodeUnreachable` when the node's
     /// tip cannot be read; nothing is stored then.
@@ -70,8 +72,8 @@ impl EpicWallet {
     /// `InvoiceNotForThisChain` when the invoice was made for another network or at a wrong
     /// height, `InvoiceLockedAboveTip`, `NotEnoughFunds` and `NodeUnreachable`. Nothing is
     /// stored then. A payment the issuer never finalizes, for example the second payment of one
-    /// request, expires once the chain reaches the invoice's time to live, and a refresh then
-    /// releases its inputs unless the node holds the transaction.
+    /// request, expires 10 blocks after the chain reaches the invoice's time to live, and a
+    /// refresh then releases its inputs unless the node holds the transaction.
     pub async fn pay_invoice_slate(
         &self,
         slate_json: String,

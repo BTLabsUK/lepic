@@ -28,7 +28,7 @@ use lepic_store::{
 };
 use lepic_wallet::WalletError;
 use lepic_wallet::chain::SLATE_LEAD_BLOCKS;
-use lepic_wallet::invoice::{InvoiceError, PayRequest};
+use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, PayRequest};
 use lepic_wallet::selection::SelectionStrategy;
 use serde_json::Value;
 use uuid::Uuid;
@@ -353,7 +353,35 @@ fn a_payment_stored_with_a_height_above_the_tip_can_be_cancelled() {
     assert_eq!(state.unwrap().state, TxState::Cancelled);
 }
 
-const TTL_BLOCKS: u64 = 10;
+/// Longer than the issuer's margin, so the issuer finalizes at `TIP`.
+const TTL_BLOCKS: u64 = 30;
+
+/// The height from which the payer releases a payment whose cutoff is `TIP + TTL_BLOCKS`.
+const RELEASE_AT: u64 = TIP + TTL_BLOCKS + INVOICE_TTL_MARGIN_BLOCKS;
+
+/// Puts `party`'s funding output on the node's chain at `mmr_index`, so a refresh finds it.
+fn fund_on_chain(node: &MockNode, party: &Party, mmr_index: u64) {
+    let output = funding(party);
+    node.update_chain(|chain| {
+        chain.outputs.push(ChainOutput {
+            commitment: output.id.commitment,
+            features: output.id.features,
+            proof: support::some_proof(),
+            height: Height::new(1),
+            mmr_index,
+            spent: false,
+        });
+    });
+}
+
+/// The payer's funding output, as stored.
+fn funding(party: &Party) -> OutputRecord {
+    party
+        .read(|repos| repos.outputs(ACCOUNT, None))
+        .into_iter()
+        .find(|output| output.amount.value() == FUNDING)
+        .unwrap()
+}
 
 /// The invoice paid with a TTL, and the I2 the issuer finalized and posted; the node records
 /// the post but neither pools nor mines it.
@@ -383,7 +411,7 @@ fn a_payment_past_its_ttl_is_not_expired_while_the_node_pool_holds_the_issuers_p
     let posted = invoice.posted();
     invoice.node.update_chain(|chain| {
         chain.pool.push(posted);
-        chain.tip.height = Height::new(TIP + TTL_BLOCKS);
+        chain.tip.height = Height::new(RELEASE_AT);
     });
 
     invoice
@@ -396,11 +424,11 @@ fn a_payment_past_its_ttl_is_not_expired_while_the_node_pool_holds_the_issuers_p
 }
 
 #[test]
-fn a_payment_expired_at_its_ttl_is_watched_and_restored_when_the_issuer_posts_later() {
+fn a_payment_expired_past_its_ttl_is_watched_and_restored_when_the_issuer_posts_later() {
     let (invoice, tx_id, change_before) = paid_with_ttl();
     invoice
         .node
-        .update_chain(|chain| chain.tip.height = Height::new(TIP + TTL_BLOCKS));
+        .update_chain(|chain| chain.tip.height = Height::new(RELEASE_AT));
 
     invoice
         .payer
@@ -410,7 +438,7 @@ fn a_payment_expired_at_its_ttl_is_watched_and_restored_when_the_issuer_posts_la
     assert!(invoice.change().is_empty(), "the expiry drops the change");
 
     // The issuer's post reaches another node, which mines it.
-    invoice.mined_at(TIP + TTL_BLOCKS + 1);
+    invoice.mined_at(RELEASE_AT + 1);
     invoice
         .payer
         .block_on(invoice.payer.wallet.refresh())
@@ -421,7 +449,7 @@ fn a_payment_expired_at_its_ttl_is_watched_and_restored_when_the_issuer_posts_la
     assert_eq!(change.len(), 1, "{change:?}");
     assert_eq!(change[0].id, change_before[0].id);
     assert_eq!(change[0].status, OutputStatus::Unspent);
-    assert_eq!(change[0].height, Height::new(TIP + TTL_BLOCKS + 1));
+    assert_eq!(change[0].height, Height::new(RELEASE_AT + 1));
 }
 
 /// A second customer, paying the same request.
@@ -429,12 +457,14 @@ const OTHER_PAYER_MNEMONIC: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo 
     zoo zoo zoo zoo zoo zoo zoo zoo vote";
 
 #[test]
-fn a_second_payment_of_the_same_request_is_released_at_the_cutoff_the_request_was_issued_with() {
+fn a_second_payment_of_the_same_request_is_released_the_margin_past_the_cutoff_it_was_issued_with()
+{
     let invoice = Invoice::issued_with_ttl(Some(TTL_BLOCKS));
     let first = invoice.payer.pay(&invoice.i1, request()).unwrap().reply;
     let other = Party::new(OTHER_PAYER_MNEMONIC, &invoice.node);
     other.fund(0, FUNDING);
     other.set_next_child(1);
+    fund_on_chain(&invoice.node, &other, 20);
     let second = other.pay(&invoice.i1, request()).unwrap().reply;
     invoice.issuer.finalize(&first).unwrap();
     assert!(matches!(
@@ -454,22 +484,25 @@ fn a_second_payment_of_the_same_request_is_released_at_the_cutoff_the_request_wa
             .count()
     };
 
-    // One block before the cutoff the payment still waits with its change.
+    // One block before the margin past the cutoff ends, the payment still waits with its
+    // change and its input locked.
     invoice
         .node
-        .update_chain(|chain| chain.tip.height = Height::new(TIP + TTL_BLOCKS - 1));
+        .update_chain(|chain| chain.tip.height = Height::new(RELEASE_AT - 1));
     other.block_on(other.wallet.refresh()).unwrap();
     assert_eq!(second_payment().entry.state, TxState::Sent);
     assert_eq!(change(), 1);
+    assert_eq!(funding(&other).status, OutputStatus::Locked);
 
-    // At the cutoff the node holds no kernel of it, so it expires, which drops the change and
-    // releases the input.
+    // Then the node holds no kernel of it, so it expires, which drops the change and releases
+    // the input.
     invoice
         .node
-        .update_chain(|chain| chain.tip.height = Height::new(TIP + TTL_BLOCKS));
+        .update_chain(|chain| chain.tip.height = Height::new(RELEASE_AT));
     other.block_on(other.wallet.refresh()).unwrap();
     assert_eq!(second_payment().entry.state, TxState::Expired);
     assert_eq!(change(), 0);
+    assert_eq!(funding(&other).status, OutputStatus::Unspent);
 }
 
 #[test]
@@ -481,7 +514,7 @@ fn a_payment_of_a_request_issued_with_a_ttl_is_not_expired_while_the_node_pool_h
     let posted = invoice.posted();
     invoice.node.update_chain(|chain| {
         chain.pool.push(posted);
-        chain.tip.height = Height::new(TIP + TTL_BLOCKS);
+        chain.tip.height = Height::new(RELEASE_AT);
     });
 
     invoice
@@ -490,4 +523,88 @@ fn a_payment_of_a_request_issued_with_a_ttl_is_not_expired_while_the_node_pool_h
         .unwrap();
 
     assert_eq!(invoice.payment(), Some((tx_id, TxState::Sent)));
+}
+
+#[test]
+fn a_payment_the_issuer_posted_just_in_time_is_kept_past_the_cutoff_while_the_post_travels() {
+    let invoice = Invoice::issued_with_ttl(Some(TTL_BLOCKS));
+    fund_on_chain(&invoice.node, &invoice.payer, 20);
+    let i2 = invoice.payer.pay(&invoice.i1, request()).unwrap().reply;
+    let (tx_id, _) = invoice.payment().unwrap();
+    // The issuer's node is behind: it finalizes and posts at the last height it may.
+    let cutoff = TIP + TTL_BLOCKS;
+    invoice.node.update_chain(|chain| {
+        chain.tip.height = Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS - 1);
+    });
+    invoice.issuer.finalize(&i2).unwrap();
+
+    // The payer's node is past the cutoff and has the post in neither its pool nor its chain.
+    for tip in [cutoff, cutoff + 1, RELEASE_AT - 1] {
+        invoice
+            .node
+            .update_chain(|chain| chain.tip.height = Height::new(tip));
+        invoice
+            .payer
+            .block_on(invoice.payer.wallet.refresh())
+            .unwrap();
+        assert_eq!(invoice.payment(), Some((tx_id, TxState::Sent)), "at {tip}");
+        assert_eq!(
+            funding(&invoice.payer).status,
+            OutputStatus::Locked,
+            "at {tip}"
+        );
+    }
+
+    // The post reaches the payer's node and is mined inside the margin.
+    invoice.mined_at(RELEASE_AT);
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+    assert_eq!(invoice.payment(), Some((tx_id, TxState::Confirmed)));
+}
+
+#[test]
+fn a_payment_with_the_payers_earlier_ttl_is_released_the_margin_past_that_cutoff() {
+    let invoice = Invoice::issued_with_ttl(Some(10 * TTL_BLOCKS));
+    fund_on_chain(&invoice.node, &invoice.payer, 20);
+    let i2 = invoice
+        .payer
+        .pay(
+            &invoice.i1,
+            PayRequest {
+                ttl_blocks: Some(TTL_BLOCKS),
+                ..request()
+            },
+        )
+        .unwrap()
+        .reply;
+    let stored: Value = serde_json::from_str(i2.as_text().unwrap()).unwrap();
+    assert_eq!(
+        stored["ttl_cutoff_height"],
+        (TIP + TTL_BLOCKS).to_string(),
+        "the I2 carries the payer's cutoff"
+    );
+    let (tx_id, _) = invoice.payment().unwrap();
+
+    invoice
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(RELEASE_AT - 1));
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+    assert_eq!(invoice.payment(), Some((tx_id, TxState::Sent)));
+    assert_eq!(funding(&invoice.payer).status, OutputStatus::Locked);
+
+    invoice
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(RELEASE_AT));
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+    assert_eq!(invoice.payment(), Some((tx_id, TxState::Expired)));
+    assert!(invoice.change().is_empty());
+    assert_eq!(funding(&invoice.payer).status, OutputStatus::Unspent);
 }

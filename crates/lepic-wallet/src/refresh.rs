@@ -40,6 +40,7 @@ use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
 use crate::event::{Balance, Event, SlateId, SupersededReceive};
 use crate::finalize::kernel_excess;
+use crate::invoice::payer_release_height;
 use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::release::{
@@ -168,9 +169,11 @@ where
     /// locked ones it does not hold spent once a second request misses them too, confirms open
     /// transactions with no change output by their kernel, and expires transactions at or past
     /// their TTL cutoff, or a send at or past its local cutoff
-    /// ([`crate::send::SendRequest::local_ttl_blocks`]), releasing their inputs. A posted or finalized transaction is never
-    /// expired, since it may still be mined. Last, it looks up the kernel of each finalized or
-    /// posted send [`crate::release::RELEASE_AFTER_BLOCKS`] or more after it was finalized,
+    /// ([`crate::send::SendRequest::local_ttl_blocks`]), or an invoice payment
+    /// [`crate::invoice::INVOICE_TTL_MARGIN_BLOCKS`] past its cutoff, releasing their inputs. A
+    /// posted or finalized transaction is never expired, since it may still be mined. Last, it
+    /// looks up the kernel of each finalized or posted send
+    /// [`crate::release::RELEASE_AFTER_BLOCKS`] or more after it was finalized,
     /// counted at the highest confirmed tip: a kernel found confirms the send, a missing one
     /// makes it releasable (`Wallet::release`). Then it looks for each transaction that was
     /// released, cancelled or expired although its peer may still complete it: by its kernel
@@ -1014,7 +1017,8 @@ pub(crate) fn pending_kernel(
 }
 
 /// Open transactions that end at `tip`: those at or past their TTL cutoff, or a send's local
-/// cutoff ([`crate::send::SendRequest::local_ttl_blocks`]) when that is earlier, and a received
+/// cutoff ([`crate::send::SendRequest::local_ttl_blocks`]) when that is earlier, an invoice
+/// payment [`crate::invoice::INVOICE_TTL_MARGIN_BLOCKS`] past its cutoff, and a received
 /// payment with no TTL, answered with an S2, once [`UNFINALIZED_RECEIVE_BLOCKS`] have passed
 /// since a refresh first saw it. A finalized or posted transaction is left out, as upstream
 /// leaves out what it has finalized: its kernel may reach the chain whatever the TTL says. So
@@ -1041,6 +1045,9 @@ fn expiring(
         };
         let slate_ttl = ttl_cutoff(repos, codecs, stored.id, slate_id)?;
         let cutoff = match effective_cutoff(repos, stored.id, slate_ttl)? {
+            Some(cutoff) if invoice_payment(repos, &stored, slate_id)? => {
+                Some(payer_release_height(cutoff))
+            }
             Some(cutoff) => Some(cutoff),
             None => unfinalized_receive_cutoff(repos, codecs, &stored)?,
         };
@@ -1225,6 +1232,16 @@ fn expire_all(
         changes.extend(expire(repos, &stored, now)?);
     }
     Ok(changes)
+}
+
+/// Whether `stored` is this wallet's payment of an invoice: outgoing, answered with an I2.
+fn invoice_payment(
+    repos: &dyn Repositories,
+    stored: &StoredTransaction,
+    slate_id: Uuid,
+) -> Result<bool, StoreError> {
+    Ok(stored.entry.direction == TxDirection::Outgoing
+        && repos.slate(slate_id, SlateStage::Invoice2)?.is_some())
 }
 
 /// The TTL cutoff every stage of a slate carries, read from the first stage stored.

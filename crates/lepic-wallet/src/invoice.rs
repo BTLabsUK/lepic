@@ -84,6 +84,15 @@ pub const INVOICE_TTL_BLOCKS: u64 = 1_440;
 /// lock the payer's inputs in a payment that cannot complete here.
 pub const MAX_INVOICE_TTL_LEAD_BLOCKS: u64 = 2 * INVOICE_TTL_BLOCKS;
 
+/// Blocks before an invoice payment's TTL cutoff from which its issuer no longer finalizes it,
+/// and blocks after the cutoff before its payer releases the payment's inputs. Issuer and payer
+/// read their tips from different nodes, which may stand a few blocks apart: without the
+/// margin, a payment finalized and posted just below the cutoff by the issuer's node could be
+/// released by a payer whose node reached the cutoff before the transaction reached its pool,
+/// and the payer could spend the inputs again under the issuer's posted payment. As many
+/// blocks as a peer's slate height may lead this wallet's tip.
+pub const INVOICE_TTL_MARGIN_BLOCKS: u64 = crate::chain::SLATE_LEAD_BLOCKS;
+
 /// A slate field the payer may not change between I1 and I2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -404,7 +413,47 @@ pub(crate) fn check_messages(slate: &Slate) -> Result<(), InvoiceError> {
 
 /// Refuses a slate once the node's current tip reaches its cutoff.
 fn check_ttl(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
-    match slate.ttl_cutoff_height() {
+    check_cutoff(slate.ttl_cutoff_height(), tip)
+}
+
+/// Refuses once the node's current tip reaches `cutoff`.
+fn check_cutoff(cutoff: Option<Height>, tip: Height) -> Result<(), InvoiceError> {
+    match cutoff {
+        Some(cutoff) if tip >= cutoff => Err(InvoiceError::Expired { cutoff, tip }),
+        _ => Ok(()),
+    }
+}
+
+/// The height from which the issuer refuses to finalize a payment whose TTL cutoff is
+/// `cutoff`: [`INVOICE_TTL_MARGIN_BLOCKS`] before it.
+fn last_finalize_cutoff(cutoff: Height) -> Height {
+    cutoff
+        .checked_sub_blocks(INVOICE_TTL_MARGIN_BLOCKS)
+        .unwrap_or(Height::ZERO)
+}
+
+/// The height from which the payer releases an invoice payment whose TTL cutoff is `cutoff`:
+/// [`INVOICE_TTL_MARGIN_BLOCKS`] after it, so an issuer whose node is behind the payer's has
+/// posted by then whatever it finalized in time.
+pub(crate) fn payer_release_height(cutoff: Height) -> Height {
+    // A cutoff so high that the margin overflows is never reached either.
+    cutoff
+        .checked_add_blocks(INVOICE_TTL_MARGIN_BLOCKS)
+        .unwrap_or(cutoff)
+}
+
+/// The earlier of two TTL cutoffs, either of which may be missing.
+pub(crate) fn earliest_cutoff(first: Option<Height>, second: Option<Height>) -> Option<Height> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (first, second) => first.or(second),
+    }
+}
+
+/// Refuses to finalize a payment once the node's tip comes within
+/// [`INVOICE_TTL_MARGIN_BLOCKS`] of `cutoff`, reporting that height as the cutoff reached.
+fn check_finalize_ttl(cutoff: Option<Height>, tip: Height) -> Result<(), InvoiceError> {
+    match cutoff.map(last_finalize_cutoff) {
         Some(cutoff) if tip >= cutoff => Err(InvoiceError::Expired { cutoff, tip }),
         _ => Ok(()),
     }
@@ -722,7 +771,10 @@ fn finalized_from(i3: &Slate, i2: &Slate) -> bool {
 
 /// Finalizes `i2` against the stored I1 and issuer context in the caller's store transaction:
 /// stores I3, drops the context and moves the transaction to `finalized`. A transaction
-/// already finalized from the same I2 is returned as stored.
+/// already finalized from the same I2 is returned as stored, unless it is still to be posted
+/// and the tip has reached its TTL cutoff. That refusal comes at the cutoff, not
+/// [`INVOICE_TTL_MARGIN_BLOCKS`] after it where the payer releases, so the margin still covers
+/// an issuer's node behind the payer's.
 fn finalize_stored(
     repos: &mut dyn Repositories,
     env: &InvoiceEnvironment<'_>,
@@ -748,15 +800,24 @@ fn finalize_stored(
                 .transpose()?;
             return match stored {
                 // Returned as the first finalize returned it: with the wire origin of the I2.
-                Some(i3) if finalized_from(&i3, i2) => Ok(StoredI3 {
-                    tx_id,
-                    finalized: FinalizedSlate {
-                        transaction: final_transaction(&i3)?,
-                        slate: i3.with_origin(i2.origin().copied()),
-                    },
-                    change: None,
-                    state,
-                }),
+                Some(i3) if finalized_from(&i3, i2) => {
+                    if state == TxState::Finalized {
+                        let issued = env.decode_stored(issued)?;
+                        check_cutoff(
+                            earliest_cutoff(i3.ttl_cutoff_height(), issued.ttl_cutoff_height()),
+                            env.tip,
+                        )?;
+                    }
+                    Ok(StoredI3 {
+                        tx_id,
+                        finalized: FinalizedSlate {
+                            transaction: final_transaction(&i3)?,
+                            slate: i3.with_origin(i2.origin().copied()),
+                        },
+                        change: None,
+                        state,
+                    })
+                }
                 _ => Err(InvoiceError::AlreadyFinalized { slate_id, tx_id }),
             };
         }
@@ -764,11 +825,13 @@ fn finalize_stored(
             return Err(InvoiceError::NotFinalizable { tx_id, state });
         }
     }
-    check_ttl(i2, env.tip)?;
     // The payer may drop or move the cutoff in its I2: a version 2 header loses it, and
     // upstream's payer replaces it with its own. The one this wallet issued still holds.
     let issued = env.decode_stored(issued)?.with_origin(None);
-    check_ttl(&issued, env.tip)?;
+    check_finalize_ttl(
+        earliest_cutoff(i2.ttl_cutoff_height(), issued.ttl_cutoff_height()),
+        env.tip,
+    )?;
     let context = repos
         .context(slate_uuid, ISSUER_CONTEXT)?
         .ok_or(InvoiceError::MissingContext { slate_id })?;
@@ -1020,11 +1083,14 @@ where
     /// private context in one store transaction, then pushes the transaction to the node with
     /// `propagation`.
     ///
-    /// Asks the node for its tip, and refuses with [`InvoiceError::Expired`] once it reaches
-    /// the TTL cutoff the I2 carries or the one this wallet issued the I1 with. Finalizing an I2 a second time returns the stored result
-    /// and posts only if the first post did not succeed, which is how a failed post is retried;
-    /// another I2 under the same slate id fails with [`InvoiceError::AlreadyFinalized`]. Fails
-    /// with [`InvoiceError::NotPosted`] when the invoice was finalized and stored but the node
+    /// Asks the node for its tip, and refuses with [`InvoiceError::Expired`] once it comes
+    /// within [`INVOICE_TTL_MARGIN_BLOCKS`] of the earlier of the TTL cutoff the I2 carries and
+    /// the one this wallet issued the I1 with; the error reports that height as its cutoff.
+    /// Finalizing an I2 a second time returns the stored result and posts only if the first
+    /// post did not succeed, which is how a failed post is retried, and is refused with
+    /// [`InvoiceError::Expired`] once the tip reaches that cutoff itself; another I2 under the
+    /// same slate id fails with [`InvoiceError::AlreadyFinalized`]. Fails with
+    /// [`InvoiceError::NotPosted`] when the invoice was finalized and stored but the node
     /// refused or could not be reached and does not hold its kernel. A node whose pool already
     /// holds the transaction, or whose chain holds its kernel, counts as having accepted it.
     /// Every other failure stores nothing.
