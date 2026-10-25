@@ -3,6 +3,8 @@
 
 use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, ContactOutboxId, ContactOutboxState, ContactState, SealMode, TxId};
+use lepic_transport::file::FILE;
+use lepic_transport::transport::Location;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::contact::{
     AcceptRequest, CardRequest, CollectTrigger as EngineTrigger, ContactKind as EngineKind,
@@ -13,6 +15,7 @@ use lepic_wallet::contact::{
 };
 use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
+use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{Slate, Stage, WireSlate};
 use tracing::{info, warn};
 
@@ -640,15 +643,28 @@ impl Session {
         let relays = self.contact_relays(mode)?;
         self.engine.contact_check_mailbox_send(id).await?;
         let scratch = ScratchFile::new(&self.data_dir)?;
-        let sent = self
-            .send_file(
-                amount,
-                minimum_confirmations,
-                scratch.path.clone(),
-                message,
-                options,
+        let sent = match self
+            .engine
+            .send(
+                Self::send_request_with(amount, minimum_confirmations, message, options)?,
+                Delivery::Export {
+                    transport: FILE,
+                    to: Location::File(scratch.path.clone()),
+                },
             )
-            .await?;
+            .await
+        {
+            Ok(sent) => super::sent_tx(&sent),
+            // Stored and locked, but the scratch file was not written: nothing reaches the
+            // contact, so the send is given up rather than left holding its inputs.
+            Err(error @ SendError::Undelivered { tx_id, .. }) => {
+                if let Err(cancel) = self.engine.cancel(tx_id).await {
+                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not written nor cancelled");
+                }
+                return Err(error.into());
+            }
+            Err(error) => return Err(error.into()),
+        };
         let tx_id = TxId(sent.tx_id);
         if let Err(error) = self
             .engine

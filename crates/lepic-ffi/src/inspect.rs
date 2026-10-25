@@ -38,13 +38,13 @@ fn slate_info(slate: &Slate) -> Result<SlateInfo, WalletError> {
         .and_then(WireOrigin::legacy_header)
         .ok_or_else(|| invalid_slate("slate carries no version"))?
         .version;
-    let messages = slate
-        .participants()
-        .filter_map(|(role, participant)| {
-            participant.message.as_ref().map(|message| SlateMessage {
-                role: role.into(),
-                text: message.text().to_owned(),
-            })
+    // Only messages whose signature verifies, made safe to display: the text is the other
+    // party's and the app shows it before anything is signed.
+    let messages = lepic_wallet::details::verified_messages(slate)
+        .into_iter()
+        .map(|message| SlateMessage {
+            role: message.role.into(),
+            text: message.text,
         })
         .collect();
     Ok(SlateInfo {

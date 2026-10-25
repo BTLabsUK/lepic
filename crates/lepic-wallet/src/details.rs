@@ -400,7 +400,9 @@ fn messages(
     Ok(Vec::new())
 }
 
-pub(crate) fn verified_messages(slate: &Slate) -> Vec<SlateMessage> {
+/// The messages of `slate` whose signatures verify, in the order the parties joined, each made
+/// safe to display by [`display_message`].
+pub fn verified_messages(slate: &Slate) -> Vec<SlateMessage> {
     slate
         .participants()
         .filter_map(|(role, participant)| {
