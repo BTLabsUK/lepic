@@ -36,7 +36,7 @@ pub(crate) use keys::reply_public_key;
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{ContactKind, Purpose, Refusal, SasSymbol};
 pub use lepic_store::PairingRole;
-pub use manage::PendingPairingView;
+pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, PendingPairingView};
 pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
 pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
@@ -215,6 +215,9 @@ pub enum ContactError {
     Invoice(#[source] crate::invoice::InvoiceError),
     #[error("slate was not finalized")]
     Finalize(#[source] crate::finalize::FinalizeError),
+    /// The text is larger than this call reads.
+    #[error("text is larger than {max} bytes")]
+    TooLarge { max: usize },
     /// A card, invite or envelope this wallet stored or made itself could not be read: damaged
     /// data, not the user's input.
     #[error("data this wallet stored could not be read")]

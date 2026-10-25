@@ -46,6 +46,12 @@ pub(crate) fn view(
     }
 }
 
+/// The longest id of an app's address-book contact a pairing is attached to.
+pub const MAX_APP_CONTACT_LEN: usize = 256;
+
+/// The largest contact backup document read: 10,000 contacts with room to spare.
+pub const MAX_BACKUP_LEN: usize = 32 * 1024 * 1024;
+
 /// A pairing still in progress, as the host lists it. Holds no key and no secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingPairingView {
@@ -231,12 +237,17 @@ where
         Ok(removed)
     }
 
-    /// Sets the user's own name for a contact. Fails with [`ContactError::UnknownContact`].
+    /// Sets the user's own name for a contact; an empty label clears it. A label follows the
+    /// rule of card names: at most 48 bytes, no control or hidden formatting characters.
+    /// Fails with [`ContactError::Name`] for another label and [`ContactError::UnknownContact`].
     pub async fn contact_set_label(
         &self,
         contact_id: ContactId,
         label: String,
     ) -> Result<(), ContactError> {
+        if !label.is_empty() {
+            lepic_contact::ContactName::new(&label).map_err(ContactError::Name)?;
+        }
         self.update_contact(contact_id, move |record| {
             record.label = label;
             Ok(())
@@ -285,12 +296,27 @@ where
     }
 
     /// Attaches a pairing to the app's address-book contact `app_contact`, an id the host
-    /// chooses, or detaches it with `None`. Fails with [`ContactError::UnknownContact`].
+    /// chooses of at most [`MAX_APP_CONTACT_LEN`] bytes with no control characters, or
+    /// detaches it with `None`. Fails with [`ContactError::Name`] for another id and
+    /// [`ContactError::UnknownContact`].
     pub async fn contact_attach(
         &self,
         contact_id: ContactId,
         app_contact: Option<String>,
     ) -> Result<(), ContactError> {
+        if let Some(id) = &app_contact {
+            if id.is_empty() || id.len() > MAX_APP_CONTACT_LEN {
+                return Err(ContactError::Name(lepic_contact::TextError::Length {
+                    found: id.len(),
+                    max: MAX_APP_CONTACT_LEN,
+                }));
+            }
+            if let Some(position) = id.chars().position(char::is_control) {
+                return Err(ContactError::Name(
+                    lepic_contact::TextError::HiddenCharacter { position },
+                ));
+            }
+        }
         self.update_contact(contact_id, move |record| {
             record.app_contact = app_contact;
             Ok(())
@@ -335,13 +361,19 @@ where
     /// possibly living on another device too, and raises the slot counters to the backup's.
     /// Records the store holds already are kept as they are.
     ///
-    /// Fails with a store error for a document this build cannot read; nothing is imported then.
+    /// Fails with [`ContactError::TooLarge`] for a document over [`MAX_BACKUP_LEN`] bytes, and
+    /// with a store error for a document this build cannot read; nothing is imported then.
     #[cfg(feature = "sqlite")]
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn contacts_import(
         &self,
         document: String,
     ) -> Result<lepic_store::ImportSummary, ContactError> {
+        if document.len() > MAX_BACKUP_LEN {
+            return Err(ContactError::TooLarge {
+                max: MAX_BACKUP_LEN,
+            });
+        }
         let session = self.session()?;
         let network = self.config().network;
         let summary = self

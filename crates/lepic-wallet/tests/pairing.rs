@@ -2060,3 +2060,38 @@ fn an_ended_pairing_keeps_no_confirm() {
     );
     assert_eq!(world.issuer.read(|repos| repos.setting(&confirm)), None);
 }
+
+/// R3-04: a label follows the rule of card names, and an address-book id is bounded.
+#[test]
+fn labels_and_address_book_ids_are_checked() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    let wallet = &world.issuer.wallet;
+    for bad in [
+        "Ben\u{202E}gnp.exe".to_owned(),
+        "Ben\nBen".to_owned(),
+        "x".repeat(49),
+    ] {
+        assert!(matches!(
+            world.block_on(wallet.contact_set_label(anna_side, bad)),
+            Err(ContactError::Name(_))
+        ));
+    }
+    world
+        .block_on(wallet.contact_set_label(anna_side, "Ben".to_owned()))
+        .unwrap();
+    world
+        .block_on(wallet.contact_set_label(anna_side, String::new()))
+        .unwrap();
+    assert!(matches!(
+        world.block_on(wallet.contact_attach(anna_side, Some("a\u{7}b".to_owned()))),
+        Err(ContactError::Name(_))
+    ));
+    assert!(matches!(
+        world.block_on(wallet.contact_attach(anna_side, Some("x".repeat(257)))),
+        Err(ContactError::Name(_))
+    ));
+    world
+        .block_on(wallet.contact_attach(anna_side, Some("contact-7".to_owned())))
+        .unwrap();
+}

@@ -301,7 +301,8 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::Name(_)
         | ContactError::RelayAddress
         | ContactError::WordsUnavailable
-        | ContactError::Words(_) => ErrorKind::Usage,
+        | ContactError::Words(_)
+        | ContactError::TooLarge { .. } => ErrorKind::Usage,
         ContactError::UnknownContact
         | ContactError::UnknownPairing
         | ContactError::UnknownTransaction
