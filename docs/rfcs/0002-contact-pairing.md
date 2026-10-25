@@ -395,9 +395,12 @@ and whose card verifies:
    signed by A: type `04`, body `nA (16) || cardA || 01` (accepted). A manual-mode A shows it as
    `epiccash://pair-confirm/1/<base64url>` instead. `cardA` is the exact card bytes A committed
    to in the invite, kept with the pending pairing for that purpose.
-3. A deletes `code` and `nA` from the pending pairing and keeps `invite_id` and the invite's
-   slot until the invite would have expired. A later reply (hint `invite_id`) is opened only far
-   enough to read its card and answered with status 02.
+3. A deletes `nA` from the pending pairing, so no second reply can pair, and keeps `code` (for the
+   reply mailbox), `invite_id` and the invite's slot until the invite would have expired. A later
+   reply (hint `invite_id`) is opened only far enough to read its card and answered with status
+   02; an invite answers at most 3 refusals. All checks on a reply (code, expiry, used, a card A
+   already holds or its own) and storing the record happen in one store transaction before any
+   confirm leaves.
 
 A reply that cannot be accepted (status 02 invite already used, 03 expired, 04 cancelled by the
 inviter) gets a confirm without nonce or card: type `04`, anonymous, body one byte, the status,
@@ -463,7 +466,8 @@ the way; "Skip" → `paired` (shown as "Paired, not verified", trust on first us
 | `seal` | `on` (default), `off` (the user turned it off), `degraded` (last fallback was plain, 9.3) |
 | `last_sealed_in` | When the last envelope from the contact opened |
 | `home relay` | The relationship's relay and onion; both mailboxes live there (8.3) |
-| `app_contact` | The id of the app's address-book contact this pairing is attached to |
+| `app_contact` | The id of the shared address-book contact (one list for every wallet on the device) this pairing is attached to; at most 256 bytes |
+| label | The user's own name for the contact, empty until the user sets one; the app shows the claimed name as "calls itself" meanwhile |
 
 Removing a contact deletes its record and any pending pairing for it. The record's slot stays
 used (2.2).
@@ -610,6 +614,10 @@ connection per relay:
   or all of them when they sit on at most 3 distinct relays;
 - on a push wake-up for a mailbox that registered push (8.6).
 
+App open, resume, unlock and pull-to-refresh clear every relay's backoff and send every queued
+outbox entry at once; the foreground tick and push wake-ups respect the backoff. Collecting,
+entering a link by hand and outbox delivery take one lock, so they never interleave.
+
 At most 50 mailboxes per cycle, round-robin, so many contacts cost a bounded drain. A relay that
 does not answer backs off (30 s, 2 min, 10 min, 30 min) and the contact shows "Exchange X's relay
 isn't answering". Signing a withdrawal or paying an invoice needs the wallet unlocked, so
@@ -629,7 +637,13 @@ Limits on updates, on the receiver (wallet and kit):
 - accepted only from a paired key with a valid signature, and only with a `seq` above the stored
   one; the same card again is ignored;
 - at most 3 per contact per day and 100 per hour in total; extra ones are acknowledged and dropped,
-  and the contact's next envelope (tag 07 carries the card) heals anything dropped.
+  and the contact's next envelope (tag 07 carries the card) heals anything dropped;
+- a card replaces the stored one only with the same enc, sig and hint keys; nothing but the user's
+  "Use the new keys" (7.8) changes a contact's keys;
+- a move of the home relay comes only in a 05 within these limits, never changes the contact's
+  kind, and goes only to a built-in relay or a named host on port 443 (no address literals). A
+  person's mailbox stays where it is. Our own new card for the moved relationship is queued to
+  the service in the same write.
 
 A user's own relay switch needs no update because of 8.3, so the flood of "my relay changed"
 notices that per-wallet addresses would need cannot happen. Section 15 has the remaining abuse
@@ -748,14 +762,25 @@ per mailbox per drain, 50 mailboxes per collecting cycle.
 
 `PairingReplied`, `PairingConfirmed`, `PairingFailed{reason}`, `ContactUpdated`,
 `ContactKeysRestored`, `ContactKeysChanged`, `SealedReceived`, `SealedUnopenable`, `InvoiceFromContact`,
-`WithdrawalFromContact`, `HomeRelayUnreachable`, `OutboxDelivered`, `OutboxStuck`. Event fields
-carry ids and labels, never keys or secrets.
+`WithdrawalFromContact`, `HomeRelayUnreachable`, `OutboxDelivered`, `OutboxStuck`, and the existing
+`InvoiceFinalized` for a contact's payment. Event fields carry ids and labels, never keys or
+secrets. `SealedUnopenable` is raised at most once per contact per cycle. A collect also returns
+the pairings that ended and why.
+
+A slate id belongs to at most one contact, and a link from a slate to a contact is never moved. An
+S1 or I1 from a contact whose slate id already has a transaction (other than that contact's own
+repeat) or belongs to another contact is dropped; notices from a contact act only on transactions
+exchanged with that contact. Contact invoices are capped per contact, apart from the payments
+address's caps, and paying one checks the contact's trust in the same locked step. Slates that go
+through a contact mailbox are recorded with transport `epicbox`; sealed files stay `file`.
+Delivered outbox entries are pruned after 7 days, entries of finished transactions at once.
 
 #### 10.5 Backup and restore
 
 Pairing records hold no secret: our keys come from the seed, the slot and `box_salt`. LEPIC
 exports the records, the slot counter and the network as a versioned JSON object; on import it
-decodes every card again and refuses another network. The app adds the object to its `.wfeh`
+decodes every card again, refuses another network, and keeps a record only when its own card
+carries the keys this seed derives for its slot. The app adds the object to its `.wfeh`
 history payload and gives it back on restore (9.5). A restore with the backup brings every
 pairing back unchanged: same keys, same mailboxes, same trust; contacts notice nothing.
 
@@ -814,7 +839,9 @@ There are no users of the address allowlist yet. The `allowed_peer` table, the i
 go, with the app's "Add trusted service" screen and the invoice address card. Settings › Wallet ›
 Invoices lists the paired contacts with their "Allow invoices" switch and offers "Pair with a shop
 or exchange". Issuing an invoice over Epicbox to someone requires a pairing in which they allow
-our invoices; issuing by file is unchanged.
+our invoices; issuing by file is unchanged. The app offers nothing else; the engine and the CLI
+keep issuing to an Epicbox address for interoperability tests, and no address-based payer path
+can list, pay or decline a contact's invoice.
 
 ### 12 Worked example: exchange deposits and withdrawals
 
