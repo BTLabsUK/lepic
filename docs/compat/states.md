@@ -126,7 +126,8 @@ I2 or S2, which hold every input, output and the final offset.
   confirmed tip, or already stored by a scan, confirms the transaction the same way at the
   output's height. Nothing in the chain's rules stops a peer from posting a transaction it
   holds signed later, and a slate's TTL binds only wallets that honour it (an Epicbox or HTTP
-  S1 has none), so a received payment is never given up for good.
+  S1 has none), so a received payment is never given up for good. A transaction whose record
+  an older build already dropped, after its 10,080 blocks, is found again only by a scan.
 - Every such lookup starts 10 blocks below the slate's height, and never above the tip or below
   height 1: the slate's height may be the peer's, and the node answers a lookup from a height it
   has no block for with an error, not with "not found". A lookup the node refuses for one

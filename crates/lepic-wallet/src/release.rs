@@ -33,6 +33,7 @@ use tracing::{debug, info, instrument, warn};
 use crate::cancel::{cancel_partner, drop_holdings, pool_holds, self_send_partner};
 use crate::chain;
 use crate::error::WalletError;
+use crate::inbox::ErrorChain;
 use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{RefreshError, balance_height, final_kernel, legacy_codecs, unless_refused};
@@ -631,7 +632,11 @@ where
     /// The transactions watched by their outputs that are mined, with the height each was
     /// mined at: one of whose outputs the store already holds, as a scan stores it, or the
     /// node holds unspent at or below `height`. The node is asked once, for the outputs of
-    /// all the others together.
+    /// all the others together; a failed request finds nothing this time.
+    ///
+    /// The set grows by one entry per payment that ended unconfirmed after this wallet signed
+    /// it, a number the inbox's bound on open receipts and the expiry window already limit per
+    /// week, and each entry adds one commitment to that one request.
     async fn find_late(
         &self,
         session: &Arc<Session<S::Store>>,
@@ -652,7 +657,10 @@ where
                 Ok(session.store.read(|repos| {
                     let mut stored = BTreeMap::new();
                     for commitment in &commitments {
-                        if let Some(output) = repos.output(commitment.as_bytes())? {
+                        // Only a scan stores one of these again, and only from the chain.
+                        if let Some(output) = repos.output(commitment.as_bytes())?
+                            && output.status != OutputStatus::Unconfirmed
+                        {
                             stored.insert(*commitment, output.height);
                         }
                     }
@@ -668,10 +676,19 @@ where
         let mut found = stored;
         if !asked.is_empty() {
             let request: Vec<Commitment> = asked.iter().copied().collect();
-            for location in self.ports().node.get_outputs(&request).await? {
-                // A node that reports an output above the confirmed tip is not believed yet.
-                if location.height <= height && asked.contains(&location.commitment) {
-                    found.insert(location.commitment, location.height);
+            match self.ports().node.get_outputs(&request).await {
+                Ok(locations) => {
+                    for location in locations {
+                        // A node that reports an output above the confirmed tip is not
+                        // believed yet.
+                        if location.height <= height && asked.contains(&location.commitment) {
+                            found.insert(location.commitment, location.height);
+                        }
+                    }
+                }
+                // The rest of the refresh goes on; a later refresh asks again.
+                Err(error) => {
+                    warn!(error = %ErrorChain(&error), "outputs of ended transactions not looked up");
                 }
             }
         }

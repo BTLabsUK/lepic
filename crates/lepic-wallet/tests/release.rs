@@ -628,7 +628,7 @@ fn a_released_send_mined_inside_the_watch_is_confirmed_and_its_change_returns() 
 }
 
 #[test]
-fn a_released_send_mined_after_the_watch_stays_cancelled_and_a_scan_recovers_its_change() {
+fn a_released_send_mined_after_the_kernel_watch_is_found_by_its_change() {
     let releasing = Releasing::posted().made_releasable();
     let change_before = releasing.change();
     releasing.release().unwrap();
@@ -648,19 +648,14 @@ fn a_released_send_mined_after_the_watch_stays_cancelled_and_a_scan_recovers_its
         releasing.refresh_twice();
     }
 
-    assert_eq!(releasing.state(), TxState::Cancelled);
-    assert!(releasing.change().is_empty(), "the change is not back");
     assert_eq!(
         releasing.kernel_lookups_by_one_refresh(),
         0,
-        "the watch has ended"
+        "the kernel watch has ended"
     );
-
-    support::complete_restore_scan(&releasing.harness.runtime, &releasing.wallet);
-
-    assert_eq!(releasing.state(), TxState::Cancelled);
+    assert_eq!(releasing.state(), TxState::Confirmed);
     let change = releasing.change();
-    assert_eq!(change.len(), 1, "the scan restores the change");
+    assert_eq!(change.len(), 1, "the refresh restores the change");
     assert_eq!(change[0].id, change_before[0].id);
     assert_eq!(change[0].amount, change_before[0].amount);
     assert_eq!(change[0].status, OutputStatus::Unspent);

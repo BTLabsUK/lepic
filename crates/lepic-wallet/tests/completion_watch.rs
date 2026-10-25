@@ -536,6 +536,40 @@ fn a_sender_cancel_of_a_finalized_send_keeps_a_watch_that_restores_its_change() 
 }
 
 #[test]
+fn a_late_payment_found_after_the_kernel_watch_takes_over_the_output_a_scan_restored() {
+    let payment = Payment::answered(None);
+    payment.receiver.cancel(payment.receive_tx).unwrap();
+    let payment = payment.finalized();
+    let after = TIP + ENDED_RECEIVE_WATCH_BLOCKS + 100;
+    payment.receiver_follows_to(after);
+    let mined = after + 1;
+    payment.mined_at(mined);
+    payment.chain_reaches(mined);
+    let entries = |side: &Side| {
+        side.store
+            .read(|repos| repos.transactions(ACCOUNT))
+            .unwrap()
+            .len()
+    };
+    let before = entries(&payment.receiver);
+    support::complete_restore_scan(&payment.receiver.harness.runtime, &payment.receiver.wallet);
+    assert_eq!(
+        entries(&payment.receiver),
+        before + 1,
+        "the scan adds an entry"
+    );
+
+    payment.receiver.refresh();
+
+    payment.assert_receive_restored(mined);
+    assert_eq!(
+        entries(&payment.receiver),
+        before,
+        "counted once, in the payment"
+    );
+}
+
+#[test]
 fn a_sender_cancel_mined_after_the_kernel_watch_still_restores_its_change() {
     let payment = Payment::answered(None);
     payment.sender.harness.node.fail_next(
