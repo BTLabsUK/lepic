@@ -1450,3 +1450,32 @@ fn an_answer_counts_only_from_the_contact_the_payment_went_to() {
         .collect();
     assert_eq!(finalized, vec![(ben_side, tx_id)]);
 }
+
+/// A contact's answer that finalizes the payment while the node refuses the push is kept and
+/// retried: the host hears of it at once, and the next collect posts it.
+#[test]
+fn an_answer_finalized_but_not_posted_is_reported_and_posted_on_the_next_collect() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let mut payer_events = world.payer.wallet.subscribe();
+    let tx_id = send_through_mailbox(&world, &relays(&world.payer), ben_side);
+    world.collect(&world.issuer);
+    world.node.fail_next(
+        "push_transaction",
+        lepic_node::mock::MockFailure::Rejected(lepic_node::RejectionKind::Internal),
+    );
+    world.collect(&world.payer);
+    let finalized_events = |events: Vec<Event>| {
+        events
+            .into_iter()
+            .filter(|event| matches!(event, Event::ContactPaymentFinalized(_)))
+            .count()
+    };
+    assert_eq!(world.tx_state(&world.payer, tx_id), TxState::Finalized);
+    assert!(finalized_events(events(&mut payer_events)) >= 1);
+    assert!(world.node.pushed_transactions().is_empty());
+
+    world.collect(&world.payer);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    assert_ne!(world.tx_state(&world.payer, tx_id), TxState::Finalized);
+}

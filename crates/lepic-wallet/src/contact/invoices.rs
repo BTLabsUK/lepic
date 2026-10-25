@@ -596,7 +596,20 @@ where
                     }));
                     Ok(Handled::Stored)
                 }
-                Err(crate::finalize::FinalizeError::Node(_)) => Ok(Handled::Later),
+                // Finalized and stored, but the node did not take it: the host hears of it now,
+                // and the message stays so the next collect finalizes it again from the stored
+                // slate and posts it again, as the Epicbox inbox does.
+                Err(crate::finalize::FinalizeError::NotPosted { tx_id, source }) => {
+                    warn!(tx_id = %tx_id, error = %ErrorChain(&source), "answer from a contact finalized but not posted");
+                    self.emit(Event::ContactPaymentFinalized(ContactSlateEvent {
+                        contact_id,
+                        tx_id,
+                        slate_id: slate.id(),
+                        amount: slate.amount(),
+                    }));
+                    Ok(Handled::Later)
+                }
+                Err(error) if !crate::inbox::finalize_is_permanent(&error) => Ok(Handled::Later),
                 Err(error) => {
                     warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "answer from a contact not finalized");
                     Ok(Handled::Stored)
@@ -614,7 +627,17 @@ where
                     }
                     Ok(Handled::Stored)
                 }
-                Err(InvoiceError::Node(_)) => Ok(Handled::Later),
+                Err(InvoiceError::NotPosted { tx_id, source }) => {
+                    warn!(tx_id = %tx_id, error = %ErrorChain(&source), "payment from a contact finalized but not posted");
+                    self.emit(Event::InvoiceFinalized(crate::event::FinalizedInvoice {
+                        tx_id,
+                        slate_id: slate.id(),
+                    }));
+                    Ok(Handled::Later)
+                }
+                Err(error) if !crate::inbox::invoice_finalize_is_permanent(&error) => {
+                    Ok(Handled::Later)
+                }
                 Err(error) => {
                     warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "payment from a contact not finalized");
                     Ok(Handled::Stored)

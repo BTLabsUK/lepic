@@ -428,7 +428,7 @@ fn receive_is_permanent(error: &ReceiveError) -> bool {
 
 /// Failures of finalizing an S2 that the same message would meet again. A slate that was
 /// finalized and stored but not posted is not a failure of the message; the caller handles it.
-fn finalize_is_permanent(error: &FinalizeError) -> bool {
+pub(crate) fn finalize_is_permanent(error: &FinalizeError) -> bool {
     match error {
         FinalizeError::Wallet(_)
         | FinalizeError::UnknownTransport { .. }
@@ -463,7 +463,7 @@ fn finalize_is_permanent(error: &FinalizeError) -> bool {
 
 /// Failures of finalizing an I2 that the same message would meet again, as for an S2. A late
 /// I2 for an invoice cancelled or expired here is refused this way.
-fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
+pub(crate) fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
     match error {
         InvoiceError::Wallet(_)
         | InvoiceError::Node(_)
