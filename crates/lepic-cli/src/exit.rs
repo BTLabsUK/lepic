@@ -5,6 +5,7 @@ use lepic_node::NodeError;
 use lepic_store::StoreError;
 use lepic_telemetry::TelemetryError;
 use lepic_transport::error::TransportError;
+use lepic_wallet::contact::ContactError;
 use lepic_wallet::error_text::display_error_chain;
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::InboxError;
@@ -173,6 +174,10 @@ pub enum CliError {
     TorBinaryNeeded,
     #[error("tor is not working")]
     Tor(#[from] lepic_tor::TorFailure),
+    #[error("contact failed")]
+    Contact(#[from] ContactError),
+    #[error("contact id is not 32 hex digits")]
+    ContactId,
 }
 
 impl CliError {
@@ -197,7 +202,9 @@ impl CliError {
             | Self::HttpUrl(_)
             | Self::InvoiceOverHttp
             | Self::OnionAddress(_)
+            | Self::ContactId
             | Self::TorBinaryNeeded => ErrorKind::Usage,
+            Self::Contact(error) => contact_kind(error),
             Self::Tor(failure) if failure.kind == lepic_tor::FailureKind::Missing => {
                 ErrorKind::Config
             }
@@ -277,6 +284,36 @@ fn send_kind(error: &SendError) -> ErrorKind {
         | SendError::CannotDeliver { .. }
         | SendError::CannotExport { .. } => ErrorKind::Transport,
         SendError::Undelivered { .. } => ErrorKind::Incomplete,
+        _ => ErrorKind::Internal,
+    }
+}
+
+fn contact_kind(error: &ContactError) -> ErrorKind {
+    match error {
+        ContactError::Wallet(error) => wallet_kind(error),
+        ContactError::Invoice(error) => invoice_kind(error),
+        ContactError::Receive(error) => receive_kind(error),
+        ContactError::Finalize(error) => finalize_kind(error),
+        ContactError::Offline | ContactError::EpicboxOff | ContactError::NetworkMismatch => {
+            ErrorKind::Config
+        }
+        ContactError::Decode(_)
+        | ContactError::Name(_)
+        | ContactError::RelayAddress
+        | ContactError::WordsUnavailable => ErrorKind::Usage,
+        ContactError::UnknownContact
+        | ContactError::UnknownPairing
+        | ContactError::UnknownTransaction => ErrorKind::NotFound,
+        ContactError::Relay(_) => ErrorKind::Transport,
+        ContactError::InviteExpired
+        | ContactError::AlreadyPaired
+        | ContactError::NotVerified
+        | ContactError::SealOff
+        | ContactError::DoesNotPayInvoices
+        | ContactError::NotForThisInstall
+        | ContactError::CannotOpen
+        | ContactError::NotASlate
+        | ContactError::Stage(_) => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }

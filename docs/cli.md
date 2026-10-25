@@ -511,6 +511,34 @@ It writes `invoice.slate.response` for the issuer, and takes the spending option
 `invoice pay` reads its first argument as a parked invoice's slate id when it is one, so a file
 whose name is a slate id is given with its directory, as in `./<SLATE_ID>`.
 
+## Contacts
+
+Pairing (RFC 0002) ties this wallet to another wallet or a service with keys of their own, so
+invoices, withdrawals and slates between the two travel sealed through mailboxes on the
+pairing's home relay, the relay of whoever made the invite.
+
+```
+$ lepic contact invite --name Anna
+Share this invite: epiccash://pair/1/AQAB...
+$ lepic contact accept epiccash://pair/1/AQAB... --name Ben      # on the other wallet
+$ lepic contact collect                                          # on both
+$ lepic contact list
+3f1c...  Ben  paired
+    check: 🐱 kitty · 🦊 vixen · 🍩 donut · 🎻 fiddle
+$ lepic contact sas 3f1c... match
+```
+
+Both screens show the same four entries when nobody changed the invite on the way; `sas ...
+match` makes the contact verified. `contact open <LINK>` shows what an invite claims first,
+`--by-hand` prints the reply as a link instead of posting it, and `contact enter <LINK>` takes a
+reply or confirm link sent by hand. In person, each side runs `contact show-card` and then
+`contact scan-card <ID> <LINK>` with the other's card.
+
+`contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
+`contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`.
+`contact invoice <ID> <AMOUNT>` invoices a contact. `contact collect` also sends what the outbox
+holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in a backup.
+
 ## Transactions
 
 ```

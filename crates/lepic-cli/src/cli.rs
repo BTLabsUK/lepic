@@ -117,6 +117,9 @@ pub enum Command {
     /// Query the node
     #[command(subcommand)]
     Node(NodeCommand),
+    /// Pair with contacts, and exchange invoices and slates with them through their mailboxes
+    #[command(subcommand)]
+    Contact(ContactCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -574,4 +577,209 @@ pub struct TorListenArgs {
 pub enum NodeCommand {
     /// Show the node's version and chain tip
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ContactCommand {
+    /// Make an invite to pair with a contact, as a link to share
+    #[command(after_help = "\
+The invite's mailboxes live on this wallet's relay. `lepic contact collect` takes the answer.")]
+    Invite(ContactInviteArgs),
+    /// Show what an invite link says, before answering it
+    Open(ContactLinkArg),
+    /// Answer an invite; the reply goes to the inviter's relay unless --by-hand
+    Accept(ContactAcceptArgs),
+    /// Take a pair-reply or pair-confirm link that was sent by hand
+    Enter(ContactLinkArg),
+    /// Fetch pairing and contact messages from the home relays once, and send what waits
+    Collect,
+    /// Record the check of the four SAS words against the other screen
+    Sas(ContactSasArgs),
+    /// Show a card to pair in person; the other phone scans it
+    ShowCard(ContactCardArgs),
+    /// Pair in person with the card the other phone shows
+    ScanCard(ContactScanArgs),
+    /// List the paired contacts
+    List,
+    /// Remove a pairing; the contact is not told
+    Remove(ContactIdArg),
+    /// Allow or stop invoices from a verified contact
+    AllowInvoices(ContactSwitchArgs),
+    /// Invoice a paired contact through its mailbox
+    Invoice(ContactInvoiceArgs),
+    /// List the invoices parked from contacts
+    Invoices,
+    /// Pay an invoice parked from a contact
+    PayInvoice(ContactPayArgs),
+    /// Write the pairing records to a file, for a backup
+    Export(ContactExportArgs),
+    /// Restore pairing records from a backup file
+    Import(ContactImportArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InviteExpiryArg {
+    #[value(name = "1h")]
+    Hour,
+    #[value(name = "24h")]
+    Day,
+    #[value(name = "7d")]
+    Week,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ContactKindArg {
+    Person,
+    Shop,
+    Exchange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SasArg {
+    Match,
+    Mismatch,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OnOffArg {
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PurposeArg {
+    Payment,
+    Deposit,
+    Withdrawal,
+    Refund,
+    Request,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactNameArg {
+    /// The name this wallet gives itself in its card
+    #[arg(long, value_name = "NAME", default_value = "LEPIC")]
+    pub name: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactInviteArgs {
+    #[command(flatten)]
+    pub name: ContactNameArg,
+    /// How long the invite may be answered
+    #[arg(long, value_enum, default_value_t = InviteExpiryArg::Day)]
+    pub expiry: InviteExpiryArg,
+    /// What this wallet is to the contact
+    #[arg(long, value_enum, default_value_t = ContactKindArg::Person)]
+    pub kind: ContactKindArg,
+    /// Also offer five pairing words that find the invite
+    #[arg(long)]
+    pub pairing_words: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactLinkArg {
+    /// The epiccash:// link
+    #[arg(value_name = "LINK")]
+    pub link: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactAcceptArgs {
+    #[command(flatten)]
+    pub link: ContactLinkArg,
+    #[command(flatten)]
+    pub name: ContactNameArg,
+    /// Print the reply link to send by hand instead of posting it
+    #[arg(long)]
+    pub by_hand: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactIdArg {
+    /// The contact's id, as `contact list` shows it
+    #[arg(value_name = "CONTACT")]
+    pub contact: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactSasArgs {
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    #[arg(value_enum, value_name = "RESULT")]
+    pub result: SasArg,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactCardArgs {
+    #[command(flatten)]
+    pub name: ContactNameArg,
+    /// What this wallet is to the contact
+    #[arg(long, value_enum, default_value_t = ContactKindArg::Person)]
+    pub kind: ContactKindArg,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactScanArgs {
+    /// The id `contact show-card` printed on this wallet
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    /// The other phone's epiccash://contact/ link
+    #[arg(value_name = "LINK")]
+    pub link: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactSwitchArgs {
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    #[arg(value_enum, value_name = "STATE")]
+    pub state: OnOffArg,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactInvoiceArgs {
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    /// The amount to ask for, in EPIC
+    #[arg(value_name = "AMOUNT")]
+    pub amount: String,
+    #[arg(long, value_enum, default_value_t = PurposeArg::Request)]
+    pub purpose: PurposeArg,
+    /// A reference the contact sees with the invoice
+    #[arg(long, value_name = "TEXT")]
+    pub reference: Option<String>,
+    #[command(flatten)]
+    pub account: AccountArg,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactPayArgs {
+    /// Slate id of the invoice, as `contact invoices` shows it
+    #[arg(value_name = "SLATE_ID")]
+    pub slate_id: String,
+    /// The amount the invoice asks for, in EPIC
+    #[arg(value_name = "AMOUNT")]
+    pub amount: String,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+    #[command(flatten)]
+    pub spend: SpendArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactExportArgs {
+    /// The file to write
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactImportArgs {
+    /// A file `contact export` wrote
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
 }

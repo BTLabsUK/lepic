@@ -44,6 +44,19 @@ pub enum Report {
     TorListen(TorListenReport),
     NodeStatus(NodeStatusReport),
     ImportHistory(ImportHistoryReport),
+    ContactInvite(ContactInviteReport),
+    ContactPreview(ContactPreviewReport),
+    ContactAccept(ContactAcceptReport),
+    ContactLink(ContactLinkReport),
+    ContactCollect(ContactCollectReport),
+    ContactCard(ContactCardReport),
+    Contact(ContactReport),
+    ContactList(ContactListReport),
+    ContactRemove(ContactRemoveReport),
+    ContactInvoiceIssue(ContactInvoiceIssueReport),
+    ContactInvoices(ContactInvoiceListReport),
+    ContactExport(ContactExportReport),
+    ContactImport(ContactImportReport),
 }
 
 #[derive(Serialize)]
@@ -348,6 +361,119 @@ pub struct ExpiredReport {
     pub cancellable: Vec<u32>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ContactInviteReport {
+    pub contact_id: String,
+    pub link: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactPreviewReport {
+    /// What the inviter calls itself, unverified.
+    pub claimed_name: String,
+    pub kind: &'static str,
+    pub expires_at: String,
+    pub home_relay: String,
+    pub service: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactAcceptReport {
+    pub contact_id: String,
+    /// The reply as a link, to send by hand when `posted` is false.
+    pub reply_link: String,
+    pub posted: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactLinkReport {
+    /// `confirm` (send `link` back by hand), `paired` or `ignored`.
+    pub outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactCollectReport {
+    pub mailboxes: usize,
+    pub messages: usize,
+    pub paired: usize,
+    pub delivered: usize,
+    pub unreachable: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactCardReport {
+    pub contact_id: String,
+    pub link: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactReport {
+    pub contact_id: String,
+    pub label: String,
+    pub claimed_name: Option<String>,
+    pub kind: Option<&'static str>,
+    pub state: String,
+    /// The SAS entries as `emoji name`, four of them.
+    pub sas: Vec<String>,
+    pub allow_invoices: bool,
+    pub seal: String,
+    pub home_relay: Option<String>,
+    pub lapsed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactListReport {
+    pub contacts: Vec<ContactReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactRemoveReport {
+    pub contact_id: String,
+    pub removed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactInvoiceIssueReport {
+    pub contact_id: String,
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactInvoiceReport {
+    pub slate_id: String,
+    pub contact_id: String,
+    pub amount: String,
+    pub purpose: Option<&'static str>,
+    pub reference: Option<String>,
+    pub received_at: String,
+    /// Other requests from the same contact for the same amount within ten minutes.
+    pub same_amount: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactInvoiceListReport {
+    pub invoices: Vec<ContactInvoiceReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactExportReport {
+    pub file: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactImportReport {
+    pub imported: usize,
+    pub skipped_existing: usize,
+    pub skipped_conflict: usize,
+}
+
 /// What `http listen` did before it was stopped.
 #[derive(Debug, Serialize)]
 pub struct HttpListenReport {
@@ -418,6 +544,28 @@ struct ErrorBody<'a> {
 
 /// The text a successful command prints. A report that carries the recovery phrase is rendered
 /// into a buffer sized for it up front, so no reallocation leaves an unwiped copy behind.
+fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}  {}  {}{}",
+        contact.contact_id,
+        printable(&contact.label),
+        contact.state,
+        if contact.allow_invoices {
+            ", invoices allowed"
+        } else {
+            ""
+        }
+    )?;
+    if !contact.sas.is_empty() {
+        writeln!(out, "    check: {}", contact.sas.join(" · "))?;
+    }
+    if contact.lapsed {
+        writeln!(out, "    not heard from in 90 days")?;
+    }
+    Ok(())
+}
+
 pub fn render(report: &Report, format: OutputFormat) -> Zeroizing<String> {
     let mut out = Zeroizing::new(Vec::with_capacity(rendered_len_bound(report)));
     match format {
@@ -889,6 +1037,103 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             writeln!(out, "Address  {}", r.address)?;
             writeln!(out, "Pending  {} deliveries", r.pending_deliveries)
         }
+        Report::ContactInvite(r) => {
+            writeln!(out, "Share this invite: {}", r.link)?;
+            writeln!(
+                out,
+                "It expires at {}. Contact {}.",
+                short_time(&r.expires_at),
+                r.contact_id
+            )
+        }
+        Report::ContactPreview(r) => writeln!(
+            out,
+            "Pair with {} ({}, as it calls itself)? Its pairing lives on {}; the invite expires at {}.",
+            printable(&r.claimed_name),
+            r.kind,
+            r.home_relay,
+            short_time(&r.expires_at)
+        ),
+        Report::ContactAccept(r) if r.posted => writeln!(
+            out,
+            "Answered as contact {}; `lepic contact collect` takes the confirm.",
+            r.contact_id
+        ),
+        Report::ContactAccept(r) => writeln!(
+            out,
+            "Answered as contact {}; send this back by hand: {}",
+            r.contact_id, r.reply_link
+        ),
+        Report::ContactLink(r) => match (r.outcome, &r.link) {
+            ("confirm", Some(link)) => writeln!(out, "Paired; send this back by hand: {link}"),
+            ("paired", _) => writeln!(out, "Paired; compare the SAS with `lepic contact list`."),
+            _ => writeln!(out, "The link answers nothing this wallet waits for."),
+        },
+        Report::ContactCollect(r) => {
+            writeln!(
+                out,
+                "Collected {} messages from {} mailboxes; {} paired, {} sent.",
+                r.messages, r.mailboxes, r.paired, r.delivered
+            )?;
+            for relay in &r.unreachable {
+                writeln!(out, "{relay} isn't answering.")?;
+            }
+            Ok(())
+        }
+        Report::ContactCard(r) => writeln!(
+            out,
+            "Show this card: {}\nThen scan the other one with `lepic contact scan-card {} <LINK>`.",
+            r.link, r.contact_id
+        ),
+        Report::Contact(r) => write_contact(out, r),
+        Report::ContactList(r) => {
+            if r.contacts.is_empty() {
+                return writeln!(out, "No contacts are paired.");
+            }
+            for contact in &r.contacts {
+                write_contact(out, contact)?;
+            }
+            Ok(())
+        }
+        Report::ContactRemove(r) if r.removed => writeln!(out, "Pairing {} removed.", r.contact_id),
+        Report::ContactRemove(r) => writeln!(out, "No pairing {}.", r.contact_id),
+        Report::ContactInvoiceIssue(r) => writeln!(
+            out,
+            "Transaction {} asks contact {} for {} EPIC; the invoice waits in its mailbox.",
+            r.tx_id, r.contact_id, r.amount
+        ),
+        Report::ContactInvoices(r) => {
+            if r.invoices.is_empty() {
+                return writeln!(out, "No invoices from contacts wait.");
+            }
+            for invoice in &r.invoices {
+                writeln!(
+                    out,
+                    "{}  {} EPIC from contact {}{}",
+                    invoice.slate_id,
+                    invoice.amount,
+                    invoice.contact_id,
+                    invoice
+                        .reference
+                        .as_deref()
+                        .map(|reference| format!(", reference {}", printable(reference)))
+                        .unwrap_or_default()
+                )?;
+                if !invoice.same_amount.is_empty() {
+                    writeln!(
+                        out,
+                        "    another request for the same amount came within ten minutes"
+                    )?;
+                }
+            }
+            Ok(())
+        }
+        Report::ContactExport(r) => writeln!(out, "Pairing records written to {}.", r.file),
+        Report::ContactImport(r) => writeln!(
+            out,
+            "{} pairings restored; {} were here already and {} clashed with another.",
+            r.imported, r.skipped_existing, r.skipped_conflict
+        ),
         Report::Peer(r) => match r.capability {
             "lepic" => writeln!(
                 out,
@@ -1313,6 +1558,131 @@ mod tests {
                     capability: "unknown",
                 }),
                 vec!["address", "capability"],
+            ),
+            (
+                Report::ContactInvite(ContactInviteReport {
+                    contact_id: text("c"),
+                    link: text("l"),
+                    expires_at: text("t"),
+                }),
+                vec!["contact_id", "expires_at", "link"],
+            ),
+            (
+                Report::ContactPreview(ContactPreviewReport {
+                    claimed_name: text("n"),
+                    kind: "person",
+                    expires_at: text("t"),
+                    home_relay: text("r"),
+                    service: false,
+                }),
+                vec![
+                    "claimed_name",
+                    "expires_at",
+                    "home_relay",
+                    "kind",
+                    "service",
+                ],
+            ),
+            (
+                Report::ContactAccept(ContactAcceptReport {
+                    contact_id: text("c"),
+                    reply_link: text("l"),
+                    posted: true,
+                }),
+                vec!["contact_id", "posted", "reply_link"],
+            ),
+            (
+                Report::ContactLink(ContactLinkReport {
+                    outcome: "confirm",
+                    contact_id: Some(text("c")),
+                    link: Some(text("l")),
+                }),
+                vec!["contact_id", "link", "outcome"],
+            ),
+            (
+                Report::ContactCollect(ContactCollectReport {
+                    mailboxes: 1,
+                    messages: 2,
+                    paired: 0,
+                    delivered: 1,
+                    unreachable: vec![],
+                }),
+                vec![
+                    "delivered",
+                    "mailboxes",
+                    "messages",
+                    "paired",
+                    "unreachable",
+                ],
+            ),
+            (
+                Report::ContactCard(ContactCardReport {
+                    contact_id: text("c"),
+                    link: text("l"),
+                }),
+                vec!["contact_id", "link"],
+            ),
+            (
+                Report::Contact(ContactReport {
+                    contact_id: text("c"),
+                    label: text("l"),
+                    claimed_name: None,
+                    kind: Some("shop"),
+                    state: text("paired"),
+                    sas: vec![],
+                    allow_invoices: false,
+                    seal: text("on"),
+                    home_relay: None,
+                    lapsed: false,
+                }),
+                vec![
+                    "allow_invoices",
+                    "claimed_name",
+                    "contact_id",
+                    "home_relay",
+                    "kind",
+                    "label",
+                    "lapsed",
+                    "sas",
+                    "seal",
+                    "state",
+                ],
+            ),
+            (
+                Report::ContactList(ContactListReport { contacts: vec![] }),
+                vec!["contacts"],
+            ),
+            (
+                Report::ContactRemove(ContactRemoveReport {
+                    contact_id: text("c"),
+                    removed: true,
+                }),
+                vec!["contact_id", "removed"],
+            ),
+            (
+                Report::ContactInvoiceIssue(ContactInvoiceIssueReport {
+                    contact_id: text("c"),
+                    tx_id: 1,
+                    slate_id: text("s"),
+                    amount: text("1"),
+                }),
+                vec!["amount", "contact_id", "slate_id", "tx_id"],
+            ),
+            (
+                Report::ContactInvoices(ContactInvoiceListReport { invoices: vec![] }),
+                vec!["invoices"],
+            ),
+            (
+                Report::ContactExport(ContactExportReport { file: text("f") }),
+                vec!["file"],
+            ),
+            (
+                Report::ContactImport(ContactImportReport {
+                    imported: 1,
+                    skipped_existing: 0,
+                    skipped_conflict: 0,
+                }),
+                vec!["imported", "skipped_conflict", "skipped_existing"],
             ),
             (
                 Report::HttpListen(HttpListenReport {
