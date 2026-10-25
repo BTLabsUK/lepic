@@ -28,6 +28,8 @@ pub(crate) struct MockBackend {
     unreachable: Arc<AtomicBool>,
     stalled: Arc<AtomicBool>,
     stalled_calls: Arc<AtomicU64>,
+    /// One more than the output pages answered before the node stalls; zero when it does not.
+    stall_at_page: Arc<AtomicU64>,
     lose_post_reply: Arc<AtomicBool>,
     /// Other nodes by the URL they are served at.
     others: Arc<Mutex<HashMap<String, MockBackend>>>,
@@ -52,6 +54,7 @@ impl MockBackend {
             unreachable: Arc::default(),
             stalled: Arc::default(),
             stalled_calls: Arc::default(),
+            stall_at_page: Arc::default(),
             lose_post_reply: Arc::default(),
             others: Arc::default(),
         })
@@ -100,6 +103,16 @@ impl MockBackend {
                 std::io::ErrorKind::ConnectionRefused,
             ))));
         }
+        if contains(&body, b"get_unspent_outputs")
+            && self
+                .stall_at_page
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                == Ok(1)
+        {
+            self.stalled.store(true, Ordering::SeqCst);
+        }
         if self.stalled.load(Ordering::SeqCst) {
             self.stalled_calls.fetch_add(1, Ordering::SeqCst);
             while self.stalled.load(Ordering::SeqCst) {
@@ -134,6 +147,14 @@ impl MockBackend {
 
     pub(crate) fn set_stalled(&self, stalled: bool) {
         self.stalled.store(stalled, Ordering::SeqCst);
+    }
+
+    /// Answers `pages` more requests for unspent outputs, then stalls, as
+    /// [`MockBackend::set_stalled`] makes it, at the next one.
+    #[cfg(test)]
+    pub(crate) fn stall_after_pages(&self, pages: u64) {
+        self.stall_at_page
+            .store(pages.saturating_add(1), Ordering::SeqCst);
     }
 
     /// Node requests that waited on a stalled node, counted when they start waiting.

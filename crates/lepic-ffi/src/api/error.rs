@@ -325,7 +325,9 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         E::AlreadyOpen => WalletErrorKind::WalletBusy,
         E::NetworkMismatch { .. } | E::ForeignDatabase => WalletErrorKind::ForeignWallet,
         E::Mnemonic(_) => WalletErrorKind::InvalidMnemonic,
-        E::Store(lepic_store::StoreError::DamagedSetAside) => WalletErrorKind::DamagedDatabase,
+        E::Store(lepic_store::StoreError::DamagedSetAside | lepic_store::StoreError::Damaged) => {
+            WalletErrorKind::DamagedDatabase
+        }
         E::Store(_) => WalletErrorKind::Io,
         E::SecretVault(_) | E::SecretStore(_) => WalletErrorKind::SecretStore,
         // The node reported a chain position the wallet does not believe.

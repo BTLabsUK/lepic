@@ -130,13 +130,21 @@ async fn a_scan_from_height_zero_also_ends_the_restore_scan() {
     assert!(!alice.restore_scan_required().unwrap());
 }
 
+/// A restore scan cancelled after it stored a page is resumed, not restarted, by the next scan
+/// without a start, which then ends the restore scan.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cancelled_restore_scan_is_finished_by_the_next_scan_without_a_start() {
+async fn a_cancelled_restore_scan_is_resumed_by_the_next_scan_without_a_start() {
     let pair = funded_pair().await;
+    let phrase = pair.alice.recovery_phrase(password()).await.unwrap();
+    // A second output, so a scan of one output per page has a page to resume at.
+    pair.chain
+        .fund(phrase, Chain::Floonet, 5 * EPIC, 1)
+        .unwrap();
     pair.chain.set_height(300);
     let (_dir, alice) = restored_from(&pair, &pair.alice).await;
+    *alice.scan_page_size.lock().unwrap() = std::num::NonZeroU64::new(1);
     let alice = Arc::new(alice);
-    pair.chain.set_node_stalled(true);
+    pair.chain.backend().stall_after_pages(1);
     let running = {
         let alice = Arc::clone(&alice);
         let report = Progress::default().report();
@@ -151,10 +159,13 @@ async fn a_cancelled_restore_scan_is_finished_by_the_next_scan_without_a_start()
     assert_eq!(ended.unwrap_err().kind, WalletErrorKind::Cancelled);
     pair.chain.set_node_stalled(false);
     assert!(alice.restore_scan_required().unwrap());
+    assert_eq!(alice.outputs().unwrap().len(), 1);
 
     let result = scan(&alice, false).await;
 
+    assert!(result.resumed);
     assert_eq!((result.start_height, result.found), (0, 1));
+    assert_eq!(alice.outputs().unwrap().len(), 2);
     assert!(!alice.restore_scan_required().unwrap());
 }
 

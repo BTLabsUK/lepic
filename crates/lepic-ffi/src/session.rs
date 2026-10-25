@@ -29,6 +29,7 @@ use lepic_wallet::legacy_history::{
     ImportWorkDir, LegacyImportOutcome, LegacyImportStatus as EngineLegacyStatus,
     TxOrigin as EngineTxOrigin,
 };
+use lepic_wallet::lifecycle::PhraseCheck;
 use lepic_wallet::refresh::{
     BALANCE_MINIMUM_CONFIRMATIONS, BalanceCategory, OutputDetails, RefreshOutcome,
 };
@@ -213,6 +214,9 @@ pub(crate) struct Session {
     /// Makes the next listen fail before it subscribes.
     #[cfg(test)]
     pub(crate) fail_next_listen: std::sync::atomic::AtomicBool,
+    /// Outputs per page of [`Session::scan`], in place of the engine's default.
+    #[cfg(test)]
+    pub(crate) scan_page_size: Mutex<Option<std::num::NonZeroU64>>,
     scan: Mutex<Option<ScanCancel>>,
     balance: Mutex<Option<Balance>>,
     runtime: Arc<RuntimeInner>,
@@ -415,6 +419,8 @@ impl Session {
             tor_timings: Mutex::default(),
             #[cfg(test)]
             fail_next_listen: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            scan_page_size: Mutex::default(),
             scan: Mutex::default(),
             balance: Mutex::default(),
             runtime: Arc::clone(runtime),
@@ -926,11 +932,16 @@ impl Session {
             None if self.engine.restore_scan_required()? => ScanStart::Genesis,
             None => ScanStart::LastScanned,
         };
-        let options = ScanOptions {
+        #[allow(unused_mut)]
+        let mut options = ScanOptions {
             start,
             delete_unconfirmed,
             ..ScanOptions::update(self.network)
         };
+        #[cfg(test)]
+        if let Some(size) = *lock(&self.scan_page_size) {
+            options.page_size = size;
+        }
         let mut events = self.engine.subscribe();
         let scan = self.engine.scan(options, &cancel);
         tokio::pin!(scan);
@@ -2011,34 +2022,41 @@ pub(crate) async fn delete_wallet(
 }
 
 /// Seals the seed of `phrase` under `password` as the vault in `store`, once the database in
-/// `config.data_dir` is shown to be that seed's; the database is left as it is.
+/// `config.data_dir` proves it that seed's; the database is left as it is, but for the seed
+/// check a database without one gets. It needs no node: the database is opened only for the
+/// check, under the directory's claim.
 pub(crate) async fn reset_password(
     runtime: &Arc<RuntimeInner>,
     config: &WalletConfig,
-    node_secret: &NodeSecret,
     store: &AppSecretStore,
     phrase: Zeroizing<String>,
     password: Zeroizing<String>,
 ) -> Result<(), WalletError> {
-    let no_database = || {
-        WalletError::new(
-            WalletErrorKind::WalletNotFound,
-            "the wallet directory holds no wallet database to check the phrase against",
-        )
-    };
-    // Holds the directory, so no wallet on it opens while the vault is replaced.
-    let session = Session::new(runtime, config, node_secret, store.clone()).await?;
-    let database = session.data_dir.join(DATABASE_FILE);
-    if !tokio::fs::try_exists(&database)
-        .await
-        .map_err(|error| io("checking the wallet database", &error))?
-    {
-        return Err(no_database());
-    }
+    let network = config.chain.network();
+    // Held to the end, so no wallet on the directory opens while the vault is replaced.
+    let claim = runtime.claim(Path::new(&config.data_dir)).await?;
+    let dir = claim.dir.clone();
     let phrase = normalize_phrase(&phrase);
-    let seed = match session.engine.check_phrase(&phrase).await {
-        Ok(Some(seed)) => seed,
-        Ok(None) => return Err(no_database()),
+    let checked = tokio::task::spawn_blocking(move || {
+        lepic_wallet::lifecycle::check_phrase(&lepic_wallet::SqliteStores, &dir, network, &phrase)
+    })
+    .await
+    .map_err(|_| WalletError::new(WalletErrorKind::Panic, "phrase check failed inside lepic"))?;
+    let seed = match checked {
+        Ok(PhraseCheck::Matches(seed)) => seed,
+        Ok(PhraseCheck::Unused) => {
+            return Err(WalletError::new(
+                WalletErrorKind::WalletNotFound,
+                "the wallet directory holds no wallet database to check the phrase against",
+            ));
+        }
+        Ok(PhraseCheck::Unproven) => {
+            return Err(WalletError::new(
+                WalletErrorKind::WalletNotFound,
+                "the wallet database holds nothing that proves the phrase: \
+                 delete the wallet and restore it",
+            ));
+        }
         Err(lepic_wallet::WalletError::ForeignDatabase) => {
             return Err(WalletError::new(
                 WalletErrorKind::PhraseMismatch,
@@ -2048,9 +2066,12 @@ pub(crate) async fn reset_password(
         Err(error) => return Err(error.into()),
     };
     let vault = password_change::seal_seed(seed, password.clone(), runtime.kdf).await?;
-    password_change::install(store, vault, password).await?;
+    // Before the vault is replaced: a PIN key left beside the new vault would unseal the old
+    // password, and every PIN attempt would fail and be counted. A stop between the two
+    // leaves the old vault without a PIN; the reset run again finishes.
     crate::pin::forget(store).await?;
-    drop(session);
+    password_change::install(store, vault, password).await?;
+    drop(claim);
     info!("wallet password reset");
     Ok(())
 }
