@@ -118,8 +118,7 @@ pub enum Command {
     #[command(subcommand)]
     Node(NodeCommand),
     /// Pair with contacts, and exchange invoices and slates with them through their mailboxes
-    #[command(subcommand)]
-    Contact(ContactCommand),
+    Contact(ContactArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -579,6 +578,18 @@ pub enum NodeCommand {
     Status,
 }
 
+#[derive(Debug, Args)]
+pub struct ContactArgs {
+    #[command(subcommand)]
+    pub command: ContactCommand,
+    /// Reach no relay at all: pairing by hand or in person and sealed files still work
+    #[arg(long, global = true)]
+    pub offline: bool,
+    /// Treat Epicbox as switched off: no relay connections, contact mailboxes pause
+    #[arg(long, global = true, conflicts_with = "offline")]
+    pub epicbox_off: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ContactCommand {
     /// Make an invite to pair with a contact, as a link to share
@@ -626,6 +637,15 @@ answer: the keys are back and the new pairing goes, or the new pairing shows key
     KeyCheck(ContactKeyCheckArgs),
     /// Keep the old keys or use the new ones for a pairing in keys-changed
     Keys(ContactKeysArgs),
+    /// Seal a transaction's slate to a paired contact, as text for a file or a paste
+    Seal(ContactSealArgs),
+    /// Open sealed text and act on its slate: receive an S1, pay an I1 with --amount, or
+    /// finalize an S2 or I2; the answer is sealed back on the same channel
+    OpenSealed(ContactOpenSealedArgs),
+    /// Send a transaction's slate sealed through the contact's mailbox, for example a withdrawal
+    SendSlate(ContactSendSlateArgs),
+    /// Write a transaction's slate plain, for a contact that cannot open sealed text
+    Plain(ContactPlainArgs),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -731,6 +751,61 @@ pub struct ContactKeysArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct OutFileArg {
+    /// Write to this file instead of printing
+    #[arg(long, value_name = "FILE")]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactSendSlateArgs {
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    #[command(flatten)]
+    pub tx: TxIdArgs,
+    /// What the slate is for
+    #[arg(long, value_enum)]
+    pub purpose: Option<PurposeArg>,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactSealArgs {
+    #[command(flatten)]
+    pub slate: ContactSendSlateArgs,
+    #[command(flatten)]
+    pub out: OutFileArg,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactOpenSealedArgs {
+    /// The sealed file, or - to read the text from standard input
+    #[arg(value_name = "FILE|-")]
+    pub input: String,
+    /// The amount an invoice asks for, in EPIC; given, the invoice is paid
+    #[arg(long, value_name = "AMOUNT")]
+    pub amount: Option<String>,
+    /// Where the answer goes [default: <FILE>.response; printed for -]
+    #[arg(long, value_name = "FILE")]
+    pub answer_file: Option<PathBuf>,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+    #[command(flatten)]
+    pub spend: SpendArgs,
+    #[command(flatten)]
+    pub fluff: FluffArg,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactPlainArgs {
+    #[command(flatten)]
+    pub tx: TxIdArgs,
+    #[command(flatten)]
+    pub out: OutFileArg,
+}
+
+#[derive(Debug, Args)]
 pub struct ContactAcceptArgs {
     #[command(flatten)]
     pub link: ContactLinkArg,
@@ -790,6 +865,7 @@ pub struct ContactInvoiceArgs {
     /// The amount to ask for, in EPIC
     #[arg(value_name = "AMOUNT")]
     pub amount: String,
+    /// What the slate is for
     #[arg(long, value_enum, default_value_t = PurposeArg::Request)]
     pub purpose: PurposeArg,
     /// A reference the contact sees with the invoice

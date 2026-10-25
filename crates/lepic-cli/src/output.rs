@@ -54,6 +54,7 @@ pub enum Report {
     ContactList(ContactListReport),
     ContactRemove(ContactRemoveReport),
     ContactKeyCheck(ContactKeyCheckReport),
+    ContactSlate(ContactSlateReport),
     ContactInvoiceIssue(ContactInvoiceIssueReport),
     ContactInvoices(ContactInvoiceListReport),
     ContactExport(ContactExportReport),
@@ -443,6 +444,29 @@ pub struct ContactRemoveReport {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ContactSlateReport {
+    /// `sealed`, `sent`, `plain`, `received`, `paid`, `finalized`, or `invoice` (an I1 shown,
+    /// not paid: pass its amount to pay it).
+    pub action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slate_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    /// Where the slate or the answer was written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The slate or the answer, when no file was written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ContactKeyCheckReport {
     /// The new pairing the check went over.
     pub contact_id: String,
@@ -556,6 +580,43 @@ struct ErrorBody<'a> {
 
 /// The text a successful command prints. A report that carries the recovery phrase is rendered
 /// into a buffer sized for it up front, so no reallocation leaves an unwiped copy behind.
+fn write_contact_slate(out: &mut Vec<u8>, r: &ContactSlateReport) -> std::io::Result<()> {
+    let what = match r.action {
+        "sealed" => "Sealed",
+        "sent" => "Queued for the contact's mailbox:",
+        "plain" => "Plain",
+        "received" => "Received",
+        "paid" => "Paid",
+        "finalized" => "Finalized and posted",
+        _ => "An invoice, not paid:",
+    };
+    let stage = r.stage.unwrap_or("slate");
+    write!(out, "{what} {stage}")?;
+    if let Some(amount) = &r.amount {
+        write!(out, " for {amount} EPIC")?;
+    }
+    if let Some(tx_id) = r.tx_id {
+        write!(out, ", transaction {tx_id}")?;
+    }
+    if let Some(contact) = &r.contact_id {
+        write!(out, ", contact {contact}")?;
+    }
+    writeln!(out, ".")?;
+    if r.action == "invoice" {
+        writeln!(
+            out,
+            "Pay it with `--amount <AMOUNT>` once the amount is right."
+        )?;
+    }
+    if let Some(file) = &r.file {
+        writeln!(out, "Written to {file}.")?;
+    }
+    if let Some(text) = &r.text {
+        writeln!(out, "{text}")?;
+    }
+    Ok(())
+}
+
 fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<()> {
     writeln!(
         out,
@@ -1116,6 +1177,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         }
         Report::ContactRemove(r) if r.removed => writeln!(out, "Pairing {} removed.", r.contact_id),
         Report::ContactRemove(r) => writeln!(out, "No pairing {}.", r.contact_id),
+        Report::ContactSlate(r) => write_contact_slate(out, r),
         Report::ContactKeyCheck(r) => writeln!(
             out,
             "Key check sent over pairing {} for {}; `lepic contact collect` takes the answer.",
@@ -1690,6 +1752,27 @@ mod tests {
                     old_contact_id: text("o"),
                 }),
                 vec!["contact_id", "old_contact_id"],
+            ),
+            (
+                Report::ContactSlate(ContactSlateReport {
+                    action: "received",
+                    contact_id: Some(text("c")),
+                    tx_id: Some(1),
+                    slate_id: Some(text("s")),
+                    stage: Some("S1"),
+                    amount: Some(text("1")),
+                    file: Some(text("f")),
+                    text: None,
+                }),
+                vec![
+                    "action",
+                    "amount",
+                    "contact_id",
+                    "file",
+                    "slate_id",
+                    "stage",
+                    "tx_id",
+                ],
             ),
             (
                 Report::ContactInvoiceIssue(ContactInvoiceIssueReport {

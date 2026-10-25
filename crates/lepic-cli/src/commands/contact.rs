@@ -2,19 +2,24 @@
 //! through their mailboxes.
 
 use lepic_primitives::amount::Amount;
+use lepic_store::TxId;
 use lepic_store::{AccountIndex, ContactId, ContactState, SealMode};
+use lepic_transport::file::response_path;
+use lepic_wallet::ReceiveRequest;
 use lepic_wallet::contact::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
     InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, Purpose, RelayMode,
-    SasDecision,
+    SasDecision, SealedAnswer,
 };
 use lepic_wallet::event::SlateId;
 use lepic_wallet::invoice::InvoiceRequest;
+use lepic_wallet::slate::Stage;
 
 use super::{Opened, Run, Spend};
 use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
-    ContactCommand, ContactKindArg, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
+    ContactArgs, ContactCommand, ContactKindArg, ContactOpenSealedArgs, InviteExpiryArg, KeysArg,
+    OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
@@ -22,7 +27,8 @@ use crate::output::{
     ContactAcceptReport, ContactCardReport, ContactCollectReport, ContactExportReport,
     ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport, ContactInvoiceListReport,
     ContactInvoiceReport, ContactKeyCheckReport, ContactLinkReport, ContactListReport,
-    ContactPreviewReport, ContactRemoveReport, ContactReport, InvoicePayReport, Report,
+    ContactPreviewReport, ContactRemoveReport, ContactReport, ContactSlateReport, InvoicePayReport,
+    Report,
 };
 
 /// Contacts belong to the default account.
@@ -116,17 +122,69 @@ fn contact_report(view: &ContactView) -> ContactReport {
 }
 
 /// The CLI's relays: its Epicbox transport, and LEPIC's built-in relays of its network, where
-/// pairing words are offered and looked for.
-fn relays<N: lepic_node::NodeApi + 'static>(opened: &Opened<N>) -> ContactRelays {
-    ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
+/// pairing words are offered and looked for. `--offline` and `--epicbox-off` keep every
+/// contact command off the relays.
+fn relays<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: &ContactArgs,
+) -> ContactRelays {
+    let mode = if args.offline {
+        RelayMode::Offline
+    } else if args.epicbox_off {
+        RelayMode::EpicboxOff
+    } else {
+        RelayMode::Online
+    };
+    ContactRelays::new(opened.epicbox.clone(), mode)
+}
+
+/// The longest sealed text read from a file or standard input.
+const MAX_SEALED_TEXT: u64 = 4 * 1024 * 1024;
+
+fn read_sealed(input: &str) -> Result<String, CliError> {
+    use std::io::Read as _;
+    let mut text = String::new();
+    if input == "-" {
+        std::io::stdin()
+            .lock()
+            .take(MAX_SEALED_TEXT)
+            .read_to_string(&mut text)
+            .map_err(CliError::io("read sealed text from standard input"))?;
+    } else {
+        std::fs::File::open(input)
+            .and_then(|file| file.take(MAX_SEALED_TEXT).read_to_string(&mut text))
+            .map_err(CliError::io("read the sealed file"))?;
+    }
+    Ok(text)
+}
+
+/// Writes `text` to `out`, or returns it to print.
+fn write_or_print(
+    out: Option<std::path::PathBuf>,
+    text: String,
+) -> Result<(Option<String>, Option<String>), CliError> {
+    match out {
+        Some(path) => {
+            std::fs::write(&path, text).map_err(CliError::io("write the slate file"))?;
+            Ok((Some(path.display().to_string()), None))
+        }
+        None => Ok((None, Some(text))),
+    }
+}
+
+fn answer_text(answer: SealedAnswer) -> String {
+    match answer {
+        SealedAnswer::Sealed(text) => text,
+        SealedAnswer::Plain(wire) => wire.as_text().unwrap_or_default().to_owned(),
+    }
 }
 
 impl<H: Host> Run<'_, H> {
-    pub(super) async fn contact(&mut self, command: ContactCommand) -> Result<Report, CliError> {
+    pub(super) async fn contact(&mut self, args: ContactArgs) -> Result<Report, CliError> {
         let opened: Opened<HostNode<H>> = self.open().await?;
         let wallet = &opened.wallet;
-        let relays = relays(&opened);
-        Ok(match command {
+        let relays = relays(&opened, &args);
+        Ok(match args.command {
             ContactCommand::Invite(args) => {
                 let offer = wallet
                     .pairing_invite(
@@ -303,6 +361,58 @@ impl<H: Host> Run<'_, H> {
                     }
                 }
             }
+            ContactCommand::Seal(args) => {
+                let id = contact_id(&args.slate.contact.contact)?;
+                let tx_id = TxId(args.slate.tx.tx_id);
+                let text = wallet
+                    .contact_seal_slate(id, tx_id, args.slate.purpose.map(purpose))
+                    .await?;
+                let (file, text) = write_or_print(args.out.out, text)?;
+                Report::ContactSlate(ContactSlateReport {
+                    action: "sealed",
+                    contact_id: Some(id.to_string()),
+                    tx_id: Some(tx_id.0),
+                    slate_id: None,
+                    stage: None,
+                    amount: None,
+                    file,
+                    text,
+                })
+            }
+            ContactCommand::SendSlate(args) => {
+                let id = contact_id(&args.contact.contact)?;
+                let tx_id = TxId(args.tx.tx_id);
+                wallet
+                    .contact_post_slate(&relays, id, tx_id, args.purpose.map(purpose))
+                    .await?;
+                Report::ContactSlate(ContactSlateReport {
+                    action: "sent",
+                    contact_id: Some(id.to_string()),
+                    tx_id: Some(tx_id.0),
+                    slate_id: None,
+                    stage: None,
+                    amount: None,
+                    file: None,
+                    text: None,
+                })
+            }
+            ContactCommand::Plain(args) => {
+                let tx_id = TxId(args.tx.tx_id);
+                let wire = wallet.contact_plain_fallback(tx_id).await?;
+                let text = wire.as_text().unwrap_or_default().to_owned();
+                let (file, text) = write_or_print(args.out.out, text)?;
+                Report::ContactSlate(ContactSlateReport {
+                    action: "plain",
+                    contact_id: None,
+                    tx_id: Some(tx_id.0),
+                    slate_id: None,
+                    stage: None,
+                    amount: None,
+                    file,
+                    text,
+                })
+            }
+            ContactCommand::OpenSealed(args) => open_sealed(&opened, args).await?,
             ContactCommand::Remove(args) => {
                 let id = contact_id(&args.contact)?;
                 Report::ContactRemove(ContactRemoveReport {
@@ -411,4 +521,90 @@ impl<H: Host> Run<'_, H> {
             }
         })
     }
+}
+
+/// The amount a V3 slate's JSON names, for showing an invoice before it is paid.
+fn shown_amount(wire: &lepic_wallet::slate::WireSlate) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(wire.as_text()?).ok()?;
+    let amount = match value.get("amount")? {
+        serde_json::Value::String(text) => text.parse::<u64>().ok()?,
+        other => other.as_u64()?,
+    };
+    Some(format_amount(Amount::new(amount)))
+}
+
+/// Opens sealed text and acts on its slate as the file commands do, answering sealed on the
+/// same channel. An I1 is paid only when its amount is given.
+async fn open_sealed<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactOpenSealedArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let text = read_sealed(&args.input)?;
+    let sealed = wallet.sealed_open(&text).await?;
+    let contact_id = sealed.contact_id.map(|id| id.to_string());
+    let stage = Some(sealed.stage.as_str());
+    let answer_to = args
+        .answer_file
+        .clone()
+        .or_else(|| (args.input != "-").then(|| response_path(std::path::Path::new(&args.input))));
+    let (action, tx_id, slate, answer) = match sealed.stage {
+        Stage::S1 => {
+            let done = wallet
+                .sealed_receive(
+                    &text,
+                    ReceiveRequest {
+                        account: Some(args.account.account),
+                        message: args.message.message,
+                    },
+                )
+                .await?;
+            (
+                "received",
+                done.received.tx_id,
+                done.received.slate,
+                Some(done.answer),
+            )
+        }
+        Stage::I1 => {
+            let Some(amount) = args.amount else {
+                return Ok(Report::ContactSlate(ContactSlateReport {
+                    action: "invoice",
+                    contact_id,
+                    tx_id: None,
+                    slate_id: None,
+                    stage,
+                    amount: shown_amount(&sealed.wire),
+                    file: None,
+                    text: None,
+                }));
+            };
+            let amount = parse_amount(&amount)?;
+            let spend = Spend::from_args(&args.spend)?;
+            let account = wallet.account(&args.account.account)?;
+            let request = spend.pay_request(account.index, amount, args.message.message);
+            let done = wallet.sealed_pay(&text, request).await?;
+            ("paid", done.paid.tx_id, done.paid.slate, Some(done.answer))
+        }
+        _ => {
+            let done = wallet
+                .sealed_finalize(&text, super::propagation(args.fluff.fluff))
+                .await?;
+            ("finalized", done.tx_id, done.slate, None)
+        }
+    };
+    let (file, text) = match answer {
+        Some(answer) => write_or_print(answer_to, answer_text(answer))?,
+        None => (None, None),
+    };
+    Ok(Report::ContactSlate(ContactSlateReport {
+        action,
+        contact_id,
+        tx_id: Some(tx_id.0),
+        slate_id: Some(slate.id().to_string()),
+        stage,
+        amount: Some(format_amount(slate.amount())),
+        file,
+        text,
+    }))
 }

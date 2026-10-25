@@ -94,6 +94,10 @@ fn the_tree_has_every_planned_command() {
         "contact import",
         "contact key-check",
         "contact keys",
+        "contact seal",
+        "contact open-sealed",
+        "contact send-slate",
+        "contact plain",
     ] {
         assert!(
             paths.iter().any(|path| path == expected),

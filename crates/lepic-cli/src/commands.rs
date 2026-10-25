@@ -176,7 +176,7 @@ impl<H: Host> Run<'_, H> {
             Command::Tor(TorCommand::Address) => self.tor_address().await,
             Command::Tor(TorCommand::Listen(args)) => self.tor_listen(args).await,
             Command::Node(NodeCommand::Status) => self.node_status().await,
-            Command::Contact(command) => self.contact(command).await,
+            Command::Contact(args) => self.contact(args).await,
         }
     }
 
