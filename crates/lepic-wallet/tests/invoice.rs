@@ -37,8 +37,8 @@ use lepic_transport::file::FilePolicy;
 use lepic_transport::policy::FormatPolicy;
 use lepic_wallet::event::{Balance, TransactionState};
 use lepic_wallet::invoice::{
-    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, InvoiceError, InvoiceField, PayRequest,
-    build_i1, build_i2, build_i3,
+    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, INVOICE_TTL_BLOCKS, InvoiceError,
+    InvoiceField, MAX_INVOICE_TTL_LEAD_BLOCKS, PayRequest, build_i1, build_i2, build_i3,
 };
 use lepic_wallet::refresh::BalanceCategory;
 use lepic_wallet::selection::SelectionStrategy;
@@ -646,6 +646,67 @@ fn paying_refuses_an_invoice_past_its_ttl() {
     assert!(
         matches!(error, InvoiceError::Expired { cutoff, tip }
             if cutoff == Height::new(TIP) && tip == Height::new(TIP)),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+/// The I1 an issuer delivered, as the file method reads it with its TTL, with `ttl_cutoff_height`
+/// and `height` set.
+fn issued_at(issuer: &Party, height: u64, cutoff: u64) -> WireSlate {
+    tampered(&issuer.delivered().unwrap(), |slate| {
+        slate["version_info"]["version"] = Value::from(3);
+        slate["version_info"]["orig_version"] = Value::from(3);
+        slate["height"] = Value::from(height.to_string());
+        slate["ttl_cutoff_height"] = Value::from(cutoff.to_string());
+        slate["payment_proof"] = Value::Null;
+    })
+}
+
+#[test]
+fn paying_refuses_an_invoice_whose_cutoff_lies_further_ahead_than_any_issuer_sets_it() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = issued_at(&issuer, TIP, TIP + MAX_INVOICE_TTL_LEAD_BLOCKS + 1);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::TtlTooFarAhead { cutoff, limit }
+            if cutoff == Height::new(TIP + MAX_INVOICE_TTL_LEAD_BLOCKS + 1)
+                && limit == Height::new(TIP + MAX_INVOICE_TTL_LEAD_BLOCKS)),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn pays_an_invoice_whose_cutoff_lies_as_far_ahead_as_allowed() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = issued_at(&issuer, TIP, TIP + MAX_INVOICE_TTL_LEAD_BLOCKS);
+    let payer = payer(&node, FUNDING);
+
+    payer.pay(&i1, request()).unwrap();
+}
+
+#[test]
+fn paying_on_floonet_refuses_a_request_issued_on_mainnet() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    // A mainnet tip, which the floonet bound on slate heights still allows.
+    let mainnet_tip = 3_770_000;
+    let i1 = issued_at(&issuer, mainnet_tip, mainnet_tip + INVOICE_TTL_BLOCKS);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::TtlTooFarAhead { .. }),
         "{error:?}"
     );
     assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());

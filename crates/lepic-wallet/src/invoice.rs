@@ -74,6 +74,16 @@ use build::{IssuerContext, final_transaction, verify_message};
 /// receiver, which the issuer is.
 pub(crate) const ISSUER_CONTEXT: ParticipantId = ParticipantId(1);
 
+/// A day of blocks: the TTL an invoice is meant to be payable for at most. The binding issues
+/// invoices with it and gives its sends the same limit.
+pub const INVOICE_TTL_BLOCKS: u64 = 1_440;
+
+/// How far above the payer's tip an invoice's TTL cutoff may lie: [`INVOICE_TTL_BLOCKS`] for
+/// the TTL itself and as many again for an issuer's node ahead of the payer's. A cutoff further
+/// ahead was set on a longer chain, another network's, or from a wrong height; paying it would
+/// lock the payer's inputs in a payment that cannot complete here.
+pub const MAX_INVOICE_TTL_LEAD_BLOCKS: u64 = 2 * INVOICE_TTL_BLOCKS;
+
 /// A slate field the payer may not change between I1 and I2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -133,6 +143,10 @@ pub enum InvoiceError {
     /// The invoice's height is above any the chain can have reached by now.
     #[error("slate height {height} is above the highest plausible height {limit}")]
     AheadOfTip { height: Height, limit: Height },
+    /// The invoice's TTL cutoff lies further above the chain tip than
+    /// [`MAX_INVOICE_TTL_LEAD_BLOCKS`]: it was issued on another network or at a wrong height.
+    #[error("slate ttl cutoff {cutoff} is above the highest plausible cutoff {limit}")]
+    TtlTooFarAhead { cutoff: Height, limit: Height },
     #[error("{role} message signature does not verify")]
     MessageSignature {
         role: Role,
@@ -394,6 +408,22 @@ fn check_ttl(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
         Some(cutoff) if tip >= cutoff => Err(InvoiceError::Expired { cutoff, tip }),
         _ => Ok(()),
     }
+}
+
+/// Refuses an invoice whose TTL cutoff lies more than [`MAX_INVOICE_TTL_LEAD_BLOCKS`] above the
+/// node's tip. An invoice without a TTL, as upstream issues them, passes.
+fn check_ttl_lead(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
+    let Some(cutoff) = slate.ttl_cutoff_height() else {
+        return Ok(());
+    };
+    // A limit that overflows is never exceeded.
+    let Ok(limit) = tip.checked_add_blocks(MAX_INVOICE_TTL_LEAD_BLOCKS) else {
+        return Ok(());
+    };
+    if cutoff > limit {
+        return Err(InvoiceError::TtlTooFarAhead { cutoff, limit });
+    }
+    Ok(())
 }
 
 /// Refuses an invoice whose kernel could not be mined at the node's current tip, which would
@@ -878,9 +908,10 @@ where
     /// `request.ttl_blocks`. Fails with [`InvoiceError::AmountMismatch`] when the invoice asks
     /// for another amount than `request.amount`, [`InvoiceError::AlreadyPaid`] for an invoice
     /// this wallet paid before, [`InvoiceError::Expired`] when the tip has reached the
-    /// invoice's TTL cutoff, [`InvoiceError::LockedUntil`] when its kernel lock height is above
-    /// the tip, [`InvoiceError::AheadOfTip`] when its height is above any the
-    /// chain can have reached by now, a [`InvoiceError::Selection`] error, and a typed rejection for
+    /// invoice's TTL cutoff, [`InvoiceError::TtlTooFarAhead`] when that cutoff lies more than
+    /// [`MAX_INVOICE_TTL_LEAD_BLOCKS`] above the tip, [`InvoiceError::LockedUntil`] when its
+    /// kernel lock height is above the tip, [`InvoiceError::AheadOfTip`] when its height is above
+    /// any the chain can have reached by now, a [`InvoiceError::Selection`] error, and a typed rejection for
     /// any slate that is malformed, not an I1, or whose message does not verify. A payment with
     /// change fails with [`WalletError::RestoreScanRequired`] on a database rebuilt from the
     /// seed before a scan from genesis completed. Nothing is stored on failure.
@@ -941,6 +972,7 @@ where
             .height;
         let limit = self.check_plausible_tip(&session, tip).await?;
         check_ttl(&i1, tip)?;
+        check_ttl_lead(&i1, tip)?;
         check_lock(&i1, tip)?;
         check_height(&i1, limit)?;
         debug!(height = tip.value(), "slate checked");

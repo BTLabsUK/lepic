@@ -482,6 +482,7 @@ pub(crate) fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::Expired { .. }
         | InvoiceError::LockedUntil { .. }
         | InvoiceError::AheadOfTip { .. }
+        | InvoiceError::TtlTooFarAhead { .. }
         | InvoiceError::MessageSignature { .. }
         | InvoiceError::Mismatch { .. }
         | InvoiceError::InputKeyMismatch
