@@ -2,6 +2,7 @@
 //! domain [`Slate`]. Codecs own their wire structs and never convert into each other.
 
 pub mod legacy;
+pub mod marked_v2;
 pub mod marked_v3;
 
 use crate::error::{DecodeError, EncodeError};
