@@ -1407,3 +1407,104 @@ fn pairings_in_progress_are_listed_until_they_complete() {
             .is_empty()
     );
 }
+
+/// The read and post identities of the pairing mailbox of `seed` on the test relay.
+fn pairing_identities(seed: [u8; 16]) -> (lepic_epicbox::Identity, lepic_epicbox::Identity) {
+    let (box_sk, from_sk) =
+        lepic_keychain::pairing_mailbox_keys(seed, lepic_primitives::params::Network::Floonet)
+            .unwrap();
+    let identity = |secret: lepic_crypto::SecretKey| {
+        let public = lepic_crypto::PublicKey::from_secret_key(&secret).unwrap();
+        let address = lepic_epicbox::EpicboxAddress::new(
+            public,
+            RelayNetwork::Floonet,
+            Domain::parse("relay.test").unwrap(),
+            Some(80),
+        );
+        lepic_epicbox::Identity::new(secret, address).unwrap()
+    };
+    (identity(box_sk), identity(from_sk))
+}
+
+/// Takes every message in a mailbox as text.
+struct Collected(Vec<String>);
+
+impl lepic_epicbox::MailboxHandler for Collected {
+    fn handle(
+        &mut self,
+        message: lepic_epicbox::MailboxMessage,
+    ) -> lepic_transport::transport::BoxFuture<'_, lepic_epicbox::Handled> {
+        Box::pin(async move {
+            if let lepic_epicbox::MailboxContent::Opened(received) = message.into_content() {
+                self.0.push(received.plaintext.expose_str().to_owned());
+            }
+            lepic_epicbox::Handled::Stored
+        })
+    }
+}
+
+/// A contact the issuer already pairs with answers a new invite with the card the issuer holds
+/// for it. The issuer refuses it with the anonymous one-byte refusal only: no confirm, so no nA
+/// and no card, leaves, and the invite stays open for the one it was made for.
+#[test]
+fn a_reply_with_a_card_already_paired_gets_no_confirm() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    let link = world.invite(&world.issuer, "Anna");
+    let invite = Invite::from_link(&link, ContactNetwork::Floonet).unwrap();
+    let held = world.payer.read(|repos| repos.contact(ben_side)).unwrap();
+    let card = ContactCard::decode(&held.own_card, ContactNetwork::Floonet).unwrap();
+    let rc = [9; 16];
+    let body = lepic_contact::ReplyBody {
+        code: invite.fields().code.clone(),
+        nonce: lepic_contact::Nonce::from_bytes([7; 16]),
+        confirm_code: lepic_contact::ConfirmCode::from_bytes(rc),
+        card,
+    };
+    let reply = seal_reply(&invite, &body, &mut rand::rngs::StdRng::seed_from_u64(3)).unwrap();
+    let (reply_box, reply_from) = pairing_identities(*invite.fields().code.expose_bytes());
+    let client = lepic_epicbox::MailboxClient::new(world::settings(), world.relay.connector());
+    world
+        .block_on(client.post(
+            &reply_from,
+            reply_box.address(),
+            &lepic_contact::armor(&reply),
+        ))
+        .unwrap();
+
+    world.collect(&world.issuer);
+
+    let (confirm_box, _) = pairing_identities(rc);
+    let mut collected = Collected(Vec::new());
+    world
+        .block_on(client.drain_once(&[confirm_box], &mut collected))
+        .unwrap();
+    assert_eq!(collected.0.len(), 1, "{:?}", collected.0);
+    let keys = contact_keys(&world.payer, ben_side);
+    let sealed_bytes = lepic_contact::dearmor(&collected.0[0]).unwrap();
+    let sealed = SealedEnvelope::decode(&sealed_bytes, ContactNetwork::Floonet).unwrap();
+    let opened = lepic_contact::open_confirm(
+        &sealed,
+        &EncSecretKey::from_bytes(*keys.expose_enc_secret()),
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            opened,
+            lepic_contact::Confirm::Refused(lepic_contact::Refusal::AlreadyUsed)
+        ),
+        "{opened:?}"
+    );
+    assert_eq!(world.contact_ids(&world.issuer), vec![anna_side]);
+    // The invite is still open: the one it was made for pairs with it.
+    let stranger = world.stranger();
+    world
+        .block_on(
+            stranger
+                .wallet
+                .pairing_accept(&relays(&stranger), accept(&link, "Cleo", false)),
+        )
+        .unwrap();
+    assert_eq!(world.collect(&world.issuer).paired, 1);
+    assert_eq!(world.collect(&stranger).paired, 1);
+}

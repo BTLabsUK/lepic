@@ -830,8 +830,11 @@ where
     }
 
     /// The inviter's side of a reply (RFC 0002 7.3): the first reply whose code matches and whose
-    /// card verifies pairs; the confirm is posted to the confirm mailbox before the record is
-    /// stored, so a failed post leaves the reply to be taken again, or returned to send by hand.
+    /// card verifies pairs. Every refusal (used, expired, a card this wallet already holds or
+    /// its own) is decided, and an accepted reply's record stored with nA consumed, in one store
+    /// transaction before any confirm leaves: a refused reply gets only the anonymous one-byte
+    /// refusal, and nA goes to the one card the record holds. The confirm is kept until the
+    /// pairing ends, so a post that failed is repeated when the same reply is taken again.
     pub(crate) async fn take_reply(
         &self,
         relays: &ContactRelays,
@@ -868,74 +871,59 @@ where
             debug!("pairing reply with another code dropped");
             return Ok(Taken::Ignored);
         }
-        let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
         let invite = Invite::decode(&pending.invite, net).map_err(ContactError::Decode)?;
         let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
         let onion_text = invite.fields().onion.as_ref().map(RelayHost::as_str);
-        let refusal = match pending.secrets.na {
-            None => Some(Refusal::AlreadyUsed),
-            Some(_) if unix_seconds(self.ports().clock.now()) >= invite.fields().expires => {
-                Some(Refusal::Expired)
-            }
-            Some(_) => None,
-        };
-        if let Some(refusal) = refusal {
-            debug!("pairing reply refused");
-            if !by_hand {
-                self.post_refusal(
-                    relays,
-                    &reply.card,
-                    *reply.confirm_code.expose_bytes(),
-                    &home,
-                    onion_text,
-                    refusal,
-                )
-                .await;
-            }
-            return Ok(Taken::Ignored);
-        }
-        let Some(n_a) = pending.secrets.na else {
-            return Ok(Taken::Ignored);
-        };
-        let n_a = Nonce::from_bytes(n_a);
-        let sas = Sas::compute(net, &own, &reply.card, &n_a, &reply.nonce);
-        let confirm = ConfirmBody {
-            nonce: n_a,
-            card: own.clone(),
-        };
-        let envelope = seal_confirm(
-            &reply.card,
-            &confirm,
-            &signing_key(&keys),
-            &mut LockedRng(&mut **self.ports().rng.lock()),
-        )
-        .map_err(ContactError::Encode)?;
-        if !by_hand {
-            let (confirm_box, confirm_from) =
-                pairing_mailbox(*reply.confirm_code.expose_bytes(), network, &home)?;
-            post_envelope(
-                relays,
-                &confirm_from,
-                confirm_box.address(),
-                invite.fields().onion.as_ref().map(RelayHost::as_str),
-                &envelope,
-            )
-            .await?;
-        }
         let peer = reply.card.clone();
+        let n_b = reply.nonce.clone();
         let rc = *reply.confirm_code.expose_bytes();
-        let onion = invite
-            .fields()
-            .onion
-            .as_ref()
-            .map(|onion| onion.as_str().to_owned());
+        let expires = invite.fields().expires;
+        let onion = onion_text.map(str::to_owned);
         let home_text = host_text(&home);
-        let stored = self
+        let signer = signing_key(&keys);
+        let decision = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
-                    refuse_known_card(repos, &peer, &own)?;
-                    let mut record = record;
+                    // Read again inside the transaction: another reply may have paired since.
+                    let Some(mut pending) = repos.pending_pairing(pairing_id)? else {
+                        return Ok(Decision::Drop);
+                    };
+                    let Some(n_a) = pending.secrets.na else {
+                        let stored = repos.setting(&confirm_key(pairing_id))?;
+                        let same_peer = repos.contact(contact_id)?.is_some_and(|record| {
+                            record.peer.as_ref().map(|card| card.sig_key)
+                                == Some(peer.sig_key().to_bytes())
+                        });
+                        return Ok(match stored.and_then(|text| unhex(&text)) {
+                            // The reply that paired, taken again: its confirm goes out again.
+                            Some(envelope) if same_peer => Decision::Again(envelope),
+                            _ => Decision::Refuse(Refusal::AlreadyUsed),
+                        });
+                    };
+                    if unix_seconds(now) >= expires {
+                        return Ok(Decision::Refuse(Refusal::Expired));
+                    }
+                    let mut record = repos
+                        .contact(contact_id)?
+                        .ok_or(ContactError::UnknownPairing)?;
+                    let own =
+                        ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
+                    if refuse_known_card(repos, &peer, &own).is_err() {
+                        return Ok(Decision::Known);
+                    }
+                    let n_a = Nonce::from_bytes(n_a);
+                    let sas = Sas::compute(net, &own, &peer, &n_a, &n_b);
+                    let envelope = seal_confirm(
+                        &peer,
+                        &ConfirmBody {
+                            nonce: n_a,
+                            card: own.clone(),
+                        },
+                        &signer,
+                        &mut LockedRng(&mut **ports.rng.lock()),
+                    )
+                    .map_err(ContactError::Encode)?;
                     record.peer = Some(peer_card(&peer));
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
@@ -954,24 +942,57 @@ where
                     // The code still finds the reply mailbox until the invite ends, to refuse
                     // later replies; without nA no second reply can pair. The confirm code lets
                     // a mismatch in the SAS check tell the invitee.
-                    let mut pending = pending;
                     pending.secrets.na = None;
                     pending.secrets.rc = Some(rc);
                     repos.put_pending_pairing(&pending)?;
-                    Ok(())
+                    repos.put_setting(&confirm_key(pairing_id), &hex(&envelope))?;
+                    Ok(Decision::Confirm(envelope))
                 })
             })
-            .await;
-        match stored {
-            Ok(()) => {}
-            Err(ContactError::AlreadyPaired) => {
+            .await?;
+        let (envelope, first) = match decision {
+            Decision::Drop => return Ok(Taken::Ignored),
+            Decision::Known => {
                 warn!("pairing reply from a contact already paired refused");
+                if !by_hand {
+                    self.post_refusal(
+                        relays,
+                        &reply.card,
+                        rc,
+                        &home,
+                        onion_text,
+                        Refusal::AlreadyUsed,
+                    )
+                    .await;
+                }
                 return Ok(Taken::Failed);
             }
-            Err(error) => return Err(error),
+            Decision::Refuse(refusal) => {
+                debug!("pairing reply refused");
+                if !by_hand {
+                    self.post_refusal(relays, &reply.card, rc, &home, onion_text, refusal)
+                        .await;
+                }
+                return Ok(Taken::Ignored);
+            }
+            Decision::Again(envelope) => (envelope, false),
+            Decision::Confirm(envelope) => (envelope, true),
+        };
+        if !by_hand {
+            let (confirm_box, confirm_from) = pairing_mailbox(rc, network, &home)?;
+            post_envelope(
+                relays,
+                &confirm_from,
+                confirm_box.address(),
+                onion_text,
+                &envelope,
+            )
+            .await?;
         }
-        info!("pairing reply taken");
-        self.emit(Event::PairingReplied(ContactEvent { contact_id }));
+        if first {
+            info!("pairing reply taken");
+            self.emit(Event::PairingReplied(ContactEvent { contact_id }));
+        }
         Ok(if by_hand {
             Taken::ConfirmLink(
                 contact_id,
@@ -1163,6 +1184,40 @@ fn take_slot(
 
 /// Refuses a peer card that is this wallet's own card or the card of a contact it holds: the
 /// peer's sig key identifies a contact, and an existing one never changes silently.
+/// What the store decided about a reply, before anything leaves.
+enum Decision {
+    /// The pairing is gone.
+    Drop,
+    /// The reply's card is one this wallet already pairs with, or its own.
+    Known,
+    Refuse(Refusal),
+    /// The reply that paired, taken again; its stored confirm.
+    Again(Vec<u8>),
+    /// Paired now; the confirm to send.
+    Confirm(Vec<u8>),
+}
+
+const CONFIRM_PREFIX: &str = "contact.confirm.";
+
+/// The setting that keeps an inviter's confirm until its pairing ends.
+pub(crate) fn confirm_key(pairing_id: PairingId) -> String {
+    format!("{CONFIRM_PREFIX}{}", hex(&pairing_id.0))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect()
+}
+
 fn refuse_known_card(
     repos: &dyn Repositories,
     peer: &ContactCard,
