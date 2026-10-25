@@ -81,8 +81,8 @@ kernel's height and stores its change `unspent` from that height, so the balance
 scan would find. If a scan already restored the change, under an incoming entry with no slate of
 its own, the send takes the output over and that entry is dropped, so the history counts the
 change once. This is the one transition out of `cancelled` or `expired`, and only a watched
-transaction takes it. A kernel mined after the window is not looked for: the send stays `cancelled`, and a scan
-stores its change `unspent` again.
+transaction takes it. After the window a refresh asks the node for the change outputs instead,
+with no end, as for a cancel below; a send with no change mined later stays `cancelled`.
 
 The app releases only a send whose post the node refused with a JSON-RPC error. LEPIC also
 releases a posted send the node dropped and a finalized one whose post got no answer: a kernel
@@ -109,9 +109,15 @@ I2 or S2, which hold every input, output and the final offset.
   first, and leaves it open while either holds the kernel.
 - A cancel or expiry that goes ahead keeps the transaction watched exactly as a release does:
   its kernel, the height below which it cannot be, and the key and amount of each unconfirmed
-  output it deletes (the payer's change, the receiver's output). A refresh up to 10,080 blocks
-  after the tip the cancel or expiry was decided at that finds the kernel moves it to
-  `confirmed` and stores those outputs `unspent` from the kernel's height.
+  output it deletes (the payer's change, the receiver's output). A refresh up to 1,440 blocks,
+  a day, after the tip a received payment's cancel or expiry was decided at, 10,080 for a send,
+  that finds the kernel moves it to `confirmed` and stores those outputs `unspent` from the
+  kernel's height. After that window a refresh asks the node for those outputs instead, all
+  watched transactions in one request, with no end: one found unspent at or below the highest
+  confirmed tip, or already stored by a scan, confirms the transaction the same way at the
+  output's height. Nothing in the chain's rules stops a peer from posting a transaction it
+  holds signed later, and a slate's TTL binds only wallets that honour it (an Epicbox or HTTP
+  S1 has none), so a received payment is never given up for good.
 - Every such lookup starts 10 blocks below the slate's height, and never above the tip or below
   height 1: the slate's height may be the peer's, and the node answers a lookup from a height it
   has no block for with an error, not with "not found". A lookup the node refuses for one

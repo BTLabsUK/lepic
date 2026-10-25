@@ -170,9 +170,12 @@ where
     /// expired, since it may still be mined. Last, it looks up the kernel of each finalized or
     /// posted send [`crate::release::RELEASE_AFTER_BLOCKS`] or more after it was finalized,
     /// counted at the highest confirmed tip: a kernel found confirms the send, a missing one
-    /// makes it releasable (`Wallet::release`). Then it looks up the kernel of each send
-    /// released at most [`crate::release::RELEASED_WATCH_BLOCKS`] before that tip: a kernel
-    /// found moves the send from `cancelled` to `confirmed` and stores its change as unspent.
+    /// makes it releasable (`Wallet::release`). Then it looks for each transaction that was
+    /// released, cancelled or expired although its peer may still complete it: by its kernel
+    /// for [`crate::release::RELEASED_WATCH_BLOCKS`] after a send ended and
+    /// [`crate::release::ENDED_RECEIVE_WATCH_BLOCKS`] after a received payment ended, then by
+    /// its outputs, with no end. One found moves from `cancelled` or `expired` to `confirmed`
+    /// and has its outputs stored as unspent.
     ///
     /// The tip must be plausible: below the bounds [`crate::chain`] describes. Output and
     /// kernel heights must not be above the tip. An output or confirming kernel above it has

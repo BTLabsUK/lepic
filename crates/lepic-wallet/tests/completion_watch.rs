@@ -38,7 +38,7 @@ use lepic_store::{
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::refresh::{RefreshOutcome, UNFINALIZED_RECEIVE_BLOCKS};
-use lepic_wallet::release::RELEASED_WATCH_BLOCKS;
+use lepic_wallet::release::{ENDED_RECEIVE_WATCH_BLOCKS, RELEASED_WATCH_BLOCKS};
 use lepic_wallet::selection::{SelectionOptions, SelectionStrategy};
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{Clock, Ports, ReceiveRequest, StoreOpener, Wallet, WalletError};
@@ -402,6 +402,71 @@ fn a_receiver_cancel_the_node_knows_nothing_of_keeps_a_watch_that_restores_a_lat
     payment.assert_receive_restored(TIP + 1);
 }
 
+fn kernel_requests(payment: &Payment) -> usize {
+    payment
+        .node()
+        .calls()
+        .iter()
+        .filter(|method| *method == "get_kernel")
+        .count()
+}
+
+#[test]
+fn a_receiver_cancel_is_restored_by_its_kernel_when_posted_on_the_last_watched_block() {
+    let payment = Payment::answered(None);
+    payment.receiver.cancel(payment.receive_tx).unwrap();
+    let last = TIP + ENDED_RECEIVE_WATCH_BLOCKS;
+    payment.receiver_follows_to(last - 1);
+    assert_eq!(
+        payment.receiver.state(payment.receive_tx),
+        TxState::Cancelled
+    );
+
+    let payment = payment.finalized();
+    payment.mined_at(last);
+    payment.chain_reaches(last);
+    payment.receiver.refresh();
+
+    payment.assert_receive_restored(last);
+}
+
+#[test]
+fn a_receiver_cancel_posted_after_the_kernel_watch_still_arrives_by_its_output() {
+    let payment = Payment::answered(None);
+    payment.receiver.cancel(payment.receive_tx).unwrap();
+    // The sender finalizes the S2 it holds; its post reaches no miner for now.
+    let payment = payment.finalized();
+    // A day of blocks passes and more: the kernel is no longer looked up.
+    let after = TIP + ENDED_RECEIVE_WATCH_BLOCKS + 100;
+    payment.receiver_follows_to(after);
+    assert_eq!(
+        payment.receiver.state(payment.receive_tx),
+        TxState::Cancelled
+    );
+    let kernels_before = kernel_requests(&payment);
+    payment.receiver.refresh();
+    assert_eq!(
+        kernel_requests(&payment),
+        kernels_before,
+        "past the window, the kernel is not looked up"
+    );
+
+    // Much later, the chain mines it.
+    let mined = after + 3_000;
+    payment.receiver_follows_to(mined - 1);
+    payment.mined_at(mined);
+    payment.chain_reaches(mined);
+    payment.receiver.refresh();
+
+    payment.assert_receive_restored(mined);
+    let watched = payment
+        .receiver
+        .store
+        .read(|repos| repos.setting(&format!("release.late.{}", payment.receive_tx)))
+        .unwrap();
+    assert_eq!(watched, None, "found, it is no longer watched");
+}
+
 #[test]
 fn a_sender_cancel_of_a_finalized_send_keeps_a_watch_that_restores_its_change() {
     let payment = Payment::answered(None);
@@ -468,6 +533,69 @@ fn a_sender_cancel_of_a_finalized_send_keeps_a_watch_that_restores_its_change() 
         .unwrap();
     assert_eq!(restored.status, OutputStatus::Unspent);
     assert_eq!(restored.amount, change_before[0].amount);
+}
+
+#[test]
+fn a_sender_cancel_mined_after_the_kernel_watch_still_restores_its_change() {
+    let payment = Payment::answered(None);
+    payment.sender.harness.node.fail_next(
+        "push_transaction",
+        MockFailure::Rejected(RejectionKind::Internal),
+    );
+    payment
+        .sender
+        .harness
+        .block_on(
+            payment
+                .sender
+                .wallet
+                .finalize(LOOPBACK, &payment.s2, Propagation::Stem),
+        )
+        .unwrap_err();
+    let change: Vec<OutputRecord> = payment
+        .sender
+        .outputs()
+        .into_iter()
+        .filter(|output| output.status == OutputStatus::Unconfirmed)
+        .collect();
+    assert_eq!(change.len(), 1);
+    payment.sender.cancel(payment.send_tx).unwrap();
+
+    // A week of blocks and more passes; the kernel is no longer looked up.
+    let after = TIP + RELEASED_WATCH_BLOCKS + 100;
+    let mut at = TIP;
+    while at < after {
+        at = (at + 1_440).min(after);
+        payment.chain_reaches(at);
+        payment.sender.refresh();
+        payment.sender.refresh();
+    }
+    assert_eq!(payment.sender.state(payment.send_tx), TxState::Cancelled);
+
+    // The refused post reached another node after all, which mines it much later.
+    let mined = after + 10;
+    payment.node().update_chain(|chain| {
+        chain.outputs.push(ChainOutput {
+            commitment: change[0].id.commitment,
+            features: OutputFeatures::Plain,
+            proof: some_proof(),
+            height: Height::new(mined),
+            mmr_index: 20,
+            spent: false,
+        });
+    });
+    payment.chain_reaches(mined);
+    payment.sender.refresh();
+
+    assert_eq!(payment.sender.state(payment.send_tx), TxState::Confirmed);
+    let restored = payment
+        .sender
+        .outputs()
+        .into_iter()
+        .find(|output| output.id == change[0].id)
+        .unwrap();
+    assert_eq!(restored.status, OutputStatus::Unspent);
+    assert_eq!(restored.height, Height::new(mined));
 }
 
 const TTL_BLOCKS: u64 = 10;
@@ -561,7 +689,7 @@ fn a_receive_with_no_ttl_the_node_never_saw_expires_after_the_window_and_is_rest
     payment.receiver.refresh();
 
     payment.assert_receive_restored(mined);
-    assert!(mined < window_end + RELEASED_WATCH_BLOCKS);
+    assert!(mined < window_end + ENDED_RECEIVE_WATCH_BLOCKS);
 }
 
 #[test]

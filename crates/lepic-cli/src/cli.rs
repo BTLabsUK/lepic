@@ -245,7 +245,7 @@ its kernel nowhere on chain; `lepic tx show` says when. The node is asked once m
 the release is refused while its chain or its pool holds the transaction. If another node still
 holds it and mines it later, a new send that spends the same inputs fails. A refresh within
 10080 blocks, about a week, of the release then finds it: the transaction shows `confirmed` and
-its change is back in the balance.")]
+its change is back in the balance. Later, a refresh finds it by its change.")]
     Release(TxIdArgs),
     /// List the transactions of an account
     List(ListArgs),

@@ -344,9 +344,10 @@ lepic tx cancel 3
 
 `tx cancel` of a transaction the other party can still complete on its own (a finalized send, an
 invoice you paid, a payment you received and answered) first asks the node, and is refused with
-exit code 7 while its pool or chain already holds it. After a cancel, the next week of refreshes
-still looks for it, and if it is mined after all, the transaction becomes `confirmed` and its
-outputs come back. A received payment that carries no TTL ends by itself a week of blocks after
+exit code 7 while its pool or chain already holds it. After a cancel, refreshes still look for
+it: by its kernel for a day of blocks (a received payment) or a week (a send), then by the
+outputs it would give this wallet, with no end. If it is mined after all, the transaction becomes
+`confirmed` and its outputs come back. A received payment that carries no TTL ends by itself a week of blocks after
 the wallet first saw it, under the same check.
 
 ## Direct over HTTP
@@ -580,9 +581,8 @@ node once more and is refused (exit 7, `rejected`) while the node's chain or its
 holds the transaction. What it can cost: if another node still holds the transaction and mines it
 later, the inputs are spent by it after all, and a new send that spends the same inputs fails.
 A refresh within 10080 blocks, about a week, of the release then finds the kernel: the
-transaction shows `confirmed` and its change is back in the balance. A transaction mined later
-than that keeps showing `cancelled`, and its change is missing from the balance until
-`lepic wallet scan` finds it on chain again.
+transaction shows `confirmed` and its change is back in the balance. Later, a refresh finds it by
+its change instead. A send with no change mined later than that keeps showing `cancelled`.
 `lepic tx post <ID>` sends a finalized transaction to the node again, for one the node dropped. A
 node whose pool already holds it counts as having taken it. When the node refuses it and its chain
 already holds the transaction's kernel, lepic records the transaction as posted and the next `lepic wallet info`

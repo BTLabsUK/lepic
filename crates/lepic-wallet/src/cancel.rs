@@ -58,9 +58,11 @@ where
     /// pool comes first, so a transaction that leaves the pool for a block between the two
     /// lookups is found by the second. A posted transaction, which includes one the node's
     /// pool answered it already holds, counts as on chain and is not cancelled. After the
-    /// cancel, a refresh up to [`crate::release::RELEASED_WATCH_BLOCKS`] past that tip still
-    /// looks the kernel up: a kernel found confirms the transaction and stores the outputs the
-    /// cancel dropped as unspent ([`Wallet::refresh`]).
+    /// cancel, a refresh up to [`crate::release::ENDED_RECEIVE_WATCH_BLOCKS`] past that tip for
+    /// a received payment, [`crate::release::RELEASED_WATCH_BLOCKS`] for a send, still looks the
+    /// kernel up, and after that asks the node for the outputs the cancel dropped, with no end:
+    /// either found confirms the transaction and stores those outputs as unspent
+    /// ([`Wallet::refresh`]).
     ///
     /// Fails with [`WalletError::Locked`], [`WalletError::UnknownTransaction`],
     /// [`WalletError::Transition`] when the transaction is posted, confirmed or expired,
