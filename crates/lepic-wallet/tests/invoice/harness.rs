@@ -194,11 +194,21 @@ impl Party {
     }
 
     pub fn issue(&self, amount: u64, message: Option<&str>) -> Result<IssuedInvoice, InvoiceError> {
+        self.issue_with_ttl(amount, message, None)
+    }
+
+    pub fn issue_with_ttl(
+        &self,
+        amount: u64,
+        message: Option<&str>,
+        ttl_blocks: Option<u64>,
+    ) -> Result<IssuedInvoice, InvoiceError> {
         self.block_on(self.wallet.issue_invoice(
             InvoiceRequest {
                 account: ACCOUNT,
                 amount: Amount::new(amount),
                 message: message.map(str::to_owned),
+                ttl_blocks,
             },
             Delivery::Deliver {
                 transport: FILE,

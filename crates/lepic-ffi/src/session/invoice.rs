@@ -54,6 +54,7 @@ impl Session {
                     account: DEFAULT_ACCOUNT,
                     amount: Amount::new(amount),
                     message,
+                    ttl_blocks: None,
                 },
                 Delivery::Export {
                     transport: FILE,

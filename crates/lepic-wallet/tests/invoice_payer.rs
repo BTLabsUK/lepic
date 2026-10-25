@@ -75,9 +75,13 @@ struct Invoice {
 impl Invoice {
     /// An invoice issued and delivered, and a payer holding one coinbase output at child 0.
     fn issued() -> Self {
+        Self::issued_with_ttl(None)
+    }
+
+    fn issued_with_ttl(ttl_blocks: Option<u64>) -> Self {
         let node = node();
         let issuer = Party::new(ISSUER_MNEMONIC, &node);
-        let issued = issuer.issue(AMOUNT, None).unwrap();
+        let issued = issuer.issue_with_ttl(AMOUNT, None, ttl_blocks).unwrap();
         let i1 = issuer.delivered().unwrap();
         let payer = Party::new(PAYER_MNEMONIC, &node);
         payer.fund(0, FUNDING);
@@ -418,4 +422,72 @@ fn a_payment_expired_at_its_ttl_is_watched_and_restored_when_the_issuer_posts_la
     assert_eq!(change[0].id, change_before[0].id);
     assert_eq!(change[0].status, OutputStatus::Unspent);
     assert_eq!(change[0].height, Height::new(TIP + TTL_BLOCKS + 1));
+}
+
+/// A second customer, paying the same request.
+const OTHER_PAYER_MNEMONIC: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo \
+    zoo zoo zoo zoo zoo zoo zoo zoo vote";
+
+#[test]
+fn a_second_payment_of_the_same_request_is_released_at_the_cutoff_the_request_was_issued_with() {
+    let invoice = Invoice::issued_with_ttl(Some(TTL_BLOCKS));
+    let first = invoice.payer.pay(&invoice.i1, request()).unwrap().reply;
+    let other = Party::new(OTHER_PAYER_MNEMONIC, &invoice.node);
+    other.fund(0, FUNDING);
+    other.set_next_child(1);
+    let second = other.pay(&invoice.i1, request()).unwrap().reply;
+    invoice.issuer.finalize(&first).unwrap();
+    assert!(matches!(
+        invoice.issuer.finalize(&second).unwrap_err(),
+        InvoiceError::AlreadyFinalized { .. }
+    ));
+    let second_payment = || {
+        other
+            .read(|repos| repos.transaction_by_slate(invoice.slate_id, TxDirection::Outgoing))
+            .unwrap()
+    };
+    let change = || {
+        other
+            .read(|repos| repos.outputs(ACCOUNT, None))
+            .into_iter()
+            .filter(|output| output.amount.value() != FUNDING)
+            .count()
+    };
+
+    // One block before the cutoff the payment still waits with its change.
+    invoice
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + TTL_BLOCKS - 1));
+    other.block_on(other.wallet.refresh()).unwrap();
+    assert_eq!(second_payment().entry.state, TxState::Sent);
+    assert_eq!(change(), 1);
+
+    // At the cutoff the node holds no kernel of it, so it expires, which drops the change and
+    // releases the input.
+    invoice
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + TTL_BLOCKS));
+    other.block_on(other.wallet.refresh()).unwrap();
+    assert_eq!(second_payment().entry.state, TxState::Expired);
+    assert_eq!(change(), 0);
+}
+
+#[test]
+fn a_payment_of_a_request_issued_with_a_ttl_is_not_expired_while_the_node_pool_holds_it() {
+    let invoice = Invoice::issued_with_ttl(Some(TTL_BLOCKS));
+    let i2 = invoice.payer.pay(&invoice.i1, request()).unwrap().reply;
+    let (tx_id, _) = invoice.payment().unwrap();
+    invoice.issuer.finalize(&i2).unwrap();
+    let posted = invoice.posted();
+    invoice.node.update_chain(|chain| {
+        chain.pool.push(posted);
+        chain.tip.height = Height::new(TIP + TTL_BLOCKS);
+    });
+
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+
+    assert_eq!(invoice.payment(), Some((tx_id, TxState::Sent)));
 }

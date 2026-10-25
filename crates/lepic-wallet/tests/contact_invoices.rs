@@ -79,6 +79,7 @@ impl World {
                 account: ACCOUNT,
                 amount: Amount::new(AMOUNT),
                 message: None,
+                ttl_blocks: None,
             },
             InvoiceDetails {
                 purpose: Purpose::DepositRequest,
@@ -1294,6 +1295,7 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
                 account: ACCOUNT,
                 amount: Amount::new(AMOUNT),
                 message: Some("deposit\u{202E} 17".to_owned()),
+                ttl_blocks: None,
             },
             InvoiceDetails {
                 purpose: Purpose::DepositRequest,
@@ -1311,6 +1313,7 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
                 account: ACCOUNT,
                 amount: Amount::new(AMOUNT),
                 message: Some("refund 9".to_owned()),
+                ttl_blocks: None,
             },
             Delivery::Export {
                 transport: lepic_transport::file::FILE,

@@ -91,9 +91,19 @@ struct Flow {
 }
 
 fn flow(issuer_message: Option<&str>, request: PayRequest) -> Flow {
+    flow_issued_with_ttl(issuer_message, None, request)
+}
+
+fn flow_issued_with_ttl(
+    issuer_message: Option<&str>,
+    issuer_ttl_blocks: Option<u64>,
+    request: PayRequest,
+) -> Flow {
     let node = node();
     let issuer = Party::new(ISSUER_MNEMONIC, &node);
-    let issued = issuer.issue(AMOUNT, issuer_message).unwrap();
+    let issued = issuer
+        .issue_with_ttl(AMOUNT, issuer_message, issuer_ttl_blocks)
+        .unwrap();
     let i1 = issuer.delivered().unwrap();
     let payer = payer(&node, FUNDING);
     let i2 = payer.pay(&i1, request).unwrap().reply;
@@ -411,6 +421,127 @@ fn a_payers_ttl_reaches_the_issuer_over_the_file_method() {
         Some(Height::new(TIP + 2))
     );
     assert_eq!(flow.state(), TxState::Posted);
+}
+
+#[test]
+fn an_invoice_issued_with_a_ttl_carries_its_cutoff_to_the_payers_i2() {
+    let flow = flow_issued_with_ttl(None, Some(10), request());
+
+    let i1: Value = serde_json::from_str(flow.i1.as_text().unwrap()).unwrap();
+    assert_eq!(i1["ttl_cutoff_height"], (TIP + 10).to_string());
+    // A payer that sets no TTL of its own keeps the issuer's.
+    let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + 10).to_string());
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+    assert_eq!(
+        finalized.slate.ttl_cutoff_height(),
+        Some(Height::new(TIP + 10))
+    );
+}
+
+#[test]
+fn a_payers_later_ttl_is_cut_to_the_cutoff_the_invoice_was_issued_with() {
+    let flow = flow_issued_with_ttl(
+        None,
+        Some(2),
+        PayRequest {
+            ttl_blocks: Some(10),
+            ..request()
+        },
+    );
+
+    let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + 2).to_string());
+}
+
+#[test]
+fn a_payers_earlier_ttl_is_kept() {
+    let flow = flow_issued_with_ttl(
+        None,
+        Some(10),
+        PayRequest {
+            ttl_blocks: Some(2),
+            ..request()
+        },
+    );
+
+    let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + 2).to_string());
+}
+
+#[test]
+fn finalizing_refuses_a_payment_past_the_issued_cutoff_when_the_i2_drops_it() {
+    let flow = flow_issued_with_ttl(None, Some(2), request());
+    // Read under a version 2 header, the I2 loses its TTL, as `epic-wallet`'s file method
+    // loses it.
+    let i2 = tampered(&flow.i2, |slate| {
+        slate["version_info"]["version"] = Value::from(2);
+        slate["version_info"]["orig_version"] = Value::from(2);
+    });
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
+
+    let error = flow.issuer.finalize(&i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff, tip }
+            if cutoff == Height::new(TIP + 2) && tip == Height::new(TIP + 2)),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_refuses_a_payment_past_the_issued_cutoff_when_the_i2_moves_it_later() {
+    let flow = flow_issued_with_ttl(None, Some(2), request());
+    let i2 = tampered(&flow.i2, |slate| {
+        slate["ttl_cutoff_height"] = Value::from((TIP + 100).to_string());
+    });
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
+
+    let error = flow.issuer.finalize(&i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff, .. } if cutoff == Height::new(TIP + 2)),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_takes_a_payment_one_block_before_the_issued_cutoff() {
+    let flow = flow_issued_with_ttl(None, Some(2), request());
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 1));
+
+    flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
+#[test]
+fn an_unpaid_invoice_expires_at_its_cutoff() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    let issued = issuer.issue_with_ttl(AMOUNT, None, Some(2)).unwrap();
+    node.update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
+
+    issuer.block_on(issuer.wallet.refresh()).unwrap();
+
+    let slate_id = Uuid::from_bytes(*issued.slate_id.as_bytes());
+    let entry = transaction(&issuer, slate_id, TxDirection::Incoming);
+    assert_eq!(entry.entry.state, TxState::Expired);
+    assert!(
+        issuer
+            .read(|repos| repos.outputs_of_transaction(issued.tx_id))
+            .is_empty()
+    );
+    assert!(
+        issuer
+            .read(|repos| repos.context(slate_id, ParticipantId(1)))
+            .is_none()
+    );
 }
 
 #[test]
@@ -762,6 +893,7 @@ fn rebuilt_i1(flow: &Flow) -> BuiltI1 {
             account: ACCOUNT,
             amount: Amount::new(AMOUNT),
             height: Height::new(TIP),
+            ttl_cutoff_height: None,
             key_id: Identifier::new(3, [0, 0, 0, 0]).unwrap(),
             message: None,
         },

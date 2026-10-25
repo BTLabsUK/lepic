@@ -583,6 +583,7 @@ impl World {
                 account: ACCOUNT,
                 amount: Amount::new(AMOUNT),
                 message: message.map(str::to_owned),
+                ttl_blocks: None,
             },
             Delivery::Deliver {
                 transport: TRANSPORT_ID,

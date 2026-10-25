@@ -235,6 +235,11 @@ pub struct InvoiceRequest {
     /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
     /// it is signed.
     pub message: Option<String>,
+    /// Blocks past the chain tip from which a payer refuses the invoice and this wallet refuses
+    /// to finalize its payment. The I1 carries the height as its TTL cutoff; this wallet
+    /// refuses past it also when the payer's I2 drops or moves it. `None` issues the invoice
+    /// without a TTL, as upstream does.
+    pub ttl_blocks: Option<u64>,
 }
 
 /// How to pay an invoice. [`PayRequest::new`] fills in the defaults of `epic-wallet`'s
@@ -249,7 +254,8 @@ pub struct PayRequest {
     pub max_outputs: std::num::NonZeroUsize,
     pub change_outputs: std::num::NonZeroUsize,
     pub strategy: SelectionStrategy,
-    /// Blocks past the chain tip after which the issuer must refuse the payment.
+    /// Blocks past the chain tip after which the issuer must refuse the payment. An invoice
+    /// with an earlier TTL cutoff of its own keeps that one.
     pub ttl_blocks: Option<u64>,
     /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
     /// it is signed.
@@ -467,12 +473,17 @@ fn issue_stored(
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
     let key_id = next_output_key(repos, request.account)?;
+    let ttl_cutoff_height = request
+        .ttl_blocks
+        .map(|blocks| env.tip.checked_add_blocks(blocks))
+        .transpose()?;
     let built = build_i1(
         env.keychain,
         &I1Plan {
             account: request.account,
             amount: request.amount,
             height: env.tip,
+            ttl_cutoff_height,
             key_id,
             message: request.message.clone(),
         },
@@ -577,10 +588,16 @@ fn pay_stored(
             })
         })
         .collect::<Result<Vec<_>, InvoiceError>>()?;
+    // The issuer refuses the payment from its own cutoff whatever the I2 says, so a later one
+    // would only keep this wallet's inputs locked past the point where the payment can complete.
     let ttl_cutoff_height = request
         .ttl_blocks
         .map(|blocks| env.tip.checked_add_blocks(blocks))
-        .transpose()?;
+        .transpose()?
+        .map(|cutoff| {
+            i1.ttl_cutoff_height()
+                .map_or(cutoff, |issuer| cutoff.min(issuer))
+        });
     let plan = I2Plan {
         fee: selection.fee,
         height: env.tip,
@@ -718,11 +735,15 @@ fn finalize_stored(
         }
     }
     check_ttl(i2, env.tip)?;
+    // The payer may drop or move the cutoff in its I2: a version 2 header loses it, and
+    // upstream's payer replaces it with its own. The one this wallet issued still holds.
+    let issued = env.decode_stored(issued)?.with_origin(None);
+    check_ttl(&issued, env.tip)?;
     let context = repos
         .context(slate_uuid, ISSUER_CONTEXT)?
         .ok_or(InvoiceError::MissingContext { slate_id })?;
     let i1 = BuiltI1 {
-        slate: env.decode_stored(issued)?.with_origin(None),
+        slate: issued,
         context: IssuerContext::from_private(&context)?,
     };
     let finalized = build_i3(env.base_fee(), &i1, i2)?;
@@ -968,7 +989,7 @@ where
     /// `propagation`.
     ///
     /// Asks the node for its tip, and refuses with [`InvoiceError::Expired`] once it reaches
-    /// the TTL cutoff the I2 carries. Finalizing an I2 a second time returns the stored result
+    /// the TTL cutoff the I2 carries or the one this wallet issued the I1 with. Finalizing an I2 a second time returns the stored result
     /// and posts only if the first post did not succeed, which is how a failed post is retried;
     /// another I2 under the same slate id fails with [`InvoiceError::AlreadyFinalized`]. Fails
     /// with [`InvoiceError::NotPosted`] when the invoice was finalized and stored but the node

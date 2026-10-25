@@ -762,6 +762,7 @@ fn expiry_cancels_an_invoice_issued_by_file_and_left_unpaid() {
                 account: ACCOUNT,
                 amount: Amount::new(AMOUNT),
                 message: None,
+                ttl_blocks: None,
             },
             Delivery::Export {
                 transport: lepic_transport::file::FILE,

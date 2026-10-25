@@ -1027,6 +1027,7 @@ impl<H: Host> Run<'_, H> {
                     account: account.index,
                     amount,
                     message: args.message.message,
+                    ttl_blocks: None,
                 },
                 delivery,
             )

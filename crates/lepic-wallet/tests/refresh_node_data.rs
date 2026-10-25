@@ -1145,6 +1145,7 @@ fn invoice_issue_refuses_a_tip_above_the_plausible_height() {
         account: ACCOUNT,
         amount: Amount::new(AMOUNT),
         message: None,
+        ttl_blocks: None,
     };
     let delivery = Delivery::Deliver {
         transport: LOOPBACK,

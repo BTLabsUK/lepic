@@ -38,6 +38,8 @@ pub struct I1Plan {
     pub amount: Amount,
     /// The chain tip the invoice is issued at.
     pub height: Height,
+    /// The height from which a payer refuses the invoice and the issuer its payment.
+    pub ttl_cutoff_height: Option<Height>,
     /// The key of the issuer's output.
     pub key_id: Identifier,
     /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
@@ -129,8 +131,9 @@ pub struct BuiltI1 {
 }
 
 /// Builds the I1 of `plan` as `issue_invoice_tx` does: the issuer's output for the amount, the
-/// kernel offset split off its key, its public excess and nonce and its signed message. No fee,
-/// TTL or lock height: the payer sets the fee, and upstream issues invoices without the others.
+/// kernel offset split off its key, its public excess and nonce and its signed message. No fee
+/// or lock height: the payer sets the fee, and upstream issues invoices without a lock height.
+/// Upstream issues them without a TTL too; `plan.ttl_cutoff_height` adds one.
 pub fn build_i1(
     keychain: &Keychain,
     plan: &I1Plan,
@@ -157,7 +160,7 @@ pub fn build_i1(
         fee: Fee::ZERO,
         height: plan.height,
         lock: KernelLock::NONE,
-        ttl_cutoff_height: None,
+        ttl_cutoff_height: plan.ttl_cutoff_height,
         offset: BlindingFactor::from_secret_key(&randomness.offset),
         inputs: Vec::new(),
         outputs: vec![output],

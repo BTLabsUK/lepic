@@ -386,6 +386,7 @@ impl Party for LepicParty {
             account: ACCOUNT,
             amount: Amount::new(amount),
             message: message.map(str::to_owned),
+            ttl_blocks: None,
         };
         let issued = self
             .runtime

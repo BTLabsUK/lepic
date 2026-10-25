@@ -476,6 +476,7 @@ impl<H: Host> Run<'_, H> {
                             account: account.index,
                             amount,
                             message: None,
+                            ttl_blocks: None,
                         },
                         InvoiceDetails {
                             purpose: purpose(args.purpose),

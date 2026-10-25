@@ -1667,6 +1667,7 @@ fn every_contact_future_is_send() {
             account: AccountIndex(0),
             amount: lepic_primitives::amount::Amount::new(1),
             message: None,
+            ttl_blocks: None,
         },
         lepic_wallet::contact::InvoiceDetails {
             purpose: lepic_contact::Purpose::Request,

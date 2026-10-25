@@ -191,6 +191,7 @@ fn issue(case: &str) -> (BuiltI1, EncodeContext) {
         account: ACCOUNT,
         amount: Amount::new(number(&expected["amount"])),
         height: Height::new(number(&expected["height"])),
+        ttl_cutoff_height: None,
         key_id: key_id(&outputs[0]),
         message: option(&v3, "initiator_message"),
     };
