@@ -21,6 +21,8 @@ pub enum KeychainError {
     Crypto(#[from] CryptoError),
     #[error("address key path cannot extend a parent of depth {depth}")]
     AddressParentTooDeep { depth: u8 },
+    #[error("contact key path needs an account path m/<a>/0, not a path of depth {depth}")]
+    NotAnAccountPath { depth: u8 },
     #[error("unknown switch commitment type {code}")]
     UnknownSwitchType { code: u8 },
 }

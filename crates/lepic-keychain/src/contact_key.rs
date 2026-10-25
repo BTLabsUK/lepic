@@ -20,11 +20,14 @@ use thiserror::Error;
 use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::identifier::{Identifier, MAX_DEPTH};
+use crate::identifier::Identifier;
 use crate::keychain::{Keychain, KeychainError, SwitchCommitment};
 
 const ROOT_SALT: &[u8] = b"epic-contact/1";
 const MAILBOX_SALT: &[u8] = b"epic-pair/1 mailbox";
+
+/// The depth of an account's own path `m/<a>/0`.
+const ACCOUNT_DEPTH: u8 = 2;
 
 /// The second path component of the contact-identity branch.
 const CONTACT_BRANCH: u32 = 2;
@@ -49,13 +52,14 @@ pub enum ContactKeyError {
     Keychain(#[from] KeychainError),
 }
 
-/// The path `m/<a>/2/0` of the contact-identity root key under the account at `parent`.
+/// The path `m/<a>/2/0` of the contact-identity root key under the account at `parent`, which
+/// must be the account's own path `m/<a>/0`.
 pub fn contact_identity_key_id(parent: &Identifier) -> Result<Identifier, KeychainError> {
     let depth = parent.depth();
-    if depth >= MAX_DEPTH {
-        return Err(KeychainError::AddressParentTooDeep { depth });
-    }
     let mut components = parent.components();
+    if depth != ACCOUNT_DEPTH || components.get(1) != Some(&0) {
+        return Err(KeychainError::NotAnAccountPath { depth });
+    }
     if let Some(branch) = components.get_mut(1) {
         *branch = CONTACT_BRANCH;
     }
@@ -64,9 +68,8 @@ pub fn contact_identity_key_id(parent: &Identifier) -> Result<Identifier, Keycha
     }
     let child_depth = depth
         .checked_add(1)
-        .ok_or(KeychainError::AddressParentTooDeep { depth })?;
-    Identifier::new(child_depth, components)
-        .map_err(|_| KeychainError::AddressParentTooDeep { depth })
+        .ok_or(KeychainError::NotAnAccountPath { depth })?;
+    Identifier::new(child_depth, components).map_err(|_| KeychainError::NotAnAccountPath { depth })
 }
 
 const fn network_byte(network: Network) -> u8 {
@@ -338,11 +341,30 @@ mod tests {
     }
 
     #[test]
-    fn rejects_contact_parent_at_maximum_depth() {
-        let parent = Identifier::new(4, [0, 0, 0, 0]).unwrap();
+    fn refuses_a_parent_that_is_not_an_account_path() {
+        for (depth, components) in [
+            (0, [0, 0, 0, 0]),
+            (1, [0, 0, 0, 0]),
+            (2, [0, 1, 0, 0]),
+            (2, [0, 2, 0, 0]),
+            (3, [0, 0, 0, 0]),
+            (4, [0, 0, 0, 0]),
+        ] {
+            let parent = Identifier::new(depth, components).unwrap();
+            assert_eq!(
+                contact_identity_key_id(&parent),
+                Err(KeychainError::NotAnAccountPath { depth }),
+                "{components:?} at depth {depth}"
+            );
+        }
+    }
+
+    #[test]
+    fn contact_path_of_another_account() {
+        let parent = Identifier::new(2, [7, 0, 0, 0]).unwrap();
         assert_eq!(
-            contact_identity_key_id(&parent),
-            Err(KeychainError::AddressParentTooDeep { depth: 4 })
+            contact_identity_key_id(&parent).unwrap().to_bip32_path(),
+            "m/7/2/0"
         );
     }
 
