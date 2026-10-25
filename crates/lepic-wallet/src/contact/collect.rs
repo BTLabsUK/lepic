@@ -36,14 +36,16 @@ use crate::wallet::Wallet;
 /// What started a collecting cycle (RFC 0002 8.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CollectTrigger {
-    /// The app opened or resumed, or the wallet was unlocked: every mailbox.
+    /// The app opened or resumed, or the wallet was unlocked: every mailbox, and relays in
+    /// backoff and the whole outbox are tried at once.
     Open,
     /// The foreground tick: the mailboxes of contacts with something pending, or all of them
     /// when they sit on at most three relays.
     Foreground,
-    /// The user pulled to refresh: every mailbox.
+    /// The user pulled to refresh, or ran collect in the CLI: as [`CollectTrigger::Open`].
     Pull,
-    /// A push wake-up: every mailbox.
+    /// A push wake-up: every mailbox; relay backoff and outbox retry times are kept, since
+    /// pushes can come in bursts.
     Push,
 }
 
@@ -236,9 +238,10 @@ where
         check_online(relays)?;
         let _turn = self.contact_turn().await;
         let mut report = CollectReport::default();
-        // An explicit trigger retries at once what waits: relays in backoff and outbox
-        // entries not yet due (RFC 0002 12.4); only the foreground tick keeps the waits.
-        let explicit = trigger != CollectTrigger::Foreground;
+        // The user's own triggers retry at once what waits: relays in backoff and outbox
+        // entries not yet due (RFC 0002 12.4). The foreground tick and push wake-ups, which
+        // can come in bursts, keep the waits.
+        let explicit = matches!(trigger, CollectTrigger::Open | CollectTrigger::Pull);
         if explicit {
             self.reset_backoff().await?;
         }

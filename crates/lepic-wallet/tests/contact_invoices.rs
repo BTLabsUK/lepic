@@ -1106,6 +1106,13 @@ fn an_explicit_collect_delivers_the_outbox_at_once_and_reports_it() {
         ))
         .unwrap();
     assert_eq!(tick.delivered, 0);
+    let push = world
+        .block_on(world.payer.wallet.contacts_collect(
+            &relays(&world.payer),
+            lepic_wallet::contact::CollectTrigger::Push,
+        ))
+        .unwrap();
+    assert_eq!(push.delivered, 0);
     assert_eq!(world.collect(&world.payer).delivered, 1);
 }
 
