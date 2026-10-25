@@ -62,6 +62,62 @@ pub struct PendingPairingView {
     pub created_at: jiff::Timestamp,
 }
 
+/// Checks a record restored from a backup against this seed and rebuilds its mailbox from the
+/// two cards (RFC 0002 10.5): our card must carry the keys this wallet derives for the record's
+/// slot and box salt, and the mailbox fields are taken from the cards, never from the
+/// document. Returns false for a record that is not this wallet's.
+#[cfg(feature = "sqlite")]
+fn restore_record(
+    repos: &mut dyn lepic_store::Repositories,
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    record: &ContactRecord,
+) -> Result<bool, ContactError> {
+    let net = super::keys::contact_network(network);
+    let Ok(own) = lepic_contact::ContactCard::decode(&record.own_card, net) else {
+        return Ok(false);
+    };
+    let keys = super::keys::contact_keys(
+        keychain,
+        network,
+        record.account,
+        record.slot,
+        record.box_salt,
+    )?;
+    let relay_network = crate::inbox::relay_network(network);
+    let ours = lepic_epicbox::EpicboxAddress::parse(own.fields().mailbox.as_str(), relay_network);
+    let mine = *own.sig_key() == super::keys::signing_key(&keys).verifying_key()
+        && own.enc_key() == &super::keys::enc_secret(&keys).public_key()
+        && ours
+            .as_ref()
+            .is_ok_and(|address| address.public_key() == keys.box_public_key());
+    if !mine {
+        return Ok(false);
+    }
+    let (Some(peer), Ok(ours)) = (&record.peer, ours) else {
+        return Ok(true);
+    };
+    let Ok(peer_card) = lepic_contact::ContactCard::decode(&peer.bytes, net) else {
+        return Ok(false);
+    };
+    let home_relay = format!(
+        "{}:{}",
+        ours.domain(),
+        ours.port().unwrap_or(lepic_epicbox::DEFAULT_PORT)
+    );
+    repos.put_contact_mailbox(&lepic_store::ContactMailbox {
+        contact_id: record.contact_id,
+        peer_mailbox: peer_card.fields().mailbox.as_str().to_owned(),
+        our_mailbox: ours.to_string(),
+        home_relay,
+        // A built-in relay is dialled at its own onion; a document's onion is not trusted.
+        onion: None,
+        previous: None,
+        backoff: Vec::new(),
+    })?;
+    Ok(true)
+}
+
 /// The record of a paired contact, or [`ContactError::UnknownContact`].
 fn paired(
     repos: &dyn lepic_store::Repositories,
@@ -295,9 +351,26 @@ where
                         .ok()
                         .map(|card| super::pairing::peer_card(&card))
                 };
-                Ok(session.store.write(|repos| {
-                    lepic_store::import_contacts(repos, &document, network, &read_card)
-                })?)
+                session.store.write(|repos| {
+                    let before: Vec<ContactId> = repos
+                        .contacts()?
+                        .iter()
+                        .map(|record| record.contact_id)
+                        .collect();
+                    let mut summary =
+                        lepic_store::import_contacts(repos, &document, network, &read_card)?;
+                    for record in repos.contacts()? {
+                        if before.contains(&record.contact_id) {
+                            continue;
+                        }
+                        if !restore_record(repos, &session.keychain, network, &record)? {
+                            repos.delete_contact(record.contact_id)?;
+                            summary.imported = summary.imported.saturating_sub(1);
+                            summary.skipped_conflict = summary.skipped_conflict.saturating_add(1);
+                        }
+                    }
+                    Ok::<_, ContactError>(summary)
+                })
             })
             .await?;
         info!(count = summary.imported, "contacts imported");

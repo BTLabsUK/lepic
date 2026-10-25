@@ -1972,3 +1972,45 @@ fn a_words_invite_offline_stores_nothing() {
     );
     assert!(world.issuer.read(|repos| repos.contacts()).is_empty());
 }
+
+/// R2-14: a backup restores only records whose own card this seed derives, and their mailbox
+/// comes from the cards, never from the document's mailbox fields.
+#[test]
+fn a_backup_restores_only_this_seeds_records_with_mailboxes_from_the_cards() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    let expected = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(anna_side))
+        .unwrap();
+    let document = world
+        .block_on(world.issuer.wallet.contacts_export())
+        .unwrap();
+    // The document's mailbox fields name other mailboxes.
+    let mut tampered: serde_json::Value = serde_json::from_str(&document).unwrap();
+    for contact in tampered["contacts"].as_array_mut().unwrap() {
+        contact["mailbox"]["peer_mailbox"] = serde_json::Value::from("elsewhere@evil.test:443");
+        contact["mailbox"]["home_relay"] = serde_json::Value::from("evil.test:443");
+        contact["mailbox"]["onion"] = serde_json::Value::from("evil.onion");
+    }
+    let restored = world.issuer_twin();
+    let summary = world
+        .block_on(restored.wallet.contacts_import(tampered.to_string()))
+        .unwrap();
+    assert_eq!(summary.imported, 1);
+    let mailbox = restored
+        .read(|repos| repos.contact_mailbox(anna_side))
+        .unwrap();
+    assert_eq!(mailbox.peer_mailbox, expected.peer_mailbox);
+    assert_eq!(mailbox.our_mailbox, expected.our_mailbox);
+    assert_eq!(mailbox.home_relay, expected.home_relay);
+    assert_eq!(mailbox.onion, None);
+
+    // Another seed's backup brings nothing in.
+    let stranger = world.stranger();
+    let summary = world
+        .block_on(stranger.wallet.contacts_import(document))
+        .unwrap();
+    assert_eq!(summary.imported, 0);
+    assert!(stranger.read(|repos| repos.contacts()).is_empty());
+}
