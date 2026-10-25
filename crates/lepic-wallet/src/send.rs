@@ -65,6 +65,7 @@ use crate::error::WalletError;
 use crate::inbox::relay_network;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::selection::{self, Selection, SelectionError, SelectionOptions, SelectionStrategy};
+use crate::send_limit::record_local_cutoff;
 use crate::wallet::Wallet;
 
 /// The private context of the party that adds inputs, under the participant id `epic-wallet`
@@ -172,6 +173,11 @@ pub struct SendRequest {
     pub lock: KernelLock,
     /// Blocks past the chain tip after which the receiver must refuse the slate.
     pub ttl_blocks: Option<u64>,
+    /// Blocks past the chain tip after which this wallet refuses to finalize or post the send,
+    /// and expires it at a refresh if it is unanswered. Kept by this wallet only, not in the
+    /// slate, so it works on every method. With [`Self::ttl_blocks`] as well, the earlier
+    /// height applies.
+    pub local_ttl_blocks: Option<u64>,
     /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
     /// it is signed.
     pub message: Option<String>,
@@ -191,6 +197,7 @@ impl SendRequest {
             strategy: options.strategy,
             lock: KernelLock::NONE,
             ttl_blocks: None,
+            local_ttl_blocks: None,
             message: None,
             payment_proof_recipient: None,
         }
@@ -722,7 +729,8 @@ pub(crate) struct BuiltAndStored {
 
 /// Builds the S1 of `request` with the inputs and change of `selection` and stores it in the
 /// caller's store transaction: the outgoing entry, the inputs locked by it, the change as
-/// unconfirmed outputs, the sender's private context and the slate itself.
+/// unconfirmed outputs, the sender's private context, the slate itself and the request's local
+/// cutoff.
 pub(crate) fn store_s1(
     repos: &mut dyn Repositories,
     keychain: &Keychain,
@@ -745,6 +753,10 @@ pub(crate) fn store_s1(
         .collect::<Result<Vec<_>, SendError>>()?;
     let ttl_cutoff_height = request
         .ttl_blocks
+        .map(|blocks| tip.checked_add_blocks(blocks))
+        .transpose()?;
+    let local_cutoff = request
+        .local_ttl_blocks
         .map(|blocks| tip.checked_add_blocks(blocks))
         .transpose()?;
     let plan = S1Plan {
@@ -786,6 +798,7 @@ pub(crate) fn store_s1(
         created_at: storage.now,
         updated_at: storage.now,
     })?;
+    record_local_cutoff(repos, tx_id, local_cutoff)?;
     for input in &plan.inputs {
         repos.put_output(&OutputRecord {
             status: OutputStatus::Locked,
@@ -1041,7 +1054,9 @@ where
 {
     /// Sends `request.amount` from `request.account`: builds the S1 slate, stores it with its
     /// inputs locked, then delivers it as `delivery` says, encoded with that transport's format
-    /// policy.
+    /// policy. A `request.local_ttl_blocks` is stored as a height past the tip, after which
+    /// [`Wallet::finalize`] and [`Wallet::post`] refuse the send and a refresh expires it if
+    /// it is unanswered.
     ///
     /// Fails, with nothing stored, with [`SendError::Wallet`] carrying [`WalletError::Locked`]
     /// when the wallet is locked, [`SendError::Node`] when the chain tip is unavailable, [`SendError::UnknownTransport`],

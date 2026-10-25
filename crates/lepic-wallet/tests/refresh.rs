@@ -161,6 +161,37 @@ fn expires_an_unposted_send_at_its_ttl_cutoff_and_releases_its_inputs() {
 }
 
 #[test]
+fn expires_an_unanswered_send_at_its_local_cutoff_as_at_a_ttl() {
+    let (sender, funding) = funded();
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(
+            SendRequest {
+                local_ttl_blocks: Some(TTL_BLOCKS),
+                ..request(None)
+            },
+            to_peer(),
+        ))
+        .unwrap();
+    let change = change(&sender, &funding);
+
+    set_tip(&sender, TIP + TTL_BLOCKS - 1);
+    assert_eq!(refresh(&sender).expired_transactions, 0);
+    assert_eq!(state(&sender, sent.tx_id), TxState::Sent);
+
+    set_tip(&sender, TIP + TTL_BLOCKS);
+    let summary = refresh(&sender);
+
+    assert_eq!(summary.expired_transactions, 1);
+    assert_eq!(state(&sender, sent.tx_id), TxState::Expired);
+    assert_eq!(
+        output(&sender, &funding).unwrap().status,
+        OutputStatus::Unspent
+    );
+    assert_eq!(output(&sender, &change), None);
+}
+
+#[test]
 fn expires_a_received_transaction_and_drops_its_output() {
     let (sender, _) = funded();
     let vector: serde_json::Value = serde_json::from_str(SEND_FILE_TTL_S2).unwrap();

@@ -11,6 +11,8 @@
 //! transaction `finalized`, from where [`crate::Wallet::post`] tries again. Finalizing the same
 //! S2 again, or posting again, changes nothing that is stored.
 
+use std::sync::Arc;
+
 use ed25519_dalek::{Verifier, VerifyingKey};
 use jiff::Timestamp;
 use lepic_crypto::aggsig::{
@@ -50,6 +52,7 @@ use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::release::record_finalized;
 use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version};
+use crate::send_limit::effective_cutoff;
 use crate::state::{StateChange, apply_transition, state_name};
 use crate::wallet::Wallet;
 
@@ -527,15 +530,21 @@ fn finalize_stored(
             return match stored_s3(repos, base_fee, slate_uuid)? {
                 // Returned as the first finalize returned it: with the wire origin of the S2,
                 // which a reply policy echoes, not that of the stored copy.
-                Some(finalized) if finalized_from(&finalized.slate, s2) => Ok(StoredS3 {
-                    tx_id,
-                    finalized: FinalizedSlate {
-                        slate: finalized.slate.with_origin(s2.origin().copied()),
-                        transaction: finalized.transaction,
-                    },
-                    change: None,
-                    state,
-                }),
+                Some(finalized) if finalized_from(&finalized.slate, s2) => {
+                    // A finalized transaction is pushed again, which its cutoff forbids.
+                    if state == TxState::Finalized {
+                        check_cutoff(repos, tx_id, &finalized.slate, env.tip)?;
+                    }
+                    Ok(StoredS3 {
+                        tx_id,
+                        finalized: FinalizedSlate {
+                            slate: finalized.slate.with_origin(s2.origin().copied()),
+                            transaction: finalized.transaction,
+                        },
+                        change: None,
+                        state,
+                    })
+                }
                 _ => Err(FinalizeError::AlreadyFinalized { slate_id, tx_id }),
             };
         }
@@ -549,14 +558,7 @@ fn finalize_stored(
         .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
         .ok_or(FinalizeError::UnknownSlate { slate_id })?;
     let s1 = decode_stored(base_fee, s1)?.with_origin(None);
-    if let Some(cutoff) = s1.ttl_cutoff_height()
-        && env.tip >= cutoff
-    {
-        return Err(FinalizeError::Expired {
-            cutoff,
-            tip: env.tip,
-        });
-    }
+    check_cutoff(repos, tx_id, &s1, env.tip)?;
     let context = repos
         .context(slate_uuid, SENDER_CONTEXT)?
         .ok_or(FinalizeError::MissingContext { slate_id })?;
@@ -595,6 +597,20 @@ fn finalize_stored(
         change,
         state: TxState::Finalized,
     })
+}
+
+/// Refuses with [`FinalizeError::Expired`] once `tip` reaches the transaction's cutoff: the
+/// earlier of the TTL `slate` carries and the send's local cutoff.
+fn check_cutoff(
+    repos: &dyn Repositories,
+    tx_id: TxId,
+    slate: &Slate,
+    tip: Height,
+) -> Result<(), FinalizeError> {
+    match effective_cutoff(repos, tx_id, slate.ttl_cutoff_height())? {
+        Some(cutoff) if tip >= cutoff => Err(FinalizeError::Expired { cutoff, tip }),
+        _ => Ok(()),
+    }
 }
 
 /// A slate this wallet finalized from its own S2, by [`finalize_own`].
@@ -654,12 +670,13 @@ fn pool_holds_transaction(error: &NodeError) -> bool {
     )
 }
 
-/// The stored final slate and transaction of a transaction that may be posted.
+/// The stored final slate and transaction of a transaction that may be posted, and the height
+/// from which it may not, if any.
 fn postable(
     repos: &dyn Repositories,
     base_fee: Fee,
     tx_id: TxId,
-) -> Result<FinalizedSlate, FinalizeError> {
+) -> Result<(FinalizedSlate, Option<Height>), FinalizeError> {
     let entry = repos
         .transaction(tx_id)?
         .ok_or(WalletError::UnknownTransaction(tx_id))?;
@@ -677,7 +694,15 @@ fn postable(
         TxDirection::Outgoing => SlateStage::Standard3,
         TxDirection::Incoming => SlateStage::Invoice3,
     };
-    stored_final(repos, base_fee, slate_id, stage)?.ok_or(not_postable)
+    let finalized = stored_final(repos, base_fee, slate_id, stage)?.ok_or(not_postable)?;
+    // Only a send has a cutoff here; an invoice's payer may expect its issuer to post late.
+    let cutoff = match entry.direction {
+        TxDirection::Outgoing => {
+            effective_cutoff(repos, tx_id, finalized.slate.ttl_cutoff_height())?
+        }
+        TxDirection::Incoming => None,
+    };
+    Ok((finalized, cutoff))
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -693,9 +718,11 @@ where
     /// `propagation`.
     ///
     /// Asks the node for its tip, and refuses with [`FinalizeError::Expired`] once it reaches the
-    /// slate's TTL cutoff. Finalizing an S2 a second time, also once its transaction is confirmed,
-    /// returns the stored result and posts only if the first post did not succeed; another S2 under
-    /// the same slate id fails with [`FinalizeError::AlreadyFinalized`]. Fails with
+    /// transaction's cutoff: the earlier of the slate's TTL cutoff and the local cutoff of
+    /// [`crate::send::SendRequest::local_ttl_blocks`]. Finalizing an S2 a second time, also once
+    /// its transaction is confirmed, returns the stored result and posts only if the first post
+    /// did not succeed, which the cutoff refuses as well; another S2 under the same slate id
+    /// fails with [`FinalizeError::AlreadyFinalized`]. Fails with
     /// [`FinalizeError::NotPosted`] when the slate was finalized and stored but the node refused or
     /// could not be reached; the transaction then waits in state `finalized` for [`Wallet::post`].
     /// A node whose pool or chain already holds the transaction counts as having accepted it. Every other
@@ -778,9 +805,12 @@ where
     ///
     /// Fails with [`FinalizeError::Wallet`] carrying [`WalletError::UnknownTransaction`], with
     /// [`FinalizeError::NotPostable`] when the transaction is not `finalized` or `posted`, and
-    /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached. A node
-    /// whose pool already holds the transaction counts as having accepted it. When the node
-    /// refuses the push, the kernel is looked up; one already on chain gives
+    /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached. A send
+    /// with a cutoff, the earlier of its slate's TTL cutoff and the local cutoff of
+    /// [`crate::send::SendRequest::local_ttl_blocks`], has the node's tip asked for, and is
+    /// refused with [`FinalizeError::Expired`] once the tip reaches it, also when it was posted
+    /// before. A node whose pool already holds the transaction counts as having accepted it.
+    /// When the node refuses the push, the kernel is looked up; one already on chain gives
     /// [`Posted::AlreadyOnChain`], and the next refresh confirms the transaction.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn post(
@@ -789,12 +819,27 @@ where
         propagation: Propagation,
     ) -> Result<Posted, FinalizeError> {
         let session = self.session()?;
-        let finalized = self
-            .blocking(move |_, config| {
+        let (finalized, cutoff) = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, config| {
                 let base_fee = config.network.params().default_base_fee();
                 Ok(session.store.read(|repos| postable(repos, base_fee, tx_id)))
             })
-            .await??;
+            .await??
+        };
+        if let Some(cutoff) = cutoff {
+            let tip = self
+                .ports()
+                .node
+                .get_tip()
+                .await
+                .map_err(FinalizeError::Node)?
+                .height;
+            self.check_plausible_tip(&session, tip).await?;
+            if tip >= cutoff {
+                return Err(FinalizeError::Expired { cutoff, tip });
+            }
+        }
         self.push(tx_id, &finalized, propagation).await
     }
 

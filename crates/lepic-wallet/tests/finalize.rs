@@ -20,8 +20,9 @@ use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::params::Network;
 use lepic_primitives::validate::ValidationError;
+use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
-use lepic_slate::codec::{MediaType, WireSlate};
+use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, SlateError};
 use lepic_slate::model::{ProofAddress, SlateId};
 use lepic_slate::role::Role;
@@ -35,8 +36,9 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Event, WalletError};
 use receive_harness::{Receiver, json, vector};
-use send_support::{ACCOUNT, PEER, Sender, TIP, legacy_codecs, uuid};
+use send_support::{ACCOUNT, PEER, Sender, TIP, V2Only, legacy_codecs, uuid};
 use serde_json::Value;
+use std::sync::Arc;
 use support::LOOPBACK;
 
 const AMOUNT: u64 = 100_000_000;
@@ -71,7 +73,10 @@ struct Exchange {
 }
 
 fn exchange(request: SendRequest, receiver_message: Option<&str>) -> Exchange {
-    let sender = Sender::new();
+    exchange_with(Sender::new(), request, receiver_message)
+}
+
+fn exchange_with(sender: Sender, request: SendRequest, receiver_message: Option<&str>) -> Exchange {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
@@ -589,6 +594,109 @@ fn a_slate_past_its_ttl_is_not_finalized() {
         "{error:?}"
     );
     exchange.assert_untouched();
+}
+
+fn set_tip(exchange: &Exchange, height: u64) {
+    exchange
+        .sender
+        .harness
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(height));
+}
+
+fn is_expired_at(error: &FinalizeError, at: u64) -> bool {
+    matches!(error, FinalizeError::Expired { cutoff, tip }
+        if *cutoff == Height::new(TIP + 2) && *tip == Height::new(at))
+}
+
+#[test]
+fn a_send_past_its_local_cutoff_is_not_finalized_though_its_v2_slate_has_no_ttl() {
+    let exchange = exchange_with(
+        Sender::with_policy(Arc::new(V2Only)),
+        SendRequest {
+            local_ttl_blocks: Some(2),
+            ..request()
+        },
+        None,
+    );
+    assert!(!exchange.s1.as_text().unwrap().contains("ttl_cutoff_height"));
+    // The reply in the V2 shape, as a legacy Epicbox peer returns it.
+    let s2 = legacy_codecs().decode(&exchange.s2).unwrap();
+    assert_eq!(s2.ttl_cutoff_height(), None);
+    let s2 = V2JsonCodec::new(Network::Floonet.params().default_base_fee())
+        .encode(
+            &s2,
+            &EncodeContext {
+                block_header_version: 6,
+            },
+        )
+        .unwrap();
+
+    set_tip(&exchange, TIP + 2);
+    let error = exchange.finalize(&s2).unwrap_err();
+    assert!(is_expired_at(&error, TIP + 2), "{error:?}");
+    exchange.assert_untouched();
+
+    set_tip(&exchange, TIP + 1);
+    exchange.finalize(&s2).unwrap();
+    assert_eq!(exchange.state(), TxState::Posted);
+}
+
+#[test]
+fn a_finalized_send_past_its_local_cutoff_is_not_pushed_again() {
+    let exchange = exchange(
+        SendRequest {
+            local_ttl_blocks: Some(2),
+            ..request()
+        },
+        None,
+    );
+    exchange
+        .sender
+        .harness
+        .node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    exchange.finalize(&exchange.s2).unwrap_err();
+    assert_eq!(exchange.state(), TxState::Finalized);
+
+    set_tip(&exchange, TIP + 2);
+    let error = exchange.post(exchange.tx_id).unwrap_err();
+    assert!(is_expired_at(&error, TIP + 2), "{error:?}");
+    let error = exchange.finalize(&exchange.s2).unwrap_err();
+    assert!(is_expired_at(&error, TIP + 2), "{error:?}");
+    assert_eq!(exchange.state(), TxState::Finalized);
+    assert_eq!(exchange.pushed(), 0);
+
+    set_tip(&exchange, TIP + 1);
+    exchange.post(exchange.tx_id).unwrap();
+    assert_eq!(exchange.state(), TxState::Posted);
+    assert_eq!(exchange.pushed(), 1);
+
+    set_tip(&exchange, TIP + 3);
+    let error = exchange.post(exchange.tx_id).unwrap_err();
+    assert!(is_expired_at(&error, TIP + 3), "{error:?}");
+    assert_eq!(exchange.state(), TxState::Posted);
+    assert_eq!(exchange.pushed(), 1);
+}
+
+#[test]
+fn the_earlier_of_the_slate_ttl_and_the_local_cutoff_applies() {
+    for (ttl_blocks, local_ttl_blocks) in [(5, 2), (2, 5)] {
+        let exchange = exchange(
+            SendRequest {
+                ttl_blocks: Some(ttl_blocks),
+                local_ttl_blocks: Some(local_ttl_blocks),
+                ..request()
+            },
+            None,
+        );
+        set_tip(&exchange, TIP + 2);
+
+        let error = exchange.finalize(&exchange.s2).unwrap_err();
+
+        assert!(is_expired_at(&error, TIP + 2), "{error:?}");
+        exchange.assert_untouched();
+    }
 }
 
 #[test]

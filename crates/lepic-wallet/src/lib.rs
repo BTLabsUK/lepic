@@ -38,6 +38,7 @@ pub mod scan;
 pub mod selection;
 pub mod self_send;
 pub mod send;
+mod send_limit;
 pub mod state;
 mod twin_answer;
 mod wallet;

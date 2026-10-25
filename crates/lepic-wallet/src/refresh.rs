@@ -46,6 +46,7 @@ use crate::release::{
     RELEASED_WATCH_BLOCKS, ReleaseCheck, record_kernel_absent, record_watch, release_check,
 };
 use crate::self_send::SELF;
+use crate::send_limit::effective_cutoff;
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
 
@@ -166,7 +167,8 @@ where
     /// marks the ones it holds unspent and confirms their transactions, marks unspent and
     /// locked ones it does not hold spent once a second request misses them too, confirms open
     /// transactions with no change output by their kernel, and expires transactions at or past
-    /// their TTL cutoff, releasing their inputs. A posted or finalized transaction is never
+    /// their TTL cutoff, or a send at or past its local cutoff
+    /// ([`crate::send::SendRequest::local_ttl_blocks`]), releasing their inputs. A posted or finalized transaction is never
     /// expired, since it may still be mined. Last, it looks up the kernel of each finalized or
     /// posted send [`crate::release::RELEASE_AFTER_BLOCKS`] or more after it was finalized,
     /// counted at the highest confirmed tip: a kernel found confirms the send, a missing one
@@ -1011,7 +1013,8 @@ pub(crate) fn pending_kernel(
     }
 }
 
-/// Open transactions that end at `tip`: those at or past their TTL cutoff, and a received
+/// Open transactions that end at `tip`: those at or past their TTL cutoff, or a send's local
+/// cutoff ([`crate::send::SendRequest::local_ttl_blocks`]) when that is earlier, and a received
 /// payment with no TTL, answered with an S2, once [`UNFINALIZED_RECEIVE_BLOCKS`] have passed
 /// since a refresh first saw it. A finalized or posted transaction is left out, as upstream
 /// leaves out what it has finalized: its kernel may reach the chain whatever the TTL says. So
@@ -1036,7 +1039,8 @@ fn expiring(
         let Some(slate_id) = stored.entry.slate_id else {
             continue;
         };
-        let cutoff = match ttl_cutoff(repos, codecs, stored.id, slate_id)? {
+        let slate_ttl = ttl_cutoff(repos, codecs, stored.id, slate_id)?;
+        let cutoff = match effective_cutoff(repos, stored.id, slate_ttl)? {
             Some(cutoff) => Some(cutoff),
             None => unfinalized_receive_cutoff(repos, codecs, &stored)?,
         };

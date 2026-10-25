@@ -23,7 +23,7 @@ own state (`lepic-wallet`'s `state` module).
 | outgoing `posted` | `TxSentCreated`, or `TxSentMempool` once seen in the mempool | false | posting to the node |
 | outgoing `confirmed` | `TxSent` | true | a refresh finding one of its outputs on chain, or the kernel of a watched transaction (below) |
 | outgoing `cancelled` | `TxSentCancelled` | false | the owner's cancel, or the owner's release of a finalized or posted send the network never took |
-| outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height, once the node holds no kernel the peer could have completed |
+| outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height, or the send's wallet-local cutoff when that is earlier, once the node holds no kernel the peer could have completed |
 | incoming `received` | `TxReceived` | false | receiving S1 (S2 returned), or issuing an invoice (I1) |
 | incoming `finalized` | `TxReceived`, with the transaction stored | false | the invoice issuer finalizing I3 |
 | incoming `posted` | `TxReceived`, or `TxReceivedMempool` once seen in the mempool | false | the invoice issuer posting |
@@ -63,6 +63,15 @@ Upstream also refuses to cancel an entry whose type is neither `TxSentCreated` n
 a transaction the mempool has seen (`TxSentMempool`, `TxReceivedMempool`) cannot be cancelled there.
 LEPIC's state machine allows `posted` to `cancelled` for the scan's repair and for a release, but
 the owner's cancel refuses a `posted` transaction.
+
+A send may also carry a wallet-local cutoff (`SendRequest::local_ttl_blocks`), a height this
+wallet stores next to the transaction and never puts in the slate, so it works on every method,
+also those whose V2 slate cannot carry a TTL. LEPIC's app sends carry one 1,440 blocks above the
+tip they were created at, and a file send carries the same height as its slate TTL, which the
+receiver enforces too. Once the tip reaches the earlier of the slate TTL and the local cutoff,
+this wallet neither finalizes the send nor posts it, also not again after a failed or earlier
+post, and a refresh expires it if it is still `sent`, as at a TTL cutoff. A finalized or posted
+send is still not expired. Upstream's `post_tx` checks no TTL.
 
 A release (`Wallet::release`) ends an outgoing `finalized` or `posted` send the network never took,
 as the Epic Cash app's `release_stuck_send` does. A refresh at or above 1,440 blocks after the
