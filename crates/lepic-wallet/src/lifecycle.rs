@@ -168,8 +168,17 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     let ours = SeedIdentity::of(seed, &keychain)?;
     let store = stores.open(target.data_dir, context_key(seed)?)?;
     let identity = store.read(|repos| stored_identity(repos, target.network, &ours))?;
-    if identity != StoredIdentity::Empty && source == SeedSource::Generated {
-        return Err(WalletError::ForeignDatabase);
+    match (identity, source) {
+        (StoredIdentity::Empty, _) | (StoredIdentity::Proven, SeedSource::Recovered) => {}
+        (_, SeedSource::Generated) => return Err(WalletError::ForeignDatabase),
+        // The fingerprint alone proves nothing, and the seed check written below would stamp
+        // the database with this seed: an output of another seed refuses it. A database without
+        // outputs holds nothing a seed could be proven by, nor anything to lose.
+        (StoredIdentity::FingerprintOnly, SeedSource::Recovered) => {
+            if store.read(|repos| outputs_prove(repos, &keychain))? == Some(false) {
+                return Err(WalletError::ForeignDatabase);
+            }
+        }
     }
     let mut vault = secrets.create(password)?;
     put_seed(&mut vault, seed)?;

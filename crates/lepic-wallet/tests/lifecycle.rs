@@ -544,6 +544,75 @@ fn check_phrase_on_a_database_with_nothing_to_prove_the_phrase_is_unproven() {
     assert_eq!(setting(&harness, SEED_CHECK), None);
 }
 
+/// A restore stores the seed check of the phrase it was given, so over a database without
+/// one the fingerprint is not taken for proof: an output of another seed refuses the phrase.
+#[test]
+fn restore_of_a_colliding_phrase_over_a_database_without_a_seed_check_is_refused_by_an_output() {
+    let harness = Harness::new();
+    let phrase = closed_wallet(&harness);
+    drop_seed_check(&harness);
+    plant_output_of(&harness, &phrase);
+    let colliding = vector_phrase();
+    let fingerprint =
+        lifecycle::seed_fingerprint(&Seed::from_mnemonic(&colliding).unwrap(), Network::Mainnet)
+            .unwrap();
+    put_setting(&harness, FINGERPRINT, &fingerprint);
+
+    let fresh_vault = TestVault::default();
+    let other = harness.wallet_with(harness.config(Network::Mainnet), fresh_vault.clone());
+    let result = harness.block_on(other.restore(password(PASSWORD), &colliding));
+
+    assert!(
+        matches!(result, Err(WalletError::ForeignDatabase)),
+        "{result:?}"
+    );
+    assert!(!fresh_vault.is_created());
+    assert_eq!(setting(&harness, SEED_CHECK), None);
+}
+
+#[test]
+fn restore_over_a_database_without_a_seed_check_or_outputs_is_accepted() {
+    let harness = Harness::new();
+    closed_wallet(&harness);
+    drop_seed_check(&harness);
+    let restored_phrase = vector_phrase();
+    let fingerprint = lifecycle::seed_fingerprint(
+        &Seed::from_mnemonic(&restored_phrase).unwrap(),
+        Network::Mainnet,
+    )
+    .unwrap();
+    put_setting(&harness, FINGERPRINT, &fingerprint);
+
+    let restored = harness.wallet_with(harness.config(Network::Mainnet), TestVault::default());
+    harness
+        .block_on(restored.restore(password(PASSWORD), &restored_phrase))
+        .unwrap();
+    restored.close();
+
+    assert!(setting(&harness, SEED_CHECK).is_some());
+    assert!(matches!(
+        harness.block_on(harness.wallet().check_phrase(&restored_phrase)),
+        Ok(PhraseCheck::Matches(_))
+    ));
+}
+
+#[test]
+fn restore_over_a_database_without_a_seed_check_is_proven_by_its_own_output() {
+    let harness = Harness::new();
+    let phrase = closed_wallet(&harness);
+    let check = setting(&harness, SEED_CHECK).unwrap();
+    drop_seed_check(&harness);
+    plant_output_of(&harness, &phrase);
+
+    let restored = harness.wallet_with(harness.config(Network::Mainnet), TestVault::default());
+    harness
+        .block_on(restored.restore(password(PASSWORD), &phrase))
+        .unwrap();
+
+    assert!(restored.is_unlocked());
+    assert_eq!(setting(&harness, SEED_CHECK).unwrap(), check);
+}
+
 /// The check of a phrase leaves a damaged database where it is, so it is still there to retry
 /// or to set aside by an open.
 #[test]
