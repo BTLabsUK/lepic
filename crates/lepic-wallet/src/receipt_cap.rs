@@ -216,7 +216,18 @@ where
                 {
                     return Ok::<_, StoreError>(None);
                 }
-                Ok(Some(repos.open_receipts(transport.as_str())?))
+                // A paired contact's receipts have caps of their own (RFC 0002 12.5).
+                let mut open = Vec::new();
+                for receipt in repos.open_receipts(transport.as_str())? {
+                    let contact = match repos.transaction(receipt.id)?.and_then(|tx| tx.slate_id) {
+                        Some(slate) => crate::contact::slate_contact(repos, slate)?,
+                        None => None,
+                    };
+                    if contact.is_none() {
+                        open.push(receipt);
+                    }
+                }
+                Ok(Some(open))
             })?)
         })
         .await

@@ -1108,3 +1108,52 @@ fn an_explicit_collect_delivers_the_outbox_at_once_and_reports_it() {
     assert_eq!(tick.delivered, 0);
     assert_eq!(world.collect(&world.payer).delivered, 1);
 }
+
+/// M5: slates exchanged through a contact's mailbox are recorded as over Epicbox on both sides;
+/// one sealed to a file stays a file.
+#[test]
+fn mailbox_slates_are_recorded_as_epicbox_and_sealed_files_as_files() {
+    let world = World::new();
+    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let issued = world.invoice_contact(shop_side, "paid");
+    world.collect(&world.payer);
+    let paid = world.pay_contact(&issued);
+    let transport = |party: &Party, tx_id| {
+        party
+            .read(|repos| repos.transaction(tx_id))
+            .unwrap()
+            .transport
+    };
+    let epicbox = Some(lepic_epicbox::TRANSPORT_ID.as_str().to_owned());
+    assert_eq!(transport(&world.issuer, issued.tx_id), epicbox);
+    assert_eq!(transport(&world.payer, paid.tx_id), epicbox);
+
+    world.payer.fund(1, world::FUNDING);
+    let sent = world
+        .block_on(world.payer.wallet.send(
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+            },
+            Delivery::Export {
+                transport: lepic_transport::file::FILE,
+                to: lepic_transport::transport::Location::File(
+                    tempfile::tempdir().unwrap().keep().join("s1.tx"),
+                ),
+            },
+        ))
+        .unwrap();
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_seal_slate(ben_side, sent.tx_id, None),
+        )
+        .unwrap();
+    assert_eq!(
+        transport(&world.payer, sent.tx_id),
+        Some(lepic_transport::file::FILE.as_str().to_owned())
+    );
+}

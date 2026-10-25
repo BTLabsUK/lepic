@@ -577,7 +577,8 @@ where
                 }
                 let mut from_contact = 0usize;
                 let mut from_contacts = 0usize;
-                for receipt in repos.open_receipts(FILE.as_str())? {
+                // A contact's receipts are recorded as exchanged over Epicbox.
+                for receipt in repos.open_receipts(lepic_epicbox::TRANSPORT_ID.as_str())? {
                     let Some(slate) = repos
                         .transaction(receipt.id)?
                         .and_then(|entry| entry.slate_id)

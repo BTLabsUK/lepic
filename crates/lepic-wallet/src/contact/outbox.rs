@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use lepic_contact::{ContactCard, armor};
-use lepic_epicbox::EpicboxAddress;
+use lepic_epicbox::{EpicboxAddress, TRANSPORT_ID};
 use lepic_node::NodeApi;
 use lepic_slate::model::SlateId;
 use lepic_store::{
@@ -82,7 +82,9 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// Queues `envelope` for the contact's mailbox, due at once.
+    /// Queues `envelope` for the contact's mailbox, due at once. A transaction whose slate goes
+    /// this way is recorded as exchanged over Epicbox, as it travels there; a sealed file stays
+    /// a file.
     pub(crate) async fn enqueue_for_contact(
         &self,
         contact_id: ContactId,
@@ -98,6 +100,14 @@ where
                 let mailbox = repos
                     .contact_mailbox(contact_id)?
                     .ok_or(ContactError::UnknownContact)?;
+                for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
+                    if let Some(mut tx) = repos.transaction_by_slate(slate_id, direction)?
+                        && tx.entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+                    {
+                        tx.entry.transport = Some(TRANSPORT_ID.as_str().to_owned());
+                        repos.update_transaction(tx.id, &tx.entry)?;
+                    }
+                }
                 Ok(repos.enqueue_contact_outbox(&ContactOutboxEntry {
                     contact_id,
                     slate_id,
