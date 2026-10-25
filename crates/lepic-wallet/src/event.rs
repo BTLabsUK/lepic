@@ -127,6 +127,9 @@ pub enum Event {
     /// An outbox entry could not be delivered for a day and stopped retrying; the host offers
     /// "Send again". Funds unlock as for any unfinished payment.
     OutboxStuck(OutboxNews),
+    /// The contact's answer (S2) to a payment this wallet sent through its mailbox arrived and
+    /// the payment was finalized. Its posting shows as [`Event::Transaction`].
+    ContactPaymentFinalized(ContactSlateEvent),
 }
 
 /// An invoice a contact sent, with what the contact says about it.
@@ -143,7 +146,7 @@ pub struct ContactInvoiceEvent {
     pub message: Option<String>,
 }
 
-/// A slate from a contact that the wallet received.
+/// A slate exchanged with a contact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContactSlateEvent {
     pub contact_id: lepic_store::ContactId,

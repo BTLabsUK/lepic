@@ -1257,6 +1257,11 @@ pub enum WalletEventKind {
     /// A message could not be delivered for a day and stopped retrying: `contact_id` and
     /// `slate_id` are set. Offer "Send again".
     OutboxStuck,
+    /// The contact answered a payment this wallet sent through its mailbox and the payment
+    /// was finalized: `contact_id`, `tx_id`, `slate_id` and `amount` are set. Its posting
+    /// follows as `Transaction`. An answer the contact sent again raises it again for the same
+    /// `tx_id`; treat a repeat as the same payment.
+    ContactPaymentFinalized,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its

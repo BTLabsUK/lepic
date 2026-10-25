@@ -1757,6 +1757,9 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             contact::outbox_event(WalletEventKind::OutboxDelivered, news)
         }
         Event::OutboxStuck(news) => contact::outbox_event(WalletEventKind::OutboxStuck, news),
+        Event::ContactPaymentFinalized(slate) => {
+            contact::slate_event(WalletEventKind::ContactPaymentFinalized, slate)
+        }
         _ => return None,
     })
 }

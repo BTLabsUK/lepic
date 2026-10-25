@@ -150,12 +150,26 @@ fn wire_text(bytes: Vec<u8>) -> Result<WireSlate, ContactError> {
     Ok(WireSlate::text(MediaType::JSON, text))
 }
 
-/// Whether the contact can take a sealed send now.
-fn check_sealable(record: &ContactRecord, card: &ContactCard) -> Result<(), ContactError> {
+/// How a sealed slate leaves for a contact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Channel {
+    /// Armored text for a file or a paste, which the user could also send plain.
+    Text,
+    /// The contact's mailbox, which carries only sealed envelopes (RFC 0002 9.1 and 11.2).
+    Mailbox,
+}
+
+/// Whether the contact can take a sealed send now on `channel`. The seal switch governs files
+/// and pastes only: a mailbox send is sealed whatever it says.
+fn check_sealable(
+    record: &ContactRecord,
+    card: &ContactCard,
+    channel: Channel,
+) -> Result<(), ContactError> {
     if !matches!(record.state, ContactState::Paired | ContactState::Verified) {
         return Err(ContactError::UnknownContact);
     }
-    if record.seal == SealMode::Off
+    if (channel == Channel::Text && record.seal == SealMode::Off)
         || !card
             .fields()
             .caps
@@ -195,6 +209,50 @@ where
         tx_id: TxId,
         purpose: Option<Purpose>,
     ) -> Result<String, ContactError> {
+        self.seal_stored_slate(contact_id, tx_id, purpose, Channel::Text)
+            .await
+    }
+
+    /// Checks that a slate can go to the contact `contact_id` through its mailbox, as
+    /// [`Wallet::contact_post_slate`] would check it, before anything is built or locked: the
+    /// contact is paired or verified, its card says it opens sealed slates, and its mailbox is
+    /// known. Reads only.
+    ///
+    /// Fails with [`ContactError::UnknownContact`] and [`ContactError::SealOff`] as
+    /// [`Wallet::contact_post_slate`] does.
+    pub async fn contact_check_mailbox_send(
+        &self,
+        contact_id: ContactId,
+    ) -> Result<(), ContactError> {
+        let net = contact_network(self.config().network);
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            session.store.read(|repos| {
+                let record = repos
+                    .contact(contact_id)?
+                    .ok_or(ContactError::UnknownContact)?;
+                let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
+                let card =
+                    ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
+                check_sealable(&record, &card, Channel::Mailbox)?;
+                repos
+                    .contact_mailbox(contact_id)?
+                    .ok_or(ContactError::UnknownContact)?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Seals the slate this wallet last wrote for `tx_id` to the contact for `channel`, as
+    /// [`Wallet::contact_seal_slate`] describes.
+    async fn seal_stored_slate(
+        &self,
+        contact_id: ContactId,
+        tx_id: TxId,
+        purpose: Option<Purpose>,
+        channel: Channel,
+    ) -> Result<String, ContactError> {
         let network = self.config().network;
         let net = contact_network(network);
         let session = self.session()?;
@@ -207,7 +265,7 @@ where
                     let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
                     let card =
                         ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
-                    check_sealable(&record, &card)?;
+                    check_sealable(&record, &card, channel)?;
                     let entry = repos
                         .transaction(tx_id)?
                         .ok_or(ContactError::UnknownTransaction)?;
@@ -257,9 +315,11 @@ where
     /// Sends the slate this wallet last wrote for `tx_id` through the contact's mailbox (RFC 0002
     /// 9.1, "Send through Anna's mailbox"; 12.5 for a withdrawal): sealed as
     /// [`Wallet::contact_seal_slate`] seals it, queued in the outbox, and posted once when relays
-    /// may be reached. The answer comes back to our mailbox and is taken by collecting.
+    /// may be reached. The answer comes back to our mailbox and is taken by collecting. A
+    /// mailbox carries only sealed envelopes, so the contact's seal switch does not apply.
     ///
-    /// Fails as [`Wallet::contact_seal_slate`] does.
+    /// Fails as [`Wallet::contact_seal_slate`] does, except that [`ContactError::SealOff`] means
+    /// only that the contact's card says it cannot open sealed slates.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn contact_post_slate(
         &self,
@@ -268,7 +328,9 @@ where
         tx_id: TxId,
         purpose: Option<Purpose>,
     ) -> Result<(), ContactError> {
-        let armored = self.contact_seal_slate(contact_id, tx_id, purpose).await?;
+        let armored = self
+            .seal_stored_slate(contact_id, tx_id, purpose, Channel::Mailbox)
+            .await?;
         let envelope = dearmor(&armored).map_err(ContactError::StoredData)?;
         let session = self.session()?;
         let (slate_id, stage) = self

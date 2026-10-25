@@ -14,8 +14,9 @@ use lepic_wallet::contact::{
 use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
 use lepic_wallet::slate::{Slate, Stage, WireSlate};
+use tracing::{info, warn};
 
-use super::{DEFAULT_ACCOUNT, Session, invalid};
+use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
@@ -23,8 +24,8 @@ use crate::api::types::{
     InvitePreview, IssuedInvoice, KeysDecision, OutboxEntryView, OutboxReport, OutboxState,
     PaidInvoice, PairingAnswer, PairingCard, PairingFailureReason, PairingInvite,
     PairingLinkOutcome, PairingLinkResult, PairingState, PendingPairingView, SasDecision, SasEntry,
-    SealState, SealedAnswer, SealedSlateView, SendOptions, SlateMessage, SlatePurpose, SlateStage,
-    WalletEvent, WalletEventKind,
+    SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx, SlateMessage, SlatePurpose,
+    SlateStage, WalletEvent, WalletEventKind,
 };
 
 /// The longest sealed text taken from the app: a slate with its envelope and armor fits many
@@ -622,6 +623,49 @@ impl Session {
             .await?)
     }
 
+    /// Checks the contact first, so a send it cannot take locks nothing, and cancels the send
+    /// when it cannot be queued after all.
+    #[allow(clippy::too_many_arguments)] // The app's send form, one value per field.
+    pub(crate) async fn contact_send(
+        &self,
+        contact_id: &str,
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+        purpose: Option<SlatePurpose>,
+        mode: ContactRelayMode,
+    ) -> Result<SentTx, WalletError> {
+        let id = self::contact_id(contact_id)?;
+        let relays = self.contact_relays(mode)?;
+        self.engine.contact_check_mailbox_send(id).await?;
+        let scratch = ScratchFile::new(&self.data_dir)?;
+        let sent = self
+            .send_file(
+                amount,
+                minimum_confirmations,
+                scratch.path.clone(),
+                message,
+                options,
+            )
+            .await?;
+        let tx_id = TxId(sent.tx_id);
+        if let Err(error) = self
+            .engine
+            .contact_post_slate(&relays, id, tx_id, purpose.map(engine_purpose))
+            .await
+        {
+            match self.engine.cancel(tx_id).await {
+                Ok(()) => info!(tx_id = %tx_id, "send to a contact cancelled, it was not queued"),
+                Err(cancel) => {
+                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not queued nor cancelled");
+                }
+            }
+            return Err(error.into());
+        }
+        Ok(sent)
+    }
+
     pub(crate) async fn sealed_open(&self, text: &str) -> Result<SealedSlateView, WalletError> {
         let text = bounded(text, MAX_SEALED_TEXT, "sealed text")?;
         let sealed = self.engine.sealed_open(text).await?;
@@ -965,10 +1009,16 @@ mod tests {
                 Event::WithdrawalFromContact(slate),
                 WalletEventKind::WithdrawalFromContact,
             ),
+            (
+                Event::ContactPaymentFinalized(slate),
+                WalletEventKind::ContactPaymentFinalized,
+            ),
         ] {
             let mapped = mapped(&event);
             assert_eq!(mapped.kind, kind);
             assert_eq!((mapped.tx_id, mapped.amount), (Some(3), Some(8)));
+            assert_eq!(mapped.contact_id.as_deref(), Some(id.as_str()));
+            assert_eq!(mapped.slate_id, Some(slate_id.to_string()));
         }
         let outbox = OutboxNews {
             contact_id,

@@ -882,3 +882,109 @@ async fn labels_follow_the_name_rule_and_marker_texts_are_bounded() {
         WalletErrorKind::InvalidPairingText
     );
 }
+
+/// Drains what the wallet raised so far.
+fn raised(
+    events: &mut tokio::sync::broadcast::Receiver<lepic_wallet::Event>,
+) -> Vec<lepic_wallet::Event> {
+    let mut raised = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        raised.push(event);
+    }
+    raised
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_contact_with_only_a_pairing_is_paid_through_its_mailbox_with_sealing_off() {
+    let mut world = World::new();
+    let anna = world.funded().await;
+    let ben = world.wallet().await;
+    let (anna_side, ben_side) = pair(&anna, &ben).await;
+    // "Seal payments" governs files and pastes; the mailbox carries only sealed slates.
+    anna.contact_set_seal(anna_side.clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        kind(
+            anna.contact_send("00".repeat(16), EPIC, 1, None, None, None, Online)
+                .await
+        ),
+        WalletErrorKind::ContactNotFound
+    );
+    let mut anna_events = anna.session().subscribe();
+
+    let sent = anna
+        .contact_send(
+            anna_side.clone(),
+            EPIC,
+            1,
+            Some("rent".to_owned()),
+            None,
+            None,
+            Online,
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent.amount, EPIC);
+    assert_eq!(
+        kind(
+            anna.contact_seal_slate(anna_side.clone(), sent.tx_id, None)
+                .await
+        ),
+        WalletErrorKind::SealingOff
+    );
+    let outbox = anna.contact_outbox(anna_side.clone()).await.unwrap();
+    assert_eq!(outbox.len(), 1);
+    assert_eq!(outbox[0].slate_id, sent.slate_id);
+    assert_eq!(outbox[0].state, OutboxState::Delivered);
+
+    ben.contacts_collect(CollectTrigger::Open, Online)
+        .await
+        .unwrap();
+    assert_eq!(ben.contact_outbox(ben_side).await.unwrap().len(), 1);
+    anna.contacts_collect(CollectTrigger::Foreground, Online)
+        .await
+        .unwrap();
+    assert_eq!(world.chain.pushed_count(), 1);
+    let finalized: Vec<_> = raised(&mut anna_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            lepic_wallet::Event::ContactPaymentFinalized(slate) => Some(slate),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finalized.len(), 1);
+    assert_eq!(finalized[0].contact_id.to_string(), anna_side);
+    assert_eq!(finalized[0].tx_id.0, sent.tx_id);
+    assert_eq!(finalized[0].slate_id.to_string(), sent.slate_id);
+    assert_eq!(finalized[0].amount.value(), EPIC);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mailbox_send_the_contact_never_answers_is_cancelled_and_its_late_answer_refused() {
+    let mut world = World::new();
+    let anna = world.funded().await;
+    let ben = world.wallet().await;
+    let (anna_side, _) = pair(&anna, &ben).await;
+    let sent = anna
+        .contact_send(anna_side, 9 * EPIC, 1, None, None, None, Online)
+        .await
+        .unwrap();
+    anna.cancel_transaction(sent.tx_id).await.unwrap();
+    // The inputs are free again.
+    anna.create_send_slate(9 * EPIC, 1, None, None)
+        .await
+        .unwrap();
+
+    ben.contacts_collect(CollectTrigger::Open, Online)
+        .await
+        .unwrap();
+    anna.contacts_collect(CollectTrigger::Open, Online)
+        .await
+        .unwrap();
+    assert_eq!(world.chain.pushed_count(), 0);
+    assert_eq!(
+        anna.transaction(sent.tx_id).await.unwrap().status,
+        crate::api::types::TxStatus::Cancelled
+    );
+}

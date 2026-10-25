@@ -578,9 +578,29 @@ where
                 });
                 Ok(Handled::Stored)
             }
+            Stage::S2 | Stage::I2
+                if !self
+                    .slate_exchanged_with(contact_id, uuid(slate.id()))
+                    .await? =>
+            {
+                warn!(slate_id = %slate.id(), "answer from a contact for a slate not exchanged with it dropped");
+                Ok(Handled::Stored)
+            }
             Stage::S2 => match self.finalize(FILE, &wire, Propagation::Stem).await {
+                Ok(finalized) => {
+                    self.emit(Event::ContactPaymentFinalized(ContactSlateEvent {
+                        contact_id,
+                        tx_id: finalized.tx_id,
+                        slate_id: finalized.slate.id(),
+                        amount: finalized.slate.amount(),
+                    }));
+                    Ok(Handled::Stored)
+                }
                 Err(crate::finalize::FinalizeError::Node(_)) => Ok(Handled::Later),
-                Ok(_) | Err(_) => Ok(Handled::Stored),
+                Err(error) => {
+                    warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "answer from a contact not finalized");
+                    Ok(Handled::Stored)
+                }
             },
             Stage::I2 => match self.finalize_invoice(FILE, &wire, Propagation::Stem).await {
                 Ok(finalized) => {
@@ -596,12 +616,27 @@ where
                 }
                 Err(InvoiceError::Node(_)) => Ok(Handled::Later),
                 Err(error) => {
-                    debug!(error = %ErrorChain(&error), "payment from a contact not finalized");
+                    warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "payment from a contact not finalized");
                     Ok(Handled::Stored)
                 }
             },
             _ => Ok(Handled::Stored),
         }
+    }
+
+    /// Whether the slate `slate_id` belongs to an exchange with the contact, as the S1 or I1
+    /// this wallet posted to its mailbox does: an answer from any other contact finishes
+    /// nothing (RFC 0002 10.4).
+    async fn slate_exchanged_with(
+        &self,
+        contact_id: ContactId,
+        slate_id: Uuid,
+    ) -> Result<bool, ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session.store.read(|repos| slate_contact(repos, slate_id))? == Some(contact_id))
+        })
+        .await
     }
 
     /// Whether the contact may send a slate under `slate_id`; see `slate_free_for`.

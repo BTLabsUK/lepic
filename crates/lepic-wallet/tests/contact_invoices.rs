@@ -1357,3 +1357,96 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
     assert!(announced.contains(&(signed.slate_id, Some("deposit 17".to_owned()))));
     assert!(announced.contains(&(unsigned.slate_id, None)));
 }
+
+/// A contact quiet for more than a day is left out of the foreground tick when contacts sit on
+/// more than three relays, but not while a payment sent through its mailbox waits for its
+/// answer (RFC 0002 8.4).
+#[test]
+fn a_contact_waiting_on_a_mailbox_payment_is_collected_on_the_foreground_tick() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let stranger = world.stranger();
+    let (_, on_payer) = world.pair(&stranger, &world.payer);
+    // Four relays between the two contacts: each has a home and a previous one.
+    let until = lepic_wallet::ports::Clock::now(&world.payer.clock)
+        .checked_add(30 * 24 * HOUR)
+        .unwrap();
+    for (contact, home, previous) in [
+        (ben_side, None, "relay2.test:80"),
+        (on_payer, Some("relay3.test:80"), "relay4.test:80"),
+    ] {
+        let mut mailbox = world
+            .payer
+            .read(|repos| repos.contact_mailbox(contact))
+            .unwrap();
+        if let Some(home) = home {
+            mailbox.home_relay = home.to_owned();
+        }
+        mailbox.previous = Some(lepic_store::PreviousHome {
+            relay: previous.to_owned(),
+            peer_mailbox: mailbox.peer_mailbox.clone(),
+            our_mailbox: mailbox.our_mailbox.clone(),
+            until,
+        });
+        world
+            .payer
+            .store()
+            .write(|repos| repos.put_contact_mailbox(&mailbox))
+            .unwrap();
+    }
+    world.payer.clock.advance(Duration::from_secs(25 * 60 * 60));
+    let tick = || {
+        world
+            .block_on(world.payer.wallet.contacts_collect(
+                &relays(&world.payer),
+                lepic_wallet::contact::CollectTrigger::Foreground,
+            ))
+            .unwrap()
+    };
+    assert_eq!(tick().mailboxes, 0);
+
+    send_through_mailbox(&world, &relays(&world.payer), ben_side);
+    // Ben's current and previous mailboxes; the quiet stranger stays out.
+    assert_eq!(tick().mailboxes, 2);
+}
+
+/// The S2 of a payment sent through a contact's mailbox finalizes it with an event naming that
+/// contact; the same S2 sealed by another contact finishes nothing.
+#[test]
+fn an_answer_counts_only_from_the_contact_the_payment_went_to() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let stranger = world.stranger();
+    let (on_stranger, _) = world.pair(&stranger, &world.payer);
+    let mut payer_events = world.payer.wallet.subscribe();
+    let tx_id = send_through_mailbox(&world, &relays(&world.payer), ben_side);
+    let slate_id = world
+        .payer
+        .read(|repos| repos.transaction(tx_id))
+        .unwrap()
+        .slate_id
+        .unwrap();
+    world.collect(&world.issuer);
+    let s2 = world
+        .issuer
+        .read(|repos| repos.slate(slate_id, SlateStage::Standard2))
+        .unwrap();
+    post_signed(
+        &world,
+        &stranger,
+        on_stranger,
+        &Content::new(MessageType::Slate, s2.bytes),
+    );
+
+    world.collect(&world.payer);
+    assert_eq!(world.tx_state(&world.payer, tx_id), TxState::Posted);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    let finalized: Vec<_> = events(&mut payer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::ContactPaymentFinalized(slate) => Some((slate.contact_id, slate.tx_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finalized, vec![(ben_side, tx_id)]);
+}

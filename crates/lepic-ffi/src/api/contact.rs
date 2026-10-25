@@ -32,7 +32,7 @@ use crate::api::types::{
     ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry, InvitePreview,
     IssuedInvoice, KeysDecision, OutboxEntryView, OutboxReport, PaidInvoice, PairingAnswer,
     PairingCard, PairingInvite, PairingLinkResult, PendingPairingView, SasDecision, SealedAnswer,
-    SealedSlateView, SendOptions, SlatePurpose,
+    SealedSlateView, SendOptions, SentTx, SlatePurpose,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -385,9 +385,16 @@ impl EpicWallet {
     }
 
     /// Sends the slate of `tx_id` sealed through the contact's mailbox: queued in the outbox
-    /// and posted once when the mode allows. The answer comes back by collecting.
+    /// and posted once when the mode allows. The answer comes back by collecting: for an S1,
+    /// the contact's S2 is finalized and posted with a `ContactPaymentFinalized` event. A
+    /// mailbox carries only sealed slates, so the contact's "Seal payments" switch does not
+    /// apply here; it governs files and pastes. For a new payment prefer
+    /// [`EpicWallet::contact_send`], which checks the contact before it locks anything.
     ///
-    /// Fails as [`EpicWallet::contact_seal_slate`] does.
+    /// Fails with `ContactNotFound` for a contact that is not paired or whose keys changed,
+    /// `SealingOff` only when its wallet cannot open sealed slates, and `NoSlateToSend` when
+    /// the transaction has no slate to send or belongs to another contact. A failure leaves
+    /// the transaction as it was: `cancel_transaction` unlocks a send's inputs.
     pub async fn contact_post_slate(
         &self,
         contact_id: String,
@@ -398,6 +405,47 @@ impl EpicWallet {
         self.run("contact_post_slate", |session| async move {
             session
                 .contact_post_slate(&contact_id, tx_id, purpose, relay_mode)
+                .await
+        })
+        .await
+    }
+
+    /// "Send through Anna's mailbox": pays `amount` to a paired contact, which needs no
+    /// payments address. The contact is checked first; then the send is built and its inputs
+    /// locked as [`EpicWallet::create_send_slate`] does, and its S1 is sealed and queued for the
+    /// contact's mailbox as [`EpicWallet::contact_post_slate`] queues it, posted once when the
+    /// mode allows (offline it waits for [`EpicWallet::contacts_outbox_deliver`]). The contact's
+    /// answer comes back by collecting, which finalizes and posts the payment and raises
+    /// `ContactPaymentFinalized`. `purpose` defaults to a payment. A contact that never answers
+    /// leaves the payment `Sent`: `cancel_transaction` gives it up and unlocks the inputs; if
+    /// the contact's answer arrives after that, it is refused.
+    ///
+    /// Fails, with nothing locked, with `ContactNotFound` for a contact that is not paired or
+    /// whose keys changed, `SealingOff` when its wallet cannot open sealed slates, and as
+    /// `create_send_slate` does. A send that could not be queued is cancelled before the error
+    /// returns.
+    #[allow(clippy::too_many_arguments)] // The app's send form, one value per field.
+    pub async fn contact_send(
+        &self,
+        contact_id: String,
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+        purpose: Option<SlatePurpose>,
+        relay_mode: ContactRelayMode,
+    ) -> Result<SentTx, WalletError> {
+        self.run("contact_send", |session| async move {
+            session
+                .contact_send(
+                    &contact_id,
+                    amount,
+                    minimum_confirmations,
+                    message,
+                    options,
+                    purpose,
+                    relay_mode,
+                )
                 .await
         })
         .await

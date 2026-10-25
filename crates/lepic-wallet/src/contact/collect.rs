@@ -14,8 +14,8 @@ use lepic_epicbox::{
 };
 use lepic_node::NodeApi;
 use lepic_store::{
-    ContactId, ContactRecord, ContactState, PairingId, PairingRole, Repositories, SealMode,
-    StoreError, WalletStore,
+    ContactId, ContactOutboxState, ContactRecord, ContactState, PairingId, PairingRole,
+    PendingInvoiceStatus, Repositories, SealMode, StoreError, TxDirection, TxState, WalletStore,
 };
 use lepic_transport::transport::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -451,7 +451,17 @@ where
                         .map(|(_, home, _, _, _)| host_text(home))
                         .collect();
                     if distinct.len() > FEW_RELAYS {
-                        contacts.retain(|(record, _, _, _, _)| active(record, now));
+                        let mut pending = Vec::new();
+                        for (record, _, _, _, _) in &contacts {
+                            if !pending.contains(&record.contact_id)
+                                && has_pending(repos, record.contact_id)?
+                            {
+                                pending.push(record.contact_id);
+                            }
+                        }
+                        contacts.retain(|(record, _, _, _, _)| {
+                            active(record, now) || pending.contains(&record.contact_id)
+                        });
                     }
                 }
                 let room = MAX_MAILBOXES_PER_DRAIN.saturating_sub(mailboxes.len());
@@ -935,6 +945,33 @@ where
         })
         .await
     }
+}
+
+/// Whether something waits on the contact (RFC 0002 8.4): an outbox entry not yet delivered,
+/// a slate this wallet exchanged with it whose transaction waits for an answer or a posting,
+/// such as a payment sent through its mailbox, or an invoice from it waiting for the user.
+fn has_pending(repos: &dyn Repositories, contact_id: ContactId) -> Result<bool, StoreError> {
+    for stored in repos.contact_outbox(contact_id)? {
+        if stored.entry.state == ContactOutboxState::Queued {
+            return Ok(true);
+        }
+        for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
+            if repos
+                .transaction_by_slate(stored.entry.slate_id, direction)?
+                .is_some_and(|tx| matches!(tx.entry.state, TxState::Sent | TxState::Received))
+            {
+                return Ok(true);
+            }
+        }
+    }
+    for invoice in repos.pending_invoices()? {
+        if invoice.status == PendingInvoiceStatus::Parked
+            && super::invoices::slate_contact(repos, invoice.slate_id)? == Some(contact_id)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn active(record: &ContactRecord, now: Timestamp) -> bool {
