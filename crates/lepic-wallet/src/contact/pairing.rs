@@ -271,8 +271,9 @@ where
     ///
     /// With `offer_words` the invite lasts 10 minutes and is also posted, sealed with five
     /// pairing words, to a rendezvous mailbox (RFC 0002 7.7). Words are offered only when the
-    /// relay is a built-in one, else this fails with [`ContactError::WordsUnavailable`]; a post
-    /// that fails is [`ContactError::Relay`], and the invite stays pending until it expires.
+    /// relay is a built-in one, else this fails with [`ContactError::WordsUnavailable`]; Offline
+    /// or Epicbox off fail before anything is stored, and a post that fails is
+    /// [`ContactError::Relay`], with the invite withdrawn.
     ///
     /// Fails with [`ContactError::Name`] for a name the card cannot carry, with
     /// [`ContactError::NetworkMismatch`], and as the store does, for example when every slot of
@@ -287,8 +288,12 @@ where
         let network = self.config().network;
         let home = relays.epicbox.settings().endpoint.clone();
         let offer_words = request.offer_words;
-        if offer_words && !super::words::built_in(relays, &home) {
-            return Err(ContactError::WordsUnavailable);
+        if offer_words {
+            // Words are posted, so a relay must be reachable before anything is stored.
+            super::relay::check_online(relays)?;
+            if !super::words::built_in(relays, &home) {
+                return Err(ContactError::WordsUnavailable);
+            }
         }
         let lifetime = if offer_words {
             super::words::WORDS_INVITE_EXPIRY
@@ -392,7 +397,15 @@ where
         if offer_words {
             let invite = Invite::from_link(&offer.link, contact_network(network))
                 .map_err(ContactError::Decode)?;
-            offer.words = Some(self.post_invite_words(relays, &invite, &words_home).await?);
+            match self.post_invite_words(relays, &invite, &words_home).await {
+                Ok(words) => offer.words = Some(words),
+                Err(error) => {
+                    // An invite nobody can find by its words is withdrawn at once, so it does
+                    // not hold a pending pairing until it expires.
+                    self.contact_remove(offer.contact_id).await?;
+                    return Err(error);
+                }
+            }
         }
         Ok(offer)
     }

@@ -1945,3 +1945,30 @@ fn a_used_invite_sends_at_most_three_refusals() {
     }
     assert_eq!(refused, 3);
 }
+
+/// R2-13: words cannot be offered offline, and nothing is left pending when they are not.
+#[test]
+fn a_words_invite_offline_stores_nothing() {
+    let world = World::new();
+    let offline = ContactRelays {
+        mode: RelayMode::Offline,
+        ..relays_with_words(&world.issuer)
+    };
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.pairing_invite(
+            &offline,
+            InviteRequest {
+                offer_words: true,
+                ..invite_request("Anna")
+            },
+        )),
+        Err(ContactError::Offline)
+    ));
+    assert!(
+        world
+            .block_on(world.issuer.wallet.pairings_pending())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(world.issuer.read(|repos| repos.contacts()).is_empty());
+}
