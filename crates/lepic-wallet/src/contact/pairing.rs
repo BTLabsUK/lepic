@@ -157,7 +157,8 @@ pub(crate) enum Taken {
     Paired(ContactId),
     /// A confirm to send back by hand.
     ConfirmLink(ContactId, String),
-    Failed,
+    /// Ended without pairing; the pairing that ended with nothing stored, if one did.
+    Failed(Option<FailedPairing>),
     Ignored,
 }
 
@@ -831,7 +832,7 @@ where
                         LinkOutcome::Confirm { contact_id, link }
                     }
                     Taken::Paired(contact_id) => LinkOutcome::Paired { contact_id },
-                    Taken::Failed | Taken::Ignored => LinkOutcome::Ignored,
+                    Taken::Failed(_) | Taken::Ignored => LinkOutcome::Ignored,
                 },
             );
         }
@@ -847,7 +848,7 @@ where
         {
             match self.take_confirm(pending.pairing_id, &envelope).await? {
                 Taken::Paired(contact_id) => return Ok(LinkOutcome::Paired { contact_id }),
-                Taken::Failed => return Ok(LinkOutcome::Ignored),
+                Taken::Failed(_) => return Ok(LinkOutcome::Ignored),
                 Taken::ConfirmLink(..) | Taken::Ignored => {}
             }
         }
@@ -995,7 +996,7 @@ where
                     )
                     .await;
                 }
-                return Ok(Taken::Failed);
+                return Ok(Taken::Failed(None));
             }
             Decision::Refuse(refusal, tell) => {
                 debug!("pairing reply refused");
@@ -1075,11 +1076,12 @@ where
                 })
                 .await?;
                 info!("pairing refused by the inviter");
-                self.emit(Event::PairingFailed(FailedPairing {
+                let failed = FailedPairing {
                     contact_id,
                     reason: PairingFailure::Refused(refusal),
-                }));
-                return Ok(Taken::Failed);
+                };
+                self.emit(Event::PairingFailed(failed));
+                return Ok(Taken::Failed(Some(failed)));
             }
             Err(_) => return Ok(Taken::Ignored),
         };
@@ -1096,11 +1098,12 @@ where
             })
             .await?;
             warn!("pairing confirm does not match the invite");
-            self.emit(Event::PairingFailed(FailedPairing {
+            let failed = FailedPairing {
                 contact_id,
                 reason: PairingFailure::ChangedOnTheWay,
-            }));
-            return Ok(Taken::Failed);
+            };
+            self.emit(Event::PairingFailed(failed));
+            return Ok(Taken::Failed(Some(failed)));
         }
         let sas = Sas::compute(
             net,
@@ -1142,7 +1145,7 @@ where
             Ok(()) => {}
             Err(ContactError::AlreadyPaired) => {
                 warn!("pairing confirm from a contact already paired refused");
-                return Ok(Taken::Failed);
+                return Ok(Taken::Failed(None));
             }
             Err(error) => return Err(error),
         }

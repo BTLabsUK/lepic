@@ -8,8 +8,8 @@ use lepic_transport::file::response_path;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::contact::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
-    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, Purpose, RelayMode,
-    SasDecision, SealedAnswer,
+    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, PairingFailure,
+    Purpose, Refusal, RelayMode, SasDecision, SealedAnswer,
 };
 use lepic_wallet::event::SlateId;
 use lepic_wallet::invoice::InvoiceRequest;
@@ -25,10 +25,10 @@ use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
     ContactAcceptReport, ContactCardReport, ContactCollectReport, ContactExportReport,
-    ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport, ContactInvoiceListReport,
-    ContactInvoiceReport, ContactKeyCheckReport, ContactLinkReport, ContactListReport,
-    ContactPreviewReport, ContactRemoveReport, ContactReport, ContactSlateReport, InvoicePayReport,
-    Report,
+    ContactFailureReport, ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport,
+    ContactInvoiceListReport, ContactInvoiceReport, ContactKeyCheckReport, ContactLinkReport,
+    ContactListReport, ContactPreviewReport, ContactRemoveReport, ContactReport,
+    ContactSlateReport, InvoicePayReport, Report,
 };
 
 /// Contacts belong to the default account.
@@ -70,6 +70,16 @@ fn purpose(purpose: PurposeArg) -> Purpose {
         PurposeArg::Withdrawal => Purpose::Withdrawal,
         PurposeArg::Refund => Purpose::Refund,
         PurposeArg::Request => Purpose::Request,
+    }
+}
+
+fn failure_name(reason: PairingFailure) -> &'static str {
+    match reason {
+        PairingFailure::Expired => "expired",
+        PairingFailure::ChangedOnTheWay => "changed-on-the-way",
+        PairingFailure::Refused(Refusal::AlreadyUsed) => "refused-already-used",
+        PairingFailure::Refused(Refusal::Expired) => "refused-expired",
+        PairingFailure::Refused(Refusal::CancelledByInviter) => "refused-cancelled",
     }
 }
 
@@ -274,15 +284,23 @@ impl<H: Host> Run<'_, H> {
                 })
             }
             ContactCommand::Collect => {
+                // The cycle runs the outbox itself, every queued entry at once.
                 let collected = wallet
                     .contacts_collect(&relays, CollectTrigger::Pull)
                     .await?;
-                let delivered = wallet.contacts_outbox_deliver(&relays).await?;
                 Report::ContactCollect(ContactCollectReport {
                     mailboxes: collected.mailboxes,
                     messages: collected.messages,
                     paired: collected.paired,
-                    delivered: delivered.delivered,
+                    delivered: collected.delivered,
+                    failed: collected
+                        .failed
+                        .iter()
+                        .map(|failed| ContactFailureReport {
+                            contact_id: failed.contact_id.to_string(),
+                            reason: failure_name(failed.reason),
+                        })
+                        .collect(),
                     unreachable: collected.unreachable,
                 })
             }

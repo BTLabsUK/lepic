@@ -56,6 +56,11 @@ pub struct CollectReport {
     pub messages: usize,
     /// Pairings that completed.
     pub paired: usize,
+    /// Pairings in progress that ended with nothing stored: expired, refused by the inviter,
+    /// or changed on the way. Each also raised [`Event::PairingFailed`].
+    pub failed: Vec<FailedPairing>,
+    /// Outbox entries that reached their relay in this cycle.
+    pub delivered: usize,
     /// Relays that did not answer, as `domain:port`; they back off.
     pub unreachable: Vec<String>,
 }
@@ -230,12 +235,21 @@ where
         self.check_contact_network(relays)?;
         check_online(relays)?;
         let _turn = self.contact_turn().await;
+        let mut report = CollectReport::default();
+        // An explicit trigger retries at once what waits: relays in backoff and outbox
+        // entries not yet due (RFC 0002 12.4); only the foreground tick keeps the waits.
+        let explicit = trigger != CollectTrigger::Foreground;
+        if explicit {
+            self.reset_backoff().await?;
+        }
         let expired = self.end_expired_pairings().await?;
         for contact_id in expired {
-            self.emit(Event::PairingFailed(FailedPairing {
+            let failed = FailedPairing {
                 contact_id,
                 reason: PairingFailure::Expired,
-            }));
+            };
+            self.emit(Event::PairingFailed(failed));
+            report.failed.push(failed);
         }
         self.tend_key_checks().await?;
         self.prune_outbox().await?;
@@ -249,7 +263,6 @@ where
                 .or_default()
                 .push(mailbox);
         }
-        let mut report = CollectReport::default();
         let mut told = std::collections::BTreeSet::new();
         for (host, mailboxes) in by_relay {
             let Some(first) = mailboxes.first() else {
@@ -267,6 +280,7 @@ where
                 jobs,
                 messages: 0,
                 paired: 0,
+                failed: Vec::new(),
                 told: &mut told,
             };
             report.mailboxes = report.mailboxes.saturating_add(identities.len());
@@ -286,11 +300,13 @@ where
             }
             report.messages = report.messages.saturating_add(handler.messages);
             report.paired = report.paired.saturating_add(handler.paired);
+            report.failed.append(&mut handler.failed);
         }
         debug!(count = report.mailboxes, "contact mailboxes collected");
         // Already this run's turn: the outbox runs without taking it again.
-        if let Err(error) = self.deliver_outbox(relays).await {
-            warn!(error = %ErrorChain(&error), "contact outbox not run");
+        match self.deliver_outbox(relays, explicit).await {
+            Ok(outbox) => report.delivered = outbox.delivered,
+            Err(error) => warn!(error = %ErrorChain(&error), "contact outbox not run"),
         }
         Ok(report)
     }
@@ -468,6 +484,17 @@ where
                 }
                 Ok(mailboxes)
             })
+        })
+        .await
+    }
+
+    /// Forgets every relay's backoff, so an explicit trigger tries them all at once.
+    async fn reset_backoff(&self) -> Result<(), ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session
+                .store
+                .write(|repos| write_json(repos, BACKOFF_KEY, &Backoffs::default()))?)
         })
         .await
     }
@@ -947,6 +974,7 @@ struct Collector<'a, N, S: StoreOpener, V> {
     jobs: Vec<Job>,
     messages: usize,
     paired: usize,
+    failed: Vec<FailedPairing>,
     /// Contacts already reported with [`Event::SealedUnopenable`] this cycle.
     told: &'a mut std::collections::BTreeSet<ContactId>,
 }
@@ -1021,8 +1049,10 @@ where
     }
 
     fn count(&mut self, taken: Result<Taken, ContactError>) -> Result<Handled, ContactError> {
-        if matches!(taken, Ok(Taken::Paired(_))) {
-            self.paired = self.paired.saturating_add(1);
+        match &taken {
+            Ok(Taken::Paired(_)) => self.paired = self.paired.saturating_add(1),
+            Ok(Taken::Failed(Some(failed))) => self.failed.push(*failed),
+            _ => {}
         }
         taken.map(|_| Handled::Stored)
     }

@@ -408,7 +408,17 @@ pub struct ContactCollectReport {
     pub messages: usize,
     pub paired: usize,
     pub delivered: usize,
+    /// Pairings in progress that ended with nothing stored.
+    pub failed: Vec<ContactFailureReport>,
     pub unreachable: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactFailureReport {
+    pub contact_id: String,
+    /// `expired`, `changed-on-the-way`, `refused-already-used`, `refused-expired` or
+    /// `refused-cancelled`.
+    pub reason: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -1162,6 +1172,16 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                 "Collected {} messages from {} mailboxes; {} paired, {} sent.",
                 r.messages, r.mailboxes, r.paired, r.delivered
             )?;
+            for failed in &r.failed {
+                let why = match failed.reason {
+                    "expired" => "it expired",
+                    "changed-on-the-way" => "the invite was changed on the way",
+                    "refused-already-used" => "the invite was already used",
+                    "refused-expired" => "the invite had expired",
+                    _ => "the inviter cancelled it",
+                };
+                writeln!(out, "Pairing {} ended: {why}.", failed.contact_id)?;
+            }
             for relay in &r.unreachable {
                 writeln!(out, "{relay} isn't answering.")?;
             }
@@ -1699,10 +1719,12 @@ mod tests {
                     messages: 2,
                     paired: 0,
                     delivered: 1,
+                    failed: vec![],
                     unreachable: vec![],
                 }),
                 vec![
                     "delivered",
+                    "failed",
                     "mailboxes",
                     "messages",
                     "paired",

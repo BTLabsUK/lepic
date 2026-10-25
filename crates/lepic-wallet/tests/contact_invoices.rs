@@ -1074,3 +1074,37 @@ fn a_paid_contact_invoice_raises_invoice_finalized_on_the_issuer() {
         .collect();
     assert_eq!(finalized, vec![(issued.tx_id, issued.slate_id)]);
 }
+
+/// An explicit trigger delivers what the outbox holds at once, whatever its next try, and the
+/// cycle reports what it delivered; the foreground tick keeps the retry waits.
+#[test]
+fn an_explicit_collect_delivers_the_outbox_at_once_and_reports_it() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let offline = ContactRelays {
+        mode: RelayMode::Offline,
+        ..relays(&world.payer)
+    };
+    send_through_mailbox(&world, &offline, ben_side);
+    // A failed try puts the entry's next try in the future.
+    let mut entry = world
+        .payer
+        .read(|repos| repos.contact_outbox(ben_side))
+        .remove(0);
+    entry.entry.attempts = 2;
+    entry.entry.next_try_at = entry.entry.next_try_at.checked_add(10 * MINUTE).unwrap();
+    world
+        .payer
+        .store()
+        .write(|repos| repos.update_contact_outbox(entry.id, &entry.entry))
+        .unwrap();
+
+    let tick = world
+        .block_on(world.payer.wallet.contacts_collect(
+            &relays(&world.payer),
+            lepic_wallet::contact::CollectTrigger::Foreground,
+        ))
+        .unwrap();
+    assert_eq!(tick.delivered, 0);
+    assert_eq!(world.collect(&world.payer).delivered, 1);
+}

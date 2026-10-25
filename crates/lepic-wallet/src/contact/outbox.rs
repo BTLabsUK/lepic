@@ -129,14 +129,15 @@ where
     ) -> Result<OutboxReport, ContactError> {
         check_online(relays)?;
         let _turn = self.contact_turn().await;
-        self.deliver_outbox(relays).await
+        self.deliver_outbox(relays, false).await
     }
 
     /// The outbox run of [`Wallet::contacts_outbox_deliver`], for a caller that holds the
-    /// contact engine's turn.
+    /// contact engine's turn. `all` tries every queued entry at once, due or not.
     pub(crate) async fn deliver_outbox(
         &self,
         relays: &ContactRelays,
+        all: bool,
     ) -> Result<OutboxReport, ContactError> {
         check_online(relays)?;
         let session = self.session()?;
@@ -144,7 +145,15 @@ where
             let session = std::sync::Arc::clone(&session);
             self.contact_work(move |ports, _| {
                 let now = ports.clock.now();
-                Ok(session.store.read(|repos| repos.due_contact_outbox(now))?)
+                // Every queued entry waits at most the longest retry step past now.
+                let until = if all {
+                    now.checked_add(OUTBOX_STUCK_AFTER).unwrap_or(now)
+                } else {
+                    now
+                };
+                Ok(session
+                    .store
+                    .read(|repos| repos.due_contact_outbox(until))?)
             })
             .await?
         };

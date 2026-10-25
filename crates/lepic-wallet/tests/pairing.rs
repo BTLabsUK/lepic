@@ -314,7 +314,16 @@ fn an_invite_answered_twice_pairs_once() {
     assert_eq!(world.collect(&world.payer).paired, 1);
     // The second answer is refused, and its pairing ends on the twin.
     let mut twin_events = twin.wallet.subscribe();
-    assert_eq!(world.collect(&twin).paired, 0);
+    let report = world.collect(&twin);
+    assert_eq!(report.paired, 0);
+    // The cycle's report names the pairing that ended too.
+    assert_eq!(
+        report.failed,
+        vec![FailedPairing {
+            contact_id: second.contact_id,
+            reason: PairingFailure::Refused(lepic_contact::Refusal::AlreadyUsed),
+        }]
+    );
     assert!(
         events(&mut twin_events).contains(&Event::PairingFailed(FailedPairing {
             contact_id: second.contact_id,
