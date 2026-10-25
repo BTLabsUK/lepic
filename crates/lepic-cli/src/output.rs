@@ -12,6 +12,9 @@ use crate::amount::{AmountError, format_units, parse_amount};
 use crate::exit::CliError;
 use crate::settings::OutputFormat;
 
+// One report is built per command and rendered at once, so the size of its largest variant
+// costs nothing worth a box around it.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Report {
@@ -232,6 +235,10 @@ pub struct TxReport {
     /// For an imported transaction, what the old wallet recorded; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imported: Option<Box<ImportedReport>>,
+    /// For a payment received over Epicbox that waits for its sender, when the sender reported
+    /// that it posted it, within the hour after; `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_reported_posted_at: Option<String>,
 }
 
 /// What `wallet import-history` did; counts are of records.
@@ -795,6 +802,9 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             for (name, value) in rows {
                 writeln!(out, "{name:<12} {value}")?;
             }
+            if let Some(at) = &tx.sender_reported_posted_at {
+                writeln!(out, "{:<12} posted at {at}", "Sender says")?;
+            }
             if let Some(origin) = &tx.origin {
                 writeln!(out, "{:<12} {origin}", "Origin")?;
             }
@@ -1018,6 +1028,7 @@ mod tests {
             messages: None,
             origin: None,
             imported: None,
+            sender_reported_posted_at: None,
         }
     }
 

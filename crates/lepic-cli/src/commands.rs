@@ -239,6 +239,7 @@ impl<H: Host> Run<'_, H> {
                     | Event::InvoiceDeclined(_)
                     | Event::InvoiceWithdrawn(_)
                     | Event::InvoiceBounced(_)
+                    | Event::PaymentPosted(_)
             ) && let Some(line) = receipt_line(&event)
             {
                 self.show_line(&line);
@@ -1407,6 +1408,10 @@ fn receipt_line(event: &Event) -> Option<String> {
             "invoice {} posted by the issuer; transaction {} waits for confirmation",
             posted.slate_id, posted.tx_id.0
         )),
+        Event::PaymentPosted(posted) => Some(format!(
+            "payment {} reported posted by its sender; transaction {} waits for confirmation",
+            posted.slate_id, posted.tx_id.0
+        )),
         Event::InvoiceDeclined(declined) => Some(format!(
             "invoice {} declined by the payer; `lepic tx cancel {}` withdraws it",
             declined.slate_id, declined.tx_id.0
@@ -1756,6 +1761,7 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
         confirmed_height: details.confirmed_height.map(Height::value),
         releasable_from: details.releasable_from.map(Height::value),
         releasable: details.releasable_from.map(|_| details.releasable),
+        sender_reported_posted_at: details.sender_reported_posted_at.map(|at| at.to_string()),
         messages: Some(
             details
                 .messages
@@ -1845,6 +1851,7 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         messages: None,
         origin: None,
         imported: None,
+        sender_reported_posted_at: None,
     }
 }
 
