@@ -128,7 +128,11 @@ fn transaction_with(
                 && stored.entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
                 && counterparty_key(repos, stored.id, network)?.as_deref() == Some(key.as_str())
         }
-        NoticeFrom::Contact(id) => contact == Some(*id),
+        // Matched by the transaction the exchange with the contact made, never by a slate id
+        // a contact could have claimed.
+        NoticeFrom::Contact(id) => {
+            contact == Some(*id) && crate::contact::tx_contact(repos, stored.id)? == Some(*id)
+        }
     };
     if !exchanged || repos.slate(slate_id, stage)?.is_none() {
         return Ok(None);

@@ -90,6 +90,26 @@ fn tx_key(tx_id: TxId) -> String {
     format!("{TX_CONTACT_PREFIX}{tx_id}")
 }
 
+/// Records that the transaction `tx_id` is an exchange with `contact`.
+pub(crate) fn link_tx(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    contact: ContactId,
+) -> Result<(), StoreError> {
+    repos.put_setting(&tx_key(tx_id), &hex(&contact.0))
+}
+
+/// The contact the transaction `tx_id` was exchanged with, if any: what a contact's notices
+/// are matched by.
+pub(crate) fn tx_contact(
+    repos: &dyn Repositories,
+    tx_id: TxId,
+) -> Result<Option<ContactId>, StoreError> {
+    Ok(repos
+        .setting(&tx_key(tx_id))?
+        .and_then(|text| contact_id_from_hex(&text)))
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -258,7 +278,10 @@ where
                     let slate_id = entry.slate_id.ok_or(ContactError::UnknownTransaction)?;
                     let stage = outgoing_stage(repos, slate_id, entry.direction)?
                         .ok_or(ContactError::UnknownTransaction)?;
-                    super::invoices::link_slate(repos, slate_id, contact_id)?;
+                    // A slate another contact holds is never moved to this one.
+                    if !super::invoices::link_slate(repos, slate_id, contact_id)? {
+                        return Err(ContactError::UnknownTransaction);
+                    }
                     Ok((slate_id, stage))
                 })
             })

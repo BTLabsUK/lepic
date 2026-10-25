@@ -1157,3 +1157,82 @@ fn mailbox_slates_are_recorded_as_epicbox_and_sealed_files_as_files() {
         Some(lepic_transport::file::FILE.as_str().to_owned())
     );
 }
+
+/// R3-01, the reviewer's proof of concept: a paired contact sends an S1 under the slate id of a
+/// payment the payer made to someone else, then a signed `withdrawn` for it. The S1 is refused,
+/// the slate id stays with nobody, and the payment is not cancelled.
+#[test]
+fn a_contact_cannot_take_over_another_payment_by_its_slate_id() {
+    let world = World::new();
+    let issued = world.issue(None);
+    let paid = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pay_parked_invoice(issued.slate_id, pay_request()),
+        )
+        .unwrap();
+    let mallory = world.stranger();
+    mallory.fund(1, world::FUNDING);
+    let (on_mallory, _) = world.pair(&mallory, &world.payer);
+
+    // Mallory builds an S1 and gives it the slate id of the payer's payment to the issuer.
+    let file = tempfile::tempdir().unwrap().keep().join("s1.tx");
+    world
+        .block_on(mallory.wallet.send(
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+            },
+            Delivery::Export {
+                transport: lepic_transport::file::FILE,
+                to: lepic_transport::transport::Location::File(file.clone()),
+            },
+        ))
+        .unwrap();
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let target = uuid::Uuid::from_bytes(*issued.slate_id.as_bytes());
+    json["id"] = serde_json::Value::String(target.hyphenated().to_string());
+    post_signed(
+        &world,
+        &mallory,
+        on_mallory,
+        &Content::new(
+            MessageType::Slate,
+            serde_json::to_string(&json).unwrap().into_bytes(),
+        ),
+    );
+    world.collect(&world.payer);
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.transaction_by_slate(target, lepic_store::TxDirection::Incoming))
+            .is_none()
+    );
+
+    let notice = lepic_wallet::notice::Notice {
+        slate_id: issued.slate_id,
+        kind: lepic_wallet::notice::NoticeKind::Withdrawn,
+    };
+    post_signed(
+        &world,
+        &mallory,
+        on_mallory,
+        &Content::new(
+            MessageType::Notice,
+            notice.encode().as_text().unwrap().as_bytes().to_vec(),
+        ),
+    );
+    world.collect(&world.payer);
+
+    assert_eq!(world.tx_state(&world.payer, paid.tx_id), TxState::Sent);
+    assert_eq!(
+        world
+            .block_on(world.payer.wallet.contact_of_transaction(paid.tx_id))
+            .unwrap(),
+        None
+    );
+}

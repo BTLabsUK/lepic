@@ -111,14 +111,43 @@ fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
 }
 
-/// Records that the slate `slate_id` belongs to an exchange with `contact`, so its notices and
-/// answers go through the contact's mailbox.
+/// Records that the slate `slate_id` belongs to an exchange with `contact`, so its answers go
+/// through the contact's mailbox. A slate another contact holds is never moved: returns false
+/// and changes nothing.
 pub(crate) fn link_slate(
     repos: &mut dyn Repositories,
     slate_id: Uuid,
     contact: ContactId,
-) -> Result<(), StoreError> {
-    repos.put_setting(&format!("{SLATE_PREFIX}{slate_id}"), &hex(&contact.0))
+) -> Result<bool, StoreError> {
+    if slate_contact(repos, slate_id)?.is_some_and(|other| other != contact) {
+        return Ok(false);
+    }
+    repos.put_setting(&format!("{SLATE_PREFIX}{slate_id}"), &hex(&contact.0))?;
+    Ok(true)
+}
+
+/// Whether the contact may start an exchange under the slate id it chose (RFC 0002 3.4): no
+/// other contact holds the id, and no transaction of this wallet uses it, but for this
+/// contact's own repeat in the `repeat` direction. A contact can never take over a slate id
+/// this wallet exchanged with someone else.
+fn slate_free_for(
+    repos: &dyn Repositories,
+    slate_id: Uuid,
+    contact: ContactId,
+    repeat: Option<TxDirection>,
+) -> Result<bool, StoreError> {
+    if slate_contact(repos, slate_id)?.is_some_and(|other| other != contact) {
+        return Ok(false);
+    }
+    for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
+        if let Some(tx) = repos.transaction_by_slate(slate_id, direction)?
+            && (Some(direction) != repeat
+                || super::sealed::tx_contact(repos, tx.id)? != Some(contact))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// The contact the slate `slate_id` was exchanged with, if any.
@@ -233,9 +262,10 @@ where
         let slate_uuid = uuid(slate.id());
         let session = self.session()?;
         self.contact_work(move |_, _| {
-            Ok(session
-                .store
-                .write(|repos| link_slate(repos, slate_uuid, contact_id))?)
+            Ok(session.store.write(|repos| {
+                link_slate(repos, slate_uuid, contact_id)?;
+                super::sealed::link_tx(repos, tx_id, contact_id)
+            })?)
         })
         .await?;
         self.enqueue_for_contact(contact_id, slate_uuid, SlateStage::Invoice1, &envelope)
@@ -389,8 +419,10 @@ where
         let record = self
             .contact_work(move |_, _| {
                 session.store.write(|repos| {
-                    link_slate(repos, slate_id, contact_id)?;
-                    repos.put_setting(&format!("contact.tx.{tx_id}"), &hex(&contact_id.0))?;
+                    if !link_slate(repos, slate_id, contact_id)? {
+                        return Err(ContactError::UnknownTransaction);
+                    }
+                    super::sealed::link_tx(repos, tx_id, contact_id)?;
                     repos
                         .contact(contact_id)?
                         .ok_or(ContactError::UnknownContact)
@@ -494,6 +526,13 @@ where
             }
             Stage::S1 => {
                 if !self
+                    .slate_free(contact_id, uuid(slate.id()), Some(TxDirection::Incoming))
+                    .await?
+                {
+                    warn!("payment from a contact under a slate id in use dropped");
+                    return Ok(Handled::Stored);
+                }
+                if !self
                     .contact_receipt_room(contact_id, uuid(slate.id()))
                     .await?
                 {
@@ -555,6 +594,22 @@ where
             },
             _ => Ok(Handled::Stored),
         }
+    }
+
+    /// Whether the contact may send a slate under `slate_id`; see `slate_free_for`.
+    async fn slate_free(
+        &self,
+        contact_id: ContactId,
+        slate_id: Uuid,
+        repeat: Option<TxDirection>,
+    ) -> Result<bool, ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session
+                .store
+                .read(|repos| slate_free_for(repos, slate_id, contact_id, repeat))?)
+        })
+        .await
     }
 
     /// Whether a new S1 `slate_id` from the contact fits the open receipt caps the inbox keeps
@@ -629,7 +684,9 @@ where
                         .ok_or(ContactError::UnknownContact)?;
                     // The parking cap counts per contact, never per mailbox the contact names.
                     let sender_key = contact_sender_key(contact_id);
-                    if repos.pending_invoice(slate_uuid)?.is_some() {
+                    if repos.pending_invoice(slate_uuid)?.is_some()
+                        || !slate_free_for(repos, slate_uuid, contact_id, None)?
+                    {
                         return Ok(false);
                     }
                     match repos.park_invoice(&PendingInvoice {
@@ -655,7 +712,9 @@ where
                         field: "invoice note",
                     })?;
                     repos.put_setting(&format!("{INVOICE_PREFIX}{slate_uuid}"), &text)?;
-                    link_slate(repos, slate_uuid, contact_id)?;
+                    if !link_slate(repos, slate_uuid, contact_id)? {
+                        return Ok(false);
+                    }
                     Ok(true)
                 })
             })

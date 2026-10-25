@@ -103,6 +103,7 @@ where
                 for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
                     if let Some(mut tx) = repos.transaction_by_slate(slate_id, direction)?
                         && tx.entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+                        && super::sealed::tx_contact(repos, tx.id)? == Some(contact_id)
                     {
                         tx.entry.transport = Some(TRANSPORT_ID.as_str().to_owned());
                         repos.update_transaction(tx.id, &tx.entry)?;

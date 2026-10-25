@@ -42,6 +42,7 @@ pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
     InviteRequest, LinkOutcome, SasDecision,
 };
+pub(crate) use sealed::tx_contact;
 pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
 pub use words::WORDS_INVITE_EXPIRY;
 
