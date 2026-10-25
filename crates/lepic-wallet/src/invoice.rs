@@ -84,6 +84,12 @@ pub const INVOICE_TTL_BLOCKS: u64 = 1_440;
 /// lock the payer's inputs in a payment that cannot complete here.
 pub const MAX_INVOICE_TTL_LEAD_BLOCKS: u64 = 2 * INVOICE_TTL_BLOCKS;
 
+/// How far below the payer's tip an invoice's TTL cutoff may lie and still read as expired
+/// here: a year of [`INVOICE_TTL_BLOCKS`]. Nobody pays a request that long after it expired,
+/// while one made on a younger chain, such as floonet's read on mainnet, has its cutoff
+/// millions of blocks below the tip; that one was not made for this chain.
+pub const MAX_INVOICE_TTL_LAG_BLOCKS: u64 = 365 * INVOICE_TTL_BLOCKS;
+
 /// Blocks before an invoice payment's TTL cutoff from which its issuer no longer finalizes it,
 /// and blocks after the cutoff before its payer releases the payment's inputs. Issuer and payer
 /// read their tips from different nodes, which may stand a few blocks apart: without the
@@ -156,6 +162,10 @@ pub enum InvoiceError {
     /// [`MAX_INVOICE_TTL_LEAD_BLOCKS`]: it was issued on another network or at a wrong height.
     #[error("slate ttl cutoff {cutoff} is above the highest plausible cutoff {limit}")]
     TtlTooFarAhead { cutoff: Height, limit: Height },
+    /// The invoice's TTL cutoff lies further below the chain tip than
+    /// [`MAX_INVOICE_TTL_LAG_BLOCKS`]: it was issued on another network or at a wrong height.
+    #[error("slate ttl cutoff {cutoff} is below the lowest plausible cutoff {limit}")]
+    TtlTooFarBehind { cutoff: Height, limit: Height },
     #[error("{role} message signature does not verify")]
     MessageSignature {
         role: Role,
@@ -422,6 +432,22 @@ fn check_cutoff(cutoff: Option<Height>, tip: Height) -> Result<(), InvoiceError>
         Some(cutoff) if tip >= cutoff => Err(InvoiceError::Expired { cutoff, tip }),
         _ => Ok(()),
     }
+}
+
+/// Refuses an invoice whose TTL cutoff lies more than [`MAX_INVOICE_TTL_LAG_BLOCKS`] below the
+/// node's tip, before [`check_ttl`] would call it expired. An invoice without a TTL passes.
+fn check_ttl_lag(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
+    let Some(cutoff) = slate.ttl_cutoff_height() else {
+        return Ok(());
+    };
+    // A tip too low to have a limit below it has no cutoff that far behind.
+    let Ok(limit) = tip.checked_sub_blocks(MAX_INVOICE_TTL_LAG_BLOCKS) else {
+        return Ok(());
+    };
+    if cutoff < limit {
+        return Err(InvoiceError::TtlTooFarBehind { cutoff, limit });
+    }
+    Ok(())
 }
 
 /// The height from which the issuer refuses to finalize a payment whose TTL cutoff is
@@ -972,10 +998,12 @@ where
     /// for another amount than `request.amount`, [`InvoiceError::AlreadyPaid`] for an invoice
     /// this wallet paid before, [`InvoiceError::Expired`] when the tip has reached the
     /// invoice's TTL cutoff, [`InvoiceError::TtlTooFarAhead`] when that cutoff lies more than
-    /// [`MAX_INVOICE_TTL_LEAD_BLOCKS`] above the tip, [`InvoiceError::LockedUntil`] when its
-    /// kernel lock height is above the tip, [`InvoiceError::AheadOfTip`] when its height is above
-    /// any the chain can have reached by now, a [`InvoiceError::Selection`] error, and a typed rejection for
-    /// any slate that is malformed, not an I1, or whose message does not verify. A payment with
+    /// [`MAX_INVOICE_TTL_LEAD_BLOCKS`] above the tip, [`InvoiceError::TtlTooFarBehind`] when it
+    /// lies more than [`MAX_INVOICE_TTL_LAG_BLOCKS`] below it, [`InvoiceError::LockedUntil`]
+    /// when its kernel lock height is above the tip, [`InvoiceError::AheadOfTip`] when its
+    /// height is above any the chain can have reached by now, a [`InvoiceError::Selection`]
+    /// error, and a typed rejection for any slate that is malformed, not an I1, or whose
+    /// message does not verify. A payment with
     /// change fails with [`WalletError::RestoreScanRequired`] on a database rebuilt from the
     /// seed before a scan from genesis completed. Nothing is stored on failure.
     #[instrument(skip_all, fields(
@@ -1034,6 +1062,7 @@ where
             .map_err(InvoiceError::Node)?
             .height;
         let limit = self.check_plausible_tip(&session, tip).await?;
+        check_ttl_lag(&i1, tip)?;
         check_ttl(&i1, tip)?;
         check_ttl_lead(&i1, tip)?;
         check_lock(&i1, tip)?;

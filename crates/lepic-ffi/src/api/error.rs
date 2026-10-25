@@ -499,7 +499,7 @@ impl From<InvoiceError> for WalletError {
             | E::Slate(_)
             | E::Encode(_)
             | E::Unrepresentable(_) => WalletErrorKind::InvalidSlate,
-            E::AheadOfTip { .. } | E::TtlTooFarAhead { .. } => {
+            E::AheadOfTip { .. } | E::TtlTooFarAhead { .. } | E::TtlTooFarBehind { .. } => {
                 WalletErrorKind::InvoiceNotForThisChain
             }
             E::AlreadyPaid { .. } | E::AlreadyFinalized { .. } => {
@@ -829,9 +829,16 @@ mod tests {
                 WalletErrorKind::InvoiceNotForThisChain,
             ),
             (
-                InvoiceError::Expired {
+                InvoiceError::TtlTooFarBehind {
                     cutoff: lepic_primitives::amount::Height::new(2_240),
-                    tip: lepic_primitives::amount::Height::new(3_770_000),
+                    limit: lepic_primitives::amount::Height::new(3_244_400),
+                },
+                WalletErrorKind::InvoiceNotForThisChain,
+            ),
+            (
+                InvoiceError::Expired {
+                    cutoff: lepic_primitives::amount::Height::new(3_771_440),
+                    tip: lepic_primitives::amount::Height::new(3_771_500),
                 },
                 WalletErrorKind::PaymentExpired,
             ),

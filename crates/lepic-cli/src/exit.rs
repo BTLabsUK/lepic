@@ -391,6 +391,7 @@ fn invoice_kind(error: &InvoiceError) -> ErrorKind {
         | InvoiceError::LockedUntil { .. }
         | InvoiceError::AheadOfTip { .. }
         | InvoiceError::TtlTooFarAhead { .. }
+        | InvoiceError::TtlTooFarBehind { .. }
         | InvoiceError::MessageSignature { .. }
         | InvoiceError::Mismatch { .. }
         | InvoiceError::PayerSignature(_)

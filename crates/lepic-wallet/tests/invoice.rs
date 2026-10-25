@@ -39,8 +39,8 @@ use lepic_wallet::event::{Balance, TransactionState};
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::invoice::{
     BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, INVOICE_TTL_BLOCKS,
-    INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, InvoiceField, MAX_INVOICE_TTL_LEAD_BLOCKS, PayRequest,
-    build_i1, build_i2, build_i3,
+    INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, InvoiceField, MAX_INVOICE_TTL_LAG_BLOCKS,
+    MAX_INVOICE_TTL_LEAD_BLOCKS, PayRequest, build_i1, build_i2, build_i3,
 };
 use lepic_wallet::refresh::BalanceCategory;
 use lepic_wallet::selection::SelectionStrategy;
@@ -57,13 +57,17 @@ const TIP: u64 = 4;
 const MARGIN_TTL: u64 = INVOICE_TTL_MARGIN_BLOCKS + 2;
 
 fn node() -> MockNode {
+    node_at(TIP)
+}
+
+fn node_at(tip: u64) -> MockNode {
     MockNode::from_chain(ChainState::new(
         NodeVersion {
             node_version: "4.0.4".to_owned(),
             block_header_version: 6,
         },
         Tip {
-            height: Height::new(TIP),
+            height: Height::new(tip),
             last_block_pushed: Hash::from_slice(&[0; 32]).unwrap(),
         },
     ))
@@ -813,6 +817,74 @@ fn paying_on_floonet_refuses_a_request_issued_on_mainnet() {
         "{error:?}"
     );
     assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+/// A mainnet tip, which the floonet bound on node tips still allows when the node starts there.
+const MAINNET_TIP: u64 = 3_770_000;
+
+#[test]
+fn paying_on_mainnet_refuses_a_request_issued_on_floonet() {
+    let node = node_at(MAINNET_TIP);
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let floonet_tip = 800;
+    let i1 = issued_at(&issuer, floonet_tip, floonet_tip + INVOICE_TTL_BLOCKS);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::TtlTooFarBehind { cutoff, limit }
+            if cutoff == Height::new(floonet_tip + INVOICE_TTL_BLOCKS)
+                && limit == Height::new(MAINNET_TIP - MAX_INVOICE_TTL_LAG_BLOCKS)),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn paying_calls_a_request_expired_as_long_ago_as_the_lag_bound_expired() {
+    let node = node_at(MAINNET_TIP);
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let cutoff = MAINNET_TIP - MAX_INVOICE_TTL_LAG_BLOCKS;
+    let i1 = issued_at(&issuer, cutoff - INVOICE_TTL_BLOCKS, cutoff);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff: at, tip }
+            if at == Height::new(cutoff) && tip == Height::new(MAINNET_TIP)),
+        "{error:?}"
+    );
+    let below = tampered(&i1, |slate| {
+        slate["ttl_cutoff_height"] = Value::from((cutoff - 1).to_string());
+    });
+    assert!(
+        matches!(
+            payer.pay(&below, request()).unwrap_err(),
+            InvoiceError::TtlTooFarBehind { .. }
+        ),
+        "one block further is another chain's"
+    );
+}
+
+#[test]
+fn paying_calls_a_recently_expired_request_expired() {
+    let node = node_at(MAINNET_TIP);
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let cutoff = MAINNET_TIP - 1;
+    let i1 = issued_at(&issuer, cutoff - INVOICE_TTL_BLOCKS, cutoff);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff: at, .. } if at == Height::new(cutoff)),
+        "{error:?}"
+    );
 }
 
 #[test]
