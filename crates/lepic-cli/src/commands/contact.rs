@@ -413,6 +413,11 @@ impl<H: Host> Run<'_, H> {
                 })
             }
             ContactCommand::OpenSealed(args) => open_sealed(&opened, args).await?,
+            ContactCommand::Label(args) => {
+                let id = contact_id(&args.contact.contact)?;
+                wallet.contact_set_label(id, args.label).await?;
+                Report::Contact(contact_report(&wallet.contact(id).await?))
+            }
             ContactCommand::Remove(args) => {
                 let id = contact_id(&args.contact)?;
                 Report::ContactRemove(ContactRemoveReport {

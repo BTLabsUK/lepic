@@ -86,6 +86,7 @@ fn the_tree_has_every_planned_command() {
         "contact scan-card",
         "contact list",
         "contact remove",
+        "contact label",
         "contact allow-invoices",
         "contact invoice",
         "contact invoices",

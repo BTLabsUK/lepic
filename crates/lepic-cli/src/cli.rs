@@ -618,6 +618,8 @@ with `lepic contact accept`.")]
     List,
     /// Remove a pairing; the contact is not told
     Remove(ContactIdArg),
+    /// Give a contact your own name for it
+    Label(ContactLabelArgs),
     /// Allow or stop invoices from a verified contact
     AllowInvoices(ContactSwitchArgs),
     /// Invoice a paired contact through its mailbox
@@ -821,6 +823,15 @@ pub struct ContactIdArg {
     /// The contact's id, as `contact list` shows it
     #[arg(value_name = "CONTACT")]
     pub contact: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactLabelArgs {
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    /// Your name for the contact
+    #[arg(value_name = "LABEL")]
+    pub label: String,
 }
 
 #[derive(Debug, Args)]

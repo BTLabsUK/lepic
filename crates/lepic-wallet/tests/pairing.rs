@@ -55,6 +55,8 @@ fn two_wallets_pair_by_link_through_the_relay_and_see_one_sas() {
     assert_eq!(payer_view.state, ContactState::Paired);
     assert_eq!(issuer_view.claimed_name.as_deref(), Some("Ben"));
     assert_eq!(payer_view.claimed_name.as_deref(), Some("Anna"));
+    // The claimed name is never taken as the user's own name for the contact (R2-10).
+    assert!(issuer_view.label.is_empty() && payer_view.label.is_empty());
     assert_eq!(
         world.sas(&world.issuer, anna_side),
         world.sas(&world.payer, ben_side)

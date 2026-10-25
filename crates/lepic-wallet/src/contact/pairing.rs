@@ -654,7 +654,6 @@ where
                     record.peer = Some(peer_card(&peer));
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
-                    record.label = peer.fields().name.as_str().to_owned();
                     record.updated_at = now;
                     repos.put_contact(&record)?;
                     repos.put_contact_mailbox(&ContactMailbox {
@@ -939,7 +938,6 @@ where
                     record.peer = Some(peer_card(&peer));
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
-                    record.label = peer.fields().name.as_str().to_owned();
                     record.updated_at = now;
                     repos.put_contact(&record)?;
                     repos.put_contact_mailbox(&ContactMailbox {
@@ -1104,7 +1102,6 @@ where
                     record.peer = Some(peer_card(&peer));
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
-                    record.label = peer.fields().name.as_str().to_owned();
                     record.updated_at = now;
                     repos.put_contact(&record)?;
                     repos.put_contact_mailbox(&ContactMailbox {

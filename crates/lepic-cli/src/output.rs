@@ -622,7 +622,11 @@ fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<
         out,
         "{}  {}  {}{}",
         contact.contact_id,
-        printable(&contact.label),
+        if contact.label.is_empty() {
+            "(no name)".to_owned()
+        } else {
+            printable(&contact.label)
+        },
         contact.state,
         if contact.allow_invoices {
             ", invoices allowed"
@@ -630,6 +634,9 @@ fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<
             ""
         }
     )?;
+    if let Some(claimed) = &contact.claimed_name {
+        writeln!(out, "    calls itself \"{}\"", printable(claimed))?;
+    }
     if !contact.sas.is_empty() {
         writeln!(out, "    check: {}", contact.sas.join(" · "))?;
     }

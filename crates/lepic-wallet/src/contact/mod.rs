@@ -115,7 +115,8 @@ impl std::fmt::Debug for ContactRelays {
 pub struct ContactView {
     pub contact_id: ContactId,
     pub account: AccountIndex,
-    /// The user's own name for the contact.
+    /// The user's own name for the contact, empty until the user gives one: the host asks,
+    /// and shows `claimed_name` only as what the contact calls itself (RFC 0002 6.1).
     pub label: String,
     /// The name the contact gives itself, shown only as "calls themselves".
     pub claimed_name: Option<String>,
