@@ -1351,6 +1351,7 @@ dependencies = [
  "futures-util",
  "insta",
  "jiff",
+ "lepic-contact",
  "lepic-crypto",
  "lepic-epicbox",
  "lepic-keychain",

@@ -352,6 +352,11 @@ impl Party {
             .unwrap_or_else(PoisonError::into_inner) = Some(succeeding);
     }
 
+    /// The wallet's keychain, rebuilt from its phrase.
+    pub fn keychain(&self) -> Keychain {
+        Keychain::from_seed(&self.seed, Network::Floonet).unwrap()
+    }
+
     /// A client speaking for the wallet's payments address, as the wallet itself would.
     pub fn client(&self) -> EpicboxClient {
         let keychain = Keychain::from_seed(&self.seed, Network::Floonet).unwrap();

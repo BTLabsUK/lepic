@@ -13,6 +13,7 @@ mod app_data;
 mod cancel;
 pub mod chain;
 pub mod config;
+pub mod contact;
 pub mod details;
 pub mod epicbox_invoice;
 mod epicbox_notice;

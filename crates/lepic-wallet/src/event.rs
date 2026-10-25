@@ -89,6 +89,37 @@ pub enum Event {
     /// payment, while it waits for its sender. Advisory: nothing changed, and the payment
     /// confirms only when a refresh finds the kernel, so the host should refresh now.
     PaymentPosted(PostedPayment),
+    /// A reply to one of this wallet's invites paired a contact; its SAS waits for the user's
+    /// check (RFC 0002 7.3).
+    PairingReplied(ContactEvent),
+    /// A pairing this wallet answered, or one in person, completed; its SAS waits for the
+    /// user's check.
+    PairingConfirmed(ContactEvent),
+    /// A pairing in progress ended without a record. The id names the record that was removed.
+    PairingFailed(FailedPairing),
+    /// A contact sent a newer card: its addresses changed, its keys did not.
+    ContactUpdated(ContactEvent),
+    /// A home relay did not answer; collecting from it backs off (RFC 0002 8.4).
+    HomeRelayUnreachable(UnreachableRelay),
+}
+
+/// A contact an event is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContactEvent {
+    pub contact_id: lepic_store::ContactId,
+}
+
+/// A pairing that ended without a record, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FailedPairing {
+    pub contact_id: lepic_store::ContactId,
+    pub reason: crate::contact::PairingFailure,
+}
+
+/// A home relay that did not answer, as `domain:port`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreachableRelay {
+    pub relay: String,
 }
 
 /// Whether the root key is in memory.

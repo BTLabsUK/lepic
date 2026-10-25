@@ -1256,6 +1256,7 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "jiff",
+ "lepic-contact",
  "lepic-crypto",
  "lepic-epicbox",
  "lepic-keychain",

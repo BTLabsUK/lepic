@@ -125,6 +125,12 @@ impl EpicboxTransport {
         self.inner.network
     }
 
+    /// The connector this transport dials its relay with, so a [`crate::MailboxClient`] for
+    /// another relay takes the same way, through tor when relay traffic goes through it.
+    pub fn connector(&self) -> Arc<dyn Connector> {
+        Arc::clone(&self.inner.connector)
+    }
+
     /// Replaces the attached identity and returns the client that now speaks for it.
     pub fn attach(&self, identity: Identity) -> EpicboxClient {
         let client = self.client_for(identity);

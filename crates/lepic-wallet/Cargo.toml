@@ -12,6 +12,7 @@ blake2 = { workspace = true, features = ["zeroize"] }
 ed25519-dalek.workspace = true
 futures-util = { workspace = true, features = ["alloc"] }
 jiff.workspace = true
+lepic-contact.workspace = true
 lepic-crypto.workspace = true
 lepic-epicbox.workspace = true
 lepic-keychain.workspace = true
