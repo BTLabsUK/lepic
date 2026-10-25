@@ -99,6 +99,11 @@ const DEFAULT_ACCOUNT: AccountIndex = AccountIndex(0);
 /// choose; the engine's own default, `All`, is that of `epic-wallet`'s owner API.
 const DEFAULT_STRATEGY: EngineStrategy = EngineStrategy::Smallest;
 
+/// Blocks, a day of them, after which this wallet neither finalizes nor posts an app send and
+/// expires it if unanswered. File slates carry it as their TTL too, so the receiver refuses to
+/// sign past it.
+const SEND_TTL_BLOCKS: u64 = 1_440;
+
 /// The most change outputs a send may ask for; each one costs a range proof.
 const MAX_CHANGE_OUTPUTS: usize = 10;
 
@@ -959,6 +964,7 @@ impl Session {
             minimum_confirmations,
             message,
             strategy: DEFAULT_STRATEGY,
+            local_ttl_blocks: Some(SEND_TTL_BLOCKS),
             ..SendRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
         }
     }
@@ -982,6 +988,20 @@ impl Session {
         })
     }
 
+    /// [`Session::send_request_with`] for the file method, whose slate carries the limit as its
+    /// TTL.
+    fn file_send_request(
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<SendRequest, WalletError> {
+        Ok(SendRequest {
+            ttl_blocks: Some(SEND_TTL_BLOCKS),
+            ..Self::send_request_with(amount, minimum_confirmations, message, options)?
+        })
+    }
+
     pub(crate) async fn send_file(
         &self,
         amount: u64,
@@ -993,7 +1013,7 @@ impl Session {
         let sent = self
             .engine
             .send(
-                Self::send_request_with(amount, minimum_confirmations, message, options)?,
+                Self::file_send_request(amount, minimum_confirmations, message, options)?,
                 Delivery::Export {
                     transport: FILE,
                     to: Location::File(path),
@@ -2427,5 +2447,17 @@ mod tests {
         };
         assert_eq!(*kind, ListenerEventKind::Repeated, "{seen:?}");
         assert_eq!(*again, Some(*first));
+    }
+
+    #[test]
+    fn app_sends_carry_a_local_limit_and_file_sends_a_ttl_too() {
+        let request = Session::send_request_with(1, 1, None, None).unwrap();
+        assert_eq!(request.local_ttl_blocks, Some(SEND_TTL_BLOCKS));
+        assert_eq!(request.ttl_blocks, None);
+
+        let file = Session::file_send_request(1, 1, None, None).unwrap();
+        assert_eq!(file.local_ttl_blocks, Some(SEND_TTL_BLOCKS));
+        assert_eq!(file.ttl_blocks, Some(SEND_TTL_BLOCKS));
+        assert_eq!(SEND_TTL_BLOCKS, 1_440);
     }
 }
