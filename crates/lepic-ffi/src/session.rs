@@ -1509,6 +1509,9 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             .copied()
             .map(|commitment| commitment.to_hex())
             .collect(),
+        sender_reported_posted_at_ms: details
+            .sender_reported_posted_at
+            .map(Timestamp::as_millisecond),
     }
 }
 
@@ -1683,6 +1686,12 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             tx_id: Some(superseded.tx_id.0),
             slate_id: Some(superseded.slate_id.to_string()),
             ..WalletEvent::of(WalletEventKind::ReceiveSuperseded)
+        },
+        Event::PaymentPosted(posted) => WalletEvent {
+            tx_id: Some(posted.tx_id.0),
+            slate_id: Some(posted.slate_id.to_string()),
+            kernel_excess: Some(posted.excess.to_hex()),
+            ..WalletEvent::of(WalletEventKind::PaymentPosted)
         },
         _ => return None,
     })
@@ -2023,6 +2032,7 @@ mod tests {
                 dated_by_block: true,
             }),
             output_commits: vec![output],
+            sender_reported_posted_at: Some(confirmed),
         };
 
         assert_eq!(
@@ -2063,6 +2073,7 @@ mod tests {
                     dated_by_block: true,
                 }),
                 output_commits: vec![output.to_hex()],
+                sender_reported_posted_at_ms: Some(1_790_000_600_456),
             }
         );
         let hex = excess.to_hex();
@@ -2178,6 +2189,32 @@ mod tests {
         assert_eq!(event.kind, WalletEventKind::ReceiveSuperseded);
         assert_eq!(event.tx_id, Some(6));
         assert_eq!(event.slate_id, Some(slate_id.to_string()));
+        assert_eq!(event.sender, None);
+    }
+
+    #[test]
+    fn a_posted_payment_is_its_own_event_with_its_kernel() {
+        use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
+        use lepic_wallet::event::{PostedPayment, SlateId};
+        let slate_id = SlateId::from_bytes([7; 16]);
+        let keychain = Keychain::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon about",
+            Network::Floonet,
+        )
+        .unwrap();
+        let id = Identifier::new(3, [0, 0, 7, 0]).unwrap();
+        let excess = keychain.commit(5, &id, SwitchCommitment::Regular).unwrap();
+        let event = wallet_event(&Event::PaymentPosted(PostedPayment {
+            tx_id: TxId(8),
+            slate_id,
+            excess,
+        }))
+        .unwrap();
+        assert_eq!(event.kind, WalletEventKind::PaymentPosted);
+        assert_eq!(event.tx_id, Some(8));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
+        assert_eq!(event.kernel_excess, Some(excess.to_hex()));
         assert_eq!(event.sender, None);
     }
 

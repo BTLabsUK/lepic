@@ -297,6 +297,11 @@ pub struct TransactionDetails {
     /// scan stored before LEPIC recorded this, only the outputs no transaction has spent yet.
     /// Empty when the wallet stores none, as for a cancelled send.
     pub output_commits: Vec<String>,
+    /// For a payment received over Epicbox that still waits for its sender: when the sender
+    /// reported that it posted the transaction (`PaymentPosted`), while that report is under an
+    /// hour old. Advisory: show it as the sender's report, never as received; the payment
+    /// confirms when a refresh finds the kernel. `None` for every other transaction.
+    pub sender_reported_posted_at_ms: Option<i64>,
 }
 
 /// Which scan stored an entry for an output it found with no record.
@@ -880,6 +885,12 @@ pub enum WalletEventKind {
     /// to the same payment. Tell the user that another install took this payment and offer a
     /// rescan to see it in the balance.
     ReceiveSuperseded,
+    /// The sender of a payment this wallet received over Epicbox reports that it posted the
+    /// transaction: `tx_id`, `slate_id` and `kernel_excess` are set. Raised once per payment,
+    /// while it waits for its sender, and only from that payment's sender with the kernel this
+    /// wallet's answer implies. Advisory: nothing changed. Refresh now; the payment confirms
+    /// when a refresh finds the kernel. Until then its `sender_reported_posted_at_ms` is set.
+    PaymentPosted,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its
@@ -901,7 +912,7 @@ pub struct WalletEvent {
     pub missed: Option<u64>,
     pub slate_id: Option<String>,
     pub amount: Option<u64>,
-    /// Hex of the kernel excess, for `InvoicePosted`.
+    /// Hex of the kernel excess, for `InvoicePosted` and `PaymentPosted`.
     pub kernel_excess: Option<String>,
     /// The Epicbox address a message came from, for `UnknownSlate`.
     pub sender: Option<String>,

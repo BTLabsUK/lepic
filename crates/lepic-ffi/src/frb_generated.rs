@@ -8674,6 +8674,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_imported = <Option<crate::api::types::ImportedTx>>::sse_decode(deserializer);
         let mut var_found = <Option<crate::api::types::ScanFound>>::sse_decode(deserializer);
         let mut var_outputCommits = <Vec<String>>::sse_decode(deserializer);
+        let mut var_senderReportedPostedAtMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
             direction: var_direction,
@@ -8698,6 +8699,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             imported: var_imported,
             found: var_found,
             output_commits: var_outputCommits,
+            sender_reported_posted_at_ms: var_senderReportedPostedAtMs,
         };
     }
 }
@@ -8998,6 +9000,7 @@ impl SseDecode for crate::api::types::WalletEventKind {
             13 => crate::api::types::WalletEventKind::SelfSend,
             14 => crate::api::types::WalletEventKind::UnknownSlate,
             15 => crate::api::types::WalletEventKind::ReceiveSuperseded,
+            16 => crate::api::types::WalletEventKind::PaymentPosted,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -10915,6 +10918,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
             self.imported.into_into_dart().into_dart(),
             self.found.into_into_dart().into_dart(),
             self.output_commits.into_into_dart().into_dart(),
+            self.sender_reported_posted_at_ms
+                .into_into_dart()
+                .into_dart(),
         ]
         .into_dart()
     }
@@ -11248,6 +11254,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::SelfSend => 13.into_dart(),
             Self::UnknownSlate => 14.into_dart(),
             Self::ReceiveSuperseded => 15.into_dart(),
+            Self::PaymentPosted => 16.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -12636,6 +12643,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <Option<crate::api::types::ImportedTx>>::sse_encode(self.imported, serializer);
         <Option<crate::api::types::ScanFound>>::sse_encode(self.found, serializer);
         <Vec<String>>::sse_encode(self.output_commits, serializer);
+        <Option<i64>>::sse_encode(self.sender_reported_posted_at_ms, serializer);
     }
 }
 
@@ -12928,6 +12936,7 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::SelfSend => 13,
                 crate::api::types::WalletEventKind::UnknownSlate => 14,
                 crate::api::types::WalletEventKind::ReceiveSuperseded => 15,
+                crate::api::types::WalletEventKind::PaymentPosted => 16,
                 _ => {
                     unimplemented!("");
                 }
