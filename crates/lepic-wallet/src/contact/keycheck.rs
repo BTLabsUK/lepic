@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
+use super::invoices::drop_contact_invoices;
 use super::keys::{CardDetails, contact_keys, contact_network, enc_secret, our_card, signing_key};
 use super::pairing::{peer_card, same_keys};
 use super::{ContactError, ContactRelays, LockedRng, new_id, pairing_id_of};
@@ -241,10 +242,12 @@ where
                     .and_then(|sent| id_of(&sent.old));
                 match decision {
                     KeysDecision::KeepOld => {
+                        drop_contact_invoices(repos, new)?;
                         repos.delete_contact(new)?;
                     }
                     KeysDecision::UseNew => {
                         if let Some(old) = old {
+                            drop_contact_invoices(repos, old)?;
                             repos.delete_contact(old)?;
                         }
                         record.state = ContactState::Paired;
@@ -718,6 +721,7 @@ where
                 if let Some(mut record) = repos.contact(new)? {
                     record.state = ContactState::KeysChanged;
                     record.allow_invoices = false;
+                    drop_contact_invoices(repos, record.contact_id)?;
                     record.verified_at = None;
                     repos.put_contact(&record)?;
                 }
@@ -744,6 +748,7 @@ where
                             })
                         {
                             repos.delete_pending_pairing(pairing_id_of(id))?;
+                            drop_contact_invoices(repos, id)?;
                             repos.delete_contact(id)?;
                             repos.delete_setting(&key(FOLD_PREFIX, id))?;
                             continue;
@@ -757,6 +762,7 @@ where
                             let mut record = record;
                             record.state = ContactState::KeysChanged;
                             record.allow_invoices = false;
+                            drop_contact_invoices(repos, record.contact_id)?;
                             record.verified_at = None;
                             repos.put_contact(&record)?;
                             changed.push(id);

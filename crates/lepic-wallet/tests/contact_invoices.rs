@@ -26,7 +26,7 @@ use lepic_contact::{
 };
 use lepic_epicbox::{Domain, EpicboxAddress, Identity, MailboxClient, Network as RelayNetwork};
 use lepic_primitives::amount::Amount;
-use lepic_store::{ContactId, ContactOutboxState, SlateStage, TxState};
+use lepic_store::{ContactId, ContactOutboxState, SlateStage, TxState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::contact::{ContactRelays, InviteRequest, InvoiceDetails, RelayMode, SasDecision};
 use lepic_wallet::invoice::{InvoiceRequest, IssuedInvoice};
@@ -705,5 +705,63 @@ fn a_contact_notice_counts_only_for_slates_exchanged_with_that_contact() {
         !events(&mut payer_events)
             .iter()
             .any(|event| matches!(event, Event::InvoiceWithdrawn(_)))
+    );
+}
+
+/// R2-04: an invoice parked under a contact's trust is paid only while that trust holds, and
+/// goes when the contact goes.
+#[test]
+fn a_parked_invoice_is_paid_only_while_its_contact_is_trusted() {
+    let world = World::new();
+    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let first = world.invoice_contact(shop_side, "first");
+    world.collect(&world.payer);
+    assert_eq!(
+        world
+            .block_on(world.payer.wallet.contact_invoices())
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // The contact is no longer verified, as after a new SAS check that did not match.
+    let mut record = world.payer.read(|repos| repos.contact(ben_side)).unwrap();
+    record.state = lepic_store::ContactState::Paired;
+    world
+        .payer
+        .store()
+        .write(|repos| repos.put_contact(&record))
+        .unwrap();
+    let transactions = world.payer.read(|repos| repos.transactions(ACCOUNT)).len();
+    assert!(matches!(
+        world.block_on(world.payer.wallet.contact_pay_invoice(
+            &relays(&world.payer),
+            first.slate_id,
+            pay_request(),
+        )),
+        Err(lepic_wallet::contact::ContactError::NotVerified)
+    ));
+    assert_eq!(
+        world.payer.read(|repos| repos.transactions(ACCOUNT)).len(),
+        transactions
+    );
+
+    // Removing the contact deletes what it left parked.
+    assert!(
+        world
+            .block_on(world.payer.wallet.contact_remove(ben_side))
+            .unwrap()
+    );
+    assert!(
+        world
+            .block_on(world.payer.wallet.contact_invoices())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.pending_invoice(uuid::Uuid::from_bytes(*first.slate_id.as_bytes())))
+            .is_none()
     );
 }

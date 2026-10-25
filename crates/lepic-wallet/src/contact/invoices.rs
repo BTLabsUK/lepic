@@ -131,6 +131,27 @@ pub(crate) fn slate_contact(
         .and_then(|text| contact_from_hex(&text)))
 }
 
+/// Deletes every unpaid invoice parked from the contact, for a contact that lost the trust they
+/// were parked under or is gone (RFC 0002 11.1). A paid one finishes as any paid invoice.
+/// Returns their slate ids.
+pub(crate) fn drop_contact_invoices(
+    repos: &mut dyn Repositories,
+    contact_id: ContactId,
+) -> Result<Vec<Uuid>, StoreError> {
+    let mut dropped = Vec::new();
+    for invoice in repos.pending_invoices()? {
+        if invoice.status == PendingInvoiceStatus::Paid
+            || slate_contact(repos, invoice.slate_id)? != Some(contact_id)
+        {
+            continue;
+        }
+        repos.delete_pending_invoice(invoice.slate_id)?;
+        repos.delete_setting(&format!("{INVOICE_PREFIX}{}", invoice.slate_id))?;
+        dropped.push(invoice.slate_id);
+    }
+    Ok(dropped)
+}
+
 /// The sender key a contact's parked invoices are stored and capped under: the contact, never
 /// the mailbox its card names, which the contact chooses.
 fn contact_sender_key(contact_id: ContactId) -> String {
@@ -295,7 +316,9 @@ where
     /// its mailbox, then the outbox runs once when relays may be reached.
     ///
     /// Fails with [`ContactError::Invoice`] carrying [`InvoiceError::NotParked`] when no invoice
-    /// from a contact with that id waits, and as [`Wallet::pay_invoice`] does.
+    /// from a contact with that id waits, [`ContactError::NotVerified`] when its contact is no
+    /// longer verified with invoices allowed (nothing is paid), and as [`Wallet::pay_invoice`]
+    /// does.
     #[instrument(skip_all, fields(wallet = %self.config().name, slate_id = %slate_id))]
     pub async fn contact_pay_invoice(
         &self,
@@ -313,10 +336,17 @@ where
                         .pending_invoice(slate_uuid)?
                         .filter(|invoice| invoice.status == PendingInvoiceStatus::Parked);
                     let contact = slate_contact(repos, slate_uuid)?;
-                    match (parked, contact) {
-                        (Some(parked), Some(contact)) => Ok((parked, contact)),
-                        _ => Err(ContactError::Invoice(InvoiceError::NotParked { slate_id })),
+                    let (Some(parked), Some(contact)) = (parked, contact) else {
+                        return Err(ContactError::Invoice(InvoiceError::NotParked { slate_id }));
+                    };
+                    // The trust it was parked under must still hold (RFC 0002 11.1).
+                    let trusted = repos.contact(contact)?.is_some_and(|record| {
+                        record.state == ContactState::Verified && record.allow_invoices
+                    });
+                    if !trusted {
+                        return Err(ContactError::NotVerified);
                     }
+                    Ok((parked, contact))
                 })
             })
             .await?;
@@ -659,20 +689,9 @@ where
         let session = self.session()?;
         let declined = self
             .contact_work(move |_, _| {
-                Ok(session.store.write(|repos| {
-                    let mut declined = Vec::new();
-                    for invoice in repos.pending_invoices()? {
-                        if invoice.status == PendingInvoiceStatus::Paid
-                            || slate_contact(repos, invoice.slate_id)? != Some(contact_id)
-                        {
-                            continue;
-                        }
-                        repos.delete_pending_invoice(invoice.slate_id)?;
-                        repos.delete_setting(&format!("{INVOICE_PREFIX}{}", invoice.slate_id))?;
-                        declined.push(invoice.slate_id);
-                    }
-                    Ok::<_, StoreError>(declined)
-                })?)
+                Ok(session
+                    .store
+                    .write(|repos| drop_contact_invoices(repos, contact_id))?)
             })
             .await?;
         for slate_id in &declined {

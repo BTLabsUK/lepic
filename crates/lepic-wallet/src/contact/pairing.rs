@@ -711,6 +711,7 @@ where
                         SasDecision::Mismatch => {
                             let pending = repos.pending_pairing(pairing_id_of(contact_id))?;
                             repos.delete_pending_pairing(pairing_id_of(contact_id))?;
+                            super::invoices::drop_contact_invoices(repos, contact_id)?;
                             repos.delete_contact(contact_id)?;
                             let tell = pending
                                 .filter(|pending| pending.role == PairingRole::Inviter)
