@@ -9,17 +9,52 @@ pub const MAX_REFERENCE_LEN: usize = 64;
 pub const MAX_MAILBOX_LEN: usize = 128;
 pub const MAX_HOST_LEN: usize = 255;
 
-/// Characters that would make text display differently from what it holds: bidirectional
-/// formatting, line and paragraph separators and zero-width characters. The same list as the
-/// wallet's labels, so a contact's name follows the label rule.
-const HIDDEN_FORMATTING: [char; 19] = [
-    '\u{061C}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}',
-    '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{2028}', '\u{2029}', '\u{200B}', '\u{200C}',
-    '\u{200D}', '\u{2060}', '\u{FEFF}',
+/// The characters of general category Cf (format), which hold every bidirectional embedding,
+/// override and isolate, as inclusive ranges in order. Generated from the Unicode 16.0 database
+/// the pairing kit reads (`unicodedata.category(c) == "Cf"` or `unicodedata.bidirectional(c)` one
+/// of LRE, LRO, RLE, RLO, PDF, LRI, RLI, FSI, PDI); category Cs needs no entry, since a `char` is
+/// never a surrogate. Names and references must refuse exactly what the kit refuses, or a card one
+/// side accepts fails to pair with the other.
+const FORMAT_CHARACTERS: [(char, char); 21] = [
+    ('\u{00AD}', '\u{00AD}'),
+    ('\u{0600}', '\u{0605}'),
+    ('\u{061C}', '\u{061C}'),
+    ('\u{06DD}', '\u{06DD}'),
+    ('\u{070F}', '\u{070F}'),
+    ('\u{0890}', '\u{0891}'),
+    ('\u{08E2}', '\u{08E2}'),
+    ('\u{180E}', '\u{180E}'),
+    ('\u{200B}', '\u{200F}'),
+    ('\u{202A}', '\u{202E}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{206F}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+    ('\u{FFF9}', '\u{FFFB}'),
+    ('\u{110BD}', '\u{110BD}'),
+    ('\u{110CD}', '\u{110CD}'),
+    ('\u{13430}', '\u{1343F}'),
+    ('\u{1BCA0}', '\u{1BCA3}'),
+    ('\u{1D173}', '\u{1D17A}'),
+    ('\u{E0001}', '\u{E0001}'),
+    ('\u{E0020}', '\u{E007F}'),
 ];
 
+fn is_format(c: char) -> bool {
+    FORMAT_CHARACTERS
+        .binary_search_by(|(first, last)| {
+            if *last < c {
+                std::cmp::Ordering::Less
+            } else if *first > c {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
 fn is_hidden(c: char) -> bool {
-    c.is_control() || HIDDEN_FORMATTING.contains(&c)
+    c.is_control() || is_format(c)
 }
 
 fn displayable(text: &str, max: usize) -> Result<(), TextError> {
@@ -76,7 +111,7 @@ macro_rules! text_type {
     };
 }
 
-/// The name a card's owner chose: 1 to 48 bytes, no control or hidden formatting characters.
+/// The name a card's owner chose: 1 to 48 bytes, no control or format characters.
 /// It is the owner's claim, not a verified identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContactName(String);
@@ -163,6 +198,64 @@ mod tests {
             );
         }
         assert!(ContactName::new("Café – Łódź 🐼").is_ok());
+    }
+
+    #[test]
+    fn names_refuse_every_format_character() {
+        for hidden in [
+            '\u{00AD}',
+            '\u{0600}',
+            '\u{180E}',
+            '\u{200B}',
+            '\u{200E}',
+            '\u{202A}',
+            '\u{2061}',
+            '\u{2064}',
+            '\u{2066}',
+            '\u{206A}',
+            '\u{206F}',
+            '\u{FEFF}',
+            '\u{FFF9}',
+            '\u{FFFB}',
+            '\u{1D173}',
+            '\u{E0001}',
+            '\u{E0020}',
+            '\u{E007F}',
+            '\u{0085}',
+            '\u{009F}',
+        ] {
+            let name = format!("a{hidden}b");
+            assert_eq!(
+                ContactName::new(&name),
+                Err(TextError::HiddenCharacter { position: 1 }),
+                "{:04X}",
+                u32::from(hidden)
+            );
+            assert!(Reference::new(&name).is_err());
+        }
+        for shown in [
+            '\u{00AC}',
+            '\u{00AE}',
+            '\u{2065}',
+            '\u{FFFC}',
+            '\u{E0000}',
+            '\u{E0080}',
+        ] {
+            assert!(
+                ContactName::new(&format!("a{shown}b")).is_ok(),
+                "{:04X}",
+                u32::from(shown)
+            );
+        }
+    }
+
+    #[test]
+    fn format_table_is_ordered_and_disjoint() {
+        for pair in FORMAT_CHARACTERS.windows(2) {
+            let ((first, last), (next, _)) = (pair[0], pair[1]);
+            let after = u32::from(last).checked_add(1).unwrap();
+            assert!(first <= last && after < u32::from(next), "{pair:?}");
+        }
     }
 
     #[test]
