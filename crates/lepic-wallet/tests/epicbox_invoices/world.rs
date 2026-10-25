@@ -70,6 +70,10 @@ pub const PAYER_MNEMONIC: &str = "abandon abandon abandon abandon abandon abando
     abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
     abandon abandon abandon abandon abandon art";
 
+/// A third phrase, for a wallet that shares neither side's seed.
+pub const STRANGER_MNEMONIC: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo \
+    zoo zoo zoo zoo zoo zoo zoo zoo vote";
+
 pub const ACCOUNT: AccountIndex = AccountIndex(0);
 pub const AMOUNT: u64 = 300_000_000;
 pub const FUNDING: u64 = 1_457_920_000;
@@ -487,6 +491,18 @@ impl World {
             ISSUER_MNEMONIC,
             "issuer-twin",
             3,
+            &self.node,
+            &self.relay,
+            &self.runtime,
+        )
+    }
+
+    /// A wallet on a seed of its own, unfunded.
+    pub fn stranger(&self) -> Party {
+        Party::new(
+            STRANGER_MNEMONIC,
+            "stranger",
+            5,
             &self.node,
             &self.relay,
             &self.runtime,

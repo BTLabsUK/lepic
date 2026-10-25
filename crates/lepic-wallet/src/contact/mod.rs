@@ -8,12 +8,14 @@
 
 mod collect;
 mod invoices;
+mod keycheck;
 mod keys;
 mod manage;
 mod outbox;
 mod pairing;
 mod relay;
 mod sealed;
+mod words;
 
 use std::time::Duration;
 
@@ -29,6 +31,7 @@ use crate::error::WalletError;
 pub use collect::{CollectReport, CollectTrigger};
 pub(crate) use invoices::slate_contact;
 pub use invoices::{ContactInvoice, InvoiceDetails, SAME_AMOUNT_WINDOW};
+pub use keycheck::{KEY_CHECK_WINDOW, KeysDecision};
 pub(crate) use keys::reply_public_key;
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{ContactKind, Purpose, Refusal, SasSymbol};
@@ -38,6 +41,7 @@ pub use pairing::{
     InviteRequest, LinkOutcome, SasDecision,
 };
 pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
+pub use words::WORDS_INVITE_EXPIRY;
 
 /// How long an inviter keeps draining its reply mailbox after the invite expired, for the clock
 /// skew of RFC 0002 C-26. Also the skew an invitee allows an invite's expiry.
@@ -185,6 +189,14 @@ pub enum ContactError {
     Invoice(#[source] crate::invoice::InvoiceError),
     #[error("slate was not finalized")]
     Finalize(#[source] crate::finalize::FinalizeError),
+    /// A key check is allowed once per pairing and per slot, within a day of the new pairing.
+    #[error("no key check is allowed for these pairings now")]
+    KeyCheckRefused,
+    /// No invite opened with these words on any built-in relay.
+    #[error("no invite found for these words")]
+    WordsNotFound,
+    #[error("pairing words are not valid")]
+    Words(#[source] lepic_contact::WordsError),
     /// The contact's card says it does not pay invoices.
     #[error("the contact does not pay invoices")]
     DoesNotPayInvoices,

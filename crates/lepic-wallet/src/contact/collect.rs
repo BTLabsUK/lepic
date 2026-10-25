@@ -87,6 +87,24 @@ const MAX_SEEN: usize = 4096;
 const FEW_RELAYS: usize = 3;
 
 const SEEN_KEY: &str = "contact.seen";
+const IN_PERSON_PREFIX: &str = "contact.inperson.";
+const OLD_SALT_PREFIX: &str = "contact.oldsalt.";
+
+/// The setting that marks a contact paired in person whose mailbox has not moved yet.
+pub(crate) fn in_person_key(contact_id: ContactId) -> String {
+    format!("{IN_PERSON_PREFIX}{}", hex(&contact_id.0))
+}
+
+fn old_salt_key(contact_id: ContactId) -> String {
+    format!("{OLD_SALT_PREFIX}{}", hex(&contact_id.0))
+}
+
+/// The box salt of a mailbox moved away from after an in-person pairing, read until `until`.
+#[derive(Serialize, Deserialize)]
+struct OldSalt {
+    salt: String,
+    until: i64,
+}
 const BACKOFF_KEY: &str = "contact.backoff";
 const UPDATES_KEY: &str = "contact.updates";
 const CURSOR_KEY: &str = "contact.cursor";
@@ -151,6 +169,17 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn unhex16(text: &str) -> Option<[u8; 16]> {
+    if text.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (slot, pair) in out.iter_mut().zip(text.as_bytes().chunks(2)) {
+        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(out)
+}
+
 impl<N, S, V> Wallet<N, S, V>
 where
     N: NodeApi + 'static,
@@ -183,6 +212,8 @@ where
                 reason: PairingFailure::Expired,
             }));
         }
+        self.tend_key_checks().await?;
+        self.move_in_person_mailboxes(relays).await?;
         let mailboxes = self.mailboxes_to_collect(relays, trigger).await?;
         let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();
         for mailbox in mailboxes {
@@ -345,17 +376,26 @@ where
                     if let Some(previous) = mailbox.previous.filter(|previous| previous.until > now)
                     {
                         let old = endpoint_for(&previous.relay, &relays)?;
-                        contacts.push((record.clone(), old, None));
+                        contacts.push((record.clone(), old, None, record.box_salt));
                     }
-                    contacts.push((record, home, mailbox.onion));
+                    let old_salt = repos
+                        .setting(&old_salt_key(record.contact_id))?
+                        .and_then(|text| serde_json::from_str::<OldSalt>(&text).ok())
+                        .filter(|old| old.until > now.as_second())
+                        .and_then(|old| unhex16(&old.salt));
+                    if let Some(salt) = old_salt {
+                        contacts.push((record.clone(), home.clone(), mailbox.onion.clone(), salt));
+                    }
+                    let salt = record.box_salt;
+                    contacts.push((record, home, mailbox.onion, salt));
                 }
                 if trigger == CollectTrigger::Foreground {
                     let distinct: std::collections::BTreeSet<String> = contacts
                         .iter()
-                        .map(|(_, home, _)| host_text(home))
+                        .map(|(_, home, _, _)| host_text(home))
                         .collect();
                     if distinct.len() > FEW_RELAYS {
-                        contacts.retain(|(record, _, _)| active(record, now));
+                        contacts.retain(|(record, _, _, _)| active(record, now));
                     }
                 }
                 let room = MAX_MAILBOXES_PER_DRAIN.saturating_sub(mailboxes.len());
@@ -369,7 +409,7 @@ where
                 let taken = room.min(count);
                 let next = start.saturating_add(taken).checked_rem(count).unwrap_or(0);
                 repos.put_setting(CURSOR_KEY, &next.to_string())?;
-                for (record, home, onion) in contacts.into_iter().take(taken) {
+                for (record, home, onion, salt) in contacts.into_iter().take(taken) {
                     if waiting(&host_text(&home)) {
                         continue;
                     }
@@ -378,7 +418,7 @@ where
                         network,
                         record.account,
                         record.slot,
-                        record.box_salt,
+                        salt,
                     )?;
                     mailboxes.push(Mailbox {
                         job: Job::Contact(record.contact_id),
@@ -551,8 +591,8 @@ where
                 self.take_contact_notice(&record, &opened.content.body)
                     .await?
             }
-            // TODO(W-28): the key check waits for the revised messages of RFC 0002 7.8.
-            MessageType::KeyCheck | MessageType::KeyCheckAnswer => Handled::Stored,
+            MessageType::KeyCheck => self.take_key_check(&record, envelope).await?,
+            MessageType::KeyCheckAnswer => self.take_key_check_answer(&record, envelope).await?,
             MessageType::PairingReply | MessageType::PairingConfirm => Handled::Stored,
         })
     }
@@ -650,6 +690,92 @@ where
         if updated {
             info!("contact updated");
             self.emit(Event::ContactUpdated(ContactEvent { contact_id }));
+        }
+        Ok(())
+    }
+
+    /// Moves our mailbox of each contact paired in person to one from a fresh box salt and
+    /// tells the contact with a contact update (RFC 0002 7.4): anyone who saw the card QR knows
+    /// the old one. The old mailbox is still read for [`PREVIOUS_HOME_KEPT`].
+    async fn move_in_person_mailboxes(&self, relays: &ContactRelays) -> Result<(), ContactError> {
+        let network = self.config().network;
+        let net = contact_network(network);
+        let session = self.session()?;
+        let relays = relays.clone();
+        let updates = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
+                    let mut updates = Vec::new();
+                    for record in repos.contacts()? {
+                        let flag = in_person_key(record.contact_id);
+                        if repos.setting(&flag)?.is_none() {
+                            continue;
+                        }
+                        repos.delete_setting(&flag)?;
+                        let (Some(peer), Some(mut mailbox)) = (
+                            record.peer.clone(),
+                            repos.contact_mailbox(record.contact_id)?,
+                        ) else {
+                            continue;
+                        };
+                        let home = endpoint_for(&mailbox.home_relay, &relays)?;
+                        let mut rng = super::LockedRng(&mut **ports.rng.lock());
+                        let salt = super::new_id(&mut rng);
+                        let keys = contact_keys(
+                            &session.keychain,
+                            network,
+                            record.account,
+                            record.slot,
+                            salt,
+                        )?;
+                        let ours = box_identity(&keys, network, &home)?;
+                        let own = ContactCard::decode(&record.own_card, net)
+                            .map_err(ContactError::Decode)?;
+                        let mut fields = own.fields().clone();
+                        fields.mailbox =
+                            lepic_contact::MailboxAddress::new(&ours.address().to_string())
+                                .map_err(ContactError::Name)?;
+                        fields.seq = fields.seq.saturating_add(1);
+                        let signer = super::keys::signing_key(&keys);
+                        let card = ContactCard::sign(net, fields, &signer)
+                            .map_err(ContactError::Encode)?;
+                        let peer_card =
+                            ContactCard::decode(&peer.bytes, net).map_err(ContactError::Decode)?;
+                        let envelope = lepic_contact::seal_contact_update(
+                            &peer_card, &card, &signer, &mut rng,
+                        )
+                        .map_err(ContactError::Encode)?;
+                        let old = OldSalt {
+                            salt: hex(&record.box_salt),
+                            until: now
+                                .checked_add(PREVIOUS_HOME_KEPT)
+                                .unwrap_or(now)
+                                .as_second(),
+                        };
+                        write_json(repos, &old_salt_key(record.contact_id), &old)?;
+                        let mut record = record;
+                        record.box_salt = salt;
+                        record.own_card = card.as_bytes().to_vec();
+                        record.updated_at = now;
+                        repos.put_contact(&record)?;
+                        mailbox.our_mailbox = ours.address().to_string();
+                        repos.put_contact_mailbox(&mailbox)?;
+                        updates.push((record.contact_id, envelope));
+                    }
+                    Ok(updates)
+                })
+            })
+            .await?;
+        for (contact_id, envelope) in updates {
+            self.enqueue_for_contact(
+                contact_id,
+                uuid::Uuid::from_bytes(contact_id.0),
+                lepic_store::SlateStage::Standard1,
+                &envelope,
+            )
+            .await?;
+            info!("in-person mailbox moved");
         }
         Ok(())
     }

@@ -18,7 +18,9 @@ mod support;
 #[path = "epicbox_invoices/world.rs"]
 mod world;
 
-use helpers::{HOUR, MINUTE, accept, events, invite_request, relays};
+use std::time::Duration;
+
+use helpers::{HOUR, MINUTE, accept, events, invite_request, relays, relays_with_words};
 use lepic_contact::{
     ContactCard, ContactKind, EncSecretKey, Invite, InviteFields, Network as ContactNetwork,
     PairingLink, SealedEnvelope, open_reply, pairing_envelope_from_link, seal_reply,
@@ -29,7 +31,7 @@ use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::contact::{
     CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry, InviteRequest,
-    LinkOutcome, PairingFailure, RelayMode, SasDecision,
+    KeysDecision, LinkOutcome, PairingFailure, RelayMode, SasDecision,
 };
 use lepic_wallet::event::{ContactEvent, FailedPairing};
 use rand::SeedableRng;
@@ -818,4 +820,532 @@ fn contact_updates_refresh_the_card_within_three_a_day() {
     post_update(&world, ben_side, 6, "relay.test:8006");
     world.collect(&world.issuer);
     assert!(peer_mailbox().ends_with("@relay.test:8006"));
+}
+
+/// The party's keys for its contact `contact`, as the wallet derives them.
+fn contact_keys(party: &Party, contact: ContactId) -> lepic_keychain::ContactKeys {
+    let record = party.read(|repos| repos.contact(contact)).unwrap();
+    party
+        .keychain()
+        .contact_root(
+            &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
+            lepic_primitives::params::Network::Floonet,
+        )
+        .unwrap()
+        .contact_keys(record.slot, record.box_salt)
+        .unwrap()
+}
+
+/// Posts `envelope` from the party's mailbox for `contact` to the contact's mailbox, as the
+/// party's wallet would.
+fn post_sealed(world: &World, party: &Party, contact: ContactId, envelope: &[u8]) {
+    let keys = contact_keys(party, contact);
+    let mailbox = party.read(|repos| repos.contact_mailbox(contact)).unwrap();
+    let from = lepic_epicbox::Identity::new(
+        keys.expose_box_secret().clone(),
+        lepic_epicbox::EpicboxAddress::parse(&mailbox.our_mailbox, RelayNetwork::Floonet).unwrap(),
+    )
+    .unwrap();
+    let to =
+        lepic_epicbox::EpicboxAddress::parse(&mailbox.peer_mailbox, RelayNetwork::Floonet).unwrap();
+    world
+        .block_on(
+            lepic_epicbox::MailboxClient::new(world::settings(), world.relay.connector()).post(
+                &from,
+                &to,
+                &lepic_contact::armor(envelope),
+            ),
+        )
+        .unwrap();
+}
+
+/// The contacts whose keys came back and those whose keys changed, by the events.
+fn key_news(events: &[Event]) -> (Vec<ContactId>, Vec<ContactId>) {
+    let restored = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ContactKeysRestored(ContactEvent { contact_id }) => Some(*contact_id),
+            _ => None,
+        })
+        .collect();
+    let changed = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ContactKeysChanged(ContactEvent { contact_id }) => Some(*contact_id),
+            _ => None,
+        })
+        .collect();
+    (restored, changed)
+}
+
+fn key_check(world: &World, party: &Party, new: ContactId, old: ContactId) {
+    world
+        .block_on(party.wallet.contact_key_check(&relays(party), new, old))
+        .unwrap();
+}
+
+/// Runs both sides' collecting until the check, its answers and the folding are done.
+fn settle(world: &World, x: &Party, y: &Party) {
+    for _ in 0..3 {
+        world.collect(y);
+        world.collect(x);
+    }
+}
+
+/// C-12 without the backup: the payer's phrase on a new install pairs with the issuer again, and
+/// the issuer adds the new pairing to the old contact. The new install finds its old slot, and
+/// both keep the old keys: the issuer its record with its trust, the payer the old slot.
+#[test]
+fn a_re_pairing_without_the_backup_brings_the_old_keys_back() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    world
+        .block_on(world.issuer.wallet.pairing_sas(
+            &relays(&world.issuer),
+            anna_side,
+            SasDecision::Match,
+        ))
+        .unwrap();
+    let before = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    let restored = world.payer_twin();
+    let (new_on_issuer, _) = world.pair(&world.issuer, &restored);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let mut restored_events = restored.wallet.subscribe();
+
+    key_check(&world, &world.issuer, new_on_issuer, anna_side);
+    settle(&world, &world.issuer, &restored);
+
+    assert_eq!(world.contact_ids(&world.issuer), vec![anna_side]);
+    let after = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    assert_eq!(after.state, ContactState::Verified);
+    assert_eq!(after.verified_at, before.verified_at);
+    let (old_peer, new_peer) = (before.peer.unwrap(), after.peer.unwrap());
+    assert_eq!(new_peer.sig_key, old_peer.sig_key);
+    assert!(new_peer.seq > old_peer.seq);
+    let kept = restored.read(|repos| repos.contacts());
+    assert_eq!(kept.len(), 1);
+    let original = world.payer.read(|repos| repos.contact(ben_side)).unwrap();
+    assert_eq!(kept[0].slot, original.slot);
+    assert_eq!(kept[0].peer.as_ref().unwrap().bytes, after.own_card);
+    // The issuer now delivers to the restored install's new mailbox.
+    let mailbox = restored
+        .read(|repos| repos.contact_mailbox(kept[0].contact_id))
+        .unwrap();
+    let issuer_mailbox = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(anna_side))
+        .unwrap();
+    assert_eq!(issuer_mailbox.peer_mailbox, mailbox.our_mailbox);
+    assert_eq!(mailbox.peer_mailbox, issuer_mailbox.our_mailbox);
+    assert_eq!(
+        key_news(&events(&mut issuer_events)),
+        (vec![anna_side], vec![])
+    );
+    assert_eq!(
+        key_news(&events(&mut restored_events)),
+        (vec![kept[0].contact_id], vec![])
+    );
+    // One check per slot a day.
+    let (again, _) = world.pair(&world.issuer, &restored);
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.contact_key_check(
+            &relays(&world.issuer),
+            again,
+            anna_side
+        )),
+        Err(ContactError::KeyCheckRefused)
+    ));
+}
+
+/// C-12 with the backup: the restored install holds the record already, so a re-pairing anyway
+/// folds into it and nothing changes on either side.
+#[test]
+fn a_re_pairing_with_the_backup_folds_into_the_restored_record() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    let document = world
+        .block_on(world.payer.wallet.contacts_export())
+        .unwrap();
+    let restored = world.payer_twin();
+    world
+        .block_on(restored.wallet.contacts_import(document))
+        .unwrap();
+    let before = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    let (new_on_issuer, _) = world.pair(&world.issuer, &restored);
+
+    key_check(&world, &world.issuer, new_on_issuer, anna_side);
+    settle(&world, &world.issuer, &restored);
+
+    assert_eq!(world.contact_ids(&world.issuer), vec![anna_side]);
+    assert_eq!(restored.read(|repos| repos.contacts()).len(), 1);
+    let kept = restored.read(|repos| repos.contact(ben_side)).unwrap();
+    let after = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    assert_eq!(after.peer.as_ref().unwrap().bytes, kept.own_card);
+    assert_eq!(after.peer.unwrap().sig_key, before.peer.unwrap().sig_key);
+    assert_eq!(after.state, before.state);
+}
+
+/// C-12 with another seed: nothing is found, the old record stays as it was, and the new
+/// pairing shows keys-changed until the user picks the old keys or the new ones.
+#[test]
+fn a_re_pairing_with_another_seed_shows_keys_changed_on_the_new_pairing() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    world
+        .block_on(world.issuer.wallet.pairing_sas(
+            &relays(&world.issuer),
+            anna_side,
+            SasDecision::Match,
+        ))
+        .unwrap();
+    let before = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    let stranger = world.stranger();
+    let (new_on_issuer, _) = world.pair(&world.issuer, &stranger);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    key_check(&world, &world.issuer, new_on_issuer, anna_side);
+    // One check per pairing.
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.contact_key_check(
+            &relays(&world.issuer),
+            new_on_issuer,
+            anna_side
+        )),
+        Err(ContactError::KeyCheckRefused)
+    ));
+    settle(&world, &world.issuer, &stranger);
+
+    assert_eq!(
+        world.issuer.read(|repos| repos.contact(anna_side)).unwrap(),
+        before
+    );
+    let changed = world
+        .issuer
+        .read(|repos| repos.contact(new_on_issuer))
+        .unwrap();
+    assert_eq!(changed.state, ContactState::KeysChanged);
+    assert!(!changed.allow_invoices);
+    assert_eq!(
+        key_news(&events(&mut issuer_events)),
+        (vec![], vec![new_on_issuer])
+    );
+
+    world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_keys_resolve(new_on_issuer, KeysDecision::UseNew),
+        )
+        .unwrap();
+    assert_eq!(world.contact_ids(&world.issuer), vec![new_on_issuer]);
+    let used = world
+        .issuer
+        .read(|repos| repos.contact(new_on_issuer))
+        .unwrap();
+    assert_eq!(used.state, ContactState::Paired);
+    world
+        .block_on(world.issuer.wallet.pairing_sas(
+            &relays(&world.issuer),
+            new_on_issuer,
+            SasDecision::Match,
+        ))
+        .unwrap();
+    assert_eq!(
+        world
+            .issuer
+            .read(|repos| repos.contact(new_on_issuer))
+            .unwrap()
+            .state,
+        ContactState::Verified
+    );
+}
+
+/// C-12 without an answer: a day later the new pairing shows keys-changed, a found answer
+/// arriving after that is refused, and keeping the old keys deletes the new pairing.
+#[test]
+fn a_key_check_unanswered_for_a_day_shows_keys_changed() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    let before = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    let restored = world.payer_twin();
+    let (new_on_issuer, _) = world.pair(&world.issuer, &restored);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    key_check(&world, &world.issuer, new_on_issuer, anna_side);
+    world.issuer.clock.advance(24 * HOUR + MINUTE);
+    world.collect(&world.issuer);
+    assert_eq!(
+        key_news(&events(&mut issuer_events)),
+        (vec![], vec![new_on_issuer])
+    );
+    // The restored install answers found too late.
+    settle(&world, &world.issuer, &restored);
+    assert_eq!(
+        world
+            .issuer
+            .read(|repos| repos.contact(new_on_issuer))
+            .unwrap()
+            .state,
+        ContactState::KeysChanged
+    );
+    assert_eq!(
+        world.issuer.read(|repos| repos.contact(anna_side)).unwrap(),
+        before
+    );
+    assert_eq!(key_news(&events(&mut issuer_events)), (vec![], vec![]));
+
+    world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_keys_resolve(new_on_issuer, KeysDecision::KeepOld),
+        )
+        .unwrap();
+    assert_eq!(world.contact_ids(&world.issuer), vec![anna_side]);
+}
+
+/// An ordinary contact update on the old pairing while a check is open refreshes the old card
+/// and completes nothing; a found answer without a proof by the old key is refused.
+#[test]
+fn only_a_proven_found_answer_completes_a_key_check() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    let stranger = world.stranger();
+    let (new_on_issuer, new_on_stranger) = world.pair(&world.issuer, &stranger);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    key_check(&world, &world.issuer, new_on_issuer, anna_side);
+
+    post_update(&world, ben_side, 2, "relay.test");
+    // The stranger claims the old keys with a card and a proof of its own.
+    let keys = contact_keys(&stranger, new_on_stranger);
+    let signer = lepic_contact::SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+    let record = stranger
+        .read(|repos| repos.contact(new_on_stranger))
+        .unwrap();
+    let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
+    let mut fields = own.fields().clone();
+    fields.seq += 1;
+    let refreshed = ContactCard::sign(ContactNetwork::Floonet, fields, &signer).unwrap();
+    let issuer_card =
+        ContactCard::decode(&record.peer.unwrap().bytes, ContactNetwork::Floonet).unwrap();
+    let forged = lepic_contact::seal_found(
+        &issuer_card,
+        &signer,
+        b"a check never seen",
+        &refreshed,
+        &signer,
+        &mut rand::rngs::StdRng::seed_from_u64(7),
+    )
+    .unwrap();
+    post_sealed(&world, &stranger, new_on_stranger, &forged);
+    world.collect(&world.issuer);
+
+    let news = events(&mut issuer_events);
+    assert!(news.contains(&Event::ContactUpdated(ContactEvent {
+        contact_id: anna_side
+    })));
+    assert_eq!(key_news(&news), (vec![], vec![]));
+    let old = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    assert_eq!(old.peer.unwrap().seq, 2);
+    assert_eq!(world.contact_ids(&world.issuer).len(), 2);
+    // The check stays open, and the stranger's own answer ends it.
+    settle(&world, &world.issuer, &stranger);
+    assert_eq!(
+        key_news(&events(&mut issuer_events)),
+        (vec![], vec![new_on_issuer])
+    );
+}
+
+/// C-17: both invite each other at once. The second pairing is added to the first contact, the
+/// other side finds the first among its own records, and one record remains on each side, with
+/// the older keys.
+#[test]
+fn cross_invites_fold_into_the_older_pairing() {
+    let world = World::new();
+    let (first_on_issuer, first_on_payer) = world.pair_by_link();
+    let (second_on_payer, second_on_issuer) = world.pair(&world.payer, &world.issuer);
+    let before = world
+        .issuer
+        .read(|repos| repos.contact(first_on_issuer))
+        .unwrap();
+
+    key_check(&world, &world.issuer, second_on_issuer, first_on_issuer);
+    settle(&world, &world.issuer, &world.payer);
+
+    assert_eq!(world.contact_ids(&world.issuer), vec![first_on_issuer]);
+    assert_eq!(world.contact_ids(&world.payer), vec![first_on_payer]);
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.contact(second_on_payer))
+            .is_none()
+    );
+    let after = world
+        .issuer
+        .read(|repos| repos.contact(first_on_issuer))
+        .unwrap();
+    assert_eq!(
+        after.peer.as_ref().unwrap().sig_key,
+        before.peer.unwrap().sig_key
+    );
+    let payer_record = world
+        .payer
+        .read(|repos| repos.contact(first_on_payer))
+        .unwrap();
+    assert_eq!(after.peer.unwrap().bytes, payer_record.own_card);
+    assert_eq!(payer_record.peer.unwrap().bytes, after.own_card);
+}
+
+/// 7.4: a card QR is seen by anyone nearby, so each side's first collect moves its mailbox to a
+/// new box salt and tells the other with a contact update; the old mailbox is still read.
+#[test]
+fn an_in_person_pairing_moves_both_mailboxes_on_the_first_collect() {
+    let world = World::new();
+    let show = |party: &Party, name: &str| {
+        world
+            .block_on(party.wallet.pairing_show_card(
+                &relays(party),
+                CardRequest {
+                    account: AccountIndex(0),
+                    name: name.to_owned(),
+                    kind: ContactKind::Person,
+                },
+            ))
+            .unwrap()
+    };
+    let anna = show(&world.issuer, "Anna");
+    let ben = show(&world.payer, "Ben");
+    world
+        .block_on(world.issuer.wallet.pairing_scan_card(
+            &relays(&world.issuer),
+            anna.contact_id,
+            &ben.link,
+        ))
+        .unwrap();
+    world
+        .block_on(world.payer.wallet.pairing_scan_card(
+            &relays(&world.payer),
+            ben.contact_id,
+            &anna.link,
+        ))
+        .unwrap();
+    let mailbox = |party: &Party, contact: ContactId| {
+        party.read(|repos| repos.contact_mailbox(contact)).unwrap()
+    };
+    let shown = mailbox(&world.issuer, anna.contact_id).our_mailbox;
+    let hint = world
+        .payer
+        .read(|repos| repos.contact(ben.contact_id))
+        .unwrap();
+
+    // The payer moves before it reads the issuer's update, so its own update goes to the
+    // issuer's old mailbox, which the issuer still drains.
+    for _ in 0..2 {
+        world.collect(&world.issuer);
+        world.collect(&world.payer);
+    }
+
+    let issuer_side = mailbox(&world.issuer, anna.contact_id);
+    let payer_side = mailbox(&world.payer, ben.contact_id);
+    assert_ne!(issuer_side.our_mailbox, shown);
+    assert_eq!(payer_side.peer_mailbox, issuer_side.our_mailbox);
+    assert_eq!(issuer_side.peer_mailbox, payer_side.our_mailbox);
+    assert_ne!(
+        world
+            .payer
+            .read(|repos| repos.contact(ben.contact_id))
+            .unwrap()
+            .box_salt,
+        hint.box_salt
+    );
+    // The move happens once; the old mailbox is drained beside the new one.
+    assert_eq!(world.collect(&world.issuer).mailboxes, 2);
+    assert_eq!(
+        mailbox(&world.issuer, anna.contact_id).our_mailbox,
+        issuer_side.our_mailbox
+    );
+}
+
+fn invite_with_words(world: &World, party: &Party) -> Vec<&'static str> {
+    world
+        .block_on(party.wallet.pairing_invite(
+            &relays_with_words(party),
+            InviteRequest {
+                offer_words: true,
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap()
+        .words
+        .unwrap()
+        .iter()
+        .map(|symbol| symbol.name)
+        .collect()
+}
+
+fn find_words(world: &World, party: &Party, words: &[&str]) -> Result<String, ContactError> {
+    world.block_on(
+        party
+            .wallet
+            .pairing_find_words(&relays_with_words(party), words),
+    )
+}
+
+/// C-33: words are offered only on a built-in relay; wrong words find nothing; the right words
+/// open the invite and pairing completes; a second use finds nothing.
+#[test]
+fn pairing_words_find_the_invite_once() {
+    let world = World::new();
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.pairing_invite(
+            &relays(&world.issuer),
+            InviteRequest {
+                offer_words: true,
+                ..invite_request("Anna")
+            },
+        )),
+        Err(ContactError::WordsUnavailable)
+    ));
+    let words = invite_with_words(&world, &world.issuer);
+    let mut wrong = words.clone();
+    wrong.rotate_left(1);
+    assert!(matches!(
+        find_words(&world, &world.payer, &wrong),
+        Err(ContactError::WordsNotFound)
+    ));
+
+    let link = find_words(&world, &world.payer, &words).unwrap();
+    let answered = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    assert!(answered.posted);
+    assert_eq!(world.collect(&world.issuer).paired, 1);
+    assert_eq!(world.collect(&world.payer).paired, 1);
+
+    let second = world.payer_twin();
+    assert!(matches!(
+        find_words(&world, &second, &words),
+        Err(ContactError::WordsNotFound)
+    ));
+}
+
+/// C-33, the window edge: an invite made just before a 10-minute window ends is still found in
+/// the next one.
+#[test]
+fn pairing_words_are_found_in_the_next_window() {
+    let world = World::new();
+    // The test clock starts 200 s into a window.
+    world.issuer.clock.advance(Duration::from_secs(390));
+    let words = invite_with_words(&world, &world.issuer);
+    world.payer.clock.advance(Duration::from_secs(420));
+
+    let link = find_words(&world, &world.payer, &words).unwrap();
+    assert!(link.starts_with("epiccash://pair/1/"));
 }

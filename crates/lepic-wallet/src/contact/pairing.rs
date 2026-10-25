@@ -74,6 +74,8 @@ pub struct InviteOffer {
     /// `epiccash://pair/1/...`.
     pub link: String,
     pub expires_at: Timestamp,
+    /// The five pairing words, when they were offered and the invite was posted for them.
+    pub words: Option<[lepic_contact::SasSymbol; lepic_contact::WORD_COUNT]>,
 }
 
 /// What an invite claims, for the user to decide on before answering it.
@@ -253,10 +255,15 @@ where
 {
     /// Makes an invite to pair with a contact (RFC 0002 7.1). Its home relay is the relay of
     /// `relays`, where the reply mailbox and later both contact mailboxes live. The pending
-    /// pairing is stored; [`Wallet::contacts_collect`] takes the reply. Nothing is sent.
+    /// pairing is stored; [`Wallet::contacts_collect`] takes the reply. Without words nothing is
+    /// sent.
     ///
-    /// Fails with [`ContactError::WordsUnavailable`] when `offer_words` is set, with
-    /// [`ContactError::Name`] for a name the card cannot carry, with
+    /// With `offer_words` the invite lasts 10 minutes and is also posted, sealed with five
+    /// pairing words, to a rendezvous mailbox (RFC 0002 7.7). Words are offered only when the
+    /// relay is a built-in one, else this fails with [`ContactError::WordsUnavailable`]; a post
+    /// that fails is [`ContactError::Relay`], and the invite stays pending until it expires.
+    ///
+    /// Fails with [`ContactError::Name`] for a name the card cannot carry, with
     /// [`ContactError::NetworkMismatch`], and as the store does, for example when every slot of
     /// the account is used or 64 pairings are pending.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
@@ -265,19 +272,25 @@ where
         relays: &ContactRelays,
         request: InviteRequest,
     ) -> Result<InviteOffer, ContactError> {
-        if request.offer_words {
-            // TODO(W-28): pairing words wait for the revised words format of RFC 0002 7.7.
-            return Err(ContactError::WordsUnavailable);
-        }
         self.check_contact_network(relays)?;
         let network = self.config().network;
         let home = relays.epicbox.settings().endpoint.clone();
+        let offer_words = request.offer_words;
+        if offer_words && !super::words::built_in(relays, &home) {
+            return Err(ContactError::WordsUnavailable);
+        }
+        let lifetime = if offer_words {
+            super::words::WORDS_INVITE_EXPIRY
+        } else {
+            request.expiry.duration()
+        };
         let session = self.session()?;
-        let offer = self
+        let words_home = home.clone();
+        let mut offer = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 let expires_at = now
-                    .checked_add(request.expiry.duration())
+                    .checked_add(lifetime)
                     .map_err(|_| ContactError::InviteExpired)?;
                 session.store.write(|repos| {
                     let new = take_slot(
@@ -359,11 +372,17 @@ where
                         contact_id: new.contact_id,
                         link: invite.to_link(),
                         expires_at,
+                        words: None,
                     })
                 })
             })
             .await?;
         info!("pairing invite made");
+        if offer_words {
+            let invite = Invite::from_link(&offer.link, contact_network(network))
+                .map_err(ContactError::Decode)?;
+            offer.words = Some(self.post_invite_words(relays, &invite, &words_home).await?);
+        }
         Ok(offer)
     }
 
@@ -637,6 +656,8 @@ where
                         previous: None,
                         backoff: Vec::new(),
                     })?;
+                    // A card QR is seen by anyone nearby: the first collect moves our mailbox.
+                    repos.put_setting(&super::collect::in_person_key(contact_id), "1")?;
                     debug!(peer_relay = %peer_relay, "in-person pairing stored");
                     Ok(super::manage::view(&record, Some(host_text(&home)), now))
                 })

@@ -101,6 +101,12 @@ pub enum Event {
     ContactUpdated(ContactEvent),
     /// A home relay did not answer; collecting from it backs off (RFC 0002 8.4).
     HomeRelayUnreachable(UnreachableRelay),
+    /// A key check proved the contact still holds the old keys: the old pairing keeps its keys
+    /// and trust, and the new pairing was folded into it ("Anna's keys are back").
+    ContactKeysRestored(ContactEvent),
+    /// A key check found no old keys, or went unanswered for a day: the new pairing shows
+    /// keys-changed and the old one is untouched, until the user decides.
+    ContactKeysChanged(ContactEvent),
     /// A verified contact that may send invoices sent one; it is parked for the user to pay or
     /// decline. Nothing was paid.
     InvoiceFromContact(ContactInvoiceEvent),

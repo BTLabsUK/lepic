@@ -31,6 +31,14 @@ pub fn relays(party: &Party) -> ContactRelays {
     }
 }
 
+/// As [`relays`], with the party's relay among the built-in ones, where words are offered.
+pub fn relays_with_words(party: &Party) -> ContactRelays {
+    ContactRelays {
+        built_in: vec![party.epicbox.settings().endpoint.clone()],
+        ..relays(party)
+    }
+}
+
 pub fn invite_request(name: &str) -> InviteRequest {
     InviteRequest {
         account: AccountIndex(0),
@@ -90,6 +98,36 @@ impl World {
         let issuer_contact = self.only_contact(&self.issuer);
         assert_eq!(answered.contact_id, self.only_contact(&self.payer));
         (issuer_contact, answered.contact_id)
+    }
+
+    /// `inviter` invites by link, `invitee` answers, and both collect. Returns the two new
+    /// contact ids, the inviter's first.
+    pub fn pair(&self, inviter: &Party, invitee: &Party) -> (ContactId, ContactId) {
+        let before = self.contact_ids(inviter);
+        let link = self.invite(inviter, "Anna");
+        let answered = self
+            .block_on(
+                invitee
+                    .wallet
+                    .pairing_accept(&relays(invitee), accept(&link, "Ben", false)),
+            )
+            .unwrap();
+        assert_eq!(self.collect(inviter).paired, 1);
+        assert_eq!(self.collect(invitee).paired, 1);
+        let ours = self
+            .contact_ids(inviter)
+            .into_iter()
+            .find(|id| !before.contains(id))
+            .unwrap();
+        (ours, answered.contact_id)
+    }
+
+    pub fn contact_ids(&self, party: &Party) -> Vec<ContactId> {
+        self.block_on(party.wallet.contacts())
+            .unwrap()
+            .into_iter()
+            .map(|view| view.contact_id)
+            .collect()
     }
 
     pub fn only_contact(&self, party: &Party) -> ContactId {
