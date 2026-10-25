@@ -1,0 +1,649 @@
+//! Pairing with contacts (RFC 0002), and the sealed slates and invoices exchanged with them.
+//!
+//! Two wallets pair once, online by an invite link, pairing words or a pasted reply, or in
+//! person by scanning each other's card, and then check four emoji words on both screens. A
+//! paired contact gets its slates sealed so only its wallet opens them, and a verified one may
+//! be allowed to send invoices; nothing from a contact ever pays without the user. Contacts
+//! belong to the default account. Contact ids are 32 lowercase hex characters.
+//!
+//! Nothing secret crosses: calls take links, armored text and names, and return public card
+//! details, the words check and states. The one secret the app sees is an invite link: whoever
+//! has it can pair as the contact until it is used or expires, so share it and never store it.
+//!
+//! Calls that take a [`ContactRelayMode`] reach relays through the wallet's Epicbox relay and
+//! the home relays of contacts; with `Offline` or `EpicboxOff` the ones that must connect fail
+//! with `ContactsOffline` or `EpicboxOff` before connecting, and the others work as they do
+//! offline. Every call that takes a mode fails with `Unsupported` when the configuration names
+//! no Epicbox relay. Every call fails with `Locked` on a locked wallet and with
+//! `InvalidArgument` for an id that is not one.
+//!
+//! What arrives in contact mailboxes is taken by [`EpicWallet::contacts_collect`] and reported
+//! as the `Pairing*`, `Contact*`, `InvoiceFromContact`, `WithdrawalFromContact`, `Sealed*` and
+//! `Outbox*` events on [`EpicWallet::events`]. What the wallet sends to contacts waits in an
+//! outbox that [`EpicWallet::contacts_outbox_deliver`] posts; run both when the app opens, on
+//! a foreground tick and on a push wake-up.
+
+use crate::api::error::WalletError;
+use crate::api::types::{
+    CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
+    ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry, InvitePreview,
+    IssuedInvoice, KeysDecision, OutboxEntryView, OutboxReport, PaidInvoice, PairingAnswer,
+    PairingCard, PairingInvite, PairingLinkResult, PendingPairingView, SasDecision, SealedAnswer,
+    SealedSlateView, SendOptions, SlatePurpose,
+};
+use crate::api::wallet::EpicWallet;
+
+impl EpicWallet {
+    /// Makes an invite to pair, valid for `expiry`, whose messages go through this wallet's
+    /// relay. The pending pairing is stored and listed by [`EpicWallet::pairings_pending`];
+    /// [`EpicWallet::contacts_collect`] takes the reply and raises `PairingReplied`. Without
+    /// words nothing is sent, so this works offline.
+    ///
+    /// With `offer_words` the invite lasts 10 minutes and is also posted under five pairing
+    /// words, returned in `words`, for the other side to type; that needs `Online` and fails
+    /// with `PairingWordsUnavailable` unless the wallet's relay is a built-in one, and with
+    /// `TransportFailed` when the post fails, the invite staying pending until it expires.
+    ///
+    /// Fails with `InvalidContactName` for a `name` a card cannot carry, and with `Io` when 64
+    /// pairings are pending.
+    pub async fn pairing_invite(
+        &self,
+        name: String,
+        kind: ContactKind,
+        expiry: InviteExpiry,
+        offer_words: bool,
+        relay_mode: ContactRelayMode,
+    ) -> Result<PairingInvite, WalletError> {
+        self.run("pairing_invite", |session| async move {
+            session
+                .pairing_invite(name, kind, expiry, offer_words, relay_mode)
+                .await
+        })
+        .await
+    }
+
+    /// Reads an invite link for the "Pair with Anna?" sheet. Nothing is stored or sent.
+    ///
+    /// Fails with `InvalidPairingText` for text that is not an invite on the wallet's network,
+    /// and `InviteExpired` for one past its expiry.
+    pub async fn pairing_preview(&self, link: String) -> Result<InvitePreview, WalletError> {
+        self.run("pairing_preview", |session| async move {
+            session.pairing_preview(&link)
+        })
+        .await
+    }
+
+    /// Finds the invite that five pairing words name, typed as names or emoji, on the
+    /// built-in relays, and returns its link with its preview, for
+    /// [`EpicWallet::pairing_accept`]. The invite is taken off the relay, so nobody else finds
+    /// it.
+    ///
+    /// Fails with `InvalidPairingWords` for words not in the table, `PairingWordsNotFound`
+    /// when no relay holds the invite, and `ContactsOffline` or `EpicboxOff`.
+    pub async fn pairing_find_words(
+        &self,
+        words: Vec<String>,
+        relay_mode: ContactRelayMode,
+    ) -> Result<FoundInvite, WalletError> {
+        self.run("pairing_find_words", |session| async move {
+            session.pairing_find_words(words, relay_mode).await
+        })
+        .await
+    }
+
+    /// Answers an invite as `name`. The pending pairing is stored first, then the reply is
+    /// posted unless `by_hand` is set or the mode is not `Online`; `reply_link` is returned
+    /// either way, for "Send by hand" and for a post that failed (`posted` false).
+    /// [`EpicWallet::contacts_collect`] takes the confirmation and raises `PairingConfirmed`.
+    ///
+    /// Fails as [`EpicWallet::pairing_preview`] does, with `AlreadyPaired` for an invite this
+    /// wallet made or answered already, and `InvalidContactName`.
+    pub async fn pairing_accept(
+        &self,
+        link: String,
+        name: String,
+        by_hand: bool,
+        relay_mode: ContactRelayMode,
+    ) -> Result<PairingAnswer, WalletError> {
+        self.run("pairing_accept", |session| async move {
+            session
+                .pairing_accept(link, name, by_hand, relay_mode)
+                .await
+        })
+        .await
+    }
+
+    /// Takes a reply or confirmation the user pasted, `epiccash://pair-reply/1/...` or
+    /// `epiccash://pair-confirm/1/...`. A reply to one of this wallet's invites pairs the
+    /// contact and returns the confirmation to send back by hand (`Confirm`); a confirmation
+    /// finishes a pairing this wallet answered (`Paired`). Either way the words check follows.
+    /// Reaches no relay unless the pairing has to tell the other side something.
+    ///
+    /// Fails with `InvalidPairingText` for any other text.
+    pub async fn pairing_enter_link(
+        &self,
+        text: String,
+        relay_mode: ContactRelayMode,
+    ) -> Result<PairingLinkResult, WalletError> {
+        self.run("pairing_enter_link", |session| async move {
+            session.pairing_enter_link(&text, relay_mode).await
+        })
+        .await
+    }
+
+    /// Shows a card to pair in person: "Show my code". Its `link` goes in a QR code for the
+    /// other phone; [`EpicWallet::pairing_scan_card`] with the same `contact_id` finishes the
+    /// pairing with theirs. Nothing is sent, so this works offline.
+    ///
+    /// Fails as [`EpicWallet::pairing_invite`] does.
+    pub async fn pairing_show_card(
+        &self,
+        name: String,
+        kind: ContactKind,
+        relay_mode: ContactRelayMode,
+    ) -> Result<PairingCard, WalletError> {
+        self.run("pairing_show_card", |session| async move {
+            session.pairing_show_card(name, kind, relay_mode).await
+        })
+        .await
+    }
+
+    /// Finishes an in-person pairing with the card `link` scanned from the other phone:
+    /// "Scan theirs". The contact is paired, not verified; show the words check from the
+    /// returned view. Works offline.
+    ///
+    /// Fails with `ContactNotFound` when `contact_id` is not a card this wallet shows,
+    /// `InvalidPairingText` for a link that is not a card on the wallet's network, and
+    /// `AlreadyPaired` for a contact this wallet holds or its own card.
+    pub async fn pairing_scan_card(
+        &self,
+        contact_id: String,
+        link: String,
+        relay_mode: ContactRelayMode,
+    ) -> Result<ContactView, WalletError> {
+        self.run("pairing_scan_card", |session| async move {
+            session
+                .pairing_scan_card(&contact_id, &link, relay_mode)
+                .await
+        })
+        .await
+    }
+
+    /// Records the words check: `Match` makes the contact verified, `Mismatch` removes the
+    /// pairing on this side and, when this wallet made the invite, tells the other side when
+    /// the mode allows, `Skip` leaves it paired.
+    ///
+    /// Fails with `ContactNotFound` when no paired contact has that id.
+    pub async fn pairing_sas(
+        &self,
+        contact_id: String,
+        decision: SasDecision,
+        relay_mode: ContactRelayMode,
+    ) -> Result<(), WalletError> {
+        self.run("pairing_sas", |session| async move {
+            session.pairing_sas(&contact_id, decision, relay_mode).await
+        })
+        .await
+    }
+
+    /// Collects the pairing and contact mailboxes once and raises an event for what arrived:
+    /// replies and confirmations pair, contacts' payments and withdrawals are received and
+    /// answered through the outbox, their invoices wait in [`EpicWallet::contact_invoices`].
+    /// Pairings past their time end with `PairingFailed`. A relay that does not answer is listed
+    /// in `unreachable`, raises `HomeRelayUnreachable` and is tried again later, not returned as
+    /// an error. Messages are taken off a relay only once their effect is stored, so a call
+    /// cut short loses nothing.
+    ///
+    /// Fails with `ContactsOffline` or `EpicboxOff` before connecting.
+    pub async fn contacts_collect(
+        &self,
+        trigger: CollectTrigger,
+        relay_mode: ContactRelayMode,
+    ) -> Result<ContactCollectReport, WalletError> {
+        self.run("contacts_collect", |session| async move {
+            session.contacts_collect(trigger, relay_mode).await
+        })
+        .await
+    }
+
+    /// The paired contacts, oldest first. Pairings in progress are in
+    /// [`EpicWallet::pairings_pending`].
+    pub async fn contacts(&self) -> Result<Vec<ContactView>, WalletError> {
+        self.run(
+            "contacts",
+            |session| async move { session.contacts().await },
+        )
+        .await
+    }
+
+    /// One paired contact. Fails with `ContactNotFound`.
+    pub async fn contact(&self, contact_id: String) -> Result<ContactView, WalletError> {
+        self.run("contact", |session| async move {
+            session.contact(&contact_id).await
+        })
+        .await
+    }
+
+    /// The paired contacts attached to the address-book entry `app_contact` with
+    /// [`EpicWallet::contact_attach`], oldest first: usually one, two while a key check
+    /// between an old and a new pairing runs.
+    pub async fn pairings_for_app_contact(
+        &self,
+        app_contact: String,
+    ) -> Result<Vec<ContactView>, WalletError> {
+        self.run("pairings_for_app_contact", |session| async move {
+            session.pairings_for_app_contact(&app_contact).await
+        })
+        .await
+    }
+
+    /// The pairings in progress, oldest first: invites waiting for a reply and replies waiting
+    /// for the confirmation, for Contacts › Pending.
+    pub async fn pairings_pending(&self) -> Result<Vec<PendingPairingView>, WalletError> {
+        self.run("pairings_pending", |session| async move {
+            session.pairings_pending().await
+        })
+        .await
+    }
+
+    /// Cancels a pairing in progress: an invite stops working, a reply is forgotten. The other
+    /// side is not told. Fails with `PairingNotFound` unless `contact_id` is in
+    /// [`EpicWallet::pairings_pending`]; a paired contact is removed with
+    /// [`EpicWallet::contact_remove`].
+    pub async fn pairing_cancel(&self, contact_id: String) -> Result<(), WalletError> {
+        self.run("pairing_cancel", |session| async move {
+            session.pairing_cancel(&contact_id).await
+        })
+        .await
+    }
+
+    /// "Remove pairing": the contact, its mailboxes and anything pending for it go, and the
+    /// contact is not told. Returns whether anything was removed.
+    pub async fn contact_remove(&self, contact_id: String) -> Result<bool, WalletError> {
+        self.run("contact_remove", |session| async move {
+            session.contact_remove(&contact_id).await
+        })
+        .await
+    }
+
+    /// Sets the user's own name for a contact. Fails with `ContactNotFound`.
+    pub async fn contact_set_label(
+        &self,
+        contact_id: String,
+        label: String,
+    ) -> Result<(), WalletError> {
+        self.run("contact_set_label", |session| async move {
+            session.contact_set_label(&contact_id, label).await
+        })
+        .await
+    }
+
+    /// "Seal payments" on or off for a contact. Fails with `ContactNotFound`.
+    pub async fn contact_set_seal(
+        &self,
+        contact_id: String,
+        seal: bool,
+    ) -> Result<(), WalletError> {
+        self.run("contact_set_seal", |session| async move {
+            session.contact_set_seal(&contact_id, seal).await
+        })
+        .await
+    }
+
+    /// "Allow invoices" on or off for a contact. Turning it off declines the contact's unpaid
+    /// invoices, queuing a `declined` for each in the outbox; a paid one finishes.
+    ///
+    /// Fails with `ContactNotVerified` when turning it on for a contact whose words were not
+    /// checked, and `ContactNotFound`.
+    pub async fn contact_set_allow_invoices(
+        &self,
+        contact_id: String,
+        allow: bool,
+    ) -> Result<(), WalletError> {
+        self.run("contact_set_allow_invoices", |session| async move {
+            session.contact_set_allow_invoices(&contact_id, allow).await
+        })
+        .await
+    }
+
+    /// Attaches a pairing to the app's address-book entry `app_contact`, an id the app
+    /// chooses, or detaches it with `None`. Attaching a new pairing to an entry that has one
+    /// already is when to offer [`EpicWallet::contact_key_check`]. Fails with
+    /// `ContactNotFound`.
+    pub async fn contact_attach(
+        &self,
+        contact_id: String,
+        app_contact: Option<String>,
+    ) -> Result<(), WalletError> {
+        self.run("contact_attach", |session| async move {
+            session.contact_attach(&contact_id, app_contact).await
+        })
+        .await
+    }
+
+    /// Starts the key check between the new pairing `new` and the old pairing `old` of the
+    /// same address-book entry, for a contact that may have restored its wallet. The answer is
+    /// collected: `ContactKeysRestored` when the old keys are back (the new pairing was folded
+    /// into the old one), `ContactKeysChanged` when they are not or nothing answers within a
+    /// day (the new pairing waits for [`EpicWallet::contact_keys_resolve`]).
+    ///
+    /// Fails with `ContactNotFound` unless both are paired, `KeyCheckRefused` when the new
+    /// pairing is older than a day or either had a check in the last day, and
+    /// `ContactsOffline` or `EpicboxOff`.
+    pub async fn contact_key_check(
+        &self,
+        new: String,
+        old: String,
+        relay_mode: ContactRelayMode,
+    ) -> Result<(), WalletError> {
+        self.run("contact_key_check", |session| async move {
+            session.contact_key_check(&new, &old, relay_mode).await
+        })
+        .await
+    }
+
+    /// Decides for a new pairing in `KeysChanged`: `KeepOld` removes it, `UseNew` removes the
+    /// old pairing and keeps this one. Fails with `ContactNotFound` when `new` is not in
+    /// `KeysChanged`.
+    pub async fn contact_keys_resolve(
+        &self,
+        new: String,
+        decision: KeysDecision,
+    ) -> Result<(), WalletError> {
+        self.run("contact_keys_resolve", |session| async move {
+            session.contact_keys_resolve(&new, decision).await
+        })
+        .await
+    }
+
+    /// The slate this wallet last wrote for `tx_id` (its S1, I1, S2 or I2) sealed to the
+    /// contact, as armored text for a `.epicsealed` file or a paste; the app writes the file.
+    /// `purpose` defaults to a payment for an S1 and a request for an I1. Nothing is sent.
+    ///
+    /// Fails with `ContactNotFound` for a contact that is not paired or whose keys changed,
+    /// `SealingOff` when sealing is off for it or it cannot open sealed text, and
+    /// `NoSlateToSend` when the transaction has no slate to send.
+    pub async fn contact_seal_slate(
+        &self,
+        contact_id: String,
+        tx_id: u32,
+        purpose: Option<SlatePurpose>,
+    ) -> Result<String, WalletError> {
+        self.run("contact_seal_slate", |session| async move {
+            session
+                .contact_seal_slate(&contact_id, tx_id, purpose)
+                .await
+        })
+        .await
+    }
+
+    /// Sends the slate of `tx_id` sealed through the contact's mailbox: queued in the outbox
+    /// and posted once when the mode allows. The answer comes back by collecting.
+    ///
+    /// Fails as [`EpicWallet::contact_seal_slate`] does.
+    pub async fn contact_post_slate(
+        &self,
+        contact_id: String,
+        tx_id: u32,
+        purpose: Option<SlatePurpose>,
+        relay_mode: ContactRelayMode,
+    ) -> Result<(), WalletError> {
+        self.run("contact_post_slate", |session| async move {
+            session
+                .contact_post_slate(&contact_id, tx_id, purpose, relay_mode)
+                .await
+        })
+        .await
+    }
+
+    /// Opens sealed text from a file or a paste, to show what it holds before the user acts on
+    /// it with [`EpicWallet::sealed_receive`], [`EpicWallet::sealed_pay`] or
+    /// [`EpicWallet::sealed_finalize`] by its `stage`. Nothing is stored, except that a newer
+    /// card of the contact in it refreshes the contact.
+    ///
+    /// Fails with `InvalidPairingText` for text that is not sealed or is for the other network,
+    /// `SealedForAnotherWallet`, `SealedUnopenable`, and `InvalidSlate` when it holds no slate.
+    pub async fn sealed_open(&self, text: String) -> Result<SealedSlateView, WalletError> {
+        self.run("sealed_open", |session| async move {
+            session.sealed_open(&text).await
+        })
+        .await
+    }
+
+    /// Receives the S1 in sealed text, as `receive_slate` does, and returns the answer sealed
+    /// to the sender when it can be, else plain; the app sends it back the way the slate came.
+    /// `message` is signed into the answer.
+    ///
+    /// Fails as [`EpicWallet::sealed_open`] does, with `InvalidSlate` for another stage, and as
+    /// `receive_slate` does.
+    pub async fn sealed_receive(
+        &self,
+        text: String,
+        message: Option<String>,
+    ) -> Result<SealedAnswer, WalletError> {
+        self.run("sealed_receive", |session| async move {
+            session.sealed_receive(&text, message).await
+        })
+        .await
+    }
+
+    /// Pays the I1 in sealed text; call it only after the user approved `amount`, which must
+    /// be the invoiced amount. `minimum_confirmations`, `message` and `options` are as in
+    /// `create_send_slate`. Returns the answer as [`EpicWallet::sealed_receive`] does.
+    ///
+    /// Fails as [`EpicWallet::sealed_open`] does, with `InvalidSlate` for another stage,
+    /// `AmountMismatch`, `PaymentExpired`, `NotEnoughFunds`, `InvoiceAlreadyPaid`,
+    /// `InvoiceLockedAboveTip` and `NodeUnreachable`.
+    pub async fn sealed_pay(
+        &self,
+        text: String,
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<SealedAnswer, WalletError> {
+        self.run("sealed_pay", |session| async move {
+            session
+                .sealed_pay(&text, amount, minimum_confirmations, message, options)
+                .await
+        })
+        .await
+    }
+
+    /// Finalizes and posts the S2 or I2 in sealed text, as `finalize_slate` does.
+    ///
+    /// Fails as [`EpicWallet::sealed_open`] does, with `InvalidSlate` for another stage, and as
+    /// `finalize_slate` does.
+    pub async fn sealed_finalize(&self, text: String) -> Result<FinalizedTx, WalletError> {
+        self.run("sealed_finalize", |session| async move {
+            session.sealed_finalize(&text).await
+        })
+        .await
+    }
+
+    /// The answer `reply` (the S2 or I2 JSON this wallet answered the plain slate `incoming`
+    /// with) sealed to the reply key `incoming` carries when it came from LEPIC, or `None`
+    /// when it carries none and the answer goes plain.
+    pub async fn sealed_answer_to_marker(
+        &self,
+        incoming: String,
+        reply: String,
+    ) -> Result<Option<String>, WalletError> {
+        self.run("sealed_answer_to_marker", |session| async move {
+            session.sealed_answer_to_marker(incoming, reply)
+        })
+        .await
+    }
+
+    /// The slate this wallet last wrote for `tx_id` as plain JSON, for a contact that cannot
+    /// open sealed text: the same transaction, never a second one. The contact's seal becomes
+    /// `Degraded`. Fails with `NoSlateToSend`.
+    pub async fn contact_plain_fallback(&self, tx_id: u32) -> Result<String, WalletError> {
+        self.run("contact_plain_fallback", |session| async move {
+            session.contact_plain_fallback(tx_id).await
+        })
+        .await
+    }
+
+    /// The contact a transaction was sealed to or from, if any.
+    pub async fn contact_of_transaction(&self, tx_id: u32) -> Result<Option<String>, WalletError> {
+        self.run("contact_of_transaction", |session| async move {
+            session.contact_of_transaction(tx_id).await
+        })
+        .await
+    }
+
+    /// Issues an invoice for `amount` to a paired contact, sealed with `purpose`, `reference`
+    /// and the advisory `expires` (Unix seconds), and queues it for the contact's mailbox; the
+    /// outbox runs once when the mode allows. The contact pays it only when it allows this
+    /// wallet's invoices; the payment comes back by collecting, finalized and posted with
+    /// `InvoiceFinalized`.
+    ///
+    /// Fails with `ContactNotFound` for a contact that is not paired or whose keys changed,
+    /// and `ContactRefusesInvoices`. Offline the invoice is stored and queued, and goes out with
+    /// the next [`EpicWallet::contacts_outbox_deliver`].
+    #[allow(clippy::too_many_arguments)] // The app's invoice form, one value per field.
+    pub async fn contact_issue_invoice(
+        &self,
+        contact_id: String,
+        amount: u64,
+        message: Option<String>,
+        purpose: SlatePurpose,
+        reference: Option<String>,
+        expires: Option<u64>,
+        relay_mode: ContactRelayMode,
+    ) -> Result<IssuedInvoice, WalletError> {
+        self.run("contact_issue_invoice", |session| async move {
+            session
+                .contact_issue_invoice(
+                    &contact_id,
+                    amount,
+                    message,
+                    purpose,
+                    reference,
+                    expires,
+                    relay_mode,
+                )
+                .await
+        })
+        .await
+    }
+
+    /// The invoices from contacts waiting for the user, oldest first.
+    pub async fn contact_invoices(&self) -> Result<Vec<ContactInvoiceView>, WalletError> {
+        self.run("contact_invoices", |session| async move {
+            session.contact_invoices().await
+        })
+        .await
+    }
+
+    /// Pays the waiting contact invoice `slate_id` after the user approved `amount`, the
+    /// invoiced amount; the payment is sealed to the contact and queued for its mailbox, and
+    /// the outbox runs once when the mode allows. `minimum_confirmations`, `message` and
+    /// `options` are as in `create_send_slate`.
+    ///
+    /// Fails with `InvoiceNotFound` when no contact invoice with that id waits,
+    /// `ContactNotVerified` when its contact is no longer verified with invoices allowed, and
+    /// as [`EpicWallet::sealed_pay`] does.
+    pub async fn contact_pay_invoice(
+        &self,
+        slate_id: String,
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+        relay_mode: ContactRelayMode,
+    ) -> Result<PaidInvoice, WalletError> {
+        self.run("contact_pay_invoice", |session| async move {
+            session
+                .contact_pay_invoice(
+                    &slate_id,
+                    amount,
+                    minimum_confirmations,
+                    message,
+                    options,
+                    relay_mode,
+                )
+                .await
+        })
+        .await
+    }
+
+    /// Declines the waiting contact invoice `slate_id`: it is never paid, and a `declined` is
+    /// queued for the contact. Fails with `InvoiceNotFound` when no contact invoice with that
+    /// id waits.
+    pub async fn contact_decline_invoice(&self, slate_id: String) -> Result<(), WalletError> {
+        self.run("contact_decline_invoice", |session| async move {
+            session.contact_decline_invoice(&slate_id).await
+        })
+        .await
+    }
+
+    /// The messages for a contact in the outbox, by id, for the payment timeline.
+    pub async fn contact_outbox(
+        &self,
+        contact_id: String,
+    ) -> Result<Vec<OutboxEntryView>, WalletError> {
+        self.run("contact_outbox", |session| async move {
+            session.contact_outbox(&contact_id).await
+        })
+        .await
+    }
+
+    /// "Send again": posts the outbox entry `id` once more, whatever its state. The contact
+    /// treats a repeat as the same message.
+    ///
+    /// Fails with `NoSlateToSend` for an id the outbox does not hold, `ContactsOffline` or
+    /// `EpicboxOff`, and `TransportFailed` when the relay fails.
+    pub async fn contact_outbox_resend(
+        &self,
+        id: u64,
+        relay_mode: ContactRelayMode,
+    ) -> Result<(), WalletError> {
+        self.run("contact_outbox_resend", |session| async move {
+            session.contact_outbox_resend(id, relay_mode).await
+        })
+        .await
+    }
+
+    /// Posts every outbox entry that is due, raising `OutboxDelivered` for each that reached
+    /// its relay and `OutboxStuck` for one undelivered for a day, which stops retrying. A relay
+    /// that fails is counted, not returned.
+    ///
+    /// Fails with `ContactsOffline` or `EpicboxOff` before connecting.
+    pub async fn contacts_outbox_deliver(
+        &self,
+        relay_mode: ContactRelayMode,
+    ) -> Result<OutboxReport, WalletError> {
+        self.run("contacts_outbox_deliver", |session| async move {
+            session.contacts_outbox_deliver(relay_mode).await
+        })
+        .await
+    }
+
+    /// The pairings as a versioned JSON document for the app's `.wfeh` history backup. It
+    /// holds no secret: the keys come from the recovery phrase. Pairings in progress are left
+    /// out.
+    pub async fn contacts_export(&self) -> Result<String, WalletError> {
+        self.run("contacts_export", |session| async move {
+            session.contacts_export().await
+        })
+        .await
+    }
+
+    /// Restores the pairings of a document [`EpicWallet::contacts_export`] wrote, with the
+    /// same keys, mailboxes and trust, marked as possibly living on another device too.
+    /// Pairings this wallet holds already are kept as they are.
+    ///
+    /// Fails with `InvalidArgument` or `Io` for a document this build cannot read or that is
+    /// for the other network; nothing is imported then.
+    pub async fn contacts_import(
+        &self,
+        document: String,
+    ) -> Result<ContactImportSummary, WalletError> {
+        self.run("contacts_import", |session| async move {
+            session.contacts_import(document).await
+        })
+        .await
+    }
+}

@@ -2,6 +2,7 @@
 //! [`WalletError::kind`] or the stable [`WalletError::code`], never on the message.
 
 use lepic_keychain::AppDataError;
+use lepic_wallet::contact::ContactError;
 use lepic_wallet::error_text::{display_error_chain, display_error_message};
 use lepic_wallet::inbox::InboxError;
 use lepic_wallet::invoice::InvoiceError;
@@ -76,8 +77,8 @@ pub enum WalletErrorKind {
     InvoiceNotFound,
     /// The invoice asks for another amount than the one the user typed. Nothing was paid.
     AmountMismatch,
-    /// The invoice or its payment is stored, but the relay did not take it. Deliver a payment
-    /// again with `resend_invoice_payment`, or cancel either with `cancel_transaction`.
+    /// The invoice or its payment is stored, but the relay did not take it. Cancel it with
+    /// `cancel_transaction`.
     NotDelivered,
     /// The wallet database was damaged. LEPIC renamed it, with its log files, to
     /// `wallet.sqlite3.damaged-<unix seconds>` in the data directory and kept it. Opening the
@@ -132,6 +133,54 @@ pub enum WalletErrorKind {
     /// The slate is too large to show as QR codes, or scanned parts exceed what one code
     /// holds. Use a file instead.
     UrCodeTooLarge,
+    /// The user chose Offline, so the contact call reached no relay. Nothing was sent or
+    /// fetched; whatever was stored stays.
+    ContactsOffline,
+    /// Epicbox is switched off, so the contact call reached no relay. Nothing was sent or
+    /// fetched; whatever was stored stays.
+    EpicboxOff,
+    /// The link, card, reply or sealed text is damaged, is not one, or is for the other
+    /// network. Nothing was stored.
+    InvalidPairingText,
+    /// The name cannot go in a contact card: empty, too long, or with characters a card
+    /// refuses. Nothing was stored.
+    InvalidContactName,
+    /// The invite expired. Ask for a new one.
+    InviteExpired,
+    /// The invite, reply or card belongs to a contact this wallet is paired with already, or
+    /// to this wallet itself. Nothing was stored.
+    AlreadyPaired,
+    /// No paired contact has that id, or it is not in the state the call needs, such as a
+    /// card this wallet does not show or a contact whose keys changed.
+    ContactNotFound,
+    /// No pairing in progress has that id: it completed, failed or was cancelled.
+    PairingNotFound,
+    /// The contact's words were not checked, or its invoices are not allowed: invoices need
+    /// a verified contact. Nothing was paid or changed.
+    ContactNotVerified,
+    /// Pairing words are offered only on LEPIC's built-in relays, and this wallet's relay is
+    /// not one. Share the link instead.
+    PairingWordsUnavailable,
+    /// Sealing is off for the contact, or its wallet cannot open sealed text. Send the slate
+    /// plain.
+    SealingOff,
+    /// The transaction has no slate this wallet can send, or the outbox holds no entry with
+    /// that id.
+    NoSlateToSend,
+    /// The sealed text is for another wallet or another install of this one, or was signed
+    /// by someone who is not the contact. Nothing was stored.
+    SealedForAnotherWallet,
+    /// The sealed text does not open: it was changed on the way. Nothing was stored.
+    SealedUnopenable,
+    /// A key check is allowed once per pairing and within a day of the new pairing; this one
+    /// is not. Keep the new pairing as it is or remove it.
+    KeyCheckRefused,
+    /// No invite was found for these words: they are wrong, expired, or were used.
+    PairingWordsNotFound,
+    /// A word is not in the pairing words table, or there are not five.
+    InvalidPairingWords,
+    /// The contact's wallet says it does not pay invoices. Nothing was sent.
+    ContactRefusesInvoices,
 }
 
 impl WalletErrorKind {
@@ -186,6 +235,24 @@ impl WalletErrorKind {
             Self::MixedUrCodes => 53,
             Self::InvalidUrCode => 54,
             Self::UrCodeTooLarge => 55,
+            Self::ContactsOffline => 56,
+            Self::EpicboxOff => 57,
+            Self::InvalidPairingText => 58,
+            Self::InvalidContactName => 59,
+            Self::InviteExpired => 60,
+            Self::AlreadyPaired => 61,
+            Self::ContactNotFound => 62,
+            Self::PairingNotFound => 63,
+            Self::ContactNotVerified => 64,
+            Self::PairingWordsUnavailable => 65,
+            Self::SealingOff => 66,
+            Self::NoSlateToSend => 67,
+            Self::SealedForAnotherWallet => 68,
+            Self::SealedUnopenable => 69,
+            Self::KeyCheckRefused => 70,
+            Self::PairingWordsNotFound => 71,
+            Self::InvalidPairingWords => 72,
+            Self::ContactRefusesInvoices => 73,
         }
     }
 }
@@ -444,6 +511,44 @@ impl From<InvoiceError> for WalletError {
     }
 }
 
+impl From<ContactError> for WalletError {
+    fn from(error: ContactError) -> Self {
+        use ContactError as E;
+        use WalletErrorKind as K;
+        let kind = match error {
+            E::Wallet(inner) => return inner.into(),
+            E::Receive(inner) => return inner.into(),
+            E::Invoice(inner) => return inner.into(),
+            E::Finalize(inner) => return inner.into(),
+            ref other => match other {
+                E::Offline => K::ContactsOffline,
+                E::EpicboxOff => K::EpicboxOff,
+                E::NetworkMismatch | E::RelayAddress => K::InvalidArgument,
+                E::Decode(_) => K::InvalidPairingText,
+                E::Name(_) => K::InvalidContactName,
+                E::InviteExpired => K::InviteExpired,
+                E::AlreadyPaired => K::AlreadyPaired,
+                E::UnknownContact => K::ContactNotFound,
+                E::UnknownPairing => K::PairingNotFound,
+                E::NotVerified => K::ContactNotVerified,
+                E::Relay(_) => K::TransportFailed,
+                E::WordsUnavailable => K::PairingWordsUnavailable,
+                E::SealOff => K::SealingOff,
+                E::UnknownTransaction => K::NoSlateToSend,
+                E::NotForThisInstall => K::SealedForAnotherWallet,
+                E::CannotOpen => K::SealedUnopenable,
+                E::NotASlate | E::Stage(_) => K::InvalidSlate,
+                E::KeyCheckRefused => K::KeyCheckRefused,
+                E::WordsNotFound => K::PairingWordsNotFound,
+                E::Words(_) => K::InvalidPairingWords,
+                E::DoesNotPayInvoices => K::ContactRefusesInvoices,
+                _ => K::Other,
+            },
+        };
+        Self::chained(kind, &error)
+    }
+}
+
 impl WalletError {
     /// The kind of the engine error inside `outer`, with the message of the whole chain.
     fn from_inner(
@@ -539,6 +644,24 @@ mod tests {
             (K::MixedUrCodes, 53),
             (K::InvalidUrCode, 54),
             (K::UrCodeTooLarge, 55),
+            (K::ContactsOffline, 56),
+            (K::EpicboxOff, 57),
+            (K::InvalidPairingText, 58),
+            (K::InvalidContactName, 59),
+            (K::InviteExpired, 60),
+            (K::AlreadyPaired, 61),
+            (K::ContactNotFound, 62),
+            (K::PairingNotFound, 63),
+            (K::ContactNotVerified, 64),
+            (K::PairingWordsUnavailable, 65),
+            (K::SealingOff, 66),
+            (K::NoSlateToSend, 67),
+            (K::SealedForAnotherWallet, 68),
+            (K::SealedUnopenable, 69),
+            (K::KeyCheckRefused, 70),
+            (K::PairingWordsNotFound, 71),
+            (K::InvalidPairingWords, 72),
+            (K::ContactRefusesInvoices, 73),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -749,5 +872,42 @@ mod tests {
             kind(AppDataError::TooLong { actual: 2, max: 1 }),
             WalletErrorKind::InvalidArgument
         );
+    }
+
+    #[test]
+    fn pairing_refusals_have_their_own_kinds() {
+        use ContactError as E;
+        use WalletErrorKind as K;
+        let cases = [
+            (E::Offline, K::ContactsOffline),
+            (E::EpicboxOff, K::EpicboxOff),
+            (E::InviteExpired, K::InviteExpired),
+            (E::AlreadyPaired, K::AlreadyPaired),
+            (E::UnknownContact, K::ContactNotFound),
+            (E::UnknownPairing, K::PairingNotFound),
+            (E::NotVerified, K::ContactNotVerified),
+            (E::WordsUnavailable, K::PairingWordsUnavailable),
+            (E::SealOff, K::SealingOff),
+            (E::UnknownTransaction, K::NoSlateToSend),
+            (E::NotForThisInstall, K::SealedForAnotherWallet),
+            (E::CannotOpen, K::SealedUnopenable),
+            (E::NotASlate, K::InvalidSlate),
+            (E::KeyCheckRefused, K::KeyCheckRefused),
+            (E::WordsNotFound, K::PairingWordsNotFound),
+            (E::DoesNotPayInvoices, K::ContactRefusesInvoices),
+            (E::NetworkMismatch, K::InvalidArgument),
+            (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),
+            (
+                E::Invoice(InvoiceError::NotParked {
+                    slate_id: lepic_wallet::event::SlateId::from_bytes([1; 16]),
+                }),
+                K::InvoiceNotFound,
+            ),
+        ];
+        for (error, kind) in cases {
+            let mapped = WalletError::from(error);
+            assert_eq!(mapped.kind, kind);
+            assert_eq!(mapped.code, kind.code());
+        }
     }
 }

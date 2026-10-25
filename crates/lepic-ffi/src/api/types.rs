@@ -657,31 +657,7 @@ pub struct InboxReport {
     pub dropped: u32,
 }
 
-/// What the wallet learned from a peer's own messages, from `EpicWallet::peer_capability`.
-/// Values are only added, at the end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PeerCapability {
-    /// Nothing yet: no marked slate or notice from it, and no invoice sent back.
-    Unknown,
-    /// It proved it runs LEPIC: it pays invoices and is sent notices.
-    Lepic,
-    /// It sent an invoice back unpaid, as a stock `epic-wallet` does: it does not pay
-    /// invoices. Send it a slate file, or ask it to send instead.
-    NoInvoices,
-}
-
-/// Retired with the invoice allowlist; `EpicWallet::invoice_senders` never returns one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvoiceSender {
-    /// The full address the user added, where payments of its invoices go.
-    pub address: String,
-    pub label: String,
-    /// Milliseconds since the Unix epoch, by the device clock.
-    pub added_at_ms: i64,
-}
-
-/// An invoice this wallet issued and handed to the relay, from
-/// `EpicWallet::issue_invoice_epicbox`.
+/// An invoice this wallet issued to a contact, from `EpicWallet::contact_issue_invoice`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssuedInvoice {
     pub tx_id: u32,
@@ -689,56 +665,13 @@ pub struct IssuedInvoice {
     pub amount: u64,
 }
 
-/// An invoice waiting on the invoice address for the user to pay or decline, from
-/// `EpicWallet::pending_invoices`. Times are milliseconds since the Unix epoch, by the device
-/// clock.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IncomingInvoice {
-    pub slate_id: String,
-    /// The allowed address of the sender, where the payment goes.
-    pub sender_address: String,
-    /// What the sender asks for; the fee comes on top.
-    pub amount: u64,
-    /// The sender's message when its signature verifies, with control, bidirectional and
-    /// zero-width characters removed and cut to 256 bytes. Safe to display as it is.
-    pub message: Option<String>,
-    pub received_at_ms: i64,
-    /// When `EpicWallet::sweep_invoices` with the same expiry deletes it unpaid.
-    pub expires_at_ms: i64,
-}
-
-/// A paid invoice, from `EpicWallet::pay_invoice`.
+/// A paid invoice, from `EpicWallet::contact_pay_invoice`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaidInvoice {
     pub tx_id: u32,
     pub slate_id: String,
     pub amount: u64,
     pub fee: u64,
-}
-
-/// Retired with the invoice address; `EpicWallet::drain_invoices` never returns one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvoiceReport {
-    /// Invoices from allowed senders stored for the user to pay or decline.
-    pub parked: u32,
-    /// Payments of invoices this wallet issued that were finalized.
-    pub finalized: u32,
-    /// Messages handled before and acknowledged again, such as an invoice parked before.
-    pub repeated: u32,
-    /// Messages refused for good.
-    pub rejected: u32,
-    /// Messages left on the relay for a later drain.
-    pub held: u32,
-    /// Messages acknowledged and forgotten unopened: from senders that are not allowed, or
-    /// invoices over the limit of waiting invoices. Also notices not from the other party of
-    /// their invoice, or of a kind this version does not know.
-    pub dropped: u32,
-    /// Notices about invoices accepted from the other party, each also reported as its event.
-    pub notices: u32,
-    /// Invoices this wallet issued that came back unpaid from the address they went to: that
-    /// payer does not pay invoices. Nothing changed; cancel the invoice with
-    /// `cancel_transaction`.
-    pub bounced: u32,
 }
 
 /// What one `EpicWallet::sweep_invoices` did.
@@ -751,6 +684,342 @@ pub struct InvoiceSweep {
     /// Payments of invoices whose time to live passed with the transaction neither on chain
     /// nor in the node's pool. Nothing was changed: offer the user `cancel_transaction`.
     pub cancellable: Vec<u32>,
+}
+
+/// Whether contact calls may reach relays, as the user set the app: `Online`, `Offline`
+/// (nothing connects anywhere) or Epicbox switched off (no relay is reached, home relays of
+/// contacts included). Calls that need a relay fail with `ContactsOffline` or `EpicboxOff`
+/// before connecting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactRelayMode {
+    Online,
+    Offline,
+    EpicboxOff,
+}
+
+/// What a contact says it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactKind {
+    Person,
+    Shop,
+    Exchange,
+}
+
+/// How long an invite may be used. An invite with pairing words lasts 10 minutes instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteExpiry {
+    OneHour,
+    OneDay,
+    SevenDays,
+}
+
+/// Where a contact stands in pairing (RFC 0002 10.2). Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingState {
+    /// An invite of ours waits for a reply.
+    PendingInvite,
+    /// Our reply waits for the inviter's confirmation.
+    PendingReply,
+    /// Paired, the words not checked: show the outline shield.
+    Paired,
+    /// The user confirmed the words: show the shield with a check.
+    Verified,
+    /// A key check found other keys for a contact the user already has: this pairing seals
+    /// nothing and takes no invoices until the user keeps the old keys or uses the new ones.
+    KeysChanged,
+}
+
+/// Whether sends to a contact are sealed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SealState {
+    On,
+    Off,
+    /// The last send went plain because the contact could not open sealed text; the next one
+    /// is sealed again.
+    Degraded,
+}
+
+/// One entry of the words check or of pairing words: an emoji and its English name. Show both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SasEntry {
+    pub emoji: String,
+    pub name: String,
+}
+
+/// A paired contact, from `EpicWallet::contacts` and `EpicWallet::contact`. Holds no key.
+/// Times are milliseconds since the Unix epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactView {
+    /// 32 lowercase hex characters; the id every contact call takes.
+    pub contact_id: String,
+    /// The user's own name for the contact.
+    pub label: String,
+    /// The name the contact gives itself, unverified: show it only as "calls themselves".
+    pub claimed_name: Option<String>,
+    pub kind: Option<ContactKind>,
+    pub state: PairingState,
+    /// The four entries of the words check, to show it again; empty before the pairing
+    /// completed.
+    pub sas: Vec<SasEntry>,
+    pub verified_at_ms: Option<i64>,
+    pub allow_invoices: bool,
+    pub seal: SealState,
+    /// The app's address-book entry this pairing is attached to.
+    pub app_contact: Option<String>,
+    /// `domain:port` of the relay the contact's messages to this wallet go through, for
+    /// "Delivered via ...".
+    pub home_relay: Option<String>,
+    /// The pairing came from a backup and may also live on another device.
+    pub imported_from_backup: bool,
+    /// Nothing sealed from the contact opened for 90 days: warn before a sealed send that the
+    /// contact needs LEPIC to open it.
+    pub lapsed: bool,
+    pub created_at_ms: i64,
+}
+
+/// A new invite, from `EpicWallet::pairing_invite`. `link` lets anyone who sees it pair as
+/// this contact until it is used or expires: share it, show it as a QR code, never store it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingInvite {
+    pub contact_id: String,
+    /// `epiccash://pair/1/...`.
+    pub link: String,
+    pub expires_at_ms: i64,
+    /// The five pairing words when they were asked for; empty otherwise.
+    pub words: Vec<SasEntry>,
+}
+
+/// What an invite claims, for the "Pair with Anna?" sheet, from `EpicWallet::pairing_preview`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvitePreview {
+    /// The inviter's own name for itself, not checked.
+    pub claimed_name: String,
+    pub kind: ContactKind,
+    pub expires_at_ms: i64,
+    /// `domain:port` of the relay the pairing's messages go through.
+    pub home_relay: String,
+    /// The invite comes from a service, such as an exchange.
+    pub service: bool,
+}
+
+/// An invite found by its pairing words, from `EpicWallet::pairing_find_words`. Answer it
+/// with `link`; do not store it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundInvite {
+    pub link: String,
+    pub preview: InvitePreview,
+}
+
+/// An answered invite, from `EpicWallet::pairing_accept`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingAnswer {
+    pub contact_id: String,
+    /// `epiccash://pair-reply/1/...`, for "Send by hand" and for a post that failed.
+    pub reply_link: String,
+    /// The reply reached the relay; the confirmation is collected later.
+    pub posted: bool,
+}
+
+/// A card shown to pair in person, from `EpicWallet::pairing_show_card`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingCard {
+    pub contact_id: String,
+    /// `epiccash://contact/1/...`, shown as a QR code for the other phone.
+    pub link: String,
+}
+
+/// What a pasted reply or confirm link did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingLinkOutcome {
+    /// A reply to one of this wallet's invites paired the contact: send `link`, the
+    /// confirmation, back by hand.
+    Confirm,
+    /// A confirmation finished a pairing this wallet answered.
+    Paired,
+    /// The link answers nothing this wallet waits for.
+    Ignored,
+}
+
+/// The result of `EpicWallet::pairing_enter_link`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingLinkResult {
+    pub outcome: PairingLinkOutcome,
+    /// Set for `Confirm` and `Paired`.
+    pub contact_id: Option<String>,
+    /// The confirmation link, for `Confirm`.
+    pub link: Option<String>,
+}
+
+/// The user's answer to the words check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SasDecision {
+    /// "They match": the contact becomes verified.
+    Match,
+    /// "They don't match": the pairing is removed on this side.
+    Mismatch,
+    /// "Skip for now": paired, not verified.
+    Skip,
+}
+
+/// A pairing in progress, from `EpicWallet::pairings_pending`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPairingView {
+    pub contact_id: String,
+    /// `true`: an invite of ours waits for a reply. `false`: our reply waits for the
+    /// confirmation.
+    pub inviter: bool,
+    /// The name in the invite: ours as inviter, the inviter's own, unverified, as invitee.
+    pub invite_name: String,
+    pub label: String,
+    pub expires_at_ms: i64,
+    pub created_at_ms: i64,
+}
+
+/// What started a collecting cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectTrigger {
+    /// The app opened or resumed, or the wallet was unlocked: every mailbox.
+    Open,
+    /// The foreground tick: the mailboxes of contacts with something pending.
+    Foreground,
+    /// The user pulled to refresh: every mailbox.
+    Pull,
+    /// A push wake-up: every mailbox.
+    Push,
+}
+
+/// What one `EpicWallet::contacts_collect` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactCollectReport {
+    pub mailboxes: u32,
+    pub messages: u32,
+    /// Pairings that completed.
+    pub paired: u32,
+    /// `domain:port` of the relays that did not answer; collecting from them backs off.
+    pub unreachable: Vec<String>,
+}
+
+/// Whether the user keeps the old keys or uses the new ones after keys changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeysDecision {
+    /// The new pairing is removed; the old one stays as it was.
+    KeepOld,
+    /// The old pairing is removed; the new one goes on as paired.
+    UseNew,
+}
+
+/// What a sealed slate or a contact invoice is for, as its sender says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlatePurpose {
+    Payment,
+    /// An invoice from a service, such as an exchange deposit.
+    DepositRequest,
+    Withdrawal,
+    Refund,
+    /// A request between people.
+    Request,
+}
+
+/// Sealed text opened by `EpicWallet::sealed_open`: who it is from and what it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedSlateView {
+    /// The contact that signed it; `None` for an answer sealed to a slate this wallet started.
+    pub contact_id: Option<String>,
+    pub stage: SlateStage,
+    pub slate_id: String,
+    pub amount: u64,
+    pub fee: u64,
+    pub purpose: Option<SlatePurpose>,
+    /// The sender's reference, such as an order number; shown as it is, never trusted.
+    pub reference: Option<String>,
+    /// Unix seconds; advisory.
+    pub expires: Option<u64>,
+}
+
+/// A sealed S1 received or a sealed I1 paid, with the answer to send back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedAnswer {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: u64,
+    pub fee: u64,
+    /// Armored sealed text when `sealed`, else plain slate JSON.
+    pub answer: String,
+    pub sealed: bool,
+}
+
+/// An invoice a contact sent, waiting for the user to pay or decline it, from
+/// `EpicWallet::contact_invoices`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactInvoiceView {
+    pub slate_id: String,
+    pub contact_id: String,
+    /// What the contact asks for; the fee comes on top.
+    pub amount: u64,
+    pub purpose: Option<SlatePurpose>,
+    pub reference: Option<String>,
+    /// Unix seconds; advisory.
+    pub expires: Option<u64>,
+    pub received_at_ms: i64,
+    /// Other waiting invoices for the same amount from the same contact within 10 minutes:
+    /// warn before paying twice.
+    pub same_amount: Vec<String>,
+}
+
+/// Where a message for a contact stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboxState {
+    Queued,
+    Delivered,
+    /// Undelivered for a day; retrying stopped. Offer "Send again".
+    Stuck,
+}
+
+/// A message for a contact's mailbox, from `EpicWallet::contact_outbox`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxEntryView {
+    /// The id `EpicWallet::contact_outbox_resend` takes.
+    pub id: u64,
+    pub contact_id: String,
+    pub slate_id: String,
+    pub stage: SlateStage,
+    pub state: OutboxState,
+    pub attempts: u32,
+    pub created_at_ms: i64,
+    pub delivered_at_ms: Option<i64>,
+    /// A payment delivered two hours ago or more that the contact has not posted: offer
+    /// "Send again".
+    pub not_posted_yet: bool,
+}
+
+/// What one `EpicWallet::contacts_outbox_deliver` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutboxReport {
+    pub delivered: u32,
+    pub failed: u32,
+    /// Entries that became stuck in this run.
+    pub stuck: u32,
+}
+
+/// What `EpicWallet::contacts_import` restored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContactImportSummary {
+    pub imported: u32,
+    /// Pairings this wallet holds already; they were kept as they are.
+    pub skipped_existing: u32,
+    /// Pairings whose contact this wallet holds under another pairing; kept as they are.
+    pub skipped_conflict: u32,
+}
+
+/// Why a pairing in progress ended, for `PairingFailed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingFailureReason {
+    /// Something changed the invite on the way. Nothing was stored; pair again.
+    ChangedOnTheWay,
+    /// The invite expired before a reply came, or no confirmation came in time.
+    Expired,
+    /// The inviter refused the reply: the invite was used, expired or cancelled.
+    Refused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -891,6 +1160,47 @@ pub enum WalletEventKind {
     /// wallet's answer implies. Advisory: nothing changed. Refresh now; the payment confirms
     /// when a refresh finds the kernel. Until then its `sender_reported_posted_at_ms` is set.
     PaymentPosted,
+    /// A reply to one of this wallet's invites paired a contact: `contact_id` is set. Show the
+    /// words check.
+    PairingReplied,
+    /// A pairing this wallet answered, or one in person, completed: `contact_id` is set. Show
+    /// the words check.
+    PairingConfirmed,
+    /// A pairing in progress ended without a contact: `contact_id` names the pairing, which is
+    /// gone, and `pairing_failure` says why.
+    PairingFailed,
+    /// A contact sent newer details, such as its relay; its keys did not change:
+    /// `contact_id` is set.
+    ContactUpdated,
+    /// A contact's relay did not answer; collecting from it backs off: `relay` is set,
+    /// `domain:port`. Turn "Delivered via" into a notice.
+    HomeRelayUnreachable,
+    /// A key check proved the contact still holds its old keys: the old pairing, `contact_id`,
+    /// keeps its keys and trust, and the new pairing was folded into it ("Anna's keys are
+    /// back").
+    ContactKeysRestored,
+    /// A key check found no old keys, or went unanswered for a day: the new pairing,
+    /// `contact_id`, is in `KeysChanged` until the user decides with `contact_keys_resolve`.
+    ContactKeysChanged,
+    /// A verified contact that may send invoices sent one; it waits in `contact_invoices`:
+    /// `contact_id`, `slate_id`, `amount` and, when the contact gave them, `purpose`,
+    /// `reference` and `expires` are set. Nothing was paid.
+    InvoiceFromContact,
+    /// A contact's withdrawal arrived and was received; the answer is queued for the contact:
+    /// `contact_id`, `tx_id`, `slate_id` and `amount` are set.
+    WithdrawalFromContact,
+    /// A contact's sealed payment arrived in its mailbox and was received; the answer is
+    /// queued for the contact: `contact_id`, `tx_id`, `slate_id` and `amount` are set.
+    SealedReceived,
+    /// Something in a contact's mailbox did not open with this wallet's keys and was dropped:
+    /// `contact_id` is set. Anyone who knows the mailbox can cause this: only inform the user,
+    /// for example that pairing again checks the keys.
+    SealedUnopenable,
+    /// A message reached the contact's relay: `contact_id` and `slate_id` are set.
+    OutboxDelivered,
+    /// A message could not be delivered for a day and stopped retrying: `contact_id` and
+    /// `slate_id` are set. Offer "Send again".
+    OutboxStuck,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its
@@ -918,6 +1228,17 @@ pub struct WalletEvent {
     pub sender: Option<String>,
     /// The slate's stage, `S2` or `I2`, for `UnknownSlate`.
     pub slate_stage: Option<String>,
+    /// The contact or pairing a contact event is about.
+    pub contact_id: Option<String>,
+    /// Why a pairing ended, for `PairingFailed`.
+    pub pairing_failure: Option<PairingFailureReason>,
+    /// `domain:port`, for `HomeRelayUnreachable`.
+    pub relay: Option<String>,
+    /// For `InvoiceFromContact`, as the contact gave them.
+    pub purpose: Option<SlatePurpose>,
+    pub reference: Option<String>,
+    /// Unix seconds; advisory.
+    pub expires: Option<u64>,
 }
 
 impl WalletEvent {
@@ -941,6 +1262,12 @@ impl WalletEvent {
             kernel_excess: None,
             sender: None,
             slate_stage: None,
+            contact_id: None,
+            pairing_failure: None,
+            relay: None,
+            purpose: None,
+            reference: None,
+            expires: None,
         }
     }
 }

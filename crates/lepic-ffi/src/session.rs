@@ -71,6 +71,7 @@ use crate::vault_port::{
 use crate::{password as password_change, pin};
 
 mod app_data;
+mod contact;
 mod http;
 mod tor;
 
@@ -1692,6 +1693,52 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             kernel_excess: Some(posted.excess.to_hex()),
             ..WalletEvent::of(WalletEventKind::PaymentPosted)
         },
+        Event::PairingReplied(news) => {
+            contact::contact_event(WalletEventKind::PairingReplied, news)
+        }
+        Event::PairingConfirmed(news) => {
+            contact::contact_event(WalletEventKind::PairingConfirmed, news)
+        }
+        Event::PairingFailed(failed) => WalletEvent {
+            contact_id: Some(failed.contact_id.to_string()),
+            pairing_failure: Some(contact::failure_reason(failed.reason)),
+            ..WalletEvent::of(WalletEventKind::PairingFailed)
+        },
+        Event::ContactUpdated(news) => {
+            contact::contact_event(WalletEventKind::ContactUpdated, news)
+        }
+        Event::HomeRelayUnreachable(unreachable) => WalletEvent {
+            relay: Some(unreachable.relay.clone()),
+            ..WalletEvent::of(WalletEventKind::HomeRelayUnreachable)
+        },
+        Event::ContactKeysRestored(news) => {
+            contact::contact_event(WalletEventKind::ContactKeysRestored, news)
+        }
+        Event::ContactKeysChanged(news) => {
+            contact::contact_event(WalletEventKind::ContactKeysChanged, news)
+        }
+        Event::InvoiceFromContact(invoice) => WalletEvent {
+            contact_id: Some(invoice.contact_id.to_string()),
+            slate_id: Some(invoice.slate_id.to_string()),
+            amount: Some(invoice.amount.value()),
+            purpose: invoice.purpose.map(contact::slate_purpose),
+            reference: invoice.reference.clone(),
+            expires: invoice.expires,
+            ..WalletEvent::of(WalletEventKind::InvoiceFromContact)
+        },
+        Event::WithdrawalFromContact(slate) => {
+            contact::slate_event(WalletEventKind::WithdrawalFromContact, slate)
+        }
+        Event::SealedReceived(slate) => {
+            contact::slate_event(WalletEventKind::SealedReceived, slate)
+        }
+        Event::SealedUnopenable(news) => {
+            contact::contact_event(WalletEventKind::SealedUnopenable, news)
+        }
+        Event::OutboxDelivered(news) => {
+            contact::outbox_event(WalletEventKind::OutboxDelivered, news)
+        }
+        Event::OutboxStuck(news) => contact::outbox_event(WalletEventKind::OutboxStuck, news),
         _ => return None,
     })
 }
