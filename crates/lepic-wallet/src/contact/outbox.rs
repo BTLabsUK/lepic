@@ -250,7 +250,9 @@ where
     /// Posts an outbox entry again, whatever its state: "Send again" for a payment the contact
     /// has not posted, or a stuck one. The contact treats a repeated slate id as a duplicate.
     ///
-    /// Fails with [`ContactError::UnknownTransaction`] for an id the outbox does not hold, with
+    /// Fails with [`ContactError::UnknownTransaction`] for an id the outbox does not hold, or
+    /// whose transaction no longer waits for the contact (finalized, posted, confirmed,
+    /// cancelled or expired), with
     /// [`ContactError::Offline`] or [`ContactError::EpicboxOff`], and with
     /// [`ContactError::Relay`] when the relay fails.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
@@ -265,7 +267,22 @@ where
         let stored = {
             let session = std::sync::Arc::clone(&session);
             self.contact_work(move |_, _| {
-                Ok(session.store.read(|repos| repos.contact_outbox_entry(id))?)
+                Ok(session.store.read(|repos| {
+                    let Some(stored) = repos.contact_outbox_entry(id)? else {
+                        return Ok::<_, StoreError>(None);
+                    };
+                    // A slate goes again only while its transaction still waits for the
+                    // contact; entries of no transaction, such as contact updates, always may.
+                    for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
+                        if let Some(tx) =
+                            repos.transaction_by_slate(stored.entry.slate_id, direction)?
+                            && !matches!(tx.entry.state, TxState::Sent | TxState::Received)
+                        {
+                            return Ok(None);
+                        }
+                    }
+                    Ok(Some(stored))
+                })?)
             })
             .await?
             .ok_or(ContactError::UnknownTransaction)?

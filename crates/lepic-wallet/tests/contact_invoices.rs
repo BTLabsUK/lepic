@@ -1023,3 +1023,32 @@ fn address_invoice_calls_never_act_on_a_contact_invoice() {
         Err(lepic_wallet::send::SendError::NotResendable { .. })
     ));
 }
+
+/// R2-15: "Send again" refuses a payment that was cancelled meanwhile.
+#[test]
+fn send_again_refuses_a_cancelled_payment() {
+    let world = World::new();
+    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let issued = world.invoice_contact(shop_side, "paid");
+    world.collect(&world.payer);
+    let paid = world.pay_contact(&issued);
+    let entry = world
+        .payer
+        .read(|repos| repos.contact_outbox(ben_side))
+        .into_iter()
+        .find(|stored| stored.entry.slate_id.as_bytes() == issued.slate_id.as_bytes())
+        .unwrap();
+    world
+        .block_on(world.payer.wallet.cancel(paid.tx_id))
+        .unwrap();
+
+    assert!(matches!(
+        world.block_on(
+            world
+                .payer
+                .wallet
+                .contact_outbox_resend(&relays(&world.payer), entry.id)
+        ),
+        Err(lepic_wallet::contact::ContactError::UnknownTransaction)
+    ));
+}
