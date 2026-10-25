@@ -95,11 +95,11 @@ fn old_salt_key(contact_id: ContactId) -> String {
     format!("{OLD_SALT_PREFIX}{}", hex(&contact_id.0))
 }
 
-/// The box salt of a mailbox moved away from after an in-person pairing, read until `until`.
+/// The box salt of a mailbox moved away from after an in-person pairing. It is read until the
+/// contact writes to the new mailbox, which shows it took our new card.
 #[derive(Serialize, Deserialize)]
 struct OldSalt {
     salt: String,
-    until: i64,
 }
 const BACKOFF_KEY: &str = "contact.backoff";
 const UPDATES_KEY: &str = "contact.updates";
@@ -110,7 +110,8 @@ const CURSOR_KEY: &str = "contact.cursor";
 enum Job {
     Reply(PairingId),
     Confirm(PairingId),
-    Contact(ContactId),
+    /// A contact's mailbox; `true` for the one our current card names.
+    Contact(ContactId, bool),
 }
 
 struct Mailbox {
@@ -409,26 +410,31 @@ where
                     if let Some(previous) = mailbox.previous.filter(|previous| previous.until > now)
                     {
                         let old = endpoint_for(&previous.relay, &relays)?;
-                        contacts.push((record.clone(), old, None, record.box_salt));
+                        contacts.push((record.clone(), old, None, record.box_salt, false));
                     }
                     let old_salt = repos
                         .setting(&old_salt_key(record.contact_id))?
                         .and_then(|text| serde_json::from_str::<OldSalt>(&text).ok())
-                        .filter(|old| old.until > now.as_second())
                         .and_then(|old| unhex16(&old.salt));
                     if let Some(salt) = old_salt {
-                        contacts.push((record.clone(), home.clone(), mailbox.onion.clone(), salt));
+                        contacts.push((
+                            record.clone(),
+                            home.clone(),
+                            mailbox.onion.clone(),
+                            salt,
+                            false,
+                        ));
                     }
                     let salt = record.box_salt;
-                    contacts.push((record, home, mailbox.onion, salt));
+                    contacts.push((record, home, mailbox.onion, salt, true));
                 }
                 if trigger == CollectTrigger::Foreground {
                     let distinct: std::collections::BTreeSet<String> = contacts
                         .iter()
-                        .map(|(_, home, _, _)| host_text(home))
+                        .map(|(_, home, _, _, _)| host_text(home))
                         .collect();
                     if distinct.len() > FEW_RELAYS {
-                        contacts.retain(|(record, _, _, _)| active(record, now));
+                        contacts.retain(|(record, _, _, _, _)| active(record, now));
                     }
                 }
                 let room = MAX_MAILBOXES_PER_DRAIN.saturating_sub(mailboxes.len());
@@ -442,7 +448,7 @@ where
                 let taken = room.min(count);
                 let next = start.saturating_add(taken).checked_rem(count).unwrap_or(0);
                 repos.put_setting(CURSOR_KEY, &next.to_string())?;
-                for (record, home, onion, salt) in contacts.into_iter().take(taken) {
+                for (record, home, onion, salt, current) in contacts.into_iter().take(taken) {
                     if waiting(&host_text(&home)) {
                         continue;
                     }
@@ -454,7 +460,7 @@ where
                         salt,
                     )?;
                     mailboxes.push(Mailbox {
-                        job: Job::Contact(record.contact_id),
+                        job: Job::Contact(record.contact_id, current),
                         identity: box_identity(&keys, network, &home)?,
                         relay: home,
                         onion,
@@ -543,6 +549,7 @@ where
         &self,
         relays: &ContactRelays,
         contact_id: ContactId,
+        current: bool,
         envelope: &[u8],
         told: &mut std::collections::BTreeSet<ContactId>,
     ) -> Result<Handled, ContactError> {
@@ -613,6 +620,9 @@ where
             self.refresh_card(contact_id, card, update).await?;
         }
         self.mark_sealed_in(contact_id).await?;
+        if current {
+            self.forget_old_salt(contact_id).await?;
+        }
         let record = {
             let session = self.session()?;
             self.contact_work(move |_, _| {
@@ -781,17 +791,17 @@ where
 
     /// Moves our mailbox of each contact paired in person to one from a fresh box salt and
     /// tells the contact with a contact update (RFC 0002 7.4): anyone who saw the card QR knows
-    /// the old one. The old mailbox is still read for [`PREVIOUS_HOME_KEPT`].
+    /// the old one. The old mailbox is still read until the contact writes to the new one.
     async fn move_in_person_mailboxes(&self, relays: &ContactRelays) -> Result<(), ContactError> {
         let network = self.config().network;
         let net = contact_network(network);
         let session = self.session()?;
         let relays = relays.clone();
-        let updates = self
+        let moved = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
-                    let mut updates = Vec::new();
+                    let mut moved = 0usize;
                     for record in repos.contacts()? {
                         let flag = in_person_key(record.contact_id);
                         if repos.setting(&flag)?.is_none() {
@@ -833,10 +843,6 @@ where
                         .map_err(ContactError::Encode)?;
                         let old = OldSalt {
                             salt: hex(&record.box_salt),
-                            until: now
-                                .checked_add(PREVIOUS_HOME_KEPT)
-                                .unwrap_or(now)
-                                .as_second(),
                         };
                         write_json(repos, &old_salt_key(record.contact_id), &old)?;
                         let mut record = record;
@@ -845,24 +851,43 @@ where
                         record.updated_at = now;
                         repos.put_contact(&record)?;
                         mailbox.our_mailbox = ours.address().to_string();
+                        // The update is queued in the same write as the move, so the move is
+                        // never made without it.
+                        repos.enqueue_contact_outbox(&lepic_store::ContactOutboxEntry {
+                            contact_id: record.contact_id,
+                            slate_id: uuid::Uuid::from_bytes(record.contact_id.0),
+                            stage: lepic_store::SlateStage::Standard1,
+                            payload: lepic_contact::armor(&envelope),
+                            destination: mailbox.peer_mailbox.clone(),
+                            attempts: 0,
+                            next_try_at: now,
+                            state: lepic_store::ContactOutboxState::Queued,
+                            created_at: now,
+                            delivered_at: None,
+                        })?;
                         repos.put_contact_mailbox(&mailbox)?;
-                        updates.push((record.contact_id, envelope));
+                        moved = moved.saturating_add(1);
                     }
-                    Ok(updates)
+                    Ok(moved)
                 })
             })
             .await?;
-        for (contact_id, envelope) in updates {
-            self.enqueue_for_contact(
-                contact_id,
-                uuid::Uuid::from_bytes(contact_id.0),
-                lepic_store::SlateStage::Standard1,
-                &envelope,
-            )
-            .await?;
-            info!("in-person mailbox moved");
+        if moved > 0 {
+            info!(count = moved, "in-person mailboxes moved");
         }
         Ok(())
+    }
+
+    /// The contact wrote to the mailbox our current card names, so it took our new card: the
+    /// mailbox of the old box salt is no longer read.
+    async fn forget_old_salt(&self, contact_id: ContactId) -> Result<(), ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session
+                .store
+                .write(|repos| repos.delete_setting(&old_salt_key(contact_id)))?)
+        })
+        .await
     }
 
     pub(crate) async fn mark_sealed_in(&self, contact_id: ContactId) -> Result<(), ContactError> {
@@ -983,9 +1008,9 @@ where
                 let taken = self.wallet.take_confirm(pairing_id, envelope).await;
                 self.count(taken)?
             }
-            Job::Contact(contact_id) => {
+            Job::Contact(contact_id, current) => {
                 self.wallet
-                    .take_contact_message(self.relays, contact_id, envelope, self.told)
+                    .take_contact_message(self.relays, contact_id, current, envelope, self.told)
                     .await?
             }
         };

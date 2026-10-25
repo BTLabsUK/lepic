@@ -1265,8 +1265,11 @@ fn an_in_person_pairing_moves_both_mailboxes_on_the_first_collect() {
             .box_salt,
         hint.box_salt
     );
-    // The move happens once; the old mailbox is drained beside the new one.
-    assert_eq!(world.collect(&world.issuer).mailboxes, 2);
+    // The move happens once. The payer's update reached the issuer's new mailbox, which shows
+    // it took the new card, so the issuer reads only that one; nothing has reached the payer's
+    // new mailbox yet, so the payer still reads its old one beside it.
+    assert_eq!(world.collect(&world.issuer).mailboxes, 1);
+    assert_eq!(world.collect(&world.payer).mailboxes, 2);
     assert_eq!(
         mailbox(&world.issuer, anna.contact_id).our_mailbox,
         issuer_side.our_mailbox
