@@ -14,7 +14,7 @@ use lepic_transport::transport::TransportId;
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
 use lepic_wallet::{
     AccountError, ConfigError, DEFAULT_ACCOUNT_LABEL, Event, SecretVault, SessionState,
-    SqliteStores, Wallet, WalletError, WordCount,
+    SqliteStores, Wallet, WalletError, WordCount, lifecycle,
 };
 use support::{Harness, TestVault, WALLET_SEED_VECTOR, password, vector_text};
 use tokio::sync::broadcast::Receiver;
@@ -298,6 +298,103 @@ fn restore_of_another_phrase_over_a_database_is_refused() {
 
     assert!(matches!(result, Err(WalletError::ForeignDatabase)));
     assert!(!fresh_vault.is_created());
+}
+
+#[test]
+fn the_fingerprint_of_an_open_wallet_is_its_phrases_and_differs_by_seed() {
+    let harness = Harness::new();
+    let created = harness.wallet();
+    let phrase = harness
+        .block_on(created.create(password(PASSWORD), WordCount::default()))
+        .unwrap();
+    let seed = Seed::from_mnemonic(phrase.expose()).unwrap();
+    let fingerprint = created.fingerprint().unwrap();
+    assert_eq!(
+        fingerprint,
+        lifecycle::seed_fingerprint(&seed, Network::Mainnet).unwrap()
+    );
+    assert_eq!(fingerprint.len(), 8);
+
+    let other = Harness::new();
+    let restored = other.wallet();
+    other
+        .block_on(restored.restore(password(PASSWORD), &vector_phrase()))
+        .unwrap();
+    let vector_seed = Seed::from_mnemonic(&vector_phrase()).unwrap();
+    assert_eq!(
+        restored.fingerprint().unwrap(),
+        lifecycle::seed_fingerprint(&vector_seed, Network::Mainnet).unwrap()
+    );
+    assert_ne!(restored.fingerprint().unwrap(), fingerprint);
+    restored.lock();
+    assert!(matches!(restored.fingerprint(), Err(WalletError::Locked)));
+}
+
+#[test]
+fn check_phrase_tells_the_wallets_phrase_from_another_and_changes_nothing() {
+    let harness = Harness::new();
+    let created = harness.wallet();
+    let phrase = harness
+        .block_on(created.create(password(PASSWORD), WordCount::default()))
+        .unwrap();
+    created.create_account("savings").unwrap();
+    assert!(matches!(
+        harness.block_on(created.check_phrase(phrase.expose())),
+        Err(WalletError::AlreadyOpen)
+    ));
+    created.close();
+
+    let wallet = harness.wallet();
+    let seed = harness
+        .block_on(wallet.check_phrase(phrase.expose()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        seed.expose_bytes(),
+        Seed::from_mnemonic(phrase.expose()).unwrap().expose_bytes()
+    );
+    assert!(matches!(
+        harness.block_on(wallet.check_phrase(&vector_phrase())),
+        Err(WalletError::ForeignDatabase)
+    ));
+    assert!(matches!(
+        harness.block_on(wallet.check_phrase("abandon abandon")),
+        Err(WalletError::Mnemonic(_))
+    ));
+    assert!(!wallet.is_unlocked());
+    harness.block_on(wallet.open(password(PASSWORD))).unwrap();
+    assert_eq!(wallet.accounts().unwrap().len(), 2);
+    assert!(!wallet.restore_scan_required().unwrap());
+}
+
+#[test]
+fn check_phrase_on_an_unused_database_finds_nothing_to_compare() {
+    let harness = Harness::new();
+    let wallet = harness.wallet();
+
+    assert!(
+        harness
+            .block_on(wallet.check_phrase(&vector_phrase()))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn check_phrase_refuses_a_database_of_another_network() {
+    let harness = Harness::new();
+    harness
+        .block_on(
+            harness
+                .wallet()
+                .restore(password(PASSWORD), &vector_phrase()),
+        )
+        .unwrap();
+
+    let floonet = harness.wallet_with(harness.config(Network::Floonet), TestVault::default());
+    let result = harness.block_on(floonet.check_phrase(&vector_phrase()));
+
+    assert!(matches!(result, Err(WalletError::NetworkMismatch { .. })));
 }
 
 #[test]

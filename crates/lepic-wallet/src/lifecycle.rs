@@ -164,7 +164,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
         return Err(WalletError::ForeignDatabase);
     }
     let mut vault = secrets.create(password)?;
-    vault.put(&seed_name()?, &SecretBytes::from_slice(seed.expose_bytes()))?;
+    put_seed(&mut vault, seed)?;
     debug!("secret storage created");
     let rebuilt = identity == StoredIdentity::Empty && source == SeedSource::Recovered;
     store.write(|repos| {
@@ -204,6 +204,23 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     })?;
     debug!("wallet database prepared");
     Ok(Session { keychain, store })
+}
+
+/// Checks that the database in the data directory belongs to `seed` on the target's network,
+/// changing nothing. Returns `false` for a database no wallet has used yet.
+///
+/// Fails with [`WalletError::ForeignDatabase`] when it belongs to another seed and
+/// [`WalletError::NetworkMismatch`] when to another network.
+pub(crate) fn check_seed<S: StoreOpener>(
+    stores: &S,
+    target: &Target<'_>,
+    seed: &Seed,
+) -> Result<bool, WalletError> {
+    let keychain = Keychain::from_seed(seed, target.network)?;
+    let fingerprint = fingerprint(&keychain)?;
+    let store = stores.open(target.data_dir, context_key(seed)?)?;
+    let identity = store.read(|repos| stored_identity(repos, target.network, &fingerprint))?;
+    Ok(identity == StoredIdentity::Matches)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,13 +285,29 @@ pub(crate) fn restore_scan_completed(repos: &mut dyn Repositories) -> Result<(),
     repos.delete_setting(RESTORE_SCAN_SETTING)
 }
 
+/// Puts `seed` into new secret storage under the name an open reads it from, as
+/// [`crate::Wallet::create`] and [`crate::Wallet::restore`] do. For a host that seals a
+/// wallet's seed under a new password without a wallet handle, after
+/// [`crate::Wallet::check_phrase`] found it the database's.
+pub fn put_seed(secrets: &mut impl SecretStore, seed: &Seed) -> Result<(), WalletError> {
+    secrets.put(&seed_name()?, &SecretBytes::from_slice(seed.expose_bytes()))?;
+    Ok(())
+}
+
 fn seed_name() -> Result<SecretName, WalletError> {
     Ok(SecretName::new(SEED_SECRET)?)
 }
 
+/// The fingerprint a wallet of `seed` on `network` stores in its database, as lowercase hex:
+/// what [`crate::Wallet::fingerprint`] returns once the wallet is open. It is no secret, but
+/// it identifies the wallet.
+pub fn seed_fingerprint(seed: &Seed, network: Network) -> Result<String, WalletError> {
+    fingerprint(&Keychain::from_seed(seed, network)?)
+}
+
 /// The BIP32 fingerprint of the master key, which tells databases of different seeds apart
 /// without revealing anything that derives keys.
-fn fingerprint(keychain: &Keychain) -> Result<String, WalletError> {
+pub(crate) fn fingerprint(keychain: &Keychain) -> Result<String, WalletError> {
     let lepic_keychain::Fingerprint(bytes) = keychain
         .master()
         .fingerprint()

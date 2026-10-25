@@ -201,6 +201,34 @@ where
             .read(|repos| Ok(lifecycle::restore_scan_pending(repos)?))
     }
 
+    /// The fingerprint of the wallet's seed that its database stores, as lowercase hex; equal
+    /// to [`lifecycle::seed_fingerprint`] of its recovery phrase. It is no secret, but it
+    /// identifies the wallet. Fails with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub fn fingerprint(&self) -> Result<String, WalletError> {
+        lifecycle::fingerprint(&self.session()?.keychain)
+    }
+
+    /// Checks, on a locked handle, that `phrase` is the recovery phrase of the database in the
+    /// data directory, without unlocking or changing anything, and returns its seed: `None`
+    /// when no wallet has used the database yet, so there is nothing to compare with. A host
+    /// that lost the wallet's password uses it before it stores the seed under a new one.
+    ///
+    /// Fails with [`WalletError::Mnemonic`] for a phrase that is not valid BIP39 English,
+    /// [`WalletError::ForeignDatabase`] when the database belongs to another seed,
+    /// [`WalletError::NetworkMismatch`] when to another network, and
+    /// [`WalletError::AlreadyOpen`] on an unlocked handle.
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub async fn check_phrase(&self, phrase: &str) -> Result<Option<Seed>, WalletError> {
+        self.ensure_locked()?;
+        let seed = Seed::from_mnemonic(phrase).map_err(WalletError::Mnemonic)?;
+        self.blocking(move |ports, config| {
+            let used = lifecycle::check_seed(&ports.stores, &target(config), &seed)?;
+            Ok(used.then_some(seed))
+        })
+        .await
+    }
+
     /// Every account, ordered by index. Fails with [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config.name))]
     pub fn accounts(&self) -> Result<Vec<Account>, WalletError> {
