@@ -310,7 +310,7 @@ A card is the binary payload below, self-signed:
 | `01` | format | u8 `01` |
 | `02` | network | `net` |
 | `03` | kind | u8 `01` person, `02` shop, `03` exchange |
-| `04` | name | 1 to 48 bytes UTF-8, the owner's chosen name. No control, format or bidi characters (the same rule as labels, `2d693308`) |
+| `04` | name | 1 to 48 bytes UTF-8, the owner's chosen name. No control, format, bidi, line or paragraph separator characters (Unicode categories Cc, Cf, Cs, Zl, Zp) |
 | `05` | enc key | 32, X25519 `enc_pk` for this contact |
 | `06` | sig key | 32, Ed25519 `sig_pk` for this contact |
 | `07` | hint key | 32, `hint_key` for this contact |
