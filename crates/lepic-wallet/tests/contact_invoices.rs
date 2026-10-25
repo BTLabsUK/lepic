@@ -300,6 +300,41 @@ fn turning_invoices_off_declines_the_unpaid_ones_and_lets_the_paid_one_finish() 
     );
 }
 
+/// An issuer's next collecting cycle prunes its outbox before it posts anything: the
+/// `withdrawn` of the invoice just cancelled must survive that and reach the payer, who then no
+/// longer offers it for payment.
+#[test]
+fn a_withdrawn_reaches_the_payer_through_the_issuers_next_collect() {
+    let world = World::new();
+    let (shop_side, _) = world.pair_for_invoices(ContactKind::Exchange);
+    let withdrawn = world.invoice_contact(shop_side, "withdrawn");
+    let kept = world.invoice_contact(shop_side, "kept");
+    world.collect(&world.payer);
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    world
+        .block_on(world.issuer.wallet.cancel(withdrawn.tx_id))
+        .unwrap();
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+
+    let told: Vec<_> = events(&mut payer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::InvoiceWithdrawn(told) => Some(told.slate_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told, vec![withdrawn.slate_id]);
+    let left: Vec<_> = world
+        .block_on(world.payer.wallet.contact_invoices())
+        .unwrap()
+        .into_iter()
+        .map(|invoice| invoice.slate_id)
+        .collect();
+    assert_eq!(left, vec![kept.slate_id]);
+}
+
 #[test]
 fn a_signed_withdrawn_for_a_paid_invoice_cancels_the_payment() {
     let world = World::new();

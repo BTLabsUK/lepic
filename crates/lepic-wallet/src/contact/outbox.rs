@@ -225,7 +225,8 @@ where
 
     /// Deletes outbox entries nothing waits for any more: delivered ones older than the relay
     /// keeps messages, stuck ones of no transaction as old, and any whose transaction
-    /// confirmed, was cancelled or expired.
+    /// confirmed, was cancelled or expired, except the queued `withdrawn` of an invoice this
+    /// wallet issued and cancelled, which the payer must still get.
     pub(crate) async fn prune_outbox(&self) -> Result<(), ContactError> {
         let session = self.session()?;
         let pruned = self
@@ -253,10 +254,19 @@ where
                                     repos.transaction_by_slate(entry.slate_id, direction)?
                                 {
                                     of_transaction = true;
-                                    ended |= matches!(
-                                        tx.entry.state,
-                                        TxState::Confirmed | TxState::Cancelled | TxState::Expired
-                                    );
+                                    // A cancelled invoice this wallet issued still has its
+                                    // `withdrawn` to deliver: a queued entry stays until it goes
+                                    // or gets stuck, else the payer could still pay it.
+                                    let withdrawal = direction == TxDirection::Incoming
+                                        && tx.entry.state == TxState::Cancelled
+                                        && entry.state == ContactOutboxState::Queued;
+                                    ended |= !withdrawal
+                                        && matches!(
+                                            tx.entry.state,
+                                            TxState::Confirmed
+                                                | TxState::Cancelled
+                                                | TxState::Expired
+                                        );
                                 }
                             }
                             // A stuck entry of no transaction, such as a contact update,
