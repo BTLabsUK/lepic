@@ -3,7 +3,9 @@
 
 use lepic_contact::{ContactKind, Sas};
 use lepic_node::NodeApi;
-use lepic_store::{ContactId, ContactRecord, ContactState, SealMode, StoreError, WalletStore};
+use lepic_store::{
+    ContactId, ContactRecord, ContactState, PairingRole, SealMode, StoreError, WalletStore,
+};
 use tracing::{info, instrument};
 
 use super::{ContactError, ContactView, pairing_id_of};
@@ -44,6 +46,22 @@ pub(crate) fn view(
     }
 }
 
+/// A pairing still in progress, as the host lists it. Holds no key and no secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPairingView {
+    /// The record the pairing completes into; [`Wallet::contact_remove`] cancels it.
+    pub contact_id: ContactId,
+    /// `Inviter`: an invite of ours waits for a reply. `Invitee`: our reply waits for the
+    /// confirmation.
+    pub role: PairingRole,
+    /// The name the invite gives its maker: ours as inviter, the inviter's (unverified) as
+    /// invitee.
+    pub invite_name: String,
+    pub label: String,
+    pub expires_at: jiff::Timestamp,
+    pub created_at: jiff::Timestamp,
+}
+
 /// The record of a paired contact, or [`ContactError::UnknownContact`].
 fn paired(
     repos: &dyn lepic_store::Repositories,
@@ -80,6 +98,41 @@ where
                 }
                 Ok::<_, StoreError>(views)
             })?)
+        })
+        .await
+    }
+
+    /// The pairings still in progress, oldest first: invites waiting for a reply and replies
+    /// waiting for the confirmation. A pairing that completed is listed by
+    /// [`Wallet::contacts`] instead. Cancel one with [`Wallet::contact_remove`]. Fails with
+    /// [`crate::WalletError::Locked`] and as the store does.
+    pub async fn pairings_pending(&self) -> Result<Vec<PendingPairingView>, ContactError> {
+        let net = super::keys::contact_network(self.config().network);
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            session.store.read(|repos| {
+                let mut views = Vec::new();
+                for pending in repos.pending_pairings()? {
+                    let Some(record) = repos
+                        .contact(pending.contact_id)?
+                        .filter(|record| record.peer.is_none())
+                    else {
+                        continue;
+                    };
+                    let invite = lepic_contact::Invite::decode(&pending.invite, net)
+                        .map_err(ContactError::Decode)?;
+                    views.push(PendingPairingView {
+                        contact_id: record.contact_id,
+                        role: pending.role,
+                        invite_name: invite.fields().name.as_str().to_owned(),
+                        label: record.label,
+                        expires_at: pending.expires_at,
+                        created_at: pending.created_at,
+                    });
+                }
+                views.sort_by_key(|view| view.created_at);
+                Ok(views)
+            })
         })
         .await
     }

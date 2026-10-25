@@ -35,6 +35,8 @@ pub use keycheck::{KEY_CHECK_WINDOW, KeysDecision};
 pub(crate) use keys::reply_public_key;
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{ContactKind, Purpose, Refusal, SasSymbol};
+pub use lepic_store::PairingRole;
+pub use manage::PendingPairingView;
 pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
 pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
@@ -78,9 +80,18 @@ pub struct ContactRelays {
 
 impl ContactRelays {
     /// The relays for `epicbox`, with the built-in relays of its network from
-    /// [`lepic_epicbox::built_in_relays`], where pairing words are offered and looked for.
+    /// [`lepic_epicbox::built_in_relays`], where pairing words are offered and looked for: the
+    /// transport's own relay first when it is one of them, then the others in their order.
     pub fn new(epicbox: EpicboxTransport, mode: RelayMode) -> Self {
-        let built_in = lepic_epicbox::built_in_relays(epicbox.network());
+        let mut built_in = lepic_epicbox::built_in_relays(epicbox.network());
+        let own = &epicbox.settings().endpoint;
+        if let Some(at) = built_in
+            .iter()
+            .position(|relay| relay.domain() == own.domain() && relay.port() == own.port())
+        {
+            let first = built_in.remove(at);
+            built_in.insert(0, first);
+        }
         Self {
             epicbox,
             built_in,

@@ -1349,3 +1349,61 @@ fn pairing_words_are_found_in_the_next_window() {
     let link = find_words(&world, &world.payer, &words).unwrap();
     assert!(link.starts_with("epiccash://pair/1/"));
 }
+
+/// Pairings in progress are listed on both sides until they complete, and removing one cancels
+/// it.
+#[test]
+fn pairings_in_progress_are_listed_until_they_complete() {
+    let world = World::new();
+    let link = world.invite(&world.issuer, "Anna");
+    let pending = world
+        .block_on(world.issuer.wallet.pairings_pending())
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].role, lepic_wallet::contact::PairingRole::Inviter);
+    assert_eq!(pending[0].invite_name, "Anna");
+    let answered = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    let waiting = world
+        .block_on(world.payer.wallet.pairings_pending())
+        .unwrap();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].role, lepic_wallet::contact::PairingRole::Invitee);
+    assert_eq!(waiting[0].contact_id, answered.contact_id);
+    assert_eq!(waiting[0].invite_name, "Anna");
+
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    for party in [&world.issuer, &world.payer] {
+        assert!(
+            world
+                .block_on(party.wallet.pairings_pending())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    let cancelled = world.invite(&world.issuer, "Anna");
+    assert!(!cancelled.is_empty());
+    let id = world
+        .block_on(world.issuer.wallet.pairings_pending())
+        .unwrap()[0]
+        .contact_id;
+    assert!(
+        world
+            .block_on(world.issuer.wallet.contact_remove(id))
+            .unwrap()
+    );
+    assert!(
+        world
+            .block_on(world.issuer.wallet.pairings_pending())
+            .unwrap()
+            .is_empty()
+    );
+}

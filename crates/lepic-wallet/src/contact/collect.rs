@@ -550,10 +550,16 @@ where
             Ok(opened) => opened,
             Err(lepic_contact::DecodeError::KeyChanged) => {
                 info!("envelope sealed for another wallet or install dropped");
+                self.emit(Event::SealedUnopenable(ContactEvent { contact_id }));
+                return Ok(Handled::Stored);
+            }
+            Err(lepic_contact::DecodeError::CannotOpen) => {
+                debug!("envelope in a contact mailbox did not open");
+                self.emit(Event::SealedUnopenable(ContactEvent { contact_id }));
                 return Ok(Handled::Stored);
             }
             Err(_) => {
-                debug!("envelope in a contact mailbox did not open");
+                debug!("malformed envelope in a contact mailbox dropped");
                 return Ok(Handled::Stored);
             }
         };

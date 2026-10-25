@@ -484,14 +484,17 @@ where
                     &received.reply,
                 )
                 .await?;
-                if content.purpose == Some(Purpose::Withdrawal) {
-                    self.emit(Event::WithdrawalFromContact(ContactSlateEvent {
-                        contact_id,
-                        tx_id: received.tx_id,
-                        slate_id: slate.id(),
-                        amount: slate.amount(),
-                    }));
-                }
+                let news = ContactSlateEvent {
+                    contact_id,
+                    tx_id: received.tx_id,
+                    slate_id: slate.id(),
+                    amount: slate.amount(),
+                };
+                self.emit(if content.purpose == Some(Purpose::Withdrawal) {
+                    Event::WithdrawalFromContact(news)
+                } else {
+                    Event::SealedReceived(news)
+                });
                 Ok(Handled::Stored)
             }
             Stage::S2 => match self.finalize(FILE, &wire, Propagation::Stem).await {
