@@ -191,14 +191,14 @@ fn the_sas_check_verifies_or_deletes_and_only_verified_contacts_send_invoices() 
         Err(ContactError::NotVerified)
     ));
     world
-        .block_on(wallet.pairing_sas(anna_side, SasDecision::Skip))
+        .block_on(wallet.pairing_sas(&relays(&world.issuer), anna_side, SasDecision::Skip))
         .unwrap();
     assert_eq!(
         world.block_on(wallet.contact(anna_side)).unwrap().state,
         ContactState::Paired
     );
     world
-        .block_on(wallet.pairing_sas(anna_side, SasDecision::Match))
+        .block_on(wallet.pairing_sas(&relays(&world.issuer), anna_side, SasDecision::Match))
         .unwrap();
     let view = world.block_on(wallet.contact(anna_side)).unwrap();
     assert_eq!(view.state, ContactState::Verified);
@@ -214,12 +214,11 @@ fn the_sas_check_verifies_or_deletes_and_only_verified_contacts_send_invoices() 
     );
 
     world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pairing_sas(ben_side, SasDecision::Mismatch),
-        )
+        .block_on(world.payer.wallet.pairing_sas(
+            &relays(&world.payer),
+            ben_side,
+            SasDecision::Mismatch,
+        ))
         .unwrap();
     assert!(
         world
@@ -309,7 +308,16 @@ fn an_invite_answered_twice_pairs_once() {
     assert_eq!(contacts.len(), 1);
     assert_eq!(contacts[0].claimed_name.as_deref(), Some("Ben"));
     assert_eq!(world.collect(&world.payer).paired, 1);
+    // The second answer is refused, and its pairing ends on the twin.
+    let mut twin_events = twin.wallet.subscribe();
     assert_eq!(world.collect(&twin).paired, 0);
+    assert!(
+        events(&mut twin_events).contains(&Event::PairingFailed(FailedPairing {
+            contact_id: second.contact_id,
+            reason: PairingFailure::Refused(lepic_contact::Refusal::AlreadyUsed),
+        }))
+    );
+    assert!(twin.read(|repos| repos.contacts()).is_empty());
 }
 
 #[test]
@@ -537,12 +545,11 @@ fn a_backup_restores_the_same_keys_and_pairings_on_another_install() {
     let world = World::new();
     let (anna_side, _) = world.pair_by_link();
     world
-        .block_on(
-            world
-                .issuer
-                .wallet
-                .pairing_sas(anna_side, SasDecision::Match),
-        )
+        .block_on(world.issuer.wallet.pairing_sas(
+            &relays(&world.issuer),
+            anna_side,
+            SasDecision::Match,
+        ))
         .unwrap();
     let document = world
         .block_on(world.issuer.wallet.contacts_export())

@@ -207,10 +207,11 @@ where
     #[cfg(feature = "sqlite")]
     pub async fn contacts_export(&self) -> Result<String, ContactError> {
         let session = self.session()?;
+        let network = self.config().network;
         self.contact_work(move |_, _| {
             Ok(session
                 .store
-                .read(|repos| lepic_store::export_contacts(repos))?)
+                .read(|repos| lepic_store::export_contacts(repos, network))?)
         })
         .await
     }
@@ -227,11 +228,17 @@ where
         document: String,
     ) -> Result<lepic_store::ImportSummary, ContactError> {
         let session = self.session()?;
+        let network = self.config().network;
         let summary = self
             .contact_work(move |_, _| {
-                Ok(session
-                    .store
-                    .write(|repos| lepic_store::import_contacts(repos, &document))?)
+                let read_card = |bytes: &[u8]| {
+                    lepic_contact::ContactCard::decode(bytes, super::keys::contact_network(network))
+                        .ok()
+                        .map(|card| super::pairing::peer_card(&card))
+                };
+                Ok(session.store.write(|repos| {
+                    lepic_store::import_contacts(repos, &document, network, &read_card)
+                })?)
             })
             .await?;
         info!(count = summary.imported, "contacts imported");

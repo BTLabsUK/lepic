@@ -109,6 +109,8 @@ pub enum PairingFailure {
     ChangedOnTheWay,
     /// The invite expired before a reply arrived, or no confirm came in time.
     Expired,
+    /// The inviter refused the reply: the invite was used, expired or cancelled. Advisory.
+    Refused(lepic_contact::Refusal),
 }
 
 /// Why a pairing operation failed.

@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use lepic_contact::{
-    Commitment, ConfirmBody, ConfirmCode, ConfirmStatus, ContactCard, ContactKind, Invite,
-    InviteFields, InviteId, Nonce, PairingCode, PairingLink, ReplyBody, Sas, SealedEnvelope,
+    Commitment, Confirm, ConfirmBody, ConfirmCode, ContactCard, ContactKind, Invite, InviteFields,
+    InviteId, Nonce, PairingCode, PairingLink, ReplyBody, Sas, SealedEnvelope,
     pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_reply,
 };
-use lepic_contact::{ContactName, RelayHost, open_confirm, open_reply};
-use lepic_epicbox::EpicboxAddress;
+use lepic_contact::{ContactName, Refusal, RelayHost, open_confirm, open_reply, seal_refusal};
+use lepic_epicbox::{EpicboxAddress, RelayEndpoint};
 use lepic_node::NodeApi;
 use lepic_store::{
     AccountIndex, ContactId, ContactMailbox, ContactRecord, ContactState, PairingId, PairingRole,
@@ -648,46 +648,103 @@ where
     }
 
     /// Records the user's SAS check (RFC 0002 7.5): a match makes the contact verified, a
-    /// mismatch deletes the pairing on this side, skipping leaves it paired.
+    /// mismatch deletes the pairing on this side, skipping leaves it paired. After a mismatch an
+    /// inviter posts a refusal to the invitee's confirm mailbox, best effort.
     ///
     /// Fails with [`ContactError::UnknownContact`] when no paired contact has that id.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn pairing_sas(
         &self,
+        relays: &ContactRelays,
         contact_id: ContactId,
         decision: SasDecision,
     ) -> Result<(), ContactError> {
         let session = self.session()?;
-        self.contact_work(move |ports, _| {
-            let now = ports.clock.now();
-            session.store.write(|repos| {
-                let mut record = repos
-                    .contact(contact_id)?
-                    .filter(|record| {
-                        matches!(record.state, ContactState::Paired | ContactState::Verified)
-                    })
-                    .ok_or(ContactError::UnknownContact)?;
-                match decision {
-                    SasDecision::Match => {
-                        record.state = ContactState::Verified;
-                        record.verified_at = Some(now);
-                        record.updated_at = now;
-                        repos.put_contact(&record)?;
+        let tell = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
+                    let mut record = repos
+                        .contact(contact_id)?
+                        .filter(|record| {
+                            matches!(record.state, ContactState::Paired | ContactState::Verified)
+                        })
+                        .ok_or(ContactError::UnknownContact)?;
+                    match decision {
+                        SasDecision::Match => {
+                            record.state = ContactState::Verified;
+                            record.verified_at = Some(now);
+                            record.updated_at = now;
+                            repos.put_contact(&record)?;
+                        }
+                        SasDecision::Mismatch => {
+                            let pending = repos.pending_pairing(pairing_id_of(contact_id))?;
+                            repos.delete_pending_pairing(pairing_id_of(contact_id))?;
+                            repos.delete_contact(contact_id)?;
+                            let tell = pending
+                                .filter(|pending| pending.role == PairingRole::Inviter)
+                                .and_then(|pending| {
+                                    Some((pending.secrets.rc?, pending.invite, record.peer?.bytes))
+                                });
+                            return Ok(tell);
+                        }
+                        SasDecision::Skip => {}
                     }
-                    SasDecision::Mismatch => {
-                        // TODO(W-28): the inviter's refusal confirm waits for the revised
-                        // anonymous confirm statuses of RFC 0002 7.3.
-                        repos.delete_pending_pairing(pairing_id_of(contact_id))?;
-                        repos.delete_contact(contact_id)?;
-                    }
-                    SasDecision::Skip => {}
-                }
-                Ok(())
+                    Ok(None)
+                })
             })
-        })
-        .await?;
+            .await?;
         info!("sas check recorded");
+        // The inviter tells the invitee, whose confirm may still wait on the relay.
+        if let Some((rc, invite, peer)) = tell {
+            let net = contact_network(self.config().network);
+            let card = ContactCard::decode(&peer, net).map_err(ContactError::Decode)?;
+            let invite = Invite::decode(&invite, net).map_err(ContactError::Decode)?;
+            let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
+            self.post_refusal(
+                relays,
+                &card,
+                rc,
+                &home,
+                invite.fields().onion.as_ref().map(RelayHost::as_str),
+                Refusal::CancelledByInviter,
+            )
+            .await;
+        }
         Ok(())
+    }
+
+    /// Posts an anonymous refusal to the confirm mailbox of `rc`. Advisory, so a failure is
+    /// logged and not returned.
+    async fn post_refusal(
+        &self,
+        relays: &ContactRelays,
+        invitee: &ContactCard,
+        rc: [u8; 16],
+        home: &RelayEndpoint,
+        onion: Option<&str>,
+        refusal: Refusal,
+    ) {
+        let posted = async {
+            let envelope = seal_refusal(
+                invitee,
+                refusal,
+                &mut LockedRng(&mut **self.ports().rng.lock()),
+            )
+            .map_err(ContactError::Encode)?;
+            let (confirm_box, confirm_from) = pairing_mailbox(rc, self.config().network, home)?;
+            post_envelope(
+                relays,
+                &confirm_from,
+                confirm_box.address(),
+                onion,
+                &envelope,
+            )
+            .await
+        };
+        if let Err(error) = posted.await {
+            warn!(error = %crate::inbox::ErrorChain(&error), "pairing refusal not posted");
+        }
     }
 
     /// Takes a pairing reply or confirm the user pasted as `epiccash://pair-reply/1/...` or
@@ -768,9 +825,7 @@ where
             return Ok(Taken::Ignored);
         };
         let contact_id = pending.contact_id;
-        let (Some(code), Some(n_a)) = (pending.secrets.code, pending.secrets.na) else {
-            // TODO(W-28): a later reply gets status 02 once RFC 0002 7.3 settles its form.
-            debug!("reply to an invite already used dropped");
+        let Some(code) = pending.secrets.code else {
             return Ok(Taken::Ignored);
         };
         let keys = contact_keys(
@@ -795,12 +850,37 @@ where
         let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
         let invite = Invite::decode(&pending.invite, net).map_err(ContactError::Decode)?;
         let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
+        let onion_text = invite.fields().onion.as_ref().map(RelayHost::as_str);
+        let refusal = match pending.secrets.na {
+            None => Some(Refusal::AlreadyUsed),
+            Some(_) if unix_seconds(self.ports().clock.now()) >= invite.fields().expires => {
+                Some(Refusal::Expired)
+            }
+            Some(_) => None,
+        };
+        if let Some(refusal) = refusal {
+            debug!("pairing reply refused");
+            if !by_hand {
+                self.post_refusal(
+                    relays,
+                    &reply.card,
+                    *reply.confirm_code.expose_bytes(),
+                    &home,
+                    onion_text,
+                    refusal,
+                )
+                .await;
+            }
+            return Ok(Taken::Ignored);
+        }
+        let Some(n_a) = pending.secrets.na else {
+            return Ok(Taken::Ignored);
+        };
         let n_a = Nonce::from_bytes(n_a);
         let sas = Sas::compute(net, &own, &reply.card, &n_a, &reply.nonce);
         let confirm = ConfirmBody {
             nonce: n_a,
             card: own.clone(),
-            status: ConfirmStatus::Accepted,
         };
         let envelope = seal_confirm(
             &reply.card,
@@ -822,6 +902,7 @@ where
             .await?;
         }
         let peer = reply.card.clone();
+        let rc = *reply.confirm_code.expose_bytes();
         let onion = invite
             .fields()
             .onion
@@ -849,10 +930,12 @@ where
                         previous: None,
                         backoff: Vec::new(),
                     })?;
-                    // The code still finds the reply mailbox until the invite ends; without nA
-                    // no second reply can pair.
+                    // The code still finds the reply mailbox until the invite ends, to refuse
+                    // later replies; without nA no second reply can pair. The confirm code lets
+                    // a mismatch in the SAS check tell the invitee.
                     let mut pending = pending;
                     pending.secrets.na = None;
+                    pending.secrets.rc = Some(rc);
                     repos.put_pending_pairing(&pending)?;
                     Ok(())
                 })
@@ -905,14 +988,29 @@ where
         let Ok(sealed) = SealedEnvelope::decode(envelope, net) else {
             return Ok(Taken::Ignored);
         };
-        let Ok(confirm) = open_confirm(&sealed, &enc_secret(&keys)) else {
-            return Ok(Taken::Ignored);
+        let confirm = match open_confirm(&sealed, &enc_secret(&keys)) {
+            Ok(Confirm::Accepted(body)) => body,
+            Ok(Confirm::Refused(refusal)) => {
+                // Advisory: only the inviter knows the confirm mailbox, and nothing of the
+                // refusal is kept but the end of this pairing.
+                let pairing_id = pending.pairing_id;
+                self.contact_work(move |_, _| {
+                    session.store.write(|repos| {
+                        repos.delete_pending_pairing(pairing_id)?;
+                        repos.delete_contact(contact_id)?;
+                        Ok(())
+                    })
+                })
+                .await?;
+                info!("pairing refused by the inviter");
+                self.emit(Event::PairingFailed(FailedPairing {
+                    contact_id,
+                    reason: PairingFailure::Refused(refusal),
+                }));
+                return Ok(Taken::Failed);
+            }
+            Err(_) => return Ok(Taken::Ignored),
         };
-        if confirm.status != ConfirmStatus::Accepted {
-            // TODO(W-28): refusals take the revised anonymous confirm of RFC 0002 7.3.
-            debug!("pairing confirm without acceptance dropped");
-            return Ok(Taken::Ignored);
-        }
         let invite = Invite::decode(&pending.invite, net).map_err(ContactError::Decode)?;
         let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::Decode)?;
         let pairing_id = pending.pairing_id;
