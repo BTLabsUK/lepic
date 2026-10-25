@@ -1685,3 +1685,42 @@ fn every_contact_future_is_send() {
     assert_send(wallet.contact_plain_fallback(tx_id));
     assert_send(wallet.contact_of_transaction(tx_id));
 }
+
+/// R2-07: two collecting cycles started at once run one after the other, so a reply pairs once
+/// and raises one event.
+#[test]
+fn collecting_cycles_started_at_once_take_a_reply_once() {
+    let world = World::new();
+    let link = world.invite(&world.issuer, "Anna");
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let relays = relays(&world.issuer);
+
+    let (first, second) = world.block_on(async {
+        tokio::join!(
+            world
+                .issuer
+                .wallet
+                .contacts_collect(&relays, CollectTrigger::Open),
+            world
+                .issuer
+                .wallet
+                .contacts_collect(&relays, CollectTrigger::Open),
+        )
+    });
+
+    assert_eq!(first.unwrap().paired + second.unwrap().paired, 1);
+    let replied = events(&mut issuer_events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::PairingReplied(_)))
+        .count();
+    assert_eq!(replied, 1);
+    assert_eq!(world.collect(&world.payer).paired, 1);
+}

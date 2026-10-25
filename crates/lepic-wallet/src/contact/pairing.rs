@@ -792,6 +792,7 @@ where
         text: &str,
     ) -> Result<LinkOutcome, ContactError> {
         let network = contact_network(self.config().network);
+        let _turn = self.contact_turn().await;
         if let Ok(envelope) = pairing_envelope_from_link(text, PairingLink::Reply) {
             let sealed =
                 SealedEnvelope::decode(&envelope, network).map_err(ContactError::Decode)?;

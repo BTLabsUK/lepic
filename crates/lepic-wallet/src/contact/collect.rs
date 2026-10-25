@@ -220,6 +220,7 @@ where
 {
     /// Collects the pairing and contact mailboxes once (RFC 0002 8.4): each relay is drained on
     /// one connection of its own, at most 50 mailboxes in a cycle, taken in turn across cycles.
+    /// Cycles, pairing links entered by hand and outbox runs take turns, never overlapping.
     /// A relay that does not answer backs off for 30 s, 2 min, 10 min, then 30 min, and raises
     /// [`Event::HomeRelayUnreachable`]. Replies to this wallet's invites pair and raise
     /// [`Event::PairingReplied`], confirms raise [`Event::PairingConfirmed`], contact updates
@@ -237,6 +238,7 @@ where
     ) -> Result<CollectReport, ContactError> {
         self.check_contact_network(relays)?;
         check_online(relays)?;
+        let _turn = self.contact_turn().await;
         let expired = self.end_expired_pairings().await?;
         for contact_id in expired {
             self.emit(Event::PairingFailed(FailedPairing {
@@ -292,7 +294,10 @@ where
             report.paired = report.paired.saturating_add(handler.paired);
         }
         debug!(count = report.mailboxes, "contact mailboxes collected");
-        self.deliver_soon(relays).await;
+        // Already this run's turn: the outbox runs without taking it again.
+        if let Err(error) = self.deliver_outbox(relays).await {
+            warn!(error = %ErrorChain(&error), "contact outbox not run");
+        }
         Ok(report)
     }
 

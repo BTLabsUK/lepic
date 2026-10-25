@@ -128,6 +128,17 @@ where
         relays: &ContactRelays,
     ) -> Result<OutboxReport, ContactError> {
         check_online(relays)?;
+        let _turn = self.contact_turn().await;
+        self.deliver_outbox(relays).await
+    }
+
+    /// The outbox run of [`Wallet::contacts_outbox_deliver`], for a caller that holds the
+    /// contact engine's turn.
+    pub(crate) async fn deliver_outbox(
+        &self,
+        relays: &ContactRelays,
+    ) -> Result<OutboxReport, ContactError> {
+        check_online(relays)?;
         let session = self.session()?;
         let due = {
             let session = std::sync::Arc::clone(&session);
@@ -249,6 +260,7 @@ where
         id: ContactOutboxId,
     ) -> Result<(), ContactError> {
         check_online(relays)?;
+        let _turn = self.contact_turn().await;
         let session = self.session()?;
         let stored = {
             let session = std::sync::Arc::clone(&session);

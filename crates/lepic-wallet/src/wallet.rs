@@ -28,6 +28,7 @@ pub struct Wallet<N, S: StoreOpener, V> {
     session: RwLock<Option<Arc<Session<S::Store>>>>,
     events: broadcast::Sender<Event>,
     unsolicited: tokio::sync::Mutex<()>,
+    contacts: tokio::sync::Mutex<()>,
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -53,6 +54,7 @@ where
             session: RwLock::new(None),
             events,
             unsolicited: tokio::sync::Mutex::new(()),
+            contacts: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -282,6 +284,13 @@ where
     /// hold under concurrent listeners.
     pub(crate) async fn unsolicited_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.unsolicited.lock().await
+    }
+
+    /// Serves the contact engine's runs one at a time: a collecting cycle, a pairing link
+    /// entered by hand and an outbox run each read, reach a relay and write, so two at once
+    /// could take one message twice or post one entry twice.
+    pub(crate) async fn contact_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.contacts.lock().await
     }
 
     pub(crate) fn emit(&self, event: Event) {
