@@ -14,9 +14,9 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
 use crate::api::types::{
-    Chain, CollectTrigger, ContactKind, ContactRelayMode, InviteExpiry, KeysDecision, OutboxState,
-    PairingLinkOutcome, PairingState, SasDecision, SealState, SlatePurpose, SlateStage,
-    WalletConfig,
+    Chain, CollectTrigger, ContactKind, ContactRelayMode, FailedPairing, InviteExpiry,
+    KeysDecision, OutboxState, PairingFailureReason, PairingLinkOutcome, PairingState, SasDecision,
+    SealState, SlatePurpose, SlateStage, WalletConfig,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -663,9 +663,12 @@ async fn a_slate_sent_through_the_mailbox_is_answered_through_the_outbox() {
     assert_eq!(outbox[0].stage, SlateStage::S1);
     assert_eq!(outbox[0].state, OutboxState::Delivered);
 
-    ben.contacts_collect(CollectTrigger::Open, Online)
+    // The cycle sends the answer itself and says so.
+    let collected = ben
+        .contacts_collect(CollectTrigger::Open, Online)
         .await
         .unwrap();
+    assert_eq!(collected.delivered, 1);
     assert_eq!(
         ben.contact_outbox(ben_side).await.unwrap()[0].state,
         OutboxState::Delivered
@@ -675,9 +678,11 @@ async fn a_slate_sent_through_the_mailbox_is_answered_through_the_outbox() {
         .unwrap();
     assert_eq!(world.chain.pushed_count(), 1);
 
-    anna.contact_outbox_resend(outbox[0].id, Online)
-        .await
-        .unwrap();
+    // The payment was finalized, so its slate is not sent again.
+    assert_eq!(
+        kind(anna.contact_outbox_resend(outbox[0].id, Online).await),
+        WalletErrorKind::NoSlateToSend
+    );
     assert_eq!(
         kind(anna.contact_outbox_resend(outbox[0].id + 100, Online).await),
         WalletErrorKind::NoSlateToSend
@@ -792,4 +797,48 @@ async fn the_backup_brings_the_pairings_back_on_another_install() {
         1
     );
     assert!(restored.contacts_import("{}".to_owned()).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_reply_is_named_in_the_collect_report() {
+    let mut world = World::new();
+    let anna = world.wallet().await;
+    let ben = world.wallet().await;
+    let carl = world.wallet().await;
+    let invite = anna
+        .pairing_invite(
+            "Anna".to_owned(),
+            ContactKind::Person,
+            InviteExpiry::OneDay,
+            false,
+            Online,
+        )
+        .await
+        .unwrap();
+    ben.pairing_accept(invite.link.clone(), "Ben".to_owned(), false, Online)
+        .await
+        .unwrap();
+    let late = carl
+        .pairing_accept(invite.link, "Carl".to_owned(), false, Online)
+        .await
+        .unwrap();
+    assert_eq!(
+        anna.contacts_collect(CollectTrigger::Open, Online)
+            .await
+            .unwrap()
+            .paired,
+        1
+    );
+
+    let collected = carl
+        .contacts_collect(CollectTrigger::Open, Online)
+        .await
+        .unwrap();
+    assert_eq!(
+        collected.failed,
+        vec![FailedPairing {
+            contact_id: late.contact_id,
+            reason: PairingFailureReason::Refused,
+        }]
+    );
 }

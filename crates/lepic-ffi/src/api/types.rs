@@ -895,8 +895,21 @@ pub struct ContactCollectReport {
     pub messages: u32,
     /// Pairings that completed.
     pub paired: u32,
+    /// Pairings in progress that ended with nothing stored in this cycle; each also raised
+    /// `PairingFailed`.
+    pub failed: Vec<FailedPairing>,
+    /// Outbox entries that reached their relay in this cycle.
+    pub delivered: u32,
     /// `domain:port` of the relays that did not answer; collecting from them backs off.
     pub unreachable: Vec<String>,
+}
+
+/// A pairing in progress that ended with nothing stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedPairing {
+    /// The id of the pairing's record, now removed.
+    pub contact_id: String,
+    pub reason: PairingFailureReason,
 }
 
 /// Whether the user keeps the old keys or uses the new ones after keys changed.

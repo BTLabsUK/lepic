@@ -19,11 +19,11 @@ use super::{DEFAULT_ACCOUNT, Session, invalid};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
-    ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry, InvitePreview,
-    IssuedInvoice, KeysDecision, OutboxEntryView, OutboxReport, OutboxState, PaidInvoice,
-    PairingAnswer, PairingCard, PairingFailureReason, PairingInvite, PairingLinkOutcome,
-    PairingLinkResult, PairingState, PendingPairingView, SasDecision, SasEntry, SealState,
-    SealedAnswer, SealedSlateView, SendOptions, SlatePurpose, SlateStage, WalletEvent,
+    ContactRelayMode, ContactView, FailedPairing, FinalizedTx, FoundInvite, InviteExpiry,
+    InvitePreview, IssuedInvoice, KeysDecision, OutboxEntryView, OutboxReport, OutboxState,
+    PaidInvoice, PairingAnswer, PairingCard, PairingFailureReason, PairingInvite,
+    PairingLinkOutcome, PairingLinkResult, PairingState, PendingPairingView, SasDecision, SasEntry,
+    SealState, SealedAnswer, SealedSlateView, SendOptions, SlatePurpose, SlateStage, WalletEvent,
     WalletEventKind,
 };
 
@@ -457,6 +457,15 @@ impl Session {
             mailboxes: count(report.mailboxes),
             messages: count(report.messages),
             paired: count(report.paired),
+            failed: report
+                .failed
+                .iter()
+                .map(|failed| FailedPairing {
+                    contact_id: failed.contact_id.to_string(),
+                    reason: failure_reason(failed.reason),
+                })
+                .collect(),
+            delivered: count(report.delivered),
             unreachable: report.unreachable,
         })
     }
