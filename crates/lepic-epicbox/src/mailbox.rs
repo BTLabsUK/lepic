@@ -485,7 +485,7 @@ impl Drain<'_> {
     /// The greeted connection, opened when there is none.
     async fn connection(&mut self) -> Result<&mut Open, Stop> {
         if self.open.is_none() {
-            let opened = self.connect().await?;
+            let opened = Self::connect(self.client, self.deadline, self.connections > 0).await?;
             self.connections = self.connections.saturating_add(1);
             self.open = Some(opened);
         }
@@ -494,11 +494,19 @@ impl Drain<'_> {
             .ok_or(Stop::Failed(MailboxError::Lost(ClientError::NotConnected)))
     }
 
-    async fn connect(&self) -> Result<Open, Stop> {
-        let settings = &self.client.settings;
+    /// Opens and greets a connection. It borrows only the client, never the drain, so the
+    /// drain's open connection, which is not `Sync`, is not held across an await and the
+    /// drain's future stays `Send`. `reached_before` says whether an earlier connection of
+    /// this drain reached the relay.
+    async fn connect(
+        client: &MailboxClient,
+        deadline: Instant,
+        reached_before: bool,
+    ) -> Result<Open, Stop> {
+        let settings = &client.settings;
         let attempt = async {
             let mut connection = Connection::open(
-                self.client.connector.as_ref(),
+                client.connector.as_ref(),
                 &settings.endpoint,
                 settings.connect_timeout,
             )
@@ -510,12 +518,12 @@ impl Drain<'_> {
                 subscribed: None,
             })
         };
-        match timeout_at(self.deadline, attempt).await {
+        match timeout_at(deadline, attempt).await {
             Ok(Ok(open)) => Ok(open),
             Ok(Err(error)) => Err(Stop::Failed(MailboxError::setting_up(error))),
             // A drain that reached the relay before has made progress; one that never did
             // could not reach it.
-            Err(_) if self.connections > 0 => Err(Stop::TimedOut),
+            Err(_) if reached_before => Err(Stop::TimedOut),
             Err(_) => Err(Stop::Failed(MailboxError::Unreachable(
                 ClientError::Timeout {
                     awaiting: Awaiting::Connection,

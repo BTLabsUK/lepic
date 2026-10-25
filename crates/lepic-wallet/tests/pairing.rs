@@ -1602,3 +1602,86 @@ fn a_restored_answer_cannot_replace_the_keys_of_a_kept_record() {
     assert!(world.contact_ids(&world.payer).contains(&on_payer));
     let _ = anna_side;
 }
+
+fn assert_send<T: Send>(_: T) {}
+
+/// The futures of every contact call a host runs on another thread are `Send`, so the binding
+/// can spawn them. Built and dropped, never polled.
+#[test]
+fn every_contact_future_is_send() {
+    let world = World::new();
+    let wallet = &world.issuer.wallet;
+    let relays = relays(&world.issuer);
+    let id = ContactId([1; 16]);
+    let slate_id = lepic_wallet::event::SlateId::from_bytes([2; 16]);
+    let tx_id = lepic_store::TxId(1);
+    let words: [&str; 5] = ["a", "b", "c", "d", "e"];
+    assert_send(wallet.pairing_invite(&relays, invite_request("Anna")));
+    assert_send(wallet.pairing_accept(&relays, accept("link", "Ben", false)));
+    assert_send(wallet.pairing_enter_link(&relays, "link"));
+    assert_send(wallet.pairing_show_card(
+        &relays,
+        CardRequest {
+            account: AccountIndex(0),
+            name: "Anna".to_owned(),
+            kind: ContactKind::Person,
+        },
+    ));
+    assert_send(wallet.pairing_scan_card(&relays, id, "link"));
+    assert_send(wallet.pairing_sas(&relays, id, SasDecision::Match));
+    assert_send(wallet.pairing_find_words(&relays, &words));
+    assert_send(wallet.pairings_pending());
+    assert_send(wallet.contacts_collect(&relays, CollectTrigger::Open));
+    assert_send(wallet.contact_key_check(&relays, id, id));
+    assert_send(wallet.contact_keys_resolve(id, KeysDecision::KeepOld));
+    assert_send(wallet.contacts_outbox_deliver(&relays));
+    assert_send(wallet.contact_outbox_resend(&relays, lepic_store::ContactOutboxId(1)));
+    assert_send(wallet.contact_outbox(id));
+    assert_send(wallet.contacts());
+    assert_send(wallet.contact(id));
+    assert_send(wallet.contact_remove(id));
+    assert_send(wallet.contact_set_label(id, "Anna".to_owned()));
+    assert_send(wallet.contact_set_seal(id, true));
+    assert_send(wallet.contact_set_allow_invoices(id, true));
+    assert_send(wallet.contact_attach(id, None));
+    assert_send(wallet.contacts_export());
+    assert_send(wallet.contacts_import(String::new()));
+    assert_send(wallet.contact_issue_invoice(
+        &relays,
+        id,
+        lepic_wallet::invoice::InvoiceRequest {
+            account: AccountIndex(0),
+            amount: lepic_primitives::amount::Amount::new(1),
+            message: None,
+        },
+        lepic_wallet::contact::InvoiceDetails {
+            purpose: lepic_contact::Purpose::Request,
+            reference: None,
+            expires: None,
+        },
+    ));
+    assert_send(wallet.contact_invoices());
+    assert_send(wallet.contact_pay_invoice(
+        &relays,
+        slate_id,
+        lepic_wallet::invoice::PayRequest::new(
+            AccountIndex(0),
+            lepic_primitives::amount::Amount::new(1),
+        ),
+    ));
+    assert_send(wallet.contact_decline_invoice(slate_id));
+    assert_send(wallet.contact_seal_slate(id, tx_id, None));
+    assert_send(wallet.contact_post_slate(&relays, id, tx_id, None));
+    assert_send(wallet.sealed_open("text"));
+    assert_send(wallet.sealed_receive("text", lepic_wallet::ReceiveRequest::default()));
+    assert_send(wallet.sealed_pay(
+        "text",
+        lepic_wallet::invoice::PayRequest::new(
+            AccountIndex(0),
+            lepic_primitives::amount::Amount::new(1),
+        ),
+    ));
+    assert_send(wallet.sealed_finalize("text", lepic_node::Propagation::Stem));
+    assert_send(wallet.contact_plain_fallback(tx_id));
+    assert_send(wallet.contact_of_transaction(tx_id));
+}
