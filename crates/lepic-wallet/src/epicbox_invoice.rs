@@ -25,6 +25,7 @@ use lepic_store::{
     PeerCapability, PeerSupport, PendingInvoiceStatus, Repositories, SlateStage, StoreError,
     TxDirection, TxId, TxState, WalletStore,
 };
+use lepic_transport::file::FILE;
 use lepic_transport::transport::{Destination, Transport};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
@@ -407,8 +408,9 @@ where
     /// Expires what invoices left unpaid, as a host or a listener runs it from time to time:
     ///
     /// - a parked or declined invoice received more than `expiry` ago is deleted;
-    /// - an invoice this wallet issued over Epicbox more than `expiry` ago and not paid is
-    ///   cancelled, which frees its output and private context, so a late payment is refused;
+    /// - an invoice this wallet issued over Epicbox, by file or to a contact more than `expiry`
+    ///   ago and not paid is cancelled, which frees its output and private context, so a late
+    ///   payment is refused;
     /// - a payment of an invoice over Epicbox whose TTL a confirmed height has passed, with its
     ///   kernel neither in the node's pool nor on its chain, is listed as cancellable. It is
     ///   never cancelled here: the user decides.
@@ -575,8 +577,9 @@ fn issued_unpaid_before(
             else {
                 continue;
             };
-            if (entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
-                && crate::contact::slate_contact(repos, slate_uuid)?.is_none())
+            let issued_here = matches!(entry.transport.as_deref(), Some(transport)
+                if transport == TRANSPORT_ID.as_str() || transport == FILE.as_str());
+            if (!issued_here && crate::contact::slate_contact(repos, slate_uuid)?.is_none())
                 || entry.created_at > cutoff
                 || repos.slate(slate_uuid, SlateStage::Invoice1)?.is_none()
             {

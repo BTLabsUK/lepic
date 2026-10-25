@@ -752,3 +752,45 @@ fn a_cancelled_payment_has_exactly_its_inputs_spent_to_the_payer_itself() {
         .collect();
     assert_eq!(pushed_inputs, inputs);
 }
+
+#[test]
+fn expiry_cancels_an_invoice_issued_by_file_and_left_unpaid() {
+    let world = World::new();
+    let issued = world
+        .block_on(world.issuer.wallet.issue_invoice(
+            lepic_wallet::invoice::InvoiceRequest {
+                account: ACCOUNT,
+                amount: Amount::new(AMOUNT),
+                message: None,
+            },
+            Delivery::Export {
+                transport: lepic_transport::file::FILE,
+                to: lepic_transport::transport::Location::File(
+                    tempfile::tempdir().unwrap().keep().join("i1.tx"),
+                ),
+            },
+        ))
+        .unwrap();
+    let expiry = InvoiceExpiry::default();
+    assert!(
+        world
+            .block_on(world.issuer.wallet.sweep_invoices(expiry))
+            .unwrap()
+            .cancelled
+            .is_empty()
+    );
+
+    world.issuer.clock.advance(DAY + Duration::from_secs(1));
+    let sweep = world
+        .block_on(world.issuer.wallet.sweep_invoices(expiry))
+        .unwrap();
+    assert_eq!(sweep.cancelled, vec![issued.tx_id]);
+    assert_eq!(
+        world
+            .issuer
+            .read(|repos| repos.transaction(issued.tx_id))
+            .unwrap()
+            .state,
+        TxState::Cancelled
+    );
+}

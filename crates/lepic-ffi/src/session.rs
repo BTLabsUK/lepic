@@ -40,6 +40,7 @@ use lepic_wallet::selection::{
 };
 use lepic_wallet::self_send::SelfSent;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
+use lepic_wallet::slate::WireSlate;
 use lepic_wallet::{
     Clock, DATABASE_FILE, Event, NodeEndpoint, Password, Ports, ReceiveRequest, SessionState,
     SharedRng, Wallet, WalletName, WordCount,
@@ -58,9 +59,9 @@ use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
     LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, OutputCategory, OutputStatus,
     PushSignature, ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy,
-    SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, TransactionDetails, TransportConnection,
-    TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput,
-    WalletSummary,
+    SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, SlateStage, TransactionDetails,
+    TransportConnection, TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent,
+    WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -1075,19 +1076,35 @@ impl Session {
         self.receive_file(&scratch.path, false).await
     }
 
+    /// Finalizes the S2 of a send, or the I2 of an invoice this wallet issued, in the file at
+    /// `path`. The engine checks either against what this wallet stored for its slate id.
     pub(crate) async fn finalize_file(&self, path: &Path) -> Result<FinalizedTx, WalletError> {
         let wire = FileTransport::new()
             .import(&Location::File(path.to_owned()))
             .await
             .map_err(|error| transport_error(&error))?;
-        let finalized = self
-            .engine
-            .finalize(FILE, &wire, Propagation::Fluff)
-            .await?;
+        let finalized = if self.is_invoice_payment(&wire) {
+            self.engine
+                .finalize_invoice(FILE, &wire, Propagation::Fluff)
+                .await?
+        } else {
+            self.engine
+                .finalize(FILE, &wire, Propagation::Fluff)
+                .await?
+        };
         Ok(FinalizedTx {
             tx_id: finalized.tx_id.0,
             slate_id: finalized.slate.id().to_string(),
         })
+    }
+
+    /// Whether `wire` reads as an I2. Anything else goes to the finalize of a send, which
+    /// names what is wrong with it.
+    fn is_invoice_payment(&self, wire: &WireSlate) -> bool {
+        std::str::from_utf8(wire.as_bytes())
+            .ok()
+            .and_then(|text| crate::inspect::inspect(text.to_owned(), self.network).ok())
+            .is_some_and(|info| info.stage == SlateStage::I2)
     }
 
     pub(crate) async fn finalize_slate(&self, json: String) -> Result<FinalizedTx, WalletError> {

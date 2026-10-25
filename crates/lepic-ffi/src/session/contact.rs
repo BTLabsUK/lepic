@@ -256,7 +256,7 @@ impl Session {
         Ok(ContactRelays::new(self.epicbox()?, relay_mode(mode)))
     }
 
-    fn pay_request(
+    pub(super) fn pay_request(
         amount: u64,
         minimum_confirmations: u64,
         message: Option<String>,

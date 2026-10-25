@@ -58,7 +58,9 @@ pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
 
 /// What the V2 or V3 slate text `json` says, read as [`EpicWallet::receive_slate`] and
 /// [`EpicWallet::finalize_and_post`] read it, without a wallet and without checking signatures.
-/// `chain` sets the minimum fee a slate must pay. Fails with `InvalidSlate`.
+/// `chain` sets the minimum fee a slate must pay. Route a slate file by its `stage`: an S1 to
+/// `receive_slate`, an I1 to `pay_invoice_slate` after the user approved it, an S2 or I2 to
+/// `finalize_and_post`. Fails with `InvalidSlate`.
 pub fn inspect_slate(json: String, chain: Chain) -> Result<SlateInfo, WalletError> {
     guard("inspect_slate", || inspect::inspect(json, chain.network()))
 }
@@ -1010,9 +1012,18 @@ impl EpicWallet {
         .await
     }
 
-    /// Sender side: finalizes the recipient's answer and posts the transaction to the node.
-    /// Fails with `NotPosted` when it was finalized but the node did not accept it; post it
-    /// again with [`EpicWallet::repost_transaction`].
+    /// Sender or issuer side: finalizes the answer and posts the transaction to the node. The
+    /// answer is the recipient's S2 of a send this wallet made, or the payer's I2 of an invoice
+    /// this wallet issued; the stage decides. An I2 finalizes only an invoice this wallet
+    /// issued and still waits for, for the amount and outputs it asked: `InvalidSlate` for a
+    /// slate id it did not issue or a signature that does not verify, `InvoiceChanged` for a
+    /// payment that changed the invoice, `InvoiceAlreadyPaid` when another I2 finalized it,
+    /// `InvalidArgument` for a withdrawn or expired invoice, and `PaymentExpired` past the
+    /// time to live the payer set.
+    ///
+    /// Finalizing the same answer again returns the stored result. Fails with `NotPosted` when
+    /// it was finalized but the node did not accept it; post it again with
+    /// [`EpicWallet::repost_transaction`].
     pub async fn finalize_and_post(&self, slate_json: String) -> Result<FinalizedTx, WalletError> {
         self.run("finalize_and_post", |session| async move {
             session.finalize_slate(slate_json).await

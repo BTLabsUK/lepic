@@ -674,6 +674,20 @@ pub struct PaidInvoice {
     pub fee: u64,
 }
 
+/// An invoice paid by file, from `EpicWallet::pay_invoice_slate` and
+/// `EpicWallet::pay_invoice_file`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaidInvoiceSlate {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// What the issuer receives.
+    pub amount: u64,
+    /// What this wallet pays on top.
+    pub fee: u64,
+    /// The I2 for the issuer.
+    pub json: String,
+}
+
 /// What one `EpicWallet::sweep_invoices` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvoiceSweep {

@@ -13,6 +13,7 @@ use crate::vault_port::VAULT_KEY;
 
 mod contact;
 mod http;
+mod invoice;
 mod listener;
 mod node;
 mod outputs;
