@@ -592,6 +592,84 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
     let own = ContactCard::decode(&own, ContactNetwork::Floonet).unwrap();
     assert!(own.fields().mailbox.as_str().ends_with("@relay2.test:80"));
     assert_eq!(own.fields().seq, 2);
+    // And went to the shop at once, in a contact update.
+    let outbox = world.payer.read(|repos| repos.contact_outbox(ben_side));
+    assert!(
+        outbox
+            .iter()
+            .any(|stored| stored.entry.destination.ends_with("@relay2.test:80")),
+        "{outbox:?}"
+    );
+}
+
+/// R2-05: a service's update may not move its home relay to an IP address or another port
+/// unless the relay is built in, nor change what the contact is; a card in any envelope but an
+/// update never names another mailbox.
+#[test]
+fn a_home_relay_moves_only_to_a_named_relay_and_never_by_a_plain_card() {
+    let world = World::new();
+    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let keys = keys_for(&world.issuer, shop_side);
+    let signer = SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+    let record = world.issuer.read(|repos| repos.contact(shop_side)).unwrap();
+    let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
+    let key_text = own
+        .fields()
+        .mailbox
+        .as_str()
+        .split('@')
+        .next()
+        .unwrap()
+        .to_owned();
+    let card = |seq: u32, host: &str, kind: ContactKind| {
+        let mut fields = own.fields().clone();
+        fields.seq = seq;
+        fields.kind = kind;
+        fields.mailbox = lepic_contact::MailboxAddress::new(&format!("{key_text}@{host}")).unwrap();
+        ContactCard::sign(ContactNetwork::Floonet, fields, &signer).unwrap()
+    };
+    let shown = world
+        .payer
+        .read(|repos| repos.contact_mailbox(ben_side))
+        .unwrap();
+    for (seq, host, kind) in [
+        (2, "10.0.0.7:443", ContactKind::Exchange),
+        (3, "relay3.test:8443", ContactKind::Exchange),
+        (4, "relay.test:80", ContactKind::Person),
+    ] {
+        post_signed(
+            &world,
+            &world.issuer,
+            shop_side,
+            &Content::new(
+                MessageType::ContactUpdate,
+                card(seq, host, kind).as_bytes().to_vec(),
+            ),
+        );
+    }
+    // A notice carrying a newer card for another relay in its tag 07.
+    let mut notice = Content::new(MessageType::Notice, b"{}".to_vec());
+    notice.card = Some(card(5, "relay4.test:443", ContactKind::Exchange));
+    post_signed(&world, &world.issuer, shop_side, &notice);
+    world.collect(&world.payer);
+
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.contact_mailbox(ben_side))
+            .unwrap(),
+        shown
+    );
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.contact(ben_side))
+            .unwrap()
+            .peer
+            .unwrap()
+            .seq,
+        1
+    );
 }
 
 /// The party's keys for its contact `contact`, as the wallet derives them.

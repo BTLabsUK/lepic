@@ -332,7 +332,7 @@ where
             .map_err(|_| ContactError::NotASlate)?;
         if let Some(contact_id) = contact {
             if let Some(card) = content.card {
-                self.refresh_card(contact_id, card, false).await?;
+                self.refresh_card(contact_id, card, None).await?;
             }
             self.mark_sealed_in(contact_id).await?;
         }

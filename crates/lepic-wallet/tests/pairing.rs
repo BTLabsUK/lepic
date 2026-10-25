@@ -789,11 +789,21 @@ fn contact_updates_refresh_the_card_within_three_a_day() {
             .peer_mailbox
     };
 
+    let shown = peer_mailbox();
+    let seq = || {
+        world
+            .issuer
+            .read(|repos| repos.contact(anna_side))
+            .unwrap()
+            .peer
+            .unwrap()
+            .seq
+    };
     for seq in 2..=5 {
-        post_update(&world, ben_side, seq, &format!("relay.test:{}", 8000 + seq));
+        post_update(&world, ben_side, seq, "relay.test:80");
     }
     // An older card than the stored one changes nothing.
-    post_update(&world, ben_side, 1, "old.test");
+    post_update(&world, ben_side, 1, "relay.test:80");
     world.collect(&world.issuer);
 
     let updates = events(&mut issuer_events)
@@ -801,25 +811,18 @@ fn contact_updates_refresh_the_card_within_three_a_day() {
         .filter(|event| matches!(event, Event::ContactUpdated(_)))
         .count();
     assert_eq!(updates, 3);
-    assert!(
-        peer_mailbox().ends_with("@relay.test:8004"),
-        "{}",
-        peer_mailbox()
-    );
-    let seq = world
-        .issuer
-        .read(|repos| repos.contact(anna_side))
-        .unwrap()
-        .peer
-        .unwrap()
-        .seq;
-    assert_eq!(seq, 4);
+    assert_eq!(seq(), 4);
 
-    // A day later the next one is taken.
+    // A day later the next one is taken, but a person's mailbox stays on its relay: an update
+    // naming another relay is refused (RFC 0002 8.5).
     world.issuer.clock.advance(24 * HOUR + MINUTE);
     post_update(&world, ben_side, 6, "relay.test:8006");
     world.collect(&world.issuer);
-    assert!(peer_mailbox().ends_with("@relay.test:8006"));
+    assert_eq!(seq(), 4);
+    assert_eq!(peer_mailbox(), shown);
+    post_update(&world, ben_side, 7, "relay.test:80");
+    world.collect(&world.issuer);
+    assert_eq!(seq(), 7);
 }
 
 /// The party's keys for its contact `contact`, as the wallet derives them.
@@ -1117,7 +1120,7 @@ fn only_a_proven_found_answer_completes_a_key_check() {
     let mut issuer_events = world.issuer.wallet.subscribe();
     key_check(&world, &world.issuer, new_on_issuer, anna_side);
 
-    post_update(&world, ben_side, 2, "relay.test");
+    post_update(&world, ben_side, 2, "relay.test:80");
     // The stranger claims the old keys with a card and a proof of its own.
     let keys = contact_keys(&stranger, new_on_stranger);
     let signer = lepic_contact::SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());

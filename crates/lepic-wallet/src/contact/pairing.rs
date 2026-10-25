@@ -171,7 +171,7 @@ fn timestamp(seconds: u64) -> Timestamp {
         .unwrap_or(Timestamp::MAX)
 }
 
-fn store_kind(kind: ContactKind) -> lepic_store::ContactKind {
+pub(crate) fn store_kind(kind: ContactKind) -> lepic_store::ContactKind {
     match kind {
         ContactKind::Person => lepic_store::ContactKind::Person,
         ContactKind::Shop => lepic_store::ContactKind::Shop,

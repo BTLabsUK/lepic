@@ -169,6 +169,38 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// A relay's `domain:port`, the port explicit.
+fn relay_host(address: &EpicboxAddress) -> String {
+    format!(
+        "{}:{}",
+        address.domain(),
+        address.port().unwrap_or(lepic_epicbox::DEFAULT_PORT)
+    )
+}
+
+/// Whether a service may move its home relay to the relay of `address`: a built-in relay, or a
+/// named host (never an IP address) on the default port.
+fn acceptable_home(
+    address: &EpicboxAddress,
+    relays: &ContactRelays,
+    network: lepic_primitives::params::Network,
+) -> bool {
+    let port = address.port().unwrap_or(lepic_epicbox::DEFAULT_PORT);
+    let built_in = relays
+        .built_in
+        .iter()
+        .chain(lepic_epicbox::built_in_relays(relay_network(network)).iter())
+        .any(|known| known.domain() == address.domain() && known.port() == port);
+    let domain = address.domain().as_str();
+    let ip_literal = domain.parse::<std::net::IpAddr>().is_ok()
+        || domain
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok();
+    built_in || (!ip_literal && port == lepic_epicbox::DEFAULT_PORT)
+}
+
 fn unhex16(text: &str) -> Option<[u8; 16]> {
     if text.len() != 32 {
         return None;
@@ -514,6 +546,7 @@ where
     /// the envelope refreshes the record within the limits of RFC 0002 8.5.
     async fn take_contact_message(
         &self,
+        relays: &ContactRelays,
         contact_id: ContactId,
         envelope: &[u8],
     ) -> Result<Handled, ContactError> {
@@ -571,14 +604,14 @@ where
         let update = match opened.content.kind {
             MessageType::ContactUpdate => {
                 match lepic_contact::open_contact_update(&sealed, &enc_secret(&keys), &recorded) {
-                    Ok(card) => Some((card, true)),
+                    Ok(card) => Some((card, Some(relays))),
                     Err(_) => return Ok(Handled::Stored),
                 }
             }
-            _ => opened.content.card.clone().map(|card| (card, false)),
+            _ => opened.content.card.clone().map(|card| (card, None)),
         };
-        if let Some((card, limited)) = update {
-            self.refresh_card(contact_id, card, limited).await?;
+        if let Some((card, update)) = update {
+            self.refresh_card(contact_id, card, update).await?;
         }
         self.mark_sealed_in(contact_id).await?;
         let record = {
@@ -604,16 +637,22 @@ where
         })
     }
 
-    /// Replaces the contact's card with `card` when its sequence number is higher and, for a
-    /// contact update, while the update limits allow it.
+    /// Replaces the contact's card with `card` when it carries the same keys and kind and a
+    /// higher sequence number. Only a contact update (`update` holds the relays) may change the
+    /// card's mailbox, within the limits of RFC 0002 8.5: a person's mailbox stays on its relay,
+    /// and a service moves its home relay only to a built-in relay or a named host on the
+    /// default port. After a move, our new card goes to the contact at once in a contact update.
+    /// A card in any other envelope that names another mailbox is ignored.
     pub(crate) async fn refresh_card(
         &self,
         contact_id: ContactId,
         card: ContactCard,
-        limited: bool,
+        update: Option<&ContactRelays>,
     ) -> Result<(), ContactError> {
         let session = self.session()?;
         let network = self.config().network;
+        let net = contact_network(network);
+        let relays = update.cloned();
         let updated = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -625,34 +664,51 @@ where
                         return Ok(false);
                     };
                     let fields = card.fields();
-                    // Addresses may change by a card; keys never do (RFC 0002 8.5).
-                    if !super::pairing::same_keys(peer, &card) || fields.seq <= peer.seq {
+                    // Addresses may change by a card; keys and kind never do (RFC 0002 8.5).
+                    if !super::pairing::same_keys(peer, &card)
+                        || super::pairing::store_kind(fields.kind) != peer.kind
+                        || fields.seq <= peer.seq
+                    {
                         return Ok(false);
                     }
-                    if limited && !within_update_limits(repos, contact_id, now.as_second())? {
-                        debug!("contact update over the limits dropped");
-                        return Ok(false);
-                    }
-                    record.peer = Some(peer_card(&card));
+                    let service = peer.kind != lepic_store::ContactKind::Person;
                     let Some(mut mailbox) = repos.contact_mailbox(contact_id)? else {
+                        return Ok(false);
+                    };
+                    let peer_mailbox = fields.mailbox.as_str().to_owned();
+                    let moved = peer_mailbox != mailbox.peer_mailbox;
+                    let Some(relays) = relays.as_ref() else {
+                        if moved {
+                            debug!("card naming another mailbox outside an update ignored");
+                            return Ok(false);
+                        }
+                        record.peer = Some(peer_card(&card));
                         repos.put_contact(&record)?;
                         return Ok(true);
                     };
-                    let peer_mailbox = fields.mailbox.as_str().to_owned();
-                    if peer_mailbox != mailbox.peer_mailbox {
-                        repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
+                    if !within_update_limits(repos, contact_id, now.as_second())? {
+                        debug!("contact update over the limits dropped");
+                        return Ok(false);
                     }
                     let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
                         .map_err(|_| ContactError::RelayAddress)?;
-                    let new_home = format!(
-                        "{}:{}",
-                        relay.domain(),
-                        relay.port().unwrap_or(lepic_epicbox::DEFAULT_PORT)
-                    );
-                    // A service moves its home relay with an update; people re-pair instead
-                    // (RFC 0002 8.5).
-                    let service = fields.kind != lepic_contact::ContactKind::Person;
-                    if service && new_home != mailbox.home_relay {
+                    let old_relay =
+                        EpicboxAddress::parse(&mailbox.peer_mailbox, relay_network(network))
+                            .ok()
+                            .map(|old| relay_host(&old));
+                    let new_host = relay_host(&relay);
+                    let other_relay = old_relay.as_deref() != Some(new_host.as_str());
+                    if other_relay && (!service || !acceptable_home(&relay, relays, network)) {
+                        debug!("contact update to a relay it may not move to dropped");
+                        return Ok(false);
+                    }
+                    record.peer = Some(peer_card(&card));
+                    if moved {
+                        repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
+                    }
+                    let mut announce = None;
+                    // A service moves its home relay with an update; people re-pair instead.
+                    if service && new_host != mailbox.home_relay {
                         let keys = contact_keys(
                             &session.keychain,
                             network,
@@ -666,31 +722,53 @@ where
                             relay.domain().clone(),
                             relay.port(),
                         );
-                        let own = ContactCard::decode(&record.own_card, contact_network(network))
+                        let own = ContactCard::decode(&record.own_card, net)
                             .map_err(ContactError::Decode)?;
                         let mut own_fields = own.fields().clone();
                         own_fields.mailbox = lepic_contact::MailboxAddress::new(&ours.to_string())
                             .map_err(ContactError::Name)?;
                         own_fields.seq = own_fields.seq.saturating_add(1);
                         let signer = super::keys::signing_key(&keys);
-                        record.own_card =
-                            ContactCard::sign(contact_network(network), own_fields, &signer)
-                                .map_err(ContactError::Encode)?
-                                .as_bytes()
-                                .to_vec();
+                        let own_card = ContactCard::sign(net, own_fields, &signer)
+                            .map_err(ContactError::Encode)?;
+                        announce = Some(
+                            lepic_contact::seal_contact_update(
+                                &card,
+                                &own_card,
+                                &signer,
+                                &mut super::LockedRng(&mut **ports.rng.lock()),
+                            )
+                            .map_err(ContactError::Encode)?,
+                        );
+                        record.own_card = own_card.as_bytes().to_vec();
                         mailbox.previous = Some(lepic_store::PreviousHome {
                             relay: mailbox.home_relay.clone(),
                             peer_mailbox: mailbox.peer_mailbox.clone(),
                             our_mailbox: mailbox.our_mailbox.clone(),
                             until: now.checked_add(PREVIOUS_HOME_KEPT).unwrap_or(now),
                         });
-                        mailbox.home_relay = new_home;
+                        mailbox.home_relay = new_host;
                         mailbox.our_mailbox = ours.to_string();
                         info!("contact home relay moved");
                     }
-                    mailbox.peer_mailbox = peer_mailbox;
+                    mailbox.peer_mailbox = peer_mailbox.clone();
                     repos.put_contact(&record)?;
                     repos.put_contact_mailbox(&mailbox)?;
+                    // Our new mailbox reaches the contact at once, in the same write.
+                    if let Some(envelope) = announce {
+                        repos.enqueue_contact_outbox(&lepic_store::ContactOutboxEntry {
+                            contact_id,
+                            slate_id: uuid::Uuid::from_bytes(contact_id.0),
+                            stage: lepic_store::SlateStage::Standard1,
+                            payload: lepic_contact::armor(&envelope),
+                            destination: peer_mailbox,
+                            attempts: 0,
+                            next_try_at: now,
+                            state: lepic_store::ContactOutboxState::Queued,
+                            created_at: now,
+                            delivered_at: None,
+                        })?;
+                    }
                     Ok(true)
                 })
             })
@@ -906,7 +984,7 @@ where
             }
             Job::Contact(contact_id) => {
                 self.wallet
-                    .take_contact_message(contact_id, envelope)
+                    .take_contact_message(self.relays, contact_id, envelope)
                     .await?
             }
         };
