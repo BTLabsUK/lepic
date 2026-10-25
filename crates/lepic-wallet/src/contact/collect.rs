@@ -249,6 +249,7 @@ where
                 .push(mailbox);
         }
         let mut report = CollectReport::default();
+        let mut told = std::collections::BTreeSet::new();
         for (host, mailboxes) in by_relay {
             let Some(first) = mailboxes.first() else {
                 continue;
@@ -265,6 +266,7 @@ where
                 jobs,
                 messages: 0,
                 paired: 0,
+                told: &mut told,
             };
             report.mailboxes = report.mailboxes.saturating_add(identities.len());
             match client.drain_once(&identities, &mut handler).await {
@@ -541,6 +543,7 @@ where
         relays: &ContactRelays,
         contact_id: ContactId,
         envelope: &[u8],
+        told: &mut std::collections::BTreeSet<ContactId>,
     ) -> Result<Handled, ContactError> {
         let network = self.config().network;
         let net = contact_network(network);
@@ -575,13 +578,16 @@ where
         let opened = match sealed.open_from(&enc_secret(&keys), &recorded) {
             Ok(opened) => opened,
             Err(lepic_contact::DecodeError::KeyChanged) => {
-                info!("envelope sealed for another wallet or install dropped");
-                self.emit(Event::SealedUnopenable(ContactEvent { contact_id }));
+                // Signed by a key that is not the contact's: never the contact's news.
+                info!("envelope signed by another key dropped");
                 return Ok(Handled::Stored);
             }
             Err(lepic_contact::DecodeError::CannotOpen) => {
                 debug!("envelope in a contact mailbox did not open");
-                self.emit(Event::SealedUnopenable(ContactEvent { contact_id }));
+                // Once a cycle per contact, however much junk the mailbox holds.
+                if told.insert(contact_id) {
+                    self.emit(Event::SealedUnopenable(ContactEvent { contact_id }));
+                }
                 return Ok(Handled::Stored);
             }
             Err(_) => {
@@ -915,6 +921,8 @@ struct Collector<'a, N, S: StoreOpener, V> {
     jobs: Vec<Job>,
     messages: usize,
     paired: usize,
+    /// Contacts already reported with [`Event::SealedUnopenable`] this cycle.
+    told: &'a mut std::collections::BTreeSet<ContactId>,
 }
 
 impl<N, S, V> MailboxHandler for Collector<'_, N, S, V>
@@ -976,7 +984,7 @@ where
             }
             Job::Contact(contact_id) => {
                 self.wallet
-                    .take_contact_message(self.relays, contact_id, envelope)
+                    .take_contact_message(self.relays, contact_id, envelope, self.told)
                     .await?
             }
         };

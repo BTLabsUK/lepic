@@ -116,11 +116,11 @@ pub enum Event {
     /// A contact's sealed slate (an S1 that is not a withdrawal) arrived in its mailbox; it was
     /// received and the answer queued for the contact's mailbox.
     SealedReceived(ContactSlateEvent),
-    /// An envelope in the contact's mailbox did not open with this install's keys, or was
-    /// signed by a key that is not the contact's, and was dropped. The contact may write to keys
-    /// of another install or from before a restore (RFC 0002 C-12), or may use new keys; pairing
-    /// again runs the key check. Advisory: whoever knows the mailbox can cause it, so the host
-    /// only informs the user and never acts on it.
+    /// Envelopes in the contact's mailbox did not open with this install's keys and were
+    /// dropped; raised at most once per contact in a collecting cycle. The contact may write to
+    /// keys of another install or from before a restore (RFC 0002 C-12); pairing again runs the
+    /// key check. Advisory: whoever knows the mailbox can cause it, so the host only informs the
+    /// user and never acts on it. An envelope signed by another key raises nothing.
     SealedUnopenable(ContactEvent),
     /// An outbox entry reached the contact's home relay.
     OutboxDelivered(OutboxNews),

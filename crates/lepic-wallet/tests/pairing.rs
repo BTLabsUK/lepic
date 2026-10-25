@@ -1846,3 +1846,35 @@ fn a_key_check_never_takes_a_slot_a_shown_card_holds() {
     );
     assert!(world.contact_ids(&world.payer).contains(&new_on_payer));
 }
+
+/// R2-11: junk in a contact's mailbox raises one event a cycle, however much there is.
+#[test]
+fn junk_in_a_contact_mailbox_raises_one_event_a_cycle() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let stranger_key = EncSecretKey::from_bytes([9; 32]).public_key();
+    for seed in 0..3 {
+        let junk = lepic_contact::seal(
+            ContactNetwork::Floonet,
+            &stranger_key,
+            lepic_contact::HintRule::ReplyKey,
+            &lepic_contact::Content::new(lepic_contact::MessageType::Notice, b"junk".to_vec()),
+            None,
+            &mut rand::rngs::StdRng::seed_from_u64(seed),
+        )
+        .unwrap();
+        post_sealed(&world, &world.payer, ben_side, &junk);
+    }
+
+    world.collect(&world.issuer);
+
+    let told: Vec<_> = events(&mut issuer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::SealedUnopenable(ContactEvent { contact_id }) => Some(contact_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told, vec![anna_side]);
+}
