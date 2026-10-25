@@ -1,25 +1,29 @@
 //! `lepic contact`: pairing with contacts (RFC 0002) and invoices and slates exchanged with them
 //! through their mailboxes.
 
+use lepic_epicbox::{DEFAULT_DOMAIN, Domain, RelayEndpoint, Security};
 use lepic_primitives::amount::Amount;
 use lepic_store::{AccountIndex, ContactId, ContactState, SealMode};
 use lepic_wallet::contact::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
-    InviteExpiry, InviteRequest, InvoiceDetails, LinkOutcome, Purpose, RelayMode, SasDecision,
+    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, Purpose, RelayMode,
+    SasDecision,
 };
 use lepic_wallet::event::SlateId;
 use lepic_wallet::invoice::InvoiceRequest;
 
 use super::{Opened, Run, Spend};
 use crate::amount::{format_amount, format_fee, parse_amount};
-use crate::cli::{ContactCommand, ContactKindArg, InviteExpiryArg, OnOffArg, PurposeArg, SasArg};
+use crate::cli::{
+    ContactCommand, ContactKindArg, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
+};
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
     ContactAcceptReport, ContactCardReport, ContactCollectReport, ContactExportReport,
     ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport, ContactInvoiceListReport,
-    ContactInvoiceReport, ContactLinkReport, ContactListReport, ContactPreviewReport,
-    ContactRemoveReport, ContactReport, InvoicePayReport, Report,
+    ContactInvoiceReport, ContactKeyCheckReport, ContactLinkReport, ContactListReport,
+    ContactPreviewReport, ContactRemoveReport, ContactReport, InvoicePayReport, Report,
 };
 
 /// Contacts belong to the default account.
@@ -112,10 +116,20 @@ fn contact_report(view: &ContactView) -> ContactReport {
     }
 }
 
+/// The CLI's built-in relays, where pairing words are offered and looked for: the relay it is
+/// set to, then the default one.
 fn relays<N: lepic_node::NodeApi + 'static>(opened: &Opened<N>) -> ContactRelays {
+    let configured = opened.epicbox.settings().endpoint.clone();
+    let mut built_in = vec![configured.clone()];
+    if let Ok(domain) = Domain::parse(DEFAULT_DOMAIN) {
+        let default = RelayEndpoint::new(domain, None, Security::Tls);
+        if default != configured {
+            built_in.push(default);
+        }
+    }
     ContactRelays {
         epicbox: opened.epicbox.clone(),
-        built_in: Vec::new(),
+        built_in,
         mode: RelayMode::Online,
     }
 }
@@ -147,6 +161,12 @@ impl<H: Host> Run<'_, H> {
                     contact_id: offer.contact_id.to_string(),
                     link: offer.link,
                     expires_at: offer.expires_at.to_string(),
+                    words: offer
+                        .words
+                        .iter()
+                        .flatten()
+                        .map(|symbol| format!("{} {}", symbol.emoji, symbol.name))
+                        .collect(),
                 })
             }
             ContactCommand::Open(args) => {
@@ -178,7 +198,18 @@ impl<H: Host> Run<'_, H> {
                 })
             }
             ContactCommand::Enter(args) => {
-                let outcome = wallet.pairing_enter_link(&relays, &args.link).await?;
+                let link = match args.input.as_slice() {
+                    [link] if link.trim_start().starts_with("epiccash:") => link.clone(),
+                    words => {
+                        let link = wallet.pairing_find_words(&relays, words).await?;
+                        return Ok(Report::ContactLink(ContactLinkReport {
+                            outcome: "invite",
+                            contact_id: None,
+                            link: Some(link),
+                        }));
+                    }
+                };
+                let outcome = wallet.pairing_enter_link(&relays, &link).await?;
                 Report::ContactLink(match outcome {
                     LinkOutcome::Confirm { contact_id, link } => ContactLinkReport {
                         outcome: "confirm",
@@ -256,6 +287,35 @@ impl<H: Host> Run<'_, H> {
                     .map(contact_report)
                     .collect(),
             }),
+            ContactCommand::KeyCheck(args) => {
+                let new = contact_id(&args.new)?;
+                let old = contact_id(&args.old)?;
+                wallet.contact_key_check(&relays, new, old).await?;
+                Report::ContactKeyCheck(ContactKeyCheckReport {
+                    contact_id: new.to_string(),
+                    old_contact_id: old.to_string(),
+                })
+            }
+            ContactCommand::Keys(args) => {
+                let new = contact_id(&args.new)?;
+                match args.choice {
+                    KeysArg::KeepOld => {
+                        wallet
+                            .contact_keys_resolve(new, KeysDecision::KeepOld)
+                            .await?;
+                        Report::ContactRemove(ContactRemoveReport {
+                            contact_id: new.to_string(),
+                            removed: true,
+                        })
+                    }
+                    KeysArg::UseNew => {
+                        wallet
+                            .contact_keys_resolve(new, KeysDecision::UseNew)
+                            .await?;
+                        Report::Contact(contact_report(&wallet.contact(new).await?))
+                    }
+                }
+            }
             ContactCommand::Remove(args) => {
                 let id = contact_id(&args.contact)?;
                 Report::ContactRemove(ContactRemoveReport {

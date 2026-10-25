@@ -92,6 +92,8 @@ fn the_tree_has_every_planned_command() {
         "contact pay-invoice",
         "contact export",
         "contact import",
+        "contact key-check",
+        "contact keys",
     ] {
         assert!(
             paths.iter().any(|path| path == expected),

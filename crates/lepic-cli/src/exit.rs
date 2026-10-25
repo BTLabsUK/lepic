@@ -300,10 +300,12 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         ContactError::Decode(_)
         | ContactError::Name(_)
         | ContactError::RelayAddress
-        | ContactError::WordsUnavailable => ErrorKind::Usage,
+        | ContactError::WordsUnavailable
+        | ContactError::Words(_) => ErrorKind::Usage,
         ContactError::UnknownContact
         | ContactError::UnknownPairing
-        | ContactError::UnknownTransaction => ErrorKind::NotFound,
+        | ContactError::UnknownTransaction
+        | ContactError::WordsNotFound => ErrorKind::NotFound,
         ContactError::Relay(_) => ErrorKind::Transport,
         ContactError::InviteExpired
         | ContactError::AlreadyPaired
@@ -313,7 +315,8 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::NotForThisInstall
         | ContactError::CannotOpen
         | ContactError::NotASlate
-        | ContactError::Stage(_) => ErrorKind::Rejected,
+        | ContactError::Stage(_)
+        | ContactError::KeyCheckRefused => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }

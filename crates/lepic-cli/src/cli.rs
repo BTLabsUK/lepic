@@ -589,8 +589,12 @@ The invite's mailboxes live on this wallet's relay. `lepic contact collect` take
     Open(ContactLinkArg),
     /// Answer an invite; the reply goes to the inviter's relay unless --by-hand
     Accept(ContactAcceptArgs),
-    /// Take a pair-reply or pair-confirm link that was sent by hand
-    Enter(ContactLinkArg),
+    /// Take a pair-reply or pair-confirm link that was sent by hand, or find an invite by its
+    /// five pairing words
+    #[command(after_help = "\
+Words are typed by name, or pasted as emoji. The invite they find is printed as a link to answer \
+with `lepic contact accept`.")]
+    Enter(ContactEnterArgs),
     /// Fetch pairing and contact messages from the home relays once, and send what waits
     Collect,
     /// Record the check of the four SAS words against the other screen
@@ -615,6 +619,13 @@ The invite's mailboxes live on this wallet's relay. `lepic contact collect` take
     Export(ContactExportArgs),
     /// Restore pairing records from a backup file
     Import(ContactImportArgs),
+    /// Ask whether a new pairing's contact still holds the keys of an older pairing
+    #[command(after_help = "\
+For a contact paired again, for example after a restore. `lepic contact collect` takes the \
+answer: the keys are back and the new pairing goes, or the new pairing shows keys-changed.")]
+    KeyCheck(ContactKeyCheckArgs),
+    /// Keep the old keys or use the new ones for a pairing in keys-changed
+    Keys(ContactKeysArgs),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -639,6 +650,14 @@ pub enum SasArg {
     Match,
     Mismatch,
     Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum KeysArg {
+    /// Keep the old pairing; the new one is deleted
+    KeepOld,
+    /// Use the new pairing, not verified; the old one is deleted
+    UseNew,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -683,6 +702,32 @@ pub struct ContactLinkArg {
     /// The epiccash:// link
     #[arg(value_name = "LINK")]
     pub link: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactEnterArgs {
+    /// The epiccash:// link, or the five pairing words
+    #[arg(value_name = "LINK|WORDS", required = true, num_args = 1..=5)]
+    pub input: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactKeyCheckArgs {
+    /// The new pairing's id, as `contact list` shows it
+    #[arg(value_name = "NEW")]
+    pub new: String,
+    /// The older pairing with the same contact
+    #[arg(value_name = "OLD")]
+    pub old: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactKeysArgs {
+    /// The new pairing's id, in keys-changed
+    #[arg(value_name = "NEW")]
+    pub new: String,
+    #[arg(value_enum, value_name = "CHOICE")]
+    pub choice: KeysArg,
 }
 
 #[derive(Debug, Args)]

@@ -53,6 +53,7 @@ pub enum Report {
     Contact(ContactReport),
     ContactList(ContactListReport),
     ContactRemove(ContactRemoveReport),
+    ContactKeyCheck(ContactKeyCheckReport),
     ContactInvoiceIssue(ContactInvoiceIssueReport),
     ContactInvoices(ContactInvoiceListReport),
     ContactExport(ContactExportReport),
@@ -366,6 +367,9 @@ pub struct ContactInviteReport {
     pub contact_id: String,
     pub link: String,
     pub expires_at: String,
+    /// The five pairing words as `emoji name`, when they were offered.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -388,7 +392,8 @@ pub struct ContactAcceptReport {
 
 #[derive(Debug, Serialize)]
 pub struct ContactLinkReport {
-    /// `confirm` (send `link` back by hand), `paired` or `ignored`.
+    /// `confirm` (send `link` back by hand), `paired`, `ignored`, or `invite` (pairing words
+    /// found the invite `link`, to answer).
     pub outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_id: Option<String>,
@@ -435,6 +440,13 @@ pub struct ContactListReport {
 pub struct ContactRemoveReport {
     pub contact_id: String,
     pub removed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactKeyCheckReport {
+    /// The new pairing the check went over.
+    pub contact_id: String,
+    pub old_contact_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1039,6 +1051,9 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         }
         Report::ContactInvite(r) => {
             writeln!(out, "Share this invite: {}", r.link)?;
+            if !r.words.is_empty() {
+                writeln!(out, "Or read out these words: {}", r.words.join(", "))?;
+            }
             writeln!(
                 out,
                 "It expires at {}. Contact {}.",
@@ -1067,6 +1082,10 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         Report::ContactLink(r) => match (r.outcome, &r.link) {
             ("confirm", Some(link)) => writeln!(out, "Paired; send this back by hand: {link}"),
             ("paired", _) => writeln!(out, "Paired; compare the SAS with `lepic contact list`."),
+            ("invite", Some(link)) => writeln!(
+                out,
+                "Found the invite: {link}\nAnswer it with `lepic contact accept <LINK>`."
+            ),
             _ => writeln!(out, "The link answers nothing this wallet waits for."),
         },
         Report::ContactCollect(r) => {
@@ -1097,6 +1116,11 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         }
         Report::ContactRemove(r) if r.removed => writeln!(out, "Pairing {} removed.", r.contact_id),
         Report::ContactRemove(r) => writeln!(out, "No pairing {}.", r.contact_id),
+        Report::ContactKeyCheck(r) => writeln!(
+            out,
+            "Key check sent over pairing {} for {}; `lepic contact collect` takes the answer.",
+            r.contact_id, r.old_contact_id
+        ),
         Report::ContactInvoiceIssue(r) => writeln!(
             out,
             "Transaction {} asks contact {} for {} EPIC; the invoice waits in its mailbox.",
@@ -1564,8 +1588,9 @@ mod tests {
                     contact_id: text("c"),
                     link: text("l"),
                     expires_at: text("t"),
+                    words: vec![text("w")],
                 }),
-                vec!["contact_id", "expires_at", "link"],
+                vec!["contact_id", "expires_at", "link", "words"],
             ),
             (
                 Report::ContactPreview(ContactPreviewReport {
@@ -1658,6 +1683,13 @@ mod tests {
                     removed: true,
                 }),
                 vec!["contact_id", "removed"],
+            ),
+            (
+                Report::ContactKeyCheck(ContactKeyCheckReport {
+                    contact_id: text("c"),
+                    old_contact_id: text("o"),
+                }),
+                vec!["contact_id", "old_contact_id"],
             ),
             (
                 Report::ContactInvoiceIssue(ContactInvoiceIssueReport {
