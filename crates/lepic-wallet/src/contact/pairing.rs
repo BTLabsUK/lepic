@@ -192,6 +192,16 @@ pub(crate) fn peer_card(card: &ContactCard) -> PeerCard {
     }
 }
 
+/// Whether `card` carries the sig, enc and hint keys of the stored peer card. A contact's keys
+/// never change by a card: only [`Wallet::contact_keys_resolve`] with `UseNew` moves a contact
+/// to other keys.
+pub(crate) fn same_keys(stored: &PeerCard, card: &ContactCard) -> bool {
+    let fresh = peer_card(card);
+    stored.sig_key == fresh.sig_key
+        && stored.enc_key == fresh.enc_key
+        && stored.hint_key == fresh.hint_key
+}
+
 /// The relay of a card's mailbox, as `domain:port`.
 fn mailbox_relay(card: &ContactCard, relays: &ContactRelays) -> Result<String, ContactError> {
     let address = mailbox_address(card, relays)?;

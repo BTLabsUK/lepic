@@ -625,7 +625,8 @@ where
                         return Ok(false);
                     };
                     let fields = card.fields();
-                    if card.sig_key().to_bytes() != peer.sig_key || fields.seq <= peer.seq {
+                    // Addresses may change by a card; keys never do (RFC 0002 8.5).
+                    if !super::pairing::same_keys(peer, &card) || fields.seq <= peer.seq {
                         return Ok(false);
                     }
                     if limited && !within_update_limits(repos, contact_id, now.as_second())? {

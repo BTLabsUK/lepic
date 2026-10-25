@@ -1508,3 +1508,94 @@ fn a_reply_with_a_card_already_paired_gets_no_confirm() {
     assert_eq!(world.collect(&world.issuer).paired, 1);
     assert_eq!(world.collect(&stranger).paired, 1);
 }
+
+/// A stranger who knows the payer's card for its contact Anna pairs with the payer, starts a
+/// key check for that card and answers the payer's found answer with a card and proof of its
+/// own. The payer's record for Anna keeps Anna's keys: a restored card must carry the keys the
+/// record holds.
+#[test]
+fn a_restored_answer_cannot_replace_the_keys_of_a_kept_record() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    world
+        .block_on(world.payer.wallet.pairing_sas(
+            &relays(&world.payer),
+            ben_side,
+            SasDecision::Match,
+        ))
+        .unwrap();
+    let before = world.payer.read(|repos| repos.contact(ben_side)).unwrap();
+    let stranger = world.stranger();
+    let (on_payer, on_stranger) = world.pair(&world.payer, &stranger);
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    let keys = contact_keys(&stranger, on_stranger);
+    let signer = lepic_contact::SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+    let record = stranger.read(|repos| repos.contact(on_stranger)).unwrap();
+    let payer_new =
+        ContactCard::decode(&record.peer.unwrap().bytes, ContactNetwork::Floonet).unwrap();
+    let payer_for_anna = ContactCard::decode(&before.own_card, ContactNetwork::Floonet).unwrap();
+    let check = lepic_contact::seal_key_check(
+        &payer_new,
+        &payer_for_anna,
+        &signer,
+        &mut rand::rngs::StdRng::seed_from_u64(11),
+    )
+    .unwrap();
+    post_sealed(&world, &stranger, on_stranger, &check);
+    world.collect(&world.payer);
+
+    // The stranger reads the found answer from its mailbox by hand.
+    let mailbox = stranger
+        .read(|repos| repos.contact_mailbox(on_stranger))
+        .unwrap();
+    let inbox = lepic_epicbox::Identity::new(
+        keys.expose_box_secret().clone(),
+        lepic_epicbox::EpicboxAddress::parse(&mailbox.our_mailbox, RelayNetwork::Floonet).unwrap(),
+    )
+    .unwrap();
+    let client = lepic_epicbox::MailboxClient::new(world::settings(), world.relay.connector());
+    let mut collected = Collected(Vec::new());
+    world
+        .block_on(client.drain_once(&[inbox], &mut collected))
+        .unwrap();
+    let found = collected
+        .0
+        .iter()
+        .map(|text| lepic_contact::dearmor(text).unwrap())
+        .find(|bytes| {
+            let sealed = SealedEnvelope::decode(bytes, ContactNetwork::Floonet).unwrap();
+            lepic_contact::open_key_check_answer(
+                &sealed,
+                &EncSecretKey::from_bytes(*keys.expose_enc_secret()),
+                payer_new.sig_key(),
+            )
+            .is_ok_and(|answer| matches!(answer, lepic_contact::KeyCheckAnswer::Found(_)))
+        })
+        .expect("the payer answered found");
+    // A card under a key of the stranger's that no record holds, with a valid proof by it.
+    let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
+    let forged_key = lepic_contact::SigningKey::from_bytes(&[77; 32]);
+    let mut fields = own.fields().clone();
+    fields.sig_key = forged_key.verifying_key();
+    let forged = ContactCard::sign(ContactNetwork::Floonet, fields, &forged_key).unwrap();
+    let restored = lepic_contact::seal_restored(
+        &payer_new,
+        &signer,
+        &found,
+        &forged,
+        &forged_key,
+        &mut rand::rngs::StdRng::seed_from_u64(12),
+    )
+    .unwrap();
+    post_sealed(&world, &stranger, on_stranger, &restored);
+    world.collect(&world.payer);
+
+    let after = world.payer.read(|repos| repos.contact(ben_side)).unwrap();
+    assert_eq!(after.peer, before.peer);
+    assert_eq!(after.state, ContactState::Verified);
+    let (restored_news, _) = key_news(&events(&mut payer_events));
+    assert!(restored_news.is_empty(), "{restored_news:?}");
+    assert!(world.contact_ids(&world.payer).contains(&on_payer));
+    let _ = anna_side;
+}

@@ -23,7 +23,7 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use super::keys::{CardDetails, contact_keys, contact_network, enc_secret, our_card, signing_key};
-use super::pairing::peer_card;
+use super::pairing::{peer_card, same_keys};
 use super::{ContactError, ContactRelays, LockedRng, new_id, pairing_id_of};
 use crate::account::parent_key_id;
 use crate::event::{ContactEvent, Event};
@@ -611,8 +611,26 @@ where
                         return Ok(None);
                     };
                     let existing = found.record.as_deref().and_then(id_of);
-                    let mut kept = match existing.map(|id| repos.contact(id)).transpose()?.flatten()
-                    {
+                    let existing = existing.map(|id| repos.contact(id)).transpose()?.flatten();
+                    // A kept record keeps its keys: the restored card must carry exactly the
+                    // keys it holds for X, or anyone who knows our card for the slot could take
+                    // over a verified contact. A record made again after a restore takes the
+                    // card only with its proof, and only when no other record holds its key.
+                    let keys_fit = match existing.as_ref().and_then(|record| record.peer.as_ref()) {
+                        Some(stored) => same_keys(stored, &old_card),
+                        None => {
+                            existing.is_none()
+                                && repos
+                                    .contact_by_peer_sig_key(&old_card.sig_key().to_bytes())?
+                                    .is_none()
+                        }
+                    };
+                    if !keys_fit {
+                        warn!("restored answer with keys the record does not hold refused");
+                        repos.delete_setting(&key(FOUND_PREFIX, new))?;
+                        return Ok(None);
+                    }
+                    let mut kept = match existing {
                         Some(record) => record,
                         None => ContactRecord {
                             contact_id: ContactId(new_id(&mut LockedRng(&mut **ports.rng.lock()))),
