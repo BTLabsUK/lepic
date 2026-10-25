@@ -79,6 +79,9 @@ pub enum StoreError {
     /// `<name>.damaged-<unix seconds>` beside it and is kept; the next open starts a new one.
     #[error("database file is damaged and was moved aside")]
     DamagedSetAside,
+    /// The database file is damaged. An open that sets nothing aside left it where it is.
+    #[error("database file is damaged")]
+    Damaged,
     #[error("stored {record} has a malformed {field}")]
     Corrupt { record: Record, field: &'static str },
     #[error("{field} is outside the storable range")]

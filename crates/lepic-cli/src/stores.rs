@@ -54,4 +54,15 @@ impl StoreOpener for CliStores {
         *self.opened.lock().unwrap_or_else(PoisonError::into_inner) = Some(store.clone());
         Ok(store)
     }
+
+    fn open_existing(
+        &self,
+        data_dir: &Path,
+        key: ContextKey,
+    ) -> Result<Option<SharedStore>, StoreError> {
+        // A check of a phrase, not an unlock: not recorded as the opened store.
+        Ok(SqliteStores
+            .open_existing(data_dir, key)?
+            .map(|store| SharedStore(Arc::new(store))))
+    }
 }

@@ -276,6 +276,39 @@ fn a_database_that_fails_its_integrity_check_is_moved_aside() {
     assert!(SqliteStore::open(&path, context_key(1)).is_ok());
 }
 
+#[test]
+fn open_existing_leaves_a_damaged_database_in_place_and_creates_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    assert!(
+        SqliteStore::open_existing(&path, context_key(1))
+            .unwrap()
+            .is_none()
+    );
+    assert!(database_files(dir.path()).is_empty());
+
+    fs::write(&path, [0x5a; 8192]).unwrap();
+    let result = SqliteStore::open_existing(&path, context_key(1));
+    assert!(matches!(result, Err(StoreError::Damaged)), "{result:?}");
+    assert_eq!(fs::read(&path).unwrap(), [0x5a; 8192]);
+    assert!(
+        !database_files(dir.path())
+            .iter()
+            .any(|name| name.contains("damaged"))
+    );
+
+    fs::remove_file(&path).unwrap();
+    let store = SqliteStore::open(&path, context_key(1)).unwrap();
+    store
+        .write(|repos| repos.put_account(&account(0, "default")))
+        .unwrap();
+    drop(store);
+    let existing = SqliteStore::open_existing(&path, context_key(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(existing.read(|repos| repos.accounts()).unwrap().len(), 1);
+}
+
 /// Logs left without their database, as when setting a damaged one aside was cut short, would
 /// be read into a new database; they are set aside before it is made.
 #[test]

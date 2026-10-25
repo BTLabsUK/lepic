@@ -46,7 +46,7 @@ impl SqliteStore {
             set_aside_logs_without_database(path)?;
         }
         restrict_to_owner(path)?;
-        match open_checked(path)? {
+        match open_checked(path, OpenFlags::SQLITE_OPEN_CREATE)? {
             Some(conn) => Ok(Self {
                 conn: Mutex::new(conn),
                 key,
@@ -57,16 +57,33 @@ impl SqliteStore {
             }
         }
     }
+
+    /// Opens the database at `path` and migrates it, as [`SqliteStore::open`] does, but only
+    /// when it exists and without setting anything aside: `None` when there is no database, and
+    /// [`StoreError::Damaged`] when the file is not one or fails `quick_check`, with it and its
+    /// log files left where they are. For a caller that must leave a damaged wallet as it
+    /// found it.
+    pub fn open_existing(path: &Path, key: ContextKey) -> Result<Option<Self>, StoreError> {
+        if !path.try_exists().map_err(io("look for the database"))? {
+            return Ok(None);
+        }
+        match open_checked(path, OpenFlags::empty())? {
+            Some(conn) => Ok(Some(Self {
+                conn: Mutex::new(conn),
+                key,
+            })),
+            None => Err(StoreError::Damaged),
+        }
+    }
 }
 
 /// The open, migrated connection, or `None` when the file is damaged. The damaged file is
-/// closed without a checkpoint, so its write-ahead log stays as it was.
-fn open_checked(path: &Path) -> Result<Option<Connection>, StoreError> {
+/// closed without a checkpoint, so its write-ahead log stays as it was. `create` is
+/// `SQLITE_OPEN_CREATE` to make a missing file, or empty.
+fn open_checked(path: &Path, create: OpenFlags) -> Result<Option<Connection>, StoreError> {
     let mut conn = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | create | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
     let checked = configure(&conn).and_then(|()| {

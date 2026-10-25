@@ -8,7 +8,7 @@ use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
 use lepic_keychain::vault::SecretName;
-use lepic_keychain::{Keychain, SecretBytes, SecretStore, Seed};
+use lepic_keychain::{Identifier, Keychain, SecretBytes, SecretStore, Seed, SwitchCommitment};
 use lepic_primitives::params::Network;
 use lepic_store::{CONTEXT_KEY_LEN, ContextKey, Repositories, StoreError, WalletStore};
 use rand_core::CryptoRng;
@@ -28,8 +28,16 @@ const FINGERPRINT_SETTING: &str = "wallet.fingerprint";
 /// Present while a database rebuilt from a seed has not been scanned from genesis.
 const RESTORE_SCAN_SETTING: &str = "wallet.restore_scan_required";
 
+/// The seed check, as lowercase hex: written by every create and open, so a recovery phrase can
+/// be proven the database's without its vault.
+const SEED_CHECK_SETTING: &str = "wallet.seed_check";
+
 /// Domain separator of the key private transaction contexts are sealed under.
 const CONTEXT_KEY_DOMAIN: &[u8] = b"lepic-wallet private context key v1";
+
+/// Domain separator of the seed check: keyed BLAKE2b of it under the seed, which proves a seed
+/// with 256 bits where the fingerprint has 32, and reveals nothing that derives keys.
+const SEED_CHECK_DOMAIN: &[u8] = b"lepic-wallet seed check v1";
 
 /// The password protecting the wallet's secret storage. Wiped on drop and never printed.
 pub struct Password(Zeroizing<String>);
@@ -157,10 +165,10 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
         return Err(WalletError::WalletExists);
     }
     let keychain = Keychain::from_seed(seed, target.network)?;
-    let fingerprint = fingerprint(&keychain)?;
+    let ours = SeedIdentity::of(seed, &keychain)?;
     let store = stores.open(target.data_dir, context_key(seed)?)?;
-    let identity = store.read(|repos| stored_identity(repos, target.network, &fingerprint))?;
-    if identity == StoredIdentity::Matches && source == SeedSource::Generated {
+    let identity = store.read(|repos| stored_identity(repos, target.network, &ours))?;
+    if identity != StoredIdentity::Empty && source == SeedSource::Generated {
         return Err(WalletError::ForeignDatabase);
     }
     let mut vault = secrets.create(password)?;
@@ -168,7 +176,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     debug!("secret storage created");
     let rebuilt = identity == StoredIdentity::Empty && source == SeedSource::Recovered;
     store.write(|repos| {
-        initialise(repos, target.network, &fingerprint)?;
+        initialise(repos, target.network, &ours)?;
         if rebuilt {
             require_restore_scan(repos)?;
         }
@@ -190,13 +198,13 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     let stored = vault.get(&seed_name()?)?.ok_or(WalletError::NoWallet)?;
     let seed = Seed::from_entropy(stored.expose_bytes()).map_err(WalletError::StoredSeed)?;
     let keychain = Keychain::from_seed(&seed, target.network)?;
-    let fingerprint = fingerprint(&keychain)?;
+    let ours = SeedIdentity::of(&seed, &keychain)?;
     let store = stores.open(target.data_dir, context_key(&seed)?)?;
     // A missing database is rebuilt empty: everything in it but history is recovered by a scan,
     // which must run before new outputs are created.
     store.write(|repos| {
-        let identity = stored_identity(repos, target.network, &fingerprint)?;
-        initialise(repos, target.network, &fingerprint)?;
+        let identity = stored_identity(repos, target.network, &ours)?;
+        initialise(repos, target.network, &ours)?;
         if identity == StoredIdentity::Empty {
             require_restore_scan(repos)?;
         }
@@ -206,34 +214,162 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     Ok(Session { keychain, store })
 }
 
-/// Checks that the database in the data directory belongs to `seed` on the target's network,
-/// changing nothing. Returns `false` for a database no wallet has used yet.
+/// What [`check_phrase`] found the database to be.
+#[derive(Debug)]
+pub enum PhraseCheck {
+    /// The database is the seed's: its seed check, or for a database without one, one of its
+    /// outputs, proves it. Holds the seed.
+    Matches(Seed),
+    /// There is no database, or no wallet has used it, so there is nothing to compare with.
+    Unused,
+    /// The fingerprint matches, but nothing in the database proves the seed: it has no seed
+    /// check, as a database no open of this version has seen, and no output. The fingerprint
+    /// alone does not prove a phrase.
+    Unproven,
+}
+
+/// Checks that `phrase` is the recovery phrase of the database in `data_dir` on `network`,
+/// without its vault, on the calling thread. The fingerprint only tells databases apart: the
+/// phrase is proven by the seed check every open stores, or, in a database no open of this
+/// version has seen, by an output whose commitment the seed derives from its key and amount,
+/// after which the seed check is stored. Nothing else is changed, also when the check fails,
+/// but the database is migrated to the current schema as an open migrates it.
 ///
-/// Fails with [`WalletError::ForeignDatabase`] when it belongs to another seed and
-/// [`WalletError::NetworkMismatch`] when to another network.
+/// Fails with [`WalletError::Mnemonic`] for a phrase that is not valid BIP39 English,
+/// [`WalletError::ForeignDatabase`] when the database belongs to another seed,
+/// [`WalletError::NetworkMismatch`] when to another network, and with
+/// [`lepic_store::StoreError::Damaged`] when the database is damaged, which is left where it
+/// is.
+pub fn check_phrase<S: StoreOpener>(
+    stores: &S,
+    data_dir: &Path,
+    network: Network,
+    phrase: &str,
+) -> Result<PhraseCheck, WalletError> {
+    let seed = Seed::from_mnemonic(phrase).map_err(WalletError::Mnemonic)?;
+    check_seed(stores, &Target { data_dir, network }, seed)
+}
+
+/// [`check_phrase`] of a seed.
 pub(crate) fn check_seed<S: StoreOpener>(
     stores: &S,
     target: &Target<'_>,
-    seed: &Seed,
-) -> Result<bool, WalletError> {
-    let keychain = Keychain::from_seed(seed, target.network)?;
-    let fingerprint = fingerprint(&keychain)?;
-    let store = stores.open(target.data_dir, context_key(seed)?)?;
-    let identity = store.read(|repos| stored_identity(repos, target.network, &fingerprint))?;
-    Ok(identity == StoredIdentity::Matches)
+    seed: Seed,
+) -> Result<PhraseCheck, WalletError> {
+    let keychain = Keychain::from_seed(&seed, target.network)?;
+    let ours = SeedIdentity::of(&seed, &keychain)?;
+    let Some(store) = stores.open_existing(target.data_dir, context_key(&seed)?)? else {
+        return Ok(PhraseCheck::Unused);
+    };
+    match store.read(|repos| stored_identity(repos, target.network, &ours))? {
+        StoredIdentity::Empty => Ok(PhraseCheck::Unused),
+        StoredIdentity::Proven => Ok(PhraseCheck::Matches(seed)),
+        StoredIdentity::FingerprintOnly => {
+            match store.read(|repos| outputs_prove(repos, &keychain))? {
+                Some(true) => {
+                    store
+                        .write(|repos| repos.put_setting(SEED_CHECK_SETTING, &ours.check_text()))?;
+                    debug!("an output proved the phrase; seed check stored");
+                    Ok(PhraseCheck::Matches(seed))
+                }
+                Some(false) => Err(WalletError::ForeignDatabase),
+                None => Ok(PhraseCheck::Unproven),
+            }
+        }
+    }
+}
+
+/// Whether the outputs stored for every account were made by `keychain`'s seed: `Some(true)`
+/// when one's commitment is the one its key and amount derive, `Some(false)` when there are
+/// outputs and none is, `None` when there are none.
+fn outputs_prove(
+    repos: &dyn Repositories,
+    keychain: &Keychain,
+) -> Result<Option<bool>, WalletError> {
+    let mut seen = false;
+    for account in repos.accounts()? {
+        for output in repos.outputs(account.index, None)? {
+            seen = true;
+            let Ok(key_id) = Identifier::from_bytes(&output.key_id.0) else {
+                continue;
+            };
+            // A restore keeps every output whose proof rewinds, whatever its switch commitment.
+            for switch in [SwitchCommitment::Regular, SwitchCommitment::None] {
+                if keychain
+                    .commit(output.amount.value(), &key_id, switch)
+                    .is_ok_and(|derived| derived == output.id.commitment)
+                {
+                    return Ok(Some(true));
+                }
+            }
+        }
+    }
+    Ok(seen.then_some(false))
+}
+
+/// What a database stores to tell its seed: the fingerprint, which identifies it, and the seed
+/// check, which proves it.
+struct SeedIdentity {
+    fingerprint: String,
+    /// Keyed by the seed, with the domain already added: finalising it gives the seed check.
+    check: Blake2bMac<U32>,
+}
+
+impl SeedIdentity {
+    fn of(seed: &Seed, keychain: &Keychain) -> Result<Self, WalletError> {
+        let mut check = seed_mac(seed)?;
+        check.update(SEED_CHECK_DOMAIN);
+        Ok(Self {
+            fingerprint: fingerprint(keychain)?,
+            check,
+        })
+    }
+
+    fn check_text(&self) -> String {
+        let bytes: [u8; 32] = self.check.clone().finalize_fixed().into();
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// Whether the stored hex `text` is the seed check, compared in constant time. Malformed
+    /// text matches nothing.
+    fn check_matches(&self, text: &str) -> bool {
+        unhex(text).is_some_and(|stored| {
+            blake2::digest::Mac::verify_slice(self.check.clone(), &stored).is_ok()
+        })
+    }
+}
+
+/// The bytes of hex `text`, or `None` when it is not hex.
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    let (pairs, rest) = text.as_bytes().as_chunks::<2>();
+    if !rest.is_empty() {
+        return None;
+    }
+    pairs
+        .iter()
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StoredIdentity {
     Empty,
-    Matches,
+    /// The fingerprint matches and the seed check proves the seed.
+    Proven,
+    /// The fingerprint matches; the database holds no seed check yet.
+    FingerprintOnly,
 }
 
-/// Whether the database is unused or already belongs to this seed on this network.
+/// Whether the database is unused or already belongs to this seed on this network. A stored
+/// seed check is compared in constant time.
 fn stored_identity(
     repos: &dyn Repositories,
     network: Network,
-    fingerprint: &str,
+    ours: &SeedIdentity,
 ) -> Result<StoredIdentity, WalletError> {
     let stored_network = repos.setting(NETWORK_SETTING)?;
     let stored_fingerprint = repos.setting(FINGERPRINT_SETTING)?;
@@ -247,7 +383,11 @@ fn stored_identity(
     }
     match stored_fingerprint {
         None if repos.accounts()?.is_empty() => Ok(StoredIdentity::Empty),
-        Some(stored) if stored == fingerprint => Ok(StoredIdentity::Matches),
+        Some(stored) if stored == ours.fingerprint => match repos.setting(SEED_CHECK_SETTING)? {
+            None => Ok(StoredIdentity::FingerprintOnly),
+            Some(check) if ours.check_matches(&check) => Ok(StoredIdentity::Proven),
+            Some(_) => Err(WalletError::ForeignDatabase),
+        },
         _ => Err(WalletError::ForeignDatabase),
     }
 }
@@ -255,10 +395,11 @@ fn stored_identity(
 fn initialise(
     repos: &mut dyn Repositories,
     network: Network,
-    fingerprint: &str,
+    ours: &SeedIdentity,
 ) -> Result<(), WalletError> {
     repos.put_setting(NETWORK_SETTING, network.as_str())?;
-    repos.put_setting(FINGERPRINT_SETTING, fingerprint)?;
+    repos.put_setting(FINGERPRINT_SETTING, &ours.fingerprint)?;
+    repos.put_setting(SEED_CHECK_SETTING, &ours.check_text())?;
     ensure_default_account(repos)
 }
 
@@ -300,13 +441,17 @@ fn seed_name() -> Result<SecretName, WalletError> {
 
 /// The fingerprint a wallet of `seed` on `network` stores in its database, as lowercase hex:
 /// what [`crate::Wallet::fingerprint`] returns once the wallet is open. It is no secret, but
-/// it identifies the wallet.
+/// it identifies the wallet. It does not depend on `network`: a phrase has the same
+/// fingerprint on every chain, so a host telling wallets apart compares the chain and the
+/// fingerprint. It identifies, never authenticates: at 32 bits, a phrase of another seed with
+/// the same fingerprint can be found, so only [`check_phrase`] proves a phrase a database's.
 pub fn seed_fingerprint(seed: &Seed, network: Network) -> Result<String, WalletError> {
     fingerprint(&Keychain::from_seed(seed, network)?)
 }
 
 /// The BIP32 fingerprint of the master key, which tells databases of different seeds apart
-/// without revealing anything that derives keys.
+/// without revealing anything that derives keys. Being 32 bits, it does not prove a seed; the
+/// seed check does.
 pub(crate) fn fingerprint(keychain: &Keychain) -> Result<String, WalletError> {
     let lepic_keychain::Fingerprint(bytes) = keychain
         .master()
@@ -323,16 +468,20 @@ fn context_key(seed: &Seed) -> Result<ContextKey, WalletError> {
 }
 
 fn context_key_bytes(seed: &Seed) -> Result<Zeroizing<[u8; CONTEXT_KEY_LEN]>, WalletError> {
-    let mut mac =
-        <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).map_err(|_| {
-            WalletError::StoredSeed(lepic_keychain::MnemonicError::EntropyLength {
-                actual: seed.expose_bytes().len(),
-            })
-        })?;
+    let mut mac = seed_mac(seed)?;
     mac.update(CONTEXT_KEY_DOMAIN);
     let mut key = Zeroizing::new([0u8; CONTEXT_KEY_LEN]);
     mac.finalize_into((&mut *key).into());
     Ok(key)
+}
+
+/// BLAKE2b-256 keyed by the seed, for a domain string to be added.
+fn seed_mac(seed: &Seed) -> Result<Blake2bMac<U32>, WalletError> {
+    <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).map_err(|_| {
+        WalletError::StoredSeed(lepic_keychain::MnemonicError::EntropyLength {
+            actual: seed.expose_bytes().len(),
+        })
+    })
 }
 
 #[cfg(test)]

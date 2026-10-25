@@ -6,15 +6,19 @@ mod support;
 
 use std::path::PathBuf;
 
-use lepic_keychain::{SecretName, SecretStore, Seed};
-use lepic_primitives::amount::Height;
+use lepic_keychain::{Identifier, Keychain, SecretName, SecretStore, Seed, SwitchCommitment};
+use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
-use lepic_store::AccountIndex;
+use lepic_store::{
+    AccountIndex, ContextKey, KeyId, MemoryStore, OutputRecord, OutputStatus, WalletStore,
+};
 use lepic_transport::transport::TransportId;
+use lepic_wallet::lifecycle::PhraseCheck;
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
 use lepic_wallet::{
     AccountError, ConfigError, DEFAULT_ACCOUNT_LABEL, Event, SecretVault, SessionState,
-    SqliteStores, Wallet, WalletError, WordCount, lifecycle,
+    SqliteStores, StoreOpener, Wallet, WalletError, WordCount, lifecycle,
 };
 use support::{Harness, TestVault, WALLET_SEED_VECTOR, password, vector_text};
 use tokio::sync::broadcast::Receiver;
@@ -345,10 +349,12 @@ fn check_phrase_tells_the_wallets_phrase_from_another_and_changes_nothing() {
     created.close();
 
     let wallet = harness.wallet();
-    let seed = harness
+    let PhraseCheck::Matches(seed) = harness
         .block_on(wallet.check_phrase(phrase.expose()))
         .unwrap()
-        .unwrap();
+    else {
+        panic!("the wallet's phrase did not match");
+    };
     assert_eq!(
         seed.expose_bytes(),
         Seed::from_mnemonic(phrase.expose()).unwrap().expose_bytes()
@@ -372,12 +378,203 @@ fn check_phrase_on_an_unused_database_finds_nothing_to_compare() {
     let harness = Harness::new();
     let wallet = harness.wallet();
 
+    assert!(matches!(
+        harness.block_on(wallet.check_phrase(&vector_phrase())),
+        Ok(PhraseCheck::Unused)
+    ));
+}
+
+const SEED_CHECK: &str = "wallet.seed_check";
+const FINGERPRINT: &str = "wallet.fingerprint";
+
+/// The harness's mainnet database, as another program with the data folder would open it.
+fn database(harness: &Harness) -> MemoryStore {
+    harness
+        .stores
+        .open(&harness.data_dir, ContextKey::from_bytes([0; 32]))
+        .unwrap()
+}
+
+fn setting(harness: &Harness, key: &str) -> Option<String> {
+    database(harness).read(|repos| repos.setting(key)).unwrap()
+}
+
+fn put_setting(harness: &Harness, key: &str, value: &str) {
+    database(harness)
+        .write(|repos| repos.put_setting(key, value))
+        .unwrap();
+}
+
+/// A database as a version before the seed check left it.
+fn drop_seed_check(harness: &Harness) {
+    database(harness)
+        .write(|repos| repos.delete_setting(SEED_CHECK))
+        .unwrap();
+}
+
+/// Stores an unspent output of 5 nanoepic that the wallet of `phrase` made.
+fn plant_output_of(harness: &Harness, phrase: &str) {
+    let keychain =
+        Keychain::from_seed(&Seed::from_mnemonic(phrase).unwrap(), Network::Mainnet).unwrap();
+    let key_id = [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0];
+    let commitment = keychain
+        .commit(
+            5,
+            &Identifier::from_bytes(&key_id).unwrap(),
+            SwitchCommitment::Regular,
+        )
+        .unwrap();
+    database(harness)
+        .write(|repos| {
+            repos.put_output(&OutputRecord {
+                id: OutputIdentifier::new(OutputFeatures::Plain, commitment),
+                key_id: KeyId(key_id),
+                account: AccountIndex(0),
+                amount: Amount::new(5),
+                status: OutputStatus::Unspent,
+                height: Height::new(10),
+                lock_height: Height::new(10),
+                mmr_index: Some(1),
+                tx: None,
+            })
+        })
+        .unwrap();
+}
+
+/// A closed wallet made by `create`, with its phrase.
+fn closed_wallet(harness: &Harness) -> String {
+    let wallet = harness.wallet();
+    let phrase = harness
+        .block_on(wallet.create(password(PASSWORD), WordCount::default()))
+        .unwrap();
+    wallet.close();
+    phrase.expose().to_owned()
+}
+
+/// The fingerprint has 32 bits, so a phrase of another seed with the same one can be found by
+/// grinding. Planting the other seed's fingerprint stands in for such a phrase: the seed check
+/// refuses it.
+#[test]
+fn check_phrase_refuses_a_phrase_whose_fingerprint_matches_but_whose_seed_differs() {
+    let harness = Harness::new();
+    closed_wallet(&harness);
+    let colliding = vector_phrase();
+    let fingerprint =
+        lifecycle::seed_fingerprint(&Seed::from_mnemonic(&colliding).unwrap(), Network::Mainnet)
+            .unwrap();
+    put_setting(&harness, FINGERPRINT, &fingerprint);
+    let check = setting(&harness, SEED_CHECK).unwrap();
+
+    let result = harness.block_on(harness.wallet().check_phrase(&colliding));
+
     assert!(
-        harness
-            .block_on(wallet.check_phrase(&vector_phrase()))
-            .unwrap()
-            .is_none()
+        matches!(result, Err(WalletError::ForeignDatabase)),
+        "{result:?}"
     );
+    assert_eq!(setting(&harness, SEED_CHECK).unwrap(), check);
+}
+
+#[test]
+fn every_open_stores_the_seed_check_that_proves_the_phrase() {
+    let harness = Harness::new();
+    let phrase = closed_wallet(&harness);
+    let check = setting(&harness, SEED_CHECK).unwrap();
+    assert_eq!(check.len(), 64);
+    drop_seed_check(&harness);
+
+    let wallet = harness.wallet();
+    harness.block_on(wallet.open(password(PASSWORD))).unwrap();
+    wallet.close();
+
+    assert_eq!(setting(&harness, SEED_CHECK).unwrap(), check);
+    assert!(matches!(
+        harness.block_on(harness.wallet().check_phrase(&phrase)),
+        Ok(PhraseCheck::Matches(_))
+    ));
+}
+
+/// A database no open of this version has seen has no seed check: one of its outputs proves
+/// the phrase, and the seed check is stored then.
+#[test]
+fn check_phrase_on_a_database_without_a_seed_check_is_proven_by_an_output() {
+    let harness = Harness::new();
+    let phrase = closed_wallet(&harness);
+    let check = setting(&harness, SEED_CHECK).unwrap();
+    drop_seed_check(&harness);
+    plant_output_of(&harness, &phrase);
+
+    let result = harness.block_on(harness.wallet().check_phrase(&phrase));
+
+    assert!(matches!(result, Ok(PhraseCheck::Matches(_))), "{result:?}");
+    assert_eq!(setting(&harness, SEED_CHECK).unwrap(), check);
+}
+
+#[test]
+fn an_output_of_another_seed_refuses_a_phrase_with_a_matching_fingerprint() {
+    let harness = Harness::new();
+    let phrase = closed_wallet(&harness);
+    drop_seed_check(&harness);
+    plant_output_of(&harness, &phrase);
+    let colliding = vector_phrase();
+    let fingerprint =
+        lifecycle::seed_fingerprint(&Seed::from_mnemonic(&colliding).unwrap(), Network::Mainnet)
+            .unwrap();
+    put_setting(&harness, FINGERPRINT, &fingerprint);
+
+    let result = harness.block_on(harness.wallet().check_phrase(&colliding));
+
+    assert!(
+        matches!(result, Err(WalletError::ForeignDatabase)),
+        "{result:?}"
+    );
+    assert_eq!(setting(&harness, SEED_CHECK), None);
+}
+
+/// Without a seed check or an output nothing proves the phrase, so a matching fingerprint is
+/// not taken for proof.
+#[test]
+fn check_phrase_on_a_database_with_nothing_to_prove_the_phrase_is_unproven() {
+    let harness = Harness::new();
+    let phrase = closed_wallet(&harness);
+    drop_seed_check(&harness);
+
+    let result = harness.block_on(harness.wallet().check_phrase(&phrase));
+
+    assert!(matches!(result, Ok(PhraseCheck::Unproven)), "{result:?}");
+    assert_eq!(setting(&harness, SEED_CHECK), None);
+}
+
+/// The check of a phrase leaves a damaged database where it is, so it is still there to retry
+/// or to set aside by an open.
+#[test]
+fn check_phrase_leaves_a_damaged_database_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let database = dir.path().join(lepic_wallet::DATABASE_FILE);
+    std::fs::write(&database, [0x5a; 8192]).unwrap();
+
+    for _ in 0..2 {
+        let result = lifecycle::check_phrase(
+            &SqliteStores,
+            dir.path(),
+            Network::Floonet,
+            &vector_phrase(),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(WalletError::Store(lepic_store::StoreError::Damaged))
+            ),
+            "{result:?}"
+        );
+    }
+    assert_eq!(std::fs::read(&database).unwrap(), [0x5a; 8192]);
+    assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .path()
+            .to_string_lossy()
+            .contains(".damaged-")
+    }));
 }
 
 #[test]

@@ -49,6 +49,17 @@ pub trait StoreOpener: Send + Sync {
     type Store: WalletStore + 'static;
 
     fn open(&self, data_dir: &Path, key: ContextKey) -> Result<Self::Store, StoreError>;
+
+    /// Opens the database only when one exists, and changes nothing when it is damaged:
+    /// `None` when there is none, [`StoreError::Damaged`] for a damaged one, left where it
+    /// is. The default opens with [`StoreOpener::open`], for stores that cannot be damaged.
+    fn open_existing(
+        &self,
+        data_dir: &Path,
+        key: ContextKey,
+    ) -> Result<Option<Self::Store>, StoreError> {
+        self.open(data_dir, key).map(Some)
+    }
 }
 
 #[cfg(feature = "sqlite")]
@@ -67,6 +78,14 @@ impl StoreOpener for SqliteStores {
 
     fn open(&self, data_dir: &Path, key: ContextKey) -> Result<SqliteStore, StoreError> {
         SqliteStore::open(&data_dir.join(DATABASE_FILE), key)
+    }
+
+    fn open_existing(
+        &self,
+        data_dir: &Path,
+        key: ContextKey,
+    ) -> Result<Option<SqliteStore>, StoreError> {
+        SqliteStore::open_existing(&data_dir.join(DATABASE_FILE), key)
     }
 }
 
