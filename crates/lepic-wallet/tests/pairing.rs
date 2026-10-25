@@ -1724,3 +1724,123 @@ fn collecting_cycles_started_at_once_take_a_reply_once() {
     assert_eq!(replied, 1);
     assert_eq!(world.collect(&world.payer).paired, 1);
 }
+
+/// R2-08: once a check ended as not found, a found answer for it is refused, and the user's
+/// choice still finds the old record.
+#[test]
+fn a_found_answer_after_not_found_is_refused() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    let before = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    let restored = world.payer_twin();
+    let (new_on_issuer, new_on_twin) = world.pair(&world.issuer, &restored);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    key_check(&world, &world.issuer, new_on_issuer, anna_side);
+    // A not-found reaches the issuer before the restored install's own answer.
+    let keys = contact_keys(&restored, new_on_twin);
+    let signer = lepic_contact::SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+    let record = restored.read(|repos| repos.contact(new_on_twin)).unwrap();
+    let issuer_card =
+        ContactCard::decode(&record.peer.unwrap().bytes, ContactNetwork::Floonet).unwrap();
+    let not_found = lepic_contact::seal_not_found(
+        &issuer_card,
+        &signer,
+        &mut rand::rngs::StdRng::seed_from_u64(31),
+    )
+    .unwrap();
+    post_sealed(&world, &restored, new_on_twin, &not_found);
+    world.collect(&world.issuer);
+
+    settle(&world, &world.issuer, &restored);
+
+    assert_eq!(
+        key_news(&events(&mut issuer_events)),
+        (vec![], vec![new_on_issuer])
+    );
+    assert_eq!(
+        world
+            .issuer
+            .read(|repos| repos.contact(new_on_issuer))
+            .unwrap()
+            .state,
+        ContactState::KeysChanged
+    );
+    assert_eq!(
+        world.issuer.read(|repos| repos.contact(anna_side)).unwrap(),
+        before
+    );
+    world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_keys_resolve(new_on_issuer, KeysDecision::UseNew),
+        )
+        .unwrap();
+    assert_eq!(world.contact_ids(&world.issuer), vec![new_on_issuer]);
+}
+
+/// R2-08: a slot a record holds, here a card shown in person and never scanned back, is
+/// never taken a second time by a key check.
+#[test]
+fn a_key_check_never_takes_a_slot_a_shown_card_holds() {
+    let world = World::new();
+    let stranger = world.stranger();
+    let card_request = |name: &str| CardRequest {
+        account: AccountIndex(0),
+        name: name.to_owned(),
+        kind: ContactKind::Person,
+    };
+    let shown = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_show_card(&relays(&world.payer), card_request("Ben")),
+        )
+        .unwrap();
+    let own = world
+        .block_on(
+            stranger
+                .wallet
+                .pairing_show_card(&relays(&stranger), card_request("Cleo")),
+        )
+        .unwrap();
+    // Only the stranger scans: it holds the payer's shown card as a contact.
+    let old = world
+        .block_on(stranger.wallet.pairing_scan_card(
+            &relays(&stranger),
+            own.contact_id,
+            &shown.link,
+        ))
+        .unwrap()
+        .contact_id;
+    let (new_on_payer, _) = world.pair(&world.payer, &stranger);
+    let before = world.payer.read(|repos| repos.contacts()).len();
+
+    let new_on_stranger = world.only_new(&stranger, old);
+    key_check(&world, &stranger, new_on_stranger, old);
+    settle(&world, &stranger, &world.payer);
+
+    // The payer answered not found, so the stranger's new pairing shows keys-changed.
+    assert_eq!(
+        stranger
+            .read(|repos| repos.contact(new_on_stranger))
+            .unwrap()
+            .state,
+        ContactState::KeysChanged
+    );
+
+    let records = world.payer.read(|repos| repos.contacts());
+    assert_eq!(records.len(), before);
+    let slot = world
+        .payer
+        .read(|repos| repos.contact(shown.contact_id))
+        .unwrap()
+        .slot;
+    assert_eq!(
+        records.iter().filter(|record| record.slot == slot).count(),
+        1
+    );
+    assert!(world.contact_ids(&world.payer).contains(&new_on_payer));
+}

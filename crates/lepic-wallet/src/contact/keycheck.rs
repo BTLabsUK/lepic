@@ -41,6 +41,7 @@ const DONE_PREFIX: &str = "contact.kc.done.";
 const SLOT_PREFIX: &str = "contact.kc.slot.";
 const FOUND_PREFIX: &str = "contact.kc.found.";
 const FOLD_PREFIX: &str = "contact.fold.";
+const CHANGED_PREFIX: &str = "contact.kc.changed.";
 
 /// What the user chooses for a new pairing whose key check failed (RFC 0002 7.8, step 7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,9 @@ struct FoundAnswer {
     card: String,
     envelope: String,
     record: Option<String>,
+    /// When it was sent; a restored answer is taken only within a day of it.
+    #[serde(default)]
+    at: i64,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -238,8 +242,9 @@ where
                     .contact(new)?
                     .filter(|record| record.state == ContactState::KeysChanged)
                     .ok_or(ContactError::UnknownContact)?;
-                let old = read::<SentCheck>(repos, &key(SENT_PREFIX, new))?
-                    .and_then(|sent| id_of(&sent.old));
+                let old = repos
+                    .setting(&key(CHANGED_PREFIX, new))?
+                    .and_then(|text| id_of(&text));
                 match decision {
                     KeysDecision::KeepOld => {
                         drop_contact_invoices(repos, new)?;
@@ -255,7 +260,7 @@ where
                         repos.put_contact(&record)?;
                     }
                 }
-                repos.delete_setting(&key(SENT_PREFIX, new))?;
+                repos.delete_setting(&key(CHANGED_PREFIX, new))?;
                 Ok(())
             })
         })
@@ -325,10 +330,18 @@ where
                         }
                     }
                     if found.is_none() {
+                        // A slot any record holds, a shown card or a pending invite included,
+                        // is never taken a second time.
+                        let held: Vec<u32> = repos
+                            .contacts()?
+                            .iter()
+                            .filter(|other| other.account == record.account)
+                            .map(|other| other.slot)
+                            .collect();
                         found = root
                             .find_slot_by_tag(&check.tag, n_y.as_bytes(), n_x.as_bytes())
                             .map_err(ContactError::Keys)?
-                            .filter(|slot| *slot != record.slot)
+                            .filter(|slot| !held.contains(slot))
                             .map(|slot| (slot, None));
                     }
                     let mut rng = LockedRng(&mut **ports.rng.lock());
@@ -399,6 +412,7 @@ where
                             card: hex(refreshed.as_bytes()),
                             envelope: hex(&envelope),
                             record: existing.map(|old| hex(&old.contact_id.0)),
+                            at: now.as_second(),
                         })?,
                     )?;
                     Ok(Some(envelope))
@@ -596,6 +610,12 @@ where
                     let Some(found) = read::<FoundAnswer>(repos, &key(FOUND_PREFIX, new))? else {
                         return Ok(None);
                     };
+                    let fresh =
+                        Timestamp::from_second(found.at).is_ok_and(|at| within_window(at, now));
+                    if !fresh {
+                        repos.delete_setting(&key(FOUND_PREFIX, new))?;
+                        return Ok(None);
+                    }
                     let (Some(found_envelope), Some(card), Some(salt)) = (
                         unhex(&found.envelope),
                         unhex(&found.card),
@@ -715,15 +735,11 @@ where
         let session = self.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.write(|repos| {
-                if read::<SentCheck>(repos, &key(SENT_PREFIX, new))?.is_none() {
+                let Some(sent) = read::<SentCheck>(repos, &key(SENT_PREFIX, new))? else {
                     return Ok::<_, StoreError>(false);
-                }
-                if let Some(mut record) = repos.contact(new)? {
-                    record.state = ContactState::KeysChanged;
-                    record.allow_invoices = false;
-                    drop_contact_invoices(repos, record.contact_id)?;
-                    record.verified_at = None;
-                    repos.put_contact(&record)?;
+                };
+                if let Some(record) = repos.contact(new)? {
+                    end_check(repos, record, &sent)?;
                 }
                 Ok(true)
             })?)
@@ -753,18 +769,20 @@ where
                             repos.delete_setting(&key(FOLD_PREFIX, id))?;
                             continue;
                         }
+                        // A found answer nobody restored within a day is forgotten.
+                        if let Some(found) = read::<FoundAnswer>(repos, &key(FOUND_PREFIX, id))?
+                            && Timestamp::from_second(found.at)
+                                .is_ok_and(|at| !within_window(at, now))
+                        {
+                            repos.delete_setting(&key(FOUND_PREFIX, id))?;
+                        }
                         let Some(sent) = read::<SentCheck>(repos, &key(SENT_PREFIX, id))? else {
                             continue;
                         };
                         let expired =
                             Timestamp::from_second(sent.at).is_ok_and(|at| !within_window(at, now));
-                        if expired && record.state != ContactState::KeysChanged {
-                            let mut record = record;
-                            record.state = ContactState::KeysChanged;
-                            record.allow_invoices = false;
-                            drop_contact_invoices(repos, record.contact_id)?;
-                            record.verified_at = None;
-                            repos.put_contact(&record)?;
+                        if expired {
+                            end_check(repos, record, &sent)?;
                             changed.push(id);
                         }
                     }
@@ -778,6 +796,24 @@ where
         }
         Ok(())
     }
+}
+
+/// Ends the open check `sent` on the new pairing `record` as not found: the pairing goes to
+/// keys-changed with its trust reset, and the check is closed, so a later found answer is
+/// refused. The old record's id is kept for [`Wallet::contact_keys_resolve`].
+fn end_check(
+    repos: &mut dyn Repositories,
+    mut record: ContactRecord,
+    sent: &SentCheck,
+) -> Result<(), StoreError> {
+    let id = record.contact_id;
+    record.state = ContactState::KeysChanged;
+    record.allow_invoices = false;
+    record.verified_at = None;
+    drop_contact_invoices(repos, id)?;
+    repos.put_contact(&record)?;
+    repos.put_setting(&key(CHANGED_PREFIX, id), &sent.old)?;
+    repos.delete_setting(&key(SENT_PREFIX, id))
 }
 
 /// The peer card a record holds.

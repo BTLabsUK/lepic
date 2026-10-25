@@ -122,6 +122,17 @@ impl World {
         (ours, answered.contact_id)
     }
 
+    /// The party's one paired contact other than `old`.
+    pub fn only_new(&self, party: &Party, old: ContactId) -> ContactId {
+        let others: Vec<ContactId> = self
+            .contact_ids(party)
+            .into_iter()
+            .filter(|id| *id != old)
+            .collect();
+        assert_eq!(others.len(), 1, "{others:?}");
+        others[0]
+    }
+
     pub fn contact_ids(&self, party: &Party) -> Vec<ContactId> {
         self.block_on(party.wallet.contacts())
             .unwrap()
