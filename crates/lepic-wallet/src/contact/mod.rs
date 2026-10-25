@@ -76,6 +76,19 @@ pub struct ContactRelays {
     pub mode: RelayMode,
 }
 
+impl ContactRelays {
+    /// The relays for `epicbox`, with the built-in relays of its network from
+    /// [`lepic_epicbox::built_in_relays`], where pairing words are offered and looked for.
+    pub fn new(epicbox: EpicboxTransport, mode: RelayMode) -> Self {
+        let built_in = lepic_epicbox::built_in_relays(epicbox.network());
+        Self {
+            epicbox,
+            built_in,
+            mode,
+        }
+    }
+}
+
 impl std::fmt::Debug for ContactRelays {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ContactRelays")

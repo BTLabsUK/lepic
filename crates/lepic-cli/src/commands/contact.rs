@@ -1,7 +1,6 @@
 //! `lepic contact`: pairing with contacts (RFC 0002) and invoices and slates exchanged with them
 //! through their mailboxes.
 
-use lepic_epicbox::{DEFAULT_DOMAIN, Domain, RelayEndpoint, Security};
 use lepic_primitives::amount::Amount;
 use lepic_store::{AccountIndex, ContactId, ContactState, SealMode};
 use lepic_wallet::contact::{
@@ -116,22 +115,10 @@ fn contact_report(view: &ContactView) -> ContactReport {
     }
 }
 
-/// The CLI's built-in relays, where pairing words are offered and looked for: the relay it is
-/// set to, then the default one.
+/// The CLI's relays: its Epicbox transport, and LEPIC's built-in relays of its network, where
+/// pairing words are offered and looked for.
 fn relays<N: lepic_node::NodeApi + 'static>(opened: &Opened<N>) -> ContactRelays {
-    let configured = opened.epicbox.settings().endpoint.clone();
-    let mut built_in = vec![configured.clone()];
-    if let Ok(domain) = Domain::parse(DEFAULT_DOMAIN) {
-        let default = RelayEndpoint::new(domain, None, Security::Tls);
-        if default != configured {
-            built_in.push(default);
-        }
-    }
-    ContactRelays {
-        epicbox: opened.epicbox.clone(),
-        built_in,
-        mode: RelayMode::Online,
-    }
+    ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
 }
 
 impl<H: Host> Run<'_, H> {
