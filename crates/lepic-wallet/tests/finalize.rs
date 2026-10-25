@@ -229,7 +229,14 @@ fn finalizing_the_same_s2_again_changes_nothing() {
 
     let second = exchange.finalize(&exchange.s2).unwrap();
 
-    assert_eq!(second, first);
+    assert!(first.pushed && !second.pushed);
+    assert_eq!(
+        lepic_wallet::Finalized {
+            pushed: true,
+            ..second
+        },
+        first
+    );
     assert_eq!(exchange.pushed(), 1);
     assert_eq!(exchange.state(), TxState::Posted);
     assert!(transaction_events(&mut events).is_empty());
@@ -252,7 +259,14 @@ fn finalizing_the_same_s2_after_confirmation_changes_nothing() {
 
     let second = exchange.finalize(&exchange.s2).unwrap();
 
-    assert_eq!(second, first);
+    assert!(first.pushed && !second.pushed);
+    assert_eq!(
+        lepic_wallet::Finalized {
+            pushed: true,
+            ..second
+        },
+        first
+    );
     assert_eq!(exchange.pushed(), 1);
     assert_eq!(exchange.state(), TxState::Confirmed);
     assert!(transaction_events(&mut events).is_empty());

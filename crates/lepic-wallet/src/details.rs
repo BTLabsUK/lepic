@@ -2,6 +2,7 @@
 
 use jiff::Timestamp;
 use lepic_crypto::Commitment;
+use lepic_epicbox::TRANSPORT_ID as EPICBOX;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
 use lepic_slate::model::Slate;
@@ -17,6 +18,7 @@ use uuid::Uuid;
 
 use crate::account::AccountError;
 use crate::epicbox_invoice::display_message;
+use crate::epicbox_notice::posted_report;
 use crate::error::WalletError;
 use crate::legacy_history::{self, TxOrigin};
 use crate::ports::{SecretVault, StoreOpener};
@@ -25,6 +27,11 @@ use crate::refresh::{final_kernel, legacy_codecs, stored_slate, ttl_cutoff};
 use crate::release::release_check;
 use crate::scan::{ScanFound, found_output, scan_found};
 use crate::wallet::Wallet;
+
+/// How long the host shows a sender's report that it posted a payment this wallet received,
+/// while the payment still waits for its sender. A posted transaction is mined within minutes;
+/// a report older than this says nothing the chain has not answered by then.
+pub const POSTED_REPORT_WINDOW: jiff::SignedDuration = jiff::SignedDuration::from_hours(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionDetails {
@@ -81,6 +88,11 @@ pub struct TransactionDetails {
     /// it by commitment, which leave it once a transaction spends them. Empty when none is
     /// stored, as for a cancelled send whose change was dropped.
     pub output_commits: Vec<Commitment>,
+    /// For a payment received over Epicbox that still waits for its sender, when the sender
+    /// reported that it posted the transaction, while that report is younger than
+    /// [`POSTED_REPORT_WINDOW`]. Advisory: the sender says so, and only a refresh that finds
+    /// the kernel confirms the payment. `None` for any other transaction.
+    pub sender_reported_posted_at: Option<Timestamp>,
 }
 
 /// What an imported transaction carries beyond its log entry.
@@ -115,6 +127,26 @@ pub struct SlateMessage {
     pub text: String,
 }
 
+/// The sender's report that it posted a payment received over Epicbox, while the payment waits
+/// for it. Reads a setting only for such a payment.
+fn sender_report(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+    now: Timestamp,
+) -> Result<Option<Timestamp>, StoreError> {
+    let entry = &transaction.entry;
+    match entry.slate_id {
+        Some(slate_id)
+            if entry.direction == TxDirection::Incoming
+                && entry.state == TxState::Received
+                && entry.transport.as_deref() == Some(EPICBOX.as_str()) =>
+        {
+            posted_report(repos, slate_id, now)
+        }
+        _ => Ok(None),
+    }
+}
+
 /// The stages of one slate, latest first. A transaction stores stages of one flow only.
 const LATEST_FIRST: [SlateStage; 6] = [
     SlateStage::Standard3,
@@ -140,12 +172,13 @@ where
     ) -> Result<TransactionDetails, WalletError> {
         let session = self.session()?;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
-        self.blocking(move |_, _| {
+        self.blocking(move |ports, _| {
+            let now = ports.clock.now();
             session.store.read(|repos| {
                 let entry = repos
                     .transaction(tx_id)?
                     .ok_or(WalletError::UnknownTransaction(tx_id))?;
-                details(repos, &codecs, StoredTransaction { id: tx_id, entry })
+                details(repos, &codecs, StoredTransaction { id: tx_id, entry }, now)
             })
         })
         .await
@@ -161,7 +194,8 @@ where
     ) -> Result<Vec<TransactionDetails>, WalletError> {
         let session = self.session()?;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
-        self.blocking(move |_, _| {
+        self.blocking(move |ports, _| {
+            let now = ports.clock.now();
             session.store.read(|repos| {
                 if repos.account(account)?.is_none() {
                     return Err(AccountError::UnknownAccount(account).into());
@@ -170,7 +204,7 @@ where
                     .transactions(account)?
                     .into_iter()
                     .rev()
-                    .map(|stored| details(repos, &codecs, stored))
+                    .map(|stored| details(repos, &codecs, stored, now))
                     .collect()
             })
         })
@@ -182,6 +216,7 @@ fn details(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
     transaction: StoredTransaction,
+    now: Timestamp,
 ) -> Result<TransactionDetails, WalletError> {
     let tx_id = transaction.id;
     let (kernel_excess, ttl_cutoff_height, messages, flow) = match transaction.entry.slate_id {
@@ -234,7 +269,9 @@ fn details(
     let release = release_check(repos, codecs, &transaction)?.ok();
     let undelivered = undelivered(repos, &transaction)?;
     let output_commits = output_commits(repos, codecs, &transaction, flow)?;
+    let sender_reported_posted_at = sender_report(repos, &transaction, now)?;
     Ok(TransactionDetails {
+        sender_reported_posted_at,
         output_commits,
         undelivered,
         origin,

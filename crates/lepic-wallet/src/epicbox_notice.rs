@@ -6,6 +6,10 @@
 //! only V2 and V3 slates. A notice is accepted only from the recorded
 //! counterparty of its slate, and it never moves funds or unlocks anything: it deletes a parked
 //! invoice at most, and otherwise only tells the host.
+//!
+//! `posted` goes from the issuer of a paid invoice to its payer, and from the sender of an
+//! ordinary payment to its receiver. The receiver keeps the time of the first report it
+//! accepted, which the host shows for [`POSTED_REPORT_WINDOW`] while the payment waits.
 
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
@@ -21,8 +25,10 @@ use lepic_transport::transport::{Destination, Outbound, Transport};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::details::POSTED_REPORT_WINDOW;
 use crate::epicbox_invoice::stored_codecs;
-use crate::event::{DeclinedInvoice, Event, PostedInvoice, WithdrawnInvoice};
+use crate::event::{DeclinedInvoice, Event, PostedInvoice, PostedPayment, WithdrawnInvoice};
+use crate::finalize::kernel_excess;
 use crate::inbox::{ErrorChain, Handled, Hold, relay_network};
 use crate::invoice::check_signed_payment;
 use crate::notice::{Notice, NoticeKind};
@@ -33,6 +39,10 @@ use crate::wallet::Wallet;
 /// What an accepted notice changed, for the event it raises.
 enum Effect {
     Posted {
+        tx_id: TxId,
+        excess: lepic_crypto::Commitment,
+    },
+    PaymentPosted {
         tx_id: TxId,
         excess: lepic_crypto::Commitment,
     },
@@ -137,7 +147,8 @@ fn apply_notice(
                 {
                     Effect::Posted { tx_id, excess }
                 }
-                _ => Effect::Dropped,
+                Some(_) => Effect::Dropped,
+                None => report_posted(repos, codecs, network, slate_id, excess, &from, now)?,
             }
         }
         NoticeKind::Declined => match transaction_with(
@@ -159,6 +170,71 @@ fn apply_notice(
         record_lepic(repos, from, now)?;
     }
     Ok(effect)
+}
+
+const POSTED_REPORT_PREFIX: &str = "notice.posted_reported.";
+
+/// The setting that keeps when the sender of the received payment `slate_id` first reported
+/// that it posted it.
+fn posted_report_key(slate_id: Uuid) -> String {
+    format!("{POSTED_REPORT_PREFIX}{slate_id}")
+}
+
+/// When the sender of the received payment `slate_id` reported that it posted it, while that
+/// report is younger than [`POSTED_REPORT_WINDOW`] at `now`. The caller checks that the payment
+/// still waits for its sender.
+pub(crate) fn posted_report(
+    repos: &dyn Repositories,
+    slate_id: Uuid,
+    now: jiff::Timestamp,
+) -> Result<Option<jiff::Timestamp>, StoreError> {
+    let Some(text) = repos.setting(&posted_report_key(slate_id))? else {
+        return Ok(None);
+    };
+    let Ok(reported) = text.parse::<jiff::Timestamp>() else {
+        return Ok(None);
+    };
+    // A report dated after `now`, as after the clock was set back, is not shown: it would
+    // otherwise outlast the window.
+    let age = now.duration_since(reported);
+    Ok((!age.is_negative() && age < POSTED_REPORT_WINDOW).then_some(reported))
+}
+
+/// A `posted` from the sender of a payment received over Epicbox. Accepted only from the
+/// payment's recorded counterparty, for a payment whose S2 is stored, with the kernel excess
+/// that S2 implies. Only the first report for a payment that still waits for its sender is kept
+/// and raises an event; a repeat, or a report for a payment that confirmed or ended, is noted.
+fn report_posted(
+    repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
+    network: RelayNetwork,
+    slate_id: Uuid,
+    excess: lepic_crypto::Commitment,
+    from: &str,
+    now: jiff::Timestamp,
+) -> Result<Effect, StoreError> {
+    let Some((tx_id, state)) = transaction_with(
+        repos,
+        slate_id,
+        TxDirection::Incoming,
+        SlateStage::Standard2,
+        from,
+        network,
+    )?
+    else {
+        return Ok(Effect::Dropped);
+    };
+    let expected = stored_slate(repos, codecs, tx_id, slate_id, SlateStage::Standard2)?
+        .and_then(|reply| kernel_excess(&reply).ok());
+    if expected != Some(excess) {
+        return Ok(Effect::Dropped);
+    }
+    let key = posted_report_key(slate_id);
+    if state != TxState::Received || repos.setting(&key)?.is_some() {
+        return Ok(Effect::Noted);
+    }
+    repos.put_setting(&key, &now.to_string())?;
+    Ok(Effect::PaymentPosted { tx_id, excess })
 }
 
 /// A parked invoice that is not paid is deleted; a paid one is only reported while its payment
@@ -285,6 +361,11 @@ where
                 slate_id,
                 excess,
             })),
+            Effect::PaymentPosted { tx_id, excess } => Some(Event::PaymentPosted(PostedPayment {
+                tx_id,
+                slate_id,
+                excess,
+            })),
             Effect::Declined { tx_id } => {
                 Some(Event::InvoiceDeclined(DeclinedInvoice { tx_id, slate_id }))
             }
@@ -317,6 +398,71 @@ where
             .await;
         if let Err(error) = recorded {
             warn!(tx_id = %tx_id, error = %ErrorChain(&error), "peer capability not recorded");
+        }
+    }
+
+    /// Records that the sender of a marked S1 runs LEPIC: only a LEPIC wallet writes the
+    /// marker, and the Epicbox signature binds it to the key the S1 came from.
+    pub(crate) async fn record_sending_peer(&self, reply_to: &Destination) {
+        let network = relay_network(self.config().network);
+        let Some(from) = key_of(reply_to.as_str(), network) else {
+            return;
+        };
+        let recorded = self
+            .inbox_write(move |repos, now| record_lepic(repos, from, now))
+            .await;
+        if let Err(error) = recorded {
+            warn!(error = %ErrorChain(&error), "peer capability not recorded");
+        }
+    }
+
+    /// Records that the receiver of the send `tx_id` runs LEPIC, when its marked S2 came from
+    /// the key the send went to. An S2 from any other key proves nothing about that receiver.
+    pub(crate) async fn record_receiving_peer(&self, tx_id: TxId, reply_to: &Destination) {
+        let network = relay_network(self.config().network);
+        let Some(from) = key_of(reply_to.as_str(), network) else {
+            return;
+        };
+        let recorded = self
+            .inbox_write(move |repos, now| {
+                if counterparty_key(repos, tx_id, network)?.as_deref() == Some(from.as_str()) {
+                    record_lepic(repos, from, now)?;
+                }
+                Ok(())
+            })
+            .await;
+        if let Err(error) = recorded {
+            warn!(tx_id = %tx_id, error = %ErrorChain(&error), "peer capability not recorded");
+        }
+    }
+
+    /// Tells the receiver of `tx_id`, a send over Epicbox whose S2 this wallet just finalized
+    /// and pushed in a listen or drain, that it was posted with the kernel of `finalized`.
+    /// Nothing for another transport or a slate without a kernel. Only the inbox calls it, so
+    /// nothing goes to the relay outside a listen or drain the host started.
+    pub(crate) async fn notify_pushed(&self, tx_id: TxId, finalized: &Slate) {
+        let Some(kernel) = finalized.kernel() else {
+            return;
+        };
+        let over_epicbox = async {
+            let session = self.session()?;
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| repos.transaction(tx_id))?
+                    .is_some_and(|entry| entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())))
+            })
+            .await
+        };
+        match over_epicbox.await {
+            Ok(true) => {
+                self.notify_posted(tx_id, finalized.id(), kernel.excess)
+                    .await;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                warn!(tx_id = %tx_id, error = %ErrorChain(&error), "notice not sent");
+            }
         }
     }
 

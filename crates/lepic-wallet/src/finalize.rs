@@ -191,6 +191,8 @@ pub struct Finalized {
     pub tx_id: TxId,
     pub slate: Slate,
     pub transaction: Transaction,
+    /// This call pushed the transaction to the node; `false` when it was posted before.
+    pub pushed: bool,
 }
 
 /// S2 to S3 for the sender of `s1`, on a network whose base fee is `base_fee`, as `complete_tx`
@@ -757,7 +759,8 @@ where
             }
             None => debug!("slate already finalized"),
         }
-        if stored.state == TxState::Finalized {
+        let pushed = stored.state == TxState::Finalized;
+        if pushed {
             self.push(stored.tx_id, &stored.finalized, propagation)
                 .await?;
         }
@@ -765,6 +768,7 @@ where
             tx_id: stored.tx_id,
             slate: stored.finalized.slate,
             transaction: stored.finalized.transaction,
+            pushed,
         })
     }
 

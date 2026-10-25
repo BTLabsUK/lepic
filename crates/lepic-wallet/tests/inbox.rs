@@ -82,7 +82,17 @@ fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
             ..InboxSummary::default()
         }
     );
-    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+    // Both wallets run LEPIC, so the sender told the receiver it posted the payment.
+    assert_eq!(world.relay.pending(&world.receiver_address), 1);
+    assert_eq!(
+        world
+            .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+            .unwrap(),
+        InboxSummary {
+            notices: 1,
+            ..InboxSummary::default()
+        }
+    );
     assert_eq!(world.relay.pending(&world.sender_address), 0);
     assert_eq!(world.sender.harness.node.pushed_transactions().len(), 1);
     assert_eq!(world.receiver.transactions(), 1);

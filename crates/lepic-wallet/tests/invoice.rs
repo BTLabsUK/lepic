@@ -337,7 +337,14 @@ fn finalizing_the_same_i2_again_returns_the_stored_result_without_posting_again(
 
     let second = flow.issuer.finalize(&flow.i2).unwrap();
 
-    assert_eq!(second, first);
+    assert!(first.pushed && !second.pushed);
+    assert_eq!(
+        lepic_wallet::Finalized {
+            pushed: true,
+            ..second
+        },
+        first
+    );
     assert_eq!(flow.node.pushed_transactions().len(), 1);
     assert_eq!(flow.state(), TxState::Posted);
 }

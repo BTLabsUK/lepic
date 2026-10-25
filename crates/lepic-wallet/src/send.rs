@@ -33,6 +33,7 @@ use lepic_primitives::params::Network;
 use lepic_primitives::tx::TransactionBody;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+use lepic_slate::codec::marked_v2::MarkedV2JsonCodec;
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, ProofAddressError, SlateError};
 use lepic_slate::model::{
@@ -503,11 +504,27 @@ pub(crate) const fn block_header_version(network: Network, height: Height) -> u1
 
 /// The codecs of the legacy methods, in the detection order `receive` uses.
 fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
+    codecs_with(Box::new(V2JsonCodec::new(base_fee)), base_fee)
+}
+
+/// The codecs a new S1 goes out with over `transport`: over Epicbox the V2 shape carries the
+/// LEPIC marker, so a reply that keeps it proves the receiver runs LEPIC, and a stock receiver
+/// drops it.
+fn delivery_codecs(transport: TransportId, base_fee: Fee) -> CodecRegistry {
+    let v2 = V2JsonCodec::new(base_fee);
+    if transport == EPICBOX {
+        codecs_with(Box::new(MarkedV2JsonCodec::new(v2)), base_fee)
+    } else {
+        codecs_with(Box::new(v2), base_fee)
+    }
+}
+
+fn codecs_with(v2: Box<dyn Codec>, base_fee: Fee) -> CodecRegistry {
     let mut codecs = CodecRegistry::new();
     // Registration fails only for a duplicate id, and these ids differ; a missing codec would
     // surface as `CodecNotRegistered` anyway.
     let _ = codecs.register(Box::new(V3JsonCodec::new(base_fee)));
-    let _ = codecs.register(Box::new(V2JsonCodec::new(base_fee)));
+    let _ = codecs.register(v2);
     codecs
 }
 
@@ -539,7 +556,8 @@ fn encode_for_delivery(
     context: &EncodeContext,
 ) -> Result<WireSlate, SendError> {
     let policy = transport(transports, delivery)?.policy();
-    Ok(policy.encode_new_slate(&legacy_codecs(base_fee), slate, context)?)
+    let codecs = delivery_codecs(delivery.transport(), base_fee);
+    Ok(policy.encode_new_slate(&codecs, slate, context)?)
 }
 
 /// What the store transaction of a send produced, for the delivery that follows it.

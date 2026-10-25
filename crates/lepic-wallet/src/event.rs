@@ -85,6 +85,11 @@ pub enum Event {
     /// the host should say that another install took this payment and offer a rescan to see
     /// it. Should the kernel still appear, a later refresh confirms the payment.
     ReceiveSuperseded(SupersededReceive),
+    /// The sender of a payment this wallet received over Epicbox reports that it pushed the
+    /// transaction, with the kernel excess this wallet's own S2 implies. Raised once per
+    /// payment, while it waits for its sender. Advisory: nothing changed, and the payment
+    /// confirms only when a refresh finds the kernel, so the host should refresh now.
+    PaymentPosted(PostedPayment),
 }
 
 /// Whether the root key is in memory.
@@ -207,6 +212,14 @@ pub struct UnknownSlate {
 pub struct SupersededReceive {
     pub tx_id: TxId,
     pub slate_id: SlateId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PostedPayment {
+    /// The received payment.
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    pub excess: Commitment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

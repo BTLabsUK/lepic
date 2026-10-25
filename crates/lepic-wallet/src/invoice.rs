@@ -1004,7 +1004,8 @@ where
             }
             None => debug!("slate already finalized"),
         }
-        if stored.state != TxState::Posted {
+        let pushed = stored.state != TxState::Posted;
+        if pushed {
             self.push_invoice(stored.tx_id, &stored.finalized, propagation)
                 .await?;
         }
@@ -1012,6 +1013,7 @@ where
             tx_id: stored.tx_id,
             slate: stored.finalized.slate,
             transaction: stored.finalized.transaction,
+            pushed,
         })
     }
 

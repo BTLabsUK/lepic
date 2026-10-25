@@ -214,13 +214,14 @@ fn a_copy_of_an_answer_the_sending_install_settled_is_acknowledged_there_as_repe
                 .await
                 .unwrap();
             assert_eq!(first.finalized, 1, "{first:?}");
-            // The twin cannot tell, and requeues its delivery at the bound.
+            // The twin cannot tell, and requeues its delivery at the bound. Posts so far: the
+            // S1, the S2, the sending install's `posted` notice, then the requeued copy.
             twin.clock.advance(TWIN_HOLD);
             world
                 .within(
                     world
                         .relay
-                        .wait_until(|relay| relay.received("PostSlate") == 3),
+                        .wait_until(|relay| relay.received("PostSlate") == 4),
                 )
                 .await;
             world

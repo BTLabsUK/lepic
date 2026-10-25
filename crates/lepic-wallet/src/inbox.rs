@@ -1490,6 +1490,7 @@ where
     ) -> Result<Handled, Settlement> {
         self.make_room_for(msg_id, attempt, proposal, reply_to)
             .await?;
+        let marked = carries_lepic_marker(envelope.wire());
         match self
             .receive_from(
                 TRANSPORT_ID,
@@ -1500,6 +1501,9 @@ where
             .await
         {
             Ok(received) => {
+                if marked {
+                    self.record_sending_peer(reply_to).await;
+                }
                 match self.reply(reply_to, &received.reply).await {
                     Ok(()) => {}
                     Err(hold)
@@ -1558,6 +1562,7 @@ where
         reply: &Slate,
         reply_to: &Destination,
     ) -> Result<Handled, Settlement> {
+        let marked = carries_lepic_marker(envelope.wire());
         let session = self.session().map_err(Hold::from)?;
         let slate_id = Uuid::from_bytes(*reply.id().as_bytes());
         let finalized_before = self
@@ -1578,9 +1583,22 @@ where
             .finalize(TRANSPORT_ID, envelope.wire(), POST_PROPAGATION)
             .await
         {
-            Ok(_) => Ok(handled),
+            Ok(finalized) => {
+                if marked {
+                    self.record_receiving_peer(finalized.tx_id, reply_to).await;
+                }
+                // Only the call that pushed the transaction tells the receiver; an S2 that
+                // arrives again for a posted transaction pushes nothing.
+                if finalized.pushed {
+                    self.notify_pushed(finalized.tx_id, &finalized.slate).await;
+                }
+                Ok(handled)
+            }
             Err(FinalizeError::NotPosted { tx_id, source }) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
+                if marked {
+                    self.record_receiving_peer(tx_id, reply_to).await;
+                }
                 Ok(handled)
             }
             // Not reachable over Epicbox today: new Epicbox slates go out in the V2 shape,

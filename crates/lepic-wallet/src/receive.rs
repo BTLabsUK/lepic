@@ -6,6 +6,7 @@ use lepic_crypto::aggsig::{
     calculate_partial_sig, create_secnonce, sign_single, verify_completed_sig,
 };
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, SecretKey, Signature};
+use lepic_epicbox::TRANSPORT_ID as EPICBOX;
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{
     Identifier, Keychain, KeychainError, ProofBuilder, ProofError, SwitchCommitment,
@@ -22,6 +23,8 @@ use lepic_primitives::tx::TransactionBody;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+use lepic_slate::codec::marked_v2::MarkedV2JsonCodec;
+use lepic_slate::codec::marked_v3::{MarkedV3JsonCodec, carries_lepic_marker};
 use lepic_slate::codec::{Codec as _, EncodeContext};
 use lepic_slate::error::{DecodeError, RegistryError, SlateError};
 use lepic_slate::model::{
@@ -225,6 +228,7 @@ where
         check_ttl(&slate, tip)?;
         check_height(&slate, limit)?;
         let context = self.encode_context(&slate).await?;
+        let marked = transport == EPICBOX && carries_lepic_marker(wire);
         debug!(height = tip.value(), "slate checked");
 
         let answer = self
@@ -238,6 +242,7 @@ where
                         network,
                         context,
                         counterparty,
+                        marked,
                     },
                     &request,
                 ))
@@ -311,6 +316,8 @@ struct Proposal {
     network: Network,
     context: EncodeContext,
     counterparty: Option<Destination>,
+    /// The S1 came over Epicbox with the LEPIC marker, so its S2 carries the marker too.
+    marked: bool,
 }
 
 /// What storing a reply ended with: a new transaction and the account the funds go to, or the
@@ -338,7 +345,7 @@ fn store_reply<N, S: StoreOpener, V>(
         .get(transport)
         .ok_or(ReceiveError::UnknownTransport { transport })?
         .policy();
-    let codecs = legacy_codecs(proposal.network)?;
+    let codecs = reply_codecs(proposal.network, proposal.marked)?;
     let now = ports.clock.now();
     let mut rng = ports.rng.lock();
     session.store.write(|repos| {
@@ -402,6 +409,7 @@ pub(crate) fn receive_own<D>(
         network,
         context,
         counterparty: None,
+        marked: false,
     };
     let request = ReceiveRequest {
         account: Some(label),
@@ -431,6 +439,23 @@ pub(crate) fn legacy_codecs(network: Network) -> Result<CodecRegistry, ReceiveEr
         .map_err(ReceiveError::Codecs)?;
     codecs
         .register(Box::new(V2JsonCodec::new(base_fee)))
+        .map_err(ReceiveError::Codecs)?;
+    Ok(codecs)
+}
+
+/// The codecs an S2 is encoded with: the legacy ones, carrying the LEPIC marker when `marked`.
+/// Only a sender that marked its S1 gets a marked reply, so a stock sender never sees the key.
+fn reply_codecs(network: Network, marked: bool) -> Result<CodecRegistry, ReceiveError> {
+    if !marked {
+        return legacy_codecs(network);
+    }
+    let base_fee = network.params().default_base_fee();
+    let mut codecs = CodecRegistry::new();
+    codecs
+        .register(Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))))
+        .map_err(ReceiveError::Codecs)?;
+    codecs
+        .register(Box::new(MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee))))
         .map_err(ReceiveError::Codecs)?;
     Ok(codecs)
 }
