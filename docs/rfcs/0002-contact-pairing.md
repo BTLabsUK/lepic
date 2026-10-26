@@ -487,13 +487,25 @@ A makes an invite as in 7.1, with a 10-minute expiry, and 5 random bytes `words`
 - `s = HKDF-Expand(k, "mailbox", 16)`: the seed of a rendezvous mailbox with the keys of 8.1;
 - `key = HKDF-Expand(k, "invite", 32)`;
 - A posts `base64url(nonce || ChaCha20-Poly1305(key, nonce, aad = "epic-pair/1 words" || net,
-  invite))`, with `nonce` 12 random bytes, to the rendezvous mailbox on its home relay.
+  invite))`, with `nonce` 12 random bytes, to the rendezvous mailbox on each of the wallet's
+  built-in relays for the network, all of them, whatever the home relay is. One relay that takes
+  it is enough; when none does, the invite is withdrawn and the words are not shown.
 
-Words are offered only when the home relay is one of the wallet's built-in relays for the network.
+Posting to every built-in relay means a relay that is down, or that one side's network blocks,
+does not matter as long as both sides reach another one. The reply still goes to the home relay
+the invite names (7.2). Copies B does not open stay on their relays until the relays drop them;
+each opens only with the words of its window, and the invite inside expires and pairs once.
+
+The built-in relays are a meeting list for words only, in this fixed order on every wallet:
+mainnet `epicbox.epiccash.com`, `epicbox.stackwallet.com`, `flooepicbox.btlabs.uk` (BT Labs'
+relay, which serves mainnet too); floonet `flooepicbox.btlabs.uk`. A wallet's own relay may be any
+other. Words are not offered on a network with no built-in relay.
+
 B types them and derives `k` for the current window and the one before (an invite made near the
 end of a window is still found), and drains the two rendezvous mailboxes on each built-in relay in
-the list's order until one holds a message that opens. B decrypts the invite, acknowledges the
-message so nobody else finds it, and goes on as if it had opened the link (7.2). Words that open
+the list's order until one holds a message that opens; a second copy is never looked at. When
+not one relay could be drained, B says the relays were not reached rather than that nothing was
+found. B decrypts the invite, acknowledges the message so nobody else finds it, and goes on as if it had opened the link (7.2). Words that open
 nothing show "No invite found for these words. Check them, or ask for new ones."
 
 Security: the words find and open the invite, nothing more. Argon2id over a salt that changes

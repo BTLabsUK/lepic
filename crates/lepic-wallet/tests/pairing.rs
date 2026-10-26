@@ -1367,6 +1367,106 @@ fn pairing_words_are_found_in_the_next_window() {
     assert!(link.starts_with("epiccash://pair/1/"));
 }
 
+/// The built-in relays of [`words_relays`]: the first refuses posts, as a relay a network
+/// blocks does; the party's own relay is neither.
+fn words_relays(party: &Party) -> ContactRelays {
+    let relay =
+        |domain: &str| RelayEndpoint::new(Domain::parse(domain).unwrap(), Some(443), Security::Tls);
+    ContactRelays {
+        built_in: vec![relay("blocked.test"), relay("other.test")],
+        ..relays(party)
+    }
+}
+
+/// C-33 (report utc3fhjj): a wallet whose own relay is not built in still offers words. They go
+/// to every built-in relay, so one that refuses is skipped on both sides; the reply comes back
+/// on the inviter's own relay.
+#[test]
+fn pairing_words_work_on_any_relay_and_skip_a_refusing_one() {
+    let world = World::new();
+    world.relay.set_domain_refused("blocked.test");
+    let posts = world.relay.received("PostSlate");
+    let words: Vec<&str> = world
+        .block_on(world.issuer.wallet.pairing_invite(
+            &words_relays(&world.issuer),
+            InviteRequest {
+                offer_words: true,
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap()
+        .words
+        .unwrap()
+        .iter()
+        .map(|symbol| symbol.name)
+        .collect();
+    // Both built-in relays were asked, the refusing one too.
+    assert_eq!(world.relay.received("PostSlate") - posts, 2);
+    let link = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_find_words(&words_relays(&world.payer), &words),
+        )
+        .unwrap();
+    let answered = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    assert!(answered.posted);
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    for party in [&world.issuer, &world.payer] {
+        assert!(
+            world
+                .block_on(party.wallet.pairings_pending())
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+/// When no built-in relay takes the words the invite is withdrawn with the relay's error, and
+/// words looked for where no relay answers are a relay error, not "no invite found".
+#[test]
+fn pairing_words_with_no_relay_are_a_relay_error() {
+    let world = World::new();
+    world.relay.set_domain_refused("blocked.test");
+    world.relay.set_domain_refused("other.test");
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.pairing_invite(
+            &words_relays(&world.issuer),
+            InviteRequest {
+                offer_words: true,
+                ..invite_request("Anna")
+            },
+        )),
+        Err(ContactError::Relay(_))
+    ));
+    assert!(
+        world
+            .block_on(world.issuer.wallet.pairings_pending())
+            .unwrap()
+            .is_empty()
+    );
+    let words = invite_with_words(&world, &world.issuer);
+    world.relay.set_refusing(true);
+    assert!(matches!(
+        world.block_on(
+            world
+                .payer
+                .wallet
+                .pairing_find_words(&words_relays(&world.payer), &words)
+        ),
+        Err(ContactError::Relay(_))
+    ));
+}
+
 /// Pairings in progress are listed on both sides until they complete, and removing one cancels
 /// it.
 #[test]

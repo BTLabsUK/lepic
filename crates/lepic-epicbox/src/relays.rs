@@ -1,5 +1,6 @@
-//! The relays LEPIC ships with, per network. Pairing words (RFC 0002 7.7) are offered only on
-//! these and looked for on these, in this order.
+//! The relays LEPIC ships with, per network: where pairing words (RFC 0002 7.7) are posted, all
+//! of them, and looked for, in this order. They are a meeting list only; a wallet's own relay can
+//! be any other.
 
 use crate::address::{Domain, Network};
 use crate::session::{RelayEndpoint, Security};
@@ -7,8 +8,9 @@ use crate::session::{RelayEndpoint, Security};
 /// Each built-in relay's network, domain and TLS port, in the order they are tried.
 pub const BUILT_IN_RELAYS: &[(Network, &str, u16)] = &[
     (Network::Mainnet, "epicbox.epiccash.com", 443),
-    (Network::Mainnet, "epicbox.epicnet.us", 443),
     (Network::Mainnet, "epicbox.stackwallet.com", 443),
+    // BT Labs' relay serves mainnet too; "floo" is only its name.
+    (Network::Mainnet, "flooepicbox.btlabs.uk", 443),
     (Network::Floonet, "flooepicbox.btlabs.uk", 443),
 ];
 
@@ -46,7 +48,15 @@ mod tests {
         assert_eq!(mainnet[0].domain().as_str(), "epicbox.epiccash.com");
         assert_eq!(floonet[0].domain().as_str(), "flooepicbox.btlabs.uk");
         assert!(is_built_in_relay(Network::Floonet, &floonet[0]));
-        assert!(!is_built_in_relay(Network::Mainnet, &floonet[0]));
+        let names: Vec<&str> = mainnet.iter().map(|relay| relay.domain().as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "epicbox.epiccash.com",
+                "epicbox.stackwallet.com",
+                "flooepicbox.btlabs.uk"
+            ]
+        );
         let other_port = RelayEndpoint::new(
             Domain::parse("epicbox.epiccash.com").unwrap(),
             Some(3420),

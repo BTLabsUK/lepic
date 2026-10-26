@@ -361,11 +361,14 @@ async fn pairing_words_find_the_invite_once() {
     );
 }
 
+/// Words go to the built-in relays whatever relay the wallet uses (the owner's report utc3fhjj:
+/// a wallet on another relay was refused words, read as "can't reach the relay"); the reply
+/// still comes back on the inviter's own relay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn words_are_offered_only_on_a_built_in_relay() {
+async fn words_are_offered_whatever_relay_the_wallet_uses() {
     let mut world = World::new();
     let config = world.config("relay.example");
-    let wallet = EpicWallet::create(
+    let anna = EpicWallet::create(
         &world.runtime,
         config,
         &AppSecretStore::in_memory(),
@@ -374,7 +377,8 @@ async fn words_are_offered_only_on_a_built_in_relay() {
     )
     .await
     .unwrap();
-    let words = wallet
+    let ben = world.wallet().await;
+    let invite = anna
         .pairing_invite(
             "Anna".to_owned(),
             ContactKind::Person,
@@ -382,8 +386,22 @@ async fn words_are_offered_only_on_a_built_in_relay() {
             true,
             Online,
         )
-        .await;
-    assert_eq!(kind(words), WalletErrorKind::PairingWordsUnavailable);
+        .await
+        .unwrap();
+    let words: Vec<String> = invite.words.iter().map(|word| word.name.clone()).collect();
+    assert_eq!(words.len(), 5);
+    let found = ben.pairing_find_words(words, Online).await.unwrap();
+    assert_eq!(found.preview.home_relay, "relay.example:443");
+    ben.pairing_accept(found.link, "Ben".to_owned(), false, Online)
+        .await
+        .unwrap();
+    anna.contacts_collect(CollectTrigger::Push, Online)
+        .await
+        .unwrap();
+    assert_eq!(
+        anna.contact(invite.contact_id).await.unwrap().state,
+        PairingState::Paired
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

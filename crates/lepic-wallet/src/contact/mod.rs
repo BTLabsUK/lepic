@@ -81,18 +81,10 @@ pub struct ContactRelays {
 
 impl ContactRelays {
     /// The relays for `epicbox`, with the built-in relays of its network from
-    /// [`lepic_epicbox::built_in_relays`], where pairing words are offered and looked for: the
-    /// transport's own relay first when it is one of them, then the others in their order.
+    /// [`lepic_epicbox::built_in_relays`], where pairing words are posted and looked for, in
+    /// their fixed order on every wallet whatever its own relay.
     pub fn new(epicbox: EpicboxTransport, mode: RelayMode) -> Self {
-        let mut built_in = lepic_epicbox::built_in_relays(epicbox.network());
-        let own = &epicbox.settings().endpoint;
-        if let Some(at) = built_in
-            .iter()
-            .position(|relay| relay.domain() == own.domain() && relay.port() == own.port())
-        {
-            let first = built_in.remove(at);
-            built_in.insert(0, first);
-        }
+        let built_in = lepic_epicbox::built_in_relays(epicbox.network());
         Self {
             epicbox,
             built_in,
@@ -194,7 +186,7 @@ pub enum ContactError {
     /// The relay could not be reached or broke off. Nothing that was not stored is lost.
     #[error("relay failed")]
     Relay(#[source] MailboxError),
-    /// Pairing words are not offered yet.
+    /// The network has no built-in relay to offer pairing words on.
     #[error("pairing words are not available")]
     WordsUnavailable,
     /// Sealing is off for the contact, or its card says it cannot open sealed files.

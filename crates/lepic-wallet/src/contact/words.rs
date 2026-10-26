@@ -3,9 +3,11 @@
 
 use std::time::Duration;
 
+use futures_util::StreamExt as _;
+use futures_util::stream::FuturesUnordered;
 use lepic_contact::{Invite, PairingWords, SasSymbol, WORD_COUNT, WordsKey, WordsWindow};
 use lepic_epicbox::{
-    Handled, Identity, MailboxContent, MailboxHandler, MailboxMessage, RelayEndpoint,
+    DrainLimits, Handled, Identity, MailboxContent, MailboxHandler, MailboxMessage,
 };
 use lepic_node::NodeApi;
 use lepic_transport::transport::BoxFuture;
@@ -20,16 +22,16 @@ use crate::wallet::Wallet;
 /// An invite offered as words lasts this long (RFC 0002 7.1).
 pub const WORDS_INVITE_EXPIRY: Duration = Duration::from_secs(10 * 60);
 
+/// Once one relay took the words, how long the other posts may still take: a relay that hangs
+/// does not hold the words back.
+const WORDS_POST_GRACE: Duration = Duration::from_secs(5);
+
+/// How long one relay may take to show its two rendezvous mailboxes when looking for words; a
+/// healthy relay answers in about a second, and the next relay waits.
+const WORDS_DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
+
 fn unix_seconds(time: jiff::Timestamp) -> u64 {
     u64::try_from(time.as_second()).unwrap_or(0)
-}
-
-/// Whether `relay` is one of the wallet's built-in relays, the only ones words are offered on.
-pub(crate) fn built_in(relays: &ContactRelays, relay: &RelayEndpoint) -> bool {
-    relays
-        .built_in
-        .iter()
-        .any(|known| known.domain() == relay.domain() && known.port() == relay.port())
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -39,12 +41,15 @@ where
     V: SecretVault + 'static,
 {
     /// Draws five words for `invite`, stretches them for the current window, and posts the sealed
-    /// invite to the rendezvous mailbox on `home`. Returns the words as the user sees them.
+    /// invite to the rendezvous mailbox on every built-in relay, all at once: the other side
+    /// looks on each of them, so the words work whatever relay this wallet uses and whichever
+    /// built-in relay either network blocks. Returns the words as the user sees them once one
+    /// relay took the invite and the others had [`WORDS_POST_GRACE`] more; when none did, the
+    /// last relay's error.
     pub(crate) async fn post_invite_words(
         &self,
         relays: &ContactRelays,
         invite: &Invite,
-        home: &RelayEndpoint,
     ) -> Result<[SasSymbol; WORD_COUNT], ContactError> {
         check_online(relays)?;
         let network = self.config().network;
@@ -71,13 +76,53 @@ where
         let posted = key
             .seal_invite(invite, &mut LockedRng(&mut **self.ports().rng.lock()))
             .map_err(ContactError::Words)?;
-        let (rendezvous, from) = pairing_mailbox(*key.mailbox_seed(), network, home)?;
-        mailbox_client(relays, home.clone(), None)
-            .post(&from, rendezvous.address(), &posted)
-            .await
-            .map_err(ContactError::Relay)?;
-        info!("pairing words offered");
-        Ok(symbols)
+        let mut posts = Vec::with_capacity(relays.built_in.len());
+        for relay in &relays.built_in {
+            let (rendezvous, from) = pairing_mailbox(*key.mailbox_seed(), network, relay)?;
+            let posted = &posted;
+            posts.push(async move {
+                let result = mailbox_client(relays, relay.clone(), None)
+                    .post(&from, rendezvous.address(), posted)
+                    .await;
+                if let Err(error) = &result {
+                    debug!(relay = %relay.domain(), error = %crate::inbox::ErrorChain(error), "pairing words not posted");
+                }
+                result
+            });
+        }
+        let mut pending: FuturesUnordered<_> = posts.into_iter().collect();
+        let mut last = None;
+        let mut offered = 0usize;
+        let mut grace = None;
+        loop {
+            let next = match grace {
+                None => pending.next().await,
+                Some(deadline) => match tokio::time::timeout_at(deadline, pending.next()).await {
+                    Ok(next) => next,
+                    // The posts still going are dropped; their relays simply hold no copy.
+                    Err(_) => break,
+                },
+            };
+            match next {
+                None => break,
+                Some(Ok(())) => {
+                    offered = offered.saturating_add(1);
+                    grace.get_or_insert_with(|| {
+                        let now = tokio::time::Instant::now();
+                        now.checked_add(WORDS_POST_GRACE).unwrap_or(now)
+                    });
+                }
+                Some(Err(error)) => last = Some(error),
+            }
+        }
+        match last {
+            Some(error) if offered == 0 => Err(ContactError::Relay(error)),
+            None if offered == 0 => Err(ContactError::WordsUnavailable),
+            _ => {
+                info!(relays = offered, "pairing words offered");
+                Ok(symbols)
+            }
+        }
     }
 
     /// Finds the invite that pairing words name (RFC 0002 7.7): the words, typed as names or
@@ -88,7 +133,8 @@ where
     /// [`Wallet::pairing_accept`].
     ///
     /// Fails with [`ContactError::Words`] for words not in the table,
-    /// [`ContactError::WordsNotFound`] when no built-in relay holds the invite, and
+    /// [`ContactError::WordsNotFound`] when no built-in relay holds the invite,
+    /// [`ContactError::Relay`] when not one built-in relay could be drained, and
     /// [`ContactError::Offline`] or [`ContactError::EpicboxOff`] before connecting.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn pairing_find_words<T: AsRef<str>>(
@@ -112,6 +158,10 @@ where
                     .collect::<Result<Vec<WordsKey>, ContactError>>()
             })
             .await?;
+        // Words that no relay could be asked about are not "not found": the relays were not
+        // reached, which the caller words differently.
+        let mut reached = false;
+        let mut failed = None;
         for relay in &relays.built_in {
             let identities: Vec<Identity> = keys
                 .iter()
@@ -123,12 +173,17 @@ where
                 found: None,
             };
             match mailbox_client(relays, relay.clone(), None)
+                .with_limits(DrainLimits {
+                    timeout: WORDS_DRAIN_TIMEOUT,
+                    ..DrainLimits::default()
+                })
                 .drain_once(&identities, &mut finder)
                 .await
             {
-                Ok(_) => {}
+                Ok(_) => reached = true,
                 Err(error) => {
-                    debug!(error = %crate::inbox::ErrorChain(&error), "rendezvous drain failed");
+                    debug!(relay = %relay.domain(), error = %crate::inbox::ErrorChain(&error), "rendezvous drain failed");
+                    failed = Some(error);
                 }
             }
             if let Some(invite) = finder.found {
@@ -136,7 +191,10 @@ where
                 return Ok(invite.to_link());
             }
         }
-        Err(ContactError::WordsNotFound)
+        match failed {
+            Some(error) if !reached => Err(ContactError::Relay(error)),
+            _ => Err(ContactError::WordsNotFound),
+        }
     }
 }
 

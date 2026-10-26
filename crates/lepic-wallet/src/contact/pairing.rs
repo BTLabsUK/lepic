@@ -271,9 +271,10 @@ where
     /// sent.
     ///
     /// With `offer_words` the invite lasts 10 minutes and is also posted, sealed with five
-    /// pairing words, to a rendezvous mailbox (RFC 0002 7.7). Words are offered only when the
-    /// relay is a built-in one, else this fails with [`ContactError::WordsUnavailable`]; Offline
-    /// or Epicbox off fail before anything is stored, and a post that fails is
+    /// pairing words, to a rendezvous mailbox on each built-in relay (RFC 0002 7.7), whatever
+    /// the home relay is; the reply still goes to the home relay. With no built-in relay for the
+    /// network this fails with [`ContactError::WordsUnavailable`]; Offline or Epicbox off fail
+    /// before anything is stored, and when no built-in relay takes the post this is
     /// [`ContactError::Relay`], with the invite withdrawn.
     ///
     /// Fails with [`ContactError::Name`] for a name the card cannot carry, with
@@ -292,7 +293,7 @@ where
         if offer_words {
             // Words are posted, so a relay must be reachable before anything is stored.
             super::relay::check_online(relays)?;
-            if !super::words::built_in(relays, &home) {
+            if relays.built_in.is_empty() {
                 return Err(ContactError::WordsUnavailable);
             }
         }
@@ -302,7 +303,6 @@ where
             request.expiry.duration()
         };
         let session = self.session()?;
-        let words_home = home.clone();
         let mut offer = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -398,7 +398,7 @@ where
         if offer_words {
             let invite = Invite::from_link(&offer.link, contact_network(network))
                 .map_err(ContactError::StoredData)?;
-            match self.post_invite_words(relays, &invite, &words_home).await {
+            match self.post_invite_words(relays, &invite).await {
                 Ok(words) => offer.words = Some(words),
                 Err(error) => {
                     // An invite nobody can find by its words is withdrawn at once, so it does
