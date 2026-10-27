@@ -227,8 +227,10 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 ### C-14 The invite expired
 
 - **What happens.** B's app refuses an invite past its expiry plus 10 minutes of skew (C-26) with
-  no network call. A drains the reply mailbox until expiry plus 10 minutes, then deletes the
-  pending pairing; a later reply is never read.
+  no network call. A drains the reply mailbox until expiry plus 10 minutes, and once more after
+  that, at its first drain of the relay or at most an hour later (8.2), then deletes the pending
+  pairing; a reply posted after that drain is never read. A reply waiting on a relay that was
+  down at the deadline still pairs.
 - **User sees.** B: "This invite has expired. Ask Anna for a new one." A: the invite shows
   "Expired" with "Invite again".
 - **Test.** unit: expiry checks with skew. engine: a reply posted after A's deadline is never
@@ -250,8 +252,9 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 ### C-16 B pairs but A has deleted the invite
 
 - **What happens.** A cancelled or deleted the invite, so it no longer drains the mailbox, or
-  drains it once more and answers status 04. B waits 1 hour for a confirm, then deletes its
-  pending pairing. The reply expires on the relay after 7 days.
+  drains it once more and answers status 04. B waits for a confirm 1 hour, and at least until A
+  could no longer take the reply (8.2), then deletes its pending pairing ("Not completed"). The
+  reply expires on the relay after 7 days.
 - **User sees.** B: "No answer from Anna. The invite may have been cancelled."; with status 04:
   "Anna cancelled this invite."
 - **Test.** engine: cancel on A; B's pending pairing ends after its timeout, or at once with 04.

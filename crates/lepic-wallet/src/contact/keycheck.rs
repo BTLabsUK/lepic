@@ -43,6 +43,17 @@ const FOUND_PREFIX: &str = "contact.kc.found.";
 const FOLD_PREFIX: &str = "contact.fold.";
 const CHANGED_PREFIX: &str = "contact.kc.changed.";
 
+/// How a key check started by [`Wallet::contact_key_check`] stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCheckStart {
+    /// The check is on its way, or was already; its answer comes with a collect.
+    Sent,
+    /// No check may run for these pairings now: the new pairing is past its day, or the old
+    /// slot was checked in the last day. The new pairing shows keys-changed at once
+    /// ([`Event::ContactKeysChanged`]) and the user decides as for an unanswered check.
+    KeysChanged,
+}
+
 /// What the user chooses for a new pairing whose key check failed (RFC 0002 7.8, step 7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeysDecision {
@@ -150,18 +161,21 @@ where
     /// pairing; [`Wallet::contacts_collect`] takes the answer. Found, the old record keeps its
     /// keys and trust and the new pairing goes ([`Event::ContactKeysRestored`]); not found or
     /// unanswered within a day, the old record stays and the new pairing shows keys-changed
-    /// ([`Event::ContactKeysChanged`]).
+    /// ([`Event::ContactKeysChanged`]). When no check may run (one a day per slot, within a
+    /// day of the new pairing), the new pairing shows keys-changed at once and this returns
+    /// [`KeyCheckStart::KeysChanged`]: a contact that restored its wallet must not stay on the
+    /// old pairing, which nobody reads any more. Asked again for a check on its way, this
+    /// returns [`KeyCheckStart::Sent`] and sends nothing.
     ///
-    /// Fails with [`ContactError::UnknownContact`] unless both are paired, and with
-    /// [`ContactError::KeyCheckRefused`] when the new pairing is older than a day, or the new
-    /// pairing or the old slot had a check within the last day.
+    /// Fails with [`ContactError::UnknownContact`] unless both are paired and differ, and with
+    /// [`ContactError::KeyCheckRefused`] when the new pairing's check already ended.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn contact_key_check(
         &self,
         relays: &ContactRelays,
         new: ContactId,
         old: ContactId,
-    ) -> Result<(), ContactError> {
+    ) -> Result<KeyCheckStart, ContactError> {
         let network = self.config().network;
         let net = contact_network(network);
         let session = self.session()?;
@@ -177,12 +191,29 @@ where
                         .contact(old)?
                         .filter(paired)
                         .ok_or(ContactError::UnknownContact)?;
-                    if new == old
-                        || !within_window(fresh.created_at, now)
-                        || repos.setting(&key(DONE_PREFIX, new))?.is_some()
+                    if new == old {
+                        return Err(ContactError::UnknownContact);
+                    }
+                    if repos.setting(&key(DONE_PREFIX, new))?.is_some() {
+                        if repos.setting(&key(SENT_PREFIX, new))?.is_some() {
+                            return Ok(None);
+                        }
+                        return Err(ContactError::KeyCheckRefused);
+                    }
+                    if !within_window(fresh.created_at, now)
                         || slot_used(repos, &stale, stale.slot, now)?
                     {
-                        return Err(ContactError::KeyCheckRefused);
+                        repos.put_setting(&key(DONE_PREFIX, new), "x")?;
+                        end_check(
+                            repos,
+                            fresh,
+                            &SentCheck {
+                                old: hex(&old.0),
+                                envelope: String::new(),
+                                at: now.as_second(),
+                            },
+                        )?;
+                        return Ok(Some(None));
                     }
                     let new_peer = card_of(&fresh, net)?;
                     let old_peer = card_of(&stale, net)?;
@@ -211,10 +242,19 @@ where
                             at: now.as_second(),
                         })?,
                     )?;
-                    Ok(envelope)
+                    Ok(Some(Some(envelope)))
                 })
             })
             .await?;
+        let envelope = match envelope {
+            None => return Ok(KeyCheckStart::Sent),
+            Some(None) => {
+                info!("key check not allowed now; keys changed");
+                self.emit(Event::ContactKeysChanged(ContactEvent { contact_id: new }));
+                return Ok(KeyCheckStart::KeysChanged);
+            }
+            Some(Some(envelope)) => envelope,
+        };
         self.enqueue_for_contact(
             new,
             Uuid::from_bytes(new.0),
@@ -224,7 +264,7 @@ where
         .await?;
         self.deliver_soon(relays).await;
         info!("key check sent");
-        Ok(())
+        Ok(KeyCheckStart::Sent)
     }
 
     /// Resolves a new pairing in keys-changed (RFC 0002 7.8, step 7). Fails with

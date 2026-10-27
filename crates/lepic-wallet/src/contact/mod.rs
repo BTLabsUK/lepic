@@ -31,7 +31,7 @@ use crate::error::WalletError;
 pub use collect::{CollectReport, CollectTrigger};
 pub(crate) use invoices::slate_contact;
 pub use invoices::{ContactInvoice, InvoiceDetails, SAME_AMOUNT_WINDOW};
-pub use keycheck::{KEY_CHECK_WINDOW, KeysDecision};
+pub use keycheck::{KEY_CHECK_WINDOW, KeyCheckStart, KeysDecision};
 pub(crate) use keys::reply_public_key;
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{ContactKind, Purpose, Refusal, SasSymbol};
@@ -50,8 +50,15 @@ pub use words::WORDS_INVITE_EXPIRY;
 /// skew of RFC 0002 C-26. Also the skew an invitee allows an invite's expiry.
 pub const CLOCK_SKEW: Duration = Duration::from_secs(10 * 60);
 
-/// How long an invitee waits for the confirm after replying (RFC 0002 8.2).
+/// How long an invitee waits for the confirm after replying (RFC 0002 8.2), at the least: it
+/// also waits as long as the inviter may still take the reply, see [`LATE_DRAIN_WAIT`].
 pub const CONFIRM_WAIT: Duration = Duration::from_secs(60 * 60);
+
+/// How long past its deadline a pairing in progress waits for one drain of its home relay. A
+/// reply or confirm that reached the relay in time is still taken when the relay did not answer
+/// or the app was closed at the deadline; the pairing ends at the first drain that starts after
+/// the deadline, or after this wait without one.
+pub const LATE_DRAIN_WAIT: Duration = Duration::from_secs(60 * 60);
 
 /// Contact updates (type 05) accepted from one contact in a day (RFC 0002 8.5).
 pub const UPDATES_PER_CONTACT_PER_DAY: usize = 3;
@@ -131,6 +138,9 @@ pub struct ContactView {
     /// When an envelope from the contact was last opened, if ever: of a contact's several
     /// pairings, the one it uses is the one heard from last.
     pub last_sealed_in: Option<Timestamp>,
+    /// The contact removed this pairing on its side and said so: nothing sent through it
+    /// arrives any more.
+    pub removed_by_peer: bool,
     pub created_at: Timestamp,
 }
 
@@ -140,8 +150,12 @@ pub enum PairingFailure {
     /// The confirm does not match the invite's commitment or enc key: something changed the
     /// invite on the way. Nothing was stored.
     ChangedOnTheWay,
-    /// The invite expired before a reply arrived, or no confirm came in time.
+    /// The invite expired before a reply arrived.
     Expired,
+    /// This wallet answered an invite and no confirm came in time, or, as the inviter, could
+    /// not deliver its confirm in time: the other side cannot have finished, so nothing of the
+    /// pairing is kept.
+    NotConfirmed,
     /// The inviter refused the reply: the invite was used, expired or cancelled. Advisory.
     Refused(lepic_contact::Refusal),
 }

@@ -1786,6 +1786,9 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
         Event::ContactKeysChanged(news) => {
             contact::contact_event(WalletEventKind::ContactKeysChanged, news)
         }
+        Event::ContactUnpaired(news) => {
+            contact::contact_event(WalletEventKind::ContactUnpaired, news)
+        }
         Event::InvoiceFromContact(invoice) => WalletEvent {
             contact_id: Some(invoice.contact_id.to_string()),
             slate_id: Some(invoice.slate_id.to_string()),

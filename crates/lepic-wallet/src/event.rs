@@ -107,6 +107,11 @@ pub enum Event {
     /// A key check found no old keys, or went unanswered for a day: the new pairing shows
     /// keys-changed and the old one is untouched, until the user decides.
     ContactKeysChanged(ContactEvent),
+    /// The contact removed its pairing with this wallet and said so in a signed notice: its
+    /// mailbox is no longer read, so nothing sent through the pairing arrives. The record stays,
+    /// marked [`crate::contact::ContactView::removed_by_peer`], until the user removes it too.
+    /// Raised once per pairing.
+    ContactUnpaired(ContactEvent),
     /// A verified contact that may send invoices sent one; it is parked for the user to pay or
     /// decline. Nothing was paid.
     InvoiceFromContact(ContactInvoiceEvent),

@@ -212,6 +212,13 @@ impl MockRelay {
         });
     }
 
+    /// Answers posts to `address` again, after [`Self::set_post_refused`].
+    pub fn set_post_accepted(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.post_refused.remove(&address.key_text());
+        });
+    }
+
     /// Accepts new connections but never answers on them, as a relay stuck mid-handshake does.
     pub fn set_stalling(&self, stalling: bool) {
         self.update(|state| state.stalling = stalling);

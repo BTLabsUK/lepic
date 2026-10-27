@@ -396,7 +396,10 @@ and whose card verifies:
    `epiccash://pair-confirm/1/<base64url>` instead. `cardA` is the exact card bytes A committed
    to in the invite, kept with the pending pairing for that purpose.
 3. A deletes `nA` from the pending pairing, so no second reply can pair, and keeps `code` (for the
-   reply mailbox), `invite_id` and the invite's slot until the invite would have expired. A later
+   reply mailbox), `invite_id` and the invite's slot until the invite would have expired. A is
+   paired from step 1, whether or not the confirm left: a confirm whose post failed goes out
+   when the kept reply is drained again. A confirm that has not reached the relay one hour after
+   the invite's drain window removes A's record too, since B cannot have finished. A later
    reply (hint `invite_id`) is opened only far enough to read its card and answered with status
    02; an invite answers at most 3 refusals. All checks on a reply (code, expiry, used, a card A
    already holds or its own) and storing the record happen in one store transaction before any
@@ -470,7 +473,15 @@ the way; "Skip" → `paired` (shown as "Paired, not verified", trust on first us
 | label | The user's own name for the contact, empty until the user sets one; the app shows the claimed name as "calls itself" meanwhile |
 
 Removing a contact deletes its record and any pending pairing for it. The record's slot stays
-used (2.2).
+used (2.2). Before the record goes, the wallet tells the contact, best effort and once: a notice
+`{"lepic":1,"type":"unpaired"}` (ADR 0016 shape, padded like every notice, no slate id), type
+`02`, sealed and signed to the contact's mailbox, waiting a few seconds at most for the relay.
+Nothing is sent Offline, with Epicbox off, or to a contact that removed the pairing first. The
+contact accepts it only signed by the pairing's recorded sig key in that pairing's mailbox; it
+marks the record "removed by the contact" (nothing sent through it arrives any more) and keeps
+it, with its history, until its own user removes it. It never touches funds or slates; a repeat
+changes nothing. A wallet that does not know the kind reads it as an unknown notice and ignores
+it (ADR 0016).
 
 #### 7.7 Pairing words
 
@@ -555,7 +566,10 @@ X's old record, `cardY_old` the card Y gave X then.
    (the old record is deleted).
 
 A wallet starts and answers at most one key check per pairing and per slot, and only within 24
-hours of the new pairing. Each proof is made by a key the other side already held, over the
+hours of the new pairing. When X may not start one (the old slot was checked in the last 24 hours,
+or the new pairing is older), the new pairing goes to `keys-changed` at once, as in step 7: a
+contact that restored its wallet must not stay on the old record, whose mailbox it no longer
+reads. Each proof is made by a key the other side already held, over the
 envelope it answers and both new keys, so neither side adopts a card or a trust level from a
 party that has not shown it holds the old key.
 
@@ -597,7 +611,15 @@ Pairing mailboxes are drained:
 - by A while the invite is pending: every 10 s while the invite screen is open, then on every app
   open and resume, until the invite expires plus 10 minutes;
 - by B after replying: every 5 s while the waiting screen is open, then on open and resume, for
-  1 hour.
+  1 hour, and never less than until the invite expires plus 1 hour and 20 minutes (A's longest
+  wait below, with the skew).
+
+A pairing mailbox past its deadline is drained once more: the pending pairing ends at the first
+drain of its relay that starts after the deadline, or one hour after it with none (the relay did
+not answer, the app was closed). So a reply or confirm that reached the relay in time is taken
+however late it is collected; A accepts a reply only while its pending pairing exists. Relays
+holding pairing mailboxes are retried after the first backoff step (30 s), whatever their
+backoff.
 
 #### 8.3 Contact mailboxes
 
@@ -850,7 +872,9 @@ counted per contact; over the cap its invoices are acknowledged and dropped and 
 #### 11.4 Notices
 
 `declined`, `withdrawn` and `posted` (ADR 0016) travel sealed and signed in the contact
-mailboxes, type `02`. Accepting them follows ADR 0016, with "the recorded counterparty" meaning
+mailboxes, type `02`. `posted` also goes from the sender of a payment sent through the mailbox
+(9.1) to its receiver once the sender pushed it, as over Epicbox. `unpaired` (7.6) is the one
+notice about the pairing rather than a slate. Accepting them follows ADR 0016, with "the recorded counterparty" meaning
 the contact. A signed `withdrawn` for a paid invoice cancels the payment automatically and
 releases its inputs (12.6); for an unpaid one it deletes it as today.
 

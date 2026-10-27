@@ -794,6 +794,9 @@ pub struct ContactView {
     /// pairings attached to one address-book contact, the one heard from last is the one the
     /// contact still uses.
     pub last_sealed_in_ms: Option<i64>,
+    /// The contact removed this pairing on its side and said so: nothing sent through it
+    /// arrives any more. Offer to remove it here too.
+    pub removed_by_peer: bool,
     pub created_at_ms: i64,
 }
 
@@ -912,8 +915,13 @@ pub struct PendingPairingView {
     /// The name in the invite: ours as inviter, the inviter's own, unverified, as invitee.
     pub invite_name: String,
     pub label: String,
+    /// When it stops waiting; it may still take a late reply or confirm at the first drain of
+    /// its relay after that, for up to an hour.
     pub expires_at_ms: i64,
     pub created_at_ms: i64,
+    /// The relay where the pairing's mailboxes live, `domain:port`, as `HomeRelayUnreachable`
+    /// names it.
+    pub home_relay: String,
 }
 
 /// What started a collecting cycle.
@@ -1078,8 +1086,12 @@ pub struct ContactImportSummary {
 pub enum PairingFailureReason {
     /// Something changed the invite on the way. Nothing was stored; pair again.
     ChangedOnTheWay,
-    /// The invite expired before a reply came, or no confirmation came in time.
+    /// The invite expired before a reply came.
     Expired,
+    /// This wallet answered and no confirmation came in time, or, as the inviter, its
+    /// confirmation never reached the relay in time: the other side cannot have finished, so
+    /// nothing of the pairing is kept. Pair again.
+    NotConfirmed,
     /// The inviter refused the reply: the invite was used, expired or cancelled.
     Refused,
 }
@@ -1268,6 +1280,20 @@ pub enum WalletEventKind {
     /// follows as `Transaction`. An answer the contact sent again raises it again for the same
     /// `tx_id`; treat a repeat as the same payment.
     ContactPaymentFinalized,
+    /// The contact `contact_id` removed this pairing on its side and said so in a signed
+    /// notice: nothing sent through it arrives any more. The pairing stays, with
+    /// `ContactView::removed_by_peer` set, until the user removes it too. Raised once.
+    ContactUnpaired,
+}
+
+/// How a key check from `EpicWallet::contact_key_check` stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCheckStart {
+    /// On its way, or already; the answer comes with a collect.
+    Sent,
+    /// No check may run now (one a day per slot, within a day of the new pairing): the new
+    /// pairing is in `KeysChanged` already and `ContactKeysChanged` was raised.
+    KeysChanged,
 }
 
 /// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its

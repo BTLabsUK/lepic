@@ -25,7 +25,7 @@ use super::keys::{box_identity, contact_keys, contact_network, enc_secret, pairi
 use super::pairing::{Taken, peer_card};
 use super::relay::{check_online, endpoint_for, host_text, mailbox_client};
 use super::{
-    CLOCK_SKEW, ContactError, ContactRelays, PairingFailure, UPDATES_PER_CONTACT_PER_DAY,
+    ContactError, ContactRelays, LATE_DRAIN_WAIT, PairingFailure, UPDATES_PER_CONTACT_PER_DAY,
     UPDATES_PER_HOUR,
 };
 use crate::event::{ContactEvent, Event, FailedPairing, UnreachableRelay};
@@ -199,6 +199,44 @@ fn acceptable_home(
     built_in || (!ip_literal && port == lepic_epicbox::DEFAULT_PORT)
 }
 
+/// Ends the pairing in progress `pending`, past its deadline, and says what ended: `None` when
+/// it is kept, else the failure to report, if any. A pairing the inviter holds already ends
+/// quietly once its confirm left; one whose confirm never left is kept for another try unless
+/// `last`, and then removed, since the invitee cannot have finished it. Any other ends with
+/// its record.
+fn end_late_pairing(
+    repos: &mut dyn Repositories,
+    pending: &lepic_store::PendingPairing,
+    last: bool,
+) -> Result<Option<Option<FailedPairing>>, StoreError> {
+    let contact_id = pending.contact_id;
+    let paired = repos
+        .contact(contact_id)?
+        .is_some_and(|record| record.peer.is_some());
+    let reason = if paired {
+        let out = repos
+            .setting(&super::pairing::confirm_out_key(pending.pairing_id))?
+            .is_some();
+        if out {
+            super::pairing::end_pending(repos, pending.pairing_id)?;
+            return Ok(Some(None));
+        }
+        if !last {
+            return Ok(None);
+        }
+        PairingFailure::NotConfirmed
+    } else {
+        match pending.role {
+            PairingRole::Inviter => PairingFailure::Expired,
+            PairingRole::Invitee => PairingFailure::NotConfirmed,
+        }
+    };
+    super::pairing::end_pending(repos, pending.pairing_id)?;
+    super::invoices::drop_contact_invoices(repos, contact_id)?;
+    repos.delete_contact(contact_id)?;
+    Ok(Some(Some(FailedPairing { contact_id, reason })))
+}
+
 fn unhex16(text: &str) -> Option<[u8; 16]> {
     if text.len() != 32 {
         return None;
@@ -245,12 +283,7 @@ where
         if explicit {
             self.reset_backoff().await?;
         }
-        let expired = self.end_expired_pairings().await?;
-        for contact_id in expired {
-            let failed = FailedPairing {
-                contact_id,
-                reason: PairingFailure::Expired,
-            };
+        for failed in self.end_expired_pairings().await? {
             self.emit(Event::PairingFailed(failed));
             report.failed.push(failed);
         }
@@ -277,6 +310,14 @@ where
                 .map(|mailbox| mailbox.identity.clone())
                 .collect();
             let jobs: Vec<Job> = mailboxes.iter().map(|mailbox| mailbox.job).collect();
+            let pairings: Vec<PairingId> = jobs
+                .iter()
+                .filter_map(|job| match job {
+                    Job::Reply(pairing_id) | Job::Confirm(pairing_id) => Some(*pairing_id),
+                    Job::Contact(..) => None,
+                })
+                .collect();
+            let started = self.ports().clock.now();
             let mut handler = Collector {
                 wallet: self,
                 relays,
@@ -287,8 +328,20 @@ where
                 told: &mut told,
             };
             report.mailboxes = report.mailboxes.saturating_add(identities.len());
-            match client.drain_once(&identities, &mut handler).await {
-                Ok(_) => self.relay_answered(&host).await?,
+            let drained = client.drain_once(&identities, &mut handler).await;
+            report.messages = report.messages.saturating_add(handler.messages);
+            report.paired = report.paired.saturating_add(handler.paired);
+            report.failed.append(&mut handler.failed);
+            match drained {
+                Ok(_) => {
+                    self.relay_answered(&host).await?;
+                    // The relay held everything that reached it by `started`: what is past
+                    // its deadline then has had its last chance.
+                    for failed in self.end_drained_pairings(pairings, started).await? {
+                        self.emit(Event::PairingFailed(failed));
+                        report.failed.push(failed);
+                    }
+                }
                 Err(error @ (MailboxError::Unreachable(_) | MailboxError::Lost(_))) => {
                     warn!(relay = %host, error = %ErrorChain(&error), "home relay not answering");
                     self.relay_failed(&host).await?;
@@ -301,9 +354,6 @@ where
                     warn!(relay = %host, error = %ErrorChain(&error), "mailbox drain failed");
                 }
             }
-            report.messages = report.messages.saturating_add(handler.messages);
-            report.paired = report.paired.saturating_add(handler.paired);
-            report.failed.append(&mut handler.failed);
         }
         debug!(count = report.mailboxes, "contact mailboxes collected");
         // Already this run's turn: the outbox runs without taking it again.
@@ -314,29 +364,23 @@ where
         Ok(report)
     }
 
-    /// Ends pairings past their time: an invite after its expiry and the clock skew, an answer
-    /// whose confirm did not come within the wait, and a card shown in person but never paired.
-    async fn end_expired_pairings(&self) -> Result<Vec<ContactId>, ContactError> {
+    /// Ends pairings in progress that waited [`LATE_DRAIN_WAIT`] past their deadline (an
+    /// invite's expiry and the clock skew, an answer's wait for its confirm) with no drain of
+    /// their home relay, and cards shown in person but never paired.
+    async fn end_expired_pairings(&self) -> Result<Vec<FailedPairing>, ContactError> {
         let session = self.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.write(|repos| {
                 let mut ended = Vec::new();
                 for pending in repos.pending_pairings()? {
-                    let deadline = match pending.role {
-                        PairingRole::Inviter => pending.expires_at.checked_add(CLOCK_SKEW).ok(),
-                        PairingRole::Invitee => Some(pending.expires_at),
-                    };
-                    if deadline.is_some_and(|deadline| deadline > now) {
+                    let end = super::pairing::pending_deadline(&pending)
+                        .and_then(|deadline| deadline.checked_add(LATE_DRAIN_WAIT).ok());
+                    if end.is_some_and(|end| end > now) {
                         continue;
                     }
-                    super::pairing::end_pending(repos, pending.pairing_id)?;
-                    let paired = repos
-                        .contact(pending.contact_id)?
-                        .is_some_and(|record| record.peer.is_some());
-                    if !paired {
-                        repos.delete_contact(pending.contact_id)?;
-                        ended.push(pending.contact_id);
+                    if let Some(Some(failed)) = end_late_pairing(repos, &pending, true)? {
+                        ended.push(failed);
                     }
                 }
                 let pending_ids: Vec<ContactId> = repos
@@ -354,6 +398,40 @@ where
                         .is_ok_and(|end| end <= now);
                     if shown_card && old {
                         repos.delete_contact(record.contact_id)?;
+                    }
+                }
+                Ok::<_, StoreError>(ended)
+            })?)
+        })
+        .await
+    }
+
+    /// Ends the pairings in progress among `pairings` whose deadline had passed when a drain of
+    /// their home relay started at `started`: that drain was their last chance. An inviter
+    /// whose confirm has not left yet keeps its pairing until [`LATE_DRAIN_WAIT`] runs out.
+    async fn end_drained_pairings(
+        &self,
+        pairings: Vec<PairingId>,
+        started: Timestamp,
+    ) -> Result<Vec<FailedPairing>, ContactError> {
+        if pairings.is_empty() {
+            return Ok(Vec::new());
+        }
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session.store.write(|repos| {
+                let mut ended = Vec::new();
+                for pairing_id in pairings {
+                    let Some(pending) = repos.pending_pairing(pairing_id)? else {
+                        continue;
+                    };
+                    let past = super::pairing::pending_deadline(&pending)
+                        .is_some_and(|deadline| deadline <= started);
+                    if !past {
+                        continue;
+                    }
+                    if let Some(Some(failed)) = end_late_pairing(repos, &pending, false)? {
+                        ended.push(failed);
                     }
                 }
                 Ok::<_, StoreError>(ended)
@@ -383,6 +461,21 @@ where
                         .get(host)
                         .is_some_and(|(_, until)| *until > now.as_second())
                 };
+                // A pairing in progress lasts minutes: its relay is tried again after the
+                // first backoff step however often it failed.
+                let pending_waiting = |host: &str| {
+                    backoffs.0.get(host).is_some_and(|(failures, until)| {
+                        let index = usize::try_from(*failures)
+                            .unwrap_or(usize::MAX)
+                            .clamp(1, BACKOFF.len())
+                            .saturating_sub(1);
+                        let step = BACKOFF.get(index).map_or(0, Duration::as_secs);
+                        let first = BACKOFF.first().map_or(0, Duration::as_secs);
+                        let failed_at = until.saturating_sub(i64::try_from(step).unwrap_or(0));
+                        failed_at.saturating_add(i64::try_from(first).unwrap_or(0))
+                            > now.as_second()
+                    })
+                };
                 let mut mailboxes = Vec::new();
                 for pending in repos.pending_pairings()? {
                     let invite =
@@ -400,7 +493,7 @@ where
                     let Some(seed) = seed else {
                         continue;
                     };
-                    if waiting(&host_text(&home)) {
+                    if pending_waiting(&host_text(&home)) {
                         continue;
                     }
                     let (identity, _) = pairing_mailbox(seed, network, &home)?;

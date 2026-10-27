@@ -136,6 +136,15 @@ depends on it arriving.
     and drops it. On two installs of one recovery phrase the install that did not answer the
     S1 holds no S2 and drops the notice, which the relay then deletes for both; the other
     install's refresh still confirms the payment.
+  - A payment sent through a paired contact's mailbox (RFC 0002 9.1) gets the same `posted`,
+    sealed and signed to the contact's mailbox and queued in its outbox, once its S2 was
+    finalized and pushed in a collect. The receiver accepts it as the contact's (RFC 0002
+    11.4) by the transaction it exchanged with that contact, with the same excess rule.
+
+- Amendment, RFC 0002 7.6: `unpaired`, `{"lepic":1,"type":"unpaired"}` with no slate id,
+  padded like the others, only sealed and signed in a contact mailbox. It says the sender
+  removed the pairing; the receiver marks that pairing and keeps it. It names no slate, so a
+  build that knows only the kinds above classifies it as unknown and ignores it.
 
 ## Alternatives considered
 

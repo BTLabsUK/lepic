@@ -89,6 +89,7 @@ fn contact_name(view: Option<&ContactView>, id: ContactId) -> String {
 fn failure_name(reason: PairingFailure) -> &'static str {
     match reason {
         PairingFailure::Expired => "expired",
+        PairingFailure::NotConfirmed => "not-confirmed",
         PairingFailure::ChangedOnTheWay => "changed-on-the-way",
         PairingFailure::Refused(Refusal::AlreadyUsed) => "refused-already-used",
         PairingFailure::Refused(Refusal::Expired) => "refused-expired",

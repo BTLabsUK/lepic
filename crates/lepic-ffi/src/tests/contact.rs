@@ -976,6 +976,25 @@ async fn a_contact_with_only_a_pairing_is_paid_through_its_mailbox_with_sealing_
     assert_eq!(finalized[0].tx_id.0, sent.tx_id);
     assert_eq!(finalized[0].slate_id.to_string(), sent.slate_id);
     assert_eq!(finalized[0].amount.value(), EPIC);
+
+    // The receiver hears that it was posted, as over Epicbox, through the same mailbox.
+    let mut ben_events = ben.session().subscribe();
+    ben.contacts_collect(CollectTrigger::Open, Online)
+        .await
+        .unwrap();
+    let posted = raised(&mut ben_events)
+        .into_iter()
+        .filter(|event| matches!(event, lepic_wallet::Event::PaymentPosted(_)))
+        .count();
+    assert_eq!(posted, 1);
+    let received = ben
+        .transactions()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|tx| tx.slate_id.as_deref() == Some(sent.slate_id.as_str()))
+        .unwrap();
+    assert!(received.sender_reported_posted_at_ms.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

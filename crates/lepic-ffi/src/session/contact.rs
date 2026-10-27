@@ -10,8 +10,9 @@ use lepic_wallet::contact::{
     AcceptRequest, CardRequest, CollectTrigger as EngineTrigger, ContactKind as EngineKind,
     ContactRelays, ContactView as EngineContactView, InviteExpiry as EngineExpiry,
     InvitePreview as EnginePreview, InviteRequest, InvoiceDetails,
-    KeysDecision as EngineKeysDecision, LinkOutcome, PairingFailure, PairingRole, Purpose,
-    RelayMode, SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer,
+    KeyCheckStart as EngineKeyCheckStart, KeysDecision as EngineKeysDecision, LinkOutcome,
+    PairingFailure, PairingRole, Purpose, RelayMode, SasDecision as EngineSasDecision, SasSymbol,
+    SealedAnswer as EngineAnswer,
 };
 use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
@@ -24,8 +25,8 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
     ContactRelayMode, ContactView, FailedPairing, FinalizedTx, FoundInvite, InviteExpiry,
-    InvitePreview, IssuedInvoice, KeysDecision, OutboxEntryView, OutboxReport, OutboxState,
-    PaidInvoice, PairingAnswer, PairingCard, PairingFailureReason, PairingInvite,
+    InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
+    OutboxState, PaidInvoice, PairingAnswer, PairingCard, PairingFailureReason, PairingInvite,
     PairingLinkOutcome, PairingLinkResult, PairingState, PendingPairingView, SasDecision, SasEntry,
     SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx, SlateMessage, SlatePurpose,
     SlateStage, WalletEvent, WalletEventKind,
@@ -124,6 +125,7 @@ pub(super) const fn failure_reason(failure: PairingFailure) -> PairingFailureRea
     match failure {
         PairingFailure::ChangedOnTheWay => PairingFailureReason::ChangedOnTheWay,
         PairingFailure::Expired => PairingFailureReason::Expired,
+        PairingFailure::NotConfirmed => PairingFailureReason::NotConfirmed,
         PairingFailure::Refused(_) => PairingFailureReason::Refused,
     }
 }
@@ -195,6 +197,7 @@ fn view(view: EngineContactView) -> ContactView {
         imported_from_backup: view.imported_from_backup,
         lapsed: view.lapsed,
         last_sealed_in_ms: view.last_sealed_in.map(ms),
+        removed_by_peer: view.removed_by_peer,
         created_at_ms: ms(view.created_at),
     }
 }
@@ -517,6 +520,7 @@ impl Session {
                 label: pending.label,
                 expires_at_ms: ms(pending.expires_at),
                 created_at_ms: ms(pending.created_at),
+                home_relay: pending.home_relay,
             })
             .collect())
     }
@@ -537,6 +541,16 @@ impl Session {
     pub(crate) async fn contact_remove(&self, contact_id: &str) -> Result<bool, WalletError> {
         let id = self::contact_id(contact_id)?;
         Ok(self.engine.contact_remove(id).await?)
+    }
+
+    pub(crate) async fn contact_unpair(
+        &self,
+        contact_id: &str,
+        mode: ContactRelayMode,
+    ) -> Result<bool, WalletError> {
+        let id = self::contact_id(contact_id)?;
+        let relays = self.contact_relays(mode)?;
+        Ok(self.engine.contact_unpair(&relays, id).await?)
     }
 
     pub(crate) async fn contact_set_label(
@@ -580,10 +594,15 @@ impl Session {
         new: &str,
         old: &str,
         mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<KeyCheckStart, WalletError> {
         let (new, old) = (contact_id(new)?, contact_id(old)?);
         let relays = self.contact_relays(mode)?;
-        Ok(self.engine.contact_key_check(&relays, new, old).await?)
+        Ok(
+            match self.engine.contact_key_check(&relays, new, old).await? {
+                EngineKeyCheckStart::Sent => KeyCheckStart::Sent,
+                EngineKeyCheckStart::KeysChanged => KeyCheckStart::KeysChanged,
+            },
+        )
     }
 
     pub(crate) async fn contact_keys_resolve(

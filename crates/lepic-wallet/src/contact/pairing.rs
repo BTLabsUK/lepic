@@ -25,8 +25,8 @@ use super::keys::{
 };
 use super::relay::{endpoint_for, host_text, post_envelope};
 use super::{
-    CLOCK_SKEW, CONFIRM_WAIT, ContactError, ContactRelays, ContactView, LockedRng, PairingFailure,
-    new_id, pairing_id_of, same_secret,
+    CLOCK_SKEW, CONFIRM_WAIT, ContactError, ContactRelays, ContactView, LATE_DRAIN_WAIT, LockedRng,
+    PairingFailure, new_id, pairing_id_of, same_secret,
 };
 use crate::event::{ContactEvent, Event, FailedPairing};
 use crate::ports::{SecretVault, StoreOpener};
@@ -511,9 +511,8 @@ where
                         }
                         None => reply_box.address().clone(),
                     };
-                    let expires_at = now
-                        .checked_add(CONFIRM_WAIT)
-                        .map_err(|_| ContactError::InviteExpired)?;
+                    let expires_at = invitee_deadline(now, invite.fields().expires)
+                        .ok_or(ContactError::InviteExpired)?;
                     repos.put_contact(&pending_record(
                         new.contact_id,
                         request.account,
@@ -683,7 +682,12 @@ where
                     // A card QR is seen by anyone nearby: the first collect moves our mailbox.
                     repos.put_setting(&super::collect::in_person_key(contact_id), "1")?;
                     debug!(peer_relay = %peer_relay, "in-person pairing stored");
-                    Ok(super::manage::view(&record, Some(host_text(&home)), now))
+                    Ok(super::manage::view(
+                        &record,
+                        Some(host_text(&home)),
+                        false,
+                        now,
+                    ))
                 })
             })
             .await?;
@@ -930,7 +934,10 @@ where
                             ),
                         });
                     };
-                    if unix_seconds(now) >= expires {
+                    // A reply the relay held at the deadline is still taken by the first drain
+                    // after it (RFC 0002 C-14): the pending pairing ends at that drain, so one
+                    // still here was not drained since.
+                    if unix_seconds(now) >= late_reply_end(expires) {
                         return Ok(Decision::Refuse(
                             Refusal::Expired,
                             may_refuse(repos, pairing_id)?,
@@ -1014,6 +1021,12 @@ where
             Decision::Again(envelope) => (envelope, false),
             Decision::Confirm(envelope) => (envelope, true),
         };
+        // Paired from here on, whether or not the confirm leaves now: the host hears it once,
+        // and a confirm that did not leave goes out when the kept reply is taken again.
+        if first {
+            info!("pairing reply taken");
+            self.emit(Event::PairingReplied(ContactEvent { contact_id }));
+        }
         if !by_hand {
             let (confirm_box, confirm_from) = pairing_mailbox(rc, network, &home)?;
             post_envelope(
@@ -1025,10 +1038,7 @@ where
             )
             .await?;
         }
-        if first {
-            info!("pairing reply taken");
-            self.emit(Event::PairingReplied(ContactEvent { contact_id }));
-        }
+        self.mark_confirm_out(pairing_id).await?;
         Ok(if by_hand {
             Taken::ConfirmLink(
                 contact_id,
@@ -1159,6 +1169,21 @@ where
         Ok(Taken::Paired(contact_id))
     }
 
+    /// Records that the confirm of `pairing_id` reached the relay or was handed to the user, so
+    /// the invitee may hold the pairing.
+    async fn mark_confirm_out(&self, pairing_id: PairingId) -> Result<(), ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session.store.write(|repos| {
+                if repos.pending_pairing(pairing_id)?.is_some() {
+                    repos.put_setting(&confirm_out_key(pairing_id), "1")?;
+                }
+                Ok::<_, StoreError>(())
+            })?)
+        })
+        .await
+    }
+
     /// The pairing in progress `pairing_id` and its record, as stored now.
     async fn pending_with_record(
         &self,
@@ -1237,6 +1262,7 @@ enum Decision {
 }
 
 const CONFIRM_PREFIX: &str = "contact.confirm.";
+const CONFIRM_OUT_PREFIX: &str = "contact.confirmout.";
 const REFUSALS_PREFIX: &str = "contact.refusals.";
 
 /// Refusals one invite sends at most, so a leaked invite cannot make the inviter post to
@@ -1255,8 +1281,40 @@ pub(crate) fn end_pending(
     pairing_id: PairingId,
 ) -> Result<bool, StoreError> {
     repos.delete_setting(&confirm_key(pairing_id))?;
+    repos.delete_setting(&confirm_out_key(pairing_id))?;
     repos.delete_setting(&refusals_key(pairing_id))?;
     repos.delete_pending_pairing(pairing_id)
+}
+
+/// The setting that marks an inviter's confirm as sent: posted, or handed out by hand.
+pub(crate) fn confirm_out_key(pairing_id: PairingId) -> String {
+    format!("{CONFIRM_OUT_PREFIX}{}", hex(&pairing_id.0))
+}
+
+/// Unix seconds from which an inviter refuses a reply to an invite that expires at `expires`:
+/// the end of its drain window and of the wait for one drain after it.
+fn late_reply_end(expires: u64) -> u64 {
+    expires
+        .saturating_add(CLOCK_SKEW.as_secs())
+        .saturating_add(LATE_DRAIN_WAIT.as_secs())
+}
+
+/// When an invitee that answers at `now` an invite expiring at `expires` stops waiting for the
+/// confirm: an hour after answering, and never before the inviter, its clock up to
+/// [`CLOCK_SKEW`] apart, could still take the reply.
+fn invitee_deadline(now: Timestamp, expires: u64) -> Option<Timestamp> {
+    let wait = now.checked_add(CONFIRM_WAIT).ok()?;
+    let late = timestamp(late_reply_end(expires).saturating_add(CLOCK_SKEW.as_secs()));
+    Some(wait.max(late))
+}
+
+/// The time a pairing in progress is past: an invite's expiry with the skew it is drained for,
+/// an answer's wait for its confirm.
+pub(crate) fn pending_deadline(pending: &PendingPairing) -> Option<Timestamp> {
+    match pending.role {
+        PairingRole::Inviter => pending.expires_at.checked_add(CLOCK_SKEW).ok(),
+        PairingRole::Invitee => Some(pending.expires_at),
+    }
 }
 
 /// Counts one more refusal for the invite, and returns whether it may still be sent.

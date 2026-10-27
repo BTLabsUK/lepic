@@ -31,7 +31,7 @@ use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::contact::{
     CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry, InviteRequest,
-    KeysDecision, LinkOutcome, PairingFailure, RelayMode, SasDecision,
+    KeyCheckStart, KeysDecision, LinkOutcome, PairingFailure, RelayMode, SasDecision,
 };
 use lepic_wallet::event::{ContactEvent, FailedPairing};
 use rand::SeedableRng;
@@ -268,7 +268,8 @@ fn an_expired_invite_is_refused_after_the_skew_and_ends_on_the_inviter() {
     world.issuer.clock.advance(HOUR + 11 * MINUTE);
     let report = world.collect(&world.issuer);
 
-    assert_eq!(report.mailboxes, 0);
+    // Its reply mailbox is drained once more, for a reply that waited there, then it ends.
+    assert_eq!(report.mailboxes, 1);
     let ended: Vec<_> = events(&mut issuer_events)
         .into_iter()
         .filter_map(|event| match event {
@@ -334,9 +335,18 @@ fn an_invite_answered_twice_pairs_once() {
 }
 
 #[test]
-fn an_answer_whose_confirm_never_comes_ends_after_an_hour() {
+fn an_answer_whose_confirm_never_comes_ends_as_not_confirmed_after_the_invites_window() {
     let world = World::new();
-    let link = world.invite(&world.issuer, "Anna");
+    let link = world
+        .block_on(world.issuer.wallet.pairing_invite(
+            &relays(&world.issuer),
+            InviteRequest {
+                expiry: InviteExpiry::OneHour,
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap()
+        .link;
     world
         .block_on(
             world
@@ -352,13 +362,18 @@ fn an_answer_whose_confirm_never_comes_ends_after_an_hour() {
         .unwrap();
     let mut payer_events = world.payer.wallet.subscribe();
 
-    world.payer.clock.advance(HOUR + MINUTE);
+    // The inviter may take the reply until an hour after the invite's skew: still waiting.
+    world.payer.clock.advance(2 * HOUR);
+    world.collect(&world.payer);
+    assert_eq!(world.payer.read(|repos| repos.pending_pairings()).len(), 1);
+
+    world.payer.clock.advance(21 * MINUTE);
     world.collect(&world.payer);
 
     assert!(events(&mut payer_events).iter().any(|event| matches!(
         event,
         Event::PairingFailed(FailedPairing {
-            reason: PairingFailure::Expired,
+            reason: PairingFailure::NotConfirmed,
             ..
         })
     )));
@@ -959,16 +974,39 @@ fn a_re_pairing_without_the_backup_brings_the_old_keys_back() {
         key_news(&events(&mut restored_events)),
         (vec![kept[0].contact_id], vec![])
     );
-    // One check per slot a day.
+    // One check per slot a day: another re-pairing that day shows keys-changed at once, so
+    // the contact never stays on a pairing nobody may read.
     let (again, _) = world.pair(&world.issuer, &restored);
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_key_check(
-            &relays(&world.issuer),
-            again,
-            anna_side
-        )),
-        Err(ContactError::KeyCheckRefused)
-    ));
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    assert_eq!(
+        world
+            .block_on(world.issuer.wallet.contact_key_check(
+                &relays(&world.issuer),
+                again,
+                anna_side
+            ))
+            .unwrap(),
+        KeyCheckStart::KeysChanged
+    );
+    assert_eq!(
+        world
+            .issuer
+            .read(|repos| repos.contact(again))
+            .unwrap()
+            .state,
+        ContactState::KeysChanged
+    );
+    assert_eq!(key_news(&events(&mut issuer_events)), (vec![], vec![again]));
+    // The user decides as after an unanswered check.
+    world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_keys_resolve(again, KeysDecision::UseNew),
+        )
+        .unwrap();
+    assert_eq!(world.contact_ids(&world.issuer), vec![again]);
 }
 
 /// C-12 with the backup: the restored install holds the record already, so a re-pairing anyway
@@ -1018,15 +1056,28 @@ fn a_re_pairing_with_another_seed_shows_keys_changed_on_the_new_pairing() {
     let mut issuer_events = world.issuer.wallet.subscribe();
 
     key_check(&world, &world.issuer, new_on_issuer, anna_side);
-    // One check per pairing.
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_key_check(
-            &relays(&world.issuer),
-            new_on_issuer,
-            anna_side
-        )),
-        Err(ContactError::KeyCheckRefused)
-    ));
+    // One check per pairing: asked again while it is on its way, nothing more is sent.
+    let queued = world
+        .issuer
+        .read(|repos| repos.contact_outbox(new_on_issuer))
+        .len();
+    assert_eq!(
+        world
+            .block_on(world.issuer.wallet.contact_key_check(
+                &relays(&world.issuer),
+                new_on_issuer,
+                anna_side
+            ))
+            .unwrap(),
+        KeyCheckStart::Sent
+    );
+    assert_eq!(
+        world
+            .issuer
+            .read(|repos| repos.contact_outbox(new_on_issuer))
+            .len(),
+        queued
+    );
     settle(&world, &world.issuer, &stranger);
 
     assert_eq!(
@@ -2195,4 +2246,261 @@ fn labels_and_address_book_ids_are_checked() {
     world
         .block_on(wallet.contact_attach(anna_side, Some("contact-7".to_owned())))
         .unwrap();
+}
+
+/// The confirm mailbox the invitee's answer waits on, on the test relay.
+fn confirm_mailbox(party: &Party) -> lepic_epicbox::EpicboxAddress {
+    let pending = party.read(|repos| repos.pending_pairings());
+    let rc = pending[0].secrets.rc.unwrap();
+    pairing_identities(rc).0.address().clone()
+}
+
+fn failures(events: &[Event]) -> Vec<PairingFailure> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::PairingFailed(FailedPairing { reason, .. }) => Some(*reason),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The inviter's confirm could not be posted when it took the reply: it is paired, says so
+/// once, and the confirm goes out when the kept reply is taken again, so both sides pair.
+#[test]
+fn a_confirm_that_did_not_leave_still_tells_the_inviter_and_goes_out_later() {
+    let world = World::new();
+    let link = world.invite(&world.issuer, "Anna");
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    let confirm_box = confirm_mailbox(&world.payer);
+    world.relay.set_post_refused(&confirm_box);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    world.collect(&world.issuer);
+    let anna_side = world.only_contact(&world.issuer);
+    let replied = events(&mut issuer_events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::PairingReplied(_)))
+        .count();
+    assert_eq!(replied, 1);
+    assert_eq!(world.collect(&world.payer).paired, 0);
+
+    world.relay.set_post_accepted(&confirm_box);
+    world.collect(&world.issuer);
+    assert_eq!(world.collect(&world.payer).paired, 1);
+    assert_eq!(world.only_contact(&world.issuer), anna_side);
+    // Told once only.
+    assert!(
+        !events(&mut issuer_events)
+            .iter()
+            .any(|event| matches!(event, Event::PairingReplied(_)))
+    );
+}
+
+/// A confirm that never leaves within the wait after the deadline: the invitee cannot have
+/// paired, so the inviter removes its half too, as not confirmed.
+#[test]
+fn a_confirm_that_never_leaves_ends_the_inviters_half_as_not_confirmed() {
+    let world = World::new();
+    let link = world
+        .block_on(world.issuer.wallet.pairing_invite(
+            &relays(&world.issuer),
+            InviteRequest {
+                expiry: InviteExpiry::OneHour,
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap()
+        .link;
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    world.relay.set_post_refused(&confirm_mailbox(&world.payer));
+    world.collect(&world.issuer);
+    assert_eq!(world.contact_ids(&world.issuer).len(), 1);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+
+    // Past the deadline its relay answers, but the confirm still does not leave: kept.
+    world.issuer.clock.advance(HOUR + 11 * MINUTE);
+    world.collect(&world.issuer);
+    assert_eq!(world.contact_ids(&world.issuer).len(), 1);
+
+    world.issuer.clock.advance(HOUR);
+    world.collect(&world.issuer);
+    assert!(world.contact_ids(&world.issuer).is_empty());
+    assert_eq!(
+        failures(&events(&mut issuer_events)),
+        vec![PairingFailure::NotConfirmed]
+    );
+}
+
+/// A reply that reached the relay in time while the inviter could not drain it is taken by
+/// the first drain after the deadline, even after failures put the relay in backoff.
+#[test]
+fn a_reply_waiting_on_a_relay_that_was_down_completes_the_pairing_late() {
+    let world = World::new();
+    let link = world
+        .block_on(world.issuer.wallet.pairing_invite(
+            &relays(&world.issuer),
+            InviteRequest {
+                expiry: InviteExpiry::OneHour,
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap()
+        .link;
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    world.relay.set_refusing(true);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let foreground = |party: &Party| {
+        world
+            .block_on(
+                party
+                    .wallet
+                    .contacts_collect(&relays(party), CollectTrigger::Foreground),
+            )
+            .unwrap()
+    };
+
+    world.issuer.clock.advance(HOUR + 15 * MINUTE);
+    for _ in 0..3 {
+        assert_eq!(foreground(&world.issuer).unreachable.len(), 1);
+        world
+            .issuer
+            .clock
+            .advance(31 * std::time::Duration::from_secs(1));
+    }
+    assert!(failures(&events(&mut issuer_events)).is_empty());
+    assert_eq!(world.issuer.read(|repos| repos.pending_pairings()).len(), 1);
+
+    world.relay.set_refusing(false);
+    assert_eq!(foreground(&world.issuer).paired, 1);
+    assert_eq!(world.collect(&world.payer).paired, 1);
+    assert!(
+        world
+            .issuer
+            .read(|repos| repos.pending_pairings())
+            .is_empty()
+    );
+    assert_eq!(
+        world.sas(&world.issuer, world.only_contact(&world.issuer)),
+        world.sas(&world.payer, world.only_contact(&world.payer))
+    );
+}
+
+/// Removing a pairing tells the contact in a signed notice: its side is marked removed by the
+/// contact, once, and kept until its user removes it.
+#[test]
+fn removing_a_pairing_tells_the_contact_once() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    assert!(
+        world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_unpair(&relays(&world.issuer), anna_side)
+            )
+            .unwrap()
+    );
+    assert!(world.contact_ids(&world.issuer).is_empty());
+    assert!(
+        !world
+            .block_on(world.payer.wallet.contact(ben_side))
+            .unwrap()
+            .removed_by_peer
+    );
+
+    world.collect(&world.payer);
+    world.collect(&world.payer);
+
+    let view = world
+        .block_on(world.payer.wallet.contact(ben_side))
+        .unwrap();
+    assert!(view.removed_by_peer);
+    assert_eq!(view.state, ContactState::Paired);
+    let unpaired: Vec<_> = events(&mut payer_events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::ContactUnpaired(_)))
+        .collect();
+    assert_eq!(
+        unpaired,
+        vec![Event::ContactUnpaired(ContactEvent {
+            contact_id: ben_side
+        })]
+    );
+    // Removed on this side too, nothing is sent back to a contact that removed it first.
+    let posted = world.relay.received("PostSlate");
+    assert!(
+        world
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_unpair(&relays(&world.payer), ben_side)
+            )
+            .unwrap()
+    );
+    assert_eq!(world.relay.received("PostSlate"), posted);
+}
+
+/// The unpaired notice counts only signed by the contact's own key: the same text sealed
+/// anonymously into the contact's mailbox changes nothing.
+#[test]
+fn an_unsigned_unpaired_notice_is_dropped() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    let issuer_card = ContactCard::decode(
+        &world
+            .issuer
+            .read(|repos| repos.contact(anna_side))
+            .unwrap()
+            .own_card,
+        ContactNetwork::Floonet,
+    )
+    .unwrap();
+    let envelope = lepic_contact::seal(
+        ContactNetwork::Floonet,
+        issuer_card.enc_key(),
+        issuer_card.hint_rule(),
+        &lepic_contact::Content::new(
+            lepic_contact::MessageType::Notice,
+            lepic_wallet::notice::unpaired_notice().into_bytes(),
+        ),
+        None,
+        &mut rand::rngs::StdRng::seed_from_u64(7),
+    )
+    .unwrap();
+    post_sealed(&world, &world.payer, ben_side, &envelope);
+
+    world.collect(&world.issuer);
+
+    assert!(
+        !world
+            .block_on(world.issuer.wallet.contact(anna_side))
+            .unwrap()
+            .removed_by_peer
+    );
 }

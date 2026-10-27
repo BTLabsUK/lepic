@@ -6,9 +6,9 @@ use lepic_node::NodeApi;
 use lepic_store::{
     ContactId, ContactRecord, ContactState, PairingRole, SealMode, StoreError, WalletStore,
 };
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
-use super::{ContactError, ContactView, pairing_id_of};
+use super::{ContactError, ContactRelays, ContactView, RelayMode, pairing_id_of};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
@@ -23,6 +23,7 @@ fn kind(kind: lepic_store::ContactKind) -> ContactKind {
 pub(crate) fn view(
     record: &ContactRecord,
     home_relay: Option<String>,
+    removed_by_peer: bool,
     now: jiff::Timestamp,
 ) -> ContactView {
     ContactView {
@@ -43,7 +44,42 @@ pub(crate) fn view(
         imported_from_backup: record.imported_from_backup,
         lapsed: super::sealed::lapsed(record, now),
         last_sealed_in: record.last_sealed_in,
+        removed_by_peer,
         created_at: record.created_at,
+    }
+}
+
+const UNPAIRED_PREFIX: &str = "contact.unpaired.";
+
+/// The setting that marks a pairing the contact removed on its side, with when it said so.
+pub(crate) fn unpaired_key(contact_id: ContactId) -> String {
+    let hex: String = contact_id
+        .0
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{UNPAIRED_PREFIX}{hex}")
+}
+
+fn removed_by_peer(
+    repos: &dyn lepic_store::Repositories,
+    contact_id: ContactId,
+) -> Result<bool, StoreError> {
+    Ok(repos.setting(&unpaired_key(contact_id))?.is_some())
+}
+
+/// How long removing a pairing waits for the contact's relay to take the unpaired notice.
+const UNPAIRED_POST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// An invite's home relay as records name one, `domain:port`, the port explicit.
+fn home_host(host: &str) -> String {
+    if host
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
+    {
+        host.to_owned()
+    } else {
+        format!("{host}:{}", lepic_epicbox::DEFAULT_PORT)
     }
 }
 
@@ -65,8 +101,12 @@ pub struct PendingPairingView {
     /// invitee.
     pub invite_name: String,
     pub label: String,
+    /// When the pairing stops waiting, before the wait for one drain after it
+    /// ([`super::LATE_DRAIN_WAIT`]): the invite's expiry, or the end of the wait for the confirm.
     pub expires_at: jiff::Timestamp,
     pub created_at: jiff::Timestamp,
+    /// The relay where the pairing's mailboxes live, `domain:port`.
+    pub home_relay: String,
 }
 
 /// Checks a record restored from a backup against this seed and rebuilds its mailbox from the
@@ -157,7 +197,8 @@ where
                     let home = repos
                         .contact_mailbox(record.contact_id)?
                         .map(|mailbox| mailbox.home_relay);
-                    views.push(view(&record, home, now));
+                    let removed = removed_by_peer(repos, record.contact_id)?;
+                    views.push(view(&record, home, removed, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -191,6 +232,7 @@ where
                         label: record.label,
                         expires_at: pending.expires_at,
                         created_at: pending.created_at,
+                        home_relay: home_host(invite.fields().home_relay.as_str()),
                     });
                 }
                 views.sort_by_key(|view| view.created_at);
@@ -210,7 +252,8 @@ where
                 let home = repos
                     .contact_mailbox(contact_id)?
                     .map(|mailbox| mailbox.home_relay);
-                Ok(view(&record, home, now))
+                let removed = removed_by_peer(repos, contact_id)?;
+                Ok(view(&record, home, removed, now))
             })
         })
         .await
@@ -227,6 +270,7 @@ where
                 Ok(session.store.write(|repos| {
                     let pending = super::pairing::end_pending(repos, pairing_id_of(contact_id))?;
                     super::invoices::drop_contact_invoices(repos, contact_id)?;
+                    repos.delete_setting(&unpaired_key(contact_id))?;
                     let record = repos.delete_contact(contact_id)?;
                     Ok::<_, StoreError>(pending || record)
                 })?)
@@ -236,6 +280,117 @@ where
             info!("pairing removed");
         }
         Ok(removed)
+    }
+
+    /// Removes a pairing as [`Wallet::contact_remove`] does, after telling the contact, best
+    /// effort: a signed unpaired notice goes straight to its mailbox, waiting at most a few
+    /// seconds for the relay, so it stops sending through a pairing nobody reads (RFC 0002
+    /// 7.6). Nothing is sent Offline, with Epicbox off, for a pairing still in progress, or for
+    /// one the contact removed first. Returns whether anything was removed.
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub async fn contact_unpair(
+        &self,
+        relays: &ContactRelays,
+        contact_id: ContactId,
+    ) -> Result<bool, ContactError> {
+        if relays.mode == RelayMode::Online {
+            match tokio::time::timeout(UNPAIRED_POST_WAIT, self.post_unpaired(relays, contact_id))
+                .await
+            {
+                Ok(Ok(true)) => info!("unpaired notice posted"),
+                Ok(Ok(false)) => {}
+                Ok(Err(error)) => {
+                    warn!(error = %crate::inbox::ErrorChain(&error), "unpaired notice not posted");
+                }
+                Err(_) => warn!("unpaired notice not posted in time"),
+            }
+        }
+        self.contact_remove(contact_id).await
+    }
+
+    /// Posts the unpaired notice to the contact's mailbox; false when there is nobody to tell.
+    async fn post_unpaired(
+        &self,
+        relays: &ContactRelays,
+        contact_id: ContactId,
+    ) -> Result<bool, ContactError> {
+        let network = self.config().network;
+        let session = self.session()?;
+        let found = self
+            .contact_work(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let Some(record) = repos.contact(contact_id)?.filter(|record| {
+                        record.peer.is_some()
+                            && matches!(
+                                record.state,
+                                ContactState::Paired
+                                    | ContactState::Verified
+                                    | ContactState::KeysChanged
+                            )
+                    }) else {
+                        return Ok::<_, StoreError>(None);
+                    };
+                    if removed_by_peer(repos, contact_id)? {
+                        return Ok(None);
+                    }
+                    Ok(repos
+                        .contact_mailbox(contact_id)?
+                        .map(|mailbox| (record, mailbox)))
+                })?)
+            })
+            .await?;
+        let Some((record, mailbox)) = found else {
+            return Ok(false);
+        };
+        let envelope = self
+            .seal_for_contact(
+                &record,
+                lepic_contact::Content::new(
+                    lepic_contact::MessageType::Notice,
+                    crate::notice::unpaired_notice().into_bytes(),
+                ),
+            )
+            .await?;
+        let session = self.session()?;
+        let keys = super::keys::contact_keys(
+            &session.keychain,
+            network,
+            record.account,
+            record.slot,
+            record.box_salt,
+        )?;
+        let home = super::relay::endpoint_for(&mailbox.home_relay, relays)?;
+        let from = super::keys::box_identity(&keys, network, &home)?;
+        let to =
+            lepic_epicbox::EpicboxAddress::parse(&mailbox.peer_mailbox, relays.epicbox.network())
+                .map_err(|_| ContactError::RelayAddress)?;
+        super::relay::post_envelope(relays, &from, &to, mailbox.onion.as_deref(), &envelope)
+            .await?;
+        Ok(true)
+    }
+
+    /// The contact said it removed its pairing: the record is marked, once, and kept.
+    pub(crate) async fn take_unpaired(&self, contact_id: ContactId) -> Result<(), ContactError> {
+        let session = self.session()?;
+        let first = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                Ok(session.store.write(|repos| {
+                    if repos.contact(contact_id)?.is_none() || removed_by_peer(repos, contact_id)? {
+                        return Ok::<_, StoreError>(false);
+                    }
+                    repos.put_setting(&unpaired_key(contact_id), &now.as_second().to_string())?;
+                    Ok(true)
+                })?)
+            })
+            .await?;
+        if first {
+            info!("contact removed the pairing");
+            self.emit(crate::event::Event::ContactUnpaired(
+                crate::event::ContactEvent { contact_id },
+            ));
+        }
+        Ok(())
     }
 
     /// Sets the user's own name for a contact; an empty label clears it. A label follows the

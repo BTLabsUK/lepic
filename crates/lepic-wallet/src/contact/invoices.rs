@@ -449,7 +449,7 @@ where
     }
 
     /// `content` with our current card, sealed and signed to the contact of `record`.
-    async fn seal_for_contact(
+    pub(crate) async fn seal_for_contact(
         &self,
         record: &ContactRecord,
         content: Content,
@@ -594,6 +594,24 @@ where
                         slate_id: finalized.slate.id(),
                         amount: finalized.slate.amount(),
                     }));
+                    // The receiver hears that it was posted, as over Epicbox (ADR 0016): sealed
+                    // to it through its mailbox, which the outbox run of this cycle delivers.
+                    if finalized.pushed
+                        && let Some(kernel) = finalized.transaction.kernels().first()
+                    {
+                        let notice = Notice {
+                            slate_id: finalized.slate.id(),
+                            kind: NoticeKind::Posted {
+                                excess: kernel.excess,
+                            },
+                        };
+                        if let Err(error) = self
+                            .queue_contact_notice_as(contact_id, notice, SlateStage::Standard3)
+                            .await
+                        {
+                            warn!(tx_id = %finalized.tx_id, error = %ErrorChain(&error), "posted notice not queued for the contact");
+                        }
+                    }
                     Ok(Handled::Stored)
                 }
                 // Finalized and stored, but the node did not take it: the host hears of it now,
@@ -812,6 +830,10 @@ where
         let Ok(text) = std::str::from_utf8(body) else {
             return Ok(Handled::Stored);
         };
+        if crate::notice::is_unpaired(text) {
+            self.take_unpaired(record.contact_id).await?;
+            return Ok(Handled::Stored);
+        }
         let Payload::Notice(notice) = classify_text(text) else {
             return Ok(Handled::Stored);
         };
@@ -836,6 +858,22 @@ where
         contact_id: ContactId,
         notice: Notice,
     ) -> Result<(), ContactError> {
+        let stage = match notice.kind {
+            NoticeKind::Posted { .. } | NoticeKind::Declined | NoticeKind::Withdrawn => {
+                SlateStage::Invoice1
+            }
+        };
+        self.queue_contact_notice_as(contact_id, notice, stage)
+            .await
+    }
+
+    /// [`Wallet::queue_contact_notice`] under the outbox stage `stage` of its slate.
+    async fn queue_contact_notice_as(
+        &self,
+        contact_id: ContactId,
+        notice: Notice,
+        stage: SlateStage,
+    ) -> Result<(), ContactError> {
         let session = self.session()?;
         let record = self
             .contact_work(move |_, _| {
@@ -850,11 +888,6 @@ where
         let envelope = self
             .seal_for_contact(&record, Content::new(MessageType::Notice, body))
             .await?;
-        let stage = match notice.kind {
-            NoticeKind::Posted { .. } | NoticeKind::Declined | NoticeKind::Withdrawn => {
-                SlateStage::Invoice1
-            }
-        };
         self.enqueue_for_contact(contact_id, uuid(notice.slate_id), stage, &envelope)
             .await?;
         debug!("notice queued for a contact");

@@ -30,9 +30,9 @@ use crate::api::error::WalletError;
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
     ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry, InvitePreview,
-    IssuedInvoice, KeysDecision, OutboxEntryView, OutboxReport, PaidInvoice, PairingAnswer,
-    PairingCard, PairingInvite, PairingLinkResult, PendingPairingView, SasDecision, SealedAnswer,
-    SealedSlateView, SendOptions, SentTx, SlatePurpose,
+    IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport, PaidInvoice,
+    PairingAnswer, PairingCard, PairingInvite, PairingLinkResult, PendingPairingView, SasDecision,
+    SealedAnswer, SealedSlateView, SendOptions, SentTx, SlatePurpose,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -272,6 +272,23 @@ impl EpicWallet {
         .await
     }
 
+    /// "Remove pairing" that tells the contact: as [`EpicWallet::contact_remove`], after a
+    /// signed unpaired notice to the contact's mailbox, best effort and waiting at most a few
+    /// seconds for its relay, so the contact sees `ContactUnpaired` instead of sending to a
+    /// pairing nobody reads. Nothing is sent with `relay_mode` Offline or Epicbox off, for a
+    /// pairing in progress, or for one the contact removed first. Returns whether anything
+    /// was removed.
+    pub async fn contact_unpair(
+        &self,
+        contact_id: String,
+        relay_mode: ContactRelayMode,
+    ) -> Result<bool, WalletError> {
+        self.run("contact_unpair", |session| async move {
+            session.contact_unpair(&contact_id, relay_mode).await
+        })
+        .await
+    }
+
     /// Sets the user's own name for a contact; an empty label clears it. A label follows the
     /// rule of card names: at most 48 bytes, no control or hidden formatting characters. Fails
     /// with `InvalidContactName` for another label and with `ContactNotFound`.
@@ -336,15 +353,19 @@ impl EpicWallet {
     /// into the old one), `ContactKeysChanged` when they are not or nothing answers within a
     /// day (the new pairing waits for [`EpicWallet::contact_keys_resolve`]).
     ///
-    /// Fails with `ContactNotFound` unless both are paired, `KeyCheckRefused` when the new
-    /// pairing is older than a day or either had a check in the last day, and
-    /// `ContactsOffline` or `EpicboxOff`.
+    /// When no check may run (the new pairing is older than a day, or the old one's slot was
+    /// checked in the last day) the new pairing goes to `KeysChanged` at once, as after an
+    /// unanswered check, and this returns `KeysChanged`; asked again while a check is on its
+    /// way it returns `Sent` and sends nothing.
+    ///
+    /// Fails with `ContactNotFound` unless both are paired and differ, `KeyCheckRefused` when
+    /// the new pairing's check already ended, and `ContactsOffline` or `EpicboxOff`.
     pub async fn contact_key_check(
         &self,
         new: String,
         old: String,
         relay_mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<KeyCheckStart, WalletError> {
         self.run("contact_key_check", |session| async move {
             session.contact_key_check(&new, &old, relay_mode).await
         })

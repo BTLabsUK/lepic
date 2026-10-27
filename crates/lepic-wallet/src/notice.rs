@@ -31,6 +31,7 @@ const PAD: char = '0';
 const DECLINED: &str = "declined";
 const WITHDRAWN: &str = "withdrawn";
 const POSTED: &str = "posted";
+const UNPAIRED: &str = "unpaired";
 
 /// What a notice says about its invoice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +165,44 @@ impl Notice {
         let text = serde_json::to_string(&written).unwrap_or(unpadded);
         WireSlate::text(MediaType::JSON, text)
     }
+}
+
+#[derive(Serialize)]
+struct WrittenUnpaired {
+    lepic: u64,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    pad: String,
+}
+
+/// The notice a wallet seals to a paired contact when it removes their pairing (RFC 0002 7.6):
+/// `{"lepic":1,"type":"unpaired"}`, padded as every notice. It is about the pairing, not a
+/// slate, so [`classify_text`] reads it as [`Payload::Unknown`], which a wallet that does not
+/// know it ignores; [`is_unpaired`] reads it.
+pub fn unpaired_notice() -> String {
+    let mut written = WrittenUnpaired {
+        lepic: NOTICE_VERSION,
+        kind: UNPAIRED,
+        pad: String::new(),
+    };
+    let unpadded = serde_json::to_string(&written).unwrap_or_default();
+    written.pad =
+        std::iter::repeat_n(PAD, PADDED_NOTICE_LEN.saturating_sub(unpadded.len())).collect();
+    serde_json::to_string(&written).unwrap_or(unpadded)
+}
+
+/// Whether `text` is the notice [`unpaired_notice`] writes, of this notice version and at most
+/// [`MAX_NOTICE_LEN`] bytes.
+pub fn is_unpaired(text: &str) -> bool {
+    if text.len() > MAX_NOTICE_LEN || !text.trim_start().starts_with('{') {
+        return false;
+    }
+    let version = serde_json::from_str::<Probe>(text)
+        .ok()
+        .and_then(|probe| probe.lepic)
+        .and_then(|version| version.as_u64());
+    version == Some(NOTICE_VERSION)
+        && serde_json::from_str::<Fields>(text).is_ok_and(|fields| fields.kind == UNPAIRED)
 }
 
 #[cfg(test)]
@@ -312,6 +351,36 @@ mod tests {
             slate_id: SlateId::from_bytes(bytes),
             kind,
         })
+    }
+
+    #[test]
+    fn the_unpaired_notice_is_padded_and_unknown_to_the_invoice_classifier() {
+        let text = unpaired_notice();
+        assert_eq!(text.len(), PADDED_NOTICE_LEN);
+        assert!(text.starts_with(r#"{"lepic":1,"type":"unpaired","pad":"0"#));
+        assert!(is_unpaired(&text));
+        // A wallet that knows only the invoice notices ignores it.
+        assert_eq!(classify_text(&text), Payload::Unknown);
+    }
+
+    #[test]
+    fn only_the_unpaired_notice_reads_as_one() {
+        for payload in [
+            r#"{"lepic":2,"type":"unpaired"}"#.to_owned(),
+            r#"{"lepic":1,"type":"declined"}"#.to_owned(),
+            r#"{"lepic":1}"#.to_owned(),
+            r#"{"type":"unpaired"}"#.to_owned(),
+            "unpaired".to_owned(),
+            format!(
+                r#"{{"lepic":1,"type":"unpaired","pad":"{}"}}"#,
+                "0".repeat(MAX_NOTICE_LEN)
+            ),
+        ] {
+            assert!(!is_unpaired(&payload), "{payload}");
+        }
+        for notice in every_kind() {
+            assert!(!is_unpaired(&text(notice)));
+        }
     }
 
     proptest! {
