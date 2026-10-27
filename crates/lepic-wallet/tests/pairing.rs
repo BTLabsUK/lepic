@@ -2346,6 +2346,65 @@ fn a_confirm_that_never_leaves_ends_the_inviters_half_as_not_confirmed() {
     );
 }
 
+/// The half removed when a confirm never left is the new pairing's record alone: an older
+/// pairing with the same contact, attached to the same address-book entry, stays as it was.
+#[test]
+fn a_confirm_that_never_leaves_removes_only_its_own_pairing() {
+    let world = World::new();
+    let (old_side, _) = world.pair_by_link();
+    world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_attach(old_side, Some("book-1".to_owned())),
+        )
+        .unwrap();
+    let old = world.issuer.read(|repos| repos.contact(old_side)).unwrap();
+    let twin = world.payer_twin();
+    let link = world
+        .block_on(world.issuer.wallet.pairing_invite(
+            &relays(&world.issuer),
+            InviteRequest {
+                expiry: InviteExpiry::OneHour,
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap()
+        .link;
+    world
+        .block_on(
+            twin.wallet
+                .pairing_accept(&relays(&twin), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    world.relay.set_post_refused(&confirm_mailbox(&twin));
+    world.collect(&world.issuer);
+    let fresh = world.only_new(&world.issuer, old_side);
+    world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_attach(fresh, Some("book-1".to_owned())),
+        )
+        .unwrap();
+
+    world.issuer.clock.advance(2 * HOUR + 11 * MINUTE);
+    world.collect(&world.issuer);
+
+    assert_eq!(world.contact_ids(&world.issuer), vec![old_side]);
+    let kept = world.issuer.read(|repos| repos.contact(old_side)).unwrap();
+    assert_eq!(kept.app_contact.as_deref(), Some("book-1"));
+    assert_eq!(kept.peer, old.peer);
+    assert!(
+        world
+            .issuer
+            .read(|repos| repos.contact_mailbox(old_side))
+            .is_some()
+    );
+}
+
 /// A reply that reached the relay in time while the inviter could not drain it is taken by
 /// the first drain after the deadline, even after failures put the relay in backoff.
 #[test]
