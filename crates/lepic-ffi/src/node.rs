@@ -10,13 +10,17 @@ use lepic_node::{
     CallPolicy, DialFuture, HttpSettings, HttpTransport, NodeClient, NodeDialer, NodeError,
     NodeStream, RpcTransport, is_loopback_host, webpki_tls_config,
 };
-use lepic_tor::{RelayTor, RelayTorError};
 use tokio::net::TcpStream;
 
 use zeroize::Zeroizing;
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::WalletConfig;
+// The wallet's tor as a way to the node, or a stand-in that never is in a build without Tor.
+#[cfg(not(feature = "tor"))]
+pub(crate) use crate::no_tor::{RelayTor, RelayTorError};
+#[cfg(feature = "tor")]
+pub(crate) use lepic_tor::{RelayTor, RelayTorError};
 
 pub(crate) type Node = NodeClient<SwitchableBackend>;
 
@@ -263,6 +267,7 @@ pub(crate) fn node_error(error: &NodeError) -> WalletError {
 }
 
 #[cfg(test)]
+#[cfg(feature = "tor")]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
 

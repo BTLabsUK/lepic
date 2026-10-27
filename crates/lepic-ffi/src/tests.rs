@@ -28,6 +28,7 @@ mod servers;
 #[cfg(target_os = "linux")]
 mod soak;
 #[cfg(unix)]
+#[cfg(feature = "tor")]
 mod tor;
 
 const PIN: &str = "471100";
@@ -672,7 +673,7 @@ fn the_node_api_secret_is_taken_out_of_the_config_before_the_client_is_built() {
         .client(
             &config,
             &secret,
-            &std::sync::Arc::new(lepic_tor::RelayTor::new(true)),
+            &std::sync::Arc::new(crate::node::RelayTor::new(true)),
             &std::sync::Arc::new(lepic_epicbox::tunnel::OnionRoutes::default()),
         )
         .unwrap();

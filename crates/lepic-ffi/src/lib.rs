@@ -29,6 +29,8 @@ mod inspect;
 mod log;
 #[cfg(feature = "mock")]
 mod mock;
+#[cfg(not(feature = "tor"))]
+mod no_tor;
 mod node;
 mod password;
 mod pin;

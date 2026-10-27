@@ -3,12 +3,14 @@
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+#[cfg(feature = "tor")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
-use lepic_epicbox::tunnel::{OnionRoutes, TunnelConnector};
+use lepic_epicbox::tunnel::OnionRoutes;
 use lepic_epicbox::{
     ClientSettings, Domain, EpicboxAddress, Network as RelayNetwork, RelayEndpoint, Security,
     TRANSPORT_ID,
@@ -66,7 +68,7 @@ use crate::api::types::{
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
-use crate::node::{BackendCache, BackendKey, Node, NodeBackend, NodeSecret, node_error};
+use crate::node::{BackendCache, BackendKey, Node, NodeBackend, NodeSecret, RelayTor, node_error};
 use crate::vault_port::{
     AppVault, SharedStorage, VAULT_KEY, VAULT_NEXT_KEY, VaultBytes, decode, vault_error,
 };
@@ -75,11 +77,15 @@ use crate::{password as password_change, pin};
 mod app_data;
 mod contact;
 mod http;
+#[cfg(not(feature = "tor"))]
+mod no_tor;
+#[cfg(feature = "tor")]
 mod tor;
 
 #[cfg(test)]
 pub(crate) use http::HttpReport;
 #[cfg(test)]
+#[cfg(feature = "tor")]
 pub(crate) use tor::TorReport;
 mod invoice;
 mod servers;
@@ -194,22 +200,27 @@ pub(crate) struct Session {
     http_listener: Mutex<http::HttpListener>,
     http_starts: AtomicU64,
     /// Holds the answers of Tor sends until they are finalized.
+    #[cfg(feature = "tor")]
     tor: lepic_tor::TorTransport,
+    #[cfg(feature = "tor")]
     tor_slot: Mutex<tor::TorSlot>,
+    #[cfg(feature = "tor")]
     tor_starts: AtomicU64,
-    /// Takes the relay connection through the wallet's tor while it runs (ADR 0021).
-    relay_tor: Arc<lepic_tor::RelayTor>,
+    /// Takes the relay connection through the wallet's tor while it runs (ADR 0021); never
+    /// in a build without Tor.
+    relay_tor: Arc<RelayTor>,
     /// The same for node requests; it follows the wallet's tor like `relay_tor`, with a
     /// setting of its own.
-    node_tor: Arc<lepic_tor::RelayTor>,
+    node_tor: Arc<RelayTor>,
     /// `expect_tor` was called and no start followed yet: a stop keeps the relay waiting.
+    #[cfg(feature = "tor")]
     tor_expected: AtomicBool,
     /// Hosts reached at an onion through tor, with TLS for the host: the built-in table until
     /// the app sets its own. Shared by every connection of the session that goes through tor.
     pub(crate) onion_routes: Arc<OnionRoutes>,
     /// The backend [`Session::node_tip_for`] asked last.
     node_tips: BackendCache<NodeBackend>,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "tor"))]
     tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
     /// Makes the next listen fail before it subscribes.
     #[cfg(test)]
@@ -302,7 +313,7 @@ fn epicbox_transport(
     runtime: &RuntimeInner,
     config: &WalletConfig,
     network: Network,
-    relay_tor: &Arc<lepic_tor::RelayTor>,
+    relay_tor: &Arc<RelayTor>,
     onion_routes: &Arc<OnionRoutes>,
 ) -> Result<Option<EpicboxTransport>, WalletError> {
     if config.epicbox_domain.is_empty() {
@@ -320,15 +331,22 @@ fn epicbox_transport(
     #[cfg(not(feature = "mock"))]
     let _ = runtime;
     let tls = webpki_tls_config().map_err(|error| node_error(&error))?;
-    let tunnel = Arc::new(tor::RelayTunnel(Arc::clone(relay_tor)));
+    #[cfg(feature = "tor")]
+    let connector = Arc::new(lepic_epicbox::tunnel::TunnelConnector::with_routes(
+        tls,
+        Arc::new(tor::RelayTunnel(Arc::clone(relay_tor))),
+        Arc::clone(onion_routes),
+    ));
+    // No tor to go through: the relay is always reached directly.
+    #[cfg(not(feature = "tor"))]
+    let connector = {
+        let _ = (relay_tor, onion_routes);
+        Arc::new(lepic_epicbox::TcpConnector::new(tls))
+    };
     Ok(Some(EpicboxTransport::new(
         ClientSettings::new(endpoint),
         relay_network(network),
-        Arc::new(TunnelConnector::with_routes(
-            tls,
-            tunnel,
-            Arc::clone(onion_routes),
-        )),
+        connector,
     )))
 }
 
@@ -345,8 +363,8 @@ impl Session {
         let claim = runtime.claim(&data_dir).await?;
         let data_dir = claim.dir.clone();
         let claim = ClaimHolder::new(claim);
-        let node_tor = Arc::new(lepic_tor::RelayTor::new(true));
-        let relay_tor = Arc::new(lepic_tor::RelayTor::new(true));
+        let node_tor = Arc::new(RelayTor::new(true));
+        let relay_tor = Arc::new(RelayTor::new(true));
         let onion_routes = Arc::new(OnionRoutes::default());
         let node = runtime
             .nodes
@@ -369,11 +387,15 @@ impl Session {
             .register(Box::new(http.clone()))
             .map_err(|error| invalid(error.to_string()))?;
         ids.push(lepic_foreign::TRANSPORT_ID);
+        #[cfg(feature = "tor")]
         let tor = tor::tor_transport();
-        transports
-            .register(Box::new(tor.clone()))
-            .map_err(|error| invalid(error.to_string()))?;
-        ids.push(lepic_tor::TRANSPORT_ID);
+        #[cfg(feature = "tor")]
+        {
+            transports
+                .register(Box::new(tor.clone()))
+                .map_err(|error| invalid(error.to_string()))?;
+            ids.push(lepic_tor::TRANSPORT_ID);
+        }
         let engine_config = lepic_wallet::WalletConfig {
             name: WalletName::new(WALLET_NAME).map_err(|error| invalid(error.to_string()))?,
             network,
@@ -407,15 +429,19 @@ impl Session {
             http,
             http_listener: Mutex::default(),
             http_starts: AtomicU64::new(0),
+            #[cfg(feature = "tor")]
             tor,
+            #[cfg(feature = "tor")]
             tor_slot: Mutex::default(),
+            #[cfg(feature = "tor")]
             tor_starts: AtomicU64::new(0),
             relay_tor,
             node_tor,
+            #[cfg(feature = "tor")]
             tor_expected: AtomicBool::new(false),
             onion_routes,
             node_tips: BackendCache::default(),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "tor"))]
             tor_timings: Mutex::default(),
             #[cfg(test)]
             fail_next_listen: std::sync::atomic::AtomicBool::new(false),
@@ -453,6 +479,7 @@ impl Session {
     /// directory is released as soon as the database closes: now, or when the last such call
     /// has ended.
     pub(crate) fn lock(&self) {
+        #[cfg(feature = "tor")]
         self.tor_expected.store(false, Ordering::Relaxed);
         if let Some(listener) = lock(&self.listener).take() {
             listener.stop();
@@ -1931,7 +1958,7 @@ pub(crate) async fn node_tip(
     let node = runtime.nodes.client(
         config,
         node_secret,
-        &Arc::new(lepic_tor::RelayTor::new(true)),
+        &Arc::new(RelayTor::new(true)),
         &Arc::new(OnionRoutes::default()),
     )?;
     ask_node_tip(&node).await

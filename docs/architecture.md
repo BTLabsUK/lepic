@@ -58,6 +58,7 @@ lepic-ffi         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-foreign
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a
 dev-dependency for its log-capture test helpers. Any other edge is a design change and needs an ADR.
+`lepic-ffi`'s edge to `lepic-tor` is optional, behind its default `tor` feature (ADR 0026).
 Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `contact`) may not depend on Tokio or the filesystem,
 read a clock, or create their own randomness.
 

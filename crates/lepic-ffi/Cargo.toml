@@ -11,6 +11,12 @@ publish.workspace = true
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
+default = ["tor"]
+# The wallet's own tor (ADR 0018), Epicbox and node requests over it (ADR 0021, ADR 0022) and
+# sends to onions: `lepic-tor` and everything that needs it (ADR 0026). Without it every Tor
+# function of the API stays, with the same signature, and fails with `Unsupported` or reports
+# Tor as off, so one generated binding serves both builds.
+tor = ["dep:lepic-tor"]
 # An in-process scripted node and Epicbox relay for the binding's own tests
 # (the binding repository's `test/`). Never in an app build.
 mock = ["lepic-node/mock", "lepic-epicbox/mock-relay"]
@@ -27,7 +33,7 @@ lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-store.workspace = true
 lepic-telemetry.workspace = true
-lepic-tor.workspace = true
+lepic-tor = { workspace = true, optional = true }
 lepic-transport.workspace = true
 lepic-wallet.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
@@ -39,7 +45,8 @@ zeroize.workspace = true
 [dev-dependencies]
 hmac.workspace = true
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
-lepic-ffi = { path = ".", features = ["mock"] }
+# Without the default features, so `--no-default-features` tests the build without Tor.
+lepic-ffi = { path = ".", default-features = false, features = ["mock"] }
 serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }

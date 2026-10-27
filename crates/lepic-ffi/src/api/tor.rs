@@ -106,6 +106,7 @@ pub struct TorEvent {
 }
 
 impl TorEvent {
+    #[cfg_attr(not(feature = "tor"), allow(dead_code))]
     pub(crate) const fn of(kind: TorEventKind) -> Self {
         Self {
             kind,
@@ -153,7 +154,15 @@ pub struct TorStatus {
 #[frb(sync)]
 pub fn validate_onion_address(address: String) -> bool {
     guard_or("validate_onion_address", false, || {
-        lepic_tor::parse_onion(&address).is_ok()
+        // A build without Tor (ADR 0026) reads no address as an onion it could send to.
+        #[cfg(not(feature = "tor"))]
+        let valid = {
+            let _ = &address;
+            false
+        };
+        #[cfg(feature = "tor")]
+        let valid = lepic_tor::parse_onion(&address).is_ok();
+        valid
     })
 }
 

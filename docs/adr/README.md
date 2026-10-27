@@ -31,6 +31,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0023](0023-binding-in-its-own-repository.md) | The Flutter binding lives in its own repository | accepted |
 | [0024](0024-contact-pairing-and-invoice-trust.md) | Contact pairing, sealed slates, and invoice trust on paired contacts | proposed |
 | [0025](0025-animated-qr-slates.md) | Slates as animated QR codes in `ur:epic-slate` | accepted |
+| [0026](0026-tor-as-a-build-feature.md) | Tor is a build feature of the binding | accepted |
 
 Template:
 

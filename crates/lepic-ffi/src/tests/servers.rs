@@ -468,6 +468,7 @@ async fn a_listener_that_ended_on_its_own_can_be_started_again_after_a_switch() 
 }
 
 /// A SOCKS5 proxy that records the target of every `CONNECT` and refuses it.
+#[cfg(feature = "tor")]
 async fn recording_socks() -> (std::net::SocketAddr, Arc<Mutex<Vec<(String, u16)>>>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -507,6 +508,7 @@ async fn recording_socks() -> (std::net::SocketAddr, Arc<Mutex<Vec<(String, u16)
 }
 
 /// Posts to the wallet's own address over its current relay; the post fails at the proxy.
+#[cfg(feature = "tor")]
 async fn post_once(session: &Session) {
     let to = Destination::new(address(session).to_string());
     let wire = WireSlate::text(MediaType::JSON, "{}".to_owned());
@@ -520,6 +522,7 @@ async fn post_once(session: &Session) {
     assert!(posted.is_err(), "the proxy refuses every connection");
 }
 
+#[cfg(feature = "tor")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relay_switched_to_while_over_tor_is_reached_through_tor() {
     let mut world = World::new();
@@ -557,6 +560,7 @@ async fn a_relay_switched_to_while_over_tor_is_reached_through_tor() {
     );
 }
 
+#[cfg(feature = "tor")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_node_switched_to_while_over_tor_is_reached_through_tor() {
     let mut world = World::new();
@@ -599,6 +603,7 @@ async fn a_node_switched_to_while_over_tor_is_reached_through_tor() {
     );
 }
 
+#[cfg(feature = "tor")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_node_tip_asked_while_over_tor_goes_through_tor() {
     let mut world = World::new();
@@ -640,6 +645,7 @@ async fn a_node_tip_asked_while_over_tor_goes_through_tor() {
     );
 }
 
+#[cfg(feature = "tor")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_node_tip_asked_of_a_loopback_node_while_over_tor_goes_directly() {
     let mut world = World::new();
