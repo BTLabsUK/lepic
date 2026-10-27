@@ -4202,7 +4202,8 @@ fn wire__crate__api__wallet__EpicWallet_pairing_accept_impl(
             let api_by_hand = <bool>::sse_decode(&mut deserializer);
             let api_relay_mode =
                 <crate::api::types::ContactRelayMode>::sse_decode(&mut deserializer);
-            let api_class = <crate::api::types::PairingClass>::sse_decode(&mut deserializer);
+            let api_pairing_class =
+                <crate::api::types::PairingClass>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -4230,7 +4231,7 @@ fn wire__crate__api__wallet__EpicWallet_pairing_accept_impl(
                             api_name,
                             api_by_hand,
                             api_relay_mode,
-                            api_class,
+                            api_pairing_class,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -4462,7 +4463,8 @@ fn wire__crate__api__wallet__EpicWallet_pairing_invite_impl(
                 <crate::api::types::ContactRelayMode>::sse_decode(&mut deserializer);
             let api_meeting_relays = <Option<Vec<String>>>::sse_decode(&mut deserializer);
             let api_home_relay = <Option<String>>::sse_decode(&mut deserializer);
-            let api_class = <crate::api::types::PairingClass>::sse_decode(&mut deserializer);
+            let api_pairing_class =
+                <crate::api::types::PairingClass>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -4493,7 +4495,7 @@ fn wire__crate__api__wallet__EpicWallet_pairing_invite_impl(
                             api_relay_mode,
                             api_meeting_relays,
                             api_home_relay,
-                            api_class,
+                            api_pairing_class,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)

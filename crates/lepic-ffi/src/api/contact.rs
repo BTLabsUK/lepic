@@ -70,7 +70,7 @@ impl EpicWallet {
     /// `None` on the wallet's own Epicbox relay; the other side reaches them there whatever
     /// relay it uses.
     ///
-    /// `class` `Private` makes a private pairing with another wallet of the user's
+    /// `pairing_class` `Private` makes a private pairing with another wallet of the user's
     /// ([`PairingClass`]): its invite must travel by QR or paste, so `offer_words` is refused
     /// with `WrongPairingClass`.
     ///
@@ -87,7 +87,7 @@ impl EpicWallet {
         relay_mode: ContactRelayMode,
         meeting_relays: Option<Vec<String>>,
         home_relay: Option<String>,
-        class: PairingClass,
+        pairing_class: PairingClass,
     ) -> Result<PairingInvite, WalletError> {
         self.run("pairing_invite", |session| async move {
             session
@@ -99,7 +99,7 @@ impl EpicWallet {
                     relay_mode,
                     meeting_relays,
                     home_relay,
-                    class,
+                    pairing_class,
                 )
                 .await
         })
@@ -149,7 +149,7 @@ impl EpicWallet {
     /// either way, for "Send by hand" and for a post that failed (`posted` false).
     /// [`EpicWallet::contacts_collect`] takes the confirmation and raises `PairingConfirmed`.
     ///
-    /// `class` is the class the user means to answer, from the preview: an invite of the
+    /// `pairing_class` is the class the user means to answer, from the preview: an invite of the
     /// other class is refused with `WrongPairingClass` before anything is stored.
     ///
     /// Fails as [`EpicWallet::pairing_preview`] does, with `AlreadyPaired` for an invite this
@@ -160,11 +160,11 @@ impl EpicWallet {
         name: String,
         by_hand: bool,
         relay_mode: ContactRelayMode,
-        class: PairingClass,
+        pairing_class: PairingClass,
     ) -> Result<PairingAnswer, WalletError> {
         self.run("pairing_accept", |session| async move {
             session
-                .pairing_accept(link, name, by_hand, relay_mode, class)
+                .pairing_accept(link, name, by_hand, relay_mode, pairing_class)
                 .await
         })
         .await
