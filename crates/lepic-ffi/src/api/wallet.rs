@@ -755,6 +755,27 @@ impl EpicWallet {
         .await
     }
 
+    /// The confirmations an output needs to count as spendable in `summary` and to be spent by
+    /// a send: the wallet's setting, 6 until `set_minimum_confirmations` changes it. Reads only
+    /// the store.
+    pub async fn minimum_confirmations(&self) -> Result<u64, WalletError> {
+        self.run("minimum_confirmations", |session| async move {
+            session.minimum_confirmations()
+        })
+        .await
+    }
+
+    /// Sets the wallet's minimum confirmations, 1 to 30 (anything else fails with
+    /// `InvalidArgument`), and re-splits the balance at once without the node: the next
+    /// `summary(refresh: false)` and the balance events use it. Pass this value as the
+    /// `minimum_confirmations` of a send so it spends what the balance calls spendable.
+    pub async fn set_minimum_confirmations(&self, count: u64) -> Result<(), WalletError> {
+        self.run("set_minimum_confirmations", |session| async move {
+            session.set_minimum_confirmations(count)
+        })
+        .await
+    }
+
     /// Every output of the default account, spent ones included, ordered by commitment, from
     /// the store alone. The values of the outputs in each `category` add up to that part of
     /// `summary(refresh: false)`; refresh first for the node's view.

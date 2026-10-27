@@ -350,9 +350,9 @@ fn a_send_needs_the_confirmations_the_balance_counts_as_spendable_by_default() {
     };
     assert_eq!(
         args.spend.min_confirmations,
-        lepic_wallet::refresh::BALANCE_MINIMUM_CONFIRMATIONS
+        lepic_wallet::refresh::DEFAULT_MINIMUM_CONFIRMATIONS
     );
-    assert_eq!(args.spend.min_confirmations, 3);
+    assert_eq!(args.spend.min_confirmations, 6);
 }
 
 #[test]

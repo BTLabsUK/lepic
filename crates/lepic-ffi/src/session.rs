@@ -32,9 +32,7 @@ use lepic_wallet::legacy_history::{
     TxOrigin as EngineTxOrigin,
 };
 use lepic_wallet::lifecycle::PhraseCheck;
-use lepic_wallet::refresh::{
-    BALANCE_MINIMUM_CONFIRMATIONS, BalanceCategory, OutputDetails, RefreshOutcome,
-};
+use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshOutcome};
 use lepic_wallet::scan::{
     FoundDuring as EngineFoundDuring, ScanCancel, ScanOptions, ScanStart, ScanSummary,
 };
@@ -823,6 +821,14 @@ impl Session {
         Ok(summary(&self.engine.balance(DEFAULT_ACCOUNT)?, false))
     }
 
+    pub(crate) fn minimum_confirmations(&self) -> Result<u64, WalletError> {
+        Ok(self.engine.minimum_confirmations()?)
+    }
+
+    pub(crate) fn set_minimum_confirmations(&self, count: u64) -> Result<(), WalletError> {
+        Ok(self.engine.set_minimum_confirmations(count)?)
+    }
+
     pub(crate) fn outputs(&self) -> Result<Vec<WalletOutput>, WalletError> {
         let outputs = self.engine.outputs(DEFAULT_ACCOUNT)?;
         Ok(outputs.iter().map(wallet_output).collect())
@@ -1467,7 +1473,7 @@ pub(crate) async fn forward_events(
 fn summary(balance: &Balance, validated_with_node: bool) -> WalletSummary {
     WalletSummary {
         last_confirmed_height: balance.height.value(),
-        minimum_confirmations: BALANCE_MINIMUM_CONFIRMATIONS,
+        minimum_confirmations: balance.minimum_confirmations,
         total: balance.total.value(),
         spendable: balance.spendable.value(),
         awaiting_confirmation: balance.awaiting_confirmation.value(),

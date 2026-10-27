@@ -328,6 +328,7 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         | E::Account(_)
         | E::UnknownTransaction(_)
         | E::Transition(_)
+        | E::MinimumConfirmationsOutOfRange { .. }
         | E::PartnerPosted { .. } => WalletErrorKind::InvalidArgument,
         E::WalletExists => WalletErrorKind::WalletAlreadyExists,
         E::NoWallet => WalletErrorKind::WalletNotFound,
