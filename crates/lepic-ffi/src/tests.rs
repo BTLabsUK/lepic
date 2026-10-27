@@ -11,6 +11,7 @@ use crate::api::wallet::{EpicWallet, PinWallet, delete_wallet, wallet_fingerprin
 use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
 
+mod address_signature;
 mod contact;
 mod http;
 mod invoice;

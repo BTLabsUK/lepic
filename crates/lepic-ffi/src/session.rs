@@ -274,6 +274,20 @@ pub(crate) fn relay_address(address: &str, network: Network) -> Option<EpicboxAd
     EpicboxAddress::parse(address, relay_network(network)).ok()
 }
 
+/// Longest message [`crate::api::wallet::EpicWallet::sign_with_address_key`] signs or
+/// [`crate::api::wallet::verify_address_signature`] checks.
+pub(crate) const MAX_ADDRESS_SIGNED_LEN: usize = 64 * 1024;
+
+pub(crate) fn verify_address_signature(public_key: &str, message: &[u8], signature: &str) -> bool {
+    if message.len() > MAX_ADDRESS_SIGNED_LEN {
+        return false;
+    }
+    [RelayNetwork::Mainnet, RelayNetwork::Floonet]
+        .into_iter()
+        .filter_map(|network| EpicboxAddress::parse(public_key, network).ok())
+        .any(|address| lepic_epicbox::address_message_verifies(&address, message, signature))
+}
+
 /// Words separated by single spaces, lowercase, as the engine expects. Built in one buffer
 /// large enough that it never moves, so no copy of the phrase is left unwiped.
 pub(crate) fn normalize_phrase(phrase: &str) -> Zeroizing<String> {
@@ -1252,6 +1266,14 @@ impl Session {
 
     pub(crate) fn epicbox_address(&self) -> Result<String, WalletError> {
         Ok(self.engine.epicbox_attach(&self.epicbox()?)?.to_string())
+    }
+
+    /// Never logs the message or the signature.
+    pub(crate) fn address_signature(&self, message: &[u8]) -> Result<String, WalletError> {
+        if message.len() > MAX_ADDRESS_SIGNED_LEN {
+            return Err(invalid("message too long to sign"));
+        }
+        Ok(self.engine.address_signature(message)?.to_der_hex())
     }
 
     /// Never logs the token, the text or the signature.

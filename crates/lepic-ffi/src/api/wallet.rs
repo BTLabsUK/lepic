@@ -56,6 +56,18 @@ pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
     })
 }
 
+/// True when `signature`, hex as [`EpicWallet::sign_with_address_key`] returns it, is that
+/// call's signature of `message` by the wallet whose Epicbox address has the key `public_key`.
+/// `public_key` is written as in the address, with or without `@<relay>`, on either chain. A
+/// signature made for a relay, a push registration or any other text never passes. False for
+/// anything malformed and for a `message` over 64 KiB.
+#[frb(sync)]
+pub fn verify_address_signature(public_key: String, message: Vec<u8>, signature: String) -> bool {
+    guard_or("verify_address_signature", false, || {
+        session::verify_address_signature(&public_key, &message, &signature)
+    })
+}
+
 /// What the V2 or V3 slate text `json` says, read as [`EpicWallet::receive_slate`] and
 /// [`EpicWallet::finalize_and_post`] read it, without a wallet and without checking signatures.
 /// `chain` sets the minimum fee a slate must pay. Route a slate file by its `stage`: an S1 to
@@ -1207,6 +1219,19 @@ impl EpicWallet {
     pub async fn epicbox_address(&self) -> Result<String, WalletError> {
         self.run("epicbox_address", |session| async move {
             session.epicbox_address()
+        })
+        .await
+    }
+
+    /// Signs `message` with this wallet's Epicbox address key and returns the DER signature in
+    /// hex. Another wallet that holds the same recovery phrase makes the same signature, and
+    /// [`verify_address_signature`] checks it against the key in [`EpicWallet::epicbox_address`],
+    /// so two devices can prove they hold one wallet. The digest is tagged so that no text the
+    /// key signs for a relay or a push registration can ever equal it. Needs no relay. Fails
+    /// with `InvalidArgument` for a `message` over 64 KiB.
+    pub async fn sign_with_address_key(&self, message: Vec<u8>) -> Result<String, WalletError> {
+        self.run("sign_with_address_key", |session| async move {
+            session.address_signature(&message)
         })
         .await
     }
