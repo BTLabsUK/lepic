@@ -1,6 +1,7 @@
 //! Epicbox addresses, message crypto, protocol frames and relay transport.
 
 mod address;
+mod address_signature;
 mod client;
 mod client_inbox;
 mod crypto;
@@ -19,6 +20,9 @@ pub mod tunnel;
 pub use address::{
     AddressError, DEFAULT_DOMAIN, DEFAULT_PORT, Domain, EpicboxAddress, MAX_ADDRESS_LEN,
     MAX_DOMAIN_LEN, Network,
+};
+pub use address_signature::{
+    address_message_verifies, sign_address_message, verify_address_message,
 };
 pub use client::{
     Awaiting, Backoff, ClientError, ClientSettings, EpicboxClient, Identity, TRANSPORT_ID,
