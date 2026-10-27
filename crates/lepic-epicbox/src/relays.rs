@@ -48,7 +48,10 @@ mod tests {
         assert_eq!(mainnet[0].domain().as_str(), "epicbox.epiccash.com");
         assert_eq!(floonet[0].domain().as_str(), "flooepicbox.btlabs.uk");
         assert!(is_built_in_relay(Network::Floonet, &floonet[0]));
-        let names: Vec<&str> = mainnet.iter().map(|relay| relay.domain().as_str()).collect();
+        let names: Vec<&str> = mainnet
+            .iter()
+            .map(|relay| relay.domain().as_str())
+            .collect();
         assert_eq!(
             names,
             [
