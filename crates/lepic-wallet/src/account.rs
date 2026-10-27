@@ -20,6 +20,21 @@ pub const DEFAULT_ACCOUNT_LABEL: &str = "default";
 /// `epic-wallet` turns a component at or above it into a hardened derivation step.
 pub(crate) const FIRST_HARDENED: u32 = 1 << 31;
 
+/// Where this install's output key counters start, drawn once per database. Two installs of one
+/// recovery phrase each walk their own counter, and a counter that starts where the other's
+/// is makes the same key, which for the same value is the same commitment.
+const KEY_START_SETTING: &str = "wallet.output_key_start";
+
+/// Starts lie above any counter an install that started at zero reaches, and leave room below
+/// the hardened range for the keys an install hands out.
+const KEY_START_FLOOR: u32 = 1 << 20;
+const KEY_START_CEILING: u32 = FIRST_HARDENED - (1 << 24);
+
+/// A key a scan finds this far above an account's counter can still be one this install
+/// handed out after the database it runs on was copied; anything further belongs to another
+/// install's range, and following it would hand out that install's next keys.
+pub(crate) const OWN_KEY_WINDOW: u32 = 1 << 16;
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum AccountError {
@@ -98,13 +113,60 @@ pub(crate) fn parent_key_id(index: AccountIndex) -> Result<Identifier, WalletErr
     Ok(Identifier::new(2, [index.0, 0, 0, 0])?)
 }
 
+/// A random start for this install's output key counters, uniform in
+/// `KEY_START_FLOOR..KEY_START_CEILING`.
+pub(crate) fn draw_key_start(rng: &mut (impl rand_core::CryptoRng + ?Sized)) -> u32 {
+    let span = u64::from(KEY_START_CEILING.saturating_sub(KEY_START_FLOOR));
+    let offset = u64::from(rng.next_u32())
+        .checked_mul(span)
+        .map_or(0, |scaled| scaled >> 32);
+    KEY_START_FLOOR.saturating_add(u32::try_from(offset).unwrap_or(0))
+}
+
+/// The counter an account added now starts at: this install's start for an account it may hand
+/// out keys from, zero for a hardened one and in a database that has no start yet.
+pub(crate) fn key_counter_start(
+    repos: &dyn Repositories,
+    index: AccountIndex,
+) -> Result<u32, WalletError> {
+    if index.0 >= FIRST_HARDENED {
+        return Ok(0);
+    }
+    Ok(repos
+        .setting(KEY_START_SETTING)?
+        .and_then(|text| text.parse::<u32>().ok())
+        .filter(|start| (KEY_START_FLOOR..KEY_START_CEILING).contains(start))
+        .unwrap_or(0))
+}
+
+/// Gives a database without a key start `start`, once, and moves every account's counter up to
+/// it, so this install's next keys are its own whatever another install of the phrase uses.
+/// Keys below stay where they are; a database that has a start keeps it.
+pub(crate) fn place_key_counters(
+    repos: &mut dyn Repositories,
+    start: u32,
+) -> Result<(), WalletError> {
+    if repos.setting(KEY_START_SETTING)?.is_some() {
+        return Ok(());
+    }
+    repos.put_setting(KEY_START_SETTING, &start.to_string())?;
+    for mut record in repos.accounts()? {
+        let start = key_counter_start(repos, record.index)?;
+        if record.next_child < start {
+            record.next_child = start;
+            repos.put_account(&record)?;
+        }
+    }
+    Ok(())
+}
+
 /// Stores the default account `m/0/0` unless an account with index 0 exists.
 pub(crate) fn ensure_default_account(repos: &mut dyn Repositories) -> Result<(), WalletError> {
     if repos.account(AccountIndex(0))?.is_none() {
         repos.put_account(&AccountRecord {
             index: AccountIndex(0),
             label: DEFAULT_ACCOUNT_LABEL.to_owned(),
-            next_child: 0,
+            next_child: key_counter_start(repos, AccountIndex(0))?,
         })?;
     }
     Ok(())
@@ -135,7 +197,7 @@ pub(crate) fn create_account(
     let record = AccountRecord {
         index: AccountIndex(next_index),
         label: label.as_str().to_owned(),
-        next_child: 0,
+        next_child: key_counter_start(repos, AccountIndex(next_index))?,
     };
     repos.put_account(&record)?;
     Ok(record.into())
@@ -385,6 +447,88 @@ mod tests {
                 AccountIndex(3)
             )))
         ));
+    }
+
+    struct FixedRng(u32);
+
+    impl rand_core::TryRng for FixedRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(self.0)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from(self.0))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            dst.fill(0);
+            Ok(())
+        }
+    }
+
+    impl rand_core::TryCryptoRng for FixedRng {}
+
+    fn counter(store: &MemoryStore, index: u32) -> u32 {
+        store
+            .read(|repos| Ok::<_, WalletError>(repos.account(AccountIndex(index))?))
+            .unwrap()
+            .unwrap()
+            .next_child
+    }
+
+    #[test]
+    fn key_starts_stay_between_the_floor_and_the_ceiling() {
+        assert_eq!(draw_key_start(&mut FixedRng(0)), KEY_START_FLOOR);
+        let top = draw_key_start(&mut FixedRng(u32::MAX));
+        assert!(
+            top < KEY_START_CEILING && top > KEY_START_CEILING - 1024,
+            "{top}"
+        );
+    }
+
+    #[test]
+    fn a_key_start_moves_every_account_once_and_keeps_counters_above_it() {
+        let store = store_with_default_account();
+        store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(1),
+                    label: "far".to_owned(),
+                    next_child: KEY_START_CEILING,
+                })?;
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(FIRST_HARDENED),
+                    label: "hardened".to_owned(),
+                    next_child: 0,
+                })?;
+                place_key_counters(repos, KEY_START_FLOOR + 5)
+            })
+            .unwrap();
+        assert_eq!(counter(&store, 0), KEY_START_FLOOR + 5);
+        assert_eq!(counter(&store, 1), KEY_START_CEILING);
+        assert_eq!(counter(&store, FIRST_HARDENED), 0);
+
+        store
+            .write(|repos| place_key_counters(repos, KEY_START_FLOOR + 9))
+            .unwrap();
+        assert_eq!(
+            counter(&store, 0),
+            KEY_START_FLOOR + 5,
+            "the start is drawn once"
+        );
+        let added = store
+            .write(|repos| create_account(repos, &AccountLabel::new("new").unwrap()))
+            .unwrap();
+        assert_eq!(counter(&store, added.index.0), KEY_START_FLOOR + 5);
+        let key = store
+            .write(|repos| next_output_key(repos, AccountIndex(0)))
+            .unwrap();
+        assert_eq!(
+            key.to_bip32_path(),
+            format!("m/0/0/{}", KEY_START_FLOOR + 5)
+        );
     }
 
     #[test]

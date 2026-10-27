@@ -33,11 +33,17 @@ fn received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys() {
     let (s1, transport) = delivered_s1(case);
     let s2 = vector(&format!("{case}_s2_v3"));
     let receiver = Receiver::new(&receiver_mnemonic(&s2), slate_height(&s1));
+    let start = receiver
+        .store()
+        .read(|repos| repos.account(AccountIndex(0)))
+        .unwrap()
+        .unwrap()
+        .next_child;
     let received = receiver.receive(transport, &json(&s1), None).unwrap();
     let slate_id = Uuid::from_bytes(*received.slate.id().as_bytes());
     let amount = received.slate.amount();
 
-    let key_id = Identifier::new(3, [0, 0, 0, 0]).unwrap();
+    let key_id = Identifier::new(3, [0, 0, start, 0]).unwrap();
     let keychain = Keychain::from_seed(&receiver.seed, Network::Floonet).unwrap();
     let commitment = keychain
         .commit(amount.value(), &key_id, SwitchCommitment::Regular)
@@ -71,7 +77,10 @@ fn received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys() {
             let reply = repos.slate(slate_id, SlateStage::Standard2)?.unwrap();
             assert_eq!(reply.bytes, received.reply.as_bytes());
             assert_eq!(reply.codec, "legacy-v3");
-            assert_eq!(repos.account(AccountIndex(0))?.unwrap().next_child, 1);
+            assert_eq!(
+                repos.account(AccountIndex(0))?.unwrap().next_child,
+                start + 1
+            );
             Ok::<_, StoreError>(())
         })
         .unwrap();

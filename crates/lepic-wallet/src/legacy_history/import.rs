@@ -792,7 +792,7 @@ fn ensure_account(repos: &mut dyn Repositories, index: AccountIndex) -> Result<b
     repos.put_account(&AccountRecord {
         index,
         label,
-        next_child: 0,
+        next_child: crate::account::key_counter_start(repos, index)?,
     })?;
     Ok(true)
 }
@@ -860,7 +860,7 @@ fn name_accounts(
                 repos.put_account(&AccountRecord {
                     index,
                     label,
-                    next_child: 0,
+                    next_child: crate::account::key_counter_start(repos, index)?,
                 })?;
                 named = named.saturating_add(1);
             }

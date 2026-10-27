@@ -438,11 +438,13 @@ pub fn assert_matches_upstream<N: NodeApi + 'static>(
         .iter()
         .find(|account| account.index == AccountIndex(0))
         .unwrap();
-    assert_eq!(
-        u64::from(default_account.next_child),
-        number(&after["next_child_index"]),
+    // The counter stays at this install's own start, above every key the old wallet used,
+    // instead of following them as upstream's restore does.
+    assert!(
+        u64::from(default_account.next_child) >= number(&after["next_child_index"]),
         "{name}: next child index"
     );
+    assert!(default_account.next_child >= 1 << 20, "{name}: own start");
 
     let scanned = wallet.last_scanned_block().unwrap();
     assert_eq!(after["init_status"], "InitComplete", "{name}");

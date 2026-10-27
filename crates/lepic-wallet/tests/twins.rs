@@ -541,9 +541,10 @@ fn the_receive_whose_answer_the_sender_did_not_finalize_is_superseded() {
 fn a_receive_whose_own_output_is_on_chain_is_confirmed_not_superseded() {
     let world = World::new();
     on_chain(&world, &world.payer);
-    // Without a history of its own the twin derives the same key, so the sender's
-    // transaction pays the twin's output too.
+    // Installs whose key counters stand at the same point derive the same key, so the
+    // sender's transaction pays the twin's output too.
     let twin = world.issuer_twin();
+    same_counter(&world.issuer, &twin);
     answered_twice(&world, &twin);
     assert_eq!(drain(&world, &world.payer).finalized, 1);
     mine_pushed(&world, true);
@@ -639,4 +640,45 @@ fn a_node_whose_tip_is_not_past_the_slate_supersedes_nothing() {
 
     assert_eq!(incoming(&twin).1, TxState::Received);
     assert!(superseded(&mut twin_events).is_empty());
+}
+
+/// Puts `twin`'s key counter where `install`'s stands, as two installs whose random starts met.
+fn same_counter(install: &Party, twin: &Party) {
+    let counter = install
+        .read(|repos| repos.account(ACCOUNT))
+        .unwrap()
+        .next_child;
+    twin.store()
+        .write(|repos| {
+            let mut account = repos.account(ACCOUNT)?.unwrap();
+            account.next_child = counter;
+            repos.put_account(&account)
+        })
+        .unwrap();
+}
+
+/// The next output key the install hands out, and the commitment it makes for `value`.
+fn next_commitment(party: &Party, value: u64) -> (String, lepic_crypto::Commitment) {
+    let key_id = party
+        .store()
+        .write(|repos| lepic_wallet::account::next_output_key(repos, ACCOUNT))
+        .unwrap();
+    let commitment = party
+        .keychain()
+        .commit(value, &key_id, lepic_keychain::SwitchCommitment::Regular)
+        .unwrap();
+    (key_id.to_bip32_path(), commitment)
+}
+
+#[test]
+fn two_installs_of_one_phrase_make_different_output_keys_for_the_same_value() {
+    let world = World::new();
+    let twin = world.issuer_twin();
+    let (key, commitment) = next_commitment(&world.issuer, AMOUNT);
+    let (twin_key, twin_commitment) = next_commitment(&twin, AMOUNT);
+    assert_ne!(key, twin_key, "each install starts its key counter apart");
+    assert_ne!(
+        commitment, twin_commitment,
+        "the same key and value would make one commitment, which the chain holds once"
+    );
 }

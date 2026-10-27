@@ -852,11 +852,14 @@ fn restore_finds_outputs_on_every_path_the_proofs_rewind_to() {
         .iter()
         .map(|account| (account.index.0, account.label.as_str(), account.next_child))
         .collect();
+    // Restored keys far below this install's own start do not move its counters.
+    let start = accounts[0].2;
+    assert!(start >= 1 << 20, "{start}");
     assert_eq!(
         accounts,
         [
-            (0, "default", 0),
-            (2, "account_1", 4),
+            (0, "default", start),
+            (2, "account_1", start),
             (hardened, "account_2", 2),
         ],
         "accounts of the parent paths, counters past their restored children"

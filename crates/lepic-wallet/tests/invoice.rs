@@ -1168,6 +1168,14 @@ fn finalizing_refuses_an_i2_from_the_margin_before_the_payers_cutoff() {
 /// all 01.
 fn rebuilt_i1(flow: &Flow) -> BuiltI1 {
     let ones = || SecretKey::from_array([1; 32]).unwrap();
+    // The I1's output took the last key the counter handed out.
+    let child = flow
+        .issuer
+        .read(|repos| repos.account(ACCOUNT))
+        .unwrap()
+        .next_child
+        .checked_sub(1)
+        .unwrap();
     let built = build_i1(
         &flow.issuer.keychain,
         &I1Plan {
@@ -1175,7 +1183,7 @@ fn rebuilt_i1(flow: &Flow) -> BuiltI1 {
             amount: Amount::new(AMOUNT),
             height: Height::new(TIP),
             ttl_cutoff_height: None,
-            key_id: Identifier::new(3, [0, 0, 0, 0]).unwrap(),
+            key_id: Identifier::new(3, [0, 0, child, 0]).unwrap(),
             message: None,
         },
         I1Randomness {

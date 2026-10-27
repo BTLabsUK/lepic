@@ -158,7 +158,14 @@ where
         self.ensure_locked()?;
         let session = self
             .blocking(move |ports, config| {
-                lifecycle::open(&ports.stores, &ports.secrets, &target(config), &password)
+                let key_start = account::draw_key_start(&mut **ports.rng.lock());
+                lifecycle::open(
+                    &ports.stores,
+                    &ports.secrets,
+                    &target(config),
+                    &password,
+                    key_start,
+                )
             })
             .await?;
         self.install(session)?;
@@ -266,6 +273,7 @@ where
     ) -> Result<(), WalletError> {
         let session = self
             .blocking(move |ports, config| {
+                let key_start = account::draw_key_start(&mut **ports.rng.lock());
                 lifecycle::create(
                     &ports.stores,
                     &ports.secrets,
@@ -273,6 +281,7 @@ where
                     &password,
                     &seed,
                     source,
+                    key_start,
                 )
             })
             .await?;

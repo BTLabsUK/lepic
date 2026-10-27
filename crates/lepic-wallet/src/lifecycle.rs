@@ -15,7 +15,7 @@ use rand_core::CryptoRng;
 use tracing::debug;
 use zeroize::Zeroizing;
 
-use crate::account::ensure_default_account;
+use crate::account::{ensure_default_account, place_key_counters};
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 
@@ -160,6 +160,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     password: &Password,
     seed: &Seed,
     source: SeedSource,
+    key_start: u32,
 ) -> Result<Session<S::Store>, WalletError> {
     if secrets.exists()? {
         return Err(WalletError::WalletExists);
@@ -185,7 +186,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     debug!("secret storage created");
     let rebuilt = identity == StoredIdentity::Empty && source == SeedSource::Recovered;
     store.write(|repos| {
-        initialise(repos, target.network, &ours)?;
+        initialise(repos, target.network, &ours, key_start)?;
         if rebuilt {
             require_restore_scan(repos)?;
         }
@@ -201,6 +202,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     secrets: &V,
     target: &Target<'_>,
     password: &Password,
+    key_start: u32,
 ) -> Result<Session<S::Store>, WalletError> {
     let vault = secrets.unlock(password)?;
     debug!("secret storage unlocked");
@@ -213,7 +215,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     // which must run before new outputs are created.
     store.write(|repos| {
         let identity = stored_identity(repos, target.network, &ours)?;
-        initialise(repos, target.network, &ours)?;
+        initialise(repos, target.network, &ours, key_start)?;
         if identity == StoredIdentity::Empty {
             require_restore_scan(repos)?;
         }
@@ -401,14 +403,18 @@ fn stored_identity(
     }
 }
 
+/// Stamps the database with its network and seed, gives it `key_start` unless it has a key
+/// start already, and adds the default account.
 fn initialise(
     repos: &mut dyn Repositories,
     network: Network,
     ours: &SeedIdentity,
+    key_start: u32,
 ) -> Result<(), WalletError> {
     repos.put_setting(NETWORK_SETTING, network.as_str())?;
     repos.put_setting(FINGERPRINT_SETTING, &ours.fingerprint)?;
     repos.put_setting(SEED_CHECK_SETTING, &ours.check_text())?;
+    place_key_counters(repos, key_start)?;
     ensure_default_account(repos)
 }
 

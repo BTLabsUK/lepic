@@ -28,7 +28,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
 
-use crate::account::FIRST_HARDENED;
+use crate::account::{FIRST_HARDENED, OWN_KEY_WINDOW, key_counter_start};
 use crate::cancel::{drop_holdings, self_send_partner};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
@@ -1049,13 +1049,15 @@ fn ensure_account(repos: &mut dyn Repositories, index: AccountIndex) -> Result<(
     repos.put_account(&AccountRecord {
         index,
         label: label.clone(),
-        next_child: 0,
+        next_child: key_counter_start(repos, index)?,
     })?;
     info!(account = %label, "account restored");
     Ok(())
 }
 
 /// Moves the account's key counter past a restored output's key, so no key is handed out twice.
+/// Only a key within [`OWN_KEY_WINDOW`] of the counter moves it: one further up was handed out
+/// by another install of the phrase, whose next keys the counter would otherwise walk into.
 fn advance_next_child(
     repos: &mut dyn Repositories,
     account: AccountIndex,
@@ -1064,7 +1066,10 @@ fn advance_next_child(
     let Some(mut record) = repos.account(account)? else {
         return Ok(());
     };
-    if child >= record.next_child {
+    let own = child
+        .checked_sub(record.next_child)
+        .is_some_and(|above| above < OWN_KEY_WINDOW);
+    if own {
         record.next_child = child.checked_add(1).ok_or(ArithmeticError::Overflow)?;
         repos.put_account(&record)?;
     }
@@ -1164,6 +1169,39 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn found_keys_move_the_counter_only_within_this_installs_window() {
+        let store = lepic_store::MemoryStore::new(lepic_store::ContextKey::from_bytes(
+            [1; lepic_store::CONTEXT_KEY_LEN],
+        ));
+        let counter = |store: &lepic_store::MemoryStore| {
+            store
+                .read(|repos| repos.account(AccountIndex(0)))
+                .unwrap()
+                .unwrap()
+                .next_child
+        };
+        store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(0),
+                    label: "default".to_owned(),
+                    next_child: 5_000_000,
+                })
+            })
+            .unwrap();
+        for child in [12, 4_999_999, 5_000_000 + OWN_KEY_WINDOW, 900_000_000] {
+            store
+                .write(|repos| advance_next_child(repos, AccountIndex(0), child))
+                .unwrap();
+            assert_eq!(counter(&store), 5_000_000, "{child}");
+        }
+        store
+            .write(|repos| advance_next_child(repos, AccountIndex(0), 5_000_000 + 40))
+            .unwrap();
+        assert_eq!(counter(&store), 5_000_041);
+    }
 
     #[test]
     fn scan_found_round_trips_and_rejects_malformed_text() {

@@ -126,6 +126,19 @@ impl World {
             .unwrap()
     }
 
+    /// Puts every account's key counter at zero, as in a database from before each install
+    /// drew its own start.
+    fn zero_counters(&self) {
+        lepic_store::WalletStore::write(&self.store(), |repos| {
+            for mut account in repos.accounts()? {
+                account.next_child = 0;
+                repos.put_account(&account)?;
+            }
+            Ok::<_, lepic_store::StoreError>(())
+        })
+        .unwrap();
+    }
+
     fn next_child(&self, account: AccountIndex) -> u32 {
         lepic_store::WalletStore::read(&self.store(), |repos| repos.account(account))
             .unwrap()
@@ -610,15 +623,33 @@ fn a_label_the_user_chose_is_kept() {
 }
 
 #[test]
-fn key_counters_move_past_every_key_the_old_wallet_used() {
+fn an_install_keeps_its_own_key_counter_far_above_the_old_wallets_keys() {
     let world = World::new(&OldWallet::standard(&keychain(MNEMONIC)), &[]);
+    let start = world.next_child(DEFAULT);
+    assert!(start >= 1 << 20, "{start}");
 
     world.import();
 
-    // The default account's highest key is child 7, above its counter of 4; savings used only
-    // child 0, below its counter of 3.
+    assert_eq!(world.next_child(DEFAULT), start);
+    assert_eq!(
+        world.next_child(SAVINGS),
+        start,
+        "a new account starts there too"
+    );
+}
+
+#[test]
+fn key_counters_move_past_every_key_the_old_wallet_used() {
+    let world = World::new(&OldWallet::standard(&keychain(MNEMONIC)), &[]);
+    let start = world.next_child(DEFAULT);
+    world.zero_counters();
+
+    world.import();
+
+    // The default account's highest key is child 7, above its counter of 4. Savings is new
+    // here and starts at this install's own start, above every key the old wallet used.
     assert_eq!(world.next_child(DEFAULT), 8);
-    assert_eq!(world.next_child(SAVINGS), 3);
+    assert_eq!(world.next_child(SAVINGS), start);
 }
 
 #[test]
@@ -626,17 +657,18 @@ fn an_old_counter_far_past_every_reproduced_key_is_believed_only_a_little() {
     let mut old = OldWallet::standard(&keychain(MNEMONIC));
     old.counters = vec![(0, u32::MAX), (1, 2_000_000_000)];
     let world = World::new(&old, &[]);
+    world.zero_counters();
 
     world.import();
 
-    // At most 1000 keys past the highest reproduced key (child 7, and child 0 in savings).
+    // At most 1000 keys past the highest reproduced key, child 7.
     assert_eq!(world.next_child(DEFAULT), 1_008);
-    assert_eq!(world.next_child(SAVINGS), 1_001);
 }
 
 #[test]
 fn a_history_with_no_output_to_prove_it_is_refused_and_stores_nothing() {
     let world = World::new(&OldWallet::standard(&keychain(MNEMONIC)), &[]);
+    world.zero_counters();
     let other = keychain(OTHER_MNEMONIC);
     let mut forged = OldWallet::standard(&other);
     forged.outputs.clear();
