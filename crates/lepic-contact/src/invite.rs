@@ -10,6 +10,7 @@ use crate::keys::EncPublicKey;
 use crate::link::{LinkKind, decode_link, encode_link};
 use crate::network::Network;
 use crate::pairing::{Commitment, InviteId, PairingCode};
+use crate::private::{PairingClass, PrivateSecret};
 use crate::text::{ContactName, MailboxAddress, RelayHost};
 use crate::tlv::{Fields, Writer, check_format};
 
@@ -27,6 +28,9 @@ const TAG_ENC_KEY: u8 = 0x08;
 const TAG_HOME_RELAY: u8 = 0x09;
 const TAG_SERVICE_INBOX: u8 = 0x0a;
 const TAG_ONION: u8 = 0x0b;
+/// The link secret of a private pairing's invite: an extension, so a reader that predates
+/// private pairings skips it, and its reply, sealed without the key, does not open.
+const TAG_LINK_SECRET: u8 = 0x80;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteFields {
@@ -45,6 +49,8 @@ pub struct InviteFields {
     /// A service's fixed pairing inbox, used instead of the derived reply mailbox.
     pub service_inbox: Option<MailboxAddress>,
     pub onion: Option<RelayHost>,
+    /// Set exactly for a private pairing's invite ([`PairingClass::Private`]).
+    pub link: Option<PrivateSecret>,
 }
 
 /// An invite and its exact bytes, which hold the pairing code: wiped on drop, and `Debug` shows
@@ -96,6 +102,13 @@ impl Invite {
             TAG_ONION,
             fields.onion.as_ref().map(|onion| onion.as_str().as_bytes()),
         )?;
+        if fields.link.is_some() && fields.service_inbox.is_some() {
+            return Err(EncodeError::WrongClass);
+        }
+        writer.optional(
+            TAG_LINK_SECRET,
+            fields.link.as_ref().map(|link| &link.expose_bytes()[..]),
+        )?;
         let bytes = writer.into_bytes();
         if bytes.len() > MAX_INVITE_LEN {
             return Err(EncodeError::Oversized {
@@ -141,6 +154,18 @@ impl Invite {
             .get(TAG_ONION)
             .map(|bytes| RelayHost::try_from(bytes).map_err(|_| value(TAG_ONION)))
             .transpose()?;
+        let link = fields
+            .extension(TAG_LINK_SECRET)
+            .map(|bytes| {
+                <[u8; 32]>::try_from(bytes)
+                    .map(PrivateSecret::from_bytes)
+                    .map_err(|_| value(TAG_LINK_SECRET))
+            })
+            .transpose()?;
+        // A private pairing's messages never go to a service's fixed inbox.
+        if link.is_some() && service_inbox.is_some() {
+            return Err(value(TAG_LINK_SECRET).into());
+        }
         Ok(Self {
             network,
             fields: InviteFields {
@@ -153,6 +178,7 @@ impl Invite {
                 home_relay,
                 service_inbox,
                 onion,
+                link,
             },
             bytes: bytes.to_vec(),
         })
@@ -177,6 +203,15 @@ impl Invite {
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Which pairing the invite makes.
+    pub fn class(&self) -> PairingClass {
+        if self.fields.link.is_some() {
+            PairingClass::Private
+        } else {
+            PairingClass::Contact
+        }
     }
 
     pub fn id(&self) -> InviteId {

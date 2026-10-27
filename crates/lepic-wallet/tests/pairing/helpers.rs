@@ -14,7 +14,8 @@ use lepic_contact::ContactKind;
 use lepic_store::{AccountIndex, ContactId};
 use lepic_wallet::Event;
 use lepic_wallet::contact::{
-    AcceptRequest, CollectTrigger, ContactRelays, InviteExpiry, InviteRequest, RelayMode,
+    AcceptRequest, CollectTrigger, ContactRelays, InviteExpiry, InviteRequest, PairingClass,
+    RelayMode,
 };
 use tokio::sync::broadcast::Receiver;
 
@@ -47,6 +48,7 @@ pub fn invite_request(name: &str) -> InviteRequest {
         expiry: InviteExpiry::OneDay,
         offer_words: false,
         home_relay: None,
+        class: PairingClass::Contact,
     }
 }
 
@@ -56,6 +58,7 @@ pub fn accept(link: &str, name: &str, by_hand: bool) -> AcceptRequest {
         account: AccountIndex(0),
         name: name.to_owned(),
         by_hand,
+        class: PairingClass::Contact,
     }
 }
 

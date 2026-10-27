@@ -28,6 +28,7 @@ pub mod legacy_history;
 pub mod lifecycle;
 pub mod notice;
 mod onion_key;
+mod other_wallet;
 pub mod ports;
 mod process;
 mod receipt_cap;

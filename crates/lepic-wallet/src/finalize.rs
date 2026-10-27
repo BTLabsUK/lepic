@@ -44,7 +44,7 @@ use lepic_store::{
 use lepic_transport::transport::TransportId;
 use thiserror::Error;
 use tracing::field::Empty;
-use tracing::{Span, debug, info, instrument};
+use tracing::{Span, debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::account;
@@ -154,6 +154,15 @@ pub enum FinalizeError {
     /// The transaction is finalized and stored; [`crate::Wallet::post`] tries again.
     #[error("transaction {tx_id} is finalized but the node did not accept it")]
     NotPosted {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
+    /// The node refused the transaction and no longer holds inputs of it that this wallet
+    /// held: another wallet on the same recovery phrase spent them. The transaction was
+    /// cancelled, its other inputs released, and a refresh ran.
+    #[error("inputs of transaction {tx_id} were spent by another wallet")]
+    InputsSpentElsewhere {
         tx_id: TxId,
         #[source]
         source: NodeError,
@@ -648,7 +657,27 @@ pub(crate) fn finalize_own(
 pub(crate) enum PushFailure {
     /// The node refused or could not be reached, and does not hold the kernel.
     NotPosted(NodeError),
+    /// The node's pool refused it and inputs this wallet held are gone from the chain.
+    InputsSpent(NodeError),
     Wallet(WalletError),
+}
+
+/// What the node's pool API answers, as `Error::Internal("Failed to update pool: ...")`, for
+/// any transaction its pool refuses, among them one whose inputs are not in the UTXO set.
+const POOL_REFUSED: &str = "Failed to update pool:";
+
+/// Whether the node's pool refused a push, for whatever reason its text gives.
+fn pool_refused(error: &NodeError) -> bool {
+    matches!(
+        error,
+        NodeError::Rejected {
+            rejection: NodeRejection {
+                kind: RejectionKind::Internal,
+                message: Some(message),
+            },
+            ..
+        } if message.starts_with(POOL_REFUSED)
+    )
 }
 
 /// What the node's pool API answers, as `Error::Internal("Failed to update pool: {PoolError}")`,
@@ -816,8 +845,11 @@ where
     /// nothing that is stored.
     ///
     /// Fails with [`FinalizeError::Wallet`] carrying [`WalletError::UnknownTransaction`], with
-    /// [`FinalizeError::NotPostable`] when the transaction is not `finalized` or `posted`, and
-    /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached. A send
+    /// [`FinalizeError::NotPostable`] when the transaction is not `finalized` or `posted`,
+    /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached, and with
+    /// [`FinalizeError::InputsSpentElsewhere`] when the node's pool refuses it and two answers
+    /// of the node agree that inputs this wallet held are no longer unspent: another wallet on
+    /// the phrase spent them. The transaction is then cancelled and a refresh runs. A send
     /// with a cutoff, the earlier of its slate's TTL cutoff and the local cutoff of
     /// [`crate::send::SendRequest::local_ttl_blocks`], has the node's tip asked for, and is
     /// refused with [`FinalizeError::Expired`] once the tip reaches it, also when it was posted
@@ -863,12 +895,86 @@ where
         finalized: &FinalizedSlate,
         propagation: Propagation,
     ) -> Result<Posted, FinalizeError> {
-        self.push_final(finalized, tx_id, propagation)
-            .await
-            .map_err(|failure| match failure {
-                PushFailure::NotPosted(source) => FinalizeError::NotPosted { tx_id, source },
-                PushFailure::Wallet(error) => FinalizeError::Wallet(error),
+        match self.push_final(finalized, tx_id, propagation).await {
+            Ok(posted) => Ok(posted),
+            Err(PushFailure::NotPosted(source)) => Err(FinalizeError::NotPosted { tx_id, source }),
+            Err(PushFailure::InputsSpent(source)) => {
+                self.end_spent_elsewhere(tx_id).await;
+                Err(FinalizeError::InputsSpentElsewhere { tx_id, source })
+            }
+            Err(PushFailure::Wallet(error)) => Err(FinalizeError::Wallet(error)),
+        }
+    }
+
+    /// Ends a transaction the node refused because another wallet spent its inputs: cancels it
+    /// as a user's cancel does, releasing the inputs still unspent, and refreshes, which marks
+    /// the spent ones spent and records the other wallet's spend. Both are best effort; what
+    /// fails is logged and left to the next refresh.
+    pub(crate) async fn end_spent_elsewhere(&self, tx_id: TxId) {
+        match self.cancel(tx_id).await {
+            Ok(()) => {
+                let marked = match self.session() {
+                    Ok(session) => {
+                        self.blocking(move |_, _| {
+                            Ok(session.store.write(|repos| {
+                                crate::other_wallet::mark_inputs_lost(repos, tx_id)
+                            })?)
+                        })
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = marked {
+                    warn!(error = %crate::inbox::ErrorChain(&error), "send spent elsewhere not marked");
+                }
+            }
+            Err(error) => {
+                warn!(error = %crate::inbox::ErrorChain(&error), "send spent elsewhere not cancelled");
+            }
+        }
+        if let Err(error) = self.refresh().await {
+            warn!(error = %crate::inbox::ErrorChain(&error), "refresh after a send spent elsewhere failed");
+        }
+    }
+
+    /// Whether inputs of `transaction` that this wallet holds are missing from the node's
+    /// UTXO set in two answers, as a refresh decides an output was spent.
+    async fn inputs_gone(&self, transaction: &lepic_primitives::tx::Transaction) -> bool {
+        let Ok(session) = self.session() else {
+            return false;
+        };
+        let inputs: Vec<Commitment> = transaction
+            .body()
+            .inputs()
+            .iter()
+            .map(|input| input.commitment)
+            .collect();
+        let ours = self
+            .blocking(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let mut ours = Vec::new();
+                    for commitment in inputs {
+                        if repos.output(commitment.as_bytes())?.is_some() {
+                            ours.push(commitment);
+                        }
+                    }
+                    Ok::<_, StoreError>(ours)
+                }))
             })
+            .await;
+        let Ok(Ok(mut missing)) = ours else {
+            return false;
+        };
+        for _ in 0..2 {
+            if missing.is_empty() {
+                return false;
+            }
+            let Ok(held) = self.ports().node.get_outputs(&missing).await else {
+                return false;
+            };
+            missing.retain(|commitment| !held.iter().any(|found| found.commitment == *commitment));
+        }
+        !missing.is_empty()
     }
 
     /// Hands the transaction to the node, then records the transaction as posted. A node whose
@@ -895,6 +1001,10 @@ where
                 Some(height) => {
                     debug!(height = %height, "kernel found on chain");
                     Posted::AlreadyOnChain { height }
+                }
+                None if pool_refused(&source) && self.inputs_gone(&finalized.transaction).await => {
+                    info!("inputs spent by another wallet");
+                    return Err(PushFailure::InputsSpent(source));
                 }
                 None => return Err(PushFailure::NotPosted(source)),
             },

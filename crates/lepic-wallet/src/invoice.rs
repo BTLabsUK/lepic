@@ -233,6 +233,13 @@ pub enum InvoiceError {
         #[source]
         source: NodeError,
     },
+    /// As [`crate::finalize::FinalizeError::InputsSpentElsewhere`].
+    #[error("inputs of transaction {tx_id} were spent by another wallet")]
+    InputsSpentElsewhere {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
     /// No invoice with the slate id waits on the invoice address to be paid or declined.
     #[error("invoice {slate_id} is not waiting to be paid")]
     NotParked { slate_id: SlateId },
@@ -1207,6 +1214,10 @@ where
         match self.push_final(finalized, tx_id, propagation).await {
             Ok(_) => Ok(()),
             Err(PushFailure::NotPosted(source)) => Err(InvoiceError::NotPosted { tx_id, source }),
+            Err(PushFailure::InputsSpent(source)) => {
+                self.end_spent_elsewhere(tx_id).await;
+                Err(InvoiceError::InputsSpentElsewhere { tx_id, source })
+            }
             Err(PushFailure::Wallet(error)) => Err(InvoiceError::Wallet(error)),
         }
     }

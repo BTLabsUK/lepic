@@ -38,6 +38,7 @@ fn invite_for(alice: &Side, card: &ContactCard, nonce: &Nonce) -> Invite {
             home_relay: RelayHost::new("epicbox.example.org:443").unwrap(),
             service_inbox: None,
             onion: None,
+            link: None,
         },
     )
     .unwrap()
@@ -969,4 +970,168 @@ fn a_signed_pairing_reply_is_refused() {
         open_reply(&SealedEnvelope::decode(&envelope, NET).unwrap(), &alice.enc),
         Err(Malformed::Signed { kind: 3 }.into())
     );
+}
+
+// Private pairings.
+
+use lepic_contact::{
+    ChannelKey, PairingClass, PrivateSecret, SUITE_PSK, open_private_confirm, open_private_reply,
+    private_sas, seal_private_confirm, seal_private_reply, seal_psk,
+};
+
+fn private_invite(alice: &Side, card: &ContactCard, nonce: &Nonce, link: [u8; 32]) -> Invite {
+    Invite::new(
+        NET,
+        InviteFields {
+            link: Some(PrivateSecret::from_bytes(link)),
+            ..invite_for(alice, card, nonce).fields().clone()
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_private_invite_carries_its_link_secret_as_an_extension() {
+    let alice = Side::new(1);
+    let card = alice.card("Alice", NET);
+    let invite = private_invite(&alice, &card, &Nonce::from_bytes([1; 16]), [9; 32]);
+    let decoded = Invite::from_link(&invite.to_link(), NET).unwrap();
+    assert_eq!(decoded, invite);
+    assert_eq!(decoded.class(), PairingClass::Private);
+    assert_eq!(
+        invite_for(&alice, &card, &Nonce::from_bytes([1; 16])).class(),
+        PairingClass::Contact
+    );
+    // A service inbox never goes with a private invite.
+    let mut fields = invite.fields().clone();
+    fields.service_inbox = Some(MailboxAddress::new("esInbox@shop.example.org").unwrap());
+    assert_eq!(Invite::new(NET, fields), Err(EncodeError::WrongClass));
+}
+
+#[test]
+fn a_private_reply_opens_only_with_the_link_secret_and_both_sides_derive_one_channel() {
+    let (alice, ben) = (Side::new(1), Side::new(2));
+    let alice_card = alice.card("Alice", NET);
+    let ben_card = ben.card("Ben", NET);
+    let n_a = Nonce::from_bytes([1; 16]);
+    let invite = private_invite(&alice, &alice_card, &n_a, [9; 32]);
+    let body = ReplyBody {
+        code: invite.fields().code.clone(),
+        nonce: Nonce::from_bytes([2; 16]),
+        confirm_code: ConfirmCode::from_bytes([3; 16]),
+        card: ben_card.clone(),
+    };
+    let joiner = PrivateSecret::from_bytes([7; 32]);
+    let envelope =
+        seal_private_reply(&invite, &body, &joiner, &mut ScriptedRng::seeded(4)).unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    assert!(sealed.is_private());
+    assert_eq!(
+        open_reply(&sealed, &alice.enc),
+        Err(DecodeError::CannotOpen)
+    );
+    assert_eq!(
+        open_private_reply(&sealed, &alice.enc, &PrivateSecret::from_bytes([8; 32])).err(),
+        Some(DecodeError::CannotOpen)
+    );
+    let link = PrivateSecret::from_bytes([9; 32]);
+    let (opened, secret) = open_private_reply(&sealed, &alice.enc, &link).unwrap();
+    assert_eq!(opened, body);
+    assert_eq!(secret, joiner);
+
+    let alice_channel = ChannelKey::channel(&link, &secret, &invite, &opened.card);
+    let ben_channel = ChannelKey::channel(&link, &joiner, &invite, &ben_card);
+    assert_eq!(alice_channel, ben_channel);
+    let confirm = ConfirmBody {
+        nonce: n_a.clone(),
+        card: alice_card.clone(),
+    };
+    let envelope = seal_private_confirm(
+        &ben_card,
+        &confirm,
+        &alice.sig,
+        &alice_channel,
+        &mut ScriptedRng::seeded(5),
+    )
+    .unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    assert_eq!(
+        open_confirm(&sealed, &ben.enc),
+        Err(DecodeError::CannotOpen)
+    );
+    assert_eq!(
+        open_private_confirm(&sealed, &ben.enc, &ben_channel).unwrap(),
+        Confirm::Accepted(Box::new(confirm))
+    );
+    let other = ChannelKey::channel(
+        &link,
+        &PrivateSecret::from_bytes([6; 32]),
+        &invite,
+        &ben_card,
+    );
+    assert_eq!(
+        open_private_confirm(&sealed, &ben.enc, &other),
+        Err(DecodeError::CannotOpen)
+    );
+}
+
+#[test]
+fn a_base_envelope_never_opens_as_private_nor_a_private_one_as_base() {
+    let (alice, ben) = (Side::new(1), Side::new(2));
+    let ben_card = ben.card("Ben", NET);
+    let content = Content::new(MessageType::AppPayload, vec![1, 2, 3]);
+    let channel = ChannelKey::from_bytes([5; 32]);
+    let private = seal_psk(
+        NET,
+        ben_card.enc_key(),
+        HintRule::Contact(&ben.hint),
+        &content,
+        Some(&alice.sig),
+        &channel,
+        &mut ScriptedRng::seeded(6),
+    )
+    .unwrap();
+    assert_eq!(private[6], SUITE_PSK);
+    let sealed = SealedEnvelope::decode(&private, NET).unwrap();
+    assert_eq!(sealed.open(&ben.enc), Err(DecodeError::CannotOpen));
+    assert_eq!(
+        sealed.open_psk(&ben.enc, &channel).unwrap().content,
+        content
+    );
+    let base = seal(
+        NET,
+        ben_card.enc_key(),
+        HintRule::Contact(&ben.hint),
+        &content,
+        Some(&alice.sig),
+        &mut ScriptedRng::seeded(6),
+    )
+    .unwrap();
+    let sealed = SealedEnvelope::decode(&base, NET).unwrap();
+    assert_eq!(
+        sealed.open_psk(&ben.enc, &channel),
+        Err(DecodeError::CannotOpen)
+    );
+}
+
+#[test]
+fn the_private_words_check_covers_both_secrets() {
+    let (alice, ben) = (Side::new(1), Side::new(2));
+    let (a, b) = (alice.card("Alice", NET), ben.card("Ben", NET));
+    let (n_a, n_b) = (Nonce::from_bytes([1; 16]), Nonce::from_bytes([2; 16]));
+    let secret = |byte| PrivateSecret::from_bytes([byte; 32]);
+    let sas = private_sas(NET, &a, &b, &n_a, &n_b, &secret(1), &secret(2));
+    assert_eq!(
+        sas,
+        private_sas(NET, &a, &b, &n_a, &n_b, &secret(1), &secret(2))
+    );
+    assert_ne!(
+        sas,
+        private_sas(NET, &a, &b, &n_a, &n_b, &secret(3), &secret(2))
+    );
+    assert_ne!(
+        sas,
+        private_sas(NET, &a, &b, &n_a, &n_b, &secret(1), &secret(3))
+    );
+    assert_ne!(sas, Sas::compute(NET, &a, &b, &n_a, &n_b));
 }

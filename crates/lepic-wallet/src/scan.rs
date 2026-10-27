@@ -35,6 +35,7 @@ use crate::error::WalletError;
 use crate::event::{Event, SyncProgress};
 use crate::legacy_history::{self, block_times};
 use crate::lifecycle::{self, Session};
+use crate::other_wallet;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
@@ -385,6 +386,9 @@ struct Page {
     outputs: Vec<UnspentOutput>,
     checkpoint: Checkpoint,
     tip: Height,
+    /// An update scan of recent blocks on a wallet whose scan from genesis completed: an output
+    /// it finds with no record here was received by another wallet on the phrase.
+    update: bool,
 }
 
 /// An output of this wallet found on chain.
@@ -453,6 +457,9 @@ where
             self.ports().clock.now(),
         )?;
         let checkpoint = state.checkpoint;
+        let update = !options.delete_unconfirmed
+            && !matches!(options.start, ScanStart::Genesis)
+            && state.genesis_scanned;
         let repair = state.repair.map(Arc::new);
         let start = if options.delete_unconfirmed {
             ScanStart::Genesis
@@ -530,6 +537,7 @@ where
                         outputs: page.outputs,
                         checkpoint,
                         tip: tip.height,
+                        update,
                     },
                     repair.clone(),
                     options,
@@ -565,6 +573,16 @@ where
         };
         summary.add(&outcome);
         self.emit_changes(outcome.changes);
+        {
+            let session = Arc::clone(&session);
+            let end = tip.height;
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .write(|repos| other_wallet::close_scanned(repos, start_height, end)))
+            })
+            .await??;
+        }
         self.emit(Event::Sync(SyncProgress {
             height: tip.height,
             target: tip.height,
@@ -631,6 +649,7 @@ where
             outputs,
             checkpoint,
             tip,
+            update,
         } = page;
         let (found, spent, undated) = {
             let session = Arc::clone(&session);
@@ -673,6 +692,7 @@ where
                     &block_times,
                     repair.as_deref(),
                     checkpoint,
+                    update,
                     now,
                 )
             }))
@@ -729,6 +749,8 @@ fn resolve_start(start: ScanStart, last_scanned: Option<&ScannedBlock>, tip: Hei
 /// What a scan starts from.
 struct ScanState {
     last_scanned: Option<ScannedBlock>,
+    /// A scan from genesis completed before this one.
+    genesis_scanned: bool,
     checkpoint: Option<Checkpoint>,
     position: ChainPosition,
     repair: Option<Repair>,
@@ -769,6 +791,7 @@ fn scan_state(repos: &dyn Repositories, repairing: bool) -> Result<ScanState, Sc
     };
     Ok(ScanState {
         last_scanned: last_scanned(repos)?,
+        genesis_scanned: has_scanned(repos)?,
         checkpoint,
         position: chain::position(repos)?,
         repair: repairing.then(|| repair_set(repos)).transpose()?,
@@ -884,6 +907,7 @@ fn unexplained_heights(
     Ok(heights)
 }
 
+#[allow(clippy::too_many_arguments)] // The page and what the scan knows about it.
 fn store_found(
     repos: &mut dyn Repositories,
     found: &[FoundOutput],
@@ -891,6 +915,7 @@ fn store_found(
     block_times: &BTreeMap<Height, Timestamp>,
     repair: Option<&Repair>,
     checkpoint: Checkpoint,
+    update: bool,
     now: Timestamp,
 ) -> Result<PageOutcome, ScanError> {
     let mut outcome = PageOutcome::default();
@@ -913,7 +938,11 @@ fn store_found(
                     during,
                     dated_by_block: block_time.is_some(),
                 };
-                restore_missing(repos, output, block_time.unwrap_or(now), found, now)?;
+                if let Some(change) =
+                    restore_missing(repos, output, block_time.unwrap_or(now), found, update, now)?
+                {
+                    outcome.changes.push(change);
+                }
                 outcome.restored = outcome.restored.saturating_add(1);
                 debug!(height = %output.height, "output restored");
                 if let Some(child) = output.child {
@@ -955,6 +984,7 @@ fn reconcile(
         OutputStatus::Spent => {
             outcome.revived = outcome.revived.saturating_add(1);
             debug!(height = %found.height, "output revived");
+            other_wallet::revived(repos, &stored)?;
             true
         }
         OutputStatus::Locked if repaired(|repair| &repair.locked) => {
@@ -988,18 +1018,30 @@ fn restore_missing(
     output: &FoundOutput,
     created_at: Timestamp,
     found: ScanFound,
+    update: bool,
     now: Timestamp,
-) -> Result<(), ScanError> {
+) -> Result<Option<StateChange>, ScanError> {
     ensure_account(repos, output.account)?;
     let commitment = *output.id.commitment.as_bytes();
-    let tx = match legacy_history::link_found_output(
+    let linked = match legacy_history::link_found_output(
         repos,
         &commitment,
         output.account,
         output.height,
         now,
     )? {
-        Some(imported) => imported,
+        Some(imported) => Some(imported),
+        None => other_wallet::take_change(
+            repos,
+            output.account,
+            &output.id.commitment,
+            output.amount,
+            output.height,
+        )?,
+    };
+    let mut change = None;
+    let tx = match linked {
+        Some(linked) => linked,
         None => {
             let tx = repos.insert_transaction(&TransactionEntry {
                 account: output.account,
@@ -1014,8 +1056,19 @@ fn restore_missing(
                 updated_at: created_at,
             })?;
             repos.set_confirmed_height(tx, output.height)?;
-            repos.put_setting(&found_key(tx), found.encode())?;
             repos.put_setting(&found_output_key(tx), &output.id.commitment.to_hex())?;
+            // An update scan over recent blocks finds what another wallet on the phrase
+            // received; a restore or a scan from genesis finds what no record explains.
+            if update && found.during == FoundDuring::Rescan {
+                other_wallet::mark_received(repos, tx, output.height)?;
+                change = Some(StateChange {
+                    tx_id: tx,
+                    from: TxState::Confirmed,
+                    to: TxState::Confirmed,
+                });
+            } else {
+                repos.put_setting(&found_key(tx), found.encode())?;
+            }
             tx
         }
     };
@@ -1030,7 +1083,7 @@ fn restore_missing(
         mmr_index: Some(output.mmr_index),
         tx: Some(tx),
     })?;
-    Ok(())
+    Ok(change)
 }
 
 /// Adds an account a restored output belongs to under the label `epic-wallet` would give it.

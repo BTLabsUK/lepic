@@ -34,6 +34,10 @@ pub const INVITE_ID_LEN: usize = 8;
 /// Slots run below this bound (RFC 0002 2.2); a counter that reached it hands out no more.
 pub const CONTACT_SLOT_COUNT: u32 = 65_536;
 
+/// Private pairings take the slots from [`CONTACT_SLOT_COUNT`] up to this bound, apart from
+/// every contact's.
+pub const PRIVATE_SLOT_END: u32 = 2 * CONTACT_SLOT_COUNT;
+
 /// Length of the random salt of a contact's mailbox key.
 pub const BOX_SALT_LEN: usize = 16;
 
@@ -451,7 +455,7 @@ pub trait ContactRepository {
 
 /// Rejects timestamps the SQLite backend could not hold, so both backends accept the same data.
 pub(crate) fn check_contact(contact: &ContactRecord) -> Result<(), StoreError> {
-    if contact.slot >= CONTACT_SLOT_COUNT {
+    if contact.slot >= PRIVATE_SLOT_END {
         return Err(StoreError::OutOfRange { field: "slot" });
     }
     timestamp_to_column(contact.created_at)?;

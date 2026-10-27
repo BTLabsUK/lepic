@@ -41,6 +41,9 @@ pub enum MockFailure {
     Unreachable,
     /// The node's handler returned this error.
     Rejected(RejectionKind),
+    /// The node's pool refused a pushed transaction it cannot validate against its chain, as
+    /// Epic node 4.1 answers for inputs that are not unspent.
+    PoolRefused,
 }
 
 #[derive(Debug)]
@@ -178,6 +181,10 @@ impl MockNode {
                 MockFailure::Rejected(kind) => {
                     Ok(rejected_response(&request.id, &rejection_value(kind)))
                 }
+                MockFailure::PoolRefused => Ok(rejected_response(
+                    &request.id,
+                    &json!({"Internal": "Failed to update pool: General pool error: failed to validate tx"}),
+                )),
             };
         }
         let answer = match request.method.as_str() {

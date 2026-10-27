@@ -1720,6 +1720,7 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
             TxOrigin::Wallet => "wallet",
             TxOrigin::Imported => "imported",
             TxOrigin::FoundByScan => "found-by-scan",
+            TxOrigin::OtherWallet => "other-wallet",
         }),
         imported: details.imported.as_ref().map(|imported| {
             Box::new(ImportedReport {

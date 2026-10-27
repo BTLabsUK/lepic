@@ -682,3 +682,133 @@ fn two_installs_of_one_phrase_make_different_output_keys_for_the_same_value() {
         "the same key and value would make one commitment, which the chain holds once"
     );
 }
+
+/// Stores every output of `party` as a plain output: a coinbase one is not spendable by
+/// anyone before it matures, so the chain check never takes it for a spend elsewhere.
+fn plain_outputs(party: &Party) {
+    party
+        .store()
+        .write(|repos| {
+            for mut output in repos.outputs(ACCOUNT, None)? {
+                output.id = lepic_primitives::output::OutputIdentifier::new(
+                    lepic_primitives::output::OutputFeatures::Plain,
+                    output.id.commitment,
+                );
+                repos.put_output(&output)?;
+            }
+            Ok::<_, StoreError>(())
+        })
+        .unwrap();
+}
+
+/// A refresh and the update scan that follows it on the app's refresh path.
+fn refresh_and_scan(world: &World, party: &Party) {
+    refresh(world, party);
+    world.block_on(party.wallet.refresh_scan()).unwrap();
+}
+
+/// The payer pays the issuer over Epicbox and the payment is mined with its outputs.
+fn paid_and_mined(world: &World) {
+    send(world);
+    assert_eq!(drain(world, &world.issuer).received, 1);
+    assert_eq!(drain(world, &world.payer).finalized, 1);
+    mine_pushed(world, true);
+}
+
+fn other_wallet_entries(
+    world: &World,
+    party: &Party,
+) -> Vec<lepic_wallet::details::TransactionDetails> {
+    world
+        .block_on(party.wallet.transactions(ACCOUNT))
+        .unwrap()
+        .into_iter()
+        .filter(|details| details.origin == lepic_wallet::legacy_history::TxOrigin::OtherWallet)
+        .collect()
+}
+
+fn transaction_events(events: &mut Receiver<Event>) -> Vec<TxId> {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            Event::Transaction(change) => Some(change.tx_id),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_spend_by_the_other_install_shows_as_sent_from_another_wallet_with_its_change() {
+    let world = World::new();
+    plain_outputs(&world.payer);
+    on_chain(&world, &world.payer);
+    let twin = world.payer_twin();
+    // The same key and value as the payer's funding: the twin holds the same output.
+    twin.fund(0, FUNDING);
+    plain_outputs(&twin);
+    refresh_and_scan(&world, &twin);
+    assert!(other_wallet_entries(&world, &twin).is_empty());
+
+    paid_and_mined(&world);
+    let mut events = twin.wallet.subscribe();
+    refresh_and_scan(&world, &twin);
+
+    let entries = other_wallet_entries(&world, &twin);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let spent = &entries[0];
+    let entry = &spent.transaction.entry;
+    assert_eq!(
+        (entry.direction, entry.state, entry.fee),
+        (TxDirection::Outgoing, TxState::Confirmed, None)
+    );
+    assert_eq!(entry.amount_debited, Amount::new(FUNDING));
+    let payer_change: Vec<Amount> = world
+        .payer
+        .read(|repos| repos.outputs(ACCOUNT, None))
+        .into_iter()
+        .filter(|output| output.status == OutputStatus::Unconfirmed)
+        .map(|output| output.amount)
+        .collect();
+    assert_eq!(payer_change.len(), 1);
+    assert_eq!(
+        entry.amount_credited, payer_change[0],
+        "the change goes to the spend"
+    );
+    assert_eq!(spent.spent_commits.len(), 1);
+    assert!(transaction_events(&mut events).contains(&spent.transaction.id));
+    // The change is the spend's, not a receive of its own.
+    let incoming = twin
+        .read(|repos| repos.transactions(ACCOUNT))
+        .into_iter()
+        .filter(|stored| stored.entry.direction == TxDirection::Incoming)
+        .count();
+    assert_eq!(incoming, 0);
+
+    // A later refresh records nothing more.
+    refresh_and_scan(&world, &twin);
+    assert_eq!(other_wallet_entries(&world, &twin).len(), 1);
+}
+
+#[test]
+fn a_payment_the_other_install_received_shows_as_received_by_another_wallet() {
+    let world = World::new();
+    on_chain(&world, &world.payer);
+    let twin = world.issuer_twin();
+    paid_and_mined(&world);
+    let mut events = twin.wallet.subscribe();
+
+    refresh_and_scan(&world, &twin);
+
+    let entries = other_wallet_entries(&world, &twin);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let entry = &entries[0].transaction.entry;
+    assert_eq!(
+        (entry.direction, entry.state, entry.amount_credited),
+        (
+            TxDirection::Incoming,
+            TxState::Confirmed,
+            Amount::new(AMOUNT)
+        )
+    );
+    assert!(entries[0].found.is_none());
+    assert!(transaction_events(&mut events).contains(&entries[0].transaction.id));
+}

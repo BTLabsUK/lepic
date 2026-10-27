@@ -166,6 +166,10 @@ fn check_sealable(
     card: &ContactCard,
     channel: Channel,
 ) -> Result<(), ContactError> {
+    // Slates never travel over a private pairing.
+    if super::private::is_private(record) {
+        return Err(ContactError::WrongClass);
+    }
     if !matches!(record.state, ContactState::Paired | ContactState::Verified) {
         return Err(ContactError::UnknownContact);
     }

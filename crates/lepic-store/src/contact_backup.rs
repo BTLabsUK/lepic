@@ -187,8 +187,20 @@ pub fn export_contacts<R: ContactRepository + ?Sized>(
     repos: &R,
     network: Network,
 ) -> Result<String, StoreError> {
+    export_contacts_where(repos, network, |_| true)
+}
+
+/// [`export_contacts`] of the records `keep` accepts only.
+pub fn export_contacts_where<R: ContactRepository + ?Sized>(
+    repos: &R,
+    network: Network,
+    keep: impl Fn(&ContactRecord) -> bool,
+) -> Result<String, StoreError> {
     let mut contacts = Vec::new();
     for contact in repos.contacts()? {
+        if !keep(&contact) {
+            continue;
+        }
         if matches!(
             contact.state,
             ContactState::PendingInvite | ContactState::PendingReply

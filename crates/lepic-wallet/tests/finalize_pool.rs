@@ -344,3 +344,66 @@ fn any_other_refusal_of_the_push_is_a_failed_post() {
     );
     assert_eq!(posting.state(), TxState::Finalized);
 }
+
+/// Another wallet on the phrase spent the send's input: the node's pool refuses the push and
+/// the input is gone from the chain (the scripted chain never held it).
+#[test]
+fn a_post_whose_inputs_another_wallet_spent_ends_the_send_with_its_own_error() {
+    let posting = Posting::new();
+    posting
+        .harness
+        .node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = posting.finalize().unwrap_err();
+
+    assert!(
+        matches!(error, FinalizeError::InputsSpentElsewhere { tx_id, .. } if tx_id == posting.tx_id),
+        "{error:?}"
+    );
+    assert_eq!(posting.state(), TxState::Cancelled);
+    let outputs = posting
+        .store
+        .read(|repos| repos.outputs(ACCOUNT, None))
+        .unwrap();
+    assert!(
+        outputs
+            .iter()
+            .all(|output| output.status == lepic_store::OutputStatus::Spent),
+        "{outputs:?}"
+    );
+}
+
+#[test]
+fn a_pool_refusal_with_the_inputs_on_chain_is_only_not_posted() {
+    let posting = Posting::new();
+    let input = posting
+        .store
+        .read(|repos| repos.outputs(ACCOUNT, None))
+        .unwrap()
+        .into_iter()
+        .find(|output| output.status == lepic_store::OutputStatus::Locked)
+        .unwrap();
+    posting.harness.node.update_chain(|chain| {
+        chain.outputs.push(lepic_node::mock::ChainOutput {
+            commitment: input.id.commitment,
+            features: input.id.features,
+            proof: support::some_proof(),
+            height: Height::new(1),
+            mmr_index: 1,
+            spent: false,
+        });
+    });
+    posting
+        .harness
+        .node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = posting.finalize().unwrap_err();
+
+    assert!(
+        matches!(error, FinalizeError::NotPosted { .. }),
+        "{error:?}"
+    );
+    assert_eq!(posting.state(), TxState::Finalized);
+}

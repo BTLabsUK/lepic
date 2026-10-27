@@ -297,6 +297,10 @@ pub struct TransactionDetails {
     /// scan stored before LEPIC recorded this, only the outputs no transaction has spent yet.
     /// Empty when the wallet stores none, as for a cancelled send.
     pub output_commits: Vec<String>,
+    /// Hex of the commitments of this wallet's outputs the transaction spent: for a send or an
+    /// invoice payment made here, its inputs; for origin `OtherWallet` outgoing, the outputs
+    /// the other wallet spent. Empty for any other.
+    pub spent_commits: Vec<String>,
     /// For a payment received over Epicbox that still waits for its sender: when the sender
     /// reported that it posted the transaction (`PaymentPosted`), while that report is under an
     /// hour old. Advisory: show it as the sender's report, never as received; the payment
@@ -333,6 +337,13 @@ pub enum TxOrigin {
     /// An output a scan found that no record explains. `created_at_ms` is the time of its
     /// block when the node told it, else the time of the scan.
     FoundByScan,
+    /// What another wallet on the same recovery phrase did, as the chain shows it. Outgoing:
+    /// outputs of this wallet a refresh found spent with no transaction here; `amount_debited`
+    /// is their value, `amount_credited` the outputs in the same blocks taken for its change,
+    /// `fee` unknown, `spent_commits` the outputs spent. Incoming: an output a refresh's
+    /// update scan found with no record here, one entry per output, `created_at_ms` its block's
+    /// time. A restore or a scan from genesis stores such outputs as `FoundByScan` instead.
+    OtherWallet,
 }
 
 /// The type the old wallet's log gave an imported transaction. Values are only added, at the
@@ -828,6 +839,21 @@ pub struct InvitePreview {
     pub home_relay: String,
     /// The invite comes from a service, such as an exchange.
     pub service: bool,
+    /// Answer it with this class in `EpicWallet::pairing_accept`.
+    pub class: PairingClass,
+}
+
+/// Which kind of pairing an invite makes. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingClass {
+    /// A contact: slates, invoices and notices, listed by `EpicWallet::contacts`.
+    Contact,
+    /// Two wallets of one owner: only the app's payloads (`EpicWallet::contact_post_payload`),
+    /// listed by `EpicWallet::private_pairings` and nowhere else. Its invite travels by QR or
+    /// paste only, never as words. Its keys and channel come from random secrets the two
+    /// wallets exchange while pairing, so the recovery phrase alone neither finds, reads nor
+    /// writes it. Payloads pass once both sides matched the words check.
+    Private,
 }
 
 /// An invite found by its pairing words, from `EpicWallet::pairing_find_words`. Answer it

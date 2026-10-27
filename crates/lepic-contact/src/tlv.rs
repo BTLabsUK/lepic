@@ -13,6 +13,8 @@ const KNOWN_TAG_SLOTS: usize = 16;
 /// The fields of one decoded list, borrowed from the input.
 pub(crate) struct Fields<'a> {
     values: [Option<&'a [u8]>; KNOWN_TAG_SLOTS],
+    /// The first extension field, from 0x80 up, that a reader may know.
+    extension: Option<(u8, &'a [u8])>,
     signature: Option<&'a [u8]>,
     /// The encoded bytes before the signature field: what the signature covers.
     signed_prefix: &'a [u8],
@@ -29,6 +31,7 @@ impl<'a> Fields<'a> {
     ) -> Result<Self, DecodeError> {
         let mut values = [None; KNOWN_TAG_SLOTS];
         let mut signature_value = None;
+        let mut extension = None;
         let mut signed_prefix = bytes;
         let mut previous: Option<u8> = None;
         let mut rest = bytes;
@@ -54,6 +57,8 @@ impl<'a> Fields<'a> {
                     .get_mut(usize::from(tag))
                     .ok_or(Malformed::UnknownField { tag })?;
                 *slot = Some(value);
+            } else if extension.is_none() {
+                extension = Some((tag, value));
             }
             previous = Some(tag);
             rest = tail;
@@ -63,6 +68,7 @@ impl<'a> Fields<'a> {
         }
         Ok(Self {
             values,
+            extension,
             signature: signature_value,
             signed_prefix,
         })
@@ -75,6 +81,13 @@ impl<'a> Fields<'a> {
     pub(crate) fn require(&self, tag: u8) -> Result<&'a [u8], DecodeError> {
         self.get(tag)
             .ok_or_else(|| Malformed::MissingField { tag }.into())
+    }
+
+    /// The value of extension `tag`, from 0x80 up, when it is the list's first extension.
+    pub(crate) fn extension(&self, tag: u8) -> Option<&'a [u8]> {
+        self.extension
+            .filter(|(found, _)| *found == tag)
+            .map(|(_, value)| value)
     }
 
     /// The value of the signature field, when the list has one.

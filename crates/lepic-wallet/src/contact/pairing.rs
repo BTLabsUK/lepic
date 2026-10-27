@@ -5,6 +5,10 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use lepic_contact::{
+    ChannelKey, PairingClass, PrivateSecret, open_private_confirm, open_private_reply, private_sas,
+    seal_private_confirm, seal_private_refusal, seal_private_reply,
+};
+use lepic_contact::{
     Commitment, Confirm, ConfirmBody, ConfirmCode, ContactCard, ContactKind, Invite, InviteFields,
     InviteId, Nonce, PairingCode, PairingLink, ReplyBody, Sas, SealedEnvelope,
     pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_reply,
@@ -23,6 +27,7 @@ use super::keys::{
     CardDetails, box_identity, contact_keys, contact_network, enc_secret, our_card,
     pairing_mailbox, signing_key,
 };
+use super::private::{PrivateSecrets, RecordClass, class_of, record_keys};
 use super::relay::{endpoint_for, host_text, post_envelope};
 use super::{
     CLOCK_SKEW, CONFIRM_WAIT, ContactError, ContactRelays, ContactView, LATE_DRAIN_WAIT, LockedRng,
@@ -68,6 +73,9 @@ pub struct InviteRequest {
     pub offer_words: bool,
     /// Where the pairing's mailboxes live, `domain[:port]`; `None` is the wallet's own relay.
     pub home_relay: Option<String>,
+    /// A contact, or a private pairing of two wallets of one owner, which carries only the host
+    /// app's payloads and never offers words.
+    pub class: PairingClass,
 }
 
 /// A new invite, to show as a link or a QR code.
@@ -92,6 +100,7 @@ pub struct InvitePreview {
     pub home_relay: String,
     /// The invite comes from a service with a fixed pairing inbox.
     pub service: bool,
+    pub class: PairingClass,
 }
 
 /// How to answer an invite.
@@ -104,6 +113,8 @@ pub struct AcceptRequest {
     pub name: String,
     /// Do not post the reply; the user sends the returned link by hand.
     pub by_hand: bool,
+    /// The class the user means to answer; an invite of the other class is refused.
+    pub class: PairingClass,
 }
 
 /// An answered invite.
@@ -303,6 +314,11 @@ where
         let network = self.config().network;
         let home = home_relay(request.home_relay.as_deref(), relays)?;
         let offer_words = request.offer_words;
+        let class = request.class;
+        // A private pairing's invite travels out of band only.
+        if offer_words && class == PairingClass::Private {
+            return Err(ContactError::WrongClass);
+        }
         if offer_words {
             // Words are posted, so a relay must be reachable before anything is stored.
             super::relay::check_online(relays)?;
@@ -323,17 +339,16 @@ where
                     .checked_add(lifetime)
                     .map_err(|_| ContactError::InviteExpired)?;
                 session.store.write(|repos| {
-                    let new = take_slot(
-                        repos,
-                        &mut LockedRng(&mut **ports.rng.lock()),
-                        request.account,
-                    )?;
-                    let keys = contact_keys(
+                    let (new, private) = {
+                        let mut guard = ports.rng.lock();
+                        new_record(repos, &mut LockedRng(&mut **guard), request.account, class)?
+                    };
+                    let keys = new_keys(
                         &session.keychain,
                         network,
                         request.account,
-                        new.slot,
-                        new.box_salt,
+                        &new,
+                        private.as_ref(),
                     )?;
                     let mailbox = box_identity(&keys, network, &home)?;
                     let card = our_card(
@@ -367,10 +382,14 @@ where
                                 .map_err(ContactError::Name)?,
                             service_inbox: None,
                             onion: None,
+                            link: private.as_ref().map(|secrets| secrets.link.clone()),
                         },
                     )
                     .map_err(ContactError::Encode)?;
                     let (reply_box, _) = pairing_mailbox(*code.expose_bytes(), network, &home)?;
+                    if let Some(secrets) = &private {
+                        super::private::put_secrets(repos, new.contact_id, secrets)?;
+                    }
                     repos.put_contact(&pending_record(
                         new.contact_id,
                         request.account,
@@ -438,6 +457,7 @@ where
             expires_at: timestamp(fields.expires),
             home_relay: fields.home_relay.as_str().to_owned(),
             service: fields.service_inbox.is_some(),
+            class: invite.class(),
         })
     }
 
@@ -467,6 +487,10 @@ where
     ) -> Result<AcceptOutcome, ContactError> {
         self.check_contact_network(relays)?;
         let invite = self.read_invite(&request.link)?;
+        if invite.class() != request.class {
+            return Err(ContactError::WrongClass);
+        }
+        let class = request.class;
         let network = self.config().network;
         let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
         let session = self.session()?;
@@ -485,13 +509,16 @@ where
                         return Err(ContactError::AlreadyPaired);
                     }
                     let mut rng = LockedRng(&mut **ports.rng.lock());
-                    let new = take_slot(repos, &mut rng, request.account)?;
-                    let keys = contact_keys(
+                    let (new, mut private) = new_record(repos, &mut rng, request.account, class)?;
+                    if let (Some(secrets), Some(link)) = (&mut private, &invite.fields().link) {
+                        secrets.link = link.clone();
+                    }
+                    let keys = new_keys(
                         &session.keychain,
                         network,
                         request.account,
-                        new.slot,
-                        new.box_salt,
+                        &new,
+                        private.as_ref(),
                     )?;
                     let mailbox = box_identity(&keys, network, &home)?;
                     let card = our_card(
@@ -512,8 +539,21 @@ where
                         confirm_code: rc.clone(),
                         card: card.clone(),
                     };
-                    let envelope =
-                        seal_reply(&invite, &body, &mut rng).map_err(ContactError::Encode)?;
+                    let envelope = match &mut private {
+                        None => seal_reply(&invite, &body, &mut rng),
+                        Some(secrets) => {
+                            let joiner = PrivateSecret::random(&mut rng);
+                            let sealed = seal_private_reply(&invite, &body, &joiner, &mut rng);
+                            secrets.channel =
+                                Some(ChannelKey::channel(&secrets.link, &joiner, &invite, &card));
+                            secrets.joiner = Some(joiner);
+                            sealed
+                        }
+                    }
+                    .map_err(ContactError::Encode)?;
+                    if let Some(secrets) = &private {
+                        super::private::put_secrets(repos, new.contact_id, secrets)?;
+                    }
                     let code = *invite.fields().code.expose_bytes();
                     let (reply_box, reply_from) = pairing_mailbox(code, network, &home)?;
                     let (confirm_box, _) = pairing_mailbox(*rc.expose_bytes(), network, &home)?;
@@ -750,10 +790,20 @@ where
                             end_pending(repos, pairing_id_of(contact_id))?;
                             super::invoices::drop_contact_invoices(repos, contact_id)?;
                             repos.delete_contact(contact_id)?;
+                            super::private::delete_secrets(repos, contact_id)?;
+                            let channel = class_of(repos, &record)?
+                                .private()
+                                .and_then(|secrets| secrets.channel.clone());
+                            super::private::delete_secrets(repos, contact_id)?;
                             let tell = pending
                                 .filter(|pending| pending.role == PairingRole::Inviter)
                                 .and_then(|pending| {
-                                    Some((pending.secrets.rc?, pending.invite, record.peer?.bytes))
+                                    Some((
+                                        pending.secrets.rc?,
+                                        pending.invite,
+                                        record.peer?.bytes,
+                                        channel,
+                                    ))
                                 });
                             return Ok(tell);
                         }
@@ -765,7 +815,7 @@ where
             .await?;
         info!("sas check recorded");
         // The inviter tells the invitee, whose confirm may still wait on the relay.
-        if let Some((rc, invite, peer)) = tell {
+        if let Some((rc, invite, peer, channel)) = tell {
             let net = contact_network(self.config().network);
             let card = ContactCard::decode(&peer, net).map_err(ContactError::StoredData)?;
             let invite = Invite::decode(&invite, net).map_err(ContactError::StoredData)?;
@@ -777,14 +827,16 @@ where
                 &home,
                 invite.fields().onion.as_ref().map(RelayHost::as_str),
                 Refusal::CancelledByInviter,
+                channel.as_ref(),
             )
             .await;
         }
         Ok(())
     }
 
-    /// Posts an anonymous refusal to the confirm mailbox of `rc`. Advisory, so a failure is
-    /// logged and not returned.
+    /// Posts an anonymous refusal to the confirm mailbox of `rc`, under `channel` for a private
+    /// pairing. Advisory, so a failure is logged and not returned.
+    #[allow(clippy::too_many_arguments)] // Each is one fact of the refusal's address.
     async fn post_refusal(
         &self,
         relays: &ContactRelays,
@@ -793,13 +845,17 @@ where
         home: &RelayEndpoint,
         onion: Option<&str>,
         refusal: Refusal,
+        channel: Option<&ChannelKey>,
     ) {
         let posted = async {
-            let envelope = seal_refusal(
-                invitee,
-                refusal,
-                &mut LockedRng(&mut **self.ports().rng.lock()),
-            )
+            let envelope = {
+                let mut guard = self.ports().rng.lock();
+                let mut rng = LockedRng(&mut **guard);
+                match channel {
+                    None => seal_refusal(invitee, refusal, &mut rng),
+                    Some(channel) => seal_private_refusal(invitee, refusal, channel, &mut rng),
+                }
+            }
             .map_err(ContactError::Encode)?;
             let (confirm_box, confirm_from) = pairing_mailbox(rc, self.config().network, home)?;
             post_envelope(
@@ -894,33 +950,55 @@ where
         let network = self.config().network;
         let net = contact_network(network);
         let session = self.session()?;
-        let Some((pending, record)) = self.pending_with_record(pairing_id).await? else {
+        let Some((pending, record, class)) = self.pending_with_record(pairing_id).await? else {
             return Ok(Taken::Ignored);
         };
         let contact_id = pending.contact_id;
         let Some(code) = pending.secrets.code else {
             return Ok(Taken::Ignored);
         };
-        let keys = contact_keys(
-            &session.keychain,
-            network,
-            record.account,
-            record.slot,
-            record.box_salt,
-        )?;
+        if matches!(class, RecordClass::Unreadable) {
+            warn!("pairing reply for a private pairing whose secrets do not open dropped");
+            return Ok(Taken::Ignored);
+        }
+        let keys = record_keys(&session.keychain, network, &record, &class)?;
         let sealed = match SealedEnvelope::decode(envelope, net) {
             Ok(sealed) if sealed.hint().as_bytes() == &pending.invite_id => sealed,
             _ => return Ok(Taken::Ignored),
         };
-        let Ok(reply) = open_reply(&sealed, &enc_secret(&keys)) else {
-            debug!("pairing reply did not open");
-            return Ok(Taken::Ignored);
+        let invite = Invite::decode(&pending.invite, net).map_err(ContactError::StoredData)?;
+        // A private pairing's reply opens only with its link secret, and makes the channel key.
+        let (reply, private) = match class.private() {
+            None => match open_reply(&sealed, &enc_secret(&keys)) {
+                Ok(reply) => (reply, None),
+                Err(_) => {
+                    debug!("pairing reply did not open");
+                    return Ok(Taken::Ignored);
+                }
+            },
+            Some(secrets) => match open_private_reply(&sealed, &enc_secret(&keys), &secrets.link) {
+                Ok((reply, joiner)) => {
+                    let mut secrets = secrets.clone();
+                    secrets.channel = Some(ChannelKey::channel(
+                        &secrets.link,
+                        &joiner,
+                        &invite,
+                        &reply.card,
+                    ));
+                    secrets.joiner = Some(joiner);
+                    (reply, Some(secrets))
+                }
+                Err(_) => {
+                    debug!("pairing reply did not open");
+                    return Ok(Taken::Ignored);
+                }
+            },
         };
+        let channel = private.as_ref().and_then(|secrets| secrets.channel.clone());
         if !same_secret(reply.code.expose_bytes(), &code) {
             debug!("pairing reply with another code dropped");
             return Ok(Taken::Ignored);
         }
-        let invite = Invite::decode(&pending.invite, net).map_err(ContactError::StoredData)?;
         let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
         let onion_text = invite.fields().onion.as_ref().map(RelayHost::as_str);
         let peer = reply.card.clone();
@@ -976,17 +1054,31 @@ where
                         Err(error) => return Err(error),
                     }
                     let n_a = Nonce::from_bytes(n_a);
-                    let sas = Sas::compute(net, &own, &peer, &n_a, &n_b);
-                    let envelope = seal_confirm(
-                        &peer,
-                        &ConfirmBody {
-                            nonce: n_a,
-                            card: own.clone(),
-                        },
-                        &signer,
-                        &mut LockedRng(&mut **ports.rng.lock()),
-                    )
-                    .map_err(ContactError::Encode)?;
+                    let body = ConfirmBody {
+                        nonce: n_a.clone(),
+                        card: own.clone(),
+                    };
+                    let mut guard = ports.rng.lock();
+                    let mut rng = LockedRng(&mut **guard);
+                    let (sas, envelope) = match &private {
+                        None => (
+                            Sas::compute(net, &own, &peer, &n_a, &n_b),
+                            seal_confirm(&peer, &body, &signer, &mut rng),
+                        ),
+                        Some(secrets) => {
+                            let (Some(joiner), Some(channel)) = (&secrets.joiner, &secrets.channel)
+                            else {
+                                return Ok(Decision::Drop);
+                            };
+                            super::private::put_secrets(repos, contact_id, secrets)?;
+                            (
+                                private_sas(net, &own, &peer, &n_a, &n_b, &secrets.link, joiner),
+                                seal_private_confirm(&peer, &body, &signer, channel, &mut rng),
+                            )
+                        }
+                    };
+                    drop(guard);
+                    let envelope = envelope.map_err(ContactError::Encode)?;
                     record.peer = Some(peer_card(&peer));
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
@@ -1024,6 +1116,7 @@ where
                         &home,
                         onion_text,
                         Refusal::AlreadyUsed,
+                        channel.as_ref(),
                     )
                     .await;
                 }
@@ -1032,8 +1125,16 @@ where
             Decision::Refuse(refusal, tell) => {
                 debug!("pairing reply refused");
                 if tell && !by_hand {
-                    self.post_refusal(relays, &reply.card, rc, &home, onion_text, refusal)
-                        .await;
+                    self.post_refusal(
+                        relays,
+                        &reply.card,
+                        rc,
+                        &home,
+                        onion_text,
+                        refusal,
+                        channel.as_ref(),
+                    )
+                    .await;
                 }
                 return Ok(Taken::Ignored);
             }
@@ -1078,24 +1179,29 @@ where
         let network = self.config().network;
         let net = contact_network(network);
         let session = self.session()?;
-        let Some((pending, record)) = self.pending_with_record(pairing_id).await? else {
+        let Some((pending, record, class)) = self.pending_with_record(pairing_id).await? else {
             return Ok(Taken::Ignored);
         };
         let contact_id = pending.contact_id;
         let Some(n_b) = pending.secrets.nb else {
             return Ok(Taken::Ignored);
         };
-        let keys = contact_keys(
-            &session.keychain,
-            network,
-            record.account,
-            record.slot,
-            record.box_salt,
-        )?;
+        if matches!(class, RecordClass::Unreadable) {
+            warn!("pairing confirm for a private pairing whose secrets do not open dropped");
+            return Ok(Taken::Ignored);
+        }
+        let keys = record_keys(&session.keychain, network, &record, &class)?;
         let Ok(sealed) = SealedEnvelope::decode(envelope, net) else {
             return Ok(Taken::Ignored);
         };
-        let confirm = match open_confirm(&sealed, &enc_secret(&keys)) {
+        let opened = match class.private() {
+            None => open_confirm(&sealed, &enc_secret(&keys)),
+            Some(secrets) => match &secrets.channel {
+                Some(channel) => open_private_confirm(&sealed, &enc_secret(&keys), channel),
+                None => return Ok(Taken::Ignored),
+            },
+        };
+        let confirm = match opened {
             Ok(Confirm::Accepted(body)) => body,
             Ok(Confirm::Refused(refusal)) => {
                 // Advisory: only the inviter knows the confirm mailbox, and nothing of the
@@ -1105,6 +1211,7 @@ where
                     session.store.write(|repos| {
                         end_pending(repos, pairing_id)?;
                         repos.delete_contact(contact_id)?;
+                        super::private::delete_secrets(repos, contact_id)?;
                         Ok(())
                     })
                 })
@@ -1127,6 +1234,7 @@ where
                 session.store.write(|repos| {
                     end_pending(repos, pairing_id)?;
                     repos.delete_contact(contact_id)?;
+                    super::private::delete_secrets(repos, contact_id)?;
                     Ok(())
                 })
             })
@@ -1139,13 +1247,24 @@ where
             self.emit(Event::PairingFailed(failed));
             return Ok(Taken::Failed(Some(failed)));
         }
-        let sas = Sas::compute(
-            net,
-            &confirm.card,
-            &own,
-            &confirm.nonce,
-            &Nonce::from_bytes(n_b),
-        );
+        let n_b = Nonce::from_bytes(n_b);
+        let sas = match class.private() {
+            None => Sas::compute(net, &confirm.card, &own, &confirm.nonce, &n_b),
+            Some(secrets) => {
+                let Some(joiner) = &secrets.joiner else {
+                    return Ok(Taken::Ignored);
+                };
+                private_sas(
+                    net,
+                    &confirm.card,
+                    &own,
+                    &confirm.nonce,
+                    &n_b,
+                    &secrets.link,
+                    joiner,
+                )
+            }
+        };
         let peer = confirm.card.clone();
         let fields = invite.fields();
         let home_text = fields.home_relay.as_str().to_owned();
@@ -1203,20 +1322,22 @@ where
         .await
     }
 
-    /// The pairing in progress `pairing_id` and its record, as stored now.
+    /// The pairing in progress `pairing_id`, its record and the record's class, as stored now.
     async fn pending_with_record(
         &self,
         pairing_id: PairingId,
-    ) -> Result<Option<(PendingPairing, ContactRecord)>, ContactError> {
+    ) -> Result<Option<(PendingPairing, ContactRecord, RecordClass)>, ContactError> {
         let session = self.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.read(|repos| {
                 let Some(pending) = repos.pending_pairing(pairing_id)? else {
                     return Ok::<_, lepic_store::StoreError>(None);
                 };
-                Ok(repos
-                    .contact(pending.contact_id)?
-                    .map(|record| (pending, record)))
+                let Some(record) = repos.contact(pending.contact_id)? else {
+                    return Ok(None);
+                };
+                let class = class_of(repos, &record)?;
+                Ok(Some((pending, record, class)))
             })?)
         })
         .await
@@ -1261,6 +1382,50 @@ fn take_slot(
         slot,
         box_salt: new_id(rng),
     })
+}
+
+/// The id, slot and salt of a new record of `class`, with a private pairing's fresh secrets:
+/// its own key secret and a link secret, which a joiner replaces with the invite's.
+fn new_record(
+    repos: &mut dyn Repositories,
+    rng: &mut LockedRng<'_>,
+    account: AccountIndex,
+    class: PairingClass,
+) -> Result<(NewSlot, Option<PrivateSecrets>), ContactError> {
+    match class {
+        PairingClass::Contact => Ok((take_slot(repos, rng, account)?, None)),
+        PairingClass::Private => {
+            let slot = super::private::take_private_slot(repos)?;
+            let new = NewSlot {
+                contact_id: ContactId(new_id(rng)),
+                slot,
+                box_salt: new_id(rng),
+            };
+            let secrets = PrivateSecrets {
+                own: PrivateSecret::random(rng),
+                link: PrivateSecret::random(rng),
+                joiner: None,
+                channel: None,
+            };
+            Ok((new, Some(secrets)))
+        }
+    }
+}
+
+/// Our keys for a new record: a contact's, or a private pairing's from its own secret.
+fn new_keys(
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    account: AccountIndex,
+    new: &NewSlot,
+    private: Option<&PrivateSecrets>,
+) -> Result<lepic_keychain::ContactKeys, ContactError> {
+    match private {
+        None => contact_keys(keychain, network, account, new.slot, new.box_salt),
+        Some(secrets) => {
+            super::private::private_keys(keychain, network, account, new.slot, &secrets.own)
+        }
+    }
 }
 
 /// Refuses a peer card that is this wallet's own card or the card of a contact it holds: the

@@ -15,8 +15,9 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
 use crate::api::types::{
     Chain, CollectTrigger, ContactKind, ContactRelayMode, FailedPairing, InviteExpiry,
-    KeysDecision, OutboxState, PairingFailureReason, PairingLinkOutcome, PairingState, SasDecision,
-    SealState, SlateMessage, SlatePurpose, SlateRole, SlateStage, WalletConfig,
+    KeysDecision, OutboxState, PairingClass, PairingFailureReason, PairingLinkOutcome,
+    PairingState, SasDecision, SealState, SlateMessage, SlatePurpose, SlateRole, SlateStage,
+    WalletConfig,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -103,11 +104,18 @@ async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
             Online,
             None,
             None,
+            PairingClass::Contact,
         )
         .await
         .unwrap();
     let answer = ben
-        .pairing_accept(invite.link, "Ben".to_owned(), false, Online)
+        .pairing_accept(
+            invite.link,
+            "Ben".to_owned(),
+            false,
+            Online,
+            PairingClass::Contact,
+        )
         .await
         .unwrap();
     assert!(answer.posted);
@@ -141,7 +149,77 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
     let mut world = World::new();
     let anna = world.wallet().await;
     let ben = world.wallet().await;
-    let (anna_side, ben_side) = pair(&anna, &ben).await;
+    let (contact, _) = pair(&anna, &ben).await;
+    assert_eq!(
+        kind(anna.contact_post_payload(contact, vec![1], Online).await),
+        WalletErrorKind::WrongPairingClass
+    );
+    let invite = anna
+        .pairing_invite(
+            "Phone".to_owned(),
+            ContactKind::Person,
+            InviteExpiry::OneDay,
+            false,
+            Online,
+            None,
+            None,
+            PairingClass::Private,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        anna.pairing_preview(invite.link.clone())
+            .await
+            .unwrap()
+            .class,
+        PairingClass::Private
+    );
+    assert_eq!(
+        kind(
+            ben.pairing_accept(
+                invite.link.clone(),
+                "Desk".to_owned(),
+                false,
+                Online,
+                PairingClass::Contact
+            )
+            .await
+        ),
+        WalletErrorKind::WrongPairingClass
+    );
+    let answer = ben
+        .pairing_accept(
+            invite.link,
+            "Desk".to_owned(),
+            false,
+            Online,
+            PairingClass::Private,
+        )
+        .await
+        .unwrap();
+    anna.contacts_collect(CollectTrigger::Open, Online, None)
+        .await
+        .unwrap();
+    ben.contacts_collect(CollectTrigger::Open, Online, None)
+        .await
+        .unwrap();
+    let (anna_side, ben_side) = (invite.contact_id, answer.contact_id);
+    for (wallet, id) in [(&anna, &anna_side), (&ben, &ben_side)] {
+        let private = wallet.private_pairings().await.unwrap();
+        assert_eq!(private.len(), 1);
+        assert!(
+            !wallet
+                .contacts()
+                .await
+                .unwrap()
+                .iter()
+                .any(|view| view.contact_id == *id)
+        );
+        wallet
+            .pairing_sas(id.clone(), SasDecision::Match, Online)
+            .await
+            .unwrap();
+    }
 
     let id = anna
         .contact_post_payload(anna_side.clone(), vec![1, 2, 3], Online)
@@ -187,6 +265,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
             Online,
             None,
             None,
+            PairingClass::Contact,
         )
         .await
         .unwrap();
@@ -201,7 +280,13 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
     assert_eq!(preview.expires_at_ms / 1000, invite.expires_at_ms / 1000);
 
     let answer = ben
-        .pairing_accept(invite.link, "Ben".to_owned(), false, Online)
+        .pairing_accept(
+            invite.link,
+            "Ben".to_owned(),
+            false,
+            Online,
+            PairingClass::Contact,
+        )
         .await
         .unwrap();
     assert!(answer.reply_link.starts_with("epiccash://pair-reply/1/"));
@@ -283,11 +368,18 @@ async fn a_pairing_by_hand_needs_no_relay() {
             Offline,
             None,
             None,
+            PairingClass::Contact,
         )
         .await
         .unwrap();
     let answer = ben
-        .pairing_accept(invite.link, "Ben".to_owned(), true, Offline)
+        .pairing_accept(
+            invite.link,
+            "Ben".to_owned(),
+            true,
+            Offline,
+            PairingClass::Contact,
+        )
         .await
         .unwrap();
     assert!(!answer.posted);
@@ -370,6 +462,7 @@ async fn pairing_words_find_the_invite_once() {
             Online,
             None,
             None,
+            PairingClass::Contact,
         )
         .await
         .unwrap();
@@ -397,9 +490,15 @@ async fn pairing_words_find_the_invite_once() {
         kind(ben.pairing_find_words(words, Online, None).await),
         WalletErrorKind::PairingWordsNotFound
     );
-    ben.pairing_accept(found.link, "Ben".to_owned(), false, Online)
-        .await
-        .unwrap();
+    ben.pairing_accept(
+        found.link,
+        "Ben".to_owned(),
+        false,
+        Online,
+        PairingClass::Contact,
+    )
+    .await
+    .unwrap();
     anna.contacts_collect(CollectTrigger::Push, Online, None)
         .await
         .unwrap();
@@ -435,6 +534,7 @@ async fn words_are_offered_whatever_relay_the_wallet_uses() {
             Online,
             None,
             None,
+            PairingClass::Contact,
         )
         .await
         .unwrap();
@@ -442,9 +542,15 @@ async fn words_are_offered_whatever_relay_the_wallet_uses() {
     assert_eq!(words.len(), 5);
     let found = ben.pairing_find_words(words, Online, None).await.unwrap();
     assert_eq!(found.preview.home_relay, "relay.example:443");
-    ben.pairing_accept(found.link, "Ben".to_owned(), false, Online)
-        .await
-        .unwrap();
+    ben.pairing_accept(
+        found.link,
+        "Ben".to_owned(),
+        false,
+        Online,
+        PairingClass::Contact,
+    )
+    .await
+    .unwrap();
     anna.contacts_collect(CollectTrigger::Push, Online, None)
         .await
         .unwrap();
@@ -467,6 +573,7 @@ async fn a_pending_invite_is_listed_until_cancelled() {
             EpicboxOff,
             None,
             None,
+            PairingClass::Contact,
         )
         .await
         .unwrap();
@@ -539,7 +646,8 @@ async fn the_relay_mode_and_bad_input_are_refused_before_anything_happens() {
                 false,
                 Online,
                 None,
-                None
+                None,
+                PairingClass::Contact
             )
             .await
         ),
@@ -909,14 +1017,27 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
             Online,
             None,
             None,
+            PairingClass::Contact,
         )
         .await
         .unwrap();
-    ben.pairing_accept(invite.link.clone(), "Ben".to_owned(), false, Online)
-        .await
-        .unwrap();
+    ben.pairing_accept(
+        invite.link.clone(),
+        "Ben".to_owned(),
+        false,
+        Online,
+        PairingClass::Contact,
+    )
+    .await
+    .unwrap();
     let late = carl
-        .pairing_accept(invite.link, "Carl".to_owned(), false, Online)
+        .pairing_accept(
+            invite.link,
+            "Carl".to_owned(),
+            false,
+            Online,
+            PairingClass::Contact,
+        )
         .await
         .unwrap();
     assert_eq!(

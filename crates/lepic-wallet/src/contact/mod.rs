@@ -14,6 +14,7 @@ mod manage;
 mod outbox;
 mod pairing;
 mod payload;
+mod private;
 mod relay;
 mod sealed;
 mod words;
@@ -35,7 +36,7 @@ pub use invoices::{ContactInvoice, InvoiceDetails, SAME_AMOUNT_WINDOW};
 pub use keycheck::{KEY_CHECK_WINDOW, KeyCheckStart, KeysDecision};
 pub(crate) use keys::reply_public_key;
 /// The contact formats a host names in these calls.
-pub use lepic_contact::{ContactKind, Purpose, Refusal, SasSymbol};
+pub use lepic_contact::{ContactKind, PairingClass, Purpose, Refusal, SasSymbol};
 pub use lepic_store::PairingRole;
 pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, PendingPairingView};
 pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
@@ -254,6 +255,14 @@ pub enum ContactError {
     /// The contact's card says it does not pay invoices.
     #[error("the contact does not pay invoices")]
     DoesNotPayInvoices,
+    /// The call is for the other pairing class: an invite answered as the class it is not, words
+    /// offered for a private pairing, or a contact call for a private pairing and the other way
+    /// round.
+    #[error("the pairing is of another class")]
+    WrongClass,
+    /// Every private pairing slot of this store is used.
+    #[error("no private pairing slot is left")]
+    NoFreeSlot,
 }
 
 impl From<StoreError> for ContactError {

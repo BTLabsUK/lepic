@@ -14,6 +14,7 @@ mod keys;
 mod link;
 mod network;
 mod pairing;
+mod private;
 mod sas;
 mod text;
 mod tlv;
@@ -24,7 +25,7 @@ pub use card::{CARD_FORMAT, Capabilities, CardFields, ContactCard, ContactKind, 
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use envelope::{
     Content, ENVELOPE_VERSION, HEADER_LEN, MAGIC, MAX_ENVELOPE_LEN, MessageType, Opened, Purpose,
-    SUITE, SealedEnvelope, decode_content, seal,
+    SUITE, SealedEnvelope, decode_content, seal, seal_psk,
 };
 pub use error::{
     DecodeError, EncodeError, KeyError, Malformed, SasTableError, TextError, WordsError,
@@ -40,8 +41,13 @@ pub use keys::{EncPublicKey, EncSecretKey, HintKey};
 pub use network::Network;
 pub use pairing::{
     Commitment, Confirm, ConfirmBody, ConfirmCode, InviteId, MAX_PAIRING_ENVELOPE_LEN, Nonce,
-    PairingCode, PairingLink, Refusal, ReplyBody, open_confirm, open_reply,
-    pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_refusal, seal_reply,
+    PairingCode, PairingLink, Refusal, ReplyBody, open_confirm, open_private_confirm, open_reply,
+    pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_private_confirm,
+    seal_private_refusal, seal_refusal, seal_reply,
+};
+pub use private::{
+    ChannelKey, PairingClass, PrivateSecret, SUITE_PSK, open_private_reply, private_sas,
+    seal_private_reply,
 };
 pub use sas::{Sas, SasSymbol, symbol};
 pub use text::{

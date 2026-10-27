@@ -8,7 +8,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hpke::aead::ChaCha20Poly1305;
 use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
-use hpke::{Deserializable, Kem, OpModeR, OpModeS, Serializable};
+use hpke::{Deserializable, Kem, OpModeR, OpModeS, PskBundle, Serializable};
 use rand_core::CryptoRng;
 use zeroize::Zeroizing;
 
@@ -17,6 +17,7 @@ use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::hint::{Hint, HintRule};
 use crate::keys::{EncPublicKey, EncSecretKey, sig_key};
 use crate::network::Network;
+use crate::private::{ChannelKey, PSK_ID, SUITE_PSK};
 use crate::text::Reference;
 use crate::tlv::{Fields, Writer};
 
@@ -182,18 +183,18 @@ pub struct Opened {
     pub sender: Option<VerifyingKey>,
 }
 
-fn info(network: Network) -> [u8; 13] {
+fn info(network: Network, suite: u8) -> [u8; 13] {
     let mut info = [0u8; 13];
     let (domain, rest) = info.split_at_mut(INFO_DOMAIN.len());
     domain.copy_from_slice(INFO_DOMAIN);
-    if let [net, suite] = rest {
+    if let [net, suite_byte] = rest {
         *net = network.byte();
-        *suite = SUITE;
+        *suite_byte = suite;
     }
     info
 }
 
-fn header(network: Network, hint: &Hint) -> [u8; HEADER_LEN] {
+fn header(network: Network, suite: u8, hint: &Hint) -> [u8; HEADER_LEN] {
     let [m0, m1, m2, m3] = MAGIC;
     let [h0, h1, h2, h3, h4, h5, h6, h7] = *hint.as_bytes();
     [
@@ -203,7 +204,7 @@ fn header(network: Network, hint: &Hint) -> [u8; HEADER_LEN] {
         m3,
         ENVELOPE_VERSION,
         network.byte(),
-        SUITE,
+        suite,
         0x00,
         h0,
         h1,
@@ -242,6 +243,41 @@ pub fn seal<R: CryptoRng>(
     signer: Option<&SigningKey>,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
+    seal_with(network, recipient, hint_rule, content, signer, None, rng)
+}
+
+/// Seals as [`seal`] does, in HPKE PSK mode under `psk`, with suite
+/// [`crate::private::SUITE_PSK`]: only a holder of `psk` opens it, with
+/// [`SealedEnvelope::open_psk`].
+pub fn seal_psk<R: CryptoRng>(
+    network: Network,
+    recipient: &EncPublicKey,
+    hint_rule: HintRule<'_>,
+    content: &Content,
+    signer: Option<&SigningKey>,
+    psk: &ChannelKey,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    seal_with(
+        network,
+        recipient,
+        hint_rule,
+        content,
+        signer,
+        Some(psk),
+        rng,
+    )
+}
+
+fn seal_with<R: CryptoRng>(
+    network: Network,
+    recipient: &EncPublicKey,
+    hint_rule: HintRule<'_>,
+    content: &Content,
+    signer: Option<&SigningKey>,
+    psk: Option<&ChannelKey>,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
     if let Some(card) = &content.card {
         if card.network() != network {
             return Err(EncodeError::WrongNetwork);
@@ -252,18 +288,28 @@ pub fn seal<R: CryptoRng>(
     }
     let public = <SealKem as Kem>::PublicKey::from_bytes(recipient.as_bytes())
         .map_err(|_| EncodeError::Encapsulation)?;
+    let (mode, suite) = match psk {
+        None => (OpModeS::Base, SUITE),
+        Some(psk) => (
+            OpModeS::Psk(
+                PskBundle::new(psk.expose_bytes(), PSK_ID)
+                    .map_err(|_| EncodeError::Encapsulation)?,
+            ),
+            SUITE_PSK,
+        ),
+    };
     let (encapped, mut context) = hpke::setup_sender_with_rng::<
         ChaCha20Poly1305,
         HkdfSha256,
         SealKem,
-    >(&OpModeS::Base, &public, &info(network), rng)
+    >(&mode, &public, &info(network, suite), rng)
     .map_err(|_| EncodeError::Encapsulation)?;
     let enc: [u8; ENC_LEN] = encapped
         .to_bytes()
         .as_slice()
         .try_into()
         .map_err(|_| EncodeError::Encapsulation)?;
-    let header = header(network, &hint_rule.hint(recipient, &enc));
+    let header = header(network, suite, &hint_rule.hint(recipient, &enc));
     let inner = Zeroizing::new(encode_content(content, &header, recipient, signer)?);
     let ciphertext = context
         .seal(&inner, &header)
@@ -334,6 +380,7 @@ fn encode_content(
 #[derive(Debug, Clone, Copy)]
 pub struct SealedEnvelope<'a> {
     network: Network,
+    suite: u8,
     header: &'a [u8; HEADER_LEN],
     hint: Hint,
     enc: &'a [u8; ENC_LEN],
@@ -383,7 +430,7 @@ impl<'a> SealedEnvelope<'a> {
             return Err(Malformed::Version { found: version }.into());
         }
         network.expect_byte(net)?;
-        if suite != SUITE {
+        if suite != SUITE && suite != SUITE_PSK {
             return Err(DecodeError::UnsupportedSuite { suite });
         }
         if flags != 0 {
@@ -394,6 +441,7 @@ impl<'a> SealedEnvelope<'a> {
         }
         Ok(Self {
             network,
+            suite,
             header,
             hint: Hint::from_bytes([h0, h1, h2, h3, h4, h5, h6, h7]),
             enc,
@@ -434,24 +482,71 @@ impl<'a> SealedEnvelope<'a> {
     }
 
     /// Opens with one candidate key. Any failure of HPKE is [`DecodeError::CannotOpen`], whatever
-    /// step failed; content that opens but is malformed or badly signed has its own error.
+    /// step failed; content that opens but is malformed or badly signed has its own error. An
+    /// envelope of a private pairing ([`crate::private::SUITE_PSK`]) never opens here.
     pub fn open(&self, key: &EncSecretKey) -> Result<Opened, DecodeError> {
+        if self.suite != SUITE {
+            return Err(DecodeError::CannotOpen);
+        }
+        self.open_mode(key, &OpModeR::Base)
+    }
+
+    /// Opens an envelope of a private pairing with one candidate key and the pairing's `psk`.
+    /// A base-mode envelope never opens here, so nobody without the key writes to the pairing.
+    pub fn open_psk(&self, key: &EncSecretKey, psk: &ChannelKey) -> Result<Opened, DecodeError> {
+        if self.suite != SUITE_PSK {
+            return Err(DecodeError::CannotOpen);
+        }
+        let bundle =
+            PskBundle::new(psk.expose_bytes(), PSK_ID).map_err(|_| DecodeError::CannotOpen)?;
+        self.open_mode(key, &OpModeR::Psk(bundle))
+    }
+
+    /// [`Self::open_psk`] for a pairing whose recorded sig key is `expected`, as
+    /// [`Self::open_from`] checks it.
+    pub fn open_from_psk(
+        &self,
+        key: &EncSecretKey,
+        expected: &VerifyingKey,
+        psk: &ChannelKey,
+    ) -> Result<Opened, DecodeError> {
+        let opened = self.open_psk(key, psk)?;
+        if opened
+            .sender
+            .as_ref()
+            .is_some_and(|sender| sender != expected)
+        {
+            return Err(DecodeError::KeyChanged);
+        }
+        Ok(opened)
+    }
+
+    fn open_mode(
+        &self,
+        key: &EncSecretKey,
+        mode: &OpModeR<'_, SealKem>,
+    ) -> Result<Opened, DecodeError> {
         let secret = <SealKem as Kem>::PrivateKey::from_bytes(key.expose_bytes())
             .map_err(|_| DecodeError::CannotOpen)?;
         let encapped = <SealKem as Kem>::EncappedKey::from_bytes(self.enc)
             .map_err(|_| DecodeError::CannotOpen)?;
         let inner = Zeroizing::new(
             hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, SealKem>(
-                &OpModeR::Base,
+                mode,
                 &secret,
                 &encapped,
-                &info(self.network),
+                &info(self.network, self.suite),
                 self.ciphertext,
                 self.header,
             )
             .map_err(|_| DecodeError::CannotOpen)?,
         );
         decode_content(&inner, self.network, self.header, &key.public_key())
+    }
+
+    /// Whether the envelope was sealed for a private pairing.
+    pub fn is_private(&self) -> bool {
+        self.suite == SUITE_PSK
     }
 }
 

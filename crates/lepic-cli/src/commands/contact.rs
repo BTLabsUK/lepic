@@ -8,8 +8,8 @@ use lepic_transport::file::response_path;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::contact::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
-    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, PairingFailure,
-    Purpose, Refusal, RelayMode, SasDecision, SealedAnswer,
+    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, PairingClass,
+    PairingFailure, Purpose, Refusal, RelayMode, SasDecision, SealedAnswer,
 };
 use lepic_wallet::event::SlateId;
 use lepic_wallet::invoice::InvoiceRequest;
@@ -224,6 +224,7 @@ impl<H: Host> Run<'_, H> {
                             },
                             offer_words: args.pairing_words,
                             home_relay: None,
+                            class: PairingClass::Contact,
                         },
                     )
                     .await?;
@@ -258,6 +259,7 @@ impl<H: Host> Run<'_, H> {
                             account: CONTACT_ACCOUNT,
                             name: args.name.name,
                             by_hand: args.by_hand,
+                            class: PairingClass::Contact,
                         },
                     )
                     .await?;

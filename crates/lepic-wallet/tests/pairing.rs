@@ -30,8 +30,9 @@ use lepic_epicbox::{Domain, Network as RelayNetwork, RelayEndpoint, Security};
 use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::contact::{
-    CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry, InviteRequest,
-    KeyCheckStart, KeysDecision, LinkOutcome, PairingFailure, RelayMode, SasDecision,
+    AcceptRequest, CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry,
+    InviteRequest, KeyCheckStart, KeysDecision, LinkOutcome, PairingClass, PairingFailure,
+    RelayMode, SasDecision,
 };
 use lepic_wallet::event::{ContactEvent, FailedPairing};
 use rand::SeedableRng;
@@ -2670,11 +2671,179 @@ fn an_unsigned_unpaired_notice_is_dropped() {
     );
 }
 
+/// `inviter` and `joiner` make a private pairing by link, collect, and both match the words.
+/// Returns the two record ids, the inviter's first.
+fn private_pair(world: &World, inviter: &Party, joiner: &Party) -> (ContactId, ContactId) {
+    let invite = world
+        .block_on(inviter.wallet.pairing_invite(
+            &relays(inviter),
+            InviteRequest {
+                class: PairingClass::Private,
+                ..invite_request("Phone")
+            },
+        ))
+        .unwrap();
+    let preview = joiner.wallet.pairing_preview(&invite.link).unwrap();
+    assert_eq!(preview.class, PairingClass::Private);
+    assert!(matches!(
+        world.block_on(
+            joiner
+                .wallet
+                .pairing_accept(&relays(joiner), accept(&invite.link, "Desk", false))
+        ),
+        Err(ContactError::WrongClass)
+    ));
+    let answered = world
+        .block_on(joiner.wallet.pairing_accept(
+            &relays(joiner),
+            AcceptRequest {
+                class: PairingClass::Private,
+                ..accept(&invite.link, "Desk", false)
+            },
+        ))
+        .unwrap();
+    assert!(answered.posted);
+    assert_eq!(world.collect(inviter).paired, 1);
+    assert_eq!(world.collect(joiner).paired, 1);
+    let sas = |party: &Party| {
+        let pairings = world.block_on(party.wallet.private_pairings()).unwrap();
+        assert_eq!(pairings.len(), 1, "{pairings:?}");
+        pairings[0].sas.unwrap()
+    };
+    assert_eq!(
+        sas(inviter),
+        sas(joiner),
+        "both screens show the same words"
+    );
+    for (party, id) in [(inviter, invite.contact_id), (joiner, answered.contact_id)] {
+        world
+            .block_on(
+                party
+                    .wallet
+                    .pairing_sas(&relays(party), id, SasDecision::Match),
+            )
+            .unwrap();
+    }
+    (invite.contact_id, answered.contact_id)
+}
+
+fn payloads(world: &World, party: &Party) -> Vec<lepic_wallet::contact::ContactPayload> {
+    world.block_on(party.wallet.contact_payloads()).unwrap()
+}
+
+/// Two installs of one recovery phrase pair privately and pass payloads both ways; the
+/// pairing stays out of every contact list and call.
+#[test]
+fn two_installs_of_one_phrase_pair_privately_and_pass_payloads_both_ways() {
+    let world = World::new();
+    let twin = world.issuer_twin();
+    let (phone, desk) = private_pair(&world, &world.issuer, &twin);
+
+    let to_desk = world
+        .block_on(world.issuer.wallet.contact_post_payload(
+            &relays(&world.issuer),
+            phone,
+            b"to the desk".to_vec(),
+        ))
+        .unwrap();
+    world.collect(&twin);
+    let kept = payloads(&world, &twin);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (kept[0].id, kept[0].contact_id, kept[0].payload.as_slice()),
+        (to_desk, desk, b"to the desk".as_slice())
+    );
+    world
+        .block_on(
+            twin.wallet
+                .contact_post_payload(&relays(&twin), desk, b"back".to_vec()),
+        )
+        .unwrap();
+    world.collect(&world.issuer);
+    let kept = payloads(&world, &world.issuer);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].payload, b"back");
+
+    for party in [&world.issuer, &twin] {
+        assert!(world.block_on(party.wallet.contacts()).unwrap().is_empty());
+        assert!(
+            world
+                .block_on(party.wallet.pairings_pending())
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.contact_post_slate(
+            &relays(&world.issuer),
+            phone,
+            lepic_store::TxId(1),
+            None
+        )),
+        Err(ContactError::WrongClass)
+    ));
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.pairing_invite(
+            &relays_with_words(&world.issuer),
+            InviteRequest {
+                class: PairingClass::Private,
+                offer_words: true,
+                ..invite_request("Phone")
+            },
+        )),
+        Err(ContactError::WrongClass)
+    ));
+}
+
+#[test]
+fn payloads_wait_for_the_words_check_and_never_travel_over_a_contact() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.contact_post_payload(
+            &relays(&world.issuer),
+            anna_side,
+            vec![1],
+        )),
+        Err(ContactError::WrongClass)
+    ));
+    let twin = world.issuer_twin();
+    let invite = world
+        .block_on(world.issuer.wallet.pairing_invite(
+            &relays(&world.issuer),
+            InviteRequest {
+                class: PairingClass::Private,
+                ..invite_request("Phone")
+            },
+        ))
+        .unwrap();
+    world
+        .block_on(twin.wallet.pairing_accept(
+            &relays(&twin),
+            AcceptRequest {
+                class: PairingClass::Private,
+                ..accept(&invite.link, "Desk", false)
+            },
+        ))
+        .unwrap();
+    world.collect(&world.issuer);
+    world.collect(&twin);
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.contact_post_payload(
+            &relays(&world.issuer),
+            invite.contact_id,
+            vec![1],
+        )),
+        Err(ContactError::NotVerified)
+    ));
+}
+
 #[test]
 fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
     let world = World::new();
-    let (anna_side, ben_side) = world.pair_by_link();
-    let mut ben_events = world.payer.wallet.subscribe();
+    let twin = world.issuer_twin();
+    let (anna_side, ben_side) = private_pair(&world, &world.issuer, &twin);
+    let mut ben_events = twin.wallet.subscribe();
     let id = world
         .block_on(world.issuer.wallet.contact_post_payload(
             &relays(&world.issuer),
@@ -2695,11 +2864,9 @@ fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
         )
         .unwrap();
 
-    world.collect(&world.payer);
+    world.collect(&twin);
 
-    let kept = world
-        .block_on(world.payer.wallet.contact_payloads())
-        .unwrap();
+    let kept = payloads(&world, &twin);
     assert_eq!(kept.len(), 1);
     assert_eq!(
         (kept[0].id, kept[0].contact_id, kept[0].payload.as_slice()),
@@ -2712,16 +2879,11 @@ fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
     assert_eq!(arrived, 1);
     assert_eq!(
         world
-            .block_on(world.payer.wallet.contact_payloads_ack(&[id, id]))
+            .block_on(twin.wallet.contact_payloads_ack(&[id, id]))
             .unwrap(),
         1
     );
-    assert!(
-        world
-            .block_on(world.payer.wallet.contact_payloads())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(payloads(&world, &twin).is_empty());
     assert!(matches!(
         world.block_on(world.issuer.wallet.contact_post_payload(
             &relays(&world.issuer),

@@ -7,7 +7,7 @@ use rand_core::CryptoRng;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::card::ContactCard;
-use crate::envelope::{Content, MessageType, Opened, SealedEnvelope, seal};
+use crate::envelope::{Content, MessageType, Opened, SealedEnvelope, seal, seal_psk};
 use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::hash::{first8, sha256};
 use crate::hint::HintRule;
@@ -15,6 +15,7 @@ use crate::invite::Invite;
 use crate::keys::EncSecretKey;
 use crate::link::{LinkKind, decode_link, encode_link};
 use crate::network::Network;
+use crate::private::ChannelKey;
 
 const ID_DOMAIN: &[u8] = b"epic-pair/1 id";
 const COMMIT_DOMAIN: &[u8] = b"epic-pair/1 commit";
@@ -262,6 +263,27 @@ pub fn seal_confirm<R: CryptoRng>(
     signer: &SigningKey,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
+    seal_confirm_with(invitee, body, signer, None, rng)
+}
+
+/// [`seal_confirm`] for a private pairing, sealed under its channel key.
+pub fn seal_private_confirm<R: CryptoRng>(
+    invitee: &ContactCard,
+    body: &ConfirmBody,
+    signer: &SigningKey,
+    channel: &ChannelKey,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    seal_confirm_with(invitee, body, signer, Some(channel), rng)
+}
+
+fn seal_confirm_with<R: CryptoRng>(
+    invitee: &ContactCard,
+    body: &ConfirmBody,
+    signer: &SigningKey,
+    channel: Option<&ChannelKey>,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
     let network = invitee.network();
     if body.card.network() != network {
         return Err(EncodeError::WrongNetwork);
@@ -270,14 +292,25 @@ pub fn seal_confirm<R: CryptoRng>(
         return Err(EncodeError::SigningKeyMismatch);
     }
     let content = Content::new(MessageType::PairingConfirm, body.encode());
-    seal(
-        network,
-        invitee.enc_key(),
-        invitee.hint_rule(),
-        &content,
-        Some(signer),
-        rng,
-    )
+    match channel {
+        None => seal(
+            network,
+            invitee.enc_key(),
+            invitee.hint_rule(),
+            &content,
+            Some(signer),
+            rng,
+        ),
+        Some(channel) => seal_psk(
+            network,
+            invitee.enc_key(),
+            invitee.hint_rule(),
+            &content,
+            Some(signer),
+            channel,
+            rng,
+        ),
+    }
 }
 
 /// Seals a refusal to the replier's card: anonymous, one status byte, nothing of the inviter's.
@@ -297,6 +330,25 @@ pub fn seal_refusal<R: CryptoRng>(
     )
 }
 
+/// [`seal_refusal`] for a private pairing, sealed under its channel key.
+pub fn seal_private_refusal<R: CryptoRng>(
+    invitee: &ContactCard,
+    refusal: Refusal,
+    channel: &ChannelKey,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    let content = Content::new(MessageType::PairingConfirm, vec![refusal.byte()]);
+    seal_psk(
+        invitee.network(),
+        invitee.enc_key(),
+        invitee.hint_rule(),
+        &content,
+        None,
+        channel,
+        rng,
+    )
+}
+
 /// Opens a pairing confirm with the invitee's enc key for this contact. An accepted confirm must
 /// be signed by the sig key of the card it carries, and the caller still checks
 /// [`ConfirmBody::matches_invite`]; a refusal must be anonymous. A signed refusal and an
@@ -305,7 +357,19 @@ pub fn open_confirm(
     envelope: &SealedEnvelope<'_>,
     key: &EncSecretKey,
 ) -> Result<Confirm, DecodeError> {
-    let opened = envelope.open(key)?;
+    check_confirm(envelope, envelope.open(key)?)
+}
+
+/// [`open_confirm`] for a private pairing, with its channel key.
+pub fn open_private_confirm(
+    envelope: &SealedEnvelope<'_>,
+    key: &EncSecretKey,
+    channel: &ChannelKey,
+) -> Result<Confirm, DecodeError> {
+    check_confirm(envelope, envelope.open_psk(key, channel)?)
+}
+
+fn check_confirm(envelope: &SealedEnvelope<'_>, opened: Opened) -> Result<Confirm, DecodeError> {
     let sender = opened.sender;
     let confirm = Confirm::decode(
         &expect_type(opened, MessageType::PairingConfirm)?,

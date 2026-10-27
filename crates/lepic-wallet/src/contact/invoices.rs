@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use super::keys::{contact_keys, contact_network, signing_key};
+use super::keys::{contact_network, signing_key};
 use super::{ContactError, ContactRelays, LockedRng, RelayMode};
 use crate::event::{ContactInvoiceEvent, ContactSlateEvent, Event};
 use crate::inbox::ErrorChain;
@@ -223,6 +223,9 @@ where
                             matches!(record.state, ContactState::Paired | ContactState::Verified)
                         })
                         .ok_or(ContactError::UnknownContact)?;
+                    if super::private::is_private(&record) {
+                        return Err(ContactError::WrongClass);
+                    }
                     let mailbox = repos
                         .contact_mailbox(contact_id)?
                         .ok_or(ContactError::UnknownContact)?;
@@ -460,24 +463,47 @@ where
         let card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
         let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
         let session = self.session()?;
-        let keys = contact_keys(
-            &session.keychain,
-            network,
-            record.account,
-            record.slot,
-            record.box_salt,
-        )?;
-        seal(
-            net,
-            card.enc_key(),
-            card.hint_rule(),
-            &Content {
-                card: Some(own),
-                ..content
-            },
-            Some(&signing_key(&keys)),
-            &mut LockedRng(&mut **self.ports().rng.lock()),
-        )
+        let class = {
+            let session = std::sync::Arc::clone(&session);
+            let record = record.clone();
+            self.contact_work(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| super::private::class_of(repos, &record))?)
+            })
+            .await?
+        };
+        let keys = super::private::record_keys(&session.keychain, network, record, &class)?;
+        let mut rng = LockedRng(&mut **self.ports().rng.lock());
+        match class.private() {
+            None => seal(
+                net,
+                card.enc_key(),
+                card.hint_rule(),
+                &Content {
+                    card: Some(own),
+                    ..content
+                },
+                Some(&signing_key(&keys)),
+                &mut rng,
+            ),
+            // A private pairing's card never changes through its channel.
+            Some(secrets) => {
+                let channel = secrets
+                    .channel
+                    .as_ref()
+                    .ok_or(ContactError::UnknownContact)?;
+                lepic_contact::seal_psk(
+                    net,
+                    card.enc_key(),
+                    card.hint_rule(),
+                    &content,
+                    Some(&signing_key(&keys)),
+                    channel,
+                    &mut rng,
+                )
+            }
+        }
         .map_err(ContactError::Encode)
     }
 
@@ -832,6 +858,10 @@ where
         };
         if crate::notice::is_unpaired(text) {
             self.take_unpaired(record.contact_id).await?;
+            return Ok(Handled::Stored);
+        }
+        // A private pairing takes no other notice.
+        if super::private::is_private(record) {
             return Ok(Handled::Stored);
         }
         let Payload::Notice(notice) = classify_text(text) else {

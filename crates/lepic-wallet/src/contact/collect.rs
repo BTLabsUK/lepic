@@ -234,6 +234,7 @@ fn end_late_pairing(
     super::pairing::end_pending(repos, pending.pairing_id)?;
     super::invoices::drop_contact_invoices(repos, contact_id)?;
     repos.delete_contact(contact_id)?;
+    super::private::delete_secrets(repos, contact_id)?;
     Ok(Some(Some(FailedPairing { contact_id, reason })))
 }
 
@@ -412,6 +413,7 @@ where
                         .is_ok_and(|end| end <= now);
                     if shown_card && old {
                         repos.delete_contact(record.contact_id)?;
+                        super::private::delete_secrets(repos, record.contact_id)?;
                     }
                 }
                 Ok::<_, StoreError>(ended)
@@ -596,13 +598,25 @@ where
                     if waiting(&host_text(&home)) {
                         continue;
                     }
-                    let keys = contact_keys(
-                        &session.keychain,
-                        network,
-                        record.account,
-                        record.slot,
-                        salt,
-                    )?;
+                    let keys = match super::private::class_of(repos, &record)? {
+                        super::private::RecordClass::Contact => contact_keys(
+                            &session.keychain,
+                            network,
+                            record.account,
+                            record.slot,
+                            salt,
+                        )?,
+                        class @ super::private::RecordClass::Private(_) => {
+                            super::private::record_keys(
+                                &session.keychain,
+                                network,
+                                &record,
+                                &class,
+                            )?
+                        }
+                        // Nothing is taken through a private pairing whose secrets do not open.
+                        super::private::RecordClass::Unreadable => continue,
+                    };
                     mailboxes.push(Mailbox {
                         job: Job::Contact(record.contact_id, current),
                         identity: box_identity(&keys, network, &home)?,
@@ -711,14 +725,20 @@ where
         let network = self.config().network;
         let net = contact_network(network);
         let session = self.session()?;
-        let record = {
+        let found = {
             let session = std::sync::Arc::clone(&session);
             self.contact_work(move |_, _| {
-                Ok(session.store.read(|repos| repos.contact(contact_id))?)
+                Ok(session.store.read(|repos| {
+                    let Some(record) = repos.contact(contact_id)? else {
+                        return Ok::<_, StoreError>(None);
+                    };
+                    let class = super::private::class_of(repos, &record)?;
+                    Ok(Some((record, class)))
+                })?)
             })
             .await?
         };
-        let Some(record) = record else {
+        let Some((record, class)) = found else {
             return Ok(Handled::Stored);
         };
         let Some(peer) = &record.peer else {
@@ -727,18 +747,24 @@ where
         let Ok(recorded) = lepic_contact::VerifyingKey::from_bytes(&peer.sig_key) else {
             return Ok(Handled::Stored);
         };
-        let keys = contact_keys(
-            &session.keychain,
-            network,
-            record.account,
-            record.slot,
-            record.box_salt,
-        )?;
+        if matches!(class, super::private::RecordClass::Unreadable) {
+            warn!("envelope for a private pairing whose secrets do not open dropped");
+            return Ok(Handled::Stored);
+        }
+        let keys = super::private::record_keys(&session.keychain, network, &record, &class)?;
         let Ok(sealed) = SealedEnvelope::decode(envelope, net) else {
             debug!("undecodable envelope in a contact mailbox dropped");
             return Ok(Handled::Stored);
         };
-        let opened = match sealed.open_from(&enc_secret(&keys), &recorded) {
+        let channel = class.private().and_then(|secrets| secrets.channel.clone());
+        if class.private().is_some() && channel.is_none() {
+            return Ok(Handled::Stored);
+        }
+        let opened = match &channel {
+            None => sealed.open_from(&enc_secret(&keys), &recorded),
+            Some(channel) => sealed.open_from_psk(&enc_secret(&keys), &recorded, channel),
+        };
+        let opened = match opened {
             Ok(opened) => opened,
             Err(lepic_contact::DecodeError::KeyChanged) => {
                 // Signed by a key that is not the contact's: never the contact's news.
@@ -760,6 +786,17 @@ where
         };
         if opened.sender.is_none() {
             debug!("anonymous envelope in a contact mailbox dropped");
+            return Ok(Handled::Stored);
+        }
+        // A private pairing carries the host app's payloads and the unpaired notice only; a
+        // contact never carries payloads.
+        let allowed = match (channel.is_some(), opened.content.kind) {
+            (true, MessageType::AppPayload | MessageType::Notice) => true,
+            (true, _) | (false, MessageType::AppPayload) => false,
+            (false, _) => true,
+        };
+        if !allowed {
+            warn!("message of a kind its pairing does not carry dropped");
             return Ok(Handled::Stored);
         }
         let update = match opened.content.kind {

@@ -188,6 +188,15 @@ pub enum WalletErrorKind {
     /// ends further ahead than any issuer sets it, or it was made at a height the chain cannot
     /// have reached. Nothing was paid or stored.
     InvoiceNotForThisChain,
+    /// The node refused the transaction because inputs of it are no longer unspent: another
+    /// wallet on the same recovery phrase spent them. The send was cancelled, its other inputs
+    /// released, and a refresh ran; the other wallet's spend shows as a transaction of origin
+    /// `OtherWallet`.
+    InputsSpentElsewhere,
+    /// The invite, contact or call is of the other pairing class: a private invite answered as
+    /// a contact or the other way round, words asked for a private pairing, a slate or invoice
+    /// for a private pairing, or a payload for a contact. Nothing was stored or sent.
+    WrongPairingClass,
 }
 
 impl WalletErrorKind {
@@ -262,6 +271,8 @@ impl WalletErrorKind {
             Self::ContactRefusesInvoices => 73,
             Self::PhraseMismatch => 74,
             Self::InvoiceNotForThisChain => 75,
+            Self::InputsSpentElsewhere => 76,
+            Self::WrongPairingClass => 77,
         }
     }
 }
@@ -434,6 +445,7 @@ impl From<FinalizeError> for WalletError {
             E::Expired { .. } => WalletErrorKind::PaymentExpired,
             E::Node(_) => WalletErrorKind::NodeUnreachable,
             E::NotPosted { .. } => WalletErrorKind::NotPosted,
+            E::InputsSpentElsewhere { .. } => WalletErrorKind::InputsSpentElsewhere,
             E::NotFinalizable { .. } | E::NotPostable { .. } | E::UnknownTransport { .. } => {
                 WalletErrorKind::InvalidArgument
             }
@@ -518,6 +530,7 @@ impl From<InvoiceError> for WalletError {
             E::NotParked { .. } => WalletErrorKind::InvoiceNotFound,
             E::Undelivered { .. } | E::PaymentUndelivered { .. } => WalletErrorKind::NotDelivered,
             E::NotPosted { .. } => WalletErrorKind::NotPosted,
+            E::InputsSpentElsewhere { .. } => WalletErrorKind::InputsSpentElsewhere,
             _ => WalletErrorKind::Other,
         };
         Self::chained(kind, &error)
@@ -557,6 +570,7 @@ impl From<ContactError> for WalletError {
                 E::WordsNotFound => K::PairingWordsNotFound,
                 E::Words(_) => K::InvalidPairingWords,
                 E::DoesNotPayInvoices => K::ContactRefusesInvoices,
+                E::WrongClass => K::WrongPairingClass,
                 _ => K::Other,
             },
         };
@@ -679,6 +693,8 @@ mod tests {
             (K::ContactRefusesInvoices, 73),
             (K::PhraseMismatch, 74),
             (K::InvoiceNotForThisChain, 75),
+            (K::InputsSpentElsewhere, 76),
+            (K::WrongPairingClass, 77),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");

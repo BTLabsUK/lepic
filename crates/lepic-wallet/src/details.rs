@@ -88,6 +88,10 @@ pub struct TransactionDetails {
     /// it by commitment, which leave it once a transaction spends them. Empty when none is
     /// stored, as for a cancelled send whose change was dropped.
     pub output_commits: Vec<Commitment>,
+    /// The outputs of this wallet the transaction spent: for one made here, the inputs this
+    /// wallet added to the slate stage it built, as the store holds them; for a spend by
+    /// another wallet, the outputs it spent. Empty for any other.
+    pub spent_commits: Vec<Commitment>,
     /// For a payment received over Epicbox that still waits for its sender, when the sender
     /// reported that it posted the transaction, while that report is younger than
     /// [`POSTED_REPORT_WINDOW`]. Advisory: the sender says so, and only a refresh that finds
@@ -264,15 +268,17 @@ fn details(
     let origin = legacy_history::origin(repos, tx_id, &transaction.entry)?;
     let found = match origin {
         TxOrigin::FoundByScan => scan_found(repos, tx_id)?,
-        TxOrigin::Wallet | TxOrigin::Imported => None,
+        TxOrigin::Wallet | TxOrigin::Imported | TxOrigin::OtherWallet => None,
     };
     let release = release_check(repos, codecs, &transaction)?.ok();
     let undelivered = undelivered(repos, &transaction)?;
     let output_commits = output_commits(repos, codecs, &transaction, flow)?;
+    let spent_commits = spent_commits(repos, codecs, &transaction, flow)?;
     let sender_reported_posted_at = sender_report(repos, &transaction, now)?;
     Ok(TransactionDetails {
         sender_reported_posted_at,
         output_commits,
+        spent_commits,
         undelivered,
         origin,
         found,
@@ -364,6 +370,38 @@ fn output_commits(
     for output in repos.outputs_of_transaction(tx_id)? {
         if !commits.contains(&output.id.commitment) {
             commits.push(output.id.commitment);
+        }
+    }
+    Ok(commits)
+}
+
+fn spent_commits(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    transaction: &StoredTransaction,
+    flow: TxFlow,
+) -> Result<Vec<Commitment>, StoreError> {
+    let tx_id = transaction.id;
+    if let Some(spent) = crate::other_wallet::spent_by(repos, tx_id)? {
+        return Ok(spent);
+    }
+    let entry = &transaction.entry;
+    // Only the sender of a payment and the payer of an invoice add inputs.
+    let built = match (flow, entry.direction) {
+        (TxFlow::Payment, TxDirection::Outgoing) => SlateStage::Standard1,
+        (TxFlow::Invoice, TxDirection::Outgoing) => SlateStage::Invoice2,
+        _ => return Ok(Vec::new()),
+    };
+    let Some(slate_id) = entry.slate_id else {
+        return Ok(Vec::new());
+    };
+    let Some(slate) = stored_slate(repos, codecs, tx_id, slate_id, built)? else {
+        return Ok(Vec::new());
+    };
+    let mut commits = Vec::new();
+    for input in slate.inputs() {
+        if repos.output(input.commitment.as_bytes())?.is_some() {
+            commits.push(input.commitment);
         }
     }
     Ok(commits)

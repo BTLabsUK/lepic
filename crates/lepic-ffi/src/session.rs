@@ -759,9 +759,18 @@ impl Session {
     }
 
     /// Refreshes against the node and returns the default account's balance.
+    /// Refreshes, then runs the short update scan that finds what another wallet on the phrase
+    /// received and the change of its spends; a scan that fails is logged and the next refresh
+    /// tries again.
     pub(crate) async fn refresh(&self) -> Result<WalletSummary, WalletError> {
         let mut events = self.engine.subscribe();
-        match self.engine.refresh().await? {
+        let refreshed = self.engine.refresh().await?;
+        if matches!(refreshed, RefreshOutcome::Refreshed(_))
+            && let Err(error) = self.engine.refresh_scan().await
+        {
+            warn!(error = %error, "update scan after a refresh failed");
+        }
+        match refreshed {
             RefreshOutcome::Refreshed(_) => {
                 let mut latest = None;
                 loop {
@@ -772,6 +781,12 @@ impl Session {
                         Ok(_) | Err(TryRecvError::Lagged(_)) => {}
                         Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                     }
+                }
+                // The update scan may have stored the change of a spend elsewhere since.
+                if latest.is_some()
+                    && let Ok(balance) = self.engine.balance(DEFAULT_ACCOUNT)
+                {
+                    latest = Some(balance);
                 }
                 match latest {
                     Some(balance) => {
@@ -1587,6 +1602,7 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             EngineTxOrigin::Wallet => TxOrigin::Wallet,
             EngineTxOrigin::Imported => TxOrigin::Imported,
             EngineTxOrigin::FoundByScan => TxOrigin::FoundByScan,
+            EngineTxOrigin::OtherWallet => TxOrigin::OtherWallet,
         },
         imported: details.imported.as_ref().map(|imported| ImportedTx {
             source_id: imported.source_id,
@@ -1607,6 +1623,11 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             .iter()
             .copied()
             .map(|commitment| commitment.to_hex())
+            .collect(),
+        spent_commits: details
+            .spent_commits
+            .iter()
+            .map(Commitment::to_hex)
             .collect(),
         sender_reported_posted_at_ms: details
             .sender_reported_posted_at
@@ -2258,6 +2279,7 @@ mod tests {
                 dated_by_block: true,
             }),
             output_commits: vec![output],
+            spent_commits: vec![output],
             sender_reported_posted_at: Some(confirmed),
         };
 
@@ -2299,6 +2321,7 @@ mod tests {
                     dated_by_block: true,
                 }),
                 output_commits: vec![output.to_hex()],
+                spent_commits: vec![output.to_hex()],
                 sender_reported_posted_at_ms: Some(1_790_000_600_456),
             }
         );

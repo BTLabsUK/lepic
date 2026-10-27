@@ -41,6 +41,13 @@ pub const SLOT_COUNT: u32 = 65_536;
 /// Length of the random salt of a contact's mailbox key.
 pub const BOX_SALT_LEN: usize = 16;
 
+/// Private pairings take their slots from here up, never a contact's (RFC 0002 2.2 uses
+/// `0..SLOT_COUNT`); the slot alone says a record is private.
+pub const PRIVATE_SLOT_BASE: u32 = SLOT_COUNT;
+
+/// The salt prefix of a private pairing's keys, apart from every contact label.
+const PRIVATE_SALT: &[u8] = b"epic-private/1 keys";
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ContactKeyError {
     #[error("key derivation failed")]
@@ -143,6 +150,43 @@ impl ContactRoot {
         let hint_key = self.hint_key(slot)?;
         let box_sk = first_valid_key(
             |ctr, out| self.expand(&[b"box", &slot_bytes, &box_salt, &[ctr]], out),
+            |bytes| SecretKey::from_bytes(bytes).ok(),
+        )?;
+        let box_pk = PublicKey::from_secret_key(&box_sk)?;
+        Ok(ContactKeys {
+            enc_sk,
+            sig_sk,
+            hint_key,
+            box_sk,
+            box_pk,
+        })
+    }
+
+    /// The keys of the private pairing in `slot`, made from this root and the record's own
+    /// random `secret`: `HKDF(salt = "epic-private/1 keys" || secret, ikm = root)` expanded
+    /// under labels no contact key uses. Someone with the recovery phrase alone cannot derive
+    /// them, and no contact slot or salt reaches them.
+    pub fn private_keys(
+        &self,
+        slot: u32,
+        secret: &[u8; 32],
+    ) -> Result<ContactKeys, ContactKeyError> {
+        let salt = Zeroizing::new([PRIVATE_SALT, secret.as_slice()].concat());
+        let hkdf = Hkdf::<Sha256>::new(Some(&salt), self.0.as_slice());
+        let slot_bytes = slot.to_be_bytes();
+        let expand = |parts: &[&[u8]], out: &mut [u8; 32]| {
+            hkdf.expand(&parts.concat(), out)
+                .map_err(|_| ContactKeyError::Derivation)
+        };
+        let mut enc_sk = Zeroizing::new([0u8; 32]);
+        expand(&[b"private enc", &slot_bytes], &mut enc_sk)?;
+        let mut sig_seed = Zeroizing::new([0u8; 32]);
+        expand(&[b"private sig", &slot_bytes], &mut sig_seed)?;
+        let sig_sk = SigningKey::from_bytes(&sig_seed);
+        let mut hint_key = Zeroizing::new([0u8; 32]);
+        expand(&[b"private hint", &slot_bytes], &mut hint_key)?;
+        let box_sk = first_valid_key(
+            |ctr, out| expand(&[b"private box", &slot_bytes, &[ctr]], out),
             |bytes| SecretKey::from_bytes(bytes).ok(),
         )?;
         let box_pk = PublicKey::from_secret_key(&box_sk)?;
@@ -363,6 +407,24 @@ fn first_valid_key<K>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_keys_need_the_records_secret_and_differ_from_every_contact_key() {
+        let root = ContactRoot::from_raw(&[7; 32], Network::Floonet).unwrap();
+        let slot = PRIVATE_SLOT_BASE;
+        let one = root.private_keys(slot, &[1; 32]).unwrap();
+        let again = root.private_keys(slot, &[1; 32]).unwrap();
+        let other = root.private_keys(slot, &[2; 32]).unwrap();
+        assert_eq!(one.enc_public_key(), again.enc_public_key());
+        assert_ne!(one.enc_public_key(), other.enc_public_key());
+        assert_ne!(one.sig_public_key(), other.sig_public_key());
+        assert_ne!(one.expose_hint_key(), other.expose_hint_key());
+        assert_ne!(one.box_public_key(), other.box_public_key());
+        let contact = root.contact_keys(slot, [0; BOX_SALT_LEN]).unwrap();
+        assert_ne!(one.enc_public_key(), contact.enc_public_key());
+        assert_ne!(one.sig_public_key(), contact.sig_public_key());
+        assert_ne!(one.expose_hint_key(), contact.expose_hint_key());
+    }
 
     #[test]
     fn contact_path_of_default_account() {

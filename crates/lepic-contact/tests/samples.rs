@@ -54,6 +54,7 @@ fn samples() {
             home_relay: RelayHost::new("epicbox.example.org").unwrap(),
             service_inbox: None,
             onion: None,
+            link: None,
         },
     )
     .unwrap();

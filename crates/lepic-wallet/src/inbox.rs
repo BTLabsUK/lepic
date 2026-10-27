@@ -435,7 +435,9 @@ pub(crate) fn finalize_is_permanent(error: &FinalizeError) -> bool {
         | FinalizeError::Node(_)
         | FinalizeError::Codecs(_)
         | FinalizeError::NotPosted { .. } => false,
-        FinalizeError::Decode(_)
+        // The send was cancelled: the same answer finds nothing to finalize.
+        FinalizeError::InputsSpentElsewhere { .. }
+        | FinalizeError::Decode(_)
         | FinalizeError::WrongStage { .. }
         | FinalizeError::UnknownSlate { .. }
         | FinalizeError::AlreadyFinalized { .. }
@@ -475,7 +477,8 @@ pub(crate) fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::NotPosted { .. }
         | InvoiceError::Undelivered { .. }
         | InvoiceError::PaymentUndelivered { .. } => false,
-        InvoiceError::Decode(_)
+        InvoiceError::InputsSpentElsewhere { .. }
+        | InvoiceError::Decode(_)
         | InvoiceError::WrongStage { .. }
         | InvoiceError::AmountMismatch { .. }
         | InvoiceError::AlreadyPaid { .. }

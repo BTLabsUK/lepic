@@ -1,9 +1,9 @@
-//! Opaque payloads between paired wallets: bytes the host app sends its paired counterpart,
-//! sealed and signed as every contact message is, queued in the outbox, and kept on arrival
-//! until the host acknowledges them. LEPIC never reads them.
+//! Opaque payloads over private pairings: bytes the host app sends its other wallet, sealed
+//! under the pairing's channel key and signed, queued in the outbox, and kept on arrival until
+//! the host acknowledges them. LEPIC never reads them. Contacts never carry them.
 
 use jiff::Timestamp;
-use lepic_contact::{ContactCard, Content, MessageType, Reference, seal};
+use lepic_contact::{Content, MessageType, Reference};
 use lepic_epicbox::Handled;
 use lepic_node::NodeApi;
 use lepic_store::{ContactId, ContactRecord, Repositories, SlateStage, StoreError, WalletStore};
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use super::keys::{contact_keys, contact_network, signing_key};
+use super::private::{RecordClass, class_of};
 use super::{ContactError, ContactRelays, LockedRng, new_id};
 use crate::event::{ContactEvent, Event};
 use crate::ports::{SecretVault, StoreOpener};
@@ -159,14 +159,15 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// Sends `payload` to the paired contact `contact_id`: sealed to its keys and signed with
-    /// ours, queued in the outbox, and posted once when relays may be reached; the outbox
-    /// retries it as it retries slates. Returns the payload's id, under which the contact keeps
-    /// it once. LEPIC does not read the bytes.
+    /// Sends `payload` through the private pairing `contact_id`: sealed to its keys under its
+    /// channel key and signed with ours, queued in the outbox, and posted once when relays may
+    /// be reached; the outbox retries it as it retries slates. Returns the payload's id, under
+    /// which the other wallet keeps it once. LEPIC does not read the bytes.
     ///
     /// Fails with [`ContactError::TooLarge`] for more than [`MAX_APP_PAYLOAD_LEN`] bytes,
-    /// [`ContactError::UnknownContact`] for a contact that is not paired, and as the store
-    /// does.
+    /// [`ContactError::WrongClass`] for a contact, [`ContactError::NotVerified`] before both
+    /// sides matched the words check, [`ContactError::UnknownContact`] for no such pairing or
+    /// one whose secrets do not open, and as the store does.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn contact_post_payload(
         &self,
@@ -180,50 +181,43 @@ where
             });
         }
         self.check_contact_network(relays)?;
-        let network = self.config().network;
-        let net = contact_network(network);
         let session = self.session()?;
-        let (id, envelope) = self
+        let (record, id) = self
             .contact_work(move |ports, _| {
                 session.store.read(|repos| {
                     let record = repos
                         .contact(contact_id)?
                         .filter(sendable)
                         .ok_or(ContactError::UnknownContact)?;
-                    let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
-                    let card =
-                        ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
-                    let keys = contact_keys(
-                        &session.keychain,
-                        network,
-                        record.account,
-                        record.slot,
-                        record.box_salt,
-                    )?;
-                    let mut rng = LockedRng(&mut **ports.rng.lock());
-                    let id = PayloadId(Uuid::from_bytes(new_id(&mut rng)));
-                    let reference = Reference::new(&id.to_string()).map_err(ContactError::Name)?;
-                    let content = Content {
-                        reference: Some(reference),
-                        ..Content::new(MessageType::AppPayload, payload)
-                    };
-                    let envelope = seal(
-                        net,
-                        card.enc_key(),
-                        card.hint_rule(),
-                        &content,
-                        Some(&signing_key(&keys)),
-                        &mut rng,
-                    )
-                    .map_err(ContactError::Encode)?;
-                    Ok::<_, ContactError>((id, envelope))
+                    match class_of(repos, &record)? {
+                        RecordClass::Contact => return Err(ContactError::WrongClass),
+                        RecordClass::Unreadable => return Err(ContactError::UnknownContact),
+                        RecordClass::Private(_) => {}
+                    }
+                    if record.state != lepic_store::ContactState::Verified {
+                        return Err(ContactError::NotVerified);
+                    }
+                    let id = PayloadId(Uuid::from_bytes(new_id(&mut LockedRng(
+                        &mut **ports.rng.lock(),
+                    ))));
+                    Ok((record, id))
                 })
             })
+            .await?;
+        let reference = Reference::new(&id.to_string()).map_err(ContactError::Name)?;
+        let envelope = self
+            .seal_for_contact(
+                &record,
+                Content {
+                    reference: Some(reference),
+                    ..Content::new(MessageType::AppPayload, payload)
+                },
+            )
             .await?;
         self.enqueue_for_contact(contact_id, id.0, SlateStage::Standard1, &envelope)
             .await?;
         self.deliver_soon(relays).await;
-        info!("payload queued for a contact");
+        info!("payload queued for a private pairing");
         Ok(id)
     }
 
@@ -286,15 +280,19 @@ where
         .await
     }
 
-    /// Keeps a payload the contact of `record` sent, then raises [`Event::ContactPayload`];
-    /// a repeat is acknowledged and kept once, one without its id or too large is dropped, and
-    /// one that finds the store full stays on the relay.
+    /// Keeps a payload the private pairing `record` carried, then raises
+    /// [`Event::ContactPayload`]; a repeat is acknowledged and kept once, one without its id or
+    /// too large is dropped, and one that finds the store full, or arrives before this side
+    /// matched the words check, stays on the relay.
     pub(crate) async fn take_contact_payload(
         &self,
         record: &ContactRecord,
         content: Content,
     ) -> Result<Handled, ContactError> {
         let contact_id = record.contact_id;
+        if record.state != lepic_store::ContactState::Verified {
+            return Ok(Handled::Later);
+        }
         let id = content
             .reference
             .as_ref()

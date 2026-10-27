@@ -30,12 +30,13 @@ pub use contact::{
     BOX_SALT_LEN, CARD_KEY_LEN, CONTACT_ID_LEN, CONTACT_SLOT_COUNT, ContactCap, ContactId,
     ContactKind, ContactMailbox, ContactOutboxEntry, ContactOutboxId, ContactOutboxState,
     ContactRecord, ContactRepository, ContactState, INVITE_ID_LEN, MAX_CONTACTS,
-    MAX_PENDING_PAIRINGS, PairingId, PairingRole, PairingSecrets, PairingState, PeerCard,
-    PendingPairing, PreviousHome, RelayBackoff, SAS_LEN, SealMode, StoredContactOutbox,
+    MAX_PENDING_PAIRINGS, PRIVATE_SLOT_END, PairingId, PairingRole, PairingSecrets, PairingState,
+    PeerCard, PendingPairing, PreviousHome, RelayBackoff, SAS_LEN, SealMode, StoredContactOutbox,
 };
 #[cfg(feature = "sqlite")]
 pub use contact_backup::{
-    CONTACT_BACKUP_VERSION, CardReader, ImportSummary, export_contacts, import_contacts,
+    CONTACT_BACKUP_VERSION, CardReader, ImportSummary, export_contacts, export_contacts_where,
+    import_contacts,
 };
 pub use context::{CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext};
 pub use error::{DatabaseError, Record, StoreError};

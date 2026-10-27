@@ -11,8 +11,8 @@ use lepic_wallet::contact::{
     ContactRelays, ContactView as EngineContactView, InviteExpiry as EngineExpiry,
     InvitePreview as EnginePreview, InviteRequest, InvoiceDetails,
     KeyCheckStart as EngineKeyCheckStart, KeysDecision as EngineKeysDecision, LinkOutcome,
-    PairingFailure, PairingRole, Purpose, RelayMode, SasDecision as EngineSasDecision, SasSymbol,
-    SealedAnswer as EngineAnswer,
+    PairingClass as EngineClass, PairingFailure, PairingRole, Purpose, RelayMode,
+    SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer,
 };
 use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
@@ -26,10 +26,10 @@ use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
     ContactPayloadView, ContactRelayMode, ContactView, FailedPairing, FinalizedTx, FoundInvite,
     InviteExpiry, InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView,
-    OutboxReport, OutboxState, PaidInvoice, PairingAnswer, PairingCard, PairingFailureReason,
-    PairingInvite, PairingLinkOutcome, PairingLinkResult, PairingState, PendingPairingView,
-    SasDecision, SasEntry, SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx,
-    SlateMessage, SlatePurpose, SlateStage, WalletEvent, WalletEventKind,
+    OutboxReport, OutboxState, PaidInvoice, PairingAnswer, PairingCard, PairingClass,
+    PairingFailureReason, PairingInvite, PairingLinkOutcome, PairingLinkResult, PairingState,
+    PendingPairingView, SasDecision, SasEntry, SealState, SealedAnswer, SealedSlateView,
+    SendOptions, SentTx, SlateMessage, SlatePurpose, SlateStage, WalletEvent, WalletEventKind,
 };
 
 /// The longest sealed text taken from the app: a slate with its envelope and armor fits many
@@ -226,6 +226,17 @@ fn preview(preview: EnginePreview) -> InvitePreview {
         expires_at_ms: ms(preview.expires_at),
         home_relay: preview.home_relay,
         service: preview.service,
+        class: match preview.class {
+            EngineClass::Contact => PairingClass::Contact,
+            EngineClass::Private => PairingClass::Private,
+        },
+    }
+}
+
+pub(super) const fn engine_class(class: PairingClass) -> EngineClass {
+    match class {
+        PairingClass::Contact => EngineClass::Contact,
+        PairingClass::Private => EngineClass::Private,
     }
 }
 
@@ -329,6 +340,7 @@ impl Session {
         mode: ContactRelayMode,
         meeting: Option<Vec<String>>,
         home_relay: Option<String>,
+        class: PairingClass,
     ) -> Result<PairingInvite, WalletError> {
         check_home_relay(home_relay.as_deref())?;
         let relays = if offer_words {
@@ -351,6 +363,7 @@ impl Session {
                     },
                     offer_words,
                     home_relay,
+                    class: engine_class(class),
                 },
             )
             .await?;
@@ -395,6 +408,7 @@ impl Session {
         name: String,
         by_hand: bool,
         mode: ContactRelayMode,
+        class: PairingClass,
     ) -> Result<PairingAnswer, WalletError> {
         bounded(&link, MAX_LINK_TEXT, "link")?;
         let relays = self.contact_relays(mode)?;
@@ -407,6 +421,7 @@ impl Session {
                     account: DEFAULT_ACCOUNT,
                     name,
                     by_hand,
+                    class: engine_class(class),
                 },
             )
             .await?;
@@ -1017,6 +1032,16 @@ impl Session {
             .contact_post_payload(&relays, id, payload)
             .await?;
         Ok(sent.to_string())
+    }
+
+    pub(crate) async fn private_pairings(&self) -> Result<Vec<ContactView>, WalletError> {
+        Ok(self
+            .engine
+            .private_pairings()
+            .await?
+            .into_iter()
+            .map(view)
+            .collect())
     }
 
     pub(crate) async fn contact_payloads(&self) -> Result<Vec<ContactPayloadView>, WalletError> {

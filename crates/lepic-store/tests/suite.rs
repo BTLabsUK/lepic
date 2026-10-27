@@ -20,10 +20,10 @@ use lepic_store::{
     ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex,
     InvoiceCap, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES,
     MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt, OutboxEntry, OutboxId,
-    OutboxStatus, OutputStatus, PairingId, PairingState, ParticipantId, PeerCapability, PeerCard,
-    PeerSupport, PendingInvoiceStatus, PrivateContext, Record, Repositories, SealMode, SlateStage,
-    StoreError, TransactionEntry, TxDirection, TxId, TxState, WalletStore, export_contacts,
-    import_contacts,
+    OutboxStatus, OutputStatus, PRIVATE_SLOT_END, PairingId, PairingState, ParticipantId,
+    PeerCapability, PeerCard, PeerSupport, PendingInvoiceStatus, PrivateContext, Record,
+    Repositories, SealMode, SlateStage, StoreError, TransactionEntry, TxDirection, TxId, TxState,
+    WalletStore, export_contacts, import_contacts,
 };
 use uuid::Uuid;
 
@@ -1251,10 +1251,13 @@ fn slots_run_out_at_65536<B: Backend>() {
     })
     .unwrap_err();
     assert!(matches!(error, StoreError::OutOfRange { .. }));
+    // Slots from CONTACT_SLOT_COUNT up are private pairings', below PRIVATE_SLOT_END.
     let mut record = contact(1, 1);
-    record.slot = CONTACT_SLOT_COUNT;
+    record.slot = PRIVATE_SLOT_END;
     let error = write(store, |repos| repos.put_contact(&record)).unwrap_err();
     assert!(matches!(error, StoreError::OutOfRange { .. }));
+    record.slot = CONTACT_SLOT_COUNT;
+    write(store, |repos| repos.put_contact(&record)).unwrap();
 }
 
 fn twin_records_share_a_slot_but_not_a_peer_key<B: Backend>() {

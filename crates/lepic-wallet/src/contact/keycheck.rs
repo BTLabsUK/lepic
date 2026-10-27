@@ -133,7 +133,9 @@ fn within_window(created: Timestamp, now: Timestamp) -> bool {
 }
 
 fn paired(record: &ContactRecord) -> bool {
-    matches!(record.state, ContactState::Paired | ContactState::Verified) && record.peer.is_some()
+    matches!(record.state, ContactState::Paired | ContactState::Verified)
+        && record.peer.is_some()
+        && !super::private::is_private(record)
 }
 
 /// A recent use of the slot's one check a day, if any.
@@ -289,11 +291,13 @@ where
                     KeysDecision::KeepOld => {
                         drop_contact_invoices(repos, new)?;
                         repos.delete_contact(new)?;
+                        super::private::delete_secrets(repos, new)?;
                     }
                     KeysDecision::UseNew => {
                         if let Some(old) = old {
                             drop_contact_invoices(repos, old)?;
                             repos.delete_contact(old)?;
+                            super::private::delete_secrets(repos, old)?;
                         }
                         record.state = ContactState::Paired;
                         record.verified_at = None;
@@ -806,6 +810,7 @@ where
                             super::pairing::end_pending(repos, pairing_id_of(id))?;
                             drop_contact_invoices(repos, id)?;
                             repos.delete_contact(id)?;
+                            super::private::delete_secrets(repos, id)?;
                             repos.delete_setting(&key(FOLD_PREFIX, id))?;
                             continue;
                         }

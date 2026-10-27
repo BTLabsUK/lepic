@@ -42,6 +42,7 @@ use crate::event::{Balance, Event, SlateId, SupersededReceive};
 use crate::finalize::kernel_excess;
 use crate::invoice::payer_release_height;
 use crate::lifecycle::Session;
+use crate::other_wallet;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::release::{
     RELEASED_WATCH_BLOCKS, ReleaseCheck, record_kernel_absent, record_watch, release_check,
@@ -125,6 +126,15 @@ struct StepOutcome {
     changes: Vec<StateChange>,
 }
 
+/// What a refresh knows of the chain when it applies the node's answers.
+#[derive(Debug, Clone, Copy)]
+struct ChainSeen {
+    tip: Height,
+    /// The tip of the refresh before, at which every output still tracked was on chain.
+    last_confirmed: Option<Height>,
+    coinbase_maturity: u64,
+}
+
 /// The tip a refresh counts at, and what [`Wallet::cover`] needs to read it once more.
 #[derive(Debug, Clone, Copy)]
 struct RefreshTip {
@@ -182,6 +192,11 @@ where
     /// its outputs, with no end. One found moves from `cancelled` or `expired` to `confirmed`
     /// and has its outputs stored as unspent.
     ///
+    /// Unspent outputs gone from the chain that no transaction here spent were spent by another
+    /// wallet on the same recovery phrase: they become one confirmed outgoing entry per account
+    /// of origin `OtherWallet` ([`crate::legacy_history::TxOrigin`]), raised as
+    /// [`Event::Transaction`]; [`Wallet::refresh_scan`] after the refresh finds their change.
+    ///
     /// The tip must be plausible: below the bounds [`crate::chain`] describes. Output and
     /// kernel heights must not be above the tip. An output or confirming kernel above it has
     /// the tip asked for once more, and a second tip that reaches it, is plausible and agrees
@@ -234,15 +249,21 @@ where
         let found_outputs: BTreeSet<Commitment> = found.keys().copied().collect();
         let mut summary = RefreshSummary::default();
 
+        let seen = ChainSeen {
+            tip: tip.height,
+            last_confirmed: known.last_confirmed,
+            coinbase_maturity: self.config().network.params().coinbase_maturity(),
+        };
         let outcome = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
                 Ok(session
                     .store
-                    .write(|repos| apply_outputs(repos, &commitments, &found, now)))
+                    .write(|repos| apply_outputs(repos, &commitments, &found, seen, now)))
             })
             .await??
         };
+
         summary.confirmed_outputs = outcome.confirmed_outputs;
         summary.spent_outputs = outcome.spent_outputs;
         self.record_changes(&mut summary, outcome.changes);
@@ -709,6 +730,52 @@ where
         })
     }
 
+    /// The short update scan to run after each [`Wallet::refresh`]: it finds what another
+    /// wallet on the same recovery phrase received, stored as incoming entries of origin
+    /// `OtherWallet`, and the change of spends such a wallet made, credited to them. It scans
+    /// from [`crate::scan::UPDATE_RESCAN_BLOCKS`] behind the last completed scan, or from the
+    /// lowest block such a spend can lie in when that is lower. It does nothing before a scan
+    /// from genesis completed or while a restore scan waits, so it never scans the whole chain.
+    /// Emits what [`Wallet::scan`] emits.
+    ///
+    /// Fails as [`Wallet::scan`] does.
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub async fn refresh_scan(&self) -> Result<(), crate::scan::ScanError> {
+        let session = self.session()?;
+        let state = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let ready = crate::scan::has_scanned(repos)?
+                        && !crate::lifecycle::restore_scan_pending(repos)?;
+                    Ok::<_, StoreError>((ready, other_wallet::change_window(repos)?))
+                }))
+            })
+            .await?
+        }?;
+        let (true, window) = state else {
+            return Ok(());
+        };
+        let start = match (window, self.last_scanned_block()?) {
+            (Some(after), Some(last)) => {
+                let update = last
+                    .height
+                    .value()
+                    .saturating_sub(crate::scan::UPDATE_RESCAN_BLOCKS);
+                crate::scan::ScanStart::Height(Height::new(
+                    after.value().saturating_add(1).min(update),
+                ))
+            }
+            _ => crate::scan::ScanStart::LastScanned,
+        };
+        let options = crate::scan::ScanOptions {
+            start,
+            ..crate::scan::ScanOptions::update(self.config().network)
+        };
+        self.scan(options, &crate::scan::ScanCancel::new()).await?;
+        Ok(())
+    }
+
     fn record_changes(&self, summary: &mut RefreshSummary, changes: Vec<StateChange>) {
         for change in changes {
             match change.to {
@@ -786,14 +853,18 @@ fn known_state(repos: &dyn Repositories) -> Result<KnownState, RefreshError> {
 }
 
 /// Upstream's `apply_api_outputs`: what the node holds becomes unspent and confirms its
-/// transaction, what it does not hold is spent unless it was never confirmed.
+/// transaction, what it does not hold is spent unless it was never confirmed. Unspent outputs
+/// no transaction here spent are recorded as spent by another wallet
+/// ([`crate::other_wallet`]), unless the database still waits for its restore scan.
 fn apply_outputs(
     repos: &mut dyn Repositories,
     tracked: &[Commitment],
     found: &BTreeMap<Commitment, OutputLocation>,
+    seen: ChainSeen,
     now: Timestamp,
 ) -> Result<StepOutcome, RefreshError> {
     let mut outcome = StepOutcome::default();
+    let mut elsewhere = Vec::new();
     for commitment in tracked {
         // A concurrent cancel may have deleted it since it was read.
         let Some(stored) = repos.output(commitment.as_bytes())? else {
@@ -801,11 +872,33 @@ fn apply_outputs(
         };
         let updated = match found.get(commitment) {
             Some(location) => on_chain(repos, stored.clone(), location, now, &mut outcome)?,
-            None => missing(stored.clone(), &mut outcome),
+            None => {
+                if other_wallet::spent_elsewhere(repos, &stored, seen.tip, seen.coinbase_maturity)?
+                {
+                    elsewhere.push(stored.clone());
+                }
+                missing(stored.clone(), &mut outcome)
+            }
         };
         if updated != stored {
             repos.put_output(&updated)?;
         }
+    }
+    if !elsewhere.is_empty() && !crate::lifecycle::restore_scan_pending(repos)? {
+        let highest = elsewhere
+            .iter()
+            .map(|output| output.height)
+            .max()
+            .unwrap_or(seen.tip);
+        // The spend lies above the last tip that saw every output, and in or above the block of
+        // the newest one.
+        let after = seen
+            .last_confirmed
+            .unwrap_or(Height::ZERO)
+            .max(Height::new(highest.value().saturating_sub(1)));
+        outcome.changes.extend(other_wallet::record(
+            repos, &elsewhere, after, seen.tip, now,
+        )?);
     }
     Ok(outcome)
 }

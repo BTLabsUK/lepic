@@ -83,6 +83,9 @@ pub enum EncodeError {
     Encapsulation,
     #[error("hpke encryption failed")]
     Encryption,
+    /// A private pairing's message for an invite of another class, or the other way round.
+    #[error("the invite is of another pairing class")]
+    WrongClass,
 }
 
 /// Why key bytes were refused.

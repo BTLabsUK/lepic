@@ -32,8 +32,9 @@ use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
     ContactPayloadView, ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry,
     InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
-    PaidInvoice, PairingAnswer, PairingCard, PairingInvite, PairingLinkResult, PendingPairingView,
-    SasDecision, SealedAnswer, SealedSlateView, SendOptions, SentTx, SlatePurpose,
+    PaidInvoice, PairingAnswer, PairingCard, PairingClass, PairingInvite, PairingLinkResult,
+    PendingPairingView, SasDecision, SealedAnswer, SealedSlateView, SendOptions, SentTx,
+    SlatePurpose,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -69,6 +70,10 @@ impl EpicWallet {
     /// `None` on the wallet's own Epicbox relay; the other side reaches them there whatever
     /// relay it uses.
     ///
+    /// `class` `Private` makes a private pairing with another wallet of the user's
+    /// ([`PairingClass`]): its invite must travel by QR or paste, so `offer_words` is refused
+    /// with `WrongPairingClass`.
+    ///
     /// Fails with `InvalidArgument` for a meeting or home relay that is not `domain[:port]` or
     /// for more than 16 meeting relays, with `InvalidContactName` for a `name` a card cannot
     /// carry, and with `Io` when 64 pairings are pending.
@@ -82,6 +87,7 @@ impl EpicWallet {
         relay_mode: ContactRelayMode,
         meeting_relays: Option<Vec<String>>,
         home_relay: Option<String>,
+        class: PairingClass,
     ) -> Result<PairingInvite, WalletError> {
         self.run("pairing_invite", |session| async move {
             session
@@ -93,6 +99,7 @@ impl EpicWallet {
                     relay_mode,
                     meeting_relays,
                     home_relay,
+                    class,
                 )
                 .await
         })
@@ -142,6 +149,9 @@ impl EpicWallet {
     /// either way, for "Send by hand" and for a post that failed (`posted` false).
     /// [`EpicWallet::contacts_collect`] takes the confirmation and raises `PairingConfirmed`.
     ///
+    /// `class` is the class the user means to answer, from the preview: an invite of the
+    /// other class is refused with `WrongPairingClass` before anything is stored.
+    ///
     /// Fails as [`EpicWallet::pairing_preview`] does, with `AlreadyPaired` for an invite this
     /// wallet made or answered already, and `InvalidContactName`.
     pub async fn pairing_accept(
@@ -150,11 +160,23 @@ impl EpicWallet {
         name: String,
         by_hand: bool,
         relay_mode: ContactRelayMode,
+        class: PairingClass,
     ) -> Result<PairingAnswer, WalletError> {
         self.run("pairing_accept", |session| async move {
             session
-                .pairing_accept(link, name, by_hand, relay_mode)
+                .pairing_accept(link, name, by_hand, relay_mode, class)
                 .await
+        })
+        .await
+    }
+
+    /// The private pairings (two wallets of one owner), oldest first, in progress or paired;
+    /// `state` tells which. They are never listed by [`EpicWallet::contacts`] or
+    /// [`EpicWallet::pairings_pending`] and never exported. Remove one with
+    /// [`EpicWallet::contact_remove`] or [`EpicWallet::contact_unpair`].
+    pub async fn private_pairings(&self) -> Result<Vec<ContactView>, WalletError> {
+        self.run("private_pairings", |session| async move {
+            session.private_pairings().await
         })
         .await
     }

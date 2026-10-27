@@ -182,8 +182,8 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// The paired contacts, oldest first. Pairings still in progress are left out. Fails with
-    /// [`crate::WalletError::Locked`] and as the store does.
+    /// The paired contacts, oldest first. Pairings still in progress and private pairings are
+    /// left out. Fails with [`crate::WalletError::Locked`] and as the store does.
     pub async fn contacts(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.session()?;
         self.contact_work(move |ports, _| {
@@ -191,7 +191,7 @@ where
             Ok(session.store.read(|repos| {
                 let mut views = Vec::new();
                 for record in repos.contacts()? {
-                    if record.peer.is_none() {
+                    if record.peer.is_none() || super::private::is_private(&record) {
                         continue;
                     }
                     let home = repos
@@ -217,10 +217,9 @@ where
             session.store.read(|repos| {
                 let mut views = Vec::new();
                 for pending in repos.pending_pairings()? {
-                    let Some(record) = repos
-                        .contact(pending.contact_id)?
-                        .filter(|record| record.peer.is_none())
-                    else {
+                    let Some(record) = repos.contact(pending.contact_id)?.filter(|record| {
+                        record.peer.is_none() && !super::private::is_private(record)
+                    }) else {
                         continue;
                     };
                     let invite = lepic_contact::Invite::decode(&pending.invite, net)
@@ -238,6 +237,33 @@ where
                 views.sort_by_key(|view| view.created_at);
                 Ok(views)
             })
+        })
+        .await
+    }
+
+    /// The private pairings (two wallets of one owner), oldest first, in progress or paired;
+    /// the state tells which. Their words check is mandatory before payloads pass: see
+    /// [`Wallet::pairing_sas`]. Remove one with [`Wallet::contact_remove`] or
+    /// [`Wallet::contact_unpair`]. Fails with [`crate::WalletError::Locked`] and as the store
+    /// does.
+    pub async fn private_pairings(&self) -> Result<Vec<ContactView>, ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |ports, _| {
+            let now = ports.clock.now();
+            Ok(session.store.read(|repos| {
+                let mut views = Vec::new();
+                for record in repos.contacts()? {
+                    if !super::private::is_private(&record) {
+                        continue;
+                    }
+                    let home = repos
+                        .contact_mailbox(record.contact_id)?
+                        .map(|mailbox| mailbox.home_relay);
+                    let removed = removed_by_peer(repos, record.contact_id)?;
+                    views.push(view(&record, home, removed, now));
+                }
+                Ok::<_, StoreError>(views)
+            })?)
         })
         .await
     }
@@ -272,6 +298,7 @@ where
                     super::invoices::drop_contact_invoices(repos, contact_id)?;
                     repos.delete_setting(&unpaired_key(contact_id))?;
                     let record = repos.delete_contact(contact_id)?;
+                    super::private::delete_secrets(repos, contact_id)?;
                     Ok::<_, StoreError>(pending || record)
                 })?)
             })
@@ -352,13 +379,17 @@ where
             )
             .await?;
         let session = self.session()?;
-        let keys = super::keys::contact_keys(
-            &session.keychain,
-            network,
-            record.account,
-            record.slot,
-            record.box_salt,
-        )?;
+        let class = {
+            let session = std::sync::Arc::clone(&session);
+            let record = record.clone();
+            self.contact_work(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| super::private::class_of(repos, &record))?)
+            })
+            .await?
+        };
+        let keys = super::private::record_keys(&session.keychain, network, &record, &class)?;
         let home = super::relay::endpoint_for(&mailbox.home_relay, relays)?;
         let from = super::keys::box_identity(&keys, network, &home)?;
         let to =
@@ -506,9 +537,11 @@ where
         let session = self.session()?;
         let network = self.config().network;
         self.contact_work(move |_, _| {
-            Ok(session
-                .store
-                .read(|repos| lepic_store::export_contacts(repos, network))?)
+            Ok(session.store.read(|repos| {
+                lepic_store::export_contacts_where(repos, network, |record| {
+                    !super::private::is_private(record)
+                })
+            })?)
         })
         .await
     }
@@ -553,6 +586,7 @@ where
                         }
                         if !restore_record(repos, &session.keychain, network, &record)? {
                             repos.delete_contact(record.contact_id)?;
+                            super::private::delete_secrets(repos, record.contact_id)?;
                             summary.imported = summary.imported.saturating_sub(1);
                             summary.skipped_conflict = summary.skipped_conflict.saturating_add(1);
                         }

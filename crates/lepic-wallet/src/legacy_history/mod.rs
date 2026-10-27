@@ -39,6 +39,9 @@ pub enum TxOrigin {
     Imported,
     /// An output a scan found that no record explains.
     FoundByScan,
+    /// Outputs of this wallet that another wallet on the same recovery phrase spent: a refresh
+    /// found them spent with no transaction here.
+    OtherWallet,
 }
 
 /// The time of the block at each height the node answers for. A failed or missing header
@@ -145,6 +148,8 @@ pub(crate) fn origin(
 ) -> Result<TxOrigin, StoreError> {
     if repos.imported_transaction(tx_id)?.is_some() {
         Ok(TxOrigin::Imported)
+    } else if crate::other_wallet::is_entry(repos, tx_id)? {
+        Ok(TxOrigin::OtherWallet)
     } else if is_found_entry(repos, tx_id, entry)? {
         Ok(TxOrigin::FoundByScan)
     } else {
