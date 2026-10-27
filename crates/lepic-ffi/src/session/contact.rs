@@ -226,7 +226,7 @@ fn preview(preview: EnginePreview) -> InvitePreview {
         expires_at_ms: ms(preview.expires_at),
         home_relay: preview.home_relay,
         service: preview.service,
-        class: match preview.class {
+        pairing_class: match preview.class {
             EngineClass::Contact => PairingClass::Contact,
             EngineClass::Private => PairingClass::Private,
         },

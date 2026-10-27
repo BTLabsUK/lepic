@@ -840,7 +840,7 @@ pub struct InvitePreview {
     /// The invite comes from a service, such as an exchange.
     pub service: bool,
     /// Answer it with this class in `EpicWallet::pairing_accept`.
-    pub class: PairingClass,
+    pub pairing_class: PairingClass,
 }
 
 /// Which kind of pairing an invite makes. Values are only added, at the end.

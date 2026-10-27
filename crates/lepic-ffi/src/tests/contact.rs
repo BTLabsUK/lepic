@@ -171,7 +171,7 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
         anna.pairing_preview(invite.link.clone())
             .await
             .unwrap()
-            .class,
+            .pairing_class,
         PairingClass::Private
     );
     assert_eq!(
