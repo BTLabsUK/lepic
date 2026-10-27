@@ -204,6 +204,9 @@ pub struct Balance {
     pub account: AccountIndex,
     /// The tip height the balance was computed at.
     pub height: Height,
+    /// The confirmations the spendable / awaiting-confirmation split was made with: the
+    /// wallet's setting at that time.
+    pub minimum_confirmations: u64,
     pub total: Amount,
     pub spendable: Amount,
     pub awaiting_confirmation: Amount,

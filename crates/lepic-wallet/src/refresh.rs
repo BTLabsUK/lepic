@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
 use std::fmt;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use jiff::Timestamp;
@@ -52,10 +53,16 @@ use crate::send_limit::effective_cutoff;
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
 
-/// Confirmations an unspent output needs to count as spendable in the balance events and in
-/// `summary()`: 3, as the Epic GUI wallet counts (decision D1). `epic-wallet info` counts 10 by
-/// default; the app reads this value from the summary, so balance and sends agree.
-pub const BALANCE_MINIMUM_CONFIRMATIONS: u64 = 3;
+/// Confirmations an unspent output needs to count as spendable, and to be selected for a send,
+/// in a wallet that has not set its own ([`Wallet::set_minimum_confirmations`]): 6. The old GUI
+/// wallet counted 3 and `epic-wallet` defaults to 10; ADR 0027 gives the reasons.
+pub const DEFAULT_MINIMUM_CONFIRMATIONS: u64 = 6;
+
+/// The values [`Wallet::set_minimum_confirmations`] accepts: 1 is the fastest, and nothing
+/// deeper than 30 blocks is useful on Epic Cash (ADR 0027).
+pub const MINIMUM_CONFIRMATIONS_RANGE: RangeInclusive<u64> = 1..=30;
+
+pub(crate) const MINIMUM_CONFIRMATIONS_SETTING: &str = "wallet.minimum_confirmations";
 
 /// Blocks after a refresh first saw a received payment with no TTL that its sender has not
 /// finalized, after which a refresh ends it: a week of blocks, as long as a released send is
@@ -695,9 +702,49 @@ where
             }
             let outputs = repos.outputs(account, None)?;
             let unpaid = unpaid_invoices(repos, &outputs)?;
-            balance(account, &outputs, balance_height(repos)?, &unpaid)
-                .map_err(WalletError::Balance)
+            balance(
+                account,
+                &outputs,
+                balance_height(repos)?,
+                minimum_confirmations(repos)?,
+                &unpaid,
+            )
+            .map_err(WalletError::Balance)
         })
+    }
+
+    /// The confirmations an output needs to count as spendable in [`Wallet::balance`] and to be
+    /// selected for a send: the stored setting, or [`DEFAULT_MINIMUM_CONFIRMATIONS`] for a
+    /// wallet that never set one. Reads only the store.
+    ///
+    /// Fails with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn minimum_confirmations(&self) -> Result<u64, WalletError> {
+        let session = self.session()?;
+        session
+            .store
+            .read(|repos| Ok(minimum_confirmations(repos)?))
+    }
+
+    /// Stores the wallet's minimum confirmations, then re-splits the balance of every account
+    /// at the stored tip and emits one [`Event::Balance`] for each, without asking the node.
+    ///
+    /// Fails with [`WalletError::MinimumConfirmationsOutOfRange`] outside
+    /// [`MINIMUM_CONFIRMATIONS_RANGE`], or [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn set_minimum_confirmations(&self, count: u64) -> Result<(), WalletError> {
+        if !MINIMUM_CONFIRMATIONS_RANGE.contains(&count) {
+            return Err(WalletError::MinimumConfirmationsOutOfRange { count });
+        }
+        let session = self.session()?;
+        session
+            .store
+            .write(|repos| repos.put_setting(MINIMUM_CONFIRMATIONS_SETTING, &count.to_string()))?;
+        let balances = session.store.read(account_balances)?;
+        for balance in balances {
+            self.emit(Event::Balance(balance));
+        }
+        Ok(())
     }
 
     /// Every stored output of `account`, spent ones included, ordered by commitment, at the
@@ -713,6 +760,7 @@ where
                 return Err(crate::AccountError::UnknownAccount(account).into());
             }
             let height = balance_height(repos)?;
+            let minimum = minimum_confirmations(repos)?;
             let outputs = repos.outputs(account, None)?;
             let unpaid = unpaid_invoices(repos, &outputs)?;
             Ok(outputs
@@ -723,7 +771,7 @@ where
                     } else {
                         confirmations(&output, height)
                     },
-                    category: balance_category(&output, height, &unpaid),
+                    category: balance_category(&output, height, minimum, &unpaid),
                     output,
                 })
                 .collect())
@@ -794,6 +842,15 @@ where
             self.emit(change.into());
         }
     }
+}
+
+/// The wallet's minimum confirmations; an absent or unreadable setting reads as the default.
+pub(crate) fn minimum_confirmations(repos: &dyn Repositories) -> Result<u64, StoreError> {
+    Ok(repos
+        .setting(MINIMUM_CONFIRMATIONS_SETTING)?
+        .and_then(|text| text.parse().ok())
+        .filter(|count| MINIMUM_CONFIRMATIONS_RANGE.contains(count))
+        .unwrap_or(DEFAULT_MINIMUM_CONFIRMATIONS))
 }
 
 /// A stored height that does not parse is ignored: the next refresh applies whatever the node
@@ -1442,12 +1499,20 @@ pub(crate) fn balance_height(repos: &dyn Repositories) -> Result<Height, StoreEr
 /// The balance of every account at [`balance_height`], in the categories of upstream's
 /// `retrieve_info`.
 fn balances(repos: &dyn Repositories) -> Result<Vec<Balance>, RefreshError> {
+    Ok(account_balances(repos)?)
+}
+
+fn account_balances(repos: &dyn Repositories) -> Result<Vec<Balance>, WalletError> {
     let height = balance_height(repos)?;
+    let minimum = minimum_confirmations(repos)?;
     let mut balances = Vec::new();
     for account in repos.accounts()? {
         let outputs = repos.outputs(account.index, None)?;
         let unpaid = unpaid_invoices(repos, &outputs)?;
-        balances.push(balance(account.index, &outputs, height, &unpaid)?);
+        balances.push(
+            balance(account.index, &outputs, height, minimum, &unpaid)
+                .map_err(WalletError::Balance)?,
+        );
     }
     Ok(balances)
 }
@@ -1456,11 +1521,13 @@ fn balance(
     account: AccountIndex,
     outputs: &[OutputRecord],
     height: Height,
+    minimum_confirmations: u64,
     unpaid: &BTreeSet<TxId>,
 ) -> Result<Balance, ArithmeticError> {
     let mut balance = Balance {
         account,
         height,
+        minimum_confirmations,
         total: Amount::ZERO,
         spendable: Amount::ZERO,
         awaiting_confirmation: Amount::ZERO,
@@ -1469,7 +1536,7 @@ fn balance(
         locked: Amount::ZERO,
     };
     for output in outputs {
-        let Some(category) = balance_category(output, height, unpaid) else {
+        let Some(category) = balance_category(output, height, minimum_confirmations, unpaid) else {
             continue;
         };
         let slot = match category {
@@ -1494,7 +1561,7 @@ fn balance(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BalanceCategory {
     Spendable,
-    /// Unspent, with fewer than [`BALANCE_MINIMUM_CONFIRMATIONS`].
+    /// Unspent, with fewer confirmations than the wallet's [`Wallet::minimum_confirmations`].
     AwaitingConfirmation,
     /// Not yet on chain: the change or the received output of a transaction in progress.
     AwaitingFinalization,
@@ -1545,6 +1612,7 @@ fn unpaid_invoices(
 fn balance_category(
     output: &OutputRecord,
     height: Height,
+    minimum_confirmations: u64,
     unpaid: &BTreeSet<TxId>,
 ) -> Option<BalanceCategory> {
     let coinbase = output.id.features.is_coinbase();
@@ -1552,7 +1620,7 @@ fn balance_category(
         OutputStatus::Unspent if coinbase && output.lock_height > height => {
             Some(BalanceCategory::Immature)
         }
-        OutputStatus::Unspent if confirmations(output, height) < BALANCE_MINIMUM_CONFIRMATIONS => {
+        OutputStatus::Unspent if confirmations(output, height) < minimum_confirmations => {
             Some(BalanceCategory::AwaitingConfirmation)
         }
         OutputStatus::Unspent => Some(BalanceCategory::Spendable),

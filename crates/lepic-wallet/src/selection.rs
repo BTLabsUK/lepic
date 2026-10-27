@@ -45,7 +45,7 @@ pub struct SelectionOptions {
 impl SelectionOptions {
     /// The confirmations a send needs by default: those after which the balance counts an
     /// output as spendable, so a send can spend what the balance shows.
-    pub const DEFAULT_MINIMUM_CONFIRMATIONS: u64 = crate::refresh::BALANCE_MINIMUM_CONFIRMATIONS;
+    pub const DEFAULT_MINIMUM_CONFIRMATIONS: u64 = crate::refresh::DEFAULT_MINIMUM_CONFIRMATIONS;
     const DEFAULT_MAX_OUTPUTS: NonZeroUsize = match NonZeroUsize::new(500) {
         Some(max) => max,
         None => NonZeroUsize::MIN,

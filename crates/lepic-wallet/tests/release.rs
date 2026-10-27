@@ -37,7 +37,7 @@ use lepic_transport::file::FILE;
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::event::TransactionState;
 use lepic_wallet::finalize::FinalizeError;
-use lepic_wallet::refresh::{BALANCE_MINIMUM_CONFIRMATIONS, RefreshOutcome};
+use lepic_wallet::refresh::{DEFAULT_MINIMUM_CONFIRMATIONS, RefreshOutcome};
 use lepic_wallet::release::{RELEASE_AFTER_BLOCKS, RELEASED_WATCH_BLOCKS, ReleaseRefusal};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
@@ -608,7 +608,7 @@ fn a_released_send_mined_inside_the_watch_is_confirmed_and_its_change_returns() 
     );
 
     // Spendable once it has its confirmations.
-    let confirmed_from = RELEASABLE_FROM + BALANCE_MINIMUM_CONFIRMATIONS - 1;
+    let confirmed_from = RELEASABLE_FROM + DEFAULT_MINIMUM_CONFIRMATIONS - 1;
     releasing.chain_reaches(confirmed_from);
     releasing.refresh();
     let balance = releasing.balance();

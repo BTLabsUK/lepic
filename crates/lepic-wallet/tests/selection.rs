@@ -405,9 +405,9 @@ fn sends_need_by_default_the_confirmations_the_balance_counts_as_spendable() {
     ];
     assert_eq!(
         defaults,
-        [lepic_wallet::refresh::BALANCE_MINIMUM_CONFIRMATIONS; 3]
+        [lepic_wallet::refresh::DEFAULT_MINIMUM_CONFIRMATIONS; 3]
     );
-    assert_eq!(lepic_wallet::refresh::BALANCE_MINIMUM_CONFIRMATIONS, 3);
+    assert_eq!(lepic_wallet::refresh::DEFAULT_MINIMUM_CONFIRMATIONS, 6);
 }
 
 /// `count` unspent outputs of `value` each, more than one byte can number.

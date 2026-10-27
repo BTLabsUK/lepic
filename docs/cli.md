@@ -286,7 +286,7 @@ Slate d4217e26-f23c-46f0-9944-84b406dd16a6.
 ```
 
 The inputs stay locked from the send until the transaction confirms or is cancelled. Options:
-`--min-confirmations` (3, the confirmations the balance counts), `--selection all|smallest`
+`--min-confirmations` (6 by default, the confirmations the balance counts), `--selection all|smallest`
 (`smallest`, the default, spends as few as cover the amount; `all`, as `epic-wallet`, spends every
 eligible output and so locks all of them until it confirms), `--change-outputs`, `--ttl-blocks`
 (the receiver must refuse the slate after that many blocks), `-m, --message <TEXT>` (a message to
