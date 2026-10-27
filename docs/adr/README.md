@@ -32,6 +32,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0024](0024-contact-pairing-and-invoice-trust.md) | Contact pairing, sealed slates, and invoice trust on paired contacts | proposed |
 | [0025](0025-animated-qr-slates.md) | Slates as animated QR codes in `ur:epic-slate` | accepted |
 | [0026](0026-tor-as-a-build-feature.md) | Tor is a build feature of the binding | accepted |
+| [0027](0027-minimum-confirmations.md) | Minimum confirmations is a per-wallet setting, default 6 | accepted |
 
 Template:
 
