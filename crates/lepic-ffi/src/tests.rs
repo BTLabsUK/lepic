@@ -537,6 +537,7 @@ async fn send_epicbox_refuses_an_address_without_its_relay() {
 
 /// The options are checked before the address and before tor is asked, as every other send
 /// checks them first.
+#[cfg(feature = "tor")]
 #[tokio::test]
 async fn send_tor_takes_the_send_options_of_the_other_sends() {
     let fixture = Fixture::new();
@@ -567,6 +568,55 @@ async fn send_tor_takes_the_send_options_of_the_other_sends() {
         ),
         WalletErrorKind::OnionAddressInvalid
     );
+    assert!(wallet.transactions().await.unwrap().is_empty());
+}
+
+/// A build without Tor (ADR 0026) keeps every Tor call: those that need tor fail with
+/// `Unsupported`, Tor reads as off and nothing goes over Tor.
+#[cfg(not(feature = "tor"))]
+#[tokio::test]
+async fn a_build_without_tor_answers_every_tor_call_without_tor() {
+    let fixture = Fixture::new();
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &AppSecretStore::in_memory(),
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    let onion = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+
+    assert!(!crate::api::tor::validate_onion_address(onion.to_owned()));
+    assert_eq!(
+        kind(wallet.onion_address().await),
+        WalletErrorKind::Unsupported
+    );
+    assert_eq!(
+        kind(wallet.send_tor(1, 1, onion.to_owned(), None, None).await),
+        WalletErrorKind::Unsupported
+    );
+    assert_eq!(
+        kind(wallet.resend_tor(1, onion.to_owned()).await),
+        WalletErrorKind::Unsupported
+    );
+    assert_eq!(
+        kind(wallet.refresh_tor(true).await),
+        WalletErrorKind::Unsupported
+    );
+    wallet.tor_network_lost().await.unwrap();
+    wallet.expect_tor().unwrap();
+    wallet.stop_tor();
+    assert_eq!(
+        wallet.tor_status().kind,
+        crate::api::tor::TorStatusKind::Off
+    );
+    wallet.set_epicbox_over_tor(true);
+    wallet.set_node_over_tor(true);
+    assert!(!wallet.epicbox_over_tor());
+    assert!(!wallet.node_over_tor());
+    wallet.set_onion_routes(Vec::new()).unwrap();
     assert!(wallet.transactions().await.unwrap().is_empty());
 }
 
