@@ -24,12 +24,12 @@ use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
-    ContactRelayMode, ContactView, FailedPairing, FinalizedTx, FoundInvite, InviteExpiry,
-    InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
-    OutboxState, PaidInvoice, PairingAnswer, PairingCard, PairingFailureReason, PairingInvite,
-    PairingLinkOutcome, PairingLinkResult, PairingState, PendingPairingView, SasDecision, SasEntry,
-    SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx, SlateMessage, SlatePurpose,
-    SlateStage, WalletEvent, WalletEventKind,
+    ContactPayloadView, ContactRelayMode, ContactView, FailedPairing, FinalizedTx, FoundInvite,
+    InviteExpiry, InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView,
+    OutboxReport, OutboxState, PaidInvoice, PairingAnswer, PairingCard, PairingFailureReason,
+    PairingInvite, PairingLinkOutcome, PairingLinkResult, PairingState, PendingPairingView,
+    SasDecision, SasEntry, SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx,
+    SlateMessage, SlatePurpose, SlateStage, WalletEvent, WalletEventKind,
 };
 
 /// The longest sealed text taken from the app: a slate with its envelope and armor fits many
@@ -38,6 +38,12 @@ const MAX_SEALED_TEXT: usize = 4 * 1024 * 1024;
 
 /// The longest pairing link, card or reply taken from the app.
 const MAX_LINK_TEXT: usize = 16 * 1024;
+
+/// Contact ids one collect may be limited to.
+const MAX_COLLECT_ONLY: usize = 64;
+
+/// A relay host, `domain[:port]`, is at most this long.
+const MAX_RELAY_HOST: usize = 260;
 
 /// Pairing words a user types; more is never a pairing.
 const MAX_TYPED_WORDS: usize = 16;
@@ -57,6 +63,17 @@ pub(super) fn contact_id(text: &str) -> Result<ContactId, WalletError> {
 
 fn slate_id(text: &str) -> Result<SlateId, WalletError> {
     SlateId::parse(text).map_err(|_| invalid("not a slate id"))
+}
+
+/// Refuses a home relay longer than a relay host can be before the engine parses it.
+fn check_home_relay(host: Option<&str>) -> Result<(), WalletError> {
+    if host.is_some_and(|host| host.len() > MAX_RELAY_HOST) {
+        return Err(WalletError::new(
+            WalletErrorKind::InvalidArgument,
+            "home relay too long",
+        ));
+    }
+    Ok(())
 }
 
 fn bounded<'a>(text: &'a str, max: usize, what: &str) -> Result<&'a str, WalletError> {
@@ -264,6 +281,27 @@ impl Session {
         Ok(ContactRelays::new(self.epicbox()?, relay_mode(mode)))
     }
 
+    /// The relays contact calls reach, with `meeting` as the meeting relays when given.
+    fn meeting_relays(
+        &self,
+        mode: ContactRelayMode,
+        meeting: Option<Vec<String>>,
+    ) -> Result<ContactRelays, WalletError> {
+        let relays = self.contact_relays(mode)?;
+        match meeting {
+            None => Ok(relays),
+            Some(hosts) => {
+                if hosts.iter().any(|host| host.len() > MAX_RELAY_HOST) {
+                    return Err(WalletError::new(
+                        WalletErrorKind::InvalidArgument,
+                        "meeting relay too long",
+                    ));
+                }
+                Ok(relays.with_meeting(lepic_wallet::contact::meeting_relays(&hosts)?))
+            }
+        }
+    }
+
     pub(super) fn pay_request(
         amount: u64,
         minimum_confirmations: u64,
@@ -276,10 +314,12 @@ impl Session {
             strategy: defaults.strategy,
             change_outputs: defaults.change_outputs,
             message: defaults.message,
+            exclude_outputs: defaults.exclude_outputs,
             ..PayRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
         })
     }
 
+    #[allow(clippy::too_many_arguments)] // One argument per choice of the Dart call.
     pub(crate) async fn pairing_invite(
         &self,
         name: String,
@@ -287,8 +327,15 @@ impl Session {
         expiry: InviteExpiry,
         offer_words: bool,
         mode: ContactRelayMode,
+        meeting: Option<Vec<String>>,
+        home_relay: Option<String>,
     ) -> Result<PairingInvite, WalletError> {
-        let relays = self.contact_relays(mode)?;
+        check_home_relay(home_relay.as_deref())?;
+        let relays = if offer_words {
+            self.meeting_relays(mode, meeting)?
+        } else {
+            self.contact_relays(mode)?
+        };
         let offer = self
             .engine
             .pairing_invite(
@@ -303,6 +350,7 @@ impl Session {
                         InviteExpiry::SevenDays => EngineExpiry::SevenDays,
                     },
                     offer_words,
+                    home_relay,
                 },
             )
             .await?;
@@ -327,6 +375,7 @@ impl Session {
         &self,
         words: Vec<String>,
         mode: ContactRelayMode,
+        meeting: Option<Vec<String>>,
     ) -> Result<FoundInvite, WalletError> {
         if words.len() > MAX_TYPED_WORDS || words.iter().any(|word| word.len() > MAX_LINK_TEXT) {
             return Err(WalletError::new(
@@ -334,7 +383,7 @@ impl Session {
                 "too many or too long pairing words",
             ));
         }
-        let relays = self.contact_relays(mode)?;
+        let relays = self.meeting_relays(mode, meeting)?;
         let link = self.engine.pairing_find_words(&relays, &words).await?;
         let preview = preview(self.engine.pairing_preview(&link)?);
         Ok(FoundInvite { link, preview })
@@ -399,7 +448,9 @@ impl Session {
         name: String,
         kind: ContactKind,
         mode: ContactRelayMode,
+        home_relay: Option<String>,
     ) -> Result<PairingCard, WalletError> {
+        check_home_relay(home_relay.as_deref())?;
         let relays = self.contact_relays(mode)?;
         let offer = self
             .engine
@@ -409,6 +460,7 @@ impl Session {
                     account: DEFAULT_ACCOUNT,
                     name,
                     kind: engine_kind(kind),
+                    home_relay,
                 },
             )
             .await?;
@@ -452,7 +504,21 @@ impl Session {
         &self,
         trigger: CollectTrigger,
         mode: ContactRelayMode,
+        only: Option<Vec<String>>,
     ) -> Result<ContactCollectReport, WalletError> {
+        let only = only
+            .map(|ids| {
+                if ids.len() > MAX_COLLECT_ONLY {
+                    return Err(WalletError::new(
+                        WalletErrorKind::InvalidArgument,
+                        "too many contact ids to collect",
+                    ));
+                }
+                ids.iter()
+                    .map(|id| contact_id(id))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
         let relays = self.contact_relays(mode)?;
         let trigger = match trigger {
             CollectTrigger::Open => EngineTrigger::Open,
@@ -460,7 +526,10 @@ impl Session {
             CollectTrigger::Pull => EngineTrigger::Pull,
             CollectTrigger::Push => EngineTrigger::Push,
         };
-        let report = self.engine.contacts_collect(&relays, trigger).await?;
+        let report = self
+            .engine
+            .contacts_collect_only(&relays, trigger, only.as_deref())
+            .await?;
         Ok(ContactCollectReport {
             mailboxes: count(report.mailboxes),
             messages: count(report.messages),
@@ -927,6 +996,60 @@ impl Session {
             .engine
             .contact_outbox_resend(&relays, ContactOutboxId(id))
             .await?)
+    }
+
+    pub(crate) async fn contact_post_payload(
+        &self,
+        contact_id: &str,
+        payload: Vec<u8>,
+        mode: ContactRelayMode,
+    ) -> Result<String, WalletError> {
+        let id = super::contact::contact_id(contact_id)?;
+        if payload.len() > lepic_wallet::contact::MAX_APP_PAYLOAD_LEN {
+            return Err(WalletError::new(
+                WalletErrorKind::InvalidArgument,
+                "payload larger than one message carries",
+            ));
+        }
+        let relays = self.contact_relays(mode)?;
+        let sent = self
+            .engine
+            .contact_post_payload(&relays, id, payload)
+            .await?;
+        Ok(sent.to_string())
+    }
+
+    pub(crate) async fn contact_payloads(&self) -> Result<Vec<ContactPayloadView>, WalletError> {
+        Ok(self
+            .engine
+            .contact_payloads()
+            .await?
+            .into_iter()
+            .map(|kept| ContactPayloadView {
+                id: kept.id.to_string(),
+                contact_id: kept.contact_id.to_string(),
+                received_at_ms: ms(kept.received_at),
+                payload: kept.payload,
+            })
+            .collect())
+    }
+
+    pub(crate) async fn contact_payloads_ack(&self, ids: Vec<String>) -> Result<u32, WalletError> {
+        if ids.len() > lepic_wallet::contact::MAX_KEPT_PAYLOADS {
+            return Err(WalletError::new(
+                WalletErrorKind::InvalidArgument,
+                "more payload ids than are ever kept",
+            ));
+        }
+        let ids = ids
+            .iter()
+            .map(|id| {
+                lepic_wallet::contact::PayloadId::parse(id).ok_or_else(|| {
+                    WalletError::new(WalletErrorKind::InvalidArgument, "not a payload id")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(count(self.engine.contact_payloads_ack(&ids).await?))
     }
 
     pub(crate) async fn contacts_outbox_deliver(

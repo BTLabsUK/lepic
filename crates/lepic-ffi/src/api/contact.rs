@@ -27,14 +27,27 @@
 //! a foreground tick and on a push wake-up.
 
 use crate::api::error::WalletError;
+use crate::api::types::Chain;
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
-    ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry, InvitePreview,
-    IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport, PaidInvoice,
-    PairingAnswer, PairingCard, PairingInvite, PairingLinkResult, PendingPairingView, SasDecision,
-    SealedAnswer, SealedSlateView, SendOptions, SentTx, SlatePurpose,
+    ContactPayloadView, ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry,
+    InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
+    PaidInvoice, PairingAnswer, PairingCard, PairingInvite, PairingLinkResult, PendingPairingView,
+    SasDecision, SealedAnswer, SealedSlateView, SendOptions, SentTx, SlatePurpose,
 };
 use crate::api::wallet::EpicWallet;
+
+/// The built-in meeting relays of `chain`, where pairing words go when a call names none:
+/// `domain` for a relay on port 443, `domain:port` for any other.
+#[flutter_rust_bridge::frb(sync)]
+pub fn built_in_pairing_relays(chain: Chain) -> Vec<String> {
+    crate::boundary::guard_or("built_in_pairing_relays", Vec::new(), || {
+        lepic_epicbox::built_in_relays(crate::session::relay_network(chain.network()))
+            .iter()
+            .map(lepic_wallet::contact::meeting_host)
+            .collect()
+    })
+}
 
 impl EpicWallet {
     /// Makes an invite to pair, valid for `expiry`, whose messages go through this wallet's
@@ -43,14 +56,23 @@ impl EpicWallet {
     /// words nothing is sent, so this works offline.
     ///
     /// With `offer_words` the invite lasts 10 minutes and is also posted under five pairing
-    /// words, returned in `words`, for the other side to type, on every built-in relay whatever
-    /// relay the wallet uses; that needs `Online` and fails with `ContactsOffline` or
-    /// `EpicboxOff` before anything is stored, with `PairingWordsUnavailable` when the network
-    /// has no built-in relay, and with `TransportFailed` when no built-in relay takes the post,
-    /// the invite then withdrawn.
+    /// words, returned in `words`, for the other side to type, on every meeting relay whatever
+    /// relay the wallet uses: the `meeting_relays`, each `domain[:port]` over TLS, or with
+    /// `None` the built-in ones ([`built_in_pairing_relays`]). The other side must look on at
+    /// least one of them. That needs `Online` and fails with `ContactsOffline` or `EpicboxOff`
+    /// before anything is stored, with `PairingWordsUnavailable` when there is no meeting relay
+    /// (an empty list, or a network without built-in relays), and with `TransportFailed` when
+    /// no meeting relay takes the post, the invite then withdrawn. Without `offer_words`,
+    /// `meeting_relays` is ignored.
     ///
-    /// Fails with `InvalidContactName` for a `name` a card cannot carry, and with `Io` when 64
-    /// pairings are pending.
+    /// The pairing's mailboxes live on `home_relay`, `domain[:port]` reached over TLS, or with
+    /// `None` on the wallet's own Epicbox relay; the other side reaches them there whatever
+    /// relay it uses.
+    ///
+    /// Fails with `InvalidArgument` for a meeting or home relay that is not `domain[:port]` or
+    /// for more than 16 meeting relays, with `InvalidContactName` for a `name` a card cannot
+    /// carry, and with `Io` when 64 pairings are pending.
+    #[allow(clippy::too_many_arguments)] // Mirrors the Dart call, one argument per choice.
     pub async fn pairing_invite(
         &self,
         name: String,
@@ -58,10 +80,20 @@ impl EpicWallet {
         expiry: InviteExpiry,
         offer_words: bool,
         relay_mode: ContactRelayMode,
+        meeting_relays: Option<Vec<String>>,
+        home_relay: Option<String>,
     ) -> Result<PairingInvite, WalletError> {
         self.run("pairing_invite", |session| async move {
             session
-                .pairing_invite(name, kind, expiry, offer_words, relay_mode)
+                .pairing_invite(
+                    name,
+                    kind,
+                    expiry,
+                    offer_words,
+                    relay_mode,
+                    meeting_relays,
+                    home_relay,
+                )
                 .await
         })
         .await
@@ -79,20 +111,28 @@ impl EpicWallet {
     }
 
     /// Finds the invite that five pairing words name, typed as names or emoji, on the
-    /// built-in relays, and returns its link with its preview, for
-    /// [`EpicWallet::pairing_accept`]. The invite is taken off the relay, so nobody else finds
-    /// it.
+    /// meeting relays, and returns its link with its preview, for
+    /// [`EpicWallet::pairing_accept`]. The meeting relays are `meeting_relays`, each
+    /// `domain[:port]` over TLS, or with `None` the built-in ones
+    /// ([`built_in_pairing_relays`]); all are asked at once, each for at most 20 seconds, and
+    /// the first invite that opens wins. That copy is taken off its relay, so nobody else finds
+    /// it; copies on other relays expire.
     ///
     /// Fails with `InvalidPairingWords` for words not in the table, `PairingWordsNotFound`
-    /// when no relay holds the invite, `TransportFailed` when no built-in relay could be
-    /// reached, and `ContactsOffline` or `EpicboxOff`.
+    /// when no relay holds the invite, `TransportFailed` when no meeting relay could be
+    /// reached, `PairingWordsUnavailable` when there is no meeting relay, `InvalidArgument`
+    /// for a meeting relay that is not `domain[:port]` or more than 16 of them, and
+    /// `ContactsOffline` or `EpicboxOff`.
     pub async fn pairing_find_words(
         &self,
         words: Vec<String>,
         relay_mode: ContactRelayMode,
+        meeting_relays: Option<Vec<String>>,
     ) -> Result<FoundInvite, WalletError> {
         self.run("pairing_find_words", |session| async move {
-            session.pairing_find_words(words, relay_mode).await
+            session
+                .pairing_find_words(words, relay_mode, meeting_relays)
+                .await
         })
         .await
     }
@@ -139,7 +179,8 @@ impl EpicWallet {
 
     /// Shows a card to pair in person: "Show my code". Its `link` goes in a QR code for the
     /// other phone; [`EpicWallet::pairing_scan_card`] with the same `contact_id` finishes the
-    /// pairing with theirs. Nothing is sent, so this works offline.
+    /// pairing with theirs. Nothing is sent, so this works offline. The pairing's mailboxes
+    /// live on `home_relay` as [`EpicWallet::pairing_invite`] describes.
     ///
     /// Fails as [`EpicWallet::pairing_invite`] does.
     pub async fn pairing_show_card(
@@ -147,9 +188,12 @@ impl EpicWallet {
         name: String,
         kind: ContactKind,
         relay_mode: ContactRelayMode,
+        home_relay: Option<String>,
     ) -> Result<PairingCard, WalletError> {
         self.run("pairing_show_card", |session| async move {
-            session.pairing_show_card(name, kind, relay_mode).await
+            session
+                .pairing_show_card(name, kind, relay_mode, home_relay)
+                .await
         })
         .await
     }
@@ -200,14 +244,20 @@ impl EpicWallet {
     /// an error. Messages are taken off a relay only once their effect is stored, so a call
     /// cut short loses nothing.
     ///
-    /// Fails with `ContactsOffline` or `EpicboxOff` before connecting.
+    /// With `only`, just the mailboxes of those contact ids are drained, their pairings in
+    /// progress included: a cheap look at a few pairings that leaves the others' turn as it
+    /// was. The outbox and the expiry of pairings run as in a full collect.
+    ///
+    /// Fails with `ContactsOffline` or `EpicboxOff` before connecting, and with
+    /// `InvalidArgument` for an id that is not one or more than 64 of them.
     pub async fn contacts_collect(
         &self,
         trigger: CollectTrigger,
         relay_mode: ContactRelayMode,
+        only: Option<Vec<String>>,
     ) -> Result<ContactCollectReport, WalletError> {
         self.run("contacts_collect", |session| async move {
-            session.contacts_collect(trigger, relay_mode).await
+            session.contacts_collect(trigger, relay_mode, only).await
         })
         .await
     }
@@ -681,6 +731,48 @@ impl EpicWallet {
     ) -> Result<(), WalletError> {
         self.run("contact_outbox_resend", |session| async move {
             session.contact_outbox_resend(id, relay_mode).await
+        })
+        .await
+    }
+
+    /// Sends `payload`, at most 64 KiB, to the paired contact `contact_id`: sealed to its keys
+    /// and signed with this pairing's, queued in the outbox and posted at once when the mode is
+    /// `Online`; the outbox retries it as it retries slates and lists it with the returned id
+    /// as `slate_id`. The contact's wallet keeps it once under that id, raises
+    /// `ContactPayload` and returns it from [`EpicWallet::contact_payloads`]. LEPIC never reads
+    /// the bytes; the app gives them their meaning.
+    ///
+    /// Fails with `InvalidArgument` for a larger payload, and `ContactNotFound` for a contact
+    /// that is not paired.
+    pub async fn contact_post_payload(
+        &self,
+        contact_id: String,
+        payload: Vec<u8>,
+        relay_mode: ContactRelayMode,
+    ) -> Result<String, WalletError> {
+        self.run("contact_post_payload", |session| async move {
+            session
+                .contact_post_payload(&contact_id, payload, relay_mode)
+                .await
+        })
+        .await
+    }
+
+    /// The payloads contacts sent that the app has not acknowledged, oldest first, at most 256:
+    /// while that many wait, newer ones stay on the relay. Kept across restarts.
+    pub async fn contact_payloads(&self) -> Result<Vec<ContactPayloadView>, WalletError> {
+        self.run("contact_payloads", |session| async move {
+            session.contact_payloads().await
+        })
+        .await
+    }
+
+    /// Forgets the kept payloads `ids` names, once the app stored what it needs; ids not kept
+    /// are ignored. Returns how many were forgotten. Fails with `InvalidArgument` for an id
+    /// that is not one or more than 256 of them.
+    pub async fn contact_payloads_ack(&self, ids: Vec<String>) -> Result<u32, WalletError> {
+        self.run("contact_payloads_ack", |session| async move {
+            session.contact_payloads_ack(ids).await
         })
         .await
     }

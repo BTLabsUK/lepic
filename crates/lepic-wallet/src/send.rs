@@ -183,10 +183,12 @@ pub struct SendRequest {
     pub message: Option<String>,
     /// The receiver's payment proof address. Asks the receiver to sign a payment proof.
     pub payment_proof_recipient: Option<ProofAddress>,
+    /// Outputs selection must not take, whatever their state.
+    pub exclude_outputs: Vec<Commitment>,
 }
 
 impl SendRequest {
-    pub const fn new(account: AccountIndex, amount: Amount) -> Self {
+    pub fn new(account: AccountIndex, amount: Amount) -> Self {
         let options = SelectionOptions::new(account);
         Self {
             account,
@@ -200,17 +202,19 @@ impl SendRequest {
             local_ttl_blocks: None,
             message: None,
             payment_proof_recipient: None,
+            exclude_outputs: Vec::new(),
         }
     }
 
     /// The options [`crate::Wallet::estimate_fee`] takes to estimate this send.
-    pub const fn selection_options(&self) -> SelectionOptions {
+    pub fn selection_options(&self) -> SelectionOptions {
         SelectionOptions {
             account: self.account,
             minimum_confirmations: self.minimum_confirmations,
             max_outputs: self.max_outputs,
             change_outputs: self.change_outputs,
             strategy: self.strategy,
+            exclude_outputs: self.exclude_outputs.clone(),
         }
     }
 }
@@ -623,14 +627,19 @@ impl SendEnvironment<'_> {
     }
 }
 
-/// `outputs` without the unspent ones this wallet cannot spend: those whose stored commitment
-/// is not the one their key and value derive with the regular switch commitment, the only one
-/// a transaction here spends with. A restore stores every output whose proof rewinds, so one
-/// created with another switch commitment still counts in the balance; selecting it would only
-/// build a transaction that fails.
-pub(crate) fn spendable_here(keychain: &Keychain, outputs: Vec<OutputRecord>) -> Vec<OutputRecord> {
+/// `outputs` without the ones the caller excludes and the unspent ones this wallet cannot
+/// spend: those whose stored commitment is not the one their key and value derive with the
+/// regular switch commitment, the only one a transaction here spends with. A restore stores
+/// every output whose proof rewinds, so one created with another switch commitment still
+/// counts in the balance; selecting it would only build a transaction that fails.
+pub(crate) fn spendable_here(
+    keychain: &Keychain,
+    outputs: Vec<OutputRecord>,
+    exclude: &[Commitment],
+) -> Vec<OutputRecord> {
     outputs
         .into_iter()
+        .filter(|output| !exclude.contains(&output.id.commitment))
         .filter(|output| {
             if output.status != OutputStatus::Unspent {
                 return true;
@@ -666,7 +675,11 @@ fn create_s1(
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
     let base_fee = env.base_fee();
-    let outputs = spendable_here(keychain, repos.outputs(request.account, None)?);
+    let outputs = spendable_here(
+        keychain,
+        repos.outputs(request.account, None)?,
+        &request.exclude_outputs,
+    );
     let selection = selection::select(
         &outputs,
         &request

@@ -138,6 +138,7 @@ fn two_phones_pair_in_person_by_scanning_each_others_card() {
                     account: AccountIndex(0),
                     name: name.to_owned(),
                     kind: ContactKind::Person,
+                    home_relay: None,
                 },
             ))
             .unwrap()
@@ -400,6 +401,29 @@ fn a_removed_contact_is_no_longer_collected() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn a_collect_limited_to_contacts_drains_only_their_mailboxes() {
+    let world = World::new();
+    let stranger = world.stranger();
+    let (with_payer, _) = world.pair(&world.issuer, &world.payer);
+    let (with_stranger, _) = world.pair(&world.issuer, &stranger);
+    let only = |ids: &[ContactId]| {
+        world
+            .block_on(world.issuer.wallet.contacts_collect_only(
+                &relays(&world.issuer),
+                CollectTrigger::Open,
+                Some(ids),
+            ))
+            .unwrap()
+            .mailboxes
+    };
+    // Each contact's mailbox, and its reply mailbox until the invite ends.
+    assert_eq!(world.collect(&world.issuer).mailboxes, 4);
+    assert_eq!(only(&[with_payer]), 2);
+    assert_eq!(only(&[with_stranger, with_payer]), 4);
+    assert_eq!(only(&[]), 0);
 }
 
 #[test]
@@ -1276,6 +1300,7 @@ fn an_in_person_pairing_moves_both_mailboxes_on_the_first_collect() {
                     account: AccountIndex(0),
                     name: name.to_owned(),
                     kind: ContactKind::Person,
+                    home_relay: None,
                 },
             ))
             .unwrap()
@@ -1480,6 +1505,84 @@ fn pairing_words_work_on_any_relay_and_skip_a_refusing_one() {
                 .is_empty()
         );
     }
+}
+
+fn meeting(party: &Party, hosts: &[&str]) -> ContactRelays {
+    relays(party).with_meeting(lepic_wallet::contact::meeting_relays(hosts).unwrap())
+}
+
+/// Words go to the meeting relays the inviter names, and are found by a wallet that asks
+/// several relays at once: the first invite that opens wins and is taken, so asking again
+/// finds nothing.
+#[test]
+fn pairing_words_meet_on_any_shared_relay_of_the_named_sets() {
+    let world = World::new();
+    world.relay.set_domain_refused("blocked.test");
+    let words: Vec<&str> = world
+        .block_on(world.issuer.wallet.pairing_invite(
+            &meeting(
+                &world.issuer,
+                &["Other.test", "other.test:443", "blocked.test"],
+            ),
+            InviteRequest {
+                offer_words: true,
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap()
+        .words
+        .unwrap()
+        .iter()
+        .map(|symbol| symbol.name)
+        .collect();
+    let link = world
+        .block_on(world.payer.wallet.pairing_find_words(
+            &meeting(&world.payer, &["blocked.test", "third.test", "other.test"]),
+            &words,
+        ))
+        .unwrap();
+    assert!(link.starts_with("epiccash://pair/1/"));
+    assert!(matches!(
+        world.block_on(
+            world
+                .payer
+                .wallet
+                .pairing_find_words(&meeting(&world.payer, &["other.test"]), &words)
+        ),
+        Err(ContactError::WordsNotFound)
+    ));
+}
+
+#[test]
+fn meeting_relays_are_validated_lowercased_and_deduplicated() {
+    use lepic_wallet::contact::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
+    let parsed = meeting_relays(&["A.test", "a.test:443", "b.test:7443"]).unwrap();
+    let hosts: Vec<String> = parsed.iter().map(meeting_host).collect();
+    assert_eq!(hosts, ["a.test", "b.test:7443"]);
+    assert!(parsed.iter().all(|relay| relay.security() == Security::Tls));
+    let none: [&str; 0] = [];
+    assert!(matches!(
+        meeting_relays(&none),
+        Err(ContactError::WordsUnavailable)
+    ));
+    for bad in [
+        "",
+        "a.test:",
+        "a.test:0",
+        "a.test:99999",
+        "wss://a.test",
+        "a_b.test",
+    ] {
+        assert!(
+            matches!(meeting_relays(&[bad]), Err(ContactError::RelayAddress)),
+            "{bad}"
+        );
+    }
+    let many = vec!["a.test"; MAX_MEETING_RELAYS + 1];
+    assert!(matches!(
+        meeting_relays(&many),
+        Err(ContactError::RelayAddress)
+    ));
 }
 
 /// When no built-in relay takes the words the invite is withdrawn with the relay's error, and
@@ -1790,6 +1893,7 @@ fn every_contact_future_is_send() {
             account: AccountIndex(0),
             name: "Anna".to_owned(),
             kind: ContactKind::Person,
+            home_relay: None,
         },
     ));
     assert_send(wallet.pairing_scan_card(&relays, id, "link"));
@@ -1956,6 +2060,7 @@ fn a_key_check_never_takes_a_slot_a_shown_card_holds() {
         account: AccountIndex(0),
         name: name.to_owned(),
         kind: ContactKind::Person,
+        home_relay: None,
     };
     let shown = world
         .block_on(
@@ -2067,6 +2172,7 @@ fn a_used_invite_sends_at_most_three_refusals() {
                 account: AccountIndex(0),
                 name: "Cleo".to_owned(),
                 kind: ContactKind::Person,
+                home_relay: None,
             },
         ))
         .unwrap();
@@ -2562,4 +2668,66 @@ fn an_unsigned_unpaired_notice_is_dropped() {
             .unwrap()
             .removed_by_peer
     );
+}
+
+#[test]
+fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    let mut ben_events = world.payer.wallet.subscribe();
+    let id = world
+        .block_on(world.issuer.wallet.contact_post_payload(
+            &relays(&world.issuer),
+            anna_side,
+            b"opaque bytes".to_vec(),
+        ))
+        .unwrap();
+    // The outbox posts it once more, as a retry would.
+    let outbox = world
+        .block_on(world.issuer.wallet.contact_outbox(anna_side))
+        .unwrap();
+    world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_outbox_resend(&relays(&world.issuer), outbox[0].id),
+        )
+        .unwrap();
+
+    world.collect(&world.payer);
+
+    let kept = world
+        .block_on(world.payer.wallet.contact_payloads())
+        .unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (kept[0].id, kept[0].contact_id, kept[0].payload.as_slice()),
+        (id, ben_side, b"opaque bytes".as_slice())
+    );
+    let arrived = events(&mut ben_events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::ContactPayload(_)))
+        .count();
+    assert_eq!(arrived, 1);
+    assert_eq!(
+        world
+            .block_on(world.payer.wallet.contact_payloads_ack(&[id, id]))
+            .unwrap(),
+        1
+    );
+    assert!(
+        world
+            .block_on(world.payer.wallet.contact_payloads())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.contact_post_payload(
+            &relays(&world.issuer),
+            anna_side,
+            vec![0; lepic_wallet::contact::MAX_APP_PAYLOAD_LEN + 1],
+        )),
+        Err(ContactError::TooLarge { .. })
+    ));
 }

@@ -27,6 +27,17 @@ pub(crate) fn endpoint_for(
     host: &str,
     relays: &ContactRelays,
 ) -> Result<RelayEndpoint, ContactError> {
+    let (domain, port) = parse_host(host)?;
+    let candidate = RelayEndpoint::new(domain.clone(), port, Security::Tls);
+    let ours = &relays.epicbox.settings().endpoint;
+    let known = std::iter::once(ours)
+        .chain(relays.built_in.iter())
+        .find(|known| known.domain() == &domain && port.is_none_or(|port| port == known.port()));
+    Ok(known.cloned().unwrap_or(candidate))
+}
+
+/// The domain and optional port of `host`, `domain[:port]`.
+fn parse_host(host: &str) -> Result<(Domain, Option<u16>), ContactError> {
     let (domain, port) = match host.rsplit_once(':') {
         Some((domain, port)) => (
             domain,
@@ -38,12 +49,48 @@ pub(crate) fn endpoint_for(
         None => (host, None),
     };
     let domain = Domain::parse(domain).map_err(|_| ContactError::RelayAddress)?;
-    let candidate = RelayEndpoint::new(domain.clone(), port, Security::Tls);
-    let ours = &relays.epicbox.settings().endpoint;
-    let known = std::iter::once(ours)
-        .chain(relays.built_in.iter())
-        .find(|known| known.domain() == &domain && port.is_none_or(|port| port == known.port()));
-    Ok(known.cloned().unwrap_or(candidate))
+    Ok((domain, port))
+}
+
+/// How many meeting relays one call may name: each costs a connection while words are offered
+/// or looked for.
+pub const MAX_MEETING_RELAYS: usize = 16;
+
+/// The meeting relays `hosts` name, each `domain[:port]` reached over TLS, lowercased, without
+/// repeats, in the order given.
+///
+/// Fails with [`ContactError::RelayAddress`] for a host that is not a domain with an optional
+/// non-zero port or for more than [`MAX_MEETING_RELAYS`] hosts, and with
+/// [`ContactError::WordsUnavailable`] for none.
+pub fn meeting_relays<T: AsRef<str>>(hosts: &[T]) -> Result<Vec<RelayEndpoint>, ContactError> {
+    if hosts.is_empty() {
+        return Err(ContactError::WordsUnavailable);
+    }
+    if hosts.len() > MAX_MEETING_RELAYS {
+        return Err(ContactError::RelayAddress);
+    }
+    let mut endpoints: Vec<RelayEndpoint> = Vec::with_capacity(hosts.len());
+    for host in hosts {
+        let (domain, port) = parse_host(&host.as_ref().trim().to_ascii_lowercase())?;
+        if port == Some(0) {
+            return Err(ContactError::RelayAddress);
+        }
+        let endpoint = RelayEndpoint::new(domain, port, Security::Tls);
+        if !endpoints.contains(&endpoint) {
+            endpoints.push(endpoint);
+        }
+    }
+    Ok(endpoints)
+}
+
+/// `domain` of a relay on the TLS default port, `domain:port` of any other: how the host app
+/// names a meeting relay.
+pub fn meeting_host(endpoint: &RelayEndpoint) -> String {
+    if endpoint.port() == lepic_epicbox::DEFAULT_PORT {
+        endpoint.domain().to_string()
+    } else {
+        host_text(endpoint)
+    }
 }
 
 /// The endpoint a mailbox address names: its domain and port.

@@ -553,6 +553,7 @@ async fn send_tor_takes_the_send_options_of_the_other_sends() {
     let too_many = crate::api::types::SendOptions {
         strategy: crate::api::types::SelectionStrategy::All,
         change_outputs: 11,
+        exclude_outputs: Vec::new(),
     };
 
     let sent = wallet

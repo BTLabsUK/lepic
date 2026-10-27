@@ -66,6 +66,8 @@ pub struct InviteRequest {
     pub expiry: InviteExpiry,
     /// Also offer five pairing words that find the invite (RFC 0002 7.7).
     pub offer_words: bool,
+    /// Where the pairing's mailboxes live, `domain[:port]`; `None` is the wallet's own relay.
+    pub home_relay: Option<String>,
 }
 
 /// A new invite, to show as a link or a QR code.
@@ -120,6 +122,8 @@ pub struct CardRequest {
     pub account: AccountIndex,
     pub name: String,
     pub kind: ContactKind,
+    /// Where the pairing's mailboxes live, `domain[:port]`; `None` is the wallet's own relay.
+    pub home_relay: Option<String>,
 }
 
 /// A card shown for pairing in person.
@@ -220,6 +224,14 @@ pub(crate) fn mailbox_address(
         .map_err(|_| ContactError::RelayAddress)
 }
 
+/// The home relay `host` names, or the relay of `relays` for none.
+fn home_relay(host: Option<&str>, relays: &ContactRelays) -> Result<RelayEndpoint, ContactError> {
+    match host {
+        Some(host) => endpoint_for(host, relays),
+        None => Ok(relays.epicbox.settings().endpoint.clone()),
+    }
+}
+
 /// A record that pairs nobody yet.
 fn pending_record(
     contact_id: ContactId,
@@ -265,8 +277,9 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// Makes an invite to pair with a contact (RFC 0002 7.1). Its home relay is the relay of
-    /// `relays`, where the reply mailbox and later both contact mailboxes live. The pending
+    /// Makes an invite to pair with a contact (RFC 0002 7.1). Its home relay, where the reply
+    /// mailbox and later both contact mailboxes live, is the request's or else the relay of
+    /// `relays`; another relay is reached over TLS through the wallet's connector. The pending
     /// pairing is stored; [`Wallet::contacts_collect`] takes the reply. Without words nothing is
     /// sent.
     ///
@@ -288,7 +301,7 @@ where
     ) -> Result<InviteOffer, ContactError> {
         self.check_contact_network(relays)?;
         let network = self.config().network;
-        let home = relays.epicbox.settings().endpoint.clone();
+        let home = home_relay(request.home_relay.as_deref(), relays)?;
         let offer_words = request.offer_words;
         if offer_words {
             // Words are posted, so a relay must be reachable before anything is stored.
@@ -569,8 +582,8 @@ where
         })
     }
 
-    /// Shows a card to pair in person (RFC 0002 7.4): a fresh slot whose mailbox is on the relay
-    /// of `relays`. [`Wallet::pairing_scan_card`] finishes the pairing with the other phone's
+    /// Shows a card to pair in person (RFC 0002 7.4): a fresh slot whose mailbox is on the
+    /// request's home relay or else the relay of `relays`. [`Wallet::pairing_scan_card`] finishes the pairing with the other phone's
     /// card. Nothing is sent, so this works offline.
     ///
     /// Fails as [`Wallet::pairing_invite`] does.
@@ -582,7 +595,7 @@ where
     ) -> Result<CardOffer, ContactError> {
         self.check_contact_network(relays)?;
         let network = self.config().network;
-        let home = relays.epicbox.settings().endpoint.clone();
+        let home = home_relay(request.home_relay.as_deref(), relays)?;
         let session = self.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
@@ -646,7 +659,6 @@ where
         let peer =
             ContactCard::from_link(link, contact_network(network)).map_err(ContactError::Decode)?;
         let peer_relay = mailbox_relay(&peer, relays)?;
-        let home = relays.epicbox.settings().endpoint.clone();
         let session = self.session()?;
         let view = self
             .contact_work(move |ports, _| {
@@ -664,6 +676,18 @@ where
                     let own = ContactCard::decode(&record.own_card, contact_network(network))
                         .map_err(ContactError::StoredData)?;
                     refuse_known_card(repos, &peer, &own)?;
+                    let home = EpicboxAddress::parse(
+                        own.fields().mailbox.as_str(),
+                        relays_network(network),
+                    )
+                    .map(|address| {
+                        format!(
+                            "{}:{}",
+                            address.domain(),
+                            address.port().unwrap_or(lepic_epicbox::DEFAULT_PORT)
+                        )
+                    })
+                    .map_err(|_| ContactError::RelayAddress)?;
                     let sas = Sas::in_person(contact_network(network), &own, &peer);
                     record.peer = Some(peer_card(&peer));
                     record.state = ContactState::Paired;
@@ -674,7 +698,7 @@ where
                         contact_id,
                         peer_mailbox: peer.fields().mailbox.as_str().to_owned(),
                         our_mailbox: own.fields().mailbox.as_str().to_owned(),
-                        home_relay: host_text(&home),
+                        home_relay: home.clone(),
                         onion: None,
                         previous: None,
                         backoff: Vec::new(),
@@ -682,12 +706,7 @@ where
                     // A card QR is seen by anyone nearby: the first collect moves our mailbox.
                     repos.put_setting(&super::collect::in_person_key(contact_id), "1")?;
                     debug!(peer_relay = %peer_relay, "in-person pairing stored");
-                    Ok(super::manage::view(
-                        &record,
-                        Some(host_text(&home)),
-                        false,
-                        now,
-                    ))
+                    Ok(super::manage::view(&record, Some(home), false, now))
                 })
             })
             .await?;

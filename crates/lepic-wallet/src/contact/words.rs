@@ -1,5 +1,5 @@
 //! Pairing words (RFC 0002 7.7): five SAS-table entries that find an invite posted to a
-//! rendezvous mailbox on a built-in relay, for when there is nothing to scan or paste.
+//! rendezvous mailbox on the meeting relays, for when there is nothing to scan or paste.
 
 use std::time::Duration;
 
@@ -27,7 +27,7 @@ pub const WORDS_INVITE_EXPIRY: Duration = Duration::from_secs(10 * 60);
 const WORDS_POST_GRACE: Duration = Duration::from_secs(5);
 
 /// How long one relay may take to show its two rendezvous mailboxes when looking for words; a
-/// healthy relay answers in about a second, and the next relay waits.
+/// healthy relay answers in about a second. The relays are asked at once.
 const WORDS_DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn unix_seconds(time: jiff::Timestamp) -> u64 {
@@ -41,9 +41,9 @@ where
     V: SecretVault + 'static,
 {
     /// Draws five words for `invite`, stretches them for the current window, and posts the sealed
-    /// invite to the rendezvous mailbox on every built-in relay, all at once: the other side
+    /// invite to the rendezvous mailbox on every meeting relay, all at once: the other side
     /// looks on each of them, so the words work whatever relay this wallet uses and whichever
-    /// built-in relay either network blocks. Returns the words as the user sees them once one
+    /// meeting relay either network blocks. Returns the words as the user sees them once one
     /// relay took the invite and the others had [`WORDS_POST_GRACE`] more; when none did, the
     /// last relay's error.
     pub(crate) async fn post_invite_words(
@@ -127,14 +127,17 @@ where
 
     /// Finds the invite that pairing words name (RFC 0002 7.7): the words, typed as names or
     /// emoji, are stretched for the current and the previous window, and the two rendezvous
-    /// mailboxes are drained on each built-in relay in order until one holds an invite that opens.
-    /// That message is acknowledged, so nobody else finds it; others stay. Returns the invite as
-    /// its `epiccash://pair/1/` link, for [`Wallet::pairing_preview`] and
+    /// mailboxes are drained on every meeting relay at once, each for at most
+    /// [`WORDS_DRAIN_TIMEOUT`]. The first invite that opens wins and the drains still going are
+    /// dropped; the message it came in is acknowledged, so nobody else finds that copy, and
+    /// copies on other relays stay until they expire. Returns the invite as its
+    /// `epiccash://pair/1/` link, for [`Wallet::pairing_preview`] and
     /// [`Wallet::pairing_accept`].
     ///
     /// Fails with [`ContactError::Words`] for words not in the table,
-    /// [`ContactError::WordsNotFound`] when no built-in relay holds the invite,
-    /// [`ContactError::Relay`] when not one built-in relay could be drained, and
+    /// [`ContactError::WordsNotFound`] when no meeting relay holds the invite,
+    /// [`ContactError::Relay`] when not one meeting relay could be drained,
+    /// [`ContactError::WordsUnavailable`] when there is no meeting relay, and
     /// [`ContactError::Offline`] or [`ContactError::EpicboxOff`] before connecting.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn pairing_find_words<T: AsRef<str>>(
@@ -145,6 +148,9 @@ where
         check_online(relays)?;
         self.check_contact_network(relays)?;
         let words = PairingWords::parse(typed).map_err(ContactError::Words)?;
+        if relays.built_in.is_empty() {
+            return Err(ContactError::WordsUnavailable);
+        }
         let network = self.config().network;
         let now = unix_seconds(self.ports().clock.now());
         let keys = self
@@ -158,37 +164,44 @@ where
                     .collect::<Result<Vec<WordsKey>, ContactError>>()
             })
             .await?;
-        // Words that no relay could be asked about are not "not found": the relays were not
-        // reached, which the caller words differently.
-        let mut reached = false;
-        let mut failed = None;
+        let mut drains = FuturesUnordered::new();
         for relay in &relays.built_in {
             let identities: Vec<Identity> = keys
                 .iter()
                 .map(|key| pairing_mailbox(*key.mailbox_seed(), network, relay).map(|(id, _)| id))
                 .collect::<Result<_, _>>()?;
-            let mut finder = Finder {
-                keys: &keys,
-                network: contact_network(network),
-                found: None,
-            };
-            match mailbox_client(relays, relay.clone(), None)
-                .with_limits(DrainLimits {
-                    timeout: WORDS_DRAIN_TIMEOUT,
-                    ..DrainLimits::default()
-                })
-                .drain_once(&identities, &mut finder)
-                .await
-            {
+            let keys = &keys;
+            drains.push(async move {
+                let mut finder = Finder {
+                    keys,
+                    network: contact_network(network),
+                    found: None,
+                };
+                let drained = mailbox_client(relays, relay.clone(), None)
+                    .with_limits(DrainLimits {
+                        timeout: WORDS_DRAIN_TIMEOUT,
+                        ..DrainLimits::default()
+                    })
+                    .drain_once(&identities, &mut finder)
+                    .await;
+                (relay, drained, finder.found)
+            });
+        }
+        // Words that no relay could be asked about are not "not found": the relays were not
+        // reached, which the caller words differently.
+        let mut reached = false;
+        let mut failed = None;
+        while let Some((relay, drained, found)) = drains.next().await {
+            if let Some(invite) = found {
+                info!(relay = %relay.domain(), "invite found by pairing words");
+                return Ok(invite.to_link());
+            }
+            match drained {
                 Ok(_) => reached = true,
                 Err(error) => {
                     debug!(relay = %relay.domain(), error = %crate::inbox::ErrorChain(&error), "rendezvous drain failed");
                     failed = Some(error);
                 }
-            }
-            if let Some(invite) = finder.found {
-                info!("invite found by pairing words");
-                return Ok(invite.to_link());
             }
         }
         match failed {

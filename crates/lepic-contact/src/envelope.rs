@@ -60,6 +60,9 @@ pub enum MessageType {
     /// Asks whether the recipient can take back the keys of an older pairing (RFC 0002 7.8).
     KeyCheck,
     KeyCheckAnswer,
+    /// Bytes the host app sends its paired counterpart; LEPIC never reads them. Its byte
+    /// leaves the next free values to RFC 0002, whose kit refuses 0x08 as unknown.
+    AppPayload,
 }
 
 impl MessageType {
@@ -72,6 +75,7 @@ impl MessageType {
             Self::ContactUpdate => 0x05,
             Self::KeyCheck => 0x06,
             Self::KeyCheckAnswer => 0x07,
+            Self::AppPayload => 0x40,
         }
     }
 
@@ -84,6 +88,7 @@ impl MessageType {
             0x05 => Self::ContactUpdate,
             0x06 => Self::KeyCheck,
             0x07 => Self::KeyCheckAnswer,
+            0x40 => Self::AppPayload,
             _ => return None,
         })
     }

@@ -1221,7 +1221,7 @@ fn fee_estimates_refuse_a_tip_above_the_plausible_height() {
 
     let fee = sender
         .harness
-        .block_on(wallet.estimate_fee(Amount::new(AMOUNT), options));
+        .block_on(wallet.estimate_fee(Amount::new(AMOUNT), options.clone()));
     let max = sender.harness.block_on(wallet.estimate_max(options));
 
     for result in [fee, max] {

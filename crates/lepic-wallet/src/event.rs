@@ -135,6 +135,9 @@ pub enum Event {
     /// The contact's answer (S2) to a payment this wallet sent through its mailbox arrived and
     /// the payment was finalized. Its posting shows as [`Event::Transaction`].
     ContactPaymentFinalized(ContactSlateEvent),
+    /// A contact sent a payload; it is kept for [`crate::Wallet::contact_payloads`] until the
+    /// host acknowledges it.
+    ContactPayload(ContactEvent),
 }
 
 /// An invoice a contact sent, with what the contact says about it.

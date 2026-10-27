@@ -13,6 +13,7 @@ mod keys;
 mod manage;
 mod outbox;
 mod pairing;
+mod payload;
 mod relay;
 mod sealed;
 mod words;
@@ -42,6 +43,8 @@ pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
     InviteRequest, LinkOutcome, SasDecision,
 };
+pub use payload::{ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, PayloadId};
+pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
 pub(crate) use sealed::tx_contact;
 pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
 pub use words::WORDS_INVITE_EXPIRY;
@@ -78,18 +81,20 @@ pub enum RelayMode {
 
 /// What the pairing engine reaches relays with: the wallet's Epicbox transport, whose relay is
 /// the home relay of the invites this wallet makes and whose connector every drain and post
-/// uses, the built-in relays of the network, and whether relays may be reached at all.
+/// uses, the meeting relays pairing words are posted to and looked for on, and whether relays
+/// may be reached at all.
 #[derive(Clone)]
 pub struct ContactRelays {
     pub epicbox: EpicboxTransport,
+    /// The meeting relays: the built-in relays of the network unless
+    /// [`ContactRelays::with_meeting`] named others.
     pub built_in: Vec<RelayEndpoint>,
     pub mode: RelayMode,
 }
 
 impl ContactRelays {
     /// The relays for `epicbox`, with the built-in relays of its network from
-    /// [`lepic_epicbox::built_in_relays`], where pairing words are posted and looked for, in
-    /// their fixed order on every wallet whatever its own relay.
+    /// [`lepic_epicbox::built_in_relays`] as the meeting relays.
     pub fn new(epicbox: EpicboxTransport, mode: RelayMode) -> Self {
         let built_in = lepic_epicbox::built_in_relays(epicbox.network());
         Self {
@@ -97,6 +102,13 @@ impl ContactRelays {
             built_in,
             mode,
         }
+    }
+
+    /// These relays with `meeting`, as [`meeting_relays`] parses them, as the meeting relays.
+    #[must_use]
+    pub fn with_meeting(mut self, meeting: Vec<RelayEndpoint>) -> Self {
+        self.built_in = meeting;
+        self
     }
 }
 

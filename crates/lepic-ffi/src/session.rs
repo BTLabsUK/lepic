@@ -38,6 +38,7 @@ use lepic_wallet::refresh::{
 use lepic_wallet::scan::{
     FoundDuring as EngineFoundDuring, ScanCancel, ScanOptions, ScanStart, ScanSummary,
 };
+use lepic_wallet::selection::Commitment;
 use lepic_wallet::selection::{
     Selection, SelectionOptions, SelectionStrategy as EngineStrategy, SelfSendShape,
 };
@@ -1039,10 +1040,11 @@ impl Session {
         let Some(options) = options else {
             return Ok(request);
         };
-        let (strategy, change_outputs) = selection_choice(options)?;
+        let (strategy, change_outputs, exclude_outputs) = selection_choice(&options)?;
         Ok(SendRequest {
             strategy,
             change_outputs,
+            exclude_outputs,
             ..request
         })
     }
@@ -1635,11 +1637,28 @@ fn legacy_import(outcome: &LegacyImportOutcome) -> LegacyImport {
     }
 }
 
-/// The engine's strategy and change outputs for `options`. Fails with `InvalidArgument` for
-/// change outputs outside 1..=[`MAX_CHANGE_OUTPUTS`].
+/// Outputs one send may be told to leave out.
+const MAX_EXCLUDED_OUTPUTS: usize = 500;
+
+/// The engine's strategy, change outputs and excluded outputs for `options`. Fails with
+/// `InvalidArgument` for change outputs outside 1..=[`MAX_CHANGE_OUTPUTS`], an excluded output
+/// that is not a commitment, or more than [`MAX_EXCLUDED_OUTPUTS`] of them.
 pub(crate) fn selection_choice(
-    options: SendOptions,
-) -> Result<(EngineStrategy, NonZeroUsize), WalletError> {
+    options: &SendOptions,
+) -> Result<(EngineStrategy, NonZeroUsize, Vec<Commitment>), WalletError> {
+    if options.exclude_outputs.len() > MAX_EXCLUDED_OUTPUTS {
+        return Err(invalid(format!(
+            "at most {MAX_EXCLUDED_OUTPUTS} outputs may be excluded"
+        )));
+    }
+    let exclude = options
+        .exclude_outputs
+        .iter()
+        .map(|hex| {
+            Commitment::from_hex(hex)
+                .map_err(|_| invalid("an excluded output is not a commitment".to_owned()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let change_outputs = usize::try_from(options.change_outputs)
         .ok()
         .filter(|count| *count <= MAX_CHANGE_OUTPUTS)
@@ -1653,7 +1672,7 @@ pub(crate) fn selection_choice(
         SelectionStrategy::Smallest => EngineStrategy::Smallest,
         SelectionStrategy::All => EngineStrategy::All,
     };
-    Ok((strategy, change_outputs))
+    Ok((strategy, change_outputs, exclude))
 }
 
 fn fee_estimate(selection: &Selection) -> Result<FeeEstimate, WalletError> {
@@ -1841,6 +1860,9 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
         Event::OutboxStuck(news) => contact::outbox_event(WalletEventKind::OutboxStuck, news),
         Event::ContactPaymentFinalized(slate) => {
             contact::slate_event(WalletEventKind::ContactPaymentFinalized, slate)
+        }
+        Event::ContactPayload(news) => {
+            contact::contact_event(WalletEventKind::ContactPayload, news)
         }
         _ => return None,
     })

@@ -223,6 +223,7 @@ impl<H: Host> Run<'_, H> {
                                 InviteExpiryArg::Week => InviteExpiry::SevenDays,
                             },
                             offer_words: args.pairing_words,
+                            home_relay: None,
                         },
                     )
                     .await?;
@@ -343,6 +344,7 @@ impl<H: Host> Run<'_, H> {
                             account: CONTACT_ACCOUNT,
                             name: args.name.name,
                             kind: kind(args.kind),
+                            home_relay: None,
                         },
                     )
                     .await?;

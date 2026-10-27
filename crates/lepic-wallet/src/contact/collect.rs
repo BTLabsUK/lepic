@@ -1,7 +1,7 @@
 //! Collecting: one-off drains of the pairing mailboxes and the contact mailboxes, grouped by
 //! relay, with per-relay backoff (RFC 0002 8.2 to 8.5).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use blake2::Blake2b256;
@@ -266,11 +266,24 @@ where
     /// Fails with [`ContactError::Offline`] or [`ContactError::EpicboxOff`] before connecting,
     /// with [`ContactError::NetworkMismatch`], and as the store does. A relay that fails is
     /// reported, not returned as an error.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub async fn contacts_collect(
         &self,
         relays: &ContactRelays,
         trigger: CollectTrigger,
+    ) -> Result<CollectReport, ContactError> {
+        self.contacts_collect_only(relays, trigger, None).await
+    }
+
+    /// [`Wallet::contacts_collect`] with only the mailboxes of the contacts in `only` drained,
+    /// their pairings in progress included, when it is given: a cheap look at a few pairings.
+    /// The turn the other contacts take across cycles is left as it was; everything else a
+    /// cycle does runs as it always does.
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub async fn contacts_collect_only(
+        &self,
+        relays: &ContactRelays,
+        trigger: CollectTrigger,
+        only: Option<&[ContactId]>,
     ) -> Result<CollectReport, ContactError> {
         self.check_contact_network(relays)?;
         check_online(relays)?;
@@ -291,7 +304,8 @@ where
         self.prune_outbox().await?;
         self.forget_old_envelopes().await?;
         self.move_in_person_mailboxes(relays).await?;
-        let mailboxes = self.mailboxes_to_collect(relays, trigger).await?;
+        let only = only.map(|ids| ids.iter().copied().collect::<BTreeSet<ContactId>>());
+        let mailboxes = self.mailboxes_to_collect(relays, trigger, only).await?;
         let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();
         for mailbox in mailboxes {
             by_relay
@@ -299,7 +313,7 @@ where
                 .or_default()
                 .push(mailbox);
         }
-        let mut told = std::collections::BTreeSet::new();
+        let mut told = BTreeSet::new();
         for (host, mailboxes) in by_relay {
             let Some(first) = mailboxes.first() else {
                 continue;
@@ -441,11 +455,13 @@ where
     }
 
     /// The mailboxes this cycle drains: every pending pairing's, then the contacts' in turn,
-    /// leaving out relays in backoff, at most [`MAX_MAILBOXES_PER_DRAIN`] in all.
+    /// leaving out relays in backoff, at most [`MAX_MAILBOXES_PER_DRAIN`] in all. With `only`,
+    /// just those of the contacts it holds, without moving the turn.
     async fn mailboxes_to_collect(
         &self,
         relays: &ContactRelays,
         trigger: CollectTrigger,
+        only: Option<BTreeSet<ContactId>>,
     ) -> Result<Vec<Mailbox>, ContactError> {
         let network = self.config().network;
         let session = self.session()?;
@@ -476,8 +492,14 @@ where
                             > now.as_second()
                     })
                 };
+                let wanted = |contact_id: ContactId| {
+                    only.as_ref().is_none_or(|only| only.contains(&contact_id))
+                };
                 let mut mailboxes = Vec::new();
                 for pending in repos.pending_pairings()? {
+                    if !wanted(pending.contact_id) {
+                        continue;
+                    }
                     let invite =
                         lepic_contact::Invite::decode(&pending.invite, contact_network(network))
                             .map_err(ContactError::StoredData)?;
@@ -510,7 +532,7 @@ where
                 }
                 let mut contacts = Vec::new();
                 for record in repos.contacts()? {
-                    if record.peer.is_none() {
+                    if record.peer.is_none() || !wanted(record.contact_id) {
                         continue;
                     }
                     let Some(mailbox) = repos.contact_mailbox(record.contact_id)? else {
@@ -558,16 +580,18 @@ where
                     }
                 }
                 let room = MAX_MAILBOXES_PER_DRAIN.saturating_sub(mailboxes.len());
-                let cursor = repos
-                    .setting(CURSOR_KEY)?
-                    .and_then(|text| text.parse::<usize>().ok())
-                    .unwrap_or(0);
                 let count = contacts.len();
-                let start = cursor.checked_rem(count).unwrap_or(0);
-                contacts.rotate_left(start);
                 let taken = room.min(count);
-                let next = start.saturating_add(taken).checked_rem(count).unwrap_or(0);
-                repos.put_setting(CURSOR_KEY, &next.to_string())?;
+                if only.is_none() {
+                    let cursor = repos
+                        .setting(CURSOR_KEY)?
+                        .and_then(|text| text.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let start = cursor.checked_rem(count).unwrap_or(0);
+                    contacts.rotate_left(start);
+                    let next = start.saturating_add(taken).checked_rem(count).unwrap_or(0);
+                    repos.put_setting(CURSOR_KEY, &next.to_string())?;
+                }
                 for (record, home, onion, salt, current) in contacts.into_iter().take(taken) {
                     if waiting(&host_text(&home)) {
                         continue;
@@ -773,6 +797,7 @@ where
             }
             MessageType::KeyCheck => self.take_key_check(&record, envelope).await?,
             MessageType::KeyCheckAnswer => self.take_key_check_answer(&record, envelope).await?,
+            MessageType::AppPayload => self.take_contact_payload(&record, opened.content).await?,
             MessageType::PairingReply | MessageType::PairingConfirm => Handled::Stored,
         })
     }

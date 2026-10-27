@@ -46,6 +46,7 @@ pub fn invite_request(name: &str) -> InviteRequest {
         kind: ContactKind::Person,
         expiry: InviteExpiry::OneDay,
         offer_words: false,
+        home_relay: None,
     }
 }
 

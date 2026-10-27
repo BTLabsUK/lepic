@@ -91,8 +91,11 @@ where
                             AccountError::UnknownAccount(options.account),
                         )));
                     }
-                    let outputs =
-                        spendable_here(&session.keychain, repos.outputs(options.account, None)?);
+                    let outputs = spendable_here(
+                        &session.keychain,
+                        repos.outputs(options.account, None)?,
+                        &options.exclude_outputs,
+                    );
                     Ok(choose(&outputs, &options.request(amount, tip, base_fee))?)
                 }))
             })

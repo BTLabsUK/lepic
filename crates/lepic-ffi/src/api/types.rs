@@ -492,13 +492,17 @@ pub enum SelectionStrategy {
 
 /// How a send chooses its inputs and change. A call given `None` uses `Smallest` with one
 /// change output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendOptions {
     pub strategy: SelectionStrategy,
     /// The outputs the change is split into, in equal parts with the remainder on the last,
     /// from 1 to 10; each one adds to the fee. A send whose inputs cover amount and fee
     /// exactly makes no change output.
     pub change_outputs: u32,
+    /// Commitments, 66 hex characters each, of outputs the send or estimate must not take,
+    /// for example ones another wallet on the same phrase is spending. At most 500; an
+    /// output this wallet does not hold is ignored.
+    pub exclude_outputs: Vec<String>,
 }
 
 /// How far a slate has progressed: `S` stages are a send, `I` stages an invoice.
@@ -1045,6 +1049,17 @@ pub enum OutboxState {
     Stuck,
 }
 
+/// A payload a paired contact sent, from `EpicWallet::contact_payloads`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactPayloadView {
+    /// The sender's id for it, 32 hex characters; a repeat is kept once.
+    pub id: String,
+    pub contact_id: String,
+    pub received_at_ms: i64,
+    /// The bytes as the contact's app sent them; LEPIC does not read them.
+    pub payload: Vec<u8>,
+}
+
 /// A message for a contact's mailbox, from `EpicWallet::contact_outbox`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboxEntryView {
@@ -1284,6 +1299,8 @@ pub enum WalletEventKind {
     /// notice: nothing sent through it arrives any more. The pairing stays, with
     /// `ContactView::removed_by_peer` set, until the user removes it too. Raised once.
     ContactUnpaired,
+    /// The contact `contact_id` sent a payload; read it with `EpicWallet::contact_payloads`.
+    ContactPayload,
 }
 
 /// How a key check from `EpicWallet::contact_key_check` stands.

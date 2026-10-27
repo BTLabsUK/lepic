@@ -19,7 +19,7 @@
 mod build;
 
 use jiff::Timestamp;
-use lepic_crypto::CryptoError;
+use lepic_crypto::{Commitment, CryptoError};
 use lepic_epicbox::TRANSPORT_ID as EPICBOX;
 use lepic_keychain::{IdentifierError, Keychain, KeychainError, ProofError, SwitchCommitment};
 use lepic_node::{NodeApi, NodeError, Propagation};
@@ -294,6 +294,8 @@ pub struct PayRequest {
     /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
     /// it is signed.
     pub message: Option<String>,
+    /// Outputs selection must not take, whatever their state.
+    pub exclude_outputs: Vec<Commitment>,
 }
 
 impl PayRequest {
@@ -308,6 +310,7 @@ impl PayRequest {
             strategy: defaults.strategy,
             ttl_blocks: None,
             message: None,
+            exclude_outputs: Vec::new(),
         }
     }
 }
@@ -668,7 +671,11 @@ fn pay_stored(
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
     let selection = selection::select(
-        &spendable_here(env.keychain, repos.outputs(request.account, None)?),
+        &spendable_here(
+            env.keychain,
+            repos.outputs(request.account, None)?,
+            &request.exclude_outputs,
+        ),
         &SelectionRequest {
             account: request.account,
             amount: i1.amount(),

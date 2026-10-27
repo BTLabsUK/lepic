@@ -566,3 +566,55 @@ fn outputs_add_up_to_the_balance_in_each_category() {
         )))
     ));
 }
+
+#[test]
+fn excluded_outputs_are_never_selected_by_an_estimate_or_a_send() {
+    let sender = funded_twice();
+    let small = sender
+        .outputs()
+        .into_iter()
+        .find(|output| output.amount == Amount::new(FUNDING))
+        .unwrap()
+        .id
+        .commitment;
+    let excluding = |strategy| SelectionOptions {
+        exclude_outputs: vec![small],
+        ..options(strategy)
+    };
+    for strategy in STRATEGIES {
+        let estimate = sender
+            .harness
+            .block_on(
+                sender
+                    .wallet
+                    .estimate_fee(Amount::new(AMOUNT), excluding(strategy)),
+            )
+            .unwrap();
+        assert!(
+            estimate
+                .inputs
+                .iter()
+                .all(|input| input.id.commitment != small)
+        );
+        let max = sender
+            .harness
+            .block_on(sender.wallet.estimate_max(excluding(strategy)))
+            .unwrap();
+        assert_eq!(max.total, Amount::new(2 * FUNDING), "{strategy:?}");
+    }
+    let sent = sender.harness.block_on(sender.wallet.send(
+        SendRequest {
+            exclude_outputs: vec![small],
+            ..request(Amount::new(AMOUNT), SelectionStrategy::All)
+        },
+        to_peer(),
+    ));
+    assert!(sent.is_ok());
+    let locked: Vec<OutputRecord> = sender
+        .outputs()
+        .into_iter()
+        .filter(|output| output.status == OutputStatus::Locked)
+        .collect();
+    assert_eq!(locked.len(), 1);
+    assert_ne!(locked[0].id.commitment, small);
+}

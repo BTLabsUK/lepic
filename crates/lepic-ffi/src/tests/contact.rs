@@ -101,6 +101,8 @@ async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
             InviteExpiry::OneDay,
             false,
             Online,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -110,12 +112,12 @@ async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
         .unwrap();
     assert!(answer.posted);
     let collected = anna
-        .contacts_collect(CollectTrigger::Open, Online)
+        .contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     assert_eq!(collected.paired, 1);
     let collected = ben
-        .contacts_collect(CollectTrigger::Pull, Online)
+        .contacts_collect(CollectTrigger::Pull, Online, None)
         .await
         .unwrap();
     assert_eq!(collected.paired, 1);
@@ -135,6 +137,43 @@ async fn verified_pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
+    let mut world = World::new();
+    let anna = world.wallet().await;
+    let ben = world.wallet().await;
+    let (anna_side, ben_side) = pair(&anna, &ben).await;
+
+    let id = anna
+        .contact_post_payload(anna_side.clone(), vec![1, 2, 3], Online)
+        .await
+        .unwrap();
+    assert_eq!(
+        kind(
+            anna.contact_post_payload(anna_side, vec![0; 64 * 1024 + 1], Online)
+                .await
+        ),
+        WalletErrorKind::InvalidArgument
+    );
+    ben.contacts_collect(CollectTrigger::Pull, Online, Some(vec![ben_side.clone()]))
+        .await
+        .unwrap();
+
+    let kept = ben.contact_payloads().await.unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (kept[0].id.as_str(), kept[0].payload.as_slice()),
+        (id.as_str(), [1, 2, 3].as_slice())
+    );
+    assert_eq!(kept[0].contact_id, ben_side);
+    assert_eq!(ben.contact_payloads_ack(vec![id]).await.unwrap(), 1);
+    assert!(ben.contact_payloads().await.unwrap().is_empty());
+    assert_eq!(
+        kind(ben.contact_payloads_ack(vec!["nope".to_owned()]).await),
+        WalletErrorKind::InvalidArgument
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_wallets_pair_by_link_and_show_the_same_words() {
     let mut world = World::new();
     let anna = world.wallet().await;
@@ -146,6 +185,8 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
             InviteExpiry::OneHour,
             false,
             Online,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -164,10 +205,10 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
         .await
         .unwrap();
     assert!(answer.reply_link.starts_with("epiccash://pair-reply/1/"));
-    anna.contacts_collect(CollectTrigger::Open, Online)
+    anna.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
-    ben.contacts_collect(CollectTrigger::Open, Online)
+    ben.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
 
@@ -240,6 +281,8 @@ async fn a_pairing_by_hand_needs_no_relay() {
             InviteExpiry::SevenDays,
             false,
             Offline,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -284,11 +327,11 @@ async fn two_phones_pair_in_person_offline() {
     let anna = world.wallet().await;
     let ben = world.wallet().await;
     let anna_card = anna
-        .pairing_show_card("Anna".to_owned(), ContactKind::Person, Offline)
+        .pairing_show_card("Anna".to_owned(), ContactKind::Person, Offline, None)
         .await
         .unwrap();
     let ben_card = ben
-        .pairing_show_card("Ben".to_owned(), ContactKind::Person, Offline)
+        .pairing_show_card("Ben".to_owned(), ContactKind::Person, Offline, None)
         .await
         .unwrap();
     assert!(anna_card.link.starts_with("epiccash://contact/1/"));
@@ -325,6 +368,8 @@ async fn pairing_words_find_the_invite_once() {
             InviteExpiry::OneDay,
             true,
             Online,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -334,25 +379,28 @@ async fn pairing_words_find_the_invite_once() {
 
     assert_eq!(
         kind(
-            ben.pairing_find_words(vec!["nonsense".to_owned(); 5], Online)
+            ben.pairing_find_words(vec!["nonsense".to_owned(); 5], Online, None)
                 .await
         ),
         WalletErrorKind::InvalidPairingWords
     );
     assert_eq!(
-        kind(ben.pairing_find_words(words.clone(), Offline).await),
+        kind(ben.pairing_find_words(words.clone(), Offline, None).await),
         WalletErrorKind::ContactsOffline
     );
-    let found = ben.pairing_find_words(words.clone(), Online).await.unwrap();
+    let found = ben
+        .pairing_find_words(words.clone(), Online, None)
+        .await
+        .unwrap();
     assert_eq!(found.preview.claimed_name, "Anna");
     assert_eq!(
-        kind(ben.pairing_find_words(words, Online).await),
+        kind(ben.pairing_find_words(words, Online, None).await),
         WalletErrorKind::PairingWordsNotFound
     );
     ben.pairing_accept(found.link, "Ben".to_owned(), false, Online)
         .await
         .unwrap();
-    anna.contacts_collect(CollectTrigger::Push, Online)
+    anna.contacts_collect(CollectTrigger::Push, Online, None)
         .await
         .unwrap();
     assert_eq!(
@@ -385,17 +433,19 @@ async fn words_are_offered_whatever_relay_the_wallet_uses() {
             InviteExpiry::OneDay,
             true,
             Online,
+            None,
+            None,
         )
         .await
         .unwrap();
     let words: Vec<String> = invite.words.iter().map(|word| word.name.clone()).collect();
     assert_eq!(words.len(), 5);
-    let found = ben.pairing_find_words(words, Online).await.unwrap();
+    let found = ben.pairing_find_words(words, Online, None).await.unwrap();
     assert_eq!(found.preview.home_relay, "relay.example:443");
     ben.pairing_accept(found.link, "Ben".to_owned(), false, Online)
         .await
         .unwrap();
-    anna.contacts_collect(CollectTrigger::Push, Online)
+    anna.contacts_collect(CollectTrigger::Push, Online, None)
         .await
         .unwrap();
     assert_eq!(
@@ -415,6 +465,8 @@ async fn a_pending_invite_is_listed_until_cancelled() {
             InviteExpiry::OneDay,
             false,
             EpicboxOff,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -450,12 +502,15 @@ async fn the_relay_mode_and_bad_input_are_refused_before_anything_happens() {
     let mut world = World::new();
     let anna = world.wallet().await;
     assert_eq!(
-        kind(anna.contacts_collect(CollectTrigger::Open, Offline).await),
+        kind(
+            anna.contacts_collect(CollectTrigger::Open, Offline, None)
+                .await
+        ),
         WalletErrorKind::ContactsOffline
     );
     assert_eq!(
         kind(
-            anna.contacts_collect(CollectTrigger::Open, EpicboxOff)
+            anna.contacts_collect(CollectTrigger::Open, EpicboxOff, None)
                 .await
         ),
         WalletErrorKind::EpicboxOff
@@ -482,7 +537,9 @@ async fn the_relay_mode_and_bad_input_are_refused_before_anything_happens() {
                 ContactKind::Person,
                 InviteExpiry::OneDay,
                 false,
-                Online
+                Online,
+                None,
+                None
             )
             .await
         ),
@@ -509,7 +566,10 @@ async fn the_relay_mode_and_bad_input_are_refused_before_anything_happens() {
     .await
     .unwrap();
     assert_eq!(
-        kind(bare.contacts_collect(CollectTrigger::Open, Online).await),
+        kind(
+            bare.contacts_collect(CollectTrigger::Open, Online, None)
+                .await
+        ),
         WalletErrorKind::Unsupported
     );
     assert!(bare.contacts().await.unwrap().is_empty());
@@ -699,7 +759,7 @@ async fn a_slate_sent_through_the_mailbox_is_answered_through_the_outbox() {
 
     // The cycle sends the answer itself and says so.
     let collected = ben
-        .contacts_collect(CollectTrigger::Open, Online)
+        .contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     assert_eq!(collected.delivered, 1);
@@ -707,7 +767,7 @@ async fn a_slate_sent_through_the_mailbox_is_answered_through_the_outbox() {
         ben.contact_outbox(ben_side).await.unwrap()[0].state,
         OutboxState::Delivered
     );
-    anna.contacts_collect(CollectTrigger::Open, Online)
+    anna.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     assert_eq!(world.chain.pushed_count(), 1);
@@ -750,7 +810,7 @@ async fn a_contacts_invoice_waits_and_is_declined_or_paid() {
     };
     let first = issue("order-1").await.unwrap();
     assert_eq!(first.amount, 2 * EPIC);
-    ben.contacts_collect(CollectTrigger::Open, Online)
+    ben.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     let invoices = ben.contact_invoices().await.unwrap();
@@ -771,7 +831,7 @@ async fn a_contacts_invoice_waits_and_is_declined_or_paid() {
     );
 
     let second = issue("order-2").await.unwrap();
-    ben.contacts_collect(CollectTrigger::Open, Online)
+    ben.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     assert_eq!(
@@ -787,7 +847,7 @@ async fn a_contacts_invoice_waits_and_is_declined_or_paid() {
         .unwrap();
     assert_eq!(paid.slate_id, second.slate_id);
     assert_eq!(paid.amount, 2 * EPIC);
-    anna.contacts_collect(CollectTrigger::Open, Online)
+    anna.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     assert_eq!(world.chain.pushed_count(), 1);
@@ -847,6 +907,8 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
             InviteExpiry::OneDay,
             false,
             Online,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -858,7 +920,7 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
         .await
         .unwrap();
     assert_eq!(
-        anna.contacts_collect(CollectTrigger::Open, Online)
+        anna.contacts_collect(CollectTrigger::Open, Online, None)
             .await
             .unwrap()
             .paired,
@@ -866,7 +928,7 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
     );
 
     let collected = carl
-        .contacts_collect(CollectTrigger::Open, Online)
+        .contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     assert_eq!(
@@ -956,11 +1018,11 @@ async fn a_contact_with_only_a_pairing_is_paid_through_its_mailbox_with_sealing_
     assert_eq!(outbox[0].slate_id, sent.slate_id);
     assert_eq!(outbox[0].state, OutboxState::Delivered);
 
-    ben.contacts_collect(CollectTrigger::Open, Online)
+    ben.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     assert_eq!(ben.contact_outbox(ben_side).await.unwrap().len(), 1);
-    anna.contacts_collect(CollectTrigger::Foreground, Online)
+    anna.contacts_collect(CollectTrigger::Foreground, Online, None)
         .await
         .unwrap();
     assert_eq!(world.chain.pushed_count(), 1);
@@ -979,7 +1041,7 @@ async fn a_contact_with_only_a_pairing_is_paid_through_its_mailbox_with_sealing_
 
     // The receiver hears that it was posted, as over Epicbox, through the same mailbox.
     let mut ben_events = ben.session().subscribe();
-    ben.contacts_collect(CollectTrigger::Open, Online)
+    ben.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     let posted = raised(&mut ben_events)
@@ -1013,10 +1075,10 @@ async fn a_mailbox_send_the_contact_never_answers_is_cancelled_and_its_late_answ
         .await
         .unwrap();
 
-    ben.contacts_collect(CollectTrigger::Open, Online)
+    ben.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
-    anna.contacts_collect(CollectTrigger::Open, Online)
+    anna.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
     assert_eq!(world.chain.pushed_count(), 0);

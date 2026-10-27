@@ -144,6 +144,7 @@ where
         self.check_plausible_tip(&session, tip).await?;
         let network = self.config().network;
         let base_fee = network.params().default_base_fee();
+        let account = options.account;
         let stored = self
             .blocking(move |ports, _| {
                 let now = ports.clock.now();
@@ -158,8 +159,11 @@ where
                             AccountError::UnknownAccount(options.account),
                         )));
                     }
-                    let outputs =
-                        spendable_here(&session.keychain, repos.outputs(options.account, None)?);
+                    let outputs = spendable_here(
+                        &session.keychain,
+                        repos.outputs(options.account, None)?,
+                        &options.exclude_outputs,
+                    );
                     let chosen = choose(&outputs, &options.request(Amount::ZERO, tip, base_fee))
                         .map_err(SendError::from)?;
                     let request = SendRequest {
@@ -208,7 +212,7 @@ where
         self.emit(Event::SelfSent(SelfSentTransaction {
             tx_id: finalized.tx_id,
             received_tx_id,
-            account: options.account,
+            account,
             amount: chosen.amount,
         }));
         if let Some(change) = finalized.change {

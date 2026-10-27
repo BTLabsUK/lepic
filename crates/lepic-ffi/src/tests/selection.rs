@@ -19,7 +19,60 @@ const fn options(strategy: SelectionStrategy, change_outputs: u32) -> Option<Sen
     Some(SendOptions {
         strategy,
         change_outputs,
+        exclude_outputs: Vec::new(),
     })
+}
+
+fn excluding(commitments: Vec<String>) -> Option<SendOptions> {
+    Some(SendOptions {
+        exclude_outputs: commitments,
+        ..options(SelectionStrategy::Smallest, 1).unwrap()
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn excluded_outputs_are_left_out_of_every_estimate_and_send() {
+    let pair = funded_with_two_outputs().await;
+    let alice = &pair.alice;
+    let outputs = alice.outputs().unwrap();
+    let small = outputs
+        .iter()
+        .find(|output| output.value == EPIC)
+        .unwrap()
+        .commitment
+        .clone();
+
+    let estimate = alice
+        .estimate_fee(EPIC / 2, 1, excluding(vec![small.clone()]))
+        .await
+        .unwrap();
+    assert_eq!((estimate.input_count, estimate.locked), (1, 10 * EPIC));
+    let max = alice
+        .estimate_max(1, excluding(vec![small.clone()]))
+        .await
+        .unwrap();
+    assert_eq!(max.locked, 10 * EPIC);
+    let sent = alice
+        .create_send_slate_with(EPIC / 2, 1, None, excluding(vec![small.clone()]))
+        .await
+        .unwrap();
+    let locked: Vec<_> = alice
+        .outputs()
+        .unwrap()
+        .into_iter()
+        .filter(|output| output.status == OutputStatus::Locked)
+        .map(|output| output.commitment)
+        .collect();
+    assert!(!locked.contains(&small), "{locked:?}");
+    assert!(alice.transaction(sent.tx_id).await.is_ok());
+    assert_eq!(
+        kind(
+            alice
+                .estimate_fee(EPIC / 2, 1, excluding(vec!["zz".to_owned()]))
+                .await
+        ),
+        WalletErrorKind::InvalidArgument
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -58,7 +111,10 @@ async fn change_split_into_outputs_costs_the_estimated_fee() {
     let alice = &pair.alice;
     let split = options(SelectionStrategy::Smallest, 3);
 
-    let estimate = alice.estimate_fee(2 * EPIC, 1, split).await.unwrap();
+    let estimate = alice
+        .estimate_fee(2 * EPIC, 1, split.clone())
+        .await
+        .unwrap();
     let single = alice.estimate_fee(2 * EPIC, 1, None).await.unwrap();
 
     assert_eq!(estimate.change_outputs, 3);

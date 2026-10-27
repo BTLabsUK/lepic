@@ -7,7 +7,8 @@
 
 use std::num::NonZeroUsize;
 
-use lepic_crypto::Commitment;
+/// The commitment type [`SelectionOptions::exclude_outputs`] names outputs by.
+pub use lepic_crypto::Commitment;
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
 use lepic_primitives::fee::BodyCounts;
 use lepic_primitives::output::OutputFeatures;
@@ -27,7 +28,7 @@ pub enum SelectionStrategy {
 /// How a send chooses its inputs and change, apart from the amount. [`SelectionOptions::new`]
 /// fills in the defaults of `epic-wallet`'s `InitTxArgs`, except the confirmations, which
 /// follow the balance ([`SelectionOptions::DEFAULT_MINIMUM_CONFIRMATIONS`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectionOptions {
     pub account: AccountIndex,
     /// As [`SelectionRequest::minimum_confirmations`].
@@ -36,6 +37,9 @@ pub struct SelectionOptions {
     pub max_outputs: NonZeroUsize,
     pub change_outputs: NonZeroUsize,
     pub strategy: SelectionStrategy,
+    /// Outputs the wallet's sends and estimates must not take, whatever their state: for
+    /// example ones the host knows another device is spending.
+    pub exclude_outputs: Vec<Commitment>,
 }
 
 impl SelectionOptions {
@@ -54,11 +58,12 @@ impl SelectionOptions {
             max_outputs: Self::DEFAULT_MAX_OUTPUTS,
             change_outputs: NonZeroUsize::MIN,
             strategy: SelectionStrategy::All,
+            exclude_outputs: Vec::new(),
         }
     }
 
     /// The request for a send of `amount` built at `tip`.
-    pub const fn request(self, amount: Amount, tip: Height, base_fee: Fee) -> SelectionRequest {
+    pub const fn request(&self, amount: Amount, tip: Height, base_fee: Fee) -> SelectionRequest {
         SelectionRequest {
             account: self.account,
             amount,
