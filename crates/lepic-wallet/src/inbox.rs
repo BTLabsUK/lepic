@@ -679,6 +679,26 @@ where
         Ok((identity.address().clone(), signature))
     }
 
+    /// Signs `message` with the wallet's Epicbox address key, under a tag that keeps it apart
+    /// from every text the key signs for a relay; [`lepic_epicbox::verify_address_message`]
+    /// checks it against the key of [`Wallet::epicbox_attach`]'s address. Needs no relay.
+    ///
+    /// Fails with [`WalletError::Locked`].
+    pub fn address_signature(
+        &self,
+        message: &[u8],
+    ) -> Result<lepic_crypto::EcdsaSignature, WalletError> {
+        let secret = self.address_secret(ADDRESS_INDEX)?;
+        lepic_epicbox::sign_address_message(message, &secret)
+            .map_err(|error| WalletError::Keychain(error.into()))
+    }
+
+    fn address_secret(&self, index: u32) -> Result<lepic_crypto::SecretKey, WalletError> {
+        let session = self.session()?;
+        let parent = account::parent_key_id(ADDRESS_ACCOUNT)?;
+        Ok(session.keychain.address_key(&parent, index)?)
+    }
+
     fn attached_client(&self, epicbox: &EpicboxTransport) -> Result<EpicboxClient, InboxError> {
         Ok(epicbox.attach(self.identity_at(epicbox, ADDRESS_INDEX)?))
     }
@@ -694,12 +714,7 @@ where
         if epicbox.network() != network {
             return Err(InboxError::NetworkMismatch);
         }
-        let session = self.session()?;
-        let parent = account::parent_key_id(ADDRESS_ACCOUNT)?;
-        let secret = session
-            .keychain
-            .address_key(&parent, index)
-            .map_err(WalletError::Keychain)?;
+        let secret = self.address_secret(index)?;
         let public = lepic_crypto::PublicKey::from_secret_key(&secret)
             .map_err(|_| InboxError::Identity(ClientError::IdentityMismatch))?;
         let endpoint = &epicbox.settings().endpoint;
