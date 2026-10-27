@@ -35,7 +35,8 @@ commands:
   mobile      --target <triple> [--release]: build the library crates for a mobile target
               --package [--mock] [--out <dir>] [--target <triple>]...: build release
               lepic-ffi into <dir>/<triple>/ with a SHA256SUMS, default dist/native; --mock adds
-              the scripted node and relay, default dist/native-mock
+              the scripted node and relay, default dist/native-mock; --no-tor leaves the
+              wallet's tor out (ADR 0026), default dist/native-no-tor
   repo-lint   workspace lints and unsafe code, pure crates, the secp256k1-zkp pin, the bridge
               fingerprint in crates/lepic-ffi/bridge.sha256, interop images
   soak        --iterations <n> [--seed <s>] [--jobs <j>]: randomized differential soak

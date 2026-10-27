@@ -18,6 +18,22 @@ const STEPS: &[(&str, &[&str])] = &[
             "warnings",
         ],
     ),
+    // The library without its default `tor` feature (ADR 0026), as `mobile --package --no-tor`
+    // builds it, with its tests.
+    (
+        "clippy without tor",
+        &[
+            "clippy",
+            "--package",
+            "lepic-ffi",
+            "--all-targets",
+            "--no-default-features",
+            "--locked",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    ),
     ("test", &["test", "--workspace", "--locked"]),
     ("deny", &["deny", "check"]),
 ];

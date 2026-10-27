@@ -11,6 +11,11 @@
 //! `--package --mock` builds the same library with the in-process scripted node and Epicbox relay
 //! (the `mock` feature) for the binding's own tests, by default into `dist/native-mock/` so it
 //! never mixes with the libraries an app ships.
+//!
+//! `--package --no-tor` builds the library without its default `tor` feature (ADR 0026): no
+//! `lepic-tor` in it, by default into `dist/native-no-tor/` (`dist/native-mock-no-tor/` with
+//! `--mock`). Next to every library a `FEATURES` file lists the `lepic-ffi` features it was
+//! built with, one per line, so the binding's build hook can tell the two builds apart.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,13 +40,22 @@ const FFI_LIBRARY_STEM: &str = "lepic_ffi";
 /// shipped ones, and the `--mock` ones apart from them.
 pub(crate) const PACKAGE_NATIVE_DIR: &str = "dist/native";
 const MOCK_NATIVE_DIR: &str = "dist/native-mock";
+/// What a build without Tor adds to the name of its default directory.
+const NO_TOR_SUFFIX: &str = "-no-tor";
 
 /// The checksum file `--package` writes next to each library. The binding's build hook reads it
 /// under the same name.
 const MANIFEST_FILE: &str = "SHA256SUMS";
 
+/// The file `--package` writes next to each library with the `lepic-ffi` features it has, one
+/// per line. The binding's build hook reads it under the same name.
+const FEATURES_FILE: &str = "FEATURES";
+
 /// The `lepic-ffi` feature with the in-process scripted node and relay the binding's tests drive.
 const MOCK_FEATURE: &str = "mock";
+
+/// The default `lepic-ffi` feature with the wallet's tor; `--no-tor` builds without it.
+const TOR_FEATURE: &str = "tor";
 
 const ANDROID_TARGETS: &[&str] = &[
     "aarch64-linux-android",
@@ -53,7 +67,7 @@ const LINUX_TARGETS: &[&str] = &["x86_64-unknown-linux-gnu"];
 const WINDOWS_TARGETS: &[&str] = &["x86_64-pc-windows-msvc"];
 
 const USAGE: &str = "mobile --target <triple> [--release] \
-                     | mobile --package [--mock] [--out <dir>] [--target <triple>]...";
+                     | mobile --package [--mock] [--no-tor] [--out <dir>] [--target <triple>]...";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
@@ -61,11 +75,12 @@ enum Request {
     Build { target: String, release: bool },
     /// Build the `lepic-ffi` release library for each target and copy it into `out`, or the
     /// default directory when that is `None`. An empty list means every target the host can
-    /// build. `mock` adds the scripted node and relay.
+    /// build. `mock` adds the scripted node and relay; `tor` false leaves the wallet's tor out.
     Package {
         targets: Vec<String>,
         out: Option<PathBuf>,
         mock: bool,
+        tor: bool,
     },
 }
 
@@ -74,6 +89,7 @@ fn parse(args: &[String]) -> Result<Request> {
     let mut release = false;
     let mut package = false;
     let mut mock = false;
+    let mut tor = true;
     let mut out = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -85,6 +101,7 @@ fn parse(args: &[String]) -> Result<Request> {
             "--release" => release = true,
             "--package" => package = true,
             "--mock" => mock = true,
+            "--no-tor" => tor = false,
             "--out" => {
                 let value = args.next().context("`--out` needs a directory")?;
                 if out.replace(PathBuf::from(value)).is_some() {
@@ -98,10 +115,15 @@ fn parse(args: &[String]) -> Result<Request> {
         if release {
             bail!("`--package` always builds in release mode; drop `--release`");
         }
-        return Ok(Request::Package { targets, out, mock });
+        return Ok(Request::Package {
+            targets,
+            out,
+            mock,
+            tor,
+        });
     }
-    if mock || out.is_some() {
-        bail!("`--mock` and `--out` go with `--package`, usage: cargo xtask {USAGE}");
+    if mock || !tor || out.is_some() {
+        bail!("`--mock`, `--no-tor` and `--out` go with `--package`, usage: cargo xtask {USAGE}");
     }
     let mut targets = targets.into_iter();
     let (Some(target), None) = (targets.next(), targets.next()) else {
@@ -178,15 +200,41 @@ fn build_args(target: &str, release: bool, host_os: &str) -> Result<Vec<String>>
     Ok(args)
 }
 
+/// The `lepic-ffi` features a packaged library has: `tor` unless it is left out, and `mock`
+/// when it is set.
+fn package_features(mock: bool, tor: bool) -> Vec<&'static str> {
+    [(tor, TOR_FEATURE), (mock, MOCK_FEATURE)]
+        .into_iter()
+        .filter_map(|(on, feature)| on.then_some(feature))
+        .collect()
+}
+
 /// The cargo arguments that build the `lepic-ffi` release library for `target`, with the
-/// scripted node and relay when `mock` is set.
-fn package_args(target: &str, mock: bool, host_os: &str) -> Result<Vec<String>> {
+/// scripted node and relay when `mock` is set and without the wallet's tor when `tor` is not.
+fn package_args(target: &str, mock: bool, tor: bool, host_os: &str) -> Result<Vec<String>> {
     let mut args = cargo_build_prefix(target, host_os)?;
     args.extend(["--package", FFI_PACKAGE, "--lib", "--locked", "--release"].map(String::from));
+    if !tor {
+        args.push("--no-default-features".to_owned());
+    }
     if mock {
         args.extend(["--features".to_owned(), MOCK_FEATURE.to_owned()]);
     }
     Ok(args)
+}
+
+/// Where `--package` puts the libraries without `--out`, relative to the workspace root.
+fn default_native_dir(mock: bool, tor: bool) -> String {
+    let base = if mock {
+        MOCK_NATIVE_DIR
+    } else {
+        PACKAGE_NATIVE_DIR
+    };
+    if tor {
+        base.to_owned()
+    } else {
+        format!("{base}{NO_TOR_SUFFIX}")
+    }
 }
 
 /// The file name of the shared library flutter_rust_bridge loads on `target`.
@@ -251,6 +299,17 @@ fn copy_into_package(built: &Path, native_dir: &Path, target: &str) -> Result<Pa
     Ok(destination)
 }
 
+/// Writes the `FEATURES_FILE` next to `library`: the `features` it was built with, one per line.
+fn write_features(library: &Path, features: &[&str]) -> Result<PathBuf> {
+    let file = library.with_file_name(FEATURES_FILE);
+    let text: String = features
+        .iter()
+        .map(|feature| format!("{feature}\n"))
+        .collect();
+    fs::write(&file, text).with_context(|| format!("could not write `{}`", file.display()))?;
+    Ok(file)
+}
+
 /// Writes the `MANIFEST_FILE` next to `library`: its SHA-256 and file name in `sha256sum`
 /// format, which the binding's build hook checks before it bundles the library.
 fn write_manifest(library: &Path) -> Result<PathBuf> {
@@ -276,7 +335,12 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         Request::Build { target, release } => {
             run_cargo(root, &build_args(&target, release, host_os)?)
         }
-        Request::Package { targets, out, mock } => {
+        Request::Package {
+            targets,
+            out,
+            mock,
+            tor,
+        } => {
             let targets = if targets.is_empty() {
                 default_package_targets(host_os)
             } else {
@@ -285,7 +349,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
             // Reject every unbuildable target before spending minutes on the first build.
             let commands = targets
                 .iter()
-                .map(|target| package_args(target, mock, host_os))
+                .map(|target| package_args(target, mock, tor, host_os))
                 .collect::<Result<Vec<_>>>()?;
             let target_dir = target_dir(root);
             // A relative `--out` is relative to where xtask was started, as any path argument.
@@ -293,17 +357,14 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
                 Some(out) => std::env::current_dir()
                     .context("could not read the current directory")?
                     .join(out),
-                None => root.join(if mock {
-                    MOCK_NATIVE_DIR
-                } else {
-                    PACKAGE_NATIVE_DIR
-                }),
+                None => root.join(default_native_dir(mock, tor)),
             };
             for (target, args) in targets.iter().zip(commands) {
                 run_cargo(root, &args)?;
                 let packaged =
                     copy_into_package(&release_library(&target_dir, target), &native_dir, target)?;
                 write_manifest(&packaged)?;
+                write_features(&packaged, &package_features(mock, tor))?;
                 eprintln!("xtask mobile: packaged {}", packaged.display());
             }
             Ok(())
@@ -356,7 +417,8 @@ mod tests {
             Request::Package {
                 targets: vec![],
                 out: None,
-                mock: false
+                mock: false,
+                tor: true
             }
         );
         let two = strings(&[
@@ -371,7 +433,8 @@ mod tests {
             Request::Package {
                 targets: strings(&["aarch64-apple-ios", "aarch64-apple-ios-sim"]),
                 out: None,
-                mock: false
+                mock: false,
+                tor: true
             }
         );
         assert!(parse(&strings(&["--package", "--release"])).is_err());
@@ -384,7 +447,8 @@ mod tests {
             Request::Package {
                 targets: vec![],
                 out: Some(PathBuf::from("test_native")),
-                mock: true
+                mock: true,
+                tor: true
             }
         );
         assert!(parse(&strings(&["--package", "--out"])).is_err());
@@ -392,8 +456,64 @@ mod tests {
     }
 
     #[test]
+    fn package_takes_the_no_tor_flag() {
+        assert_eq!(
+            parse(&strings(&[
+                "--package",
+                "--no-tor",
+                "--target",
+                "x86_64-linux-android"
+            ]))
+            .unwrap(),
+            Request::Package {
+                targets: strings(&["x86_64-linux-android"]),
+                out: None,
+                mock: false,
+                tor: false
+            }
+        );
+    }
+
+    #[test]
+    fn package_without_tor_drops_the_default_features_into_a_directory_of_its_own() {
+        let with_tor = package_args("x86_64-linux-android", false, true, "linux").unwrap();
+        let without = package_args("x86_64-linux-android", false, false, "linux").unwrap();
+        assert_eq!(
+            without.get(with_tor.len()..),
+            Some(&strings(&["--no-default-features"])[..])
+        );
+        let mock_without = package_args("x86_64-linux-android", true, false, "linux").unwrap();
+        assert_eq!(
+            mock_without.get(with_tor.len()..),
+            Some(&strings(&["--no-default-features", "--features", "mock"])[..])
+        );
+        let dirs = [
+            default_native_dir(false, true),
+            default_native_dir(false, false),
+            default_native_dir(true, true),
+            default_native_dir(true, false),
+        ];
+        assert_eq!(dirs[0], PACKAGE_NATIVE_DIR);
+        assert_eq!(dirs[2], MOCK_NATIVE_DIR);
+        for (i, dir) in dirs.iter().enumerate() {
+            for other in dirs.get(i + 1..).unwrap() {
+                assert_ne!(dir, other);
+                assert!(!other.starts_with(&format!("{dir}/")));
+            }
+        }
+    }
+
+    #[test]
+    fn features_name_tor_unless_it_is_left_out() {
+        assert_eq!(package_features(false, true), ["tor"]);
+        assert_eq!(package_features(true, true), ["tor", "mock"]);
+        assert_eq!(package_features(false, false), Vec::<&str>::new());
+        assert_eq!(package_features(true, false), ["mock"]);
+    }
+
+    #[test]
     fn mock_and_out_go_with_package_only() {
-        for flags in [&["--mock"][..], &["--out", "native"]] {
+        for flags in [&["--mock"][..], &["--no-tor"], &["--out", "native"]] {
             let mut args = strings(&["--target", "x86_64-linux-android"]);
             args.extend(strings(flags));
             assert!(
@@ -427,7 +547,7 @@ mod tests {
 
     #[test]
     fn package_builds_the_linux_library_natively_on_linux_only() {
-        let args = package_args("x86_64-unknown-linux-gnu", false, "linux").unwrap();
+        let args = package_args("x86_64-unknown-linux-gnu", false, true, "linux").unwrap();
         assert_eq!(
             args,
             strings(&[
@@ -441,7 +561,7 @@ mod tests {
                 "--release",
             ])
         );
-        assert!(package_args("x86_64-unknown-linux-gnu", false, "macos").is_err());
+        assert!(package_args("x86_64-unknown-linux-gnu", false, true, "macos").is_err());
         assert!(build_args("x86_64-unknown-linux-gnu", false, "windows").is_err());
     }
 
@@ -469,7 +589,7 @@ mod tests {
 
     #[test]
     fn package_builds_only_the_ffi_library_in_release() {
-        let args = package_args("x86_64-linux-android", false, "linux").unwrap();
+        let args = package_args("x86_64-linux-android", false, true, "linux").unwrap();
         assert_eq!(
             args,
             strings(&[
@@ -486,7 +606,7 @@ mod tests {
                 "--release",
             ])
         );
-        let mock = package_args("x86_64-linux-android", true, "linux").unwrap();
+        let mock = package_args("x86_64-linux-android", true, true, "linux").unwrap();
         assert_eq!(
             mock.get(args.len()..),
             Some(&strings(&["--features", "mock"])[..])
@@ -496,7 +616,7 @@ mod tests {
     #[test]
     fn apple_targets_build_only_on_macos() {
         assert!(build_args("aarch64-apple-ios", false, "linux").is_err());
-        assert!(package_args("aarch64-apple-ios", false, "linux").is_err());
+        assert!(package_args("aarch64-apple-ios", false, true, "linux").is_err());
         let args = build_args("aarch64-apple-ios-sim", true, "macos").unwrap();
         assert_eq!(
             args.get(..3),
@@ -507,18 +627,18 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_targets() {
-        assert!(package_args("aarch64-unknown-linux-gnu", false, "linux").is_err());
-        assert!(package_args("aarch64-pc-windows-msvc", false, "windows").is_err());
+        assert!(package_args("aarch64-unknown-linux-gnu", false, true, "linux").is_err());
+        assert!(package_args("aarch64-pc-windows-msvc", false, true, "windows").is_err());
     }
 
     #[test]
     fn package_builds_the_windows_library_natively_on_windows_only() {
-        let args = package_args("x86_64-pc-windows-msvc", false, "windows").unwrap();
+        let args = package_args("x86_64-pc-windows-msvc", false, true, "windows").unwrap();
         assert_eq!(
             args.get(..3),
             Some(&strings(&["build", "--target", "x86_64-pc-windows-msvc"])[..])
         );
-        assert!(package_args("x86_64-pc-windows-msvc", false, "linux").is_err());
+        assert!(package_args("x86_64-pc-windows-msvc", false, true, "linux").is_err());
         assert!(build_args("x86_64-pc-windows-msvc", false, "macos").is_err());
     }
 
