@@ -49,6 +49,19 @@ fn key(tx_id: TxId) -> String {
     format!("{PREFIX}{tx_id}")
 }
 
+/// Drops every record this module keeps for the entry `tx_id`, for an entry that is deleted:
+/// the store hands its id to the next transaction, which must not inherit them.
+pub(crate) fn forget(repos: &mut dyn Repositories, tx_id: TxId) -> Result<(), StoreError> {
+    repos.delete_setting(&key(tx_id))?;
+    repos.delete_setting(&lost_key(tx_id))?;
+    let open = open_entries(repos)?;
+    if open.contains(&tx_id.0) {
+        let rest: Vec<u32> = open.into_iter().filter(|id| *id != tx_id.0).collect();
+        write_open(repos, &rest)?;
+    }
+    Ok(())
+}
+
 fn corrupt(field: &'static str) -> StoreError {
     StoreError::Corrupt {
         record: lepic_store::Record::Transaction,
@@ -301,13 +314,8 @@ pub(crate) fn revived(
             }
             spend.spent.retain(|spent| *spent != hex);
             if spend.spent.is_empty() {
-                repos.delete_setting(&key(stored.id))?;
+                forget(repos, stored.id)?;
                 repos.delete_transaction(stored.id)?;
-                let open: Vec<u32> = open_entries(repos)?
-                    .into_iter()
-                    .filter(|id| *id != stored.id.0)
-                    .collect();
-                write_open(repos, &open)?;
                 info!(tx_id = %stored.id, "spend by another wallet undone");
             } else {
                 let mut entry = stored.entry;
@@ -322,4 +330,33 @@ pub(crate) fn revived(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_store::{CONTEXT_KEY_LEN, ContextKey, MemoryStore, WalletStore};
+
+    use super::*;
+
+    #[test]
+    fn a_deleted_entry_leaves_nothing_for_the_next_transaction_with_its_id() {
+        let store = MemoryStore::new(ContextKey::from_bytes([1; CONTEXT_KEY_LEN]));
+        let id = TxId(7);
+        store
+            .write(|repos| {
+                mark_received(repos, id, Height::new(345))?;
+                write_open(repos, &[3, id.0])?;
+                repos.put_setting(&lost_key(id), "1")?;
+                forget(repos, id)
+            })
+            .unwrap();
+        store
+            .read(|repos| {
+                assert!(!is_entry(repos, id)?);
+                assert_eq!(repos.setting(&lost_key(id))?, None);
+                assert_eq!(open_entries(repos)?, vec![3]);
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+    }
 }

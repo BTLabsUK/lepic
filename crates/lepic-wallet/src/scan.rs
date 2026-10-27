@@ -377,7 +377,9 @@ pub(crate) fn delete_found_entry(
 ) -> Result<(), StoreError> {
     repos.delete_transaction(tx_id)?;
     repos.delete_setting(&found_key(tx_id))?;
-    repos.delete_setting(&found_output_key(tx_id))
+    repos.delete_setting(&found_output_key(tx_id))?;
+    // An entry of another wallet's receive is a found entry too.
+    crate::other_wallet::forget(repos, tx_id)
 }
 
 /// A page of the node's unspent outputs, with the checkpoint stored with it and the tip the
