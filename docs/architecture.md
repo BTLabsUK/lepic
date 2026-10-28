@@ -36,6 +36,22 @@ Outside the product workspace, with their own `Cargo.lock`:
 - `fuzz/` holds cargo-fuzz targets.
 - `interop/` runs LEPIC against real `epic-wallet` binaries and a local Epicbox relay.
 
+### Feature code in the pure crates
+
+Three modules in the pure crates implement features of LEPIC and its app, not Epic compatibility.
+Nothing in consensus, keys of funds or the slates `epic-wallet` reads depends on them, so a review
+of the money core can leave them out:
+
+- `lepic-keychain` `app_data`: the app's `WFEH` backup file (`docs/compat/wfeh.md`), sealed under
+  a key derived from the wallet root.
+- `lepic-keychain` `contact_key`: the contact and private-pairing key schedule of RFC 0002,
+  derived from the wallet's keychain.
+- `lepic-slate` `codec::marked_v3`: the LEPIC marker a V3 slate may carry (a reply key for sealed
+  answers, RFC 0002), which `epic-wallet` ignores.
+
+They sit in the pure crates because each needs the wallet's keychain or the V3 codec, and those
+crates may not depend on `lepic-contact` (see the edges below).
+
 ## Allowed dependency edges
 
 ```
