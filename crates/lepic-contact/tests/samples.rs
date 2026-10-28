@@ -36,6 +36,7 @@ fn envelope_entry(name: &str, envelope: &[u8], key: &EncSecretKey) -> Value {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn samples() {
     let (alice, bob) = (Side::new(1), Side::new(11));
     let card_a = alice.card("Alice", NET);

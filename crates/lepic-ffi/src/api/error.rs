@@ -792,6 +792,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
     fn invoice_refusals_have_their_own_kinds() {
         use lepic_primitives::amount::Amount;
         use lepic_wallet::event::SlateId;

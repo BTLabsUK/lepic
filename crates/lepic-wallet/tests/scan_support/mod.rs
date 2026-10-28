@@ -319,6 +319,7 @@ fn transaction_state(tx_type: &str, confirmed: bool) -> (TxDirection, TxState) {
 
 /// Asserts that the wallet holds exactly the outputs and transactions upstream ended with, and
 /// the scanned position and key counter it recorded.
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 pub fn assert_matches_upstream<N: NodeApi + 'static>(
     harness: &Harness,
     wallet: &AnyWallet<N>,

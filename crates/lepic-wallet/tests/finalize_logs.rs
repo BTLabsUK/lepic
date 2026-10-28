@@ -35,6 +35,7 @@ const RECEIVER_MNEMONIC: &str = "legal winner thank year wave sausage worth usef
     thank year wave sausage worth useful legal winner thank year wave sausage worth title";
 
 #[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn finalize_and_post_log_in_their_spans_and_never_log_secrets_or_amounts() {
     let sender = Sender::new();
     let request = SendRequest {

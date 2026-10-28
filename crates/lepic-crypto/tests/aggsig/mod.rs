@@ -90,6 +90,7 @@ fn replay_checks(vector: &Value, expected_count: usize) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn replay_two_party(name: &str) {
     let vector = vector(name);
     let inputs = &vector["inputs"];

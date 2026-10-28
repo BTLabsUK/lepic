@@ -145,6 +145,7 @@ async fn verified_pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
     let mut world = World::new();
     let anna = world.wallet().await;

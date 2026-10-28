@@ -141,6 +141,7 @@ fn check_v6_seed(store: &SqliteStore) {
     );
 }
 
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn check_v7_seed(store: &SqliteStore) {
     assert!(!store.read(|repos| repos.envelope_seen(&[1; 32])).unwrap());
     let commitment = |byte: u8, fill: u8| {

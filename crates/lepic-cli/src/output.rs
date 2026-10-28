@@ -1013,99 +1013,105 @@ fn write_transaction_human(out: &mut Vec<u8>, report: &Report) -> std::io::Resul
             "Transaction {} is released and {}; its inputs can be spent again.",
             r.tx_id, r.state
         ),
-        Report::List(r) => {
-            if r.transactions.is_empty() {
-                return writeln!(out, "No transactions in account {}.", r.account);
-            }
-            writeln!(
-                out,
-                "{:>5}  {:<8}  {:<9}  {:>20}  {:>11}  {:<9}  CREATED (UTC)",
-                "ID", "DIR", "STATE", "AMOUNT", "FEE", "TRANSPORT"
-            )?;
-            for tx in &r.transactions {
-                writeln!(
-                    out,
-                    "{:>5}  {:<8}  {:<9}  {:>20}  {:>11}  {:<9}  {}",
-                    tx.tx_id,
-                    tx.direction,
-                    tx.state,
-                    net_amount(tx),
-                    tx.fee.as_deref().unwrap_or("-"),
-                    tx.transport.as_deref().unwrap_or("-"),
-                    short_time(&tx.created_at)
-                )?;
-            }
-            Ok(())
-        }
-        Report::Show(tx) => {
-            let rows = [
-                ("Transaction", tx.tx_id.to_string()),
-                ("Direction", tx.direction.clone()),
-                ("State", tx.state.clone()),
-                ("Credited", tx.amount_credited.clone()),
-                ("Debited", tx.amount_debited.clone()),
-                ("Fee", tx.fee.clone().unwrap_or_else(|| "-".to_owned())),
-                (
-                    "Slate",
-                    tx.slate_id.clone().unwrap_or_else(|| "-".to_owned()),
-                ),
-                (
-                    "Transport",
-                    tx.transport.clone().unwrap_or_else(|| "-".to_owned()),
-                ),
-                ("Created", tx.created_at.clone()),
-                ("Updated", tx.updated_at.clone()),
-                (
-                    "Stages",
-                    tx.stages
-                        .as_ref()
-                        .map_or_else(String::new, |stages| stages.join(" ")),
-                ),
-                (
-                    "Kernel",
-                    tx.kernel_excess.clone().unwrap_or_else(|| "-".to_owned()),
-                ),
-                (
-                    "Confirmed at",
-                    tx.confirmed_height
-                        .map_or_else(|| "-".to_owned(), |height| height.to_string()),
-                ),
-                ("Release", release_text(tx)),
-            ];
-            for (name, value) in rows {
-                writeln!(out, "{name:<12} {value}")?;
-            }
-            if let Some(at) = &tx.sender_reported_posted_at {
-                writeln!(out, "{:<12} posted at {at}", "Sender says")?;
-            }
-            if let Some(origin) = &tx.origin {
-                writeln!(out, "{:<12} {origin}", "Origin")?;
-            }
-            if let Some(imported) = &tx.imported {
-                writeln!(
-                    out,
-                    "{:<12} old id {}, {}, {} in, {} out, chain {}",
-                    "Imported",
-                    imported.source_id,
-                    imported.kind,
-                    imported.input_count,
-                    imported.output_count,
-                    imported.check
-                )?;
-            }
-            match tx.messages.as_deref() {
-                Some(messages) if !messages.is_empty() => {
-                    for message in messages {
-                        let text = printable(&message.text);
-                        writeln!(out, "{:<12} {}: {text}", "Message", message.role)?;
-                    }
-                }
-                _ => writeln!(out, "{:<12} -", "Message")?,
-            }
-            Ok(())
-        }
+        Report::List(r) => write_list(out, r),
+        Report::Show(tx) => write_show(out, tx),
         _ => Ok(()),
     }
+}
+
+/// The transaction list of an account, one row per transaction.
+fn write_list(out: &mut Vec<u8>, r: &TxListReport) -> std::io::Result<()> {
+    if r.transactions.is_empty() {
+        return writeln!(out, "No transactions in account {}.", r.account);
+    }
+    writeln!(
+        out,
+        "{:>5}  {:<8}  {:<9}  {:>20}  {:>11}  {:<9}  CREATED (UTC)",
+        "ID", "DIR", "STATE", "AMOUNT", "FEE", "TRANSPORT"
+    )?;
+    for tx in &r.transactions {
+        writeln!(
+            out,
+            "{:>5}  {:<8}  {:<9}  {:>20}  {:>11}  {:<9}  {}",
+            tx.tx_id,
+            tx.direction,
+            tx.state,
+            net_amount(tx),
+            tx.fee.as_deref().unwrap_or("-"),
+            tx.transport.as_deref().unwrap_or("-"),
+            short_time(&tx.created_at)
+        )?;
+    }
+    Ok(())
+}
+
+/// One transaction with every field the report holds.
+fn write_show(out: &mut Vec<u8>, tx: &TxReport) -> std::io::Result<()> {
+    let rows = [
+        ("Transaction", tx.tx_id.to_string()),
+        ("Direction", tx.direction.clone()),
+        ("State", tx.state.clone()),
+        ("Credited", tx.amount_credited.clone()),
+        ("Debited", tx.amount_debited.clone()),
+        ("Fee", tx.fee.clone().unwrap_or_else(|| "-".to_owned())),
+        (
+            "Slate",
+            tx.slate_id.clone().unwrap_or_else(|| "-".to_owned()),
+        ),
+        (
+            "Transport",
+            tx.transport.clone().unwrap_or_else(|| "-".to_owned()),
+        ),
+        ("Created", tx.created_at.clone()),
+        ("Updated", tx.updated_at.clone()),
+        (
+            "Stages",
+            tx.stages
+                .as_ref()
+                .map_or_else(String::new, |stages| stages.join(" ")),
+        ),
+        (
+            "Kernel",
+            tx.kernel_excess.clone().unwrap_or_else(|| "-".to_owned()),
+        ),
+        (
+            "Confirmed at",
+            tx.confirmed_height
+                .map_or_else(|| "-".to_owned(), |height| height.to_string()),
+        ),
+        ("Release", release_text(tx)),
+    ];
+    for (name, value) in rows {
+        writeln!(out, "{name:<12} {value}")?;
+    }
+    if let Some(at) = &tx.sender_reported_posted_at {
+        writeln!(out, "{:<12} posted at {at}", "Sender says")?;
+    }
+    if let Some(origin) = &tx.origin {
+        writeln!(out, "{:<12} {origin}", "Origin")?;
+    }
+    if let Some(imported) = &tx.imported {
+        writeln!(
+            out,
+            "{:<12} old id {}, {}, {} in, {} out, chain {}",
+            "Imported",
+            imported.source_id,
+            imported.kind,
+            imported.input_count,
+            imported.output_count,
+            imported.check
+        )?;
+    }
+    match tx.messages.as_deref() {
+        Some(messages) if !messages.is_empty() => {
+            for message in messages {
+                let text = printable(&message.text);
+                writeln!(out, "{:<12} {}: {text}", "Message", message.role)?;
+            }
+        }
+        _ => writeln!(out, "{:<12} -", "Message")?,
+    }
+    Ok(())
 }
 
 /// An invoice report, or what is known about a peer's invoices. Writes nothing for any other.
@@ -1480,6 +1486,7 @@ mod tests {
 
     /// The field names are the CLI's JSON interface; a change here is a breaking change.
     #[test]
+    #[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
     fn every_json_document_keeps_its_field_names() {
         const TX: &[&str] = &[
             "amount_credited",

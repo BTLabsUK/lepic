@@ -213,6 +213,17 @@ impl ScannedBlock {
     }
 }
 
+/// What a scan starts from.
+struct ScanPlan {
+    /// Where an interrupted scan stopped, if one did.
+    checkpoint: Option<Checkpoint>,
+    /// An update scan of recent blocks on a wallet whose scan from genesis completed.
+    update: bool,
+    /// What a repairing scan compares the chain against.
+    repair: Option<Arc<Repair>>,
+    start_height: Height,
+}
+
 /// How far an unfinished scan got: every output below `next_index` is stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Checkpoint {
@@ -408,29 +419,12 @@ where
         let session = self.session()?;
         let node = &self.ports().node;
         let tip = until_cancelled(cancel, node.get_tip()).await?;
-        let state = {
-            let session = Arc::clone(&session);
-            let repairing = options.delete_unconfirmed;
-            self.blocking(move |_, _| Ok(session.store.read(|repos| scan_state(repos, repairing))))
-                .await??
-        };
-        chain::check_tip(
-            self.config().network,
-            &state.position,
-            tip.height,
-            self.ports().clock.now(),
-        )?;
-        let checkpoint = state.checkpoint;
-        let update = !options.delete_unconfirmed
-            && !matches!(options.start, ScanStart::Genesis)
-            && state.genesis_scanned;
-        let repair = state.repair.map(Arc::new);
-        let start = if options.delete_unconfirmed {
-            ScanStart::Genesis
-        } else {
-            options.start
-        };
-        let start_height = resolve_start(start, state.last_scanned.as_ref(), tip.height);
+        let ScanPlan {
+            checkpoint,
+            update,
+            repair,
+            start_height,
+        } = self.plan_scan(&session, options, tip.height).await?;
         let mut summary = ScanSummary {
             start_height,
             end_height: tip.height,
@@ -447,12 +441,9 @@ where
         .await?;
         chain::check_output_index(indices.last_index, tip.height)?;
         let mut next_index = indices.first_index;
-        if let Some(checkpoint) = checkpoint
-            && checkpoint.start_height == start_height
-            && checkpoint.first_index == indices.first_index
-            && checkpoint.delete_unconfirmed == options.delete_unconfirmed
+        if let Some(resumed) = resume_index(checkpoint, start_height, indices.first_index, options)
         {
-            next_index = checkpoint.next_index;
+            next_index = resumed;
             summary.resumed = true;
         }
         info!(height = %start_height, "scan started");
@@ -519,6 +510,41 @@ where
         }));
         info!(height = %tip.height, "scan completed");
         Ok(summary)
+    }
+
+    /// What a scan to `tip` with `options` starts from: the stored scan state, checked against
+    /// the tip.
+    async fn plan_scan(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        options: ScanOptions,
+        tip: Height,
+    ) -> Result<ScanPlan, ScanError> {
+        let state = {
+            let session = Arc::clone(session);
+            let repairing = options.delete_unconfirmed;
+            self.blocking(move |_, _| Ok(session.store.read(|repos| scan_state(repos, repairing))))
+                .await??
+        };
+        chain::check_tip(
+            self.config().network,
+            &state.position,
+            tip,
+            self.ports().clock.now(),
+        )?;
+        let start = if options.delete_unconfirmed {
+            ScanStart::Genesis
+        } else {
+            options.start
+        };
+        Ok(ScanPlan {
+            checkpoint: state.checkpoint,
+            update: !options.delete_unconfirmed
+                && !matches!(options.start, ScanStart::Genesis)
+                && state.genesis_scanned,
+            repair: state.repair.map(Arc::new),
+            start_height: resolve_start(start, state.last_scanned.as_ref(), tip),
+        })
     }
 
     /// The page of unspent outputs from `next_index` on, checked against the tip, with the index
@@ -720,6 +746,24 @@ impl ScanSummary {
         self.unlocked = self.unlocked.saturating_add(outcome.unlocked);
         self.deleted = self.deleted.saturating_add(outcome.deleted);
     }
+}
+
+/// Where an interrupted scan goes on: the index its `checkpoint` stored, when the checkpoint
+/// is of a scan from the same `start_height` and output index `first_index` with the same
+/// options. `None` starts over.
+fn resume_index(
+    checkpoint: Option<Checkpoint>,
+    start_height: Height,
+    first_index: u64,
+    options: ScanOptions,
+) -> Option<u64> {
+    checkpoint
+        .filter(|checkpoint| {
+            checkpoint.start_height == start_height
+                && checkpoint.first_index == first_index
+                && checkpoint.delete_unconfirmed == options.delete_unconfirmed
+        })
+        .map(|checkpoint| checkpoint.next_index)
 }
 
 async fn until_cancelled<T>(

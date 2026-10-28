@@ -204,6 +204,7 @@ pub fn seed_before(harness: &Harness, vector: &Value) -> BTreeMap<u64, TxId> {
 
 /// Asserts that the wallet holds exactly the outputs and transactions upstream ended with, and
 /// the last confirmed height it recorded.
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 pub fn assert_matches_upstream<N: lepic_node::NodeApi + 'static>(
     harness: &Harness,
     wallet: &AnyWallet<N>,

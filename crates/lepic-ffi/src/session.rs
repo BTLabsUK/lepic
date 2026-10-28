@@ -23,7 +23,7 @@ use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, OutputStatus as EngineOutputStatus, TxId, TxState};
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{Destination, Exchange as _, Location};
+use lepic_transport::transport::{Destination, Exchange as _, Location, TransportId};
 use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
 use lepic_wallet::event::{Balance, Connection, TransportState as EngineTransportState};
 use lepic_wallet::inbox::ListenHandle;
@@ -363,6 +363,84 @@ fn epicbox_transport(
     )))
 }
 
+/// The transaction methods a session registers, and the ids its wallet offers them under.
+struct SessionTransports {
+    registry: TransportRegistry,
+    ids: Vec<TransportId>,
+    http: lepic_foreign::HttpTransport,
+    #[cfg(feature = "tor")]
+    tor: lepic_tor::TorTransport,
+}
+
+/// Registers the file transport, `epicbox` when the wallet has one, the HTTP transport and,
+/// with the `tor` feature, the Tor transport.
+fn session_transports(epicbox: Option<&EpicboxSlot>) -> Result<SessionTransports, WalletError> {
+    let mut registry = TransportRegistry::new();
+    let mut ids = vec![FILE];
+    registry
+        .register(Box::new(FileTransport::new()))
+        .map_err(|error| invalid(error.to_string()))?;
+    if let Some(epicbox) = epicbox {
+        registry
+            .register(Box::new(epicbox.clone()))
+            .map_err(|error| invalid(error.to_string()))?;
+        ids.push(TRANSPORT_ID);
+    }
+    let http = http::http_transport()?;
+    registry
+        .register(Box::new(http.clone()))
+        .map_err(|error| invalid(error.to_string()))?;
+    ids.push(lepic_foreign::TRANSPORT_ID);
+    #[cfg(feature = "tor")]
+    let tor = tor::tor_transport();
+    #[cfg(feature = "tor")]
+    {
+        registry
+            .register(Box::new(tor.clone()))
+            .map_err(|error| invalid(error.to_string()))?;
+        ids.push(lepic_tor::TRANSPORT_ID);
+    }
+    Ok(SessionTransports {
+        registry,
+        ids,
+        http,
+        #[cfg(feature = "tor")]
+        tor,
+    })
+}
+
+/// The locked engine of a session on `data_dir`, with the contact engine installed.
+fn engine(
+    runtime: &Arc<RuntimeInner>,
+    config: &WalletConfig,
+    data_dir: &Path,
+    node: Node,
+    claim: &Arc<ClaimHolder>,
+    (transports, ids): (TransportRegistry, Vec<TransportId>),
+    vault: &VaultBytes,
+) -> Result<EngineWallet, WalletError> {
+    let engine_config = lepic_wallet::WalletConfig {
+        name: WalletName::new(WALLET_NAME).map_err(|error| invalid(error.to_string()))?,
+        network: config.chain.network(),
+        data_dir: data_dir.to_owned(),
+        node: NodeEndpoint::parse(&config.node_url)
+            .map_err(|_| invalid("node url is not an http or https url with a host"))?,
+        transports: ids,
+    };
+    let ports = Ports {
+        node,
+        stores: ClaimedStores(Arc::clone(claim)),
+        secrets: AppVault::new(vault.clone(), runtime.kdf),
+        transports,
+        clock: Arc::new(SystemClock),
+        rng: SharedRng::new(os_rng()?),
+        runtime: runtime.boundary.handle.clone(),
+    };
+    let engine = Wallet::new(engine_config, ports)?;
+    lepic_wallet_contacts::install(&engine);
+    Ok(engine)
+}
+
 impl Session {
     /// A locked wallet on `config.data_dir`, which must exist and not be open anywhere.
     pub(crate) async fn new(
@@ -388,51 +466,23 @@ impl Session {
             .client(config, node_secret, &node_tor, &onion_routes)?;
         let epicbox = epicbox_transport(runtime, config, network, &relay_tor, &onion_routes)?
             .map(EpicboxSlot::new);
-        let mut transports = TransportRegistry::new();
-        let mut ids = vec![FILE];
-        transports
-            .register(Box::new(FileTransport::new()))
-            .map_err(|error| invalid(error.to_string()))?;
-        if let Some(epicbox) = &epicbox {
-            transports
-                .register(Box::new(epicbox.clone()))
-                .map_err(|error| invalid(error.to_string()))?;
-            ids.push(TRANSPORT_ID);
-        }
-        let http = http::http_transport()?;
-        transports
-            .register(Box::new(http.clone()))
-            .map_err(|error| invalid(error.to_string()))?;
-        ids.push(lepic_foreign::TRANSPORT_ID);
-        #[cfg(feature = "tor")]
-        let tor = tor::tor_transport();
-        #[cfg(feature = "tor")]
-        {
-            transports
-                .register(Box::new(tor.clone()))
-                .map_err(|error| invalid(error.to_string()))?;
-            ids.push(lepic_tor::TRANSPORT_ID);
-        }
-        let engine_config = lepic_wallet::WalletConfig {
-            name: WalletName::new(WALLET_NAME).map_err(|error| invalid(error.to_string()))?,
-            network,
-            data_dir: data_dir.clone(),
-            node: NodeEndpoint::parse(&config.node_url)
-                .map_err(|_| invalid("node url is not an http or https url with a host"))?,
-            transports: ids,
-        };
+        let SessionTransports {
+            registry,
+            ids,
+            http,
+            #[cfg(feature = "tor")]
+            tor,
+        } = session_transports(epicbox.as_ref())?;
         let vault = VaultBytes::default();
-        let ports = Ports {
+        let engine = engine(
+            runtime,
+            config,
+            &data_dir,
             node,
-            stores: ClaimedStores(Arc::clone(&claim)),
-            secrets: AppVault::new(vault.clone(), runtime.kdf),
-            transports,
-            clock: Arc::new(SystemClock),
-            rng: SharedRng::new(os_rng()?),
-            runtime: runtime.boundary.handle.clone(),
-        };
-        let engine = Wallet::new(engine_config, ports)?;
-        lepic_wallet_contacts::install(&engine);
+            &claim,
+            (registry, ids),
+            &vault,
+        )?;
         Ok(Self {
             engine,
             network,
@@ -2275,6 +2325,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
     fn every_engine_detail_reaches_the_binding_type() {
         use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
         use lepic_store::{StoredTransaction, TransactionEntry, TxDirection};

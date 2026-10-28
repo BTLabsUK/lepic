@@ -46,6 +46,7 @@ fn derived_secrets(seed: &Seed) -> Vec<Vec<u8>> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn lifecycle_operations_run_in_named_spans_and_never_log_secrets() {
     let vector: serde_json::Value = serde_json::from_str(WALLET_SEED_VECTOR).unwrap();
     let phrase_text = vector_text(&vector, "/inputs/mnemonic");

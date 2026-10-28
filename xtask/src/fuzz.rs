@@ -309,34 +309,57 @@ fn write_seeds(root: &Path, target: &str, corpus: &Path) -> Result<usize> {
     Ok(seeds.len())
 }
 
-/// The seed inputs of one target, without duplicates, in a stable order.
-fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
-    let vectors = root.join("testdata").join("vectors");
+/// The `ser_read` seeds: every serialized type of the primitives vectors, prefixed with its
+/// type index and protocol version.
+fn ser_read_seeds(vectors: &Path) -> Result<BTreeSet<Vec<u8>>> {
     let mut seeds = BTreeSet::new();
-    match target {
-        "ser_read" => {
-            for rule in SER_READ_RULES {
-                for vector in read_area(&vectors, "primitives", rule.file_prefix)? {
-                    for bytes in hex_fields(&vector, rule.field) {
-                        for version in rule.versions {
-                            seeds.insert(prefixed(&[rule.type_index, *version], &bytes));
-                        }
-                    }
-                }
-            }
-            // A transaction is a 32-byte offset followed by its body.
-            for vector in read_area(&vectors, "primitives", "tx_")? {
-                for (field, version) in [("serialized_v1", 1), ("serialized_v2", 2)] {
-                    for bytes in hex_fields(&vector, field) {
-                        if let Some(body) = bytes.get(32..) {
-                            seeds.insert(prefixed(&[SER_TRANSACTION_BODY, version], body));
-                        }
-                    }
+    for rule in SER_READ_RULES {
+        for vector in read_area(vectors, "primitives", rule.file_prefix)? {
+            for bytes in hex_fields(&vector, rule.field) {
+                for version in rule.versions {
+                    seeds.insert(prefixed(&[rule.type_index, *version], &bytes));
                 }
             }
         }
+    }
+    // A transaction is a 32-byte offset followed by its body.
+    for vector in read_area(vectors, "primitives", "tx_")? {
+        for (field, version) in [("serialized_v1", 1), ("serialized_v2", 2)] {
+            for bytes in hex_fields(&vector, field) {
+                if let Some(body) = bytes.get(32..) {
+                    seeds.insert(prefixed(&[SER_TRANSACTION_BODY, version], body));
+                }
+            }
+        }
+    }
+    Ok(seeds)
+}
+
+/// The seed inputs of one target, without duplicates, in a stable order.
+fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
+    let vectors = root.join("testdata").join("vectors");
+    let seeds = if let Some(seeds) = chain_seeds(root, &vectors, target)? {
+        seeds
+    } else if let Some(seeds) = network_seeds(&vectors, target)? {
+        seeds
+    } else if let Some(seeds) = contact_seeds(root, &vectors, target)? {
+        seeds
+    } else {
+        bail!("no seed rule for fuzz target `{target}`");
+    };
+    if seeds.is_empty() {
+        bail!("no seeds for fuzz target `{target}`; did the golden vectors move?");
+    }
+    Ok(seeds)
+}
+
+/// The seeds of the targets that read chain types, slates, vaults and app files. `None` for a target of another family.
+fn chain_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTreeSet<Vec<u8>>>> {
+    let mut seeds = BTreeSet::new();
+    match target {
+        "ser_read" => seeds.extend(ser_read_seeds(vectors)?),
         "tx_decode" => {
-            for vector in read_area(&vectors, "primitives", "tx_")? {
+            for vector in read_area(vectors, "primitives", "tx_")? {
                 for (field, version) in [("serialized_v1", 1), ("serialized_v2", 2)] {
                     for bytes in hex_fields(&vector, field) {
                         seeds.insert(prefixed(&[version], &bytes));
@@ -345,42 +368,15 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
             }
         }
         "slate_v2" | "slate_v3" | "slate_detect" | "file_import" | "ffi_inspect_slate" => {
-            for vector in read_area(&vectors, "slates", "")? {
+            for vector in read_area(vectors, "slates", "")? {
                 seeds.extend(text_fields(&vector, "json"));
             }
-            for vector in read_area(&vectors, "epicbox", "message_")? {
+            for vector in read_area(vectors, "epicbox", "message_")? {
                 seeds.extend(text_fields(&vector, "plaintext"));
             }
         }
-        "epicbox_address" => {
-            for vector in read_area(&vectors, "epicbox", "address_")? {
-                seeds.extend(text_fields(
-                    vector.get("inputs").unwrap_or(&Value::Null),
-                    "text",
-                ));
-            }
-        }
-        "epicbox_message" => {
-            for vector in read_area(&vectors, "epicbox", "message_")? {
-                seeds.extend(text_fields(&vector, "str"));
-            }
-        }
-        "epicbox_frame" => {
-            seeds.extend(FIXED_FRAMES.iter().map(|frame| frame.as_bytes().to_vec()));
-            for vector in read_area(&vectors, "epicbox", "message_")? {
-                let field = |name: &str| vector.pointer(&format!("/expected/{name}")).cloned();
-                let frame = serde_json::json!({
-                    "type": "Slate",
-                    "from": field("from"),
-                    "str": field("str"),
-                    "signature": field("signature"),
-                    "challenge": "",
-                });
-                seeds.insert(frame.to_string().into_bytes());
-            }
-        }
         "node_response" => {
-            let mut sources = read_area(&vectors, "engine", "")?;
+            let mut sources = read_area(vectors, "engine", "")?;
             sources.extend(read_dir_json(&root.join("testdata").join("node"), "")?);
             for source in sources {
                 for response in values_of(&source, "response") {
@@ -394,10 +390,130 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
         "vault_file" => seeds.extend(vault_seeds()),
         "ur_slate_decode" => seeds.extend(ur_slate_seeds(root)?),
         "wallet_seed" => {
-            for vector in read_area(&vectors, "keys", "wallet_seed_")? {
+            for vector in read_area(vectors, "keys", "wallet_seed_")? {
                 seeds.extend(text_fields(&vector, "file"));
             }
         }
+        "app_data_open" => {
+            for vector in read_area(vectors, "app_data", "wfeh_")? {
+                seeds.extend(
+                    hex_fields(&vector, "file")
+                        .iter()
+                        .map(|file| prefixed(&[0], file)),
+                );
+                let inputs = vector.get("inputs").unwrap_or(&Value::Null);
+                let field = |name| hex_fields(inputs, name).into_iter().next();
+                if let (Some(salt), Some(nonce)) = (field("salt"), field("nonce")) {
+                    for payload in text_fields(inputs, "payload") {
+                        seeds.insert([&[1][..], &salt, &nonce, &payload].concat());
+                    }
+                }
+            }
+        }
+        "slate_marker" => {
+            for vector in read_area(vectors, "slates", "")? {
+                for json in text_fields(&vector, "json") {
+                    seeds.insert(marked(&json, r#""lepic":{"version":1}"#));
+                    seeds.insert(marked(&json, MARKER_WITH_REPLY));
+                    seeds.insert(json);
+                }
+            }
+        }
+        _ => return Ok(None),
+    }
+    Ok(Some(seeds))
+}
+
+/// The seeds of the targets that read Epicbox, the foreign API and Tor. `None` for a target of another family.
+fn network_seeds(vectors: &Path, target: &str) -> Result<Option<BTreeSet<Vec<u8>>>> {
+    let mut seeds = BTreeSet::new();
+    match target {
+        "epicbox_address" => {
+            for vector in read_area(vectors, "epicbox", "address_")? {
+                seeds.extend(text_fields(
+                    vector.get("inputs").unwrap_or(&Value::Null),
+                    "text",
+                ));
+            }
+        }
+        "epicbox_message" => {
+            for vector in read_area(vectors, "epicbox", "message_")? {
+                seeds.extend(text_fields(&vector, "str"));
+            }
+        }
+        "epicbox_frame" => {
+            seeds.extend(FIXED_FRAMES.iter().map(|frame| frame.as_bytes().to_vec()));
+            for vector in read_area(vectors, "epicbox", "message_")? {
+                let field = |name: &str| vector.pointer(&format!("/expected/{name}")).cloned();
+                let frame = serde_json::json!({
+                    "type": "Slate",
+                    "from": field("from"),
+                    "str": field("str"),
+                    "signature": field("signature"),
+                    "challenge": "",
+                });
+                seeds.insert(frame.to_string().into_bytes());
+            }
+        }
+        "foreign_rpc" => {
+            let version = br#"{"jsonrpc":"2.0","method":"check_version","id":1,"params":[]}"#;
+            seeds.insert(prefixed(&[0], version));
+            seeds.insert(prefixed(
+                &[2],
+                br#"{"id":1,"jsonrpc":"2.0","result":{"Ok":{"foreign_api_version":2,"supported_slate_versions":["V3","V2"]}}}"#,
+            ));
+            for vector in read_area(vectors, "slates", "")? {
+                for json in text_fields(&vector, "json") {
+                    let json = String::from_utf8_lossy(&json);
+                    let request = format!(
+                        r#"{{"jsonrpc":"2.0","method":"receive_tx","id":1,"params":[{json},null,null]}}"#
+                    );
+                    seeds.insert(prefixed(&[0], request.as_bytes()));
+                    let answer = format!(r#"{{"id":1,"jsonrpc":"2.0","result":{{"Ok":{json}}}}}"#);
+                    seeds.insert(prefixed(&[1], answer.as_bytes()));
+                }
+            }
+        }
+        "tor_control_reply" => {
+            for lines in TOR_CONTROL_SEEDS {
+                seeds.insert(lines.as_bytes().to_vec());
+            }
+        }
+        "onion_parse" => {
+            for text in [
+                ONION_SEED.to_owned(),
+                ONION_SEED.trim_end_matches(".onion").to_owned(),
+                ONION_SEED.to_ascii_uppercase(),
+            ] {
+                seeds.insert(text.into_bytes());
+            }
+            for head in [[5, 0, 0, 1], [5, 0, 0, 3], [5, 0, 0, 4], [5, 4, 0, 1]] {
+                seeds.insert(head.to_vec());
+            }
+        }
+        "relay_discovery" => {
+            let document = format!(
+                r#"{{"domain":"epicbox.example","port":443,"onion":"{ONION_SEED}","onion_port":443,"tls_name":"epicbox.example"}}"#
+            );
+            seeds.insert(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{document}",
+                    document.len()
+                )
+                .into_bytes(),
+            );
+            seeds.insert(format!("HTTP/1.0 200 OK\r\n\r\n{document}").into_bytes());
+        }
+
+        _ => return Ok(None),
+    }
+    Ok(Some(seeds))
+}
+
+/// The seeds of the targets that read contact pairing formats. `None` for a target of another family.
+fn contact_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTreeSet<Vec<u8>>>> {
+    let mut seeds = BTreeSet::new();
+    match target {
         "seal_open" => {
             let samples = contact_samples(root)?;
             seeds.extend(
@@ -453,33 +569,8 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                 }
             }
         }
-        "app_data_open" => {
-            for vector in read_area(&vectors, "app_data", "wfeh_")? {
-                seeds.extend(
-                    hex_fields(&vector, "file")
-                        .iter()
-                        .map(|file| prefixed(&[0], file)),
-                );
-                let inputs = vector.get("inputs").unwrap_or(&Value::Null);
-                let field = |name| hex_fields(inputs, name).into_iter().next();
-                if let (Some(salt), Some(nonce)) = (field("salt"), field("nonce")) {
-                    for payload in text_fields(inputs, "payload") {
-                        seeds.insert([&[1][..], &salt, &nonce, &payload].concat());
-                    }
-                }
-            }
-        }
-        "slate_marker" => {
-            for vector in read_area(&vectors, "slates", "")? {
-                for json in text_fields(&vector, "json") {
-                    seeds.insert(marked(&json, r#""lepic":{"version":1}"#));
-                    seeds.insert(marked(&json, MARKER_WITH_REPLY));
-                    seeds.insert(json);
-                }
-            }
-        }
         "envelope_inner" => {
-            let envelopes = read_pairing(&vectors, "envelopes.json")?;
+            let envelopes = read_pairing(vectors, "envelopes.json")?;
             for inner in hex_fields(&envelopes, "inner") {
                 for mode in [0, 1, 2, 3] {
                     seeds.insert(prefixed(&[mode], &inner));
@@ -487,7 +578,7 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
             }
         }
         "pair_answers" => {
-            let pairings = read_pairing(&vectors, "cards_invites.json")?;
+            let pairings = read_pairing(vectors, "cards_invites.json")?;
             for body in [
                 hex_fields(&pairings, "confirm_body"),
                 hex_fields(&pairings, "reply_body"),
@@ -497,7 +588,7 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                 seeds.insert(prefixed(&[0], &body));
             }
             seeds.insert(prefixed(&[0], &[2]));
-            let checks = read_pairing(&vectors, "keycheck.json")?;
+            let checks = read_pairing(vectors, "keycheck.json")?;
             for body in hex_fields(&checks, "check_body") {
                 seeds.insert(prefixed(&[1], &body));
             }
@@ -512,61 +603,9 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                 }
             }
         }
-        "foreign_rpc" => {
-            let version = br#"{"jsonrpc":"2.0","method":"check_version","id":1,"params":[]}"#;
-            seeds.insert(prefixed(&[0], version));
-            seeds.insert(prefixed(
-                &[2],
-                br#"{"id":1,"jsonrpc":"2.0","result":{"Ok":{"foreign_api_version":2,"supported_slate_versions":["V3","V2"]}}}"#,
-            ));
-            for vector in read_area(&vectors, "slates", "")? {
-                for json in text_fields(&vector, "json") {
-                    let json = String::from_utf8_lossy(&json);
-                    let request = format!(
-                        r#"{{"jsonrpc":"2.0","method":"receive_tx","id":1,"params":[{json},null,null]}}"#
-                    );
-                    seeds.insert(prefixed(&[0], request.as_bytes()));
-                    let answer = format!(r#"{{"id":1,"jsonrpc":"2.0","result":{{"Ok":{json}}}}}"#);
-                    seeds.insert(prefixed(&[1], answer.as_bytes()));
-                }
-            }
-        }
-        "tor_control_reply" => {
-            for lines in TOR_CONTROL_SEEDS {
-                seeds.insert(lines.as_bytes().to_vec());
-            }
-        }
-        "onion_parse" => {
-            for text in [
-                ONION_SEED.to_owned(),
-                ONION_SEED.trim_end_matches(".onion").to_owned(),
-                ONION_SEED.to_ascii_uppercase(),
-            ] {
-                seeds.insert(text.into_bytes());
-            }
-            for head in [[5, 0, 0, 1], [5, 0, 0, 3], [5, 0, 0, 4], [5, 4, 0, 1]] {
-                seeds.insert(head.to_vec());
-            }
-        }
-        "relay_discovery" => {
-            let document = format!(
-                r#"{{"domain":"epicbox.example","port":443,"onion":"{ONION_SEED}","onion_port":443,"tls_name":"epicbox.example"}}"#
-            );
-            seeds.insert(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{document}",
-                    document.len()
-                )
-                .into_bytes(),
-            );
-            seeds.insert(format!("HTTP/1.0 200 OK\r\n\r\n{document}").into_bytes());
-        }
-        other => bail!("no seed rule for fuzz target `{other}`"),
+        _ => return Ok(None),
     }
-    if seeds.is_empty() {
-        bail!("no seeds for fuzz target `{target}`; did the golden vectors move?");
-    }
-    Ok(seeds)
+    Ok(Some(seeds))
 }
 
 /// Seeds for `ser_read`: a hex field of the primitives vectors, read as one type.

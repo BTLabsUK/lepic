@@ -154,6 +154,7 @@ fn participant<'a>(slate: &'a mut Value, id: &str) -> Option<&'a mut Value> {
         })
 }
 
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn mutations() -> Vec<Mutation> {
     let cases: Vec<Mutation> = vec![
         (

@@ -150,6 +150,7 @@ fn onion_tor_derives(key_base64: &str) -> String {
         .to_owned()
 }
 
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 async fn serve_control(
     listener: TcpListener,
     script: Script,

@@ -124,6 +124,7 @@ fn count<T>(
 
 #[test]
 #[ignore = "opt-in live soak against public floonet servers"]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn soak() {
     assert_eq!(
         std::env::var("LEPIC_LIVE_TESTS").as_deref(),

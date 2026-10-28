@@ -442,6 +442,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
     fn engine_errors_map_to_their_exit_codes() {
         let cases: Vec<(CliError, ErrorKind)> = vec![
             (WalletError::WrongPassword.into(), ErrorKind::WrongPassword),

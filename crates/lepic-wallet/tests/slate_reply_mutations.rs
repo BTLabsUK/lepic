@@ -87,6 +87,7 @@ fn flip(field: &mut Value, index: usize) {
     *field = Value::String(digits.into_iter().collect());
 }
 
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn mutations() -> Vec<Mutation> {
     let mut cases: Vec<Mutation> = Vec::new();
     for delta in [-1i64, 1, 1_000_000_000] {

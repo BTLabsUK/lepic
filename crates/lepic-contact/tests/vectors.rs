@@ -365,6 +365,7 @@ fn cards_sign_and_link_byte_for_byte() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn pairings_replay_byte_for_byte() {
     let keys = signing_keys();
     let mut pairings = 0;
@@ -659,6 +660,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 /// The kit's key check between X and Y, end to end: every envelope sealed again byte for byte
 /// with the kit's ephemeral keys, opened by the other side, and every proof accepted.
 #[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn key_checks_replay_byte_for_byte() {
     let mut checked = 0;
     for vector in vectors("keycheck.json") {

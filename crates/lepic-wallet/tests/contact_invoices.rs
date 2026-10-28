@@ -541,6 +541,7 @@ fn a_withdrawal_through_the_mailbox_is_received_and_answered_through_the_outbox(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_week() {
     let world = World::new();
     let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);

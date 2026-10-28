@@ -1955,6 +1955,7 @@ fn assert_send<T: Send>(_: T) {}
 /// The futures of every contact call a host runs on another thread are `Send`, so the binding
 /// can spawn them. Built and dropped, never polled.
 #[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn every_contact_future_is_send() {
     let world = World::new();
     let wallet = &world.issuer.wallet;

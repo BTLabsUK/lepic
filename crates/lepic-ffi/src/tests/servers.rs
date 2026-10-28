@@ -263,6 +263,7 @@ async fn a_refused_switch_keeps_the_node_and_the_relay_in_use() {
 /// is answered and acknowledged there, then the listener subscribes on relay two under Bob's
 /// new address and receives the next payment, from a sender on that relay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 async fn the_listener_moves_to_the_new_relay_after_the_payment_in_hand() {
     let mut world = World::new();
     let (bob, bob_config) = world.wallet("one.example").await;
