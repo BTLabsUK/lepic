@@ -816,7 +816,7 @@ pub(crate) fn store_s1(
             &change.key_id,
             SwitchCommitment::Regular,
         )?;
-        repos.put_output(&OutputRecord {
+        repos.insert_output(&OutputRecord {
             id: OutputIdentifier::new(OutputFeatures::Plain, commitment),
             key_id: KeyId(change.key_id.to_bytes()),
             account: request.account,

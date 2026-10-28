@@ -741,7 +741,7 @@ fn store_response(
         created_at: now,
         updated_at: now,
     })?;
-    repos.put_output(&OutputRecord {
+    repos.insert_output(&OutputRecord {
         id: response.output.identifier(),
         key_id: KeyId(response.key_id.to_bytes()),
         account: response.account,

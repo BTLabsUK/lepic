@@ -634,7 +634,7 @@ fn issue_stored(
     let commitment =
         env.keychain
             .commit(request.amount.value(), &key_id, SwitchCommitment::Regular)?;
-    repos.put_output(&OutputRecord {
+    repos.insert_output(&OutputRecord {
         id: OutputIdentifier::new(OutputFeatures::Plain, commitment),
         key_id: KeyId(key_id.to_bytes()),
         account: request.account,
@@ -761,7 +761,7 @@ fn pay_stored(
             &change.key_id,
             SwitchCommitment::Regular,
         )?;
-        repos.put_output(&OutputRecord {
+        repos.insert_output(&OutputRecord {
             id: OutputIdentifier::new(OutputFeatures::Plain, commitment),
             key_id: KeyId(change.key_id.to_bytes()),
             account: request.account,

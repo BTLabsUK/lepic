@@ -1,10 +1,11 @@
 //! Accounts: the derivation subtrees `m/<index>/0` that hold a wallet's outputs, with a label and
 //! the counter of the next unused output key.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use lepic_keychain::Identifier;
-use lepic_store::{AccountIndex, AccountRecord, Repositories};
+use lepic_store::{AccountIndex, AccountRecord, KeyId, Repositories};
 use thiserror::Error;
 
 use crate::epicbox_invoice::HIDDEN_FORMATTING;
@@ -214,7 +215,9 @@ pub(crate) fn account_by_label(
 }
 
 /// Reserves the account's next output key, `m/<index>/0/<child>`, and advances its counter in
-/// the same store transaction, so a key is never handed out twice.
+/// the same store transaction, so a key is never handed out twice. Keys a stored output of the
+/// account already uses are skipped: the counter can fall behind them when the database is an
+/// older copy, or when a scan found an output past the counter.
 ///
 /// Fails with [`WalletError::RestoreScanRequired`] on a database rebuilt from the seed before a
 /// scan from genesis completed, since a key the counter has not passed may already be in use on
@@ -227,16 +230,26 @@ pub fn next_output_key(
     let mut record = repos
         .account(account)?
         .ok_or(AccountError::UnknownAccount(account))?;
-    let child = record.next_child;
-    if child >= FIRST_HARDENED {
-        return Err(AccountError::ChildIndexExhausted(account).into());
+    let used: HashSet<KeyId> = repos
+        .outputs(account, None)?
+        .into_iter()
+        .map(|output| output.key_id)
+        .collect();
+    let mut child = record.next_child;
+    loop {
+        if child >= FIRST_HARDENED {
+            return Err(AccountError::ChildIndexExhausted(account).into());
+        }
+        let key_id = Identifier::new(3, [account.0, 0, child, 0])?;
+        child = child
+            .checked_add(1)
+            .ok_or(AccountError::ChildIndexExhausted(account))?;
+        if !used.contains(&KeyId(key_id.to_bytes())) {
+            record.next_child = child;
+            repos.put_account(&record)?;
+            return Ok(key_id);
+        }
     }
-    let key_id = Identifier::new(3, [account.0, 0, child, 0])?;
-    record.next_child = child
-        .checked_add(1)
-        .ok_or(AccountError::ChildIndexExhausted(account))?;
-    repos.put_account(&record)?;
-    Ok(key_id)
 }
 
 #[cfg(test)]
@@ -435,6 +448,53 @@ mod tests {
             .write(|repos| next_output_key(repos, AccountIndex(0)))
             .unwrap();
         assert_eq!(key.to_bip32_path(), "m/0/0/0");
+    }
+
+    #[test]
+    fn skips_output_keys_a_stored_output_already_uses() {
+        use lepic_keychain::{Keychain, Seed, SwitchCommitment};
+        use lepic_primitives::amount::{Amount, Height};
+        use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
+        use lepic_primitives::params::Network;
+        use lepic_store::{KeyId, OutputRecord, OutputStatus};
+
+        let store = store_with_default_account();
+        let keychain =
+            Keychain::from_seed(&Seed::from_entropy(&[7; 32]).unwrap(), Network::Floonet).unwrap();
+        // The counter stands at 0 while keys 0 and 1 are on stored outputs, as in an older
+        // copy of the database.
+        for child in [0, 1] {
+            let key_id = Identifier::new(3, [0, 0, child, 0]).unwrap();
+            let commitment = keychain
+                .commit(1_000, &key_id, SwitchCommitment::Regular)
+                .unwrap();
+            store
+                .write(|repos| {
+                    repos.put_output(&OutputRecord {
+                        id: OutputIdentifier::new(OutputFeatures::Plain, commitment),
+                        key_id: KeyId(key_id.to_bytes()),
+                        account: AccountIndex(0),
+                        amount: Amount::new(1_000),
+                        status: OutputStatus::Unspent,
+                        height: Height::new(1),
+                        lock_height: Height::ZERO,
+                        mmr_index: None,
+                        tx: None,
+                    })
+                })
+                .unwrap();
+        }
+
+        let key = store
+            .write(|repos| next_output_key(repos, AccountIndex(0)))
+            .unwrap();
+
+        assert_eq!(key.to_bip32_path(), "m/0/0/2");
+        let account = store
+            .read(|repos| repos.account(AccountIndex(0)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.next_child, 3);
     }
 
     #[test]
