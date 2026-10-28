@@ -20,9 +20,10 @@ use lepic_primitives::amount::{Amount, ArithmeticError, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::output::OutputIdentifier;
 use lepic_primitives::params::Network;
+use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
     AccountIndex, AccountRecord, CommitmentBytes, KeyId, OutputRecord, OutputStatus, Repositories,
-    StoreError, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
+    StoreError, StoredTransaction, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -37,6 +38,8 @@ use crate::legacy_history::{self, block_times};
 use crate::lifecycle::{self, Session};
 use crate::other_wallet;
 use crate::ports::{SecretVault, StoreOpener};
+use crate::refresh::{KernelAt, final_kernel, legacy_codecs, pending_kernel};
+use crate::release::record_watch;
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
 
@@ -393,6 +396,14 @@ struct Page {
     update: bool,
 }
 
+/// When a scan ends the open transactions whose inputs the chain holds unspent again.
+struct Ending<'a> {
+    now: Timestamp,
+    /// The tip the scan runs to, from which the kernel of an ended transaction stays watched.
+    tip: Height,
+    codecs: &'a CodecRegistry,
+}
+
 /// An output of this wallet found on chain.
 #[derive(Debug, Clone, Copy)]
 struct FoundOutput {
@@ -566,10 +577,16 @@ where
         let now = self.ports().clock.now();
         let outcome = {
             let session = Arc::clone(&session);
-            self.blocking(move |_, _| {
+            self.blocking(move |_, config| {
+                let codecs = legacy_codecs(config.network.params().default_base_fee());
+                let ending = Ending {
+                    now,
+                    tip: block.height,
+                    codecs: &codecs,
+                };
                 Ok(session
                     .store
-                    .write(|repos| finish(repos, repair.as_deref(), start_height, &block, now)))
+                    .write(|repos| finish(repos, repair.as_deref(), start_height, &block, &ending)))
             })
             .await??
         };
@@ -685,7 +702,13 @@ where
             }
         }
         let now = self.ports().clock.now();
-        self.blocking(move |_, _| {
+        self.blocking(move |_, config| {
+            let codecs = legacy_codecs(config.network.params().default_base_fee());
+            let ending = Ending {
+                now,
+                tip,
+                codecs: &codecs,
+            };
             Ok(session.store.write(|repos| {
                 store_found(
                     repos,
@@ -695,7 +718,7 @@ where
                     repair.as_deref(),
                     checkpoint,
                     update,
-                    now,
+                    &ending,
                 )
             }))
         })
@@ -918,8 +941,9 @@ fn store_found(
     repair: Option<&Repair>,
     checkpoint: Checkpoint,
     update: bool,
-    now: Timestamp,
+    ending: &Ending<'_>,
 ) -> Result<PageOutcome, ScanError> {
+    let now = ending.now;
     let mut outcome = PageOutcome::default();
     let mut highest_child: BTreeMap<AccountIndex, u32> = BTreeMap::new();
     let during = if lifecycle::restore_scan_pending(repos)? {
@@ -932,7 +956,15 @@ fn store_found(
         match repos.output(output.id.commitment.as_bytes())? {
             Some(stored) => {
                 let revivable = revivable.contains(&output.id.commitment);
-                reconcile(repos, stored, output, revivable, repair, now, &mut outcome)?;
+                reconcile(
+                    repos,
+                    stored,
+                    output,
+                    revivable,
+                    repair,
+                    ending,
+                    &mut outcome,
+                )?;
             }
             None => {
                 let block_time = block_times.get(&output.height).copied();
@@ -969,7 +1001,7 @@ fn reconcile(
     found: &FoundOutput,
     revivable: bool,
     repair: Option<&Repair>,
-    now: Timestamp,
+    ending: &Ending<'_>,
     outcome: &mut PageOutcome,
 ) -> Result<(), ScanError> {
     let changed = stored.mmr_index != Some(found.mmr_index);
@@ -1005,7 +1037,7 @@ fn reconcile(
     if cancel {
         stored.status = OutputStatus::Unspent;
         repos.put_output(&stored)?;
-        cancel_open(repos, stored.tx, now, outcome)?;
+        cancel_open(repos, stored.tx, ending, outcome)?;
     } else if changed {
         repos.put_output(&stored)?;
     }
@@ -1139,7 +1171,7 @@ fn advance_next_child(
 fn cancel_open(
     repos: &mut dyn Repositories,
     tx: Option<TxId>,
-    now: Timestamp,
+    ending: &Ending<'_>,
     outcome: &mut PageOutcome,
 ) -> Result<(), ScanError> {
     let Some(tx_id) = tx else {
@@ -1151,20 +1183,47 @@ fn cancel_open(
     if is_final(entry.state) {
         return Ok(());
     }
-    cancel_one(repos, tx_id, &entry, now, outcome)?;
+    let kernel = ended_kernel(repos, ending.codecs, tx_id, &entry)?;
+    cancel_one(repos, tx_id, &entry, kernel, ending, outcome)?;
     if let Some(partner) = self_send_partner(repos, &entry)?
         && !is_final(partner.entry.state)
     {
-        cancel_one(repos, partner.id, &partner.entry, now, outcome)?;
+        cancel_one(repos, partner.id, &partner.entry, kernel, ending, outcome)?;
     }
     Ok(())
 }
 
+/// The kernel a transaction the scan ends may still be mined with, and the height below which
+/// it cannot be: one finalized or posted here, an invoice payment with its I2, or a received
+/// payment with its S2. A posted transaction whose block a reorganisation undid is usually
+/// mined again.
+fn ended_kernel(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+    entry: &TransactionEntry,
+) -> Result<Option<KernelAt>, StoreError> {
+    match (entry.state, entry.slate_id) {
+        (TxState::Posted, Some(slate_id)) => final_kernel(repos, codecs, tx_id, slate_id),
+        _ => pending_kernel(
+            repos,
+            codecs,
+            &StoredTransaction {
+                id: tx_id,
+                entry: entry.clone(),
+            },
+        ),
+    }
+}
+
+/// Ends the transaction as a cancel does: with `kernel` watched from the scan's tip, so a
+/// refresh confirms it and restores its outputs if the chain mines it after all.
 fn cancel_one(
     repos: &mut dyn Repositories,
     tx_id: TxId,
     entry: &TransactionEntry,
-    now: Timestamp,
+    kernel: Option<KernelAt>,
+    ending: &Ending<'_>,
     outcome: &mut PageOutcome,
 ) -> Result<(), ScanError> {
     for output in repos.outputs_of_transaction(tx_id)? {
@@ -1174,8 +1233,11 @@ fn cancel_one(
             OutputStatus::Unspent | OutputStatus::Spent => {}
         }
     }
+    if let Some((excess, min_height)) = kernel {
+        record_watch(repos, tx_id, excess, min_height, ending.tip)?;
+    }
     drop_holdings(repos, tx_id, entry)?;
-    if let Some(change) = apply_transition(repos, tx_id, TxState::Cancelled, now)? {
+    if let Some(change) = apply_transition(repos, tx_id, TxState::Cancelled, ending.now)? {
         outcome.changes.push(change);
     }
     Ok(())
@@ -1188,8 +1250,9 @@ fn finish(
     repair: Option<&Repair>,
     start_height: Height,
     block: &ScannedBlock,
-    now: Timestamp,
+    ending: &Ending<'_>,
 ) -> Result<PageOutcome, ScanError> {
+    let now = ending.now;
     let mut outcome = PageOutcome::default();
     for commitment in repair.iter().flat_map(|repair| &repair.unconfirmed) {
         let unconfirmed = |repos: &dyn Repositories| {
@@ -1202,7 +1265,7 @@ fn finish(
         let Some(output) = unconfirmed(repos)? else {
             continue;
         };
-        cancel_open(repos, output.tx, now, &mut outcome)?;
+        cancel_open(repos, output.tx, ending, &mut outcome)?;
         // An output of a transaction no cancel applies to is deleted on its own.
         if unconfirmed(repos)?.is_some() {
             repos.delete_output(commitment)?;
@@ -1224,6 +1287,76 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A posted send whose input a scan finds unspent again, as after a reorganisation undid
+    /// its block, is cancelled with its kernel watched, so a refresh confirms it if the chain
+    /// mines it again.
+    #[test]
+    fn a_posted_send_a_scan_cancels_keeps_its_kernel_watched() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/slates/send_file_plain_s3_v3.json"
+        ))
+        .unwrap();
+        let s3 = vector["expected"]["json"].as_str().unwrap().to_owned();
+        let slate_id: uuid::Uuid = vector["expected"]["slate_id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let store = lepic_store::MemoryStore::new(lepic_store::ContextKey::from_bytes(
+            [1; lepic_store::CONTEXT_KEY_LEN],
+        ));
+        let now = Timestamp::UNIX_EPOCH;
+        let tx_id = store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(0),
+                    label: "default".to_owned(),
+                    next_child: 0,
+                })?;
+                let tx_id = repos.insert_transaction(&TransactionEntry {
+                    account: AccountIndex(0),
+                    direction: TxDirection::Outgoing,
+                    state: TxState::Posted,
+                    slate_id: Some(slate_id),
+                    transport: Some("file".to_owned()),
+                    amount_credited: Amount::ZERO,
+                    amount_debited: Amount::ZERO,
+                    fee: None,
+                    created_at: now,
+                    updated_at: now,
+                })?;
+                repos.insert_slate(&lepic_store::StoredSlate {
+                    slate_id,
+                    stage: lepic_store::SlateStage::Standard3,
+                    codec: "legacy-v3".to_owned(),
+                    bytes: s3.into_bytes(),
+                })?;
+                Ok::<_, StoreError>(tx_id)
+            })
+            .unwrap();
+        let codecs = legacy_codecs(Network::Floonet.params().default_base_fee());
+        let ending = Ending {
+            now,
+            tip: Height::new(100),
+            codecs: &codecs,
+        };
+
+        store
+            .write(|repos| cancel_open(repos, Some(tx_id), &ending, &mut PageOutcome::default()))
+            .unwrap();
+
+        let (state, watch) = store
+            .read(|repos| {
+                Ok::<_, StoreError>((
+                    repos.transaction(tx_id)?.unwrap().state,
+                    repos.setting(&format!("release.released.{tx_id}"))?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(state, TxState::Cancelled);
+        assert!(watch.is_some(), "the kernel stays watched");
+    }
 
     #[test]
     fn found_keys_move_the_counter_only_within_this_installs_window() {

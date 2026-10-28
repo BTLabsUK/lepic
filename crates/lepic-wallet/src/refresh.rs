@@ -150,7 +150,7 @@ struct RefreshTip {
 }
 
 /// A kernel excess and the height below which the kernel cannot be on chain.
-type KernelAt = (Commitment, Height);
+pub(crate) type KernelAt = (Commitment, Height);
 
 /// A received payment waiting for its sender: the inputs its slate spends, the unconfirmed
 /// outputs it would create here, and the kernel the sender would finalize it to.
