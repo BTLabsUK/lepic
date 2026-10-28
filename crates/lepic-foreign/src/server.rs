@@ -8,7 +8,8 @@
 //!
 //! The per-minute budgets cannot tell callers apart (behind an onion every caller is
 //! `127.0.0.1`), so they are shaped to keep one caller's junk from blocking another's
-//! payment: requests that are not payments cannot use up the room payments have, and a
+//! payment: requests that are not payments cannot use up the room payments have (a request read
+//! past the request budget holds a payment's place only until it turns out not to be one), and a
 //! payment the wallet refuses as invalid gives its share of the payment budget back, up to the
 //! budget again each minute.
 
@@ -264,13 +265,15 @@ impl Served {
     }
 
     /// What a new request may be, or `None` when it is over every budget.
-    fn admit_request(&self) -> Option<Admission> {
+    fn admit_request(&self) -> Option<Admission<'_>> {
         if Self::take(&self.requests, self.settings.requests_per_minute) {
             Some(Admission::Any)
-        } else if Self::take(&self.payments_only, self.settings.receives_per_minute) {
-            Some(Admission::PaymentOnly)
         } else {
-            None
+            let slot = Self::take_slot(&self.payments_only, self.settings.receives_per_minute)?;
+            Some(Admission::PaymentOnly(PaymentPlace {
+                served: self,
+                slot: Some(slot),
+            }))
         }
     }
 
@@ -314,11 +317,34 @@ impl Drop for AddressShare {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Admission {
+enum Admission<'a> {
     Any,
     /// Read past the request budget: served only if it is a payment.
-    PaymentOnly,
+    PaymentOnly(PaymentPlace<'a>),
+}
+
+/// A place in the payments-only budget, given back on drop unless the request was a payment.
+struct PaymentPlace<'a> {
+    served: &'a Served,
+    slot: Option<Slot>,
+}
+
+impl PaymentPlace<'_> {
+    fn keep(&mut self) {
+        self.slot = None;
+    }
+}
+
+impl Drop for PaymentPlace<'_> {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot.take() {
+            self.served
+                .payments_only
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .release(slot);
+        }
+    }
 }
 
 /// One call taken from a [`Window`] in the minute that began at `minute`.
@@ -354,6 +380,13 @@ impl Window {
         Some(Slot {
             minute: self.started,
         })
+    }
+
+    /// Gives `slot` back whatever was given back already; for calls that cost nothing.
+    fn release(&mut self, slot: Slot) {
+        if slot.minute == self.started {
+            self.taken = self.taken.saturating_sub(1);
+        }
     }
 
     /// Gives `slot` back unless `limit` slots were already given back this minute, so at most
@@ -445,7 +478,7 @@ async fn answer(state: &Served, request: Request<Incoming>) -> Response<Full<Byt
 
 async fn serve(
     state: &Served,
-    admission: Admission,
+    mut admission: Admission<'_>,
     request: Request<Incoming>,
 ) -> Response<Full<Bytes>> {
     let declared = request
@@ -467,15 +500,18 @@ async fn serve(
     };
     let request = match rpc::decode_request(&body) {
         Ok(request) => request,
-        Err(_) if admission == Admission::PaymentOnly => {
+        Err(_) if matches!(admission, Admission::PaymentOnly(_)) => {
             return status(StatusCode::SERVICE_UNAVAILABLE);
         }
         Err(unanswerable) => return json(rpc::encode_error_response(&unanswerable)),
     };
     let payment = matches!(&request.call, Call::ReceiveTx(slate) if looks_like_s1(slate));
-    if admission == Admission::PaymentOnly && !payment {
-        debug!("request limit reached");
-        return status(StatusCode::SERVICE_UNAVAILABLE);
+    if let Admission::PaymentOnly(place) = &mut admission {
+        if !payment {
+            debug!("request limit reached");
+            return status(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        place.keep();
     }
     match request.call {
         Call::CheckVersion => json(rpc::encode_version_response(&request.id)),

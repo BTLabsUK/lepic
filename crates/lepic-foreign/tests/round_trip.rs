@@ -251,6 +251,29 @@ async fn requests_that_are_not_payments_leave_room_for_payments() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flood_of_junk_requests_leaves_room_for_payments() {
+    let wallet = handler(None);
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    settings.requests_per_minute = 3;
+    settings.receives_per_minute = 2;
+    let listener = listen(settings, wallet.clone()).await.unwrap();
+    let port = listener.local_addr().port();
+    for _ in 0..8 {
+        let answer = raw_exchange(
+            port,
+            b"GET /elsewhere HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(answer.starts_with("HTTP/1.1"), "{answer}");
+    }
+    for _ in 0..4 {
+        let _ = client().check_version(&url(port)).await;
+    }
+    let reply = client().receive_tx(&url(port), &s1()).await.unwrap();
+    assert_eq!(reply.as_text(), Some(S2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn past_the_request_budget_only_so_many_payments_are_read() {
     let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
     settings.requests_per_minute = 1;
