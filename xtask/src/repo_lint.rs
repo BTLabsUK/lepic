@@ -2,6 +2,7 @@
 //! Each gate returns its findings; this module only gathers the inputs and reports.
 
 mod bridge;
+mod home_paths;
 mod interop;
 mod lints;
 mod pure;
@@ -61,6 +62,9 @@ pub(crate) fn run(root: &Path) -> Result<()> {
             &lockfile,
         )),
     );
+
+    let text_files = repository_files(root, &home_paths::PATHSPECS)?;
+    report("home-paths", boxed(home_paths::check(&text_files)));
 
     let interop_files = repository_files(root, &["interop"])?;
     report("interop", boxed(interop::check(&interop_files)));
