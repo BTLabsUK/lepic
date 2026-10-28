@@ -539,55 +539,8 @@ where
                 Ok(Handled::Stored)
             }
             Stage::S1 => {
-                if !self
-                    .slate_free(contact_id, uuid(slate.id()), Some(TxDirection::Incoming))
-                    .await?
-                {
-                    warn!("payment from a contact under a slate id in use dropped");
-                    return Ok(Handled::Stored);
-                }
-                if !self
-                    .contact_receipt_room(contact_id, uuid(slate.id()))
-                    .await?
-                {
-                    debug!("payment from a contact over the open receipt caps dropped");
-                    return Ok(Handled::Stored);
-                }
-                let received = match self
-                    .wallet
-                    .receive(FILE, &wire, ReceiveRequest::default())
+                self.take_contact_payment(contact_id, &wire, &slate, content.purpose)
                     .await
-                {
-                    Ok(received) => received,
-                    Err(ReceiveError::Node(_) | ReceiveError::Wallet(_)) => {
-                        return Ok(Handled::Later);
-                    }
-                    Err(error) => {
-                        debug!(error = %ErrorChain(&error), "slate from a contact refused");
-                        return Ok(Handled::Stored);
-                    }
-                };
-                self.answer_contact(
-                    contact_id,
-                    received.tx_id,
-                    uuid(slate.id()),
-                    SlateStage::Standard2,
-                    &received.reply,
-                )
-                .await?;
-                let news = ContactSlateEvent {
-                    contact_id,
-                    tx_id: received.tx_id,
-                    slate_id: slate.id(),
-                    amount: slate.amount(),
-                };
-                self.wallet
-                    .emit(if content.purpose == Some(Purpose::Withdrawal) {
-                        Event::WithdrawalFromContact(news)
-                    } else {
-                        Event::SealedReceived(news)
-                    });
-                Ok(Handled::Stored)
             }
             Stage::S2 | Stage::I2
                 if !self
@@ -597,95 +550,177 @@ where
                 warn!(slate_id = %slate.id(), "answer from a contact for a slate not exchanged with it dropped");
                 Ok(Handled::Stored)
             }
-            Stage::S2 => match self.wallet.finalize(FILE, &wire, Propagation::Stem).await {
-                Ok(finalized) => {
-                    self.wallet
-                        .emit(Event::ContactPaymentFinalized(ContactSlateEvent {
-                            contact_id,
-                            tx_id: finalized.tx_id,
-                            slate_id: finalized.slate.id(),
-                            amount: finalized.slate.amount(),
-                        }));
-                    // The receiver hears that it was posted, as over Epicbox (ADR 0016): sealed
-                    // to it through its mailbox, which the outbox run of this cycle delivers.
-                    if finalized.pushed
-                        && let Some(kernel) = finalized.transaction.kernels().first()
-                    {
-                        let notice = Notice {
-                            slate_id: finalized.slate.id(),
-                            kind: NoticeKind::Posted {
-                                excess: kernel.excess,
-                            },
-                        };
-                        if let Err(error) = self
-                            .queue_contact_notice_as(contact_id, notice, SlateStage::Standard3)
-                            .await
-                        {
-                            warn!(tx_id = %finalized.tx_id, error = %ErrorChain(&error), "posted notice not queued for the contact");
-                        }
-                    }
-                    Ok(Handled::Stored)
-                }
-                // Finalized and stored, but the node did not take it: the host hears of it now,
-                // and the message stays so the next collect finalizes it again from the stored
-                // slate and posts it again, as the Epicbox inbox does.
-                Err(lepic_wallet::finalize::FinalizeError::NotPosted { tx_id, source }) => {
-                    warn!(tx_id = %tx_id, error = %ErrorChain(&source), "answer from a contact finalized but not posted");
-                    self.wallet
-                        .emit(Event::ContactPaymentFinalized(ContactSlateEvent {
-                            contact_id,
-                            tx_id,
-                            slate_id: slate.id(),
-                            amount: slate.amount(),
-                        }));
-                    Ok(Handled::Later)
-                }
-                Err(error) if !lepic_wallet::inbox::finalize_is_permanent(&error) => {
-                    Ok(Handled::Later)
-                }
-                Err(error) => {
-                    warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "answer from a contact not finalized");
-                    Ok(Handled::Stored)
-                }
-            },
-            Stage::I2 => match self
-                .wallet
-                .finalize_invoice(FILE, &wire, Propagation::Stem)
-                .await
-            {
-                Ok(finalized) => {
-                    self.wallet.emit(Event::InvoiceFinalized(
-                        lepic_wallet::event::FinalizedInvoice {
-                            tx_id: finalized.tx_id,
-                            slate_id: finalized.slate.id(),
-                        },
-                    ));
-                    if let Some(kernel) = finalized.transaction.kernels().first() {
-                        self.wallet
-                            .notify_posted(finalized.tx_id, finalized.slate.id(), kernel.excess)
-                            .await;
-                    }
-                    Ok(Handled::Stored)
-                }
-                Err(InvoiceError::NotPosted { tx_id, source }) => {
-                    warn!(tx_id = %tx_id, error = %ErrorChain(&source), "payment from a contact finalized but not posted");
-                    self.wallet.emit(Event::InvoiceFinalized(
-                        lepic_wallet::event::FinalizedInvoice {
-                            tx_id,
-                            slate_id: slate.id(),
-                        },
-                    ));
-                    Ok(Handled::Later)
-                }
-                Err(error) if !lepic_wallet::inbox::invoice_finalize_is_permanent(&error) => {
-                    Ok(Handled::Later)
-                }
-                Err(error) => {
-                    warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "payment from a contact not finalized");
-                    Ok(Handled::Stored)
-                }
-            },
+            Stage::S2 => {
+                self.finalize_contact_answer(contact_id, &wire, &slate)
+                    .await
+            }
+            Stage::I2 => self.finalize_contact_invoice(&wire, &slate).await,
             _ => Ok(Handled::Stored),
+        }
+    }
+
+    /// Receives a contact's S1 and answers it through the outbox, when its slate id is free and
+    /// the open receipt caps leave room.
+    async fn take_contact_payment(
+        &self,
+        contact_id: ContactId,
+        wire: &WireSlate,
+        slate: &lepic_slate::model::Slate,
+        purpose: Option<Purpose>,
+    ) -> Result<lepic_epicbox::Handled, ContactError> {
+        use lepic_epicbox::Handled;
+        if !self
+            .slate_free(contact_id, uuid(slate.id()), Some(TxDirection::Incoming))
+            .await?
+        {
+            warn!("payment from a contact under a slate id in use dropped");
+            return Ok(Handled::Stored);
+        }
+        if !self
+            .contact_receipt_room(contact_id, uuid(slate.id()))
+            .await?
+        {
+            debug!("payment from a contact over the open receipt caps dropped");
+            return Ok(Handled::Stored);
+        }
+        let received = match self
+            .wallet
+            .receive(FILE, wire, ReceiveRequest::default())
+            .await
+        {
+            Ok(received) => received,
+            Err(ReceiveError::Node(_) | ReceiveError::Wallet(_)) => {
+                return Ok(Handled::Later);
+            }
+            Err(error) => {
+                debug!(error = %ErrorChain(&error), "slate from a contact refused");
+                return Ok(Handled::Stored);
+            }
+        };
+        self.answer_contact(
+            contact_id,
+            received.tx_id,
+            uuid(slate.id()),
+            SlateStage::Standard2,
+            &received.reply,
+        )
+        .await?;
+        let news = ContactSlateEvent {
+            contact_id,
+            tx_id: received.tx_id,
+            slate_id: slate.id(),
+            amount: slate.amount(),
+        };
+        self.wallet.emit(if purpose == Some(Purpose::Withdrawal) {
+            Event::WithdrawalFromContact(news)
+        } else {
+            Event::SealedReceived(news)
+        });
+        Ok(Handled::Stored)
+    }
+
+    /// Finalizes and posts a contact's S2 answer to a payment this wallet sent it.
+    async fn finalize_contact_answer(
+        &self,
+        contact_id: ContactId,
+        wire: &WireSlate,
+        slate: &lepic_slate::model::Slate,
+    ) -> Result<lepic_epicbox::Handled, ContactError> {
+        use lepic_epicbox::Handled;
+        match self.wallet.finalize(FILE, wire, Propagation::Stem).await {
+            Ok(finalized) => {
+                self.wallet
+                    .emit(Event::ContactPaymentFinalized(ContactSlateEvent {
+                        contact_id,
+                        tx_id: finalized.tx_id,
+                        slate_id: finalized.slate.id(),
+                        amount: finalized.slate.amount(),
+                    }));
+                // The receiver hears that it was posted, as over Epicbox (ADR 0016): sealed
+                // to it through its mailbox, which the outbox run of this cycle delivers.
+                if finalized.pushed
+                    && let Some(kernel) = finalized.transaction.kernels().first()
+                {
+                    let notice = Notice {
+                        slate_id: finalized.slate.id(),
+                        kind: NoticeKind::Posted {
+                            excess: kernel.excess,
+                        },
+                    };
+                    if let Err(error) = self
+                        .queue_contact_notice_as(contact_id, notice, SlateStage::Standard3)
+                        .await
+                    {
+                        warn!(tx_id = %finalized.tx_id, error = %ErrorChain(&error), "posted notice not queued for the contact");
+                    }
+                }
+                Ok(Handled::Stored)
+            }
+            // Finalized and stored, but the node did not take it: the host hears of it now,
+            // and the message stays so the next collect finalizes it again from the stored
+            // slate and posts it again, as the Epicbox inbox does.
+            Err(lepic_wallet::finalize::FinalizeError::NotPosted { tx_id, source }) => {
+                warn!(tx_id = %tx_id, error = %ErrorChain(&source), "answer from a contact finalized but not posted");
+                self.wallet
+                    .emit(Event::ContactPaymentFinalized(ContactSlateEvent {
+                        contact_id,
+                        tx_id,
+                        slate_id: slate.id(),
+                        amount: slate.amount(),
+                    }));
+                Ok(Handled::Later)
+            }
+            Err(error) if !lepic_wallet::inbox::finalize_is_permanent(&error) => Ok(Handled::Later),
+            Err(error) => {
+                warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "answer from a contact not finalized");
+                Ok(Handled::Stored)
+            }
+        }
+    }
+
+    /// Finalizes and posts a contact's I2, its payment of an invoice this wallet issued.
+    async fn finalize_contact_invoice(
+        &self,
+        wire: &WireSlate,
+        slate: &lepic_slate::model::Slate,
+    ) -> Result<lepic_epicbox::Handled, ContactError> {
+        use lepic_epicbox::Handled;
+        match self
+            .wallet
+            .finalize_invoice(FILE, wire, Propagation::Stem)
+            .await
+        {
+            Ok(finalized) => {
+                self.wallet.emit(Event::InvoiceFinalized(
+                    lepic_wallet::event::FinalizedInvoice {
+                        tx_id: finalized.tx_id,
+                        slate_id: finalized.slate.id(),
+                    },
+                ));
+                if let Some(kernel) = finalized.transaction.kernels().first() {
+                    self.wallet
+                        .notify_posted(finalized.tx_id, finalized.slate.id(), kernel.excess)
+                        .await;
+                }
+                Ok(Handled::Stored)
+            }
+            Err(InvoiceError::NotPosted { tx_id, source }) => {
+                warn!(tx_id = %tx_id, error = %ErrorChain(&source), "payment from a contact finalized but not posted");
+                self.wallet.emit(Event::InvoiceFinalized(
+                    lepic_wallet::event::FinalizedInvoice {
+                        tx_id,
+                        slate_id: slate.id(),
+                    },
+                ));
+                Ok(Handled::Later)
+            }
+            Err(error) if !lepic_wallet::inbox::invoice_finalize_is_permanent(&error) => {
+                Ok(Handled::Later)
+            }
+            Err(error) => {
+                warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "payment from a contact not finalized");
+                Ok(Handled::Stored)
+            }
         }
     }
 
