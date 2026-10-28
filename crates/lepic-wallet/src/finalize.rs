@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use ed25519_dalek::{Verifier, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use jiff::Timestamp;
 use lepic_crypto::aggsig::{
     add_signatures, calculate_partial_sig, verify_completed_sig, verify_partial_sig,
@@ -413,8 +413,9 @@ fn verify_payment_proof(
     signed.extend_from_slice(proof.sender_address.as_bytes());
     let receiver = VerifyingKey::from_bytes(proof.receiver_address.as_bytes())
         .map_err(|_| FinalizeError::PaymentProofSignature)?;
+    // Strict, so a weak receiver key cannot carry a signature made without its secret.
     receiver
-        .verify(
+        .verify_strict(
             &signed,
             &ed25519_dalek::Signature::from_bytes(signature.as_bytes()),
         )
