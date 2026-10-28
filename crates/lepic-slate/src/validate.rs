@@ -1,6 +1,7 @@
 //! Checks and field parsers shared by the codecs, so every legacy format applies the same rules
 //! (`docs/compat/legacy-slates.md`, "Checks LEPIC performs on decode").
 
+use lepic_crypto::hex;
 use lepic_crypto::{Commitment, PublicKey, RangeProof, Signature};
 use lepic_primitives::amount::Fee;
 use lepic_primitives::crypto_ser::BlindingFactor;
@@ -27,32 +28,12 @@ pub fn check_size(wire: &WireSlate) -> Result<(), DecodeError> {
 
 /// Lowercase hex, as upstream writes it.
 pub fn encode_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut text = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        for nibble in [byte >> 4, byte & 0x0f] {
-            if let Some(&digit) = DIGITS.get(usize::from(nibble)) {
-                text.push(char::from(digit));
-            }
-        }
-    }
-    text
+    hex::encode(bytes)
 }
 
 /// Exactly `2 * N` hex digits in either case.
 pub fn decode_hex_array<const N: usize>(text: &str) -> Result<[u8; N], HexError> {
-    let expected = N.saturating_mul(2);
-    if text.len() != expected {
-        return Err(HexError::WrongLength {
-            expected,
-            actual: text.len(),
-        });
-    }
-    let mut bytes = [0u8; N];
-    for (byte, pair) in bytes.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
-        *byte = decode_pair(pair)?;
-    }
-    Ok(bytes)
+    hex::decode_array(text).map_err(HexError::from)
 }
 
 /// Between `min_bytes` and `max_bytes` bytes of hex in either case. The length is checked
@@ -62,30 +43,7 @@ pub fn decode_hex_bounded(
     min_bytes: usize,
     max_bytes: usize,
 ) -> Result<Vec<u8>, HexError> {
-    let digits = text.as_bytes();
-    let (min, max) = (min_bytes.saturating_mul(2), max_bytes.saturating_mul(2));
-    if digits.len() < min || digits.len() > max {
-        return Err(HexError::LengthOutOfRange {
-            min,
-            max,
-            actual: digits.len(),
-        });
-    }
-    if !digits.len().is_multiple_of(2) {
-        return Err(HexError::OddLength);
-    }
-    digits.as_chunks::<2>().0.iter().map(decode_pair).collect()
-}
-
-fn decode_pair(&[high, low]: &[u8; 2]) -> Result<u8, HexError> {
-    Ok(nibble(high)?.wrapping_shl(4) | nibble(low)?)
-}
-
-fn nibble(digit: u8) -> Result<u8, HexError> {
-    char::from(digit)
-        .to_digit(16)
-        .and_then(|value| u8::try_from(value).ok())
-        .ok_or(HexError::InvalidDigit)
+    hex::decode_bounded(text, min_bytes, max_bytes).map_err(HexError::from)
 }
 
 pub fn parse_slate_id(text: &str) -> Result<SlateId, FieldProblem> {

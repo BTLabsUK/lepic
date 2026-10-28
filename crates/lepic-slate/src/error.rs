@@ -89,6 +89,20 @@ pub enum HexError {
     InvalidDigit,
 }
 
+impl From<lepic_crypto::hex::HexError> for HexError {
+    fn from(error: lepic_crypto::hex::HexError) -> Self {
+        use lepic_crypto::hex::HexError as Shared;
+        match error {
+            Shared::WrongLength { expected, actual } => Self::WrongLength { expected, actual },
+            Shared::LengthOutOfRange { min, max, actual } => {
+                Self::LengthOutOfRange { min, max, actual }
+            }
+            Shared::OddLength => Self::OddLength,
+            Shared::InvalidDigit { .. } => Self::InvalidDigit,
+        }
+    }
+}
+
 /// Legacy wire data that is well formed but inconsistent. These are LEPIC's own rules,
 /// shared by the legacy codecs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

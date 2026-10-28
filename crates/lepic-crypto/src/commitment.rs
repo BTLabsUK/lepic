@@ -6,6 +6,7 @@ use secp256k1zkp::pedersen::Commitment as BackendCommitment;
 use crate::context::secp;
 use crate::error::{CryptoError, Item};
 use crate::hex;
+use crate::item_hex;
 use crate::limits::{MAX_SUM_TERMS, check_batch_len};
 use crate::secret::SecretKey;
 
@@ -29,7 +30,7 @@ impl Commitment {
     }
 
     pub fn from_hex(hex: &str) -> Result<Self, CryptoError> {
-        Self::from_bytes(&hex::decode_array::<PEDERSEN_COMMITMENT_SIZE>(
+        Self::from_bytes(&item_hex::decode_array::<PEDERSEN_COMMITMENT_SIZE>(
             hex,
             Item::Commitment,
         )?)

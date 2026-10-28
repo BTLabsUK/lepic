@@ -7,6 +7,7 @@ use secp256k1zkp::constants::{COMPACT_SIGNATURE_SIZE, MAX_SIGNATURE_SIZE, MESSAG
 use crate::context::secp;
 use crate::error::{CryptoError, Item};
 use crate::hex;
+use crate::item_hex;
 use crate::public_key::PublicKey;
 use crate::secret::SecretKey;
 
@@ -28,7 +29,7 @@ impl Message {
     }
 
     pub fn from_hex(hex: &str) -> Result<Self, CryptoError> {
-        hex::decode_array(hex, Item::Message).map(Self)
+        item_hex::decode_array(hex, Item::Message).map(Self)
     }
 
     pub fn as_bytes(&self) -> &[u8; MESSAGE_SIZE] {
@@ -66,7 +67,7 @@ impl Signature {
     }
 
     pub fn from_compact_hex(hex: &str) -> Result<Self, CryptoError> {
-        Self::from_compact(&hex::decode_array::<COMPACT_SIGNATURE_SIZE>(
+        Self::from_compact(&item_hex::decode_array::<COMPACT_SIGNATURE_SIZE>(
             hex,
             Item::Signature,
         )?)
@@ -150,7 +151,7 @@ impl EcdsaSignature {
     }
 
     pub fn from_der_hex(hex: &str) -> Result<Self, CryptoError> {
-        Self::from_der(&hex::decode_bounded(
+        Self::from_der(&item_hex::decode_bounded(
             hex,
             Self::MIN_DER_LEN,
             Self::MAX_DER_LEN,

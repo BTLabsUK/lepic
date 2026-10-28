@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use lepic_crypto::hex::{self, HexError};
 use lepic_crypto::{Commitment, CryptoError, PublicKey, RangeProof, SecretKey, Signature};
 use zeroize::Zeroizing;
 
@@ -101,35 +102,18 @@ impl BlindingFactor {
     }
 
     /// Parses exactly 64 hex digits in either case.
-    pub fn from_hex(hex: &str) -> Result<Self, BlindingFactorError> {
-        let digits = hex.as_bytes();
-        if digits.len() != Self::LEN * 2 {
-            return Err(BlindingFactorError::WrongHexLength {
-                actual: digits.len(),
-            });
-        }
+    pub fn from_hex(text: &str) -> Result<Self, BlindingFactorError> {
         let mut bytes = Zeroizing::new([0u8; Self::LEN]);
-        let (pairs, _) = digits.as_chunks::<2>();
-        for (byte, [high, low]) in bytes.iter_mut().zip(pairs) {
-            let high = hex_value(*high).ok_or(BlindingFactorError::InvalidHex)?;
-            let low = hex_value(*low).ok_or(BlindingFactorError::InvalidHex)?;
-            *byte = (high << 4) | low;
-        }
+        hex::decode_into(text, bytes.as_mut_slice()).map_err(|error| match error {
+            HexError::InvalidDigit { .. } => BlindingFactorError::InvalidHex,
+            _ => BlindingFactorError::WrongHexLength { actual: text.len() },
+        })?;
         Ok(Self(bytes))
     }
 
     /// Lowercase hex, as upstream JSON writes it.
     pub fn to_hex(&self) -> String {
-        const DIGITS: &[u8; 16] = b"0123456789abcdef";
-        let mut hex = String::with_capacity(Self::LEN * 2);
-        for byte in self.0.iter() {
-            for nibble in [byte >> 4, byte & 0x0f] {
-                if let Some(digit) = DIGITS.get(usize::from(nibble)) {
-                    hex.push(char::from(*digit));
-                }
-            }
-        }
-        hex
+        hex::encode(self.0.as_slice())
     }
 
     pub fn from_secret_key(key: &SecretKey) -> Self {
@@ -149,12 +133,6 @@ impl BlindingFactor {
     pub fn to_secret_key(&self) -> Result<SecretKey, CryptoError> {
         SecretKey::from_bytes(self.0.as_slice())
     }
-}
-
-fn hex_value(digit: u8) -> Option<u8> {
-    char::from(digit)
-        .to_digit(16)
-        .and_then(|value| u8::try_from(value).ok())
 }
 
 impl Default for BlindingFactor {

@@ -2,6 +2,7 @@
 
 use blake2::digest::{FixedOutput, KeyInit, Update};
 use blake2::{Blake2b256, Blake2bMac};
+use lepic_crypto::hex::{self, HexError};
 use thiserror::Error;
 
 use crate::ser::{
@@ -50,33 +51,17 @@ impl Hash {
 
     /// Lowercase hex, as the node prints hashes.
     pub fn to_hex(&self) -> String {
-        const DIGITS: &[u8; 16] = b"0123456789abcdef";
-        let mut hex = String::with_capacity(Self::LEN * 2);
-        for byte in self.0 {
-            for nibble in [byte >> 4, byte & 0x0f] {
-                if let Some(digit) = DIGITS.get(usize::from(nibble)) {
-                    hex.push(char::from(*digit));
-                }
-            }
-        }
-        hex
+        hex::encode(&self.0)
     }
 
     /// Parses exactly 64 hex characters in either case.
-    pub fn from_hex(hex: &str) -> Result<Self, HashError> {
-        let digits = hex.as_bytes();
-        let mut bytes = [0u8; Self::LEN];
-        if digits.len() != Self::LEN * 2 {
-            return Err(HashError::InvalidHexLength { len: digits.len() });
-        }
-        let (pairs, _) = digits.as_chunks::<2>();
-        for (index, (byte, [high, low])) in bytes.iter_mut().zip(pairs).enumerate() {
-            let invalid = HashError::InvalidHexDigit { byte: index };
-            let high = hex_value(*high).ok_or(invalid)?;
-            let low = hex_value(*low).ok_or(invalid)?;
-            *byte = (high << 4) | low;
-        }
-        Ok(Self(bytes))
+    pub fn from_hex(text: &str) -> Result<Self, HashError> {
+        hex::decode_array::<{ Self::LEN }>(text)
+            .map(Self)
+            .map_err(|error| match error {
+                HexError::InvalidDigit { byte } => HashError::InvalidHexDigit { byte },
+                _ => HashError::InvalidHexLength { len: text.len() },
+            })
     }
 
     /// The most significant 64 bits, read big-endian.
@@ -84,12 +69,6 @@ impl Hash {
         let [a, b, c, d, e, f, g, h, ..] = self.0;
         u64::from_be_bytes([a, b, c, d, e, f, g, h])
     }
-}
-
-fn hex_value(digit: u8) -> Option<u8> {
-    char::from(digit)
-        .to_digit(16)
-        .and_then(|value| u8::try_from(value).ok())
 }
 
 impl AsRef<[u8]> for Hash {

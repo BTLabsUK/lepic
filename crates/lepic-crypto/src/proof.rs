@@ -9,6 +9,7 @@ use crate::commitment::Commitment;
 use crate::context::secp;
 use crate::error::{CryptoError, Item};
 use crate::hex;
+use crate::item_hex;
 use crate::limits::{MAX_PROOF_BATCH, check_batch_len};
 use crate::secret::SecretKey;
 
@@ -91,7 +92,7 @@ impl RangeProof {
     }
 
     pub fn from_hex(hex: &str) -> Result<Self, CryptoError> {
-        Self::from_bytes(&hex::decode_bounded(
+        Self::from_bytes(&item_hex::decode_bounded(
             hex,
             1,
             Self::MAX_LEN,

@@ -7,6 +7,7 @@
 
 use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Tag};
+use lepic_crypto::hex;
 use serde::Deserialize;
 use sha2::Sha512;
 use thiserror::Error;
@@ -120,14 +121,7 @@ impl WalletSeedFile {
 
 /// Upper or lower case, no prefix, as `epic-wallet` writes.
 fn hex_decode(text: &str, field: WalletSeedField) -> Result<Vec<u8>, WalletSeedError> {
-    let (pairs, rest) = text.as_bytes().as_chunks::<2>();
-    if !rest.is_empty() {
-        return Err(WalletSeedError::InvalidHex { field });
-    }
-    pairs
-        .iter()
-        .map(|[high, low]| Ok(nibble(*high, field)?.wrapping_shl(4) | nibble(*low, field)?))
-        .collect()
+    hex::decode_bounded(text, 0, usize::MAX).map_err(|_| WalletSeedError::InvalidHex { field })
 }
 
 fn hex_decode_array<const N: usize>(
@@ -140,13 +134,6 @@ fn hex_decode_array<const N: usize>(
         expected: N,
         actual: bytes.len(),
     })
-}
-
-fn nibble(digit: u8, field: WalletSeedField) -> Result<u8, WalletSeedError> {
-    char::from(digit)
-        .to_digit(16)
-        .and_then(|value| u8::try_from(value).ok())
-        .ok_or(WalletSeedError::InvalidHex { field })
 }
 
 #[cfg(test)]

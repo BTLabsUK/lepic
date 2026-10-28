@@ -6,7 +6,7 @@ use zeroize::Zeroizing;
 
 use crate::context::secp;
 use crate::error::{CryptoError, Item};
-use crate::hex;
+use crate::item_hex;
 
 /// A non-zero scalar below the secp256k1 curve order: a private key, blinding factor or nonce.
 ///
@@ -37,7 +37,7 @@ impl SecretKey {
 
     pub fn from_hex(hex: &str) -> Result<Self, CryptoError> {
         let mut bytes = Zeroizing::new([0u8; SECRET_KEY_SIZE]);
-        hex::decode_into(hex, bytes.as_mut_slice(), Item::SecretKey)?;
+        item_hex::decode_into(hex, bytes.as_mut_slice(), Item::SecretKey)?;
         Self::from_bytes(bytes.as_slice())
     }
 

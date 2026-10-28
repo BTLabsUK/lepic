@@ -12,6 +12,7 @@
 //! instead (RFC 0002 section 5); [`lepic_marker_reply_key`] reads it back. The key
 //! authenticates nothing.
 
+use lepic_crypto::hex;
 use serde::Deserialize;
 
 use crate::codec::legacy::v3_json::V3JsonCodec;
@@ -174,24 +175,15 @@ pub fn lepic_marker_reply_key(wire: &WireSlate) -> Option<[u8; 32]> {
     (!is_small_order(&key)).then_some(key)
 }
 
-fn decode_reply_hex(hex: &str) -> Option<[u8; 32]> {
-    fn nibble(digit: u8) -> Option<u8> {
-        match digit {
-            b'0'..=b'9' => digit.checked_sub(b'0'),
-            b'a'..=b'f' => digit.checked_sub(b'a')?.checked_add(10),
-            _ => None,
-        }
-    }
-    let digits = hex.as_bytes();
-    if digits.len() != 64 {
+/// The reply key is written in lowercase only, which is stricter than the shared decoder.
+fn decode_reply_hex(text: &str) -> Option<[u8; 32]> {
+    let lowercase = text
+        .bytes()
+        .all(|digit| matches!(digit, b'0'..=b'9' | b'a'..=b'f'));
+    if !lowercase {
         return None;
     }
-    let mut key = [0u8; 32];
-    let (pairs, _) = digits.as_chunks::<2>();
-    for (byte, [high, low]) in key.iter_mut().zip(pairs) {
-        *byte = nibble(*high)?.checked_mul(16)?.checked_add(nibble(*low)?)?;
-    }
-    Some(key)
+    hex::decode_array(text).ok()
 }
 
 #[cfg(test)]

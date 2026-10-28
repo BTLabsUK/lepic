@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use lepic_crypto::hex::{self, HexError};
 use lepic_primitives::ser::{Readable, Reader, SerError, Writeable, Writer};
 use thiserror::Error;
 
@@ -64,18 +65,13 @@ impl Identifier {
         Ok(Self(array))
     }
 
-    pub fn from_hex(hex: &str) -> Result<Self, IdentifierError> {
-        let digits = hex.as_bytes();
-        if digits.len() != Self::LEN * 2 {
-            return Err(IdentifierError::WrongLength {
-                actual: digits.len() / 2,
-            });
-        }
-        let mut bytes = [0u8; Self::LEN];
-        let (pairs, _) = digits.as_chunks::<2>();
-        for (byte, [high, low]) in bytes.iter_mut().zip(pairs) {
-            *byte = nibble(*high)?.wrapping_shl(4) | nibble(*low)?;
-        }
+    pub fn from_hex(text: &str) -> Result<Self, IdentifierError> {
+        let bytes = hex::decode_array::<{ Self::LEN }>(text).map_err(|error| match error {
+            HexError::InvalidDigit { .. } => IdentifierError::InvalidHex,
+            _ => IdentifierError::WrongLength {
+                actual: text.len() / 2,
+            },
+        })?;
         Self::from_bytes(&bytes)
     }
 
@@ -93,16 +89,7 @@ impl Identifier {
     }
 
     pub fn to_hex(&self) -> String {
-        const DIGITS: &[u8; 16] = b"0123456789abcdef";
-        let mut hex = String::with_capacity(Self::LEN * 2);
-        for byte in self.0 {
-            for value in [byte >> 4, byte & 0x0f] {
-                if let Some(digit) = DIGITS.get(usize::from(value)) {
-                    hex.push(char::from(*digit));
-                }
-            }
-        }
-        hex
+        hex::encode(&self.0)
     }
 
     /// The 16 path bytes without the depth.
@@ -159,13 +146,6 @@ impl Identifier {
         }
         path
     }
-}
-
-fn nibble(digit: u8) -> Result<u8, IdentifierError> {
-    char::from(digit)
-        .to_digit(16)
-        .and_then(|value| u8::try_from(value).ok())
-        .ok_or(IdentifierError::InvalidHex)
 }
 
 impl fmt::Debug for Identifier {
