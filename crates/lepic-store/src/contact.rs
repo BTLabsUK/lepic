@@ -17,6 +17,7 @@ use crate::context::{self, ContextKey, SealFailure};
 use crate::encoding::{stored_enum, timestamp_to_column};
 use crate::error::{Record, StoreError};
 use crate::slate::SlateStage;
+use crate::transaction::TxId;
 
 /// Contacts kept at once. Storing one more fails with [`StoreError::ContactCapReached`].
 pub const MAX_CONTACTS: usize = 10_000;
@@ -451,6 +452,21 @@ pub trait ContactRepository {
 
     /// Forgets the envelopes taken before `cutoff`, and returns how many.
     fn forget_envelopes_before(&mut self, cutoff: Timestamp) -> Result<usize, StoreError>;
+
+    /// The contact the slate `slate_id` was exchanged with, if any.
+    fn slate_contact(&self, slate_id: Uuid) -> Result<Option<ContactId>, StoreError>;
+
+    /// Records that the slate `slate_id` was exchanged with `contact`, replacing any contact
+    /// recorded before. The link outlives the contact, so a slate id stays taken.
+    fn set_slate_contact(&mut self, slate_id: Uuid, contact: ContactId) -> Result<(), StoreError>;
+
+    /// The contact the transaction `tx_id` was exchanged with, if any.
+    fn tx_contact(&self, tx_id: TxId) -> Result<Option<ContactId>, StoreError>;
+
+    /// Records that the transaction `tx_id` was exchanged with `contact`, replacing any contact
+    /// recorded before. Deleting the transaction deletes the link. Fails with
+    /// [`StoreError::UnknownTransaction`] when no entry has the id.
+    fn set_tx_contact(&mut self, tx_id: TxId, contact: ContactId) -> Result<(), StoreError>;
 }
 
 /// Rejects timestamps the SQLite backend could not hold, so both backends accept the same data.

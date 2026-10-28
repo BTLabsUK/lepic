@@ -574,6 +574,12 @@ fn position_column(position: usize) -> Result<i64, StoreError> {
     })
 }
 
+fn decode_contact_link(bytes: &[u8]) -> Result<ContactId, StoreError> {
+    Ok(ContactId(bytes.try_into().map_err(|_| {
+        corrupt(Record::Contact, "linked contact id")
+    })?))
+}
+
 fn decode_height(value: Option<i64>) -> Option<Height> {
     value.map(|value| Height::new(u64_from_column(value)))
 }
@@ -2174,6 +2180,41 @@ impl ContactRepository for SqliteRepos<'_> {
             "INSERT INTO contact_seen (hash, seen_at) VALUES (?1, ?2) \
              ON CONFLICT (hash) DO UPDATE SET seen_at = excluded.seen_at",
             params![&hash[..], timestamp_to_column(at)?],
+        )?;
+        Ok(())
+    }
+
+    fn slate_contact(&self, slate_id: Uuid) -> Result<Option<ContactId>, StoreError> {
+        self.first(
+            "SELECT contact_id FROM contact_slates WHERE slate_id = ?1",
+            [&slate_id.as_bytes()[..]],
+            |row| decode_contact_link(&row.get::<_, Vec<u8>>(0)?),
+        )
+    }
+
+    fn set_slate_contact(&mut self, slate_id: Uuid, contact: ContactId) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO contact_slates (slate_id, contact_id) VALUES (?1, ?2)
+             ON CONFLICT (slate_id) DO UPDATE SET contact_id = excluded.contact_id",
+            params![&slate_id.as_bytes()[..], &contact.0[..]],
+        )?;
+        Ok(())
+    }
+
+    fn tx_contact(&self, tx_id: TxId) -> Result<Option<ContactId>, StoreError> {
+        self.first(
+            "SELECT contact_id FROM contact_transactions WHERE tx_id = ?1",
+            [i64::from(tx_id.0)],
+            |row| decode_contact_link(&row.get::<_, Vec<u8>>(0)?),
+        )
+    }
+
+    fn set_tx_contact(&mut self, tx_id: TxId, contact: ContactId) -> Result<(), StoreError> {
+        self.require_transaction(tx_id)?;
+        self.conn.execute(
+            "INSERT INTO contact_transactions (tx_id, contact_id) VALUES (?1, ?2)
+             ON CONFLICT (tx_id) DO UPDATE SET contact_id = excluded.contact_id",
+            params![i64::from(tx_id.0), &contact.0[..]],
         )?;
         Ok(())
     }

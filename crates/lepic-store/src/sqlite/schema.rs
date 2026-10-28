@@ -340,10 +340,42 @@ CREATE TABLE scan_found (
 );
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8];
+/// Which contact a slate or a transaction was exchanged with, which were settings keyed by slate
+/// and transaction id before. A link to a transaction goes with it; a slate's link stays, so a
+/// contact can never take over a slate id this wallet used with someone else.
+const V9: &str = "
+CREATE TABLE contact_slates (
+    slate_id BLOB PRIMARY KEY,
+    contact_id BLOB NOT NULL
+);
+
+CREATE TABLE contact_transactions (
+    tx_id INTEGER PRIMARY KEY REFERENCES transactions (id) ON DELETE CASCADE,
+    contact_id BLOB NOT NULL
+);
+
+INSERT INTO contact_slates (slate_id, contact_id)
+    SELECT unhex(replace(substr(key, 15), '-', '')), unhex(value) FROM settings
+    WHERE substr(key, 1, 14) = 'contact.slate.'
+        AND length(replace(substr(key, 15), '-', '')) = 32
+        AND unhex(replace(substr(key, 15), '-', '')) IS NOT NULL
+        AND length(value) = 32 AND unhex(value) IS NOT NULL;
+
+INSERT INTO contact_transactions (tx_id, contact_id)
+    SELECT CAST(substr(key, 12) AS INTEGER), unhex(value) FROM settings
+    WHERE substr(key, 1, 11) = 'contact.tx.'
+        AND substr(key, 12) <> '' AND substr(key, 12) NOT GLOB '*[^0-9]*'
+        AND length(substr(key, 12)) <= 10
+        AND CAST(substr(key, 12) AS INTEGER) IN (SELECT id FROM transactions)
+        AND length(value) = 32 AND unhex(value) IS NOT NULL;
+
+DELETE FROM settings WHERE substr(key, 1, 14) = 'contact.slate.' OR substr(key, 1, 11) = 'contact.tx.';
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

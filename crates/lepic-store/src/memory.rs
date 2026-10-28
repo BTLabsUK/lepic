@@ -65,6 +65,8 @@ struct State {
     tx_watches: BTreeMap<TxId, TxWatch>,
     other_wallet_spends: BTreeMap<TxId, OtherWalletSpend>,
     scan_found: BTreeMap<TxId, ScanFoundRecord>,
+    slate_contacts: BTreeMap<[u8; 16], ContactId>,
+    tx_contacts: BTreeMap<TxId, ContactId>,
 }
 
 /// A pending invoice as the SQLite row holds it: its bytes sealed, the other fields in clear.
@@ -333,6 +335,7 @@ impl TransactionRepository for MemoryRepos<'_> {
         self.state.tx_watches.remove(&id);
         self.state.other_wallet_spends.remove(&id);
         self.state.scan_found.remove(&id);
+        self.state.tx_contacts.remove(&id);
         Ok(())
     }
 
@@ -1174,5 +1177,26 @@ impl ContactRepository for MemoryRepos<'_> {
         let before = self.state.seen_envelopes.len();
         self.state.seen_envelopes.retain(|_, at| *at >= cutoff);
         Ok(before.saturating_sub(self.state.seen_envelopes.len()))
+    }
+
+    fn slate_contact(&self, slate_id: Uuid) -> Result<Option<ContactId>, StoreError> {
+        Ok(self.state.slate_contacts.get(slate_id.as_bytes()).copied())
+    }
+
+    fn set_slate_contact(&mut self, slate_id: Uuid, contact: ContactId) -> Result<(), StoreError> {
+        self.state
+            .slate_contacts
+            .insert(*slate_id.as_bytes(), contact);
+        Ok(())
+    }
+
+    fn tx_contact(&self, tx_id: TxId) -> Result<Option<ContactId>, StoreError> {
+        Ok(self.state.tx_contacts.get(&tx_id).copied())
+    }
+
+    fn set_tx_contact(&mut self, tx_id: TxId, contact: ContactId) -> Result<(), StoreError> {
+        self.require_transaction(tx_id)?;
+        self.state.tx_contacts.insert(tx_id, contact);
+        Ok(())
     }
 }

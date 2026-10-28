@@ -248,6 +248,30 @@ fn check_v7_seed(store: &SqliteStore) {
 }
 
 fn check_v8_seed(store: &SqliteStore) {
+    let contact = crate::contact::ContactId([0x0f; 16]);
+    let (slate, tx, left) = store
+        .read(|repos| {
+            Ok::<_, StoreError>((
+                repos.slate_contact(uuid::Uuid::from_bytes([0x0a; 16]))?,
+                [repos.tx_contact(TxId(1))?, repos.tx_contact(TxId(2))?],
+                [
+                    repos.setting("network")?,
+                    repos.setting("contact.tx.1")?,
+                    repos.setting("contact.slate.not-a-uuid")?,
+                ],
+            ))
+        })
+        .unwrap();
+    assert_eq!(slate, Some(contact));
+    assert_eq!(
+        tx,
+        [Some(contact), None],
+        "the link of a gone transaction is dropped"
+    );
+    assert_eq!(left, [Some("floonet".to_owned()), None, None]);
+}
+
+fn check_v9_seed(store: &SqliteStore) {
     check_empty(store);
     assert!(store.read(|repos| repos.tx_watches()).unwrap().is_empty());
 }
@@ -345,8 +369,23 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 8,
-        seed: "",
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, amount_credited,
+                   amount_debited, created_at, updated_at)
+               VALUES (1, 0, 'outgoing', 'sent', 0, 5, 1, 1);
+               INSERT INTO settings (key, value) VALUES
+                   ('network', 'floonet'),
+                   ('contact.slate.0a0a0a0a-0a0a-0a0a-0a0a-0a0a0a0a0a0a', '0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f'),
+                   ('contact.slate.not-a-uuid', '0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f'),
+                   ('contact.tx.1', '0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f'),
+                   ('contact.tx.2', '0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f'),
+                   ('contact.tx.1x', '0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f');",
         check: check_v8_seed,
+    },
+    UpgradeCase {
+        from: 9,
+        seed: "",
+        check: check_v9_seed,
     },
 ];
 

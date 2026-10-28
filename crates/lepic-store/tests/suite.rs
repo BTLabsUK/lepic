@@ -2268,6 +2268,42 @@ fn transaction_records_need_their_transaction_and_go_with_it<B: Backend>() {
     assert_eq!(read(store, |repos| repos.tx_watch(next)).unwrap(), None);
 }
 
+fn contact_links_are_replaced_and_a_transactions_goes_with_it<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let (first, second) = (contact_id(1), contact_id(2));
+    let tx = write(store, |repos| {
+        let tx = repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_A)))?;
+        repos.set_slate_contact(SLATE_A, first)?;
+        repos.set_slate_contact(SLATE_A, second)?;
+        repos.set_tx_contact(tx, first)?;
+        Ok(tx)
+    })
+    .unwrap();
+    let links = |store: &B::Store| {
+        read(store, |repos| {
+            Ok((
+                repos.slate_contact(SLATE_A)?,
+                repos.slate_contact(SLATE_B)?,
+                repos.tx_contact(tx)?,
+            ))
+        })
+        .unwrap()
+    };
+    assert_eq!(links(store), (Some(second), None, Some(first)));
+    assert!(matches!(
+        write(store, |repos| repos.set_tx_contact(TxId(9), first)),
+        Err(StoreError::UnknownTransaction(TxId(9)))
+    ));
+
+    write(store, |repos| repos.delete_transaction(tx)).unwrap();
+    assert_eq!(
+        links(store),
+        (Some(second), None, None),
+        "the slate stays taken"
+    );
+}
+
 for_each_backend!(
     accounts_round_trip_in_index_order,
     put_account_replaces_label_and_child_counter,
@@ -2332,6 +2368,7 @@ for_each_backend!(
     deleting_a_transaction_removes_what_was_imported_with_it,
     transaction_records_round_trip_and_are_replaced,
     transaction_records_need_their_transaction_and_go_with_it,
+    contact_links_are_replaced_and_a_transactions_goes_with_it,
 );
 
 #[test]
