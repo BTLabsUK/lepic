@@ -41,6 +41,10 @@ schema. The 2026-10-27 security audit asked for these records to move into table
   decoding the version-7 text with decoders frozen in `sqlite/v8.rs`, and deletes the moved
   settings. A record whose transaction no longer exists, or whose value did not decode, is
   dropped with a warning: version 7 read such a value as absent too.
+- Schema version 9 does the same for which contact a slate or transaction was exchanged with
+  (`contact_slates`, `contact_transactions`), and version 10 for the last two transaction facts
+  kept by slate id (a sender's posted report and an answered withdrawal, now `tx_marks`
+  columns), dropping the parked invoices' origin addresses that nothing writes any more.
 - `settings` keeps true singletons only: network, fingerprint, chain reference, scan progress,
   minimum confirmations and the like.
 

@@ -372,10 +372,31 @@ INSERT INTO contact_transactions (tx_id, contact_id)
 DELETE FROM settings WHERE substr(key, 1, 14) = 'contact.slate.' OR substr(key, 1, 11) = 'contact.tx.';
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9];
+/// Two more marks of a transaction, which were settings keyed by its slate id: when the sender
+/// of a received payment reported it posted, and that the payer of a withdrawn invoice was told.
+/// A posted report is advisory for an hour, so stored ones are dropped. The parked invoices' origin
+/// addresses, no longer written since the invoice address was retired, go too.
+const V10: &str = "
+ALTER TABLE tx_marks ADD COLUMN sender_posted_at INTEGER;
+ALTER TABLE tx_marks ADD COLUMN withdrawn_answered INTEGER NOT NULL DEFAULT 0
+    CHECK (withdrawn_answered IN (0, 1));
+
+INSERT INTO tx_marks (tx_id, receive_inputs_unspent, inputs_spent_elsewhere, withdrawn_answered)
+    SELECT transactions.id, 0, 0, 1 FROM settings JOIN transactions
+        ON transactions.slate_id = unhex(replace(substr(settings.key, 27), '-', ''))
+    WHERE substr(settings.key, 1, 26) = 'notice.withdrawn_answered.'
+        AND length(replace(substr(settings.key, 27), '-', '')) = 32
+    ON CONFLICT (tx_id) DO UPDATE SET withdrawn_answered = 1;
+
+DELETE FROM settings WHERE substr(key, 1, 26) = 'notice.withdrawn_answered.'
+    OR substr(key, 1, 23) = 'notice.posted_reported.'
+    OR substr(key, 1, 15) = 'invoice.origin.';
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

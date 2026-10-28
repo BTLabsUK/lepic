@@ -3,6 +3,7 @@
 //! same recovery phrase made, and how a scan found it. Every record belongs to one entry and is
 //! deleted with it.
 
+use jiff::Timestamp;
 use lepic_primitives::amount::{Amount, Height};
 
 use crate::encoding::stored_enum;
@@ -26,6 +27,10 @@ pub struct TxMarks {
     pub receive_inputs_unspent: bool,
     /// The node refused a send because another wallet spent its inputs.
     pub inputs_spent_elsewhere: bool,
+    /// When the sender of a received payment first reported that it posted it.
+    pub sender_posted_at: Option<Timestamp>,
+    /// The payer of a cancelled invoice was told it is withdrawn.
+    pub withdrawn_answered: bool,
 }
 
 stored_enum! {

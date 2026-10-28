@@ -61,7 +61,6 @@ use uuid::Uuid;
 
 use crate::account::{self, AccountError, next_output_key};
 use crate::codecs;
-use crate::epicbox_invoice::invoice_origin;
 use crate::error::WalletError;
 use crate::extension::ReplyKeys;
 use crate::inbox::relay_network;
@@ -597,9 +596,6 @@ struct StoredS1 {
     /// Where the slate must go whatever the caller named: the allowed address of a parked
     /// invoice's payment.
     bound_to: Option<Destination>,
-    /// Where the slate goes as well: the address a parked invoice came from, when it names the
-    /// allowed key under another relay.
-    also_to: Option<Destination>,
 }
 
 /// What the store transaction of a send or resend runs with, so it needs no `Ports`.
@@ -710,7 +706,6 @@ fn create_s1(
         wire,
         outbox,
         bound_to: None,
-        also_to: None,
     })
 }
 
@@ -984,7 +979,6 @@ fn stored_s1_for_delivery(
         wire,
         outbox,
         bound_to: None,
-        also_to: None,
     })
 }
 
@@ -1026,7 +1020,7 @@ fn stored_i2_for_delivery(
     if slate.stage() != Stage::I2 {
         return Err(SendError::NotResendable { tx_id });
     }
-    let (bound_to, also_to) = if repos.pending_invoice(slate_uuid)?.is_some() {
+    let bound_to = if repos.pending_invoice(slate_uuid)?.is_some() {
         // A parked invoice is paid only to the address the user allowed, recorded when it was
         // paid; the recorded address also decides whose notices count for the payment. The
         // caller's address may name the same key under another domain, which the relay does
@@ -1035,11 +1029,10 @@ fn stored_i2_for_delivery(
         if !same_epicbox_key(env.network, delivery, allowed.as_deref()) {
             return Err(SendError::PayeeMismatch { tx_id });
         }
-        let origin = invoice_origin(repos, slate_uuid)?.map(Destination::new);
-        (allowed.map(Destination::new), origin)
+        allowed.map(Destination::new)
     } else {
         record_counterparty(repos, tx_id, delivery)?;
-        (None, None)
+        None
     };
     Ok(StoredS1 {
         tx_id,
@@ -1049,7 +1042,6 @@ fn stored_i2_for_delivery(
         wire,
         outbox: None,
         bound_to,
-        also_to,
     })
 }
 
@@ -1181,19 +1173,7 @@ where
             },
             None => delivery,
         };
-        let delivered = self.deliver(&stored, &delivery).await;
-        match &stored.also_to {
-            // The issuer listens where it sent the invoice from; either delivery is enough.
-            Some(to) => {
-                let also = Delivery::Deliver {
-                    transport: delivery.transport(),
-                    to: to.clone(),
-                };
-                let also = self.deliver(&stored, &also).await;
-                delivered.or(also)
-            }
-            None => delivered,
-        }
+        self.deliver(&stored, &delivery).await
     }
 
     /// Hands the wire slate to the transport, then records the attempt in the outbox. A store

@@ -158,24 +158,6 @@ fn peer_key(address: &EpicboxAddress) -> String {
     address.key_text()
 }
 
-/// Prefix of the setting that keeps, per parked invoice, the address its I1 came from when
-/// that names the sender's key under another relay than its stored address does.
-const ORIGIN_PREFIX: &str = "invoice.origin.";
-
-fn origin_key(slate_id: Uuid) -> String {
-    format!("{ORIGIN_PREFIX}{slate_id}")
-}
-
-/// The address the I1 of parked invoice `slate_id` came from, when it differs from the stored
-/// address its payment goes to. Same key, another relay: the issuer listens where it sent the
-/// invoice from, which the stored address may no longer name.
-pub(crate) fn invoice_origin(
-    repos: &dyn Repositories,
-    slate_id: Uuid,
-) -> Result<Option<String>, StoreError> {
-    repos.setting(&origin_key(slate_id))
-}
-
 /// The issued invoice and the address it went to, when `slate` is an I1 this wallet issued and
 /// still holds, sent back unchanged from that address.
 fn returned_invoice(
@@ -330,15 +312,6 @@ where
         let i1 = epicbox_decode(&codecs, &WireSlate::binary(MediaType::JSON, parked.bytes))
             .map_err(InvoiceError::Decode)?;
         let to = Destination::new(parked.sender_address);
-        let session = self.session()?;
-        let origin = self
-            .blocking(move |_, _| {
-                Ok(session
-                    .store
-                    .read(|repos| invoice_origin(repos, slate_uuid))?)
-            })
-            .await?
-            .map(Destination::new);
         request.ttl_blocks = request.ttl_blocks.or(Some(DEFAULT_PAYMENT_TTL_BLOCKS));
         let paid = self
             .pay_decoded(TRANSPORT_ID, i1, request, Some(to.clone()))
@@ -352,23 +325,12 @@ where
             .ok_or(InvoiceError::CannotDeliver {
                 transport: TRANSPORT_ID,
             })?;
-        let delivered = outbound.deliver(&to, &paid.reply).await;
-        // The issuer listens where it sent the invoice from; the stored address may name the
-        // same key under a relay it left. Either delivery is enough.
-        let delivered = match origin {
-            Some(origin) => {
-                let also = outbound.deliver(&origin, &paid.reply).await;
-                if let Err(error) = &also {
-                    debug!(error = %error, "payment not delivered to the invoice's relay");
-                }
-                delivered.or(also)
+        outbound.deliver(&to, &paid.reply).await.map_err(|source| {
+            InvoiceError::PaymentUndelivered {
+                tx_id: paid.tx_id,
+                slate_id,
+                source,
             }
-            None => delivered,
-        };
-        delivered.map_err(|source| InvoiceError::PaymentUndelivered {
-            tx_id: paid.tx_id,
-            slate_id,
-            source,
         })?;
         info!("slate sent");
         Ok(paid)
@@ -556,7 +518,6 @@ fn delete_expired_parked(
     for invoice in repos.pending_invoices()? {
         if invoice.status != PendingInvoiceStatus::Paid && invoice.received_at <= cutoff {
             repos.delete_pending_invoice(invoice.slate_id)?;
-            repos.delete_setting(&origin_key(invoice.slate_id))?;
             deleted.push(invoice.slate_id);
         }
     }

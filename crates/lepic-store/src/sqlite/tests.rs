@@ -272,6 +272,37 @@ fn check_v8_seed(store: &SqliteStore) {
 }
 
 fn check_v9_seed(store: &SqliteStore) {
+    let (marks, left) = store
+        .read(|repos| {
+            Ok::<_, StoreError>((
+                [repos.tx_marks(TxId(1))?, repos.tx_marks(TxId(2))?],
+                [
+                    repos.setting("network")?,
+                    repos.setting(
+                        "notice.withdrawn_answered.0a0a0a0a-0a0a-0a0a-0a0a-0a0a0a0a0a0a",
+                    )?,
+                    repos.setting("notice.posted_reported.0b0b0b0b-0b0b-0b0b-0b0b-0b0b0b0b0b0b")?,
+                    repos.setting("invoice.origin.0c0c0c0c-0c0c-0c0c-0c0c-0c0c0c0c0c0c")?,
+                ],
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        marks,
+        [
+            TxMarks {
+                receive_seen_at: Some(Height::new(77)),
+                withdrawn_answered: true,
+                ..TxMarks::default()
+            },
+            TxMarks::default(),
+        ],
+        "the answered withdrawal moves to its transaction; the posted report is dropped"
+    );
+    assert_eq!(left, [Some("floonet".to_owned()), None, None, None]);
+}
+
+fn check_v10_seed(store: &SqliteStore) {
     check_empty(store);
     assert!(store.read(|repos| repos.tx_watches()).unwrap().is_empty());
 }
@@ -384,8 +415,29 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 9,
-        seed: "",
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, slate_id,
+                   amount_credited, amount_debited, created_at, updated_at)
+               VALUES (1, 0, 'incoming', 'cancelled', X'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a',
+                   5, 0, 1, 1),
+                      (2, 0, 'incoming', 'received', X'0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b',
+                   5, 0, 1, 1);
+               INSERT INTO tx_marks (tx_id, receive_seen_at, receive_inputs_unspent,
+                   inputs_spent_elsewhere)
+               VALUES (1, 77, 0, 0);
+               INSERT INTO settings (key, value) VALUES
+                   ('network', 'floonet'),
+                   ('notice.withdrawn_answered.0a0a0a0a-0a0a-0a0a-0a0a-0a0a0a0a0a0a',
+                    '2026-10-28T00:00:00Z'),
+                   ('notice.posted_reported.0b0b0b0b-0b0b-0b0b-0b0b-0b0b0b0b0b0b',
+                    '2026-10-28T00:00:00Z'),
+                   ('invoice.origin.0c0c0c0c-0c0c-0c0c-0c0c-0c0c0c0c0c0c', 'key@relay');",
         check: check_v9_seed,
+    },
+    UpgradeCase {
+        from: 10,
+        seed: "",
+        check: check_v10_seed,
     },
 ];
 

@@ -610,6 +610,13 @@ fn decode_marks(row: &Row<'_>) -> Result<TxMarks, StoreError> {
         receive_seen_at: decode_height(row.get(3)?),
         receive_inputs_unspent: decode_flag(row.get(4)?, "receive inputs unspent")?,
         inputs_spent_elsewhere: decode_flag(row.get(5)?, "inputs spent elsewhere")?,
+        sender_posted_at: row
+            .get::<_, Option<i64>>(6)?
+            .map(|value| {
+                timestamp_from_column(value, Record::TransactionRecord, "sender posted at")
+            })
+            .transpose()?,
+        withdrawn_answered: decode_flag(row.get(7)?, "withdrawn answered")?,
     })
 }
 
@@ -677,7 +684,8 @@ impl TxRecordRepository for SqliteRepos<'_> {
         Ok(self
             .first(
                 "SELECT local_cutoff, finalized_at, kernel_absent_at, receive_seen_at,
-                     receive_inputs_unspent, inputs_spent_elsewhere
+                     receive_inputs_unspent, inputs_spent_elsewhere, sender_posted_at,
+                     withdrawn_answered
                  FROM tx_marks WHERE tx_id = ?1",
                 [i64::from(id.0)],
                 decode_marks,
@@ -695,8 +703,8 @@ impl TxRecordRepository for SqliteRepos<'_> {
         self.conn.execute(
             "INSERT OR REPLACE INTO tx_marks (tx_id, local_cutoff, finalized_at,
                  kernel_absent_at, receive_seen_at, receive_inputs_unspent,
-                 inputs_spent_elsewhere)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 inputs_spent_elsewhere, sender_posted_at, withdrawn_answered)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 i64::from(id.0),
                 encode_height(marks.local_cutoff),
@@ -705,6 +713,11 @@ impl TxRecordRepository for SqliteRepos<'_> {
                 encode_height(marks.receive_seen_at),
                 marks.receive_inputs_unspent,
                 marks.inputs_spent_elsewhere,
+                marks
+                    .sender_posted_at
+                    .map(timestamp_to_column)
+                    .transpose()?,
+                marks.withdrawn_answered,
             ],
         )?;
         Ok(())

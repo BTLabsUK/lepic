@@ -143,15 +143,14 @@ fn sender_report(
     now: Timestamp,
 ) -> Result<Option<Timestamp>, StoreError> {
     let entry = &transaction.entry;
-    match entry.slate_id {
-        Some(slate_id)
-            if entry.direction == TxDirection::Incoming
-                && entry.state == TxState::Received
-                && entry.transport.as_deref() == Some(EPICBOX.as_str()) =>
-        {
-            posted_report(repos, slate_id, now)
-        }
-        _ => Ok(None),
+    if entry.slate_id.is_some()
+        && entry.direction == TxDirection::Incoming
+        && entry.state == TxState::Received
+        && entry.transport.as_deref() == Some(EPICBOX.as_str())
+    {
+        posted_report(repos, transaction.id, now)
+    } else {
+        Ok(None)
     }
 }
 

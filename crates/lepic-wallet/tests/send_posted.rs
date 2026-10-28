@@ -78,10 +78,6 @@ fn wire(json: &str) -> WireSlate {
     WireSlate::text(MediaType::JSON, json.to_owned())
 }
 
-fn report_key(slate_id: SlateId) -> String {
-    format!("notice.posted_reported.{}", uuid(slate_id))
-}
-
 /// A payment the payer sent through the peer key [`SENDER`], which the issuer received and
 /// answered. `s2` is the issuer's answer as the peer received it.
 struct Receipt {
@@ -186,8 +182,13 @@ impl World {
     }
 
     fn reported(&self, slate_id: SlateId) -> bool {
-        let key = report_key(slate_id);
-        self.receiver().read(|repos| repos.setting(&key)).is_some()
+        self.receiver().read(|repos| {
+            let Some(stored) = repos.transaction_by_slate(uuid(slate_id), TxDirection::Incoming)?
+            else {
+                return Ok(false);
+            };
+            Ok(repos.tx_marks(stored.id)?.sender_posted_at.is_some())
+        })
     }
 
     fn report_shown(&self, tx_id: TxId) -> Option<jiff::Timestamp> {
@@ -619,13 +620,12 @@ fn a_posted_notice_for_an_invoice_this_wallet_issued_is_dropped() {
 }
 
 #[test]
-fn a_report_dated_ahead_of_the_clock_or_unreadable_is_not_shown() {
+fn a_report_dated_ahead_of_the_clock_is_not_shown() {
     let world = World::new();
     let (receipt, notice) = world.posted_through_sender();
     world.post(SENDER, &world.receiver().address, &notice, 1);
     world.drain(world.receiver());
     assert!(world.report_shown(receipt.tx_id).is_some());
-    let key = report_key(receipt.sent.slate_id);
     let ahead = world
         .receiver()
         .clock
@@ -633,13 +633,15 @@ fn a_report_dated_ahead_of_the_clock_or_unreadable_is_not_shown() {
         .checked_add(jiff::SignedDuration::from_mins(10))
         .unwrap();
 
-    for stored in [ahead.to_string(), "not a time".to_owned()] {
-        world
-            .receiver()
-            .store()
-            .write(|repos| repos.put_setting(&key, &stored))
-            .unwrap();
+    world
+        .receiver()
+        .store()
+        .write(|repos| {
+            let mut marks = repos.tx_marks(receipt.tx_id)?;
+            marks.sender_posted_at = Some(ahead);
+            repos.put_tx_marks(receipt.tx_id, &marks)
+        })
+        .unwrap();
 
-        assert_eq!(world.report_shown(receipt.tx_id), None, "{stored}");
-    }
+    assert_eq!(world.report_shown(receipt.tx_id), None);
 }

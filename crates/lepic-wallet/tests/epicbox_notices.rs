@@ -121,8 +121,13 @@ impl World {
 
     /// Whether the issuer recorded that the payer of the withdrawn invoice `slate_id` was told.
     fn withdrawn_answered(&self, slate_id: SlateId) -> bool {
-        let key = format!("notice.withdrawn_answered.{}", uuid(slate_id));
-        self.issuer.read(|repos| repos.setting(&key)).is_some()
+        self.issuer.read(|repos| {
+            let Some(stored) = repos.transaction_by_slate(uuid(slate_id), TxDirection::Incoming)?
+            else {
+                return Ok(false);
+            };
+            Ok(repos.tx_marks(stored.id)?.withdrawn_answered)
+        })
     }
 
     fn issuer_capability(&self, key: &str) -> Option<PeerSupport> {

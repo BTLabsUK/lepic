@@ -193,26 +193,15 @@ fn apply_notice(
     Ok(effect)
 }
 
-const POSTED_REPORT_PREFIX: &str = "notice.posted_reported.";
-
-/// The setting that keeps when the sender of the received payment `slate_id` first reported
-/// that it posted it.
-fn posted_report_key(slate_id: Uuid) -> String {
-    format!("{POSTED_REPORT_PREFIX}{slate_id}")
-}
-
-/// When the sender of the received payment `slate_id` reported that it posted it, while that
+/// When the sender of the received payment `tx_id` reported that it posted it, while that
 /// report is younger than [`POSTED_REPORT_WINDOW`] at `now`. The caller checks that the payment
 /// still waits for its sender.
 pub(crate) fn posted_report(
     repos: &dyn Repositories,
-    slate_id: Uuid,
+    tx_id: TxId,
     now: jiff::Timestamp,
 ) -> Result<Option<jiff::Timestamp>, StoreError> {
-    let Some(text) = repos.setting(&posted_report_key(slate_id))? else {
-        return Ok(None);
-    };
-    let Ok(reported) = text.parse::<jiff::Timestamp>() else {
+    let Some(reported) = repos.tx_marks(tx_id)?.sender_posted_at else {
         return Ok(None);
     };
     // A report dated after `now`, as after the clock was set back, is not shown: it would
@@ -250,11 +239,12 @@ fn report_posted(
     if expected != Some(excess) {
         return Ok(Effect::Dropped);
     }
-    let key = posted_report_key(slate_id);
-    if state != TxState::Received || repos.setting(&key)?.is_some() {
+    let mut marks = repos.tx_marks(tx_id)?;
+    if state != TxState::Received || marks.sender_posted_at.is_some() {
         return Ok(Effect::Noted);
     }
-    repos.put_setting(&key, &now.to_string())?;
+    marks.sender_posted_at = Some(now);
+    repos.put_tx_marks(tx_id, &marks)?;
     Ok(Effect::PaymentPosted { tx_id, excess })
 }
 
@@ -325,13 +315,6 @@ fn withdrawal_target(
     }))
 }
 
-/// The setting that records that the payer of the withdrawn invoice `slate_id` was told.
-fn withdrawn_answer_key(slate_id: Uuid) -> String {
-    format!("{WITHDRAWN_ANSWER_PREFIX}{slate_id}")
-}
-
-const WITHDRAWN_ANSWER_PREFIX: &str = "notice.withdrawn_answered.";
-
 /// Whether `payment` of the cancelled invoice `tx_id` is to be answered with a `withdrawn`: it
 /// pays the I1 this wallet issued under its slate id with a payer signature that verifies, and
 /// the payer of that slate was not told before. Once per slate, so repeating a payment sends
@@ -349,7 +332,7 @@ fn withdrawn_answer_due(
     };
     if entry.state != TxState::Cancelled
         || entry.slate_id != Some(slate_id)
-        || repos.setting(&withdrawn_answer_key(slate_id))?.is_some()
+        || repos.tx_marks(tx_id)?.withdrawn_answered
     {
         return Ok(false);
     }
@@ -610,9 +593,12 @@ where
             kind: NoticeKind::Withdrawn,
         };
         self.send_notice(None, &to, notice).await?;
-        let key = withdrawn_answer_key(uuid(slate_id));
         let recorded = self
-            .inbox_write(move |repos, now| repos.put_setting(&key, &now.to_string()))
+            .inbox_write(move |repos, _| {
+                let mut marks = repos.tx_marks(tx_id)?;
+                marks.withdrawn_answered = true;
+                repos.put_tx_marks(tx_id, &marks)
+            })
             .await;
         if let Err(error) = recorded {
             warn!(tx_id = %tx_id, error = %ErrorChain(&error), "withdrawn notice not recorded");
