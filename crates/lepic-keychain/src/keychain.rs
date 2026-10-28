@@ -135,24 +135,31 @@ mod tests {
 
     #[test]
     fn extended_key_versions_match_the_derivation_vectors() {
-        for seed_name in ["seed16", "seed32"] {
-            for network in [Network::Mainnet, Network::Floonet] {
-                let label = if network == Network::Mainnet {
-                    "mainnet"
-                } else {
-                    "floonet"
-                };
-                let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../testdata/vectors/keys")
-                    .join(format!("derivation_{seed_name}_{label}.json"));
-                let vector: Value =
-                    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-                let master = &vector["expected"]["master"];
-                let version = ExtKeyVersion::of(network);
-                let hex = |bytes: [u8; 4]| lepic_crypto::hex::encode(&bytes);
-                assert_eq!(master["ext_priv_version"], hex(version.private));
-                assert_eq!(master["ext_pub_version"], hex(version.public));
-            }
+        const VECTORS: [(Network, &str); 4] = [
+            (
+                Network::Mainnet,
+                include_str!("../../../testdata/vectors/keys/derivation_seed16_mainnet.json"),
+            ),
+            (
+                Network::Floonet,
+                include_str!("../../../testdata/vectors/keys/derivation_seed16_floonet.json"),
+            ),
+            (
+                Network::Mainnet,
+                include_str!("../../../testdata/vectors/keys/derivation_seed32_mainnet.json"),
+            ),
+            (
+                Network::Floonet,
+                include_str!("../../../testdata/vectors/keys/derivation_seed32_floonet.json"),
+            ),
+        ];
+        for (network, text) in VECTORS {
+            let vector: Value = serde_json::from_str(text).unwrap();
+            let master = &vector["expected"]["master"];
+            let version = ExtKeyVersion::of(network);
+            let hex = |bytes: [u8; 4]| lepic_crypto::hex::encode(&bytes);
+            assert_eq!(master["ext_priv_version"], hex(version.private));
+            assert_eq!(master["ext_pub_version"], hex(version.public));
         }
     }
 
