@@ -28,7 +28,8 @@ message. Use these field names and add new ones to this list in the same change:
 | `stage` | slate stage, for example `S1` |
 | `codec` | slate codec id |
 | `transport` | transport id: `epicbox`, `file` |
-| `relay` | Epicbox relay host |
+| `relay` | Epicbox relay host of the wallet itself |
+| `peer_relay` | a contact's or a meeting relay's host; support bundles redact it |
 | `node` | node host |
 | `msg_id` | relay message id |
 | `height` | block height |

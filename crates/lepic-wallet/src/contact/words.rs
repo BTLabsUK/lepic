@@ -85,7 +85,7 @@ where
                     .post(&from, rendezvous.address(), posted)
                     .await;
                 if let Err(error) = &result {
-                    debug!(relay = %relay.domain(), error = %crate::inbox::ErrorChain(error), "pairing words not posted");
+                    debug!(peer_relay = %relay.domain(), error = %crate::inbox::ErrorChain(error), "pairing words not posted");
                 }
                 result
             });
@@ -193,13 +193,13 @@ where
         let mut failed = None;
         while let Some((relay, drained, found)) = drains.next().await {
             if let Some(invite) = found {
-                info!(relay = %relay.domain(), "invite found by pairing words");
+                info!(peer_relay = %relay.domain(), "invite found by pairing words");
                 return Ok(invite.to_link());
             }
             match drained {
                 Ok(_) => reached = true,
                 Err(error) => {
-                    debug!(relay = %relay.domain(), error = %crate::inbox::ErrorChain(&error), "rendezvous drain failed");
+                    debug!(peer_relay = %relay.domain(), error = %crate::inbox::ErrorChain(&error), "rendezvous drain failed");
                     failed = Some(error);
                 }
             }

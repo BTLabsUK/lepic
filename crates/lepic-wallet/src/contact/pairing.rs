@@ -610,7 +610,7 @@ where
             {
                 Ok(()) => true,
                 Err(error) => {
-                    warn!(relay = %host_text(&home), error = %crate::inbox::ErrorChain(&error), "pairing reply not posted");
+                    warn!(peer_relay = %host_text(&home), error = %crate::inbox::ErrorChain(&error), "pairing reply not posted");
                     false
                 }
             };

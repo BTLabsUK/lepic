@@ -378,7 +378,7 @@ where
                     }
                 }
                 Err(error @ (MailboxError::Unreachable(_) | MailboxError::Lost(_))) => {
-                    warn!(relay = %host, error = %ErrorChain(&error), "home relay not answering");
+                    warn!(peer_relay = %host, error = %ErrorChain(&error), "home relay not answering");
                     self.relay_failed(&host).await?;
                     self.emit(Event::HomeRelayUnreachable(UnreachableRelay {
                         relay: host.clone(),
@@ -386,7 +386,7 @@ where
                     report.unreachable.push(host);
                 }
                 Err(error) => {
-                    warn!(relay = %host, error = %ErrorChain(&error), "mailbox drain failed");
+                    warn!(peer_relay = %host, error = %ErrorChain(&error), "mailbox drain failed");
                 }
             }
         }
