@@ -7,7 +7,7 @@ use std::time::Duration;
 use blake2::Blake2b256;
 use blake2::digest::Digest;
 use jiff::Timestamp;
-use lepic_contact::{ContactCard, MessageType, SealedEnvelope, dearmor, looks_sealed};
+use lepic_contact::{ContactCard, MessageType, Opened, SealedEnvelope, dearmor, looks_sealed};
 use lepic_epicbox::{
     EpicboxAddress, Handled, Identity, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxError,
     MailboxHandler, MailboxMessage, RelayEndpoint,
@@ -150,6 +150,34 @@ struct Mailbox {
 
 #[derive(Default, Serialize, Deserialize)]
 struct Backoffs(BTreeMap<String, (u32, i64)>);
+
+impl Backoffs {
+    /// Whether `host` waits out its backoff at `now`.
+    fn waiting(&self, host: &str, now: Timestamp) -> bool {
+        self.0
+            .get(host)
+            .is_some_and(|(_, until)| *until > now.as_second())
+    }
+
+    /// Whether `host` waits out its backoff at `now` for a pairing in progress. A pairing lasts
+    /// minutes: its relay is tried again after the first backoff step however often it failed.
+    fn pending_waiting(&self, host: &str, now: Timestamp) -> bool {
+        self.0.get(host).is_some_and(|(failures, until)| {
+            let index = usize::try_from(*failures)
+                .unwrap_or(usize::MAX)
+                .clamp(1, BACKOFF.len())
+                .saturating_sub(1);
+            let step = BACKOFF.get(index).map_or(0, Duration::as_secs);
+            let first = BACKOFF.first().map_or(0, Duration::as_secs);
+            let failed_at = until.saturating_sub(i64::try_from(step).unwrap_or(0));
+            failed_at.saturating_add(i64::try_from(first).unwrap_or(0)) > now.as_second()
+        })
+    }
+}
+
+/// A contact mailbox to drain: the record, the relay and onion it is on, the box salt it is
+/// read with, and whether our current card names it.
+type ContactBox = (ContactRecord, RelayEndpoint, Option<String>, [u8; 16], bool);
 
 #[derive(Default, Serialize, Deserialize)]
 struct Updates {
@@ -499,113 +527,14 @@ where
             let now = ports.clock.now();
             session.store.write(|repos| {
                 let backoffs: Backoffs = read_json(repos, BACKOFF_KEY)?;
-                let waiting = |host: &str| {
-                    backoffs
-                        .0
-                        .get(host)
-                        .is_some_and(|(_, until)| *until > now.as_second())
-                };
-                // A pairing in progress lasts minutes: its relay is tried again after the
-                // first backoff step however often it failed.
-                let pending_waiting = |host: &str| {
-                    backoffs.0.get(host).is_some_and(|(failures, until)| {
-                        let index = usize::try_from(*failures)
-                            .unwrap_or(usize::MAX)
-                            .clamp(1, BACKOFF.len())
-                            .saturating_sub(1);
-                        let step = BACKOFF.get(index).map_or(0, Duration::as_secs);
-                        let first = BACKOFF.first().map_or(0, Duration::as_secs);
-                        let failed_at = until.saturating_sub(i64::try_from(step).unwrap_or(0));
-                        failed_at.saturating_add(i64::try_from(first).unwrap_or(0))
-                            > now.as_second()
-                    })
-                };
                 let wanted = |contact_id: ContactId| {
                     only.as_ref().is_none_or(|only| only.contains(&contact_id))
                 };
-                let mut mailboxes = Vec::new();
-                for pending in repos.pending_pairings()? {
-                    if !wanted(pending.contact_id) {
-                        continue;
-                    }
-                    let invite =
-                        lepic_contact::Invite::decode(&pending.invite, contact_network(network))
-                            .map_err(ContactError::StoredData)?;
-                    let home = endpoint_for(invite.fields().home_relay.as_str(), &relays)?;
-                    let (seed, job) = match pending.role {
-                        PairingRole::Inviter => {
-                            (pending.secrets.code, Job::Reply(pending.pairing_id))
-                        }
-                        PairingRole::Invitee => {
-                            (pending.secrets.rc, Job::Confirm(pending.pairing_id))
-                        }
-                    };
-                    let Some(seed) = seed else {
-                        continue;
-                    };
-                    if pending_waiting(&host_text(&home)) {
-                        continue;
-                    }
-                    let (identity, _) = pairing_mailbox(&seed, network, &home)?;
-                    mailboxes.push(Mailbox {
-                        job,
-                        identity,
-                        relay: home,
-                        onion: invite
-                            .fields()
-                            .onion
-                            .as_ref()
-                            .map(|onion| onion.as_str().to_owned()),
-                    });
-                }
-                let mut contacts = Vec::new();
-                for record in repos.contacts()? {
-                    if record.peer.is_none() || !wanted(record.contact_id) {
-                        continue;
-                    }
-                    let Some(mailbox) = repos.contact_mailbox(record.contact_id)? else {
-                        continue;
-                    };
-                    let home = endpoint_for(&mailbox.home_relay, &relays)?;
-                    if let Some(previous) = mailbox.previous.filter(|previous| previous.until > now)
-                    {
-                        let old = endpoint_for(&previous.relay, &relays)?;
-                        contacts.push((record.clone(), old, None, record.box_salt, false));
-                    }
-                    let old_salt = repos
-                        .setting(&old_salt_key(record.contact_id))?
-                        .and_then(|text| serde_json::from_str::<OldSalt>(&text).ok())
-                        .and_then(|old| unhex16(&old.salt));
-                    if let Some(salt) = old_salt {
-                        contacts.push((
-                            record.clone(),
-                            home.clone(),
-                            mailbox.onion.clone(),
-                            salt,
-                            false,
-                        ));
-                    }
-                    let salt = record.box_salt;
-                    contacts.push((record, home, mailbox.onion, salt, true));
-                }
+                let mut mailboxes =
+                    pending_mailboxes(repos, network, &relays, &backoffs, now, &wanted)?;
+                let mut contacts = contact_mailboxes(repos, &relays, now, &wanted)?;
                 if trigger == CollectTrigger::Foreground {
-                    let distinct: std::collections::BTreeSet<String> = contacts
-                        .iter()
-                        .map(|(_, home, _, _, _)| host_text(home))
-                        .collect();
-                    if distinct.len() > FEW_RELAYS {
-                        let mut pending = Vec::new();
-                        for (record, _, _, _, _) in &contacts {
-                            if !pending.contains(&record.contact_id)
-                                && has_pending(repos, record.contact_id)?
-                            {
-                                pending.push(record.contact_id);
-                            }
-                        }
-                        contacts.retain(|(record, _, _, _, _)| {
-                            active(record, now) || pending.contains(&record.contact_id)
-                        });
-                    }
+                    keep_active_when_many(repos, &mut contacts, now)?;
                 }
                 let room = MAX_MAILBOXES_PER_DRAIN.saturating_sub(mailboxes.len());
                 let count = contacts.len();
@@ -621,27 +550,12 @@ where
                     repos.put_setting(CURSOR_KEY, &next.to_string())?;
                 }
                 for (record, home, onion, salt, current) in contacts.into_iter().take(taken) {
-                    if waiting(&host_text(&home)) {
+                    if backoffs.waiting(&host_text(&home), now) {
                         continue;
                     }
-                    let keys = match super::private::class_of(repos, &record)? {
-                        super::private::RecordClass::Contact => contact_keys(
-                            &session.keychain,
-                            network,
-                            record.account,
-                            record.slot,
-                            salt,
-                        )?,
-                        class @ super::private::RecordClass::Private(_) => {
-                            super::private::record_keys(
-                                &session.keychain,
-                                network,
-                                &record,
-                                &class,
-                            )?
-                        }
-                        // Nothing is taken through a private pairing whose secrets do not open.
-                        super::private::RecordClass::Unreadable => continue,
+                    let Some(keys) = box_keys(repos, &session.keychain, network, &record, salt)?
+                    else {
+                        continue;
                     };
                     mailboxes.push(Mailbox {
                         job: Job::Contact(record.contact_id, current),
@@ -825,43 +739,17 @@ where
         if class.private().is_some() && channel.is_none() {
             return Ok(Handled::Stored);
         }
-        let opened = match &channel {
-            None => sealed.open_from(&enc_secret(&keys), &recorded),
-            Some(channel) => sealed.open_from_psk(&enc_secret(&keys), &recorded, channel),
-        };
-        let opened = match opened {
-            Ok(opened) => opened,
-            Err(lepic_contact::DecodeError::KeyChanged) => {
-                // Signed by a key that is not the contact's: never the contact's news.
-                info!("envelope signed by another key dropped");
-                return Ok(Handled::Stored);
-            }
-            Err(lepic_contact::DecodeError::CannotOpen) => {
-                debug!("envelope in a contact mailbox did not open");
-                // Once a cycle per contact, however much junk the mailbox holds.
-                if told.insert(contact_id) {
-                    self.wallet
-                        .emit(Event::SealedUnopenable(ContactEvent { contact_id }));
-                }
-                return Ok(Handled::Stored);
-            }
-            Err(_) => {
-                debug!("malformed envelope in a contact mailbox dropped");
-                return Ok(Handled::Stored);
-            }
-        };
-        if opened.sender.is_none() {
-            debug!("anonymous envelope in a contact mailbox dropped");
+        let Some(opened) = self.open_contact_envelope(
+            &sealed,
+            &keys,
+            &recorded,
+            channel.as_ref(),
+            contact_id,
+            told,
+        ) else {
             return Ok(Handled::Stored);
-        }
-        // A private pairing carries the host app's payloads and the unpaired notice only; a
-        // contact never carries payloads.
-        let allowed = match (channel.is_some(), opened.content.kind) {
-            (true, MessageType::AppPayload | MessageType::Notice) => true,
-            (true, _) | (false, MessageType::AppPayload) => false,
-            (false, _) => true,
         };
-        if !allowed {
+        if !carries(channel.is_some(), opened.content.kind) {
             warn!("message of a kind its pairing does not carry dropped");
             return Ok(Handled::Stored);
         }
@@ -891,6 +779,18 @@ where
         if current {
             self.forget_old_salt(contact_id).await?;
         }
+        self.dispatch_contact_message(contact_id, opened, envelope)
+            .await
+    }
+
+    /// Hands an opened message from a contact to the engine part that takes its kind, against
+    /// the contact's record as stored now.
+    async fn dispatch_contact_message(
+        &self,
+        contact_id: ContactId,
+        opened: Opened,
+        envelope: &[u8],
+    ) -> Result<Handled, ContactError> {
         let record = {
             let session = self.wallet.session()?;
             self.contact_work(move |_, _| {
@@ -915,6 +815,50 @@ where
         })
     }
 
+    /// Opens an envelope from a contact's mailbox, signed by the contact's `recorded` key and
+    /// under `channel` for a private pairing; `None` drops it. The contact is told to the host
+    /// as sealed unopenable once a cycle, in `told`.
+    fn open_contact_envelope(
+        &self,
+        sealed: &SealedEnvelope<'_>,
+        keys: &crate::key_schedule::ContactKeys,
+        recorded: &lepic_contact::VerifyingKey,
+        channel: Option<&lepic_contact::ChannelKey>,
+        contact_id: ContactId,
+        told: &mut std::collections::BTreeSet<ContactId>,
+    ) -> Option<Opened> {
+        let opened = match channel {
+            None => sealed.open_from(&enc_secret(keys), recorded),
+            Some(channel) => sealed.open_from_psk(&enc_secret(keys), recorded, channel),
+        };
+        let opened = match opened {
+            Ok(opened) => opened,
+            Err(lepic_contact::DecodeError::KeyChanged) => {
+                // Signed by a key that is not the contact's: never the contact's news.
+                info!("envelope signed by another key dropped");
+                return None;
+            }
+            Err(lepic_contact::DecodeError::CannotOpen) => {
+                debug!("envelope in a contact mailbox did not open");
+                // Once a cycle per contact, however much junk the mailbox holds.
+                if told.insert(contact_id) {
+                    self.wallet
+                        .emit(Event::SealedUnopenable(ContactEvent { contact_id }));
+                }
+                return None;
+            }
+            Err(_) => {
+                debug!("malformed envelope in a contact mailbox dropped");
+                return None;
+            }
+        };
+        if opened.sender.is_none() {
+            debug!("anonymous envelope in a contact mailbox dropped");
+            return None;
+        }
+        Some(opened)
+    }
+
     /// Replaces the contact's card with `card` when it carries the same keys and kind and a
     /// higher sequence number. Only a contact update (`update` holds the relays) may change the
     /// card's mailbox, within the limits of RFC 0002 8.5: a person's mailbox stays on its relay,
@@ -929,125 +873,16 @@ where
     ) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         let network = self.wallet.config().network;
-        let net = contact_network(network);
-        let relays = update.cloned();
+        let news = CardNews {
+            contact_id,
+            card,
+            relays: update.cloned(),
+        };
         let updated = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
-                    let Some(mut record) = repos.contact(contact_id)? else {
-                        return Ok(false);
-                    };
-                    let Some(peer) = &record.peer else {
-                        return Ok(false);
-                    };
-                    let fields = card.fields();
-                    // Addresses may change by a card; keys and kind never do (RFC 0002 8.5).
-                    if !super::pairing::same_keys(peer, &card)
-                        || super::pairing::store_kind(fields.kind) != peer.kind
-                        || fields.seq <= peer.seq
-                    {
-                        return Ok(false);
-                    }
-                    let service = peer.kind != lepic_store::ContactKind::Person;
-                    let Some(mut mailbox) = repos.contact_mailbox(contact_id)? else {
-                        return Ok(false);
-                    };
-                    let peer_mailbox = fields.mailbox.as_str().to_owned();
-                    let moved = peer_mailbox != mailbox.peer_mailbox;
-                    let Some(relays) = relays.as_ref() else {
-                        if moved {
-                            debug!("card naming another mailbox outside an update ignored");
-                            return Ok(false);
-                        }
-                        record.peer = Some(peer_card(&card));
-                        repos.put_contact(&record)?;
-                        return Ok(true);
-                    };
-                    if !within_update_limits(repos, contact_id, now.as_second())? {
-                        debug!("contact update over the limits dropped");
-                        return Ok(false);
-                    }
-                    let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
-                        .map_err(|_| ContactError::RelayAddress)?;
-                    let old_relay =
-                        EpicboxAddress::parse(&mailbox.peer_mailbox, relay_network(network))
-                            .ok()
-                            .map(|old| relay_host(&old));
-                    let new_host = relay_host(&relay);
-                    let other_relay = old_relay.as_deref() != Some(new_host.as_str());
-                    if other_relay && (!service || !acceptable_home(&relay, relays, network)) {
-                        debug!("contact update to a relay it may not move to dropped");
-                        return Ok(false);
-                    }
-                    record.peer = Some(peer_card(&card));
-                    if moved {
-                        repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
-                    }
-                    let mut announce = None;
-                    // A service moves its home relay with an update; people re-pair instead.
-                    if service && new_host != mailbox.home_relay {
-                        let keys = contact_keys(
-                            &session.keychain,
-                            network,
-                            record.account,
-                            record.slot,
-                            record.box_salt,
-                        )?;
-                        let ours = EpicboxAddress::new(
-                            *keys.box_public_key(),
-                            relay_network(network),
-                            relay.domain().clone(),
-                            relay.port(),
-                        );
-                        let own = ContactCard::decode(&record.own_card, net)
-                            .map_err(ContactError::StoredData)?;
-                        let mut own_fields = own.fields().clone();
-                        own_fields.mailbox = lepic_contact::MailboxAddress::new(&ours.to_string())
-                            .map_err(ContactError::Name)?;
-                        own_fields.seq = own_fields.seq.saturating_add(1);
-                        let signer = super::keys::signing_key(&keys);
-                        let own_card = ContactCard::sign(net, own_fields, &signer)
-                            .map_err(ContactError::Encode)?;
-                        announce = Some(
-                            lepic_contact::seal_contact_update(
-                                &card,
-                                &own_card,
-                                &signer,
-                                &mut super::LockedRng(&mut **ports.rng.lock()),
-                            )
-                            .map_err(ContactError::Encode)?,
-                        );
-                        record.own_card = own_card.as_bytes().to_vec();
-                        mailbox.previous = Some(lepic_store::PreviousHome {
-                            relay: mailbox.home_relay.clone(),
-                            peer_mailbox: mailbox.peer_mailbox.clone(),
-                            our_mailbox: mailbox.our_mailbox.clone(),
-                            until: now.checked_add(PREVIOUS_HOME_KEPT).unwrap_or(now),
-                        });
-                        mailbox.home_relay = new_host;
-                        mailbox.our_mailbox = ours.to_string();
-                        info!("contact home relay moved");
-                    }
-                    mailbox.peer_mailbox = peer_mailbox.clone();
-                    repos.put_contact(&record)?;
-                    repos.put_contact_mailbox(&mailbox)?;
-                    // Our new mailbox reaches the contact at once, in the same write.
-                    if let Some(envelope) = announce {
-                        repos.enqueue_contact_outbox(&lepic_store::ContactOutboxEntry {
-                            contact_id,
-                            slate_id: uuid::Uuid::from_bytes(contact_id.0),
-                            stage: lepic_store::SlateStage::Standard1,
-                            payload: lepic_contact::armor(&envelope),
-                            destination: peer_mailbox,
-                            attempts: 0,
-                            next_try_at: now,
-                            state: lepic_store::ContactOutboxState::Queued,
-                            created_at: now,
-                            delivered_at: None,
-                        })?;
-                    }
-                    Ok(true)
+                    store_card_news(repos, &ports.rng, &session.keychain, network, news, now)
                 })
             })
             .await?;
@@ -1205,6 +1040,318 @@ fn has_pending(repos: &dyn Repositories, contact_id: ContactId) -> Result<bool, 
         }
     }
     Ok(false)
+}
+
+/// The reply and confirm mailboxes of the pairings in progress `wanted` holds, leaving out
+/// relays in backoff.
+fn pending_mailboxes(
+    repos: &dyn Repositories,
+    network: lepic_primitives::params::Network,
+    relays: &ContactRelays,
+    backoffs: &Backoffs,
+    now: Timestamp,
+    wanted: &impl Fn(ContactId) -> bool,
+) -> Result<Vec<Mailbox>, ContactError> {
+    let mut mailboxes = Vec::new();
+    for pending in repos.pending_pairings()? {
+        if !wanted(pending.contact_id) {
+            continue;
+        }
+        let invite = lepic_contact::Invite::decode(&pending.invite, contact_network(network))
+            .map_err(ContactError::StoredData)?;
+        let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
+        let (seed, job) = match pending.role {
+            PairingRole::Inviter => (pending.secrets.code, Job::Reply(pending.pairing_id)),
+            PairingRole::Invitee => (pending.secrets.rc, Job::Confirm(pending.pairing_id)),
+        };
+        let Some(seed) = seed else {
+            continue;
+        };
+        if backoffs.pending_waiting(&host_text(&home), now) {
+            continue;
+        }
+        let (identity, _) = pairing_mailbox(&seed, network, &home)?;
+        mailboxes.push(Mailbox {
+            job,
+            identity,
+            relay: home,
+            onion: invite
+                .fields()
+                .onion
+                .as_ref()
+                .map(|onion| onion.as_str().to_owned()),
+        });
+    }
+    Ok(mailboxes)
+}
+
+/// The mailboxes of the paired contacts `wanted` holds: a service's previous home while it is
+/// kept, the mailbox of an old box salt while it is read, and the current one.
+fn contact_mailboxes(
+    repos: &dyn Repositories,
+    relays: &ContactRelays,
+    now: Timestamp,
+    wanted: &impl Fn(ContactId) -> bool,
+) -> Result<Vec<ContactBox>, ContactError> {
+    let mut contacts = Vec::new();
+    for record in repos.contacts()? {
+        if record.peer.is_none() || !wanted(record.contact_id) {
+            continue;
+        }
+        let Some(mailbox) = repos.contact_mailbox(record.contact_id)? else {
+            continue;
+        };
+        let home = endpoint_for(&mailbox.home_relay, relays)?;
+        if let Some(previous) = mailbox.previous.filter(|previous| previous.until > now) {
+            let old = endpoint_for(&previous.relay, relays)?;
+            contacts.push((record.clone(), old, None, record.box_salt, false));
+        }
+        let old_salt = repos
+            .setting(&old_salt_key(record.contact_id))?
+            .and_then(|text| serde_json::from_str::<OldSalt>(&text).ok())
+            .and_then(|old| unhex16(&old.salt));
+        if let Some(salt) = old_salt {
+            contacts.push((
+                record.clone(),
+                home.clone(),
+                mailbox.onion.clone(),
+                salt,
+                false,
+            ));
+        }
+        let salt = record.box_salt;
+        contacts.push((record, home, mailbox.onion, salt, true));
+    }
+    Ok(contacts)
+}
+
+/// Keeps only the active contacts and those something waits on when their mailboxes are on
+/// more than [`FEW_RELAYS`] relays.
+fn keep_active_when_many(
+    repos: &dyn Repositories,
+    contacts: &mut Vec<ContactBox>,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let distinct: std::collections::BTreeSet<String> = contacts
+        .iter()
+        .map(|(_, home, _, _, _)| host_text(home))
+        .collect();
+    if distinct.len() > FEW_RELAYS {
+        let mut pending = Vec::new();
+        for (record, _, _, _, _) in contacts.iter() {
+            if !pending.contains(&record.contact_id) && has_pending(repos, record.contact_id)? {
+                pending.push(record.contact_id);
+            }
+        }
+        contacts.retain(|(record, _, _, _, _)| {
+            active(record, now) || pending.contains(&record.contact_id)
+        });
+    }
+    Ok(())
+}
+
+/// Our keys for the contact's mailbox read with `salt`; `None` for a private pairing whose
+/// secrets do not open, since nothing is taken through it.
+fn box_keys(
+    repos: &dyn Repositories,
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    record: &ContactRecord,
+    salt: [u8; 16],
+) -> Result<Option<crate::key_schedule::ContactKeys>, ContactError> {
+    Ok(Some(match super::private::class_of(repos, record)? {
+        super::private::RecordClass::Contact => {
+            contact_keys(keychain, network, record.account, record.slot, salt)?
+        }
+        class @ super::private::RecordClass::Private(_) => {
+            super::private::record_keys(keychain, network, record, &class)?
+        }
+        super::private::RecordClass::Unreadable => return Ok(None),
+    }))
+}
+
+/// Whether a pairing carries a message of `kind`: a private pairing carries the host app's
+/// payloads and the unpaired notice only; a contact never carries payloads.
+fn carries(private: bool, kind: MessageType) -> bool {
+    match (private, kind) {
+        (true, MessageType::AppPayload | MessageType::Notice) => true,
+        (true, _) | (false, MessageType::AppPayload) => false,
+        (false, _) => true,
+    }
+}
+
+/// A card to refresh a contact's record with, and the relays when it came in a contact update.
+struct CardNews {
+    contact_id: ContactId,
+    card: ContactCard,
+    relays: Option<ContactRelays>,
+}
+
+/// Stores the card of `news` as [`ContactBook::refresh_card`] describes, and returns whether the
+/// record changed.
+fn store_card_news(
+    repos: &mut dyn Repositories,
+    rng: &lepic_wallet::SharedRng,
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    news: CardNews,
+    now: Timestamp,
+) -> Result<bool, ContactError> {
+    let CardNews {
+        contact_id,
+        card,
+        relays,
+    } = news;
+    let Some(mut record) = repos.contact(contact_id)? else {
+        return Ok(false);
+    };
+    let Some(peer) = &record.peer else {
+        return Ok(false);
+    };
+    if !newer_card(peer, &card) {
+        return Ok(false);
+    }
+    let service = peer.kind != lepic_store::ContactKind::Person;
+    let Some(mut mailbox) = repos.contact_mailbox(contact_id)? else {
+        return Ok(false);
+    };
+    let peer_mailbox = card.fields().mailbox.as_str().to_owned();
+    let moved = peer_mailbox != mailbox.peer_mailbox;
+    let Some(relays) = relays.as_ref() else {
+        if moved {
+            debug!("card naming another mailbox outside an update ignored");
+            return Ok(false);
+        }
+        record.peer = Some(peer_card(&card));
+        repos.put_contact(&record)?;
+        return Ok(true);
+    };
+    if !within_update_limits(repos, contact_id, now.as_second())? {
+        debug!("contact update over the limits dropped");
+        return Ok(false);
+    }
+    let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
+        .map_err(|_| ContactError::RelayAddress)?;
+    let new_host = relay_host(&relay);
+    if !may_move(&mailbox.peer_mailbox, &relay, service, relays, network) {
+        debug!("contact update to a relay it may not move to dropped");
+        return Ok(false);
+    }
+    record.peer = Some(peer_card(&card));
+    if moved {
+        repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
+    }
+    let mut announce = None;
+    // A service moves its home relay with an update; people re-pair instead.
+    if service && new_host != mailbox.home_relay {
+        let (own_card, ours, signer) = moved_own_card(keychain, network, &record, &relay)?;
+        announce = Some(
+            lepic_contact::seal_contact_update(
+                &card,
+                &own_card,
+                &signer,
+                &mut super::LockedRng(&mut **rng.lock()),
+            )
+            .map_err(ContactError::Encode)?,
+        );
+        record.own_card = own_card.as_bytes().to_vec();
+        mailbox.previous = Some(lepic_store::PreviousHome {
+            relay: mailbox.home_relay.clone(),
+            peer_mailbox: mailbox.peer_mailbox.clone(),
+            our_mailbox: mailbox.our_mailbox.clone(),
+            until: now.checked_add(PREVIOUS_HOME_KEPT).unwrap_or(now),
+        });
+        mailbox.home_relay = new_host;
+        mailbox.our_mailbox = ours.to_string();
+        info!("contact home relay moved");
+    }
+    mailbox.peer_mailbox = peer_mailbox.clone();
+    repos.put_contact(&record)?;
+    repos.put_contact_mailbox(&mailbox)?;
+    // Our new mailbox reaches the contact at once, in the same write.
+    if let Some(envelope) = announce {
+        repos.enqueue_contact_outbox(&update_entry(contact_id, &envelope, peer_mailbox, now))?;
+    }
+    Ok(true)
+}
+
+/// Whether `card` may replace the contact's `peer` card: the same keys and kind and a higher
+/// sequence number. Addresses may change by a card; keys and kind never do (RFC 0002 8.5).
+fn newer_card(peer: &lepic_store::PeerCard, card: &ContactCard) -> bool {
+    let fields = card.fields();
+    super::pairing::same_keys(peer, card)
+        && super::pairing::store_kind(fields.kind) == peer.kind
+        && fields.seq > peer.seq
+}
+
+/// Whether a contact update may move the contact's mailbox from `old_mailbox` to one on
+/// `relay`: a person's mailbox stays on its relay, and a service moves only to a relay
+/// [`acceptable_home`] allows.
+fn may_move(
+    old_mailbox: &str,
+    relay: &EpicboxAddress,
+    service: bool,
+    relays: &ContactRelays,
+    network: lepic_primitives::params::Network,
+) -> bool {
+    let old_relay = EpicboxAddress::parse(old_mailbox, relay_network(network))
+        .ok()
+        .map(|old| relay_host(&old));
+    let other_relay = old_relay.as_deref() != Some(relay_host(relay).as_str());
+    !(other_relay && (!service || !acceptable_home(relay, relays, network)))
+}
+
+/// Our card re-signed for a service's move to the relay of `relay`: our mailbox there and the
+/// next sequence number. Returns the card, its mailbox and the key it is signed with.
+fn moved_own_card(
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    record: &ContactRecord,
+    relay: &EpicboxAddress,
+) -> Result<(ContactCard, EpicboxAddress, lepic_contact::SigningKey), ContactError> {
+    let net = contact_network(network);
+    let keys = contact_keys(
+        keychain,
+        network,
+        record.account,
+        record.slot,
+        record.box_salt,
+    )?;
+    let ours = EpicboxAddress::new(
+        *keys.box_public_key(),
+        relay_network(network),
+        relay.domain().clone(),
+        relay.port(),
+    );
+    let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
+    let mut own_fields = own.fields().clone();
+    own_fields.mailbox =
+        lepic_contact::MailboxAddress::new(&ours.to_string()).map_err(ContactError::Name)?;
+    own_fields.seq = own_fields.seq.saturating_add(1);
+    let signer = super::keys::signing_key(&keys);
+    let own_card = ContactCard::sign(net, own_fields, &signer).map_err(ContactError::Encode)?;
+    Ok((own_card, ours, signer))
+}
+
+/// The outbox entry that carries a contact update `envelope` to the contact's `destination`.
+fn update_entry(
+    contact_id: ContactId,
+    envelope: &[u8],
+    destination: String,
+    now: Timestamp,
+) -> lepic_store::ContactOutboxEntry {
+    lepic_store::ContactOutboxEntry {
+        contact_id,
+        slate_id: uuid::Uuid::from_bytes(contact_id.0),
+        stage: lepic_store::SlateStage::Standard1,
+        payload: lepic_contact::armor(envelope),
+        destination,
+        attempts: 0,
+        next_try_at: now,
+        state: lepic_store::ContactOutboxState::Queued,
+        created_at: now,
+        delivered_at: None,
+    }
 }
 
 fn active(record: &ContactRecord, now: Timestamp) -> bool {
