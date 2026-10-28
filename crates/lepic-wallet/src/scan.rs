@@ -15,7 +15,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use lepic_crypto::Commitment;
 use lepic_keychain::{Identifier, OutputRewinder, ProofError, SwitchCommitment};
-use lepic_node::{NodeApi, NodeError, UnspentOutput};
+use lepic_node::{NodeApi, NodeError, UnspentOutput, UnspentOutputs};
 use lepic_primitives::amount::{Amount, ArithmeticError, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::output::OutputIdentifier;
@@ -465,26 +465,9 @@ where
             if cancel.is_cancelled() {
                 return Err(ScanError::Cancelled);
             }
-            let page = until_cancelled(
-                cancel,
-                node.get_unspent_outputs(
-                    next_index,
-                    Some(indices.last_index),
-                    options.page_size.get(),
-                ),
-            )
-            .await?;
-            let finished = page.highest_index <= page.last_retrieved_index;
-            let after = page
-                .last_retrieved_index
-                .checked_add(1)
-                .ok_or(ScanError::Paging)?;
-            if after <= next_index {
-                return Err(ScanError::Paging);
-            }
-            for output in &page.outputs {
-                chain::check_output_height(output.height, tip.height)?;
-            }
+            let (page, after, finished) = self
+                .fetch_page(next_index, indices.last_index, tip.height, options, cancel)
+                .await?;
             if let Some(highest) = page.outputs.iter().map(|output| output.height).max() {
                 progress = progress.max(highest.min(tip.height));
             }
@@ -525,9 +508,64 @@ where
             start_pmmr_index: indices.first_index,
             last_pmmr_index: next_index.saturating_sub(1),
         };
+        let outcome = self
+            .finish_scan(&session, repair, start_height, block)
+            .await?;
+        summary.add(&outcome);
+        self.emit_changes(outcome.changes);
+        self.emit(Event::Sync(SyncProgress {
+            height: tip.height,
+            target: tip.height,
+        }));
+        info!(height = %tip.height, "scan completed");
+        Ok(summary)
+    }
+
+    /// The page of unspent outputs from `next_index` on, checked against the tip, with the index
+    /// after it and whether it is the last page.
+    async fn fetch_page(
+        &self,
+        next_index: u64,
+        last_index: u64,
+        tip: Height,
+        options: ScanOptions,
+        cancel: &ScanCancel,
+    ) -> Result<(UnspentOutputs, u64, bool), ScanError> {
+        let page = until_cancelled(
+            cancel,
+            self.ports().node.get_unspent_outputs(
+                next_index,
+                Some(last_index),
+                options.page_size.get(),
+            ),
+        )
+        .await?;
+        let finished = page.highest_index <= page.last_retrieved_index;
+        let after = page
+            .last_retrieved_index
+            .checked_add(1)
+            .ok_or(ScanError::Paging)?;
+        if after <= next_index {
+            return Err(ScanError::Paging);
+        }
+        for output in &page.outputs {
+            chain::check_output_height(output.height, tip)?;
+        }
+        Ok((page, after, finished))
+    }
+
+    /// Records the scanned `block`, ends what the scan settled, and closes the spends of
+    /// another wallet whose blocks the scan from `start_height` covered.
+    async fn finish_scan(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        repair: Option<Arc<Repair>>,
+        start_height: Height,
+        block: ScannedBlock,
+    ) -> Result<PageOutcome, ScanError> {
         let now = self.ports().clock.now();
         let outcome = {
-            let session = Arc::clone(&session);
+            let session = Arc::clone(session);
             self.blocking(move |_, config| {
                 let codecs = legacy_codecs(config.network.params().default_base_fee());
                 let ending = Ending {
@@ -541,24 +579,15 @@ where
             })
             .await??
         };
-        summary.add(&outcome);
-        self.emit_changes(outcome.changes);
-        {
-            let session = Arc::clone(&session);
-            let end = tip.height;
-            self.blocking(move |_, _| {
-                Ok(session
-                    .store
-                    .write(|repos| other_wallet::close_scanned(repos, start_height, end)))
-            })
-            .await??;
-        }
-        self.emit(Event::Sync(SyncProgress {
-            height: tip.height,
-            target: tip.height,
-        }));
-        info!(height = %tip.height, "scan completed");
-        Ok(summary)
+        let session = Arc::clone(session);
+        let end = block.height;
+        self.blocking(move |_, _| {
+            Ok(session
+                .store
+                .write(|repos| other_wallet::close_scanned(repos, start_height, end)))
+        })
+        .await??;
+        Ok(outcome)
     }
 
     /// Where the last completed scan ended, or `None` before the first one completes. Fails with

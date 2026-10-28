@@ -148,6 +148,16 @@ struct RefreshTip {
 /// A kernel excess and the height below which the kernel cannot be on chain.
 pub(crate) type KernelAt = (Commitment, Height);
 
+/// What a refresh found out about received payments waiting for their sender.
+struct ReceiveOutcome {
+    /// Payments whose inputs a refresh saw all unspent for the first time.
+    seen_unspent: Vec<TxId>,
+    /// Payments whose kernel the chain holds, with its height.
+    confirmed: Vec<(TxId, Height)>,
+    /// Payments one of whose inputs another transaction spent, with the kernel to watch.
+    superseded: Vec<(TxId, Uuid, KernelAt)>,
+}
+
 /// A received payment waiting for its sender: the inputs its slate spends, the unconfirmed
 /// outputs it would create here, and the kernel the sender would finalize it to.
 #[derive(Debug, Clone)]
@@ -272,9 +282,38 @@ where
         summary.spent_outputs = outcome.spent_outputs;
         self.record_changes(&mut summary, outcome.changes);
 
+        let kernel_missing = self
+            .confirm_kernels(&session, &mut tip, now, &mut summary)
+            .await?;
+        self.end_superseded(&session, &found_outputs, &mut tip, now, &mut summary)
+            .await?;
+
+        summary.height = tip.height;
+        self.expire_unheld(&session, &mut tip, now, &mut summary)
+            .await?;
+        self.check_releases(&session, tip.height, &kernel_missing, now, &mut summary)
+            .await?;
+        let changes = self.watch_released(&session, tip.height, now).await?;
+        self.record_changes(&mut summary, changes);
+
+        self.emit_balances(&session).await?;
+        info!(height = %tip.height, "refresh completed");
+        Ok(RefreshOutcome::Refreshed(summary))
+    }
+
+    /// Looks up the kernels of the transactions waiting to confirm and confirms those the
+    /// chain holds. Returns the transactions whose kernel the node did not find.
+    async fn confirm_kernels(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        tip: &mut RefreshTip,
+        now: Timestamp,
+        summary: &mut RefreshSummary,
+    ) -> Result<BTreeSet<TxId>, RefreshError> {
+        let node = &self.ports().node;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
         let lookups = {
-            let session = Arc::clone(&session);
+            let session = Arc::clone(session);
             self.blocking(move |_, _| {
                 Ok(session.store.read(|repos| kernel_lookups(repos, &codecs)))
             })
@@ -292,7 +331,7 @@ where
             };
             match kernel {
                 Some(kernel) => {
-                    self.cover(&mut tip, kernel.height).await?;
+                    self.cover(tip, kernel.height).await?;
                     chain::check_kernel_height(kernel.height, floor, tip.height)?;
                     kernel_confirmed.push((lookup.tx_id, kernel.height));
                 }
@@ -302,7 +341,7 @@ where
             }
         }
         if !kernel_confirmed.is_empty() {
-            let session = Arc::clone(&session);
+            let session = Arc::clone(session);
             let changes = self
                 .blocking(move |_, _| {
                     Ok(session
@@ -310,19 +349,30 @@ where
                         .write(|repos| confirm_all(repos, &kernel_confirmed, now)))
                 })
                 .await??;
-            self.record_changes(&mut summary, changes);
+            self.record_changes(summary, changes);
         }
-        self.end_superseded(&session, &found_outputs, &mut tip, now, &mut summary)
-            .await?;
+        Ok(kernel_missing)
+    }
 
-        summary.height = tip.height;
+    /// Expires the transactions past their cutoff whose kernel neither the pool nor the chain
+    /// holds, once a second tip agrees with the first, and records the receives seen and the
+    /// confirmed tip.
+    async fn expire_unheld(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        tip: &mut RefreshTip,
+        now: Timestamp,
+        summary: &mut RefreshSummary,
+    ) -> Result<(), RefreshError> {
+        let node = &self.ports().node;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
         let candidates = {
-            let session = Arc::clone(&session);
+            let session = Arc::clone(session);
+            let height = tip.height;
             self.blocking(move |_, _| {
                 Ok(session.store.read(|repos| {
                     Ok::<_, RefreshError>(
-                        expiring(repos, &codecs, tip.height)?
+                        expiring(repos, &codecs, height)?
                             .into_iter()
                             .map(|(stored, kernel)| (stored.id, kernel))
                             .collect::<Vec<_>>(),
@@ -337,45 +387,44 @@ where
             let second = node.get_tip().await?;
             chain::check_agreement(tip.height, second.height)?;
         }
-        let cleared = self.not_held(&candidates, &mut tip).await?;
+        let cleared = self.not_held(&candidates, tip).await?;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
         let changes = {
-            let session = Arc::clone(&session);
+            let session = Arc::clone(session);
+            let height = tip.height;
             self.blocking(move |_, _| {
                 Ok(session.store.write(|repos| {
                     // Only a tip that was confirmed by a second one expires anything.
                     let changes = if due {
-                        expire_all(repos, &codecs, tip.height, &cleared, now)?
+                        expire_all(repos, &codecs, height, &cleared, now)?
                     } else {
                         Vec::new()
                     };
-                    record_receives_seen(repos, &codecs, tip.height)?;
+                    record_receives_seen(repos, &codecs, height)?;
                     // A tip that expired transactions is not trusted as a reference until a
                     // later refresh sees the chain there without expiring anything.
                     if changes.is_empty() {
-                        record_confirmed(repos, tip.height, now)?;
+                        record_confirmed(repos, height, now)?;
                     }
                     Ok::<_, RefreshError>(changes)
                 }))
             })
             .await??
         };
-        self.record_changes(&mut summary, changes);
-        self.check_releases(&session, tip.height, &kernel_missing, now, &mut summary)
-            .await?;
-        let changes = self.watch_released(&session, tip.height, now).await?;
-        self.record_changes(&mut summary, changes);
+        self.record_changes(summary, changes);
+        Ok(())
+    }
 
-        let balances = {
-            let session = Arc::clone(&session);
-            self.blocking(move |_, _| Ok(session.store.read(balances)))
-                .await??
-        };
+    /// Raises a balance event per account.
+    async fn emit_balances(&self, session: &Arc<Session<S::Store>>) -> Result<(), RefreshError> {
+        let session = Arc::clone(session);
+        let balances = self
+            .blocking(move |_, _| Ok(session.store.read(balances)))
+            .await??;
         for balance in balances {
             self.emit(Event::Balance(balance));
         }
-        info!(height = %tip.height, "refresh completed");
-        Ok(RefreshOutcome::Refreshed(summary))
+        Ok(())
     }
 
     /// Ends every received payment waiting for its sender that can never be mined: one whose
@@ -424,16 +473,7 @@ where
             .into_iter()
             .collect();
         let node = &self.ports().node;
-        let mut spent: BTreeSet<Commitment> = inputs.iter().copied().collect();
-        for location in node.get_outputs(&inputs).await? {
-            spent.remove(&location.commitment);
-        }
-        if !spent.is_empty() {
-            let missing: Vec<Commitment> = spent.iter().copied().collect();
-            for location in node.get_outputs(&missing).await? {
-                spent.remove(&location.commitment);
-            }
-        }
+        let spent = self.missing_twice(&inputs).await?;
         let mut confirmed = Vec::new();
         let mut superseded = Vec::new();
         let mut seen_unspent = Vec::new();
@@ -474,7 +514,50 @@ where
         if confirmed.is_empty() && superseded.is_empty() && seen_unspent.is_empty() {
             return Ok(());
         }
-        let ended_at = tip.height;
+        let outcome = ReceiveOutcome {
+            seen_unspent,
+            confirmed,
+            superseded,
+        };
+        self.store_receive_outcome(session, outcome, tip.height, now, summary)
+            .await
+    }
+
+    /// Of `commitments`, those the node holds in neither of two answers: the second asks only
+    /// for the ones the first left out.
+    async fn missing_twice(
+        &self,
+        commitments: &[Commitment],
+    ) -> Result<BTreeSet<Commitment>, RefreshError> {
+        let node = &self.ports().node;
+        let mut missing: BTreeSet<Commitment> = commitments.iter().copied().collect();
+        for location in node.get_outputs(commitments).await? {
+            missing.remove(&location.commitment);
+        }
+        if !missing.is_empty() {
+            let again: Vec<Commitment> = missing.iter().copied().collect();
+            for location in node.get_outputs(&again).await? {
+                missing.remove(&location.commitment);
+            }
+        }
+        Ok(missing)
+    }
+
+    /// Stores what [`Self::end_superseded`] found in one store transaction, at a tip of
+    /// `ended_at`, and raises the events that follow.
+    async fn store_receive_outcome(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        outcome: ReceiveOutcome,
+        ended_at: Height,
+        now: Timestamp,
+        summary: &mut RefreshSummary,
+    ) -> Result<(), RefreshError> {
+        let ReceiveOutcome {
+            seen_unspent,
+            confirmed,
+            superseded,
+        } = outcome;
         let session = Arc::clone(session);
         let (changes, ended) = self
             .blocking(move |_, _| {

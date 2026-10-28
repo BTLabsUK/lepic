@@ -740,18 +740,66 @@ fn pay_stored(
     )
     .map_err(InvoiceError::Encode)?;
 
-    let slate_uuid = uuid(slate_id);
+    let tx_id = store_payment(
+        repos,
+        env,
+        &StoredPayment {
+            transport,
+            account: request.account,
+            slate_id: uuid(slate_id),
+            plan: &plan,
+            debited: selection.total,
+            codec: encoding.codec.as_str(),
+            reply: &reply,
+        },
+    )?;
+    Ok(PaidInvoice {
+        tx_id,
+        slate,
+        reply,
+    })
+}
+
+/// What [`store_payment`] stores of an invoice payment.
+struct StoredPayment<'a> {
+    transport: TransportId,
+    account: AccountIndex,
+    slate_id: Uuid,
+    plan: &'a I2Plan,
+    /// The value of the inputs.
+    debited: Amount,
+    /// The codec the I2 is encoded with.
+    codec: &'a str,
+    reply: &'a WireSlate,
+}
+
+/// Stores a new invoice payment: its outgoing entry, its inputs locked to it, its change
+/// unconfirmed and its I2. Returns the entry's id. Run it in the store transaction that pays.
+fn store_payment(
+    repos: &mut dyn Repositories,
+    env: &InvoiceEnvironment<'_>,
+    payment: &StoredPayment<'_>,
+) -> Result<TxId, InvoiceError> {
+    let &StoredPayment {
+        transport,
+        account,
+        slate_id: slate_uuid,
+        plan,
+        debited,
+        codec,
+        reply,
+    } = payment;
     let total_change = plan.change.iter().try_fold(Amount::ZERO, |total, change| {
         total.checked_add(change.amount)
     })?;
     let tx_id = repos.insert_transaction(&TransactionEntry {
-        account: request.account,
+        account,
         direction: TxDirection::Outgoing,
         state: TxState::Sent,
         slate_id: Some(slate_uuid),
         transport: Some(transport.as_str().to_owned()),
         amount_credited: total_change,
-        amount_debited: selection.total,
+        amount_debited: debited,
         fee: Some(plan.fee),
         created_at: env.now,
         updated_at: env.now,
@@ -772,7 +820,7 @@ fn pay_stored(
         repos.insert_output(&OutputRecord {
             id: OutputIdentifier::new(OutputFeatures::Plain, commitment),
             key_id: KeyId(change.key_id.to_bytes()),
-            account: request.account,
+            account,
             amount: change.amount,
             status: OutputStatus::Unconfirmed,
             height: env.tip,
@@ -784,14 +832,10 @@ fn pay_stored(
     repos.insert_slate(&StoredSlate {
         slate_id: slate_uuid,
         stage: SlateStage::Invoice2,
-        codec: encoding.codec.as_str().to_owned(),
+        codec: codec.to_owned(),
         bytes: reply.as_bytes().to_vec(),
     })?;
-    Ok(PaidInvoice {
-        tx_id,
-        slate,
-        reply,
-    })
+    Ok(tx_id)
 }
 
 /// What a finalize stored, or found stored by an earlier one.
