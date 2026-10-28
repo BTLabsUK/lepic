@@ -406,7 +406,7 @@ mod tests {
     async fn with_tor_off_or_the_setting_off_the_node_is_reached_directly() {
         let node = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let port = node.local_addr().unwrap().port();
-        let tor = Arc::new(RelayTor::new(true));
+        let tor = Arc::new(RelayTor::direct(true));
         dialer(&tor).dial("127.0.0.1", port).await.unwrap();
         node.accept().await.unwrap();
 

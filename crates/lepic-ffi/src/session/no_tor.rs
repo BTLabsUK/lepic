@@ -39,6 +39,8 @@ impl Session {
 
     pub(crate) fn stop_tor(&self) {}
 
+    pub(super) fn stop_tor_for_lock(&self) {}
+
     pub(crate) fn tor_status(&self) -> TorStatus {
         TorStatus {
             kind: TorStatusKind::Off,

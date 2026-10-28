@@ -725,7 +725,7 @@ fn the_node_api_secret_is_taken_out_of_the_config_before_the_client_is_built() {
         .client(
             &config,
             &secret,
-            &std::sync::Arc::new(crate::node::RelayTor::new(true)),
+            &std::sync::Arc::new(crate::node::RelayTor::direct(true)),
             &std::sync::Arc::new(lepic_epicbox::tunnel::OnionRoutes::default()),
         )
         .unwrap();

@@ -34,6 +34,10 @@ impl RelayTor {
         }
     }
 
+    pub(crate) fn direct(enabled: bool) -> Self {
+        Self::new(enabled)
+    }
+
     /// Always `false`.
     pub(crate) fn active(&self) -> watch::Receiver<bool> {
         self.active.subscribe()

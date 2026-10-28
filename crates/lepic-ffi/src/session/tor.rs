@@ -19,7 +19,7 @@ use lepic_wallet::OnionKey;
 use lepic_wallet::send::{Delivery, SendError};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::http::HttpReport;
 use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
@@ -38,6 +38,24 @@ pub(crate) type TorReport = Arc<dyn Fn(TorEvent) + Send + Sync>;
 
 /// The directory inside the wallet's data directory that holds its tor's files.
 const TOR_DIR: &str = "tor";
+
+/// The file inside the wallet's data directory that says tor was expected and not stopped
+/// since: the next session waits for tor from its first connection.
+const TOR_EXPECTED_FILE: &str = "tor-expected";
+
+/// The relay connection and node requests of a session on `data_dir`. They wait for tor from
+/// the start when the last session there expected one and the app did not stop it, so a
+/// connection made before the app calls [`Session::expect_tor`] never goes directly; else
+/// they go directly until tor is expected or started.
+pub(super) fn session_routes(data_dir: &std::path::Path) -> (RelayTor, RelayTor) {
+    let expected = !cfg!(target_os = "ios") && data_dir.join(TOR_EXPECTED_FILE).exists();
+    let routes = if expected {
+        RelayTor::new
+    } else {
+        RelayTor::direct
+    };
+    (routes(true), routes(true))
+}
 
 /// How long a start waits for the tor that is stopping to be down: the tor it stops shares
 /// the data directory with the new one.
@@ -80,6 +98,17 @@ pub(super) struct TorRun {
 
 /// The wallet's tor as the way to its Epicbox relay.
 pub(super) struct RelayTunnel(pub(super) Arc<RelayTor>);
+
+/// Where the relay connection goes after a stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Routes {
+    /// Directly: tor is no longer expected.
+    Direct,
+    /// Through the next tor, which the app starts.
+    Waiting,
+    /// As before: the stop found nothing to stop.
+    Unchanged,
+}
 
 impl Tunnel for RelayTunnel {
     fn active(&self) -> watch::Receiver<bool> {
@@ -362,7 +391,18 @@ impl Session {
 
     /// Stops tor, then its listener. `Stopped` is reported once both are down; until then the
     /// slot is `Stopping`.
+    ///
+    /// A stop that lets the relay go directly again also forgets that tor was expected, so
+    /// the next session starts direct.
     pub(crate) fn stop_tor(&self) {
+        if self.stop_tor_of_start(None) == Routes::Direct {
+            self.forget_tor_expected();
+        }
+    }
+
+    /// Stops tor as a lock does: a session opened later still waits for tor when this one
+    /// expected it.
+    pub(super) fn stop_tor_for_lock(&self) {
         self.stop_tor_of_start(None);
     }
 
@@ -371,8 +411,9 @@ impl Session {
         self.stop_tor_of_start(Some(generation));
     }
 
-    /// Stops the tor in the slot, or only the one of start `generation`.
-    fn stop_tor_of_start(&self, generation: Option<u64>) {
+    /// Stops the tor in the slot, or only the one of start `generation`, and says where the
+    /// relay connection goes now.
+    fn stop_tor_of_start(&self, generation: Option<u64>) -> Routes {
         let mut slot = lock(&self.tor_slot);
         let run = match &*slot {
             TorSlot::Running(run) if generation.is_none_or(|start| start == run.generation) => {
@@ -381,31 +422,27 @@ impl Session {
             TorSlot::Starting(_) if generation.is_none() => {
                 // The start finds the slot changed and stops what it started.
                 *slot = TorSlot::Idle;
-                if !self.tor_expected.swap(false, Ordering::Relaxed) {
-                    self.detach_routes();
-                }
-                return;
+                return self.end_expectation();
             }
             TorSlot::Idle if generation.is_none() => {
                 // Ends what `expect_tor` announced, unless it was announced again for a
                 // restart.
-                if !self.tor_expected.swap(false, Ordering::Relaxed) {
-                    self.detach_routes();
-                }
-                return;
+                return self.end_expectation();
             }
-            _ => return,
+            _ => return Routes::Unchanged,
         };
         // Under the slot lock, so a start that follows attaches after this detach.
         self.tor.detach();
         // Tor ended on its own, or the app restarts it: the relay connection waits for the
         // next start. Only stopping tor or turning the setting off leads back to a direct
         // connection.
-        if generation.is_some() || self.tor_expected.swap(false, Ordering::Relaxed) {
+        let routes = if generation.is_some() || self.tor_expected.swap(false, Ordering::Relaxed) {
             self.expect_routes();
+            Routes::Waiting
         } else {
             self.detach_routes();
-        }
+            Routes::Direct
+        };
         let (down, down_receiver) = watch::channel(false);
         *slot = TorSlot::Stopping(down_receiver);
         drop(slot);
@@ -414,6 +451,34 @@ impl Session {
             // killed with the process handle and the listener's socket closes with the
             // runtime.
             drop(self.runtime().boundary.handle.spawn(shut_down(*run, down)));
+        }
+        routes
+    }
+
+    /// No tor runs or starts: the relay connection goes directly, unless tor was expected
+    /// again for a restart.
+    fn end_expectation(&self) -> Routes {
+        if self.tor_expected.swap(false, Ordering::Relaxed) {
+            Routes::Waiting
+        } else {
+            self.detach_routes();
+            Routes::Direct
+        }
+    }
+
+    /// Records that tor is expected, for the sessions opened on this wallet later. Without
+    /// the record a later session waits for tor only once the app expects it again.
+    fn remember_tor_expected(&self) {
+        if let Err(error) = std::fs::write(self.data_dir.join(TOR_EXPECTED_FILE), []) {
+            warn!(transport = "tor", error = %error, "tor expectation not recorded");
+        }
+    }
+
+    fn forget_tor_expected(&self) {
+        match std::fs::remove_file(self.data_dir.join(TOR_EXPECTED_FILE)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => warn!(transport = "tor", error = %error, "tor expectation not removed"),
         }
     }
 
@@ -662,6 +727,8 @@ impl Session {
         if matches!(&*slot, TorSlot::Idle | TorSlot::Stopping(_)) {
             self.expect_routes();
         }
+        drop(slot);
+        self.remember_tor_expected();
         Ok(())
     }
 

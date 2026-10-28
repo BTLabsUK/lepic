@@ -999,3 +999,47 @@ async fn the_status_and_the_events_carry_the_socks_port_once_tor_has_bootstrappe
     events.wait_for(TorEventKind::Stopped).await;
     assert_eq!(bob.tor_status().socks_port, None);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wallet_that_expected_tor_waits_for_it_from_its_next_open_until_tor_is_stopped() {
+    let fixture = super::Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let session = || async {
+        let mut config = fixture.config();
+        let secret = crate::node::NodeSecret::take(&mut config);
+        Session::new(&fixture.runtime.inner, &config, &secret, store.clone())
+            .await
+            .unwrap()
+    };
+    let first = session().await;
+    assert!(!first.relay_through_tor() && !first.node_through_tor());
+    first
+        .create(SeedOrigin::Generate, password())
+        .await
+        .unwrap();
+    first.expect_tor().unwrap();
+    first.lock();
+    drop(first);
+
+    let second = session().await;
+    assert!(
+        second.relay_through_tor() && second.node_through_tor(),
+        "waits for tor before the app says anything"
+    );
+    second.open(password()).await.unwrap();
+    assert!(second.relay_through_tor() && second.node_through_tor());
+    second.set_epicbox_over_tor(false);
+    assert!(!second.relay_through_tor(), "the setting off goes directly");
+    second.set_epicbox_over_tor(true);
+    assert!(second.relay_through_tor());
+    second.stop_tor();
+    assert!(!second.relay_through_tor() && !second.node_through_tor());
+    second.lock();
+    drop(second);
+
+    let third = session().await;
+    assert!(
+        !third.relay_through_tor() && !third.node_through_tor(),
+        "a stopped tor is not waited for"
+    );
+}

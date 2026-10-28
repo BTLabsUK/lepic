@@ -1,5 +1,6 @@
 //! The wallet's tor for its Epicbox relay connection (ADR 0021): streams to the relay's onion,
-//! or to its domain through an exit, while the setting is on and a tor is attached.
+//! or to its domain through an exit, while the setting is on. With the setting on it never
+//! goes directly until the host detaches tor or turns the setting off.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -26,7 +27,7 @@ pub enum RelayTorError {
 
 #[derive(Clone)]
 enum Source {
-    /// A tor that is being started and is not attached yet.
+    /// A tor that is expected and is not attached yet.
     Pending,
     /// The wallet's own tor, which may still be starting.
     Process(Arc<TorProcess>),
@@ -34,14 +35,15 @@ enum Source {
     Fixed(FixedSocks),
 }
 
-#[derive(Default)]
 struct Inner {
     enabled: bool,
+    /// `None` only after [`RelayTor::detach`] or for [`RelayTor::direct`].
     source: Option<Source>,
 }
 
 /// Whether the relay connection goes through tor, and the tor it goes through. It does while
-/// the setting is on and a tor is attached; then it never goes directly.
+/// the setting is on and tor has not been detached: a tor attached, being started or still
+/// to come. Only [`RelayTor::detach`] or turning the setting off lets it go directly.
 pub struct RelayTor {
     inner: Mutex<Inner>,
     active: watch::Sender<bool>,
@@ -50,13 +52,23 @@ pub struct RelayTor {
 }
 
 impl RelayTor {
+    /// Waiting for a tor while `enabled`: connections wait until one is attached, and never
+    /// go directly until [`RelayTor::detach`] or [`RelayTor::set_enabled`] with `false`.
     pub fn new(enabled: bool) -> Self {
+        Self::with_source(enabled, Some(Source::Pending))
+    }
+
+    /// Detached from the start: connections go directly until a tor is expected or
+    /// attached. For a host that knows no tor is wanted.
+    pub fn direct(enabled: bool) -> Self {
+        Self::with_source(enabled, None)
+    }
+
+    fn with_source(enabled: bool, source: Option<Source>) -> Self {
+        let active = enabled && source.is_some();
         Self {
-            inner: Mutex::new(Inner {
-                enabled,
-                source: None,
-            }),
-            active: watch::Sender::new(false),
+            inner: Mutex::new(Inner { enabled, source }),
+            active: watch::Sender::new(active),
             changes: watch::Sender::new(0),
         }
     }
@@ -108,6 +120,8 @@ impl RelayTor {
         self.change(|inner| inner.source = Some(Source::Fixed(socks)));
     }
 
+    /// No tor any more: relay connections go directly from now on, and a connection
+    /// waiting for a tor fails.
     pub fn detach(&self) {
         self.change(|inner| inner.source = None);
     }
@@ -162,8 +176,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_is_active_only_with_the_setting_on_and_a_tor_attached() {
-        let relay = RelayTor::new(true);
+    fn it_is_active_only_with_the_setting_on_and_tor_not_detached() {
+        let relay = RelayTor::direct(true);
         let active = relay.active();
         assert!(!*active.borrow());
         relay.attach_socks(FixedSocks(SocketAddr::from((Ipv4Addr::LOCALHOST, 9050))));
@@ -192,8 +206,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn with_the_setting_on_it_waits_for_a_tor_until_one_is_attached_or_detached() {
+        let relay = Arc::new(RelayTor::new(true));
+        assert!(
+            *relay.active().borrow(),
+            "never direct before a tor is attached"
+        );
+        let opening = tokio::spawn({
+            let relay = Arc::clone(&relay);
+            async move { relay.open("relay.example", 443).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!opening.is_finished(), "waits for a tor");
+        relay.detach();
+        assert!(!*relay.active().borrow());
+        assert!(matches!(opening.await.unwrap(), Err(RelayTorError::Off)));
+    }
+
+    #[test]
+    fn with_the_setting_off_it_goes_directly_until_the_setting_is_on() {
+        let relay = RelayTor::new(false);
+        assert!(!*relay.active().borrow());
+        relay.set_enabled(true);
+        assert!(*relay.active().borrow(), "still waiting for a tor");
+    }
+
+    #[tokio::test]
     async fn without_tor_or_with_the_setting_off_nothing_is_opened() {
-        let relay = RelayTor::new(true);
+        let relay = RelayTor::direct(true);
         assert!(matches!(
             relay.open("relay.example", 443).await,
             Err(RelayTorError::Off)

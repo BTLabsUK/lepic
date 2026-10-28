@@ -376,8 +376,12 @@ impl Session {
         let claim = runtime.claim(&data_dir).await?;
         let data_dir = claim.dir.clone();
         let claim = ClaimHolder::new(claim);
-        let node_tor = Arc::new(RelayTor::new(true));
-        let relay_tor = Arc::new(RelayTor::new(true));
+        #[cfg(feature = "tor")]
+        let (node_tor, relay_tor) = tor::session_routes(&data_dir);
+        #[cfg(not(feature = "tor"))]
+        let (node_tor, relay_tor) = (RelayTor::new(true), RelayTor::new(true));
+        let node_tor = Arc::new(node_tor);
+        let relay_tor = Arc::new(relay_tor);
         let onion_routes = Arc::new(OnionRoutes::default());
         let node = runtime
             .nodes
@@ -513,7 +517,7 @@ impl Session {
         self.engine.lock();
         // After the engine locks, so a start that saw it unlocked is in its slot. Tor stops
         // before the listeners it forwards to.
-        self.stop_tor();
+        self.stop_tor_for_lock();
         self.stop_http_listener();
         self.in_flight.abort_all();
     }
@@ -2029,7 +2033,7 @@ pub(crate) async fn node_tip(
     let node = runtime.nodes.client(
         config,
         node_secret,
-        &Arc::new(RelayTor::new(true)),
+        &Arc::new(RelayTor::direct(true)),
         &Arc::new(OnionRoutes::default()),
     )?;
     ask_node_tip(&node).await
