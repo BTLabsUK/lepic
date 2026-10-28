@@ -47,6 +47,7 @@ use tracing::{Span, debug, info, instrument};
 use uuid::Uuid;
 
 use crate::account::{self, DEFAULT_ACCOUNT_LABEL};
+use crate::codecs;
 use crate::error::WalletError;
 use crate::event::{AnsweredSlate, Event, ReceivedTransaction};
 use crate::lifecycle::Session;
@@ -432,15 +433,7 @@ pub(crate) fn receive_own<D>(
 
 /// The codecs a legacy transport policy decodes and encodes with, at the network's base fee.
 pub(crate) fn legacy_codecs(network: Network) -> Result<CodecRegistry, ReceiveError> {
-    let base_fee = network.params().default_base_fee();
-    let mut codecs = CodecRegistry::new();
-    codecs
-        .register(Box::new(V3JsonCodec::new(base_fee)))
-        .map_err(ReceiveError::Codecs)?;
-    codecs
-        .register(Box::new(V2JsonCodec::new(base_fee)))
-        .map_err(ReceiveError::Codecs)?;
-    Ok(codecs)
+    Ok(codecs::legacy(network.params().default_base_fee()))
 }
 
 /// The codecs an S2 is encoded with: the legacy ones, carrying the LEPIC marker when `marked`.
@@ -450,14 +443,10 @@ fn reply_codecs(network: Network, marked: bool) -> Result<CodecRegistry, Receive
         return legacy_codecs(network);
     }
     let base_fee = network.params().default_base_fee();
-    let mut codecs = CodecRegistry::new();
-    codecs
-        .register(Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))))
-        .map_err(ReceiveError::Codecs)?;
-    codecs
-        .register(Box::new(MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee))))
-        .map_err(ReceiveError::Codecs)?;
-    Ok(codecs)
+    Ok(codecs::legacy_with(
+        Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))),
+        Box::new(MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee))),
+    ))
 }
 
 /// An S1 whose sender message, if any, is signed by the sender.

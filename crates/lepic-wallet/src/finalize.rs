@@ -29,7 +29,6 @@ use lepic_primitives::hash::blake2b_256;
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::{Transaction, TransactionBody};
 use lepic_primitives::validate::ValidationError;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, RegistryError, SlateError};
@@ -48,6 +47,7 @@ use tracing::{Span, debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::account;
+use crate::codecs;
 use crate::error::WalletError;
 use crate::invoice::earliest_cutoff;
 use crate::ports::{SecretVault, StoreOpener};
@@ -439,14 +439,7 @@ fn count(len: usize) -> u64 {
 
 /// The codecs a legacy transport policy decodes with, at the network's base fee.
 fn legacy_codecs(base_fee: Fee) -> Result<CodecRegistry, FinalizeError> {
-    let mut codecs = CodecRegistry::new();
-    codecs
-        .register(Box::new(V3JsonCodec::new(base_fee)))
-        .map_err(FinalizeError::Codecs)?;
-    codecs
-        .register(Box::new(V2JsonCodec::new(base_fee)))
-        .map_err(FinalizeError::Codecs)?;
-    Ok(codecs)
+    Ok(codecs::legacy(base_fee))
 }
 
 /// What the store transaction of a finalize runs with, so it needs no `Ports`.

@@ -58,6 +58,7 @@ pub use build::{
 };
 
 use crate::account::{AccountError, next_output_key};
+use crate::codecs;
 use crate::error::WalletError;
 use crate::finalize::{Finalized, FinalizedSlate, PushFailure};
 use crate::ports::{SecretVault, StoreOpener};
@@ -364,12 +365,10 @@ fn invoice_codecs(
 }
 
 fn codecs_with(v3: Box<dyn Codec>, base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
-    let mut codecs = CodecRegistry::new();
-    codecs.register(v3).map_err(InvoiceError::Codecs)?;
-    codecs
-        .register(Box::new(V2JsonCodec::new(base_fee)))
-        .map_err(InvoiceError::Codecs)?;
-    Ok(codecs)
+    Ok(codecs::legacy_with(
+        v3,
+        Box::new(V2JsonCodec::new(base_fee)),
+    ))
 }
 
 fn uuid(slate_id: SlateId) -> Uuid {

@@ -60,6 +60,7 @@ use tracing::{Span, debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::account::{self, AccountError, next_output_key};
+use crate::codecs;
 use crate::epicbox_invoice::invoice_origin;
 use crate::error::WalletError;
 use crate::inbox::relay_network;
@@ -533,12 +534,7 @@ fn delivery_codecs(transport: TransportId, base_fee: Fee) -> CodecRegistry {
 }
 
 fn codecs_with(v2: Box<dyn Codec>, base_fee: Fee) -> CodecRegistry {
-    let mut codecs = CodecRegistry::new();
-    // Registration fails only for a duplicate id, and these ids differ; a missing codec would
-    // surface as `CodecNotRegistered` anyway.
-    let _ = codecs.register(Box::new(V3JsonCodec::new(base_fee)));
-    let _ = codecs.register(v2);
-    codecs
+    codecs::legacy_with(Box::new(V3JsonCodec::new(base_fee)), v2)
 }
 
 fn transport<'a>(
@@ -583,15 +579,10 @@ fn encode_for_delivery(
         })
         .flatten();
     let codecs = match reply_key {
-        Some(key) => {
-            let mut codecs = CodecRegistry::new();
-            // Registration fails only for a duplicate id, and these ids differ.
-            let _ = codecs.register(Box::new(
-                MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_reply_key(key),
-            ));
-            let _ = codecs.register(Box::new(V2JsonCodec::new(base_fee)));
-            codecs
-        }
+        Some(key) => codecs::legacy_with(
+            Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_reply_key(key)),
+            Box::new(V2JsonCodec::new(base_fee)),
+        ),
         None => delivery_codecs(delivery.transport(), base_fee),
     };
     Ok(policy.encode_new_slate(&codecs, slate, context)?)

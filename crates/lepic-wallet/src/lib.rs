@@ -12,6 +12,7 @@ pub mod account;
 mod app_data;
 mod cancel;
 pub mod chain;
+mod codecs;
 pub mod config;
 pub mod contact;
 pub mod details;

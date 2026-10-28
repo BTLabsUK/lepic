@@ -22,8 +22,6 @@ use jiff::Timestamp;
 use lepic_crypto::Commitment;
 use lepic_node::{NodeApi, NodeError, OutputLocation};
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
@@ -1475,11 +1473,7 @@ impl fmt::Display for ErrorChain<'_> {
 
 /// The codecs stored slates are written in, in the detection order `receive` uses.
 pub(crate) fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
-    let mut codecs = CodecRegistry::new();
-    // Registration fails only for a duplicate id, and these ids differ.
-    let _ = codecs.register(Box::new(V3JsonCodec::new(base_fee)));
-    let _ = codecs.register(Box::new(V2JsonCodec::new(base_fee)));
-    codecs
+    crate::codecs::legacy(base_fee)
 }
 
 /// The height balances are computed at: the highest tip a refresh or scan confirmed, or zero
