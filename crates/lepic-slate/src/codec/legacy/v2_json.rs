@@ -1,6 +1,9 @@
 //! The V2 JSON slate as `epic-wallet` `v4.1.0` reads and writes it (`docs/compat/legacy-slates.md`).
 //! It is the V3 shape without the `ttl_cutoff_height` and `payment_proof` keys, so a slate in it
 //! carries neither.
+//!
+//! This module repeats most of `v3_json.rs` on purpose: ADR 0002 gives every codec its own wire
+//! structs, and the legacy codecs are frozen. A fix to a shared part must be made in both files.
 
 use lepic_crypto::{Commitment, Signature};
 use lepic_primitives::amount::{Amount, Fee, Height};
