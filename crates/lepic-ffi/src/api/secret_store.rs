@@ -10,12 +10,22 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::boundary::guard;
 
 /// The answer of one store call. The Dart wrapper in `package:lepic` builds it, so an exception
-/// in the app's store becomes `ok: false` instead of an unanswered call.
-#[derive(Debug, Clone)]
+/// in the app's store becomes `ok: false` instead of an unanswered call. A read's value is the
+/// PIN key or the sealed vault, so `Debug` shows only whether there is one (ADR 0014).
+#[derive(Clone)]
 pub struct SecretReply {
     pub ok: bool,
     /// The value read, for `read` only. `None` when nothing is stored under the key.
     pub value: Option<String>,
+}
+
+impl std::fmt::Debug for SecretReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretReply")
+            .field("ok", &self.ok)
+            .field("value", &self.value.as_ref().map_or("<none>", |_| "<set>"))
+            .finish()
+    }
 }
 
 type ReadFn = dyn Fn(String) -> DartFnFuture<SecretReply> + Send + Sync;
@@ -122,4 +132,25 @@ fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_reply_debug_hides_the_value() {
+        let read = SecretReply {
+            ok: true,
+            value: Some("sealed-vault-text".to_owned()),
+        };
+        let printed = format!("{read:?}");
+        assert!(!printed.contains("sealed-vault-text"));
+        assert!(printed.contains("<set>"));
+        let empty = SecretReply {
+            ok: true,
+            value: None,
+        };
+        assert!(format!("{empty:?}").contains("<none>"));
+    }
 }
