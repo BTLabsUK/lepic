@@ -437,6 +437,7 @@ impl From<FinalizeError> for WalletError {
             | E::Mismatch { .. }
             | E::MissingPaymentProof
             | E::ForeignSenderAddress
+            | E::UnexpectedAnswerer { .. }
             | E::PaymentProofSignature
             | E::MessageSignature(_)
             | E::ReceiverSignature(_)

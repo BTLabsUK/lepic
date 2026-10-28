@@ -991,16 +991,17 @@ fn same_epicbox_key(network: Network, delivery: &Delivery, allowed: Option<&str>
     let Delivery::Deliver { transport, to } = delivery else {
         return false;
     };
-    let network = relay_network(network);
-    let key = |address: &str| {
-        EpicboxAddress::parse(address, network)
-            .ok()
-            .map(|address| *address.public_key())
-    };
     *transport == EPICBOX
         && allowed
-            .and_then(key)
-            .is_some_and(|allowed| key(to.as_str()) == Some(allowed))
+            .and_then(|allowed| epicbox_key(network, allowed))
+            .is_some_and(|allowed| epicbox_key(network, to.as_str()) == Some(allowed))
+}
+
+/// The key of `address` when it is an Epicbox address on `network`.
+pub(crate) fn epicbox_key(network: Network, address: &str) -> Option<PublicKey> {
+    EpicboxAddress::parse(address, relay_network(network))
+        .ok()
+        .map(|address| *address.public_key())
 }
 
 /// The stored I2 of an invoice payment, as it was encoded for its first delivery. It was

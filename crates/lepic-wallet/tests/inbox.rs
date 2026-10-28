@@ -22,15 +22,19 @@ use lepic_crypto::PublicKey;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::mock::MockFailure;
+use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxDirection, TxState, WalletStore};
-use lepic_transport::transport::{Destination, Inbound, Transport};
+use lepic_transport::file::FILE;
+use lepic_transport::transport::{Destination, Inbound, Location, Transport};
 use lepic_wallet::details::{SlateMessage, TxFlow};
 use lepic_wallet::event::{Connection, TransportState, TransportStatus};
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::slate::Role;
 use lepic_wallet::{Event, ReceiveRequest, WalletError};
-use world::{RECEIVER_MNEMONIC, World, settings, transport_reaches, transport_states, within};
+use world::{
+    RECEIVER_MNEMONIC, World, request, settings, transport_reaches, transport_states, within,
+};
 
 #[test]
 fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
@@ -348,6 +352,93 @@ fn messages_that_cannot_be_used_are_recorded_and_acknowledged_and_the_next_one_i
     }
     assert_eq!(world.receiver.transactions(), 1);
     assert_eq!(world.relay.pending(&world.sender_address), 1);
+}
+
+/// A slate exported as a file can be answered by anyone holding a copy, so an answer to it that
+/// a relay delivers is refused, and the send waits for the user to import the real answer.
+#[test]
+fn an_answer_over_epicbox_to_an_s1_exported_as_a_file_is_not_finalized() {
+    let world = World::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("send.slate");
+    world
+        .block_on(world.sender.wallet.send(
+            request(),
+            Delivery::Export {
+                transport: FILE,
+                to: Location::File(path.clone()),
+            },
+        ))
+        .unwrap();
+    let s1 = WireSlate::text(MediaType::JSON, std::fs::read_to_string(&path).unwrap());
+    let answer = world
+        .block_on(
+            world
+                .receiver_wallet
+                .receive(TRANSPORT_ID, &s1, ReceiveRequest::default()),
+        )
+        .unwrap();
+    let posted = world.post_to_sender(9, answer.reply.as_text().unwrap());
+
+    let summary = world
+        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .unwrap();
+
+    assert_eq!(
+        summary,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    let entry = world
+        .sender
+        .store
+        .read(|repos| repos.inbox(&posted))
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.status, InboxStatus::Rejected);
+    assert_eq!(world.sender_state(), TxState::Sent);
+    assert!(world.sender.harness.node.pushed_transactions().is_empty());
+}
+
+/// An S1 sent over Epicbox is finalized only from the key it went to: an answer posted from
+/// another key is refused, and the intended receiver's own answer still goes through.
+#[test]
+fn an_answer_from_another_key_than_the_receivers_is_not_finalized() {
+    let world = World::new();
+    world.block_on(world.send());
+    let s1 = WireSlate::text(MediaType::JSON, peek_s1(&world));
+    let answer = world
+        .block_on(
+            world
+                .receiver_wallet
+                .receive(TRANSPORT_ID, &s1, ReceiveRequest::default()),
+        )
+        .unwrap();
+    world.post_to_sender(9, answer.reply.as_text().unwrap());
+
+    let refused = world
+        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .unwrap();
+    assert_eq!(
+        refused,
+        InboxSummary {
+            rejected: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(world.sender_state(), TxState::Sent);
+
+    world
+        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .unwrap();
+    let finalized = world
+        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .unwrap();
+    assert_eq!(finalized.finalized, 1);
+    assert_eq!(world.sender_state(), TxState::Posted);
+    assert_eq!(world.sender.harness.node.pushed_transactions().len(), 1);
 }
 
 /// The S1 the sender posted, read without acknowledging it, so the relay delivers it again.

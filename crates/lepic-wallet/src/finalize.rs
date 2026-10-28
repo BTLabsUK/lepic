@@ -40,7 +40,7 @@ use lepic_slate::stage::Stage;
 use lepic_store::{
     Repositories, SlateStage, StoreError, StoredSlate, TxDirection, TxId, TxState, WalletStore,
 };
-use lepic_transport::transport::TransportId;
+use lepic_transport::transport::{Destination, TransportId};
 use thiserror::Error;
 use tracing::field::Empty;
 use tracing::{Span, debug, info, instrument, warn};
@@ -52,7 +52,7 @@ use crate::error::WalletError;
 use crate::invoice::earliest_cutoff;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::release::record_finalized;
-use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version};
+use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version, epicbox_key};
 use crate::send_limit::effective_cutoff;
 use crate::state::{StateChange, apply_transition, state_name};
 use crate::wallet::Wallet;
@@ -149,6 +149,10 @@ pub enum FinalizeError {
     MalformedContext,
     #[error("node request failed")]
     Node(#[source] NodeError),
+    /// A relay delivered the reply from an address the transaction's S1 was not delivered to.
+    /// A slate carried out by file, QR or paste is answered only through an explicit import.
+    #[error("reply to transaction {tx_id} came from an address its slate was not sent to")]
+    UnexpectedAnswerer { tx_id: TxId },
     #[error("transaction {tx_id} is {} and has nothing to post", state_name(*state))]
     NotPostable { tx_id: TxId, state: TxState },
     /// The transaction is finalized and stored; [`crate::Wallet::post`] tries again.
@@ -449,6 +453,38 @@ struct FinalizeEnvironment {
     now: Timestamp,
 }
 
+/// Who handed the wallet an S2.
+#[derive(Debug, Clone)]
+pub(crate) enum Answerer {
+    /// The user brought it in, by file, paste or QR, or a channel that already checked its
+    /// sender handed it over.
+    Imported,
+    /// An Epicbox relay delivered it from this address, whose key the relay authenticated.
+    Epicbox(Destination),
+}
+
+/// Refuses an S2 a relay delivered unless it came from the Epicbox key the transaction's S1
+/// was delivered to. Every holder of a slate carried out by file, QR or paste could answer
+/// it, so such a send records no counterparty and only an import finalizes it. The domain of
+/// an Epicbox address is not authenticated, so only the keys are compared.
+fn check_answerer(
+    repos: &dyn Repositories,
+    network: Network,
+    tx_id: TxId,
+    answerer: &Answerer,
+) -> Result<(), FinalizeError> {
+    let Answerer::Epicbox(from) = answerer else {
+        return Ok(());
+    };
+    let expected = repos
+        .counterparty(tx_id)?
+        .and_then(|address| epicbox_key(network, &address));
+    match (expected, epicbox_key(network, from.as_str())) {
+        (Some(expected), Some(from)) if expected == from => Ok(()),
+        _ => Err(FinalizeError::UnexpectedAnswerer { tx_id }),
+    }
+}
+
 impl FinalizeEnvironment {
     fn base_fee(&self) -> Fee {
         self.network.params().default_base_fee()
@@ -519,6 +555,7 @@ fn finalize_stored(
     keychain: &Keychain,
     env: &FinalizeEnvironment,
     s2: &Slate,
+    answerer: &Answerer,
 ) -> Result<StoredS3, FinalizeError> {
     let slate_id = s2.id();
     let slate_uuid = uuid(slate_id);
@@ -527,6 +564,7 @@ fn finalize_stored(
         .transaction_by_slate(slate_uuid, TxDirection::Outgoing)?
         .ok_or(FinalizeError::UnknownSlate { slate_id })?;
     let tx_id = entry.id;
+    check_answerer(repos, env.network, tx_id, answerer)?;
     match entry.entry.state {
         TxState::Sent => {}
         state @ (TxState::Finalized | TxState::Posted | TxState::Confirmed) => {
@@ -638,6 +676,7 @@ pub(crate) fn finalize_own(
         keychain,
         &FinalizeEnvironment { network, tip, now },
         s2,
+        &Answerer::Imported,
     )?;
     Ok(FinalizedOwn {
         tx_id: stored.tx_id,
@@ -774,6 +813,19 @@ where
         wire: &WireSlate,
         propagation: Propagation,
     ) -> Result<Finalized, FinalizeError> {
+        self.finalize_from(transport, wire, propagation, Answerer::Imported)
+            .await
+    }
+
+    /// [`Self::finalize`] for an S2 from `answerer`, which [`check_answerer`] checks against the
+    /// transaction before anything else.
+    pub(crate) async fn finalize_from(
+        &self,
+        transport: TransportId,
+        wire: &WireSlate,
+        propagation: Propagation,
+        answerer: Answerer,
+    ) -> Result<Finalized, FinalizeError> {
         let session = self.session()?;
         let network = self.config().network;
         let base_fee = network.params().default_base_fee();
@@ -809,7 +861,7 @@ where
                 };
                 Ok(session
                     .store
-                    .write(|repos| finalize_stored(repos, &session.keychain, &env, &s2)))
+                    .write(|repos| finalize_stored(repos, &session.keychain, &env, &s2, &answerer)))
             })
             .await??;
         span.record("tx_id", stored.tx_id.0);

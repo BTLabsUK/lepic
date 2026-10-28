@@ -64,7 +64,7 @@ use crate::event::{
     Connection, Event, FinalizedInvoice, SlateId, TransportDisconnect, TransportState,
     TransportStatus, UndeliveredReply, UnknownSlate,
 };
-use crate::finalize::FinalizeError;
+use crate::finalize::{Answerer, FinalizeError};
 use crate::invoice::InvoiceError;
 use crate::notice::{self, Payload};
 use crate::ports::{SecretVault, StoreOpener};
@@ -446,6 +446,7 @@ pub(crate) fn finalize_is_permanent(error: &FinalizeError) -> bool {
         | FinalizeError::Mismatch { .. }
         | FinalizeError::MissingPaymentProof
         | FinalizeError::ForeignSenderAddress
+        | FinalizeError::UnexpectedAnswerer { .. }
         | FinalizeError::PaymentProofSignature
         | FinalizeError::MessageSignature(_)
         | FinalizeError::ReceiverSignature(_)
@@ -1552,7 +1553,12 @@ where
             Handled::Finalized
         };
         match self
-            .finalize(TRANSPORT_ID, envelope.wire(), POST_PROPAGATION)
+            .finalize_from(
+                TRANSPORT_ID,
+                envelope.wire(),
+                POST_PROPAGATION,
+                Answerer::Epicbox(reply_to.clone()),
+            )
             .await
         {
             Ok(finalized) => {

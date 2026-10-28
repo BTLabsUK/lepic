@@ -21,6 +21,7 @@ use lepic_epicbox::{
 use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, InboxEntry, MemoryStore, StoreError, TxState, WalletStore};
+use lepic_transport::file::FileTransport;
 use lepic_transport::transport::Destination;
 use lepic_wallet::event::{TransportState, TransportStatus};
 use lepic_wallet::selection::SelectionStrategy;
@@ -195,7 +196,10 @@ impl World {
         let relay = MockRelay::new(RelayNetwork::Floonet);
         let sender_epicbox =
             EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
-        let sender = Sender::with_transports(vec![Box::new(sender_epicbox.clone())]);
+        let sender = Sender::with_transports(vec![
+            Box::new(sender_epicbox.clone()),
+            Box::new(FileTransport::new()),
+        ]);
         let sender_address = sender.wallet.epicbox_attach(&sender_epicbox).unwrap();
         let receiver = Receiver::new();
         let (receiver_wallet, receiver_epicbox) =
@@ -269,16 +273,25 @@ impl World {
 
     /// Stores a message for the receiver as if `from` had posted it, signed by `signer`.
     pub fn post_to_receiver(&self, from: u8, signer: u8, plaintext: &str) -> String {
+        self.post(from, signer, &self.receiver_address, plaintext)
+    }
+
+    /// Stores a message for the sender as if `from` had posted it, signed by itself.
+    pub fn post_to_sender(&self, from: u8, plaintext: &str) -> String {
+        self.post(from, from, &self.sender_address, plaintext)
+    }
+
+    fn post(&self, from: u8, signer: u8, to: &EpicboxAddress, plaintext: &str) -> String {
         let key = |byte: u8| SecretKey::from_array([byte; 32]).unwrap();
         let from = Self::address_of(from);
         let message = SignedMessage::seal(
             plaintext,
-            &self.receiver_address,
+            to,
             &key(signer),
             Salt::from([4; 8]),
             Nonce::from([5; 12]),
         )
         .unwrap();
-        self.relay.store(&from, &self.receiver_address, &message)
+        self.relay.store(&from, to, &message)
     }
 }

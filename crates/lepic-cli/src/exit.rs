@@ -357,6 +357,7 @@ fn finalize_kind(error: &FinalizeError) -> ErrorKind {
         | FinalizeError::Mismatch { .. }
         | FinalizeError::MissingPaymentProof
         | FinalizeError::ForeignSenderAddress
+        | FinalizeError::UnexpectedAnswerer { .. }
         | FinalizeError::PaymentProofSignature
         | FinalizeError::MessageSignature(_)
         | FinalizeError::ReceiverSignature(_)
