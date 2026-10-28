@@ -11,4 +11,10 @@ Parts of the Epicbox protocol, address and message code in epic-wallet are
 Copyright 2019 The vault713 Developers, licensed under the Apache License,
 Version 2.0; LEPIC's ports of that code carry the same attribution.
 
+Other ported code in those projects is Copyright The Epic Cash Developers and
+Copyright The Grin Developers, licensed under the Apache License, Version 2.0;
+the ported files carry the copyright lines of the upstream files they derive from.
+The BIP32 code also derives from the Rust Bitcoin Library by Andrew Poelstra,
+dedicated to the public domain under CC0.
+
 Ported files record their upstream origin in upstream.toml.
