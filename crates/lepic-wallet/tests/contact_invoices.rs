@@ -1592,3 +1592,139 @@ fn a_contact_message_sealed_long_ago_or_without_its_send_time_is_not_taken() {
             .all(|invoice| invoice.contact_id == ben_side)
     );
 }
+
+fn payment_cancelled(events: Vec<Event>) -> Vec<lepic_wallet::event::CancelledPayment> {
+    events
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::PaymentCancelled(cancelled) => Some(cancelled),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sender of a payment through a contact's mailbox cancels it while the contact's answer
+/// waits in its own mailbox: the answer it collects later is answered with a `cancelled`
+/// through the pairing, and the receiver records it, raises the event, reports it in the
+/// details and releases the payment with its own cancel.
+#[test]
+fn a_mailbox_payment_cancelled_before_its_answer_is_collected_tells_the_contact() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let mut receiver_events = world.issuer.wallet.subscribe();
+    let sent = send_through_mailbox(&world, &relays(&world.payer), ben_side);
+    let slate_id = world
+        .payer
+        .read(|repos| repos.transaction(sent))
+        .unwrap()
+        .slate_id
+        .unwrap();
+    // The receiver answers; the sender is not listening, so the S2 waits in its mailbox.
+    world.collect(&world.issuer);
+    let received = world
+        .issuer
+        .read(|repos| repos.transaction_by_slate(slate_id, lepic_store::TxDirection::Incoming))
+        .unwrap();
+    assert_eq!(received.entry.state, TxState::Received);
+
+    world.block_on(world.payer.wallet.cancel(sent)).unwrap();
+    assert_eq!(world.tx_state(&world.payer, sent), TxState::Cancelled);
+    // The sender comes back: its late answer is not posted, and the contact is told.
+    world.collect(&world.payer);
+    world.collect(&world.payer);
+    assert_eq!(world.tx_state(&world.payer, sent), TxState::Cancelled);
+    assert!(world.node.pushed_transactions().is_empty());
+    assert!(
+        world
+            .payer
+            .read(|repos| repos.tx_marks(sent))
+            .cancelled_answered
+    );
+    let reported_at = lepic_wallet::ports::Clock::now(&world.issuer.clock);
+    world.collect(&world.issuer);
+
+    let cancelled = payment_cancelled(events(&mut receiver_events));
+    assert_eq!(cancelled.len(), 1, "{cancelled:?}");
+    assert_eq!(cancelled[0].tx_id, received.id);
+    assert_eq!(*cancelled[0].slate_id.as_bytes(), slate_id.into_bytes());
+    let marks = world.issuer.read(|repos| repos.tx_marks(received.id));
+    assert_eq!(marks.sender_cancelled_at, Some(reported_at));
+    let details = world
+        .block_on(world.issuer.wallet.transaction_details(received.id))
+        .unwrap();
+    assert_eq!(details.sender_reported_cancelled_at, Some(reported_at));
+    assert_eq!(
+        world.tx_state(&world.issuer, received.id),
+        TxState::Received
+    );
+
+    // The host releases the payment with its normal cancel; another collect tells nothing more.
+    world
+        .block_on(world.issuer.wallet.cancel(received.id))
+        .unwrap();
+    assert_eq!(
+        world.tx_state(&world.issuer, received.id),
+        TxState::Cancelled
+    );
+    world.collect(&world.payer);
+    world.collect(&world.issuer);
+    assert!(payment_cancelled(events(&mut receiver_events)).is_empty());
+}
+
+/// A signed `cancelled` for a payment received through one contact's mailbox, sent by another
+/// paired contact, changes nothing.
+#[test]
+fn a_cancelled_notice_from_another_contact_is_ignored() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let mallory = world.stranger();
+    let (on_mallory, _) = world.pair(&mallory, &world.issuer);
+    let mut receiver_events = world.issuer.wallet.subscribe();
+    let sent = send_through_mailbox(&world, &relays(&world.payer), ben_side);
+    let slate_id = world
+        .payer
+        .read(|repos| repos.transaction(sent))
+        .unwrap()
+        .slate_id
+        .unwrap();
+    world.collect(&world.issuer);
+    let received = world
+        .issuer
+        .read(|repos| repos.transaction_by_slate(slate_id, lepic_store::TxDirection::Incoming))
+        .unwrap();
+
+    let notice = lepic_wallet::notice::Notice {
+        slate_id: lepic_slate::model::SlateId::from_bytes(slate_id.into_bytes()),
+        kind: lepic_wallet::notice::NoticeKind::Cancelled,
+    };
+    post_signed(
+        &world,
+        &mallory,
+        on_mallory,
+        &Content::new(
+            MessageType::Notice,
+            notice.encode().as_text().unwrap().as_bytes().to_vec(),
+        ),
+    );
+    assert_eq!(world.collect(&world.issuer).messages, 1);
+
+    assert!(payment_cancelled(events(&mut receiver_events)).is_empty());
+    assert_eq!(
+        world
+            .issuer
+            .read(|repos| repos.tx_marks(received.id))
+            .sender_cancelled_at,
+        None
+    );
+    assert_eq!(
+        world
+            .block_on(world.issuer.wallet.transaction_details(received.id))
+            .unwrap()
+            .sender_reported_cancelled_at,
+        None
+    );
+    assert_eq!(
+        world.tx_state(&world.issuer, received.id),
+        TxState::Received
+    );
+}
