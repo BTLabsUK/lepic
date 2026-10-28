@@ -5,7 +5,7 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Tag};
 use lepic_crypto::{CryptoError, EcdsaSignature, Message, PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::address::{AddressError, EpicboxAddress};
 use crate::json::JsonProblem;
@@ -105,8 +105,9 @@ impl fmt::Debug for MessageKey {
     }
 }
 
-/// Decrypted message text. Wiped on drop, never printed.
-pub struct Plaintext(Zeroizing<String>);
+/// Decrypted message text, never printed. Not wiped on drop: both parties can read what an
+/// Epicbox message carries, and callers copy it into the slates they handle.
+pub struct Plaintext(String);
 
 impl Plaintext {
     pub fn expose_str(&self) -> &str {
@@ -316,7 +317,7 @@ impl EncryptedMessage {
                 })?;
         let (body, tag) = self.ciphertext.split_at(body_len);
         let tag = Tag::try_from(tag).map_err(|_| MessageError::Decryption)?;
-        let mut buffer = Zeroizing::new(body.to_vec());
+        let mut buffer = body.to_vec();
         key.cipher()
             .ok_or(MessageError::Decryption)?
             .decrypt_inout_detached(
@@ -326,13 +327,9 @@ impl EncryptedMessage {
                 &tag,
             )
             .map_err(|_| MessageError::Decryption)?;
-        match String::from_utf8(std::mem::take(&mut *buffer)) {
-            Ok(text) => Ok(Plaintext(Zeroizing::new(text))),
-            Err(error) => {
-                error.into_bytes().zeroize();
-                Err(MessageError::NotUtf8)
-            }
-        }
+        String::from_utf8(buffer)
+            .map(Plaintext)
+            .map_err(|_| MessageError::NotUtf8)
     }
 
     pub fn open(&self, sender: &PublicKey, own: &SecretKey) -> Result<Plaintext, MessageError> {
