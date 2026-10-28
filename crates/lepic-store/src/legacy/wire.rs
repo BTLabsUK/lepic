@@ -1,3 +1,9 @@
+// Portions Copyright 2019 The Epic Developers
+// Portions Copyright 2023 The Epic Developers
+// Ported from EpicCash/epic-wallet impls/src/backends/db.rs, impls/src/backends/lmdb.rs,
+// impls/src/serialization.rs, libwallet/src/types.rs, libwallet/src/slate.rs (Apache-2.0); see
+// NOTICE and upstream.toml.
+
 //! The JSON shapes `epic-wallet` stores in the `data` column, field for field.
 //!
 //! Field presence follows serde's derive rules as upstream applies them: a plain `Option` may be

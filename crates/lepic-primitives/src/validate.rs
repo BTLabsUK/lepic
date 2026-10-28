@@ -1,3 +1,8 @@
+// Portions Copyright 2018 The Grin Developers
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic core/src/core/transaction.rs, core/src/core/committed.rs (Apache-2.0);
+// see NOTICE and upstream.toml.
+
 //! Full transaction validation, as the node's `Transaction::validate(Weighting::AsTransaction)`
 //! runs it and `epic-wallet` calls it when finalizing a slate.
 

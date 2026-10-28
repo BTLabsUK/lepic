@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet impls/src/lifecycle/seed.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! The vault file format, version 1.
 //!
 //! ```text

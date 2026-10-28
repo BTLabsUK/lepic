@@ -1,3 +1,8 @@
+// Portions Copyright 2019 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic-wallet api/src/foreign_rpc.rs, impls/src/adapters/http.rs
+// (Apache-2.0); see NOTICE and upstream.toml.
+
 //! The JSON-RPC 2.0 messages of the wallet foreign API at `/v2/foreign`, as `epic-wallet`
 //! `v4.1.0` writes and reads them: `check_version` and `receive_tx`, with every answer wrapped
 //! in `result.Ok` or `result.Err`. Pure functions over bytes, so both sides and the fuzz

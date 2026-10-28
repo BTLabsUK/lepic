@@ -1,3 +1,9 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/owner.rs,
+// libwallet/src/api_impl/foreign.rs, libwallet/src/internal/tx.rs,
+// libwallet/src/internal/selection.rs, libwallet/src/slate.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! The three slates of the invoice flow on their own, with the randomness passed in, as
 //! `epic-wallet` `v4.0.2` builds them: `owner::issue_invoice_tx` (I1), `owner::process_invoice_tx`
 //! (I2) and `foreign::finalize_invoice_tx` (I3).

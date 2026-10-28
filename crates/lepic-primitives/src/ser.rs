@@ -1,3 +1,7 @@
+// Portions Copyright 2018 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic core/src/ser.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Big-endian binary serialization, byte-compatible with the Epic node's `core::ser`.
 //!
 //! Reading works on a byte slice and never allocates more than a caller-supplied maximum, so a

@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/internal/selection.rs, libwallet/src/types.rs
+// (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Output selection and fee estimation for a send, with the results `epic-wallet` reaches in
 //! `libwallet/src/internal/selection.rs`: the same inputs, the same fee and the same change.
 //!

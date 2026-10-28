@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet impls/src/lifecycle/seed.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! Argon2id parameters and the vault key they derive from a password.
 
 use std::fmt;

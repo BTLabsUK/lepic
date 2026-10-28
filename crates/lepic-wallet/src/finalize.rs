@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/owner.rs, libwallet/src/internal/tx.rs,
+// libwallet/src/slate.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Finalize and post, the sender's last step of the standard flow: the receiver's S2 becomes S3
 //! and its transaction goes to the node, as `epic-wallet`'s `finalize_tx` and `post_tx` do it
 //! (`docs/compat/legacy-slates.md`, "Lifecycle").

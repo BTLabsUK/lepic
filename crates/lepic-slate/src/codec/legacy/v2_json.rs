@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/slate_versions/v2.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! The V2 JSON slate as `epic-wallet` `v4.1.0` reads and writes it (`docs/compat/legacy-slates.md`).
 //! It is the V3 shape without the `ttl_cutoff_height` and `payment_proof` keys, so a slate in it
 //! carries neither.

@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/internal/scan.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! Scan and restore: find the wallet's outputs in the node's UTXO set by rewinding their range
 //! proofs, and reconcile what is found with the store, as `epic-wallet` does. The algorithm is in
 //! `docs/compat/node-api.md` (restore and scan), the output transitions in

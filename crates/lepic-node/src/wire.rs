@@ -1,3 +1,11 @@
+// Portions Copyright 2018 The Grin Developers
+// Portions Copyright 2019 The Grin Developers
+// Portions Copyright 2020 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic api/src/foreign_rpc.rs, api/src/foreign.rs, api/src/types.rs,
+// api/src/rest.rs, core/src/core/transaction.rs, core/src/libtx/secp_ser.rs (Apache-2.0); see
+// NOTICE and upstream.toml.
+
 //! The node's JSON shapes for the calls LEPIC makes, and their conversion to validated values.
 //!
 //! Field names and enum spellings follow the node's `api::types` and `core::transaction` serde

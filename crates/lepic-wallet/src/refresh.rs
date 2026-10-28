@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/owner.rs,
+// libwallet/src/internal/updater.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Refresh: bring stored outputs and transactions in line with the node's UTXO set and kernels,
 //! as `epic-wallet`'s `update_wallet_state` does before its scan. The algorithm is in
 //! `docs/compat/node-api.md` (refresh), the state mapping in `docs/compat/states.md`.

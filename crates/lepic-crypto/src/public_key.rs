@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The vault713 Developers
+// Ported from EpicCash/epic-wallet libwallet/src/message.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 use std::fmt;
 
 use secp256k1zkp::constants::COMPRESSED_PUBLIC_KEY_SIZE;

@@ -1,3 +1,6 @@
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic core/src/libtx/aggsig.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Schnorr aggregate signatures as Epic kernels and participant messages use them.
 //!
 //! Ported from `core/src/libtx/aggsig.rs` of the Epic node. Nonces are always passed in, so every

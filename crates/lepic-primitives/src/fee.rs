@@ -1,3 +1,8 @@
+// Portions Copyright 2018 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic core/src/libtx/mod.rs, core/src/consensus.rs (Apache-2.0); see NOTICE
+// and upstream.toml.
+
 //! Transaction weights and the fee rule, equal to the node's `TransactionBody::weight`,
 //! `weight_as_block` and `libtx::tx_fee`.
 

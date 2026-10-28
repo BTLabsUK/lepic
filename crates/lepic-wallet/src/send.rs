@@ -1,3 +1,8 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/owner.rs, libwallet/src/internal/tx.rs,
+// libwallet/src/internal/selection.rs, libwallet/src/slate.rs, libwallet/src/types.rs
+// (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Send, standard flow: build the S1 slate, lock its inputs, store it, deliver it.
 //!
 //! The slate is built as `epic-wallet` `v4.0.2` builds it (`owner::init_send_tx`): selection,

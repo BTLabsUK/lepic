@@ -1,3 +1,8 @@
+// Portions Copyright 2019 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic-wallet impls/src/adapters/epicbox.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! A relay subscription in `listen` or `drain` mode, and its [`Inbound`] side.
 //!
 //! One task owns the connection. It answers every challenge with a fresh `Subscribe`, sends at

@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic core/src/core/transaction.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! Transaction inputs, equal in encoding and hash to the node's `Input`.
 
 use lepic_crypto::Commitment;

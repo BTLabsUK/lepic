@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet impls/src/lifecycle/seed.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! Seed storage: the [`SecretStore`] port, the desktop vault that implements it, and the
 //! read-only import of `epic-wallet`'s `wallet.seed`.
 //!
