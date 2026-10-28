@@ -1,7 +1,8 @@
 # 0006 rustls with ring, hyper for HTTP, tokio-tungstenite for websockets
 
 Status: accepted
-Date: 2026-10-02
+Date: 2026-10-02 (amended 2026-10-28 to record plain http to the node and the app's exception
+for nodes on the local network)
 
 ## Context
 
@@ -55,6 +56,31 @@ iOS was not built, because the spike machine had no Xcode.
 - The node client sends Basic auth headers, caps body sizes and sets timeouts itself on top of hyper.
   That is more code than reqwest, and it lives in `lepic-node`.
 - The macOS CI job (U-03) is the first iOS build of this stack.
+
+## Plain http to the node, and the app's local-network relay
+
+`lepic-node` takes a node URL with `https`, or with plain `http` only to loopback (`localhost`,
+127/8, `::1`) or, over Tor, to an onion address; any other plain-http URL is refused
+(`PlainHttpToRemoteHost`). A node API secret is sent as Basic auth on every request, so plain
+http elsewhere would put it on the wire unencrypted.
+
+Epic's node API answers plain http, and people run their node on their home network or reach it
+through a tailnet. The Epic Cash wallet app therefore relays such a node itself: a plain-http
+node at a private or link-local address, at a `.local` / `.lan` name that resolves only to such
+addresses, or, once the user agreed for that node, at a 100.64.0.0/10 address (a Tailscale
+tailnet, which cannot be told apart from a provider's carrier-grade NAT), is handed to LEPIC as
+`http://127.0.0.1:<port>/<token>`, a relay in the app that passes each request on to the node.
+The relay answers only requests whose path starts with its random 128-bit token, so another
+program or app on the device cannot use it. This is a deliberate exception to the loopback rule,
+kept in the app rather than in LEPIC:
+
+- the traffic and any node API secret still cross the local network or the tailnet in plain
+  http; the app warns on the node's row when a secret would, and asks before it uses a
+  100.64.0.0/10 address;
+- LEPIC itself still refuses plain http to anything but loopback, so no other host of LEPIC gets
+  the exception by accident;
+- the app decides what counts as local, once per address, and connects to the address it looked
+  up, so a later lookup cannot move the node to a public address.
 
 ## Alternatives considered
 
