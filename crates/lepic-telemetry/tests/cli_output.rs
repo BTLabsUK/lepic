@@ -108,6 +108,7 @@ fn json_lines_carry_documented_field_names() {
             codec = "legacy-v3",
             transport = "epicbox",
             relay = "relay.example",
+            peer_relay = "peer.example",
             node = "node.example",
             msg_id = "m-1",
             height = 1_000_u64,
