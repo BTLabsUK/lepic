@@ -67,10 +67,14 @@ impl std::fmt::Display for Transition {
 #[error("slate id is not a hyphenated uuid")]
 pub struct SlateIdError;
 
-/// Bytes that are not a valid ed25519 point, so cannot be a payment proof address.
+/// Bytes that cannot be a payment proof address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("payment proof address is not a valid ed25519 point")]
-pub struct ProofAddressError;
+pub enum ProofAddressError {
+    #[error("payment proof address is not a valid ed25519 point")]
+    NotAPoint,
+    #[error("payment proof address is a small-order ed25519 point")]
+    WeakKey,
+}
 
 /// Hex text that does not decode to the expected bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

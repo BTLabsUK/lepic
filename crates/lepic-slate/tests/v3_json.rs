@@ -261,7 +261,7 @@ mod hex_and_curve_values {
             decode_mutated(S1, set("/payment_proof/receiver_address", json!(address))),
             field(
                 "payment_proof.receiver_address",
-                FieldProblem::ProofAddress(ProofAddressError)
+                FieldProblem::ProofAddress(ProofAddressError::NotAPoint)
             )
         );
     }

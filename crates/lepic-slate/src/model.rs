@@ -160,12 +160,15 @@ pub struct ProofAddress([u8; ProofAddress::LEN]);
 impl ProofAddress {
     pub const LEN: usize = 32;
 
-    /// Accepts only bytes that decompress to an ed25519 point, as `epic-wallet` does when it
-    /// reads an address.
+    /// Accepts only bytes that decompress to an ed25519 point of large order. `epic-wallet`
+    /// accepts any point; no address it derives has small order.
     pub fn from_bytes(bytes: [u8; Self::LEN]) -> Result<Self, ProofAddressError> {
-        ed25519_dalek::VerifyingKey::from_bytes(&bytes)
-            .map(|_| Self(bytes))
-            .map_err(|_| ProofAddressError)
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+            .map_err(|_| ProofAddressError::NotAPoint)?;
+        if key.is_weak() {
+            return Err(ProofAddressError::WeakKey);
+        }
+        Ok(Self(bytes))
     }
 
     pub const fn as_bytes(&self) -> &[u8; Self::LEN] {
@@ -587,6 +590,7 @@ fn count(len: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::validate::decode_hex_array;
 
     #[test]
     fn slate_id_displays_lowercase_hyphenated_and_parses_back() {
@@ -648,6 +652,37 @@ mod tests {
         // y = 2 has no x on edwards25519.
         let mut bytes = [0u8; 32];
         bytes[0] = 2;
-        assert_eq!(ProofAddress::from_bytes(bytes), Err(ProofAddressError));
+        assert_eq!(
+            ProofAddress::from_bytes(bytes),
+            Err(ProofAddressError::NotAPoint)
+        );
+    }
+
+    #[test]
+    fn proof_address_rejects_the_identity_point() {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1;
+        assert_eq!(
+            ProofAddress::from_bytes(bytes),
+            Err(ProofAddressError::WeakKey)
+        );
+    }
+
+    #[test]
+    fn proof_address_rejects_a_point_of_order_eight() {
+        let bytes = decode_hex_array::<32>(
+            "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        )
+        .unwrap();
+        assert_eq!(
+            ProofAddress::from_bytes(bytes),
+            Err(ProofAddressError::WeakKey)
+        );
+    }
+
+    #[test]
+    fn proof_address_accepts_a_derived_address() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+        assert!(ProofAddress::from_bytes(key.to_bytes()).is_ok());
     }
 }
