@@ -31,20 +31,33 @@ pub fn legacy_codecs() -> CodecRegistry {
     codecs
 }
 
-/// A slate `codec` accepted must encode with the same codec and decode back to itself.
+/// A slate `codec` accepted must encode with the same codec and decode back to itself, and its
+/// encoding must be stable. Only the wire origin may change on the way: the codecs write the
+/// header version that follows the slate's shape (ADR 0020), whatever header it was read with.
 pub fn assert_round_trips(codec: &dyn Codec, slate: &Slate) {
     let encoded = match codec.encode(slate, &ENCODE_CONTEXT) {
         Ok(encoded) => encoded,
         Err(error) => panic!("{} decoded a slate it cannot encode: {error}", codec.id()),
     };
-    match codec.decode(&encoded) {
-        Ok(decoded) => assert_eq!(
-            &decoded,
-            slate,
-            "{} round trip changed the slate",
-            codec.id()
-        ),
+    let decoded = match codec.decode(&encoded) {
+        Ok(decoded) => decoded,
         Err(error) => panic!("{} rejected its own encoding: {error}", codec.id()),
+    };
+    assert_eq!(
+        decoded.origin().map(|origin| origin.codec()),
+        Some(codec.id()),
+        "{} decoded its own encoding as another codec",
+        codec.id()
+    );
+    assert_eq!(
+        decoded.clone().with_origin(None),
+        slate.clone().with_origin(None),
+        "{} round trip changed the slate",
+        codec.id()
+    );
+    match codec.encode(&decoded, &ENCODE_CONTEXT) {
+        Ok(again) => assert_eq!(again, encoded, "{} encoding is not stable", codec.id()),
+        Err(error) => panic!("{} cannot encode what it decoded: {error}", codec.id()),
     }
 }
 
