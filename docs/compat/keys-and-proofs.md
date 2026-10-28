@@ -1,9 +1,10 @@
 # Keys, proofs, kernels and the seed file
 
-Derived from the Epic node `v4.0.4` (`keychain/src/{mnemonic,extkey_bip32,keychain,types}.rs`,
+Derived from the Epic node `v4.1.0` (`keychain/src/{mnemonic,extkey_bip32,keychain,types}.rs`,
 `core/src/libtx/{proof,aggsig,build,mod}.rs`, `core/src/core/transaction.rs`, `core/src/consensus.rs`,
-`core/src/global.rs`) and `epic-wallet` `v4.0.2` (`impls/src/lifecycle/seed.rs`,
-`libwallet/src/internal/{keys,scan,selection,tx}.rs`, `impls/src/backends/lmdb.rs`). Items marked
+`core/src/global.rs`) and `epic-wallet` `v4.1.0` (`impls/src/lifecycle/seed.rs`,
+`libwallet/src/internal/{keys,scan,selection,tx}.rs`, `impls/src/backends/lmdb.rs`); the node
+`v4.0.4` and wallet `v4.0.2` files compute the same results (`upstream-4.1.0-review.md`). Items marked
 "confirm" need vectors before code depends on them.
 
 ## From mnemonic to keys

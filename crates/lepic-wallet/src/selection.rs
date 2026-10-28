@@ -604,8 +604,8 @@ fn split_change(
         .checked_div(parts_u64)
         .filter(|part| *part > 0)
         .ok_or(too_small)?;
-    // Upstream takes the remainder modulo the part, which equals the true remainder whenever
-    // its change adds up. LEPIC always uses the true remainder.
+    // The true remainder, as epic-wallet v4.1.0 takes it (v4.0.2 took it modulo the part, which
+    // differs only for change smaller than about the square of the output count).
     let remainder = change.value().checked_rem(parts_u64).ok_or(too_small)?;
     let mut amounts = vec![Amount::new(part); parts.get()];
     if let Some(last) = amounts.last_mut() {
