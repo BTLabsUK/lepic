@@ -426,13 +426,15 @@ match" makes the contact Verified on that phone, because the camera saw the othe
 network is used, so this works Offline.
 
 The in-person SAS is a consistency check whose strength is the physical channel: there is no
-commitment, so it only proves that each phone scanned the card the other one shows when both
-cameras looked at the other phone's screen. Someone who controls both QR codes (a card passed on
-as a screenshot, a photo or over a video call) can pick both cards they hand over after seeing
-the real ones, and finds two whose SAS agree with about 2^16 card keys per side, a birthday
-search over 32 bits. The app therefore offers "They match" in person only for cards its camera
-read from the other phone; a card that came any other way is paired online (7.1 to 7.3), whose
-commitment gives the full 2^-32 below.
+commitment. When at least one of the two cards went straight from one screen to the other
+phone's camera, an attacker who replaces the other card must hit the SAS that real card fixes,
+about 2^32 card keys, which it cannot do while the pairing waits; a phone that scans a desktop's
+code and sends its own card back by paste is this case. Someone who supplies both cards (each
+passed on as a screenshot, a photo or over a video call) picks both after seeing the real ones,
+and finds two whose SAS agree with about 2^16 card keys per side, a birthday search over 32
+bits. "They match" in person therefore stands for "at least one code was scanned from the other
+device's screen"; when neither was, the pair verifies online (7.1 to 7.3), whose commitment
+gives the full 2^-32 below.
 
 There is no invite, so no shared home relay: each card's mailbox (tag 08) is on the relay its
 owner uses when it shows the card (a service's card names its inbox), each side delivers to the
