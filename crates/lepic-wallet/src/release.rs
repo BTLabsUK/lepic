@@ -18,14 +18,14 @@ use std::sync::Arc;
 
 use jiff::Timestamp;
 use lepic_crypto::Commitment;
-use lepic_keychain::Identifier;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    AccountIndex, KeyId, OutputRecord, OutputStatus, Repositories, SlateStage, StoreError,
-    StoredTransaction, TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, KeyId, OutputRecord, OutputStatus, Record, Repositories, SlateStage, StoreError,
+    StoredTransaction, TxDirection, TxId, TxState, TxWatch, WalletStore, WatchPhase as StoredPhase,
+    WatchedOutput,
 };
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
@@ -58,13 +58,6 @@ pub const RELEASED_WATCH_BLOCKS: u64 = 10_080;
 /// posting a signed payment later, and the output is what the payment gives this wallet.
 pub const ENDED_RECEIVE_WATCH_BLOCKS: u64 = 1_440;
 
-const FINALIZED_HEIGHT_PREFIX: &str = "release.finalized_height.";
-const KERNEL_ABSENT_PREFIX: &str = "release.kernel_absent.";
-const RELEASED_PREFIX: &str = "release.released.";
-/// A watched transaction whose kernel window ended unseen and that is now looked for by its
-/// outputs. The record is the one kept under [`RELEASED_PREFIX`], moved.
-const LATE_PREFIX: &str = "release.late.";
-
 /// What a release keeps to recognise the send if the chain mines it after all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReleasedSend {
@@ -93,50 +86,49 @@ impl ReleasedSend {
             .unwrap_or(Height::new(u64::MAX))
     }
 
-    fn encode(&self) -> String {
-        let mut fields = vec![
-            self.excess.to_hex(),
-            self.min_height.value().to_string(),
-            self.released_at.value().to_string(),
-        ];
-        fields.extend(self.change.iter().map(|change| {
-            let key_id: String = change
-                .key_id
-                .0
+    /// The send as its watch record holds it. A commitment that no longer parses is a
+    /// damaged record.
+    fn from_watch(watch: &TxWatch) -> Result<Self, StoreError> {
+        let commitment = |bytes: &[u8]| {
+            Commitment::from_bytes(bytes).map_err(|_| StoreError::Corrupt {
+                record: Record::TransactionRecord,
+                field: "watched commitment",
+            })
+        };
+        Ok(Self {
+            excess: commitment(&watch.excess)?,
+            min_height: watch.min_height,
+            released_at: watch.ended_at,
+            change: watch
+                .outputs
                 .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect();
-            format!(
-                "{}:{key_id}:{}",
-                change.commitment.to_hex(),
-                change.amount.value()
-            )
-        }));
-        fields.join(" ")
+                .map(|output| {
+                    Ok(ReleasedChange {
+                        commitment: commitment(&output.commitment)?,
+                        key_id: output.key_id,
+                        amount: output.amount,
+                    })
+                })
+                .collect::<Result<_, StoreError>>()?,
+        })
     }
 
-    fn decode(text: &str) -> Option<Self> {
-        let mut fields = text.split(' ');
-        let excess = Commitment::from_hex(fields.next()?).ok()?;
-        let min_height = Height::new(fields.next()?.parse().ok()?);
-        let released_at = Height::new(fields.next()?.parse().ok()?);
-        let change = fields
-            .map(|field| {
-                let mut parts = field.split(':');
-                let change = ReleasedChange {
-                    commitment: Commitment::from_hex(parts.next()?).ok()?,
-                    key_id: KeyId(Identifier::from_hex(parts.next()?).ok()?.to_bytes()),
-                    amount: Amount::new(parts.next()?.parse().ok()?),
-                };
-                parts.next().is_none().then_some(change)
-            })
-            .collect::<Option<Vec<_>>>()?;
-        Some(Self {
-            excess,
-            min_height,
-            released_at,
-            change,
-        })
+    fn to_watch(&self, phase: StoredPhase) -> TxWatch {
+        TxWatch {
+            phase,
+            excess: *self.excess.as_bytes(),
+            min_height: self.min_height,
+            ended_at: self.released_at,
+            outputs: self
+                .change
+                .iter()
+                .map(|change| WatchedOutput {
+                    commitment: *change.commitment.as_bytes(),
+                    key_id: change.key_id,
+                    amount: change.amount,
+                })
+                .collect(),
+        }
     }
 
     /// The change output as a refresh stores it once the kernel is found at `height`, as the
@@ -190,7 +182,7 @@ pub(crate) fn record_watch(
         released_at: ended_at,
         change,
     };
-    repos.put_setting(&key(RELEASED_PREFIX, tx_id), &released.encode())
+    repos.put_tx_watch(tx_id, &released.to_watch(StoredPhase::Kernel))
 }
 
 /// How a refresh looks for a watched transaction.
@@ -203,10 +195,10 @@ enum WatchPhase {
 }
 
 impl WatchPhase {
-    fn prefix(self) -> &'static str {
+    fn stored(self) -> StoredPhase {
         match self {
-            Self::Kernel { .. } => RELEASED_PREFIX,
-            Self::Outputs => LATE_PREFIX,
+            Self::Kernel { .. } => StoredPhase::Kernel,
+            Self::Outputs => StoredPhase::Outputs,
         }
     }
 }
@@ -230,37 +222,28 @@ struct Watched {
 }
 
 /// The cancelled or expired transactions still watched for, with the account each belongs to
-/// and how each is looked for. A record that does not parse is skipped: the transaction then
-/// keeps its state, as it did before ended transactions were watched.
+/// and how each is looked for.
 fn released_sends(repos: &dyn Repositories) -> Result<Vec<Watched>, StoreError> {
     let mut released = Vec::new();
-    for account in repos.accounts()? {
-        for stored in repos.transactions(account.index)? {
-            let entry = &stored.entry;
-            if !matches!(entry.state, TxState::Cancelled | TxState::Expired) {
-                continue;
-            }
-            let phases = [
-                WatchPhase::Kernel {
-                    window: kernel_window(entry.direction),
-                },
-                WatchPhase::Outputs,
-            ];
-            for phase in phases {
-                let Some(text) = repos.setting(&key(phase.prefix(), stored.id))? else {
-                    continue;
-                };
-                match ReleasedSend::decode(&text) {
-                    Some(send) => released.push(Watched {
-                        tx_id: stored.id,
-                        account: entry.account,
-                        send,
-                        phase,
-                    }),
-                    None => warn!(tx_id = %stored.id, "released send unreadable"),
-                }
-            }
+    for (tx_id, watch) in repos.tx_watches()? {
+        let Some(entry) = repos.transaction(tx_id)? else {
+            continue;
+        };
+        if !matches!(entry.state, TxState::Cancelled | TxState::Expired) {
+            continue;
         }
+        let phase = match watch.phase {
+            StoredPhase::Kernel => WatchPhase::Kernel {
+                window: kernel_window(entry.direction),
+            },
+            StoredPhase::Outputs => WatchPhase::Outputs,
+        };
+        released.push(Watched {
+            tx_id,
+            account: entry.account,
+            send: ReleasedSend::from_watch(&watch)?,
+            phase,
+        });
     }
     Ok(released)
 }
@@ -280,11 +263,13 @@ fn confirm_mined_release(
     height: Height,
     now: Timestamp,
 ) -> Result<Option<StateChange>, WalletError> {
-    let record = key(phase.prefix(), tx_id);
     let still_ended = repos
         .transaction(tx_id)?
         .is_some_and(|entry| matches!(entry.state, TxState::Cancelled | TxState::Expired));
-    if !still_ended || repos.setting(&record)?.is_none() {
+    let still_watched = repos
+        .tx_watch(tx_id)?
+        .is_some_and(|watch| watch.phase == phase.stored());
+    if !still_ended || !still_watched {
         return Ok(None);
     }
     for change in &released.change {
@@ -295,7 +280,7 @@ fn confirm_mined_release(
     }
     let change = confirm_released(repos, tx_id, now)?;
     repos.set_confirmed_height(tx_id, height)?;
-    repos.delete_setting(&record)?;
+    repos.delete_tx_watch(tx_id)?;
     undo_spends_by_another_wallet(repos, codecs, tx_id)?;
     Ok(change)
 }
@@ -430,7 +415,8 @@ pub(crate) fn release_check(
     };
     // Sends finalized before the height was stored count from the slate's creation, which is
     // never later than finalizing.
-    let finalized = stored_height(repos, FINALIZED_HEIGHT_PREFIX, stored.id)?.unwrap_or(min_height);
+    let marks = repos.tx_marks(stored.id)?;
+    let finalized = marks.finalized_at.unwrap_or(min_height);
     Ok(Ok(ReleaseCheck {
         excess,
         min_height,
@@ -438,7 +424,7 @@ pub(crate) fn release_check(
         from: finalized
             .checked_add_blocks(RELEASE_AFTER_BLOCKS)
             .unwrap_or(Height::new(u64::MAX)),
-        absent_at: stored_height(repos, KERNEL_ABSENT_PREFIX, stored.id)?,
+        absent_at: marks.kernel_absent_at,
     }))
 }
 
@@ -448,10 +434,9 @@ pub(crate) fn record_finalized(
     tx_id: TxId,
     tip: Height,
 ) -> Result<(), StoreError> {
-    repos.put_setting(
-        &key(FINALIZED_HEIGHT_PREFIX, tx_id),
-        &tip.value().to_string(),
-    )
+    let mut marks = repos.tx_marks(tx_id)?;
+    marks.finalized_at = Some(tip);
+    repos.put_tx_marks(tx_id, &marks)
 }
 
 /// Records that a lookup of the send's kernel up to `height` did not find it.
@@ -460,33 +445,9 @@ pub(crate) fn record_kernel_absent(
     tx_id: TxId,
     height: Height,
 ) -> Result<(), StoreError> {
-    repos.put_setting(
-        &key(KERNEL_ABSENT_PREFIX, tx_id),
-        &height.value().to_string(),
-    )
-}
-
-fn key(prefix: &str, tx_id: TxId) -> String {
-    format!("{prefix}{tx_id}")
-}
-
-/// A stored height that does not parse counts as not stored: the send then waits for the next
-/// lookup, which is the safe side.
-fn stored_height(
-    repos: &dyn Repositories,
-    prefix: &str,
-    tx_id: TxId,
-) -> Result<Option<Height>, StoreError> {
-    Ok(match repos.setting(&key(prefix, tx_id))? {
-        Some(text) => {
-            let height = text.parse().ok().map(Height::new);
-            if height.is_none() {
-                warn!(tx_id = %tx_id, "release height unreadable");
-            }
-            height
-        }
-        None => None,
-    })
+    let mut marks = repos.tx_marks(tx_id)?;
+    marks.kernel_absent_at = Some(height);
+    repos.put_tx_marks(tx_id, &marks)
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -757,16 +718,19 @@ fn end_kernel_watch(
     watched: &Watched,
     height: Height,
 ) -> Result<(), StoreError> {
-    let record = key(RELEASED_PREFIX, watched.tx_id);
-    let Some(text) = repos.setting(&record)? else {
+    let Some(mut watch) = repos
+        .tx_watch(watched.tx_id)?
+        .filter(|watch| watch.phase == StoredPhase::Kernel)
+    else {
         return Ok(());
     };
-    repos.delete_setting(&record)?;
     if watched.send.change.is_empty() {
         debug!(tx_id = %watched.tx_id, height = %height, "released send no longer watched");
+        repos.delete_tx_watch(watched.tx_id)?;
     } else {
         debug!(tx_id = %watched.tx_id, height = %height, "ended transaction now watched by its outputs");
-        repos.put_setting(&key(LATE_PREFIX, watched.tx_id), &text)?;
+        watch.phase = StoredPhase::Outputs;
+        repos.put_tx_watch(watched.tx_id, &watch)?;
     }
     Ok(())
 }
@@ -792,6 +756,8 @@ fn releasable(
 
 #[cfg(test)]
 mod tests {
+    use lepic_keychain::Identifier;
+
     use super::*;
 
     fn released() -> ReleasedSend {
@@ -809,30 +775,23 @@ mod tests {
     }
 
     #[test]
-    fn a_released_send_record_round_trips() {
+    fn a_released_send_round_trips_through_its_watch_record() {
         let send = released();
+        let watch = send.to_watch(StoredPhase::Outputs);
 
-        assert_eq!(ReleasedSend::decode(&send.encode()), Some(send));
+        assert_eq!(watch.phase, StoredPhase::Outputs);
+        assert_eq!(ReleasedSend::from_watch(&watch).unwrap(), send);
     }
 
     #[test]
-    fn a_released_send_with_no_change_round_trips() {
-        let send = ReleasedSend {
-            change: Vec::new(),
-            ..released()
-        };
+    fn a_watch_record_with_a_commitment_off_the_curve_is_corrupt() {
+        let mut watch = released().to_watch(StoredPhase::Kernel);
+        watch.outputs[0].commitment = [0xff; 33];
 
-        assert_eq!(ReleasedSend::decode(&send.encode()), Some(send));
-    }
-
-    #[test]
-    fn rejects_a_damaged_released_send_record() {
-        let text = released().encode();
-        let cut = text.rsplit_once(':').unwrap().0;
-
-        assert_eq!(ReleasedSend::decode(cut), None);
-        assert_eq!(ReleasedSend::decode(&format!("{text}:1")), None);
-        assert_eq!(ReleasedSend::decode(""), None);
+        assert!(matches!(
+            ReleasedSend::from_watch(&watch),
+            Err(StoreError::Corrupt { .. })
+        ));
     }
 
     #[test]

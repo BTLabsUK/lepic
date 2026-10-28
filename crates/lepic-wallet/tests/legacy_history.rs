@@ -360,8 +360,8 @@ fn import_after_the_scan_moves_outputs_to_imported_entries_and_dates_the_rest_by
         .iter()
         .filter(|d| d.transaction.id != found[0].transaction.id)
     {
-        let key = format!("scan.found.{}", linked.transaction.id);
-        let record = lepic_store::WalletStore::read(&world.store(), |repos| repos.setting(&key));
+        let id = linked.transaction.id;
+        let record = lepic_store::WalletStore::read(&world.store(), |repos| repos.scan_found(id));
         assert_eq!(record.unwrap(), None, "removed with its entry");
     }
     let sent = world.tx(DEFAULT, SLATE_SENT);

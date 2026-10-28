@@ -70,11 +70,6 @@ pub const UNFINALIZED_RECEIVE_BLOCKS: u64 = RELEASED_WATCH_BLOCKS;
 
 pub(crate) const LAST_CONFIRMED_SETTING: &str = "refresh.last_confirmed_height";
 
-const RECEIVE_SEEN_PREFIX: &str = "refresh.receive_seen.";
-
-/// Set for a received payment once a refresh found every input of its slate unspent.
-const RECEIVE_INPUTS_PREFIX: &str = "refresh.receive_inputs_unspent.";
-
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RefreshError {
@@ -484,7 +479,9 @@ where
                 Ok(session.store.write(|repos| {
                     for &tx_id in &seen_unspent {
                         if repos.transaction(tx_id)?.is_some() {
-                            repos.put_setting(&receive_inputs_key(tx_id), "1")?;
+                            let mut marks = repos.tx_marks(tx_id)?;
+                            marks.receive_inputs_unspent = true;
+                            repos.put_tx_marks(tx_id, &marks)?;
                         }
                     }
                     let mut changes = confirm_all(repos, &confirmed, now)?;
@@ -1283,7 +1280,7 @@ fn waiting_receives(
                 .collect(),
             outputs,
             kernel: pending_kernel(repos, codecs, &stored)?,
-            inputs_seen: repos.setting(&receive_inputs_key(stored.id))?.is_some(),
+            inputs_seen: repos.tx_marks(stored.id)?.receive_inputs_unspent,
         });
     }
     Ok(waiting)
@@ -1349,16 +1346,7 @@ fn awaits_finalization(
 }
 
 fn receive_seen_at(repos: &dyn Repositories, tx_id: TxId) -> Result<Option<Height>, StoreError> {
-    Ok(match repos.setting(&receive_seen_key(tx_id))? {
-        Some(text) => {
-            let height = text.parse().ok().map(Height::new);
-            if height.is_none() {
-                warn!(tx_id = %tx_id, "receive height unreadable");
-            }
-            height
-        }
-        None => None,
-    })
+    Ok(repos.tx_marks(tx_id)?.receive_seen_at)
 }
 
 /// Forgets when a refresh first saw a received payment. Run it when the payment ends.
@@ -1366,16 +1354,10 @@ pub(crate) fn forget_receive_seen(
     repos: &mut dyn Repositories,
     tx_id: TxId,
 ) -> Result<(), StoreError> {
-    repos.delete_setting(&receive_seen_key(tx_id))?;
-    repos.delete_setting(&receive_inputs_key(tx_id))
-}
-
-fn receive_inputs_key(tx_id: TxId) -> String {
-    format!("{RECEIVE_INPUTS_PREFIX}{tx_id}")
-}
-
-fn receive_seen_key(tx_id: TxId) -> String {
-    format!("{RECEIVE_SEEN_PREFIX}{tx_id}")
+    let mut marks = repos.tx_marks(tx_id)?;
+    marks.receive_seen_at = None;
+    marks.receive_inputs_unspent = false;
+    repos.put_tx_marks(tx_id, &marks)
 }
 
 /// Records `tip` as the height a refresh first saw each received payment with no TTL that
@@ -1386,10 +1368,12 @@ fn record_receives_seen(
     tip: Height,
 ) -> Result<(), RefreshError> {
     for stored in open_transactions(repos)? {
-        if awaits_finalization(repos, codecs, &stored)?
-            && repos.setting(&receive_seen_key(stored.id))?.is_none()
-        {
-            repos.put_setting(&receive_seen_key(stored.id), &tip.value().to_string())?;
+        if awaits_finalization(repos, codecs, &stored)? {
+            let mut marks = repos.tx_marks(stored.id)?;
+            if marks.receive_seen_at.is_none() {
+                marks.receive_seen_at = Some(tip);
+                repos.put_tx_marks(stored.id, &marks)?;
+            }
         }
     }
     Ok(())

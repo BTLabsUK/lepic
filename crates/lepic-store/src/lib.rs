@@ -24,6 +24,7 @@ mod slate;
 mod sqlite;
 mod store;
 mod transaction;
+mod tx_record;
 
 pub use account::{AccountIndex, AccountRecord, AccountRepository};
 pub use contact::{
@@ -65,4 +66,8 @@ pub use store::{Repositories, WalletStore};
 pub use transaction::{
     OpenReceipt, StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
     TxState,
+};
+pub use tx_record::{
+    FoundDuring, OtherWalletSpend, ScanFoundRecord, TxMarks, TxRecordRepository, TxWatch,
+    WatchPhase, WatchedOutput,
 };

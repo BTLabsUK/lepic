@@ -16,14 +16,15 @@ use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
 use lepic_store::{
     AccountIndex, AccountRecord, CONTACT_SLOT_COUNT, ChainCheck, ContactCap, ContactOutboxState,
-    ContactState, ContextKey, ImportSummary, ImportedKind, ImportedMessage, ImportedOutput,
-    ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex,
-    InvoiceCap, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES,
-    MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt, OutboxEntry, OutboxId,
-    OutboxStatus, OutputStatus, PRIVATE_SLOT_END, PairingId, PairingState, ParticipantId,
-    PeerCapability, PeerCard, PeerSupport, PendingInvoiceStatus, PrivateContext, Record,
-    Repositories, SealMode, SlateStage, StoreError, TransactionEntry, TxDirection, TxId, TxState,
-    WalletStore, export_contacts, import_contacts,
+    ContactState, ContextKey, FoundDuring, ImportSummary, ImportedKind, ImportedMessage,
+    ImportedOutput, ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus,
+    InvoiceAddressIndex, InvoiceCap, KeyId, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES,
+    MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt,
+    OtherWalletSpend, OutboxEntry, OutboxId, OutboxStatus, OutputStatus, PRIVATE_SLOT_END,
+    PairingId, PairingState, ParticipantId, PeerCapability, PeerCard, PeerSupport,
+    PendingInvoiceStatus, PrivateContext, Record, Repositories, ScanFoundRecord, SealMode,
+    SlateStage, StoreError, TransactionEntry, TxDirection, TxId, TxMarks, TxState, TxWatch,
+    WalletStore, WatchPhase, WatchedOutput, export_contacts, import_contacts,
 };
 use uuid::Uuid;
 
@@ -2084,6 +2085,189 @@ macro_rules! for_each_backend {
     };
 }
 
+fn tx_record_fixture() -> (TxMarks, TxWatch, OtherWalletSpend, ScanFoundRecord) {
+    let marks = TxMarks {
+        local_cutoff: Some(Height::new(120)),
+        finalized_at: Some(Height::new(100)),
+        kernel_absent_at: Some(Height::new(u64::MAX)),
+        receive_seen_at: None,
+        receive_inputs_unspent: true,
+        inputs_spent_elsewhere: false,
+    };
+    let watch = TxWatch {
+        phase: WatchPhase::Kernel,
+        excess: [0x08; 33],
+        min_height: Height::new(90),
+        ended_at: Height::new(1_530),
+        outputs: vec![
+            WatchedOutput {
+                commitment: [0x09; 33],
+                key_id: KeyId([3; 17]),
+                amount: Amount::new(u64::MAX),
+            },
+            WatchedOutput {
+                commitment: [0x08; 33],
+                key_id: KeyId([4; 17]),
+                amount: Amount::new(1),
+            },
+        ],
+    };
+    let spend = OtherWalletSpend {
+        after: Height::new(10),
+        to: Height::new(20),
+        open: true,
+        spent: vec![[0x09; 33], [0x08; 33]],
+        change: vec![[0x08; 33]],
+    };
+    let found = ScanFoundRecord {
+        output: Some([0x09; 33]),
+        during: Some(FoundDuring::Restore),
+        dated_by_block: true,
+    };
+    (marks, watch, spend, found)
+}
+
+fn transaction_records_round_trip_and_are_replaced<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let (marks, watch, spend, found) = tx_record_fixture();
+    let (first, second) = write(store, |repos| {
+        let first = repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_A)))?;
+        let second = repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_B)))?;
+        repos.put_tx_marks(first, &marks)?;
+        repos.put_tx_watch(second, &watch)?;
+        repos.put_tx_watch(first, &watch)?;
+        repos.put_other_wallet_spend(first, &spend)?;
+        repos.put_scan_found(first, &found)?;
+        Ok((first, second))
+    })
+    .unwrap();
+    let stored = read(store, |repos| {
+        Ok((
+            repos.tx_marks(first)?,
+            repos.tx_marks(second)?,
+            repos.tx_watch(first)?,
+            repos.tx_watches()?,
+            repos.other_wallet_spend(first)?,
+            repos.other_wallet_spends()?,
+            repos.scan_found(first)?,
+            repos.scan_found(second)?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(stored.0, marks);
+    assert_eq!(stored.1, TxMarks::default());
+    assert_eq!(stored.2.as_ref(), Some(&watch));
+    assert_eq!(
+        stored.3,
+        vec![(first, watch.clone()), (second, watch.clone())]
+    );
+    assert_eq!(stored.4.as_ref(), Some(&spend));
+    assert_eq!(stored.5, vec![(first, spend.clone())]);
+    assert_eq!(stored.6, Some(found));
+    assert_eq!(stored.7, None);
+
+    let moved = TxWatch {
+        phase: WatchPhase::Outputs,
+        outputs: vec![watch.outputs[1]],
+        ..watch.clone()
+    };
+    let closed = OtherWalletSpend {
+        open: false,
+        change: Vec::new(),
+        ..spend.clone()
+    };
+    let received = ScanFoundRecord {
+        during: None,
+        dated_by_block: false,
+        ..found
+    };
+    write(store, |repos| {
+        repos.put_tx_watch(first, &moved)?;
+        repos.delete_tx_watch(second)?;
+        repos.put_other_wallet_spend(first, &closed)?;
+        repos.put_scan_found(first, &received)?;
+        repos.put_tx_marks(first, &TxMarks::default())
+    })
+    .unwrap();
+    let stored = read(store, |repos| {
+        Ok((
+            repos.tx_watches()?,
+            repos.other_wallet_spend(first)?,
+            repos.scan_found(first)?,
+            repos.tx_marks(first)?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(stored.0, vec![(first, moved)]);
+    assert_eq!(stored.1, Some(closed));
+    assert_eq!(stored.2, Some(received));
+    assert_eq!(stored.3, TxMarks::default());
+}
+
+fn transaction_records_need_their_transaction_and_go_with_it<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let (marks, watch, spend, found) = tx_record_fixture();
+    let missing = TxId(9);
+    let refused = [
+        write(store, |repos| repos.put_tx_marks(missing, &marks)),
+        write(store, |repos| repos.put_tx_watch(missing, &watch)),
+        write(store, |repos| repos.put_other_wallet_spend(missing, &spend)),
+        write(store, |repos| repos.put_scan_found(missing, &found)),
+    ];
+    for result in refused {
+        assert!(matches!(
+            result,
+            Err(StoreError::UnknownTransaction(TxId(9)))
+        ));
+    }
+
+    let (id, kept) = write(store, |repos| {
+        let id = repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_A)))?;
+        let kept = repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_B)))?;
+        for tx in [id, kept] {
+            repos.put_tx_marks(tx, &marks)?;
+            repos.put_tx_watch(tx, &watch)?;
+            repos.put_other_wallet_spend(tx, &spend)?;
+            repos.put_scan_found(tx, &found)?;
+        }
+        Ok((id, kept))
+    })
+    .unwrap();
+    write(store, |repos| repos.delete_transaction(id)).unwrap();
+    let after = read(store, |repos| {
+        Ok((
+            repos.tx_marks(id)?,
+            repos.tx_watch(id)?,
+            repos.other_wallet_spend(id)?,
+            repos.scan_found(id)?,
+            repos.tx_watches()?.len(),
+            repos.other_wallet_spends()?.len(),
+            repos.tx_marks(kept)?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(after.0, TxMarks::default());
+    assert_eq!(after.1, None);
+    assert_eq!(after.2, None);
+    assert_eq!(after.3, None);
+    assert_eq!(
+        (after.4, after.5),
+        (1, 1),
+        "the other entry keeps its records"
+    );
+    assert_eq!(after.6, marks);
+
+    // A new entry never inherits the records of a deleted one.
+    let next = write(store, |repos| {
+        repos.insert_transaction(&transaction(DEFAULT, Some(SLATE_A)))
+    })
+    .unwrap();
+    assert_ne!(next, id);
+    assert_eq!(read(store, |repos| repos.tx_watch(next)).unwrap(), None);
+}
+
 for_each_backend!(
     accounts_round_trip_in_index_order,
     put_account_replaces_label_and_child_counter,
@@ -2146,6 +2330,8 @@ for_each_backend!(
     imported_records_need_their_transaction_and_bounded_messages,
     imported_outputs_are_found_by_commitment_and_status,
     deleting_a_transaction_removes_what_was_imported_with_it,
+    transaction_records_round_trip_and_are_replaced,
+    transaction_records_need_their_transaction_and_go_with_it,
 );
 
 #[test]

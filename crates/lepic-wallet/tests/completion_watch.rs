@@ -462,7 +462,7 @@ fn a_receiver_cancel_posted_after_the_kernel_watch_still_arrives_by_its_output()
     let watched = payment
         .receiver
         .store
-        .read(|repos| repos.setting(&format!("release.late.{}", payment.receive_tx)))
+        .read(|repos| repos.tx_watch(payment.receive_tx))
         .unwrap();
     assert_eq!(watched, None, "found, it is no longer watched");
 }

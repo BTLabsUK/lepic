@@ -5,7 +5,7 @@
 //! repositories.
 
 use jiff::Timestamp;
-use lepic_primitives::amount::Height;
+use lepic_primitives::amount::{Amount, Height};
 use rusqlite::Connection;
 
 use super::SqliteStore;
@@ -14,9 +14,13 @@ use crate::account::{AccountIndex, AccountRecord};
 use crate::context::ContextKey;
 use crate::error::StoreError;
 use crate::invoice::{InvoiceAddressIndex, PendingInvoice, PendingInvoiceStatus};
+use crate::output::KeyId;
 use crate::peer::PeerSupport;
 use crate::store::WalletStore;
 use crate::transaction::{TxId, TxState};
+use crate::tx_record::{
+    FoundDuring, OtherWalletSpend, ScanFoundRecord, TxMarks, TxWatch, WatchPhase, WatchedOutput,
+};
 
 struct UpgradeCase {
     from: u32,
@@ -138,8 +142,114 @@ fn check_v6_seed(store: &SqliteStore) {
 }
 
 fn check_v7_seed(store: &SqliteStore) {
-    check_v6_seed(store);
     assert!(!store.read(|repos| repos.envelope_seen(&[1; 32])).unwrap());
+    let commitment = |byte: u8, fill: u8| {
+        let mut bytes = [fill; 33];
+        bytes[0] = byte;
+        bytes
+    };
+    let mut key_id = [0; 17];
+    key_id[0] = 3;
+    key_id[4] = 7;
+    let (marks, watches, spends, found, left) = store
+        .read(|repos| {
+            Ok::<_, StoreError>((
+                [repos.tx_marks(TxId(1))?, repos.tx_marks(TxId(2))?],
+                repos.tx_watches()?,
+                repos.other_wallet_spends()?,
+                [repos.scan_found(TxId(2))?, repos.scan_found(TxId(3))?],
+                [
+                    repos.setting("network")?,
+                    repos.setting("send.local_cutoff.1")?,
+                    repos.setting("send.local_cutoff.9")?,
+                    repos.setting("tx.other_wallet.open")?,
+                    repos.setting("scan.found.2")?,
+                    repos.setting("release.kernel_absent.1")?,
+                ],
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        marks,
+        [
+            TxMarks {
+                local_cutoff: Some(Height::new(120)),
+                finalized_at: Some(Height::new(100)),
+                inputs_spent_elsewhere: true,
+                ..TxMarks::default()
+            },
+            TxMarks {
+                receive_seen_at: Some(Height::new(55)),
+                receive_inputs_unspent: true,
+                ..TxMarks::default()
+            },
+        ],
+        "a height that does not parse is dropped"
+    );
+    assert_eq!(
+        watches,
+        vec![
+            (
+                TxId(1),
+                TxWatch {
+                    phase: WatchPhase::Kernel,
+                    excess: commitment(0x08, 0x11),
+                    min_height: Height::new(90),
+                    ended_at: Height::new(1_530),
+                    outputs: vec![WatchedOutput {
+                        commitment: commitment(0x09, 0x22),
+                        key_id: KeyId(key_id),
+                        amount: Amount::new(899_200_000),
+                    }],
+                },
+            ),
+            (
+                TxId(2),
+                TxWatch {
+                    phase: WatchPhase::Outputs,
+                    excess: commitment(0x08, 0x11),
+                    min_height: Height::new(40),
+                    ended_at: Height::new(50),
+                    outputs: Vec::new(),
+                },
+            ),
+        ]
+    );
+    assert_eq!(
+        spends,
+        vec![(
+            TxId(3),
+            OtherWalletSpend {
+                after: Height::new(10),
+                to: Height::new(20),
+                open: true,
+                spent: vec![commitment(0x09, 0x22)],
+                change: Vec::new(),
+            },
+        )],
+        "a commitment that does not parse is skipped"
+    );
+    assert_eq!(
+        found,
+        [
+            None,
+            Some(ScanFoundRecord {
+                output: Some(commitment(0x09, 0x22)),
+                during: Some(FoundDuring::Restore),
+                dated_by_block: true,
+            }),
+        ]
+    );
+    assert_eq!(
+        left,
+        [Some("floonet".to_owned()), None, None, None, None, None],
+        "only the moved settings are deleted"
+    );
+}
+
+fn check_v8_seed(store: &SqliteStore) {
+    check_empty(store);
+    assert!(store.read(|repos| repos.tx_watches()).unwrap().is_empty());
 }
 
 fn check_v5_seed(store: &SqliteStore) {
@@ -208,8 +318,35 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 7,
-        seed: "",
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, amount_credited,
+                   amount_debited, created_at, updated_at)
+               VALUES (1, 0, 'outgoing', 'cancelled', 0, 5, 1, 1),
+                      (2, 0, 'incoming', 'cancelled', 5, 0, 1, 1),
+                      (3, 0, 'outgoing', 'confirmed', 0, 5, 1, 1);
+               INSERT INTO settings (key, value) VALUES
+                   ('network', 'floonet'),
+                   ('send.local_cutoff.1', '120'),
+                   ('send.local_cutoff.9', '5'),
+                   ('release.finalized_height.1', '100'),
+                   ('release.kernel_absent.1', '1x'),
+                   ('tx.inputs_spent_elsewhere.1', '1'),
+                   ('refresh.receive_seen.2', '55'),
+                   ('refresh.receive_inputs_unspent.2', '1'),
+                   ('release.released.1', '081111111111111111111111111111111111111111111111111111111111111111 90 1530 092222222222222222222222222222222222222222222222222222222222222222:0300000007000000000000000000000000:899200000'),
+                   ('release.late.2', '081111111111111111111111111111111111111111111111111111111111111111 40 50'),
+                   ('tx.other_wallet.3',
+                    '{\"spent\":[\"092222222222222222222222222222222222222222222222222222222222222222\",\"zz\"],\"change\":[],\"after\":10,\"to\":20}'),
+                   ('tx.other_wallet.open', '[3,7]'),
+                   ('scan.found.2', 'rescan noon'),
+                   ('scan.found.3', 'restore block'),
+                   ('scan.found_output.3', '092222222222222222222222222222222222222222222222222222222222222222');",
         check: check_v7_seed,
+    },
+    UpgradeCase {
+        from: 8,
+        seed: "",
+        check: check_v8_seed,
     },
 ];
 

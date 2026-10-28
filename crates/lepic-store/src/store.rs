@@ -10,6 +10,7 @@ use crate::relay::RelayRepository;
 use crate::settings::SettingsRepository;
 use crate::slate::SlateRepository;
 use crate::transaction::TransactionRepository;
+use crate::tx_record::TxRecordRepository;
 
 /// Every repository, as seen inside one store transaction.
 pub trait Repositories:
@@ -24,6 +25,7 @@ pub trait Repositories:
     + PeerRepository
     + ImportedRepository
     + ContactRepository
+    + TxRecordRepository
 {
 }
 
@@ -39,6 +41,7 @@ impl<T> Repositories for T where
         + PeerRepository
         + ImportedRepository
         + ContactRepository
+        + TxRecordRepository
 {
 }
 

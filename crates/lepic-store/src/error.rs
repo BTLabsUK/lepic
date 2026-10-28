@@ -28,6 +28,7 @@ pub enum Record {
     InvoiceAddress,
     ImportedTransaction,
     ImportedOutput,
+    TransactionRecord,
 }
 
 impl fmt::Display for Record {
@@ -51,6 +52,7 @@ impl fmt::Display for Record {
             Self::InvoiceAddress => "invoice address",
             Self::ImportedTransaction => "imported transaction",
             Self::ImportedOutput => "imported output",
+            Self::TransactionRecord => "transaction record",
         })
     }
 }

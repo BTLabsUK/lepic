@@ -33,6 +33,10 @@ use crate::transaction::{
     OpenReceipt, StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
     TxState, next_transaction_id,
 };
+use crate::tx_record::{
+    FoundDuring, OtherWalletSpend, ScanFoundRecord, TxMarks, TxRecordRepository, TxWatch,
+    WatchPhase, WatchedOutput,
+};
 
 /// The repositories over one open SQLite transaction.
 pub(super) struct SqliteRepos<'a> {
@@ -561,6 +565,289 @@ fn decode_slate(row: &Row<'_>) -> Result<StoredSlate, StoreError> {
         codec: row.get(2)?,
         bytes: row.get(3)?,
     })
+}
+
+/// The position of an item in a stored list, as its column holds it.
+fn position_column(position: usize) -> Result<i64, StoreError> {
+    i64::try_from(position).map_err(|_| StoreError::OutOfRange {
+        field: "list position",
+    })
+}
+
+fn decode_height(value: Option<i64>) -> Option<Height> {
+    value.map(|value| Height::new(u64_from_column(value)))
+}
+
+fn encode_height(height: Option<Height>) -> Option<i64> {
+    height.map(|height| u64_to_column(height.value()))
+}
+
+fn decode_commitment(bytes: &[u8], field: &'static str) -> Result<CommitmentBytes, StoreError> {
+    bytes
+        .try_into()
+        .map_err(|_| corrupt(Record::TransactionRecord, field))
+}
+
+fn decode_flag(value: i64, field: &'static str) -> Result<bool, StoreError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(corrupt(Record::TransactionRecord, field)),
+    }
+}
+
+fn decode_marks(row: &Row<'_>) -> Result<TxMarks, StoreError> {
+    Ok(TxMarks {
+        local_cutoff: decode_height(row.get(0)?),
+        finalized_at: decode_height(row.get(1)?),
+        kernel_absent_at: decode_height(row.get(2)?),
+        receive_seen_at: decode_height(row.get(3)?),
+        receive_inputs_unspent: decode_flag(row.get(4)?, "receive inputs unspent")?,
+        inputs_spent_elsewhere: decode_flag(row.get(5)?, "inputs spent elsewhere")?,
+    })
+}
+
+fn decode_watched_output(row: &Row<'_>) -> Result<WatchedOutput, StoreError> {
+    let record = Record::TransactionRecord;
+    let key_id: Vec<u8> = row.get(1)?;
+    Ok(WatchedOutput {
+        commitment: decode_commitment(&row.get::<_, Vec<u8>>(0)?, "watched output")?,
+        key_id: KeyId(
+            key_id
+                .try_into()
+                .map_err(|_| corrupt(record, "watched output key id"))?,
+        ),
+        amount: Amount::new(u64_from_column(row.get(2)?)),
+    })
+}
+
+impl SqliteRepos<'_> {
+    fn watch_from_row(&self, row: &Row<'_>) -> Result<(TxId, TxWatch), StoreError> {
+        let record = Record::TransactionRecord;
+        let id = TxId(decode_u32(row.get(0)?, record, "transaction id")?);
+        let phase: String = row.get(1)?;
+        let watch = TxWatch {
+            phase: decode_code(&phase, WatchPhase::from_code, record, "watch phase")?,
+            excess: decode_commitment(&row.get::<_, Vec<u8>>(2)?, "watch excess")?,
+            min_height: Height::new(u64_from_column(row.get(3)?)),
+            ended_at: Height::new(u64_from_column(row.get(4)?)),
+            outputs: self.collect(
+                "SELECT commitment, key_id, amount FROM tx_watch_outputs
+                 WHERE tx_id = ?1 ORDER BY position",
+                [i64::from(id.0)],
+                decode_watched_output,
+            )?,
+        };
+        Ok((id, watch))
+    }
+
+    fn spend_from_row(&self, row: &Row<'_>) -> Result<(TxId, OtherWalletSpend), StoreError> {
+        let record = Record::TransactionRecord;
+        let id = TxId(decode_u32(row.get(0)?, record, "transaction id")?);
+        let outputs = |role: &str| {
+            self.collect(
+                "SELECT commitment FROM other_wallet_outputs
+                 WHERE tx_id = ?1 AND role = ?2 ORDER BY position",
+                params![i64::from(id.0), role],
+                |row| decode_commitment(&row.get::<_, Vec<u8>>(0)?, "other wallet output"),
+            )
+        };
+        let spend = OtherWalletSpend {
+            after: Height::new(u64_from_column(row.get(1)?)),
+            to: Height::new(u64_from_column(row.get(2)?)),
+            open: decode_flag(row.get(3)?, "other wallet spend open")?,
+            spent: outputs("spent")?,
+            change: outputs("change")?,
+        };
+        Ok((id, spend))
+    }
+}
+
+const WATCH_COLUMNS: &str = "tx_id, phase, excess, min_height, ended_at";
+const SPEND_COLUMNS: &str = "tx_id, after_height, to_height, open";
+
+impl TxRecordRepository for SqliteRepos<'_> {
+    fn tx_marks(&self, id: TxId) -> Result<TxMarks, StoreError> {
+        Ok(self
+            .first(
+                "SELECT local_cutoff, finalized_at, kernel_absent_at, receive_seen_at,
+                     receive_inputs_unspent, inputs_spent_elsewhere
+                 FROM tx_marks WHERE tx_id = ?1",
+                [i64::from(id.0)],
+                decode_marks,
+            )?
+            .unwrap_or_default())
+    }
+
+    fn put_tx_marks(&mut self, id: TxId, marks: &TxMarks) -> Result<(), StoreError> {
+        self.require_transaction(id)?;
+        if *marks == TxMarks::default() {
+            self.conn
+                .execute("DELETE FROM tx_marks WHERE tx_id = ?1", [i64::from(id.0)])?;
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT OR REPLACE INTO tx_marks (tx_id, local_cutoff, finalized_at,
+                 kernel_absent_at, receive_seen_at, receive_inputs_unspent,
+                 inputs_spent_elsewhere)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                i64::from(id.0),
+                encode_height(marks.local_cutoff),
+                encode_height(marks.finalized_at),
+                encode_height(marks.kernel_absent_at),
+                encode_height(marks.receive_seen_at),
+                marks.receive_inputs_unspent,
+                marks.inputs_spent_elsewhere,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn tx_watch(&self, id: TxId) -> Result<Option<TxWatch>, StoreError> {
+        Ok(self
+            .first(
+                &format!("SELECT {WATCH_COLUMNS} FROM tx_watch WHERE tx_id = ?1"),
+                [i64::from(id.0)],
+                |row| self.watch_from_row(row),
+            )?
+            .map(|(_, watch)| watch))
+    }
+
+    fn tx_watches(&self) -> Result<Vec<(TxId, TxWatch)>, StoreError> {
+        self.collect(
+            &format!("SELECT {WATCH_COLUMNS} FROM tx_watch ORDER BY tx_id"),
+            [],
+            |row| self.watch_from_row(row),
+        )
+    }
+
+    fn put_tx_watch(&mut self, id: TxId, watch: &TxWatch) -> Result<(), StoreError> {
+        self.require_transaction(id)?;
+        self.delete_tx_watch(id)?;
+        self.conn.execute(
+            &format!("INSERT INTO tx_watch ({WATCH_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5)"),
+            params![
+                i64::from(id.0),
+                watch.phase.code(),
+                &watch.excess[..],
+                u64_to_column(watch.min_height.value()),
+                u64_to_column(watch.ended_at.value()),
+            ],
+        )?;
+        for (position, output) in watch.outputs.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO tx_watch_outputs (tx_id, position, commitment, key_id, amount)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    i64::from(id.0),
+                    position_column(position)?,
+                    &output.commitment[..],
+                    &output.key_id.0[..],
+                    u64_to_column(output.amount.value()),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn delete_tx_watch(&mut self, id: TxId) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM tx_watch WHERE tx_id = ?1", [i64::from(id.0)])?;
+        Ok(())
+    }
+
+    fn other_wallet_spend(&self, id: TxId) -> Result<Option<OtherWalletSpend>, StoreError> {
+        Ok(self
+            .first(
+                &format!("SELECT {SPEND_COLUMNS} FROM other_wallet_spends WHERE tx_id = ?1"),
+                [i64::from(id.0)],
+                |row| self.spend_from_row(row),
+            )?
+            .map(|(_, spend)| spend))
+    }
+
+    fn other_wallet_spends(&self) -> Result<Vec<(TxId, OtherWalletSpend)>, StoreError> {
+        self.collect(
+            &format!("SELECT {SPEND_COLUMNS} FROM other_wallet_spends ORDER BY tx_id"),
+            [],
+            |row| self.spend_from_row(row),
+        )
+    }
+
+    fn put_other_wallet_spend(
+        &mut self,
+        id: TxId,
+        spend: &OtherWalletSpend,
+    ) -> Result<(), StoreError> {
+        self.require_transaction(id)?;
+        self.conn.execute(
+            "DELETE FROM other_wallet_spends WHERE tx_id = ?1",
+            [i64::from(id.0)],
+        )?;
+        self.conn.execute(
+            &format!("INSERT INTO other_wallet_spends ({SPEND_COLUMNS}) VALUES (?1, ?2, ?3, ?4)"),
+            params![
+                i64::from(id.0),
+                u64_to_column(spend.after.value()),
+                u64_to_column(spend.to.value()),
+                spend.open,
+            ],
+        )?;
+        for (role, list) in [("spent", &spend.spent), ("change", &spend.change)] {
+            for (position, commitment) in list.iter().enumerate() {
+                self.conn.execute(
+                    "INSERT INTO other_wallet_outputs (tx_id, role, position, commitment)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        i64::from(id.0),
+                        role,
+                        position_column(position)?,
+                        &commitment[..]
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn scan_found(&self, id: TxId) -> Result<Option<ScanFoundRecord>, StoreError> {
+        let record = Record::TransactionRecord;
+        self.first(
+            "SELECT output, during, dated_by_block FROM scan_found WHERE tx_id = ?1",
+            [i64::from(id.0)],
+            |row| {
+                let output: Option<Vec<u8>> = row.get(0)?;
+                let during: Option<String> = row.get(1)?;
+                Ok(ScanFoundRecord {
+                    output: output
+                        .map(|bytes| decode_commitment(&bytes, "scan found output"))
+                        .transpose()?,
+                    during: during
+                        .map(|code| {
+                            decode_code(&code, FoundDuring::from_code, record, "scan found during")
+                        })
+                        .transpose()?,
+                    dated_by_block: decode_flag(row.get(2)?, "scan found dated by block")?,
+                })
+            },
+        )
+    }
+
+    fn put_scan_found(&mut self, id: TxId, found: &ScanFoundRecord) -> Result<(), StoreError> {
+        self.require_transaction(id)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO scan_found (tx_id, output, during, dated_by_block)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                i64::from(id.0),
+                found.output.as_ref().map(|output| &output[..]),
+                found.during.map(FoundDuring::code),
+                found.dated_by_block,
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 impl SlateRepository for SqliteRepos<'_> {

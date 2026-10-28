@@ -34,6 +34,7 @@ use crate::transaction::{
     OpenReceipt, StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
     TxState, next_transaction_id,
 };
+use crate::tx_record::{OtherWalletSpend, ScanFoundRecord, TxMarks, TxRecordRepository, TxWatch};
 
 type SlateKey = ([u8; 16], &'static str);
 
@@ -60,6 +61,10 @@ struct State {
     invoice_address_index: Option<InvoiceAddressIndex>,
     imported_transactions: BTreeMap<TxId, ImportedTransaction>,
     imported_outputs: BTreeMap<CommitmentBytes, ImportedOutput>,
+    tx_marks: BTreeMap<TxId, TxMarks>,
+    tx_watches: BTreeMap<TxId, TxWatch>,
+    other_wallet_spends: BTreeMap<TxId, OtherWalletSpend>,
+    scan_found: BTreeMap<TxId, ScanFoundRecord>,
 }
 
 /// A pending invoice as the SQLite row holds it: its bytes sealed, the other fields in clear.
@@ -324,6 +329,10 @@ impl TransactionRepository for MemoryRepos<'_> {
         self.state
             .imported_outputs
             .retain(|_, output| output.tx != id);
+        self.state.tx_marks.remove(&id);
+        self.state.tx_watches.remove(&id);
+        self.state.other_wallet_spends.remove(&id);
+        self.state.scan_found.remove(&id);
         Ok(())
     }
 
@@ -405,6 +414,79 @@ impl TransactionRepository for MemoryRepos<'_> {
 
 fn slate_key(slate_id: Uuid, stage: SlateStage) -> SlateKey {
     (slate_id.into_bytes(), stage.code())
+}
+
+impl TxRecordRepository for MemoryRepos<'_> {
+    fn tx_marks(&self, id: TxId) -> Result<TxMarks, StoreError> {
+        Ok(self.state.tx_marks.get(&id).copied().unwrap_or_default())
+    }
+
+    fn put_tx_marks(&mut self, id: TxId, marks: &TxMarks) -> Result<(), StoreError> {
+        self.require_transaction(id)?;
+        if *marks == TxMarks::default() {
+            self.state.tx_marks.remove(&id);
+        } else {
+            self.state.tx_marks.insert(id, *marks);
+        }
+        Ok(())
+    }
+
+    fn tx_watch(&self, id: TxId) -> Result<Option<TxWatch>, StoreError> {
+        Ok(self.state.tx_watches.get(&id).cloned())
+    }
+
+    fn tx_watches(&self) -> Result<Vec<(TxId, TxWatch)>, StoreError> {
+        Ok(self
+            .state
+            .tx_watches
+            .iter()
+            .map(|(id, watch)| (*id, watch.clone()))
+            .collect())
+    }
+
+    fn put_tx_watch(&mut self, id: TxId, watch: &TxWatch) -> Result<(), StoreError> {
+        self.require_transaction(id)?;
+        self.state.tx_watches.insert(id, watch.clone());
+        Ok(())
+    }
+
+    fn delete_tx_watch(&mut self, id: TxId) -> Result<(), StoreError> {
+        self.state.tx_watches.remove(&id);
+        Ok(())
+    }
+
+    fn other_wallet_spend(&self, id: TxId) -> Result<Option<OtherWalletSpend>, StoreError> {
+        Ok(self.state.other_wallet_spends.get(&id).cloned())
+    }
+
+    fn other_wallet_spends(&self) -> Result<Vec<(TxId, OtherWalletSpend)>, StoreError> {
+        Ok(self
+            .state
+            .other_wallet_spends
+            .iter()
+            .map(|(id, spend)| (*id, spend.clone()))
+            .collect())
+    }
+
+    fn put_other_wallet_spend(
+        &mut self,
+        id: TxId,
+        spend: &OtherWalletSpend,
+    ) -> Result<(), StoreError> {
+        self.require_transaction(id)?;
+        self.state.other_wallet_spends.insert(id, spend.clone());
+        Ok(())
+    }
+
+    fn scan_found(&self, id: TxId) -> Result<Option<ScanFoundRecord>, StoreError> {
+        Ok(self.state.scan_found.get(&id).copied())
+    }
+
+    fn put_scan_found(&mut self, id: TxId, found: &ScanFoundRecord) -> Result<(), StoreError> {
+        self.require_transaction(id)?;
+        self.state.scan_found.insert(id, *found);
+        Ok(())
+    }
 }
 
 impl SlateRepository for MemoryRepos<'_> {

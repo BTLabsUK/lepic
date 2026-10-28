@@ -2,6 +2,7 @@
 
 mod repos;
 pub(crate) mod schema;
+mod v8;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

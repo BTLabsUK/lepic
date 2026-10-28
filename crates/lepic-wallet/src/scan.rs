@@ -23,7 +23,8 @@ use lepic_primitives::params::Network;
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
     AccountIndex, AccountRecord, CommitmentBytes, KeyId, OutputRecord, OutputStatus, Repositories,
-    StoreError, StoredTransaction, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
+    ScanFoundRecord, StoreError, StoredTransaction, TransactionEntry, TxDirection, TxId, TxState,
+    WalletStore,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -58,12 +59,6 @@ const CHECKPOINT_SETTING: &str = "scan.checkpoint";
 /// Set once a scan from genesis completed: from then on an output no scan found is not on
 /// chain.
 const GENESIS_SCANNED_SETTING: &str = "scan.genesis_completed";
-
-/// Prefix of the setting that records, per entry, how a scan stored it.
-const FOUND_PREFIX: &str = "scan.found.";
-/// Prefix of the setting that records, per entry, the commitment of the output a scan stored
-/// it for. The output's own link moves to the transaction that spends it, this one stays.
-const FOUND_OUTPUT_PREFIX: &str = "scan.found_output.";
 
 /// Label prefix `epic-wallet` gives an account that a restore finds outputs of.
 const RESTORED_ACCOUNT_LABEL: &str = "account";
@@ -280,14 +275,7 @@ pub struct ScanSummary {
     pub deleted: u64,
 }
 
-/// Which scan stored an entry for an output it found with no record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FoundDuring {
-    /// The scan from genesis a wallet rebuilt from its seed needs before it hands out keys.
-    Restore,
-    /// Any other scan, including the first one of a wallet made with a new seed.
-    Rescan,
-}
+pub use lepic_store::FoundDuring;
 
 /// How a scan stored an entry for an output it found with no record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,50 +286,18 @@ pub struct ScanFound {
     pub dated_by_block: bool,
 }
 
-impl ScanFound {
-    const fn encode(self) -> &'static str {
-        match (self.during, self.dated_by_block) {
-            (FoundDuring::Restore, true) => "restore block",
-            (FoundDuring::Restore, false) => "restore scan",
-            (FoundDuring::Rescan, true) => "rescan block",
-            (FoundDuring::Rescan, false) => "rescan scan",
-        }
-    }
-
-    fn decode(text: &str) -> Option<Self> {
-        let (during, dated) = text.split_once(' ')?;
-        Some(Self {
-            during: match during {
-                "restore" => FoundDuring::Restore,
-                "rescan" => FoundDuring::Rescan,
-                _ => return None,
-            },
-            dated_by_block: match dated {
-                "block" => true,
-                "scan" => false,
-                _ => return None,
-            },
-        })
-    }
-}
-
-fn found_key(tx_id: TxId) -> String {
-    format!("{FOUND_PREFIX}{tx_id}")
-}
-
 /// How a scan stored the entry `tx_id`. `None` for an entry no scan stored, and for one stored
 /// before this was recorded.
 pub(crate) fn scan_found(
     repos: &dyn Repositories,
     tx_id: TxId,
 ) -> Result<Option<ScanFound>, StoreError> {
-    Ok(repos
-        .setting(&found_key(tx_id))?
-        .and_then(|text| ScanFound::decode(&text)))
-}
-
-fn found_output_key(tx_id: TxId) -> String {
-    format!("{FOUND_OUTPUT_PREFIX}{tx_id}")
+    Ok(repos.scan_found(tx_id)?.and_then(|record| {
+        record.during.map(|during| ScanFound {
+            during,
+            dated_by_block: record.dated_by_block,
+        })
+    }))
 }
 
 /// The commitment of the output the scan stored the entry `tx_id` for. `None` for an entry no
@@ -351,8 +307,9 @@ pub(crate) fn found_output(
     tx_id: TxId,
 ) -> Result<Option<Commitment>, StoreError> {
     Ok(repos
-        .setting(&found_output_key(tx_id))?
-        .and_then(|hex| Commitment::from_hex(&hex).ok()))
+        .scan_found(tx_id)?
+        .and_then(|record| record.output)
+        .and_then(|bytes| Commitment::from_bytes(&bytes).ok()))
 }
 
 /// Records that the entry `tx_id` a scan stored is now dated by its output's block.
@@ -360,29 +317,23 @@ pub(crate) fn record_dated_by_block(
     repos: &mut dyn Repositories,
     tx_id: TxId,
 ) -> Result<(), StoreError> {
-    if let Some(found) = scan_found(repos, tx_id)?
-        && !found.dated_by_block
+    if let Some(mut record) = repos.scan_found(tx_id)?
+        && record.during.is_some()
+        && !record.dated_by_block
     {
-        let dated = ScanFound {
-            dated_by_block: true,
-            ..found
-        };
-        repos.put_setting(&found_key(tx_id), dated.encode())?;
+        record.dated_by_block = true;
+        repos.put_scan_found(tx_id, &record)?;
     }
     Ok(())
 }
 
-/// Removes the entry `tx_id` and what a scan recorded about it. Fails as
+/// Removes the entry `tx_id` and, with it, what a scan recorded about it. Fails as
 /// [`lepic_store::TransactionRepository::delete_transaction`] does.
 pub(crate) fn delete_found_entry(
     repos: &mut dyn Repositories,
     tx_id: TxId,
 ) -> Result<(), StoreError> {
-    repos.delete_transaction(tx_id)?;
-    repos.delete_setting(&found_key(tx_id))?;
-    repos.delete_setting(&found_output_key(tx_id))?;
-    // An entry of another wallet's receive is a found entry too.
-    crate::other_wallet::forget(repos, tx_id)
+    repos.delete_transaction(tx_id)
 }
 
 /// A page of the node's unspent outputs, with the checkpoint stored with it and the tip the
@@ -1090,18 +1041,24 @@ fn restore_missing(
                 updated_at: created_at,
             })?;
             repos.set_confirmed_height(tx, output.height)?;
-            repos.put_setting(&found_output_key(tx), &output.id.commitment.to_hex())?;
             // An update scan over recent blocks finds what another wallet on the phrase
             // received; a restore or a scan from genesis finds what no record explains.
-            if update && found.during == FoundDuring::Rescan {
+            let received_elsewhere = update && found.during == FoundDuring::Rescan;
+            repos.put_scan_found(
+                tx,
+                &ScanFoundRecord {
+                    output: Some(*output.id.commitment.as_bytes()),
+                    during: (!received_elsewhere).then_some(found.during),
+                    dated_by_block: !received_elsewhere && found.dated_by_block,
+                },
+            )?;
+            if received_elsewhere {
                 other_wallet::mark_received(repos, tx, output.height)?;
                 change = Some(StateChange {
                     tx_id: tx,
                     from: TxState::Confirmed,
                     to: TxState::Confirmed,
                 });
-            } else {
-                repos.put_setting(&found_key(tx), found.encode())?;
             }
             tx
         }
@@ -1350,7 +1307,7 @@ mod tests {
             .read(|repos| {
                 Ok::<_, StoreError>((
                     repos.transaction(tx_id)?.unwrap().state,
-                    repos.setting(&format!("release.released.{tx_id}"))?,
+                    repos.tx_watch(tx_id)?,
                 ))
             })
             .unwrap();
@@ -1389,28 +1346,6 @@ mod tests {
             .write(|repos| advance_next_child(repos, AccountIndex(0), 5_000_000 + 40))
             .unwrap();
         assert_eq!(counter(&store), 5_000_041);
-    }
-
-    #[test]
-    fn scan_found_round_trips_and_rejects_malformed_text() {
-        for during in [FoundDuring::Restore, FoundDuring::Rescan] {
-            for dated_by_block in [false, true] {
-                let found = ScanFound {
-                    during,
-                    dated_by_block,
-                };
-                assert_eq!(ScanFound::decode(found.encode()), Some(found));
-            }
-        }
-        for text in [
-            "",
-            "restore",
-            "restore block x",
-            "found block",
-            "rescan time",
-        ] {
-            assert_eq!(ScanFound::decode(text), None, "{text}");
-        }
     }
 
     #[test]

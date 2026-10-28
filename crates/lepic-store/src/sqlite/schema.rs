@@ -287,10 +287,63 @@ CREATE INDEX contact_seen_at ON contact_seen (seen_at);
 DELETE FROM settings WHERE key = 'contact.seen';
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7];
+/// The records the wallet keeps per transaction, which were settings keyed by transaction id
+/// before; [`super::v8::move_settings`] moves the stored ones after this runs.
+const V8: &str = "
+CREATE TABLE tx_marks (
+    tx_id INTEGER PRIMARY KEY REFERENCES transactions (id) ON DELETE CASCADE,
+    local_cutoff INTEGER,
+    finalized_at INTEGER,
+    kernel_absent_at INTEGER,
+    receive_seen_at INTEGER,
+    receive_inputs_unspent INTEGER NOT NULL CHECK (receive_inputs_unspent IN (0, 1)),
+    inputs_spent_elsewhere INTEGER NOT NULL CHECK (inputs_spent_elsewhere IN (0, 1))
+);
+
+CREATE TABLE tx_watch (
+    tx_id INTEGER PRIMARY KEY REFERENCES transactions (id) ON DELETE CASCADE,
+    phase TEXT NOT NULL CHECK (phase IN ('kernel', 'outputs')),
+    excess BLOB NOT NULL,
+    min_height INTEGER NOT NULL,
+    ended_at INTEGER NOT NULL
+);
+
+CREATE TABLE tx_watch_outputs (
+    tx_id INTEGER NOT NULL REFERENCES tx_watch (tx_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    commitment BLOB NOT NULL,
+    key_id BLOB NOT NULL,
+    amount INTEGER NOT NULL,
+    PRIMARY KEY (tx_id, position)
+);
+
+CREATE TABLE other_wallet_spends (
+    tx_id INTEGER PRIMARY KEY REFERENCES transactions (id) ON DELETE CASCADE,
+    after_height INTEGER NOT NULL,
+    to_height INTEGER NOT NULL,
+    open INTEGER NOT NULL CHECK (open IN (0, 1))
+);
+
+CREATE TABLE other_wallet_outputs (
+    tx_id INTEGER NOT NULL REFERENCES other_wallet_spends (tx_id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('spent', 'change')),
+    position INTEGER NOT NULL,
+    commitment BLOB NOT NULL,
+    PRIMARY KEY (tx_id, role, position)
+);
+
+CREATE TABLE scan_found (
+    tx_id INTEGER PRIMARY KEY REFERENCES transactions (id) ON DELETE CASCADE,
+    output BLOB,
+    during TEXT CHECK (during IN ('restore', 'rescan')),
+    dated_by_block INTEGER NOT NULL CHECK (dated_by_block IN (0, 1))
+);
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {
@@ -340,6 +393,9 @@ pub(crate) fn migrate_to(conn: &mut Connection, target: u32) -> Result<(), Store
         let reached = version.checked_add(1).ok_or(StoreError::OutOfRange {
             field: "schema version",
         })?;
+        if reached == 8 {
+            super::v8::move_settings(&tx)?;
+        }
         tx.execute(
             "UPDATE schema_version SET version = ?1 WHERE id = 1",
             [reached],
