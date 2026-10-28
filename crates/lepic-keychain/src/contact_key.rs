@@ -17,7 +17,7 @@ use lepic_crypto::{CryptoError, PublicKey, SecretKey};
 use lepic_primitives::params::Network;
 use sha2::Sha256;
 use thiserror::Error;
-use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
+use x25519_dalek::StaticSecret;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::identifier::Identifier;
@@ -154,7 +154,7 @@ impl ContactRoot {
         )?;
         let box_pk = PublicKey::from_secret_key(&box_sk)?;
         Ok(ContactKeys {
-            enc_sk,
+            enc_sk: StaticSecret::from(*enc_sk),
             sig_sk,
             hint_key,
             box_sk,
@@ -191,7 +191,7 @@ impl ContactRoot {
         )?;
         let box_pk = PublicKey::from_secret_key(&box_sk)?;
         Ok(ContactKeys {
-            enc_sk,
+            enc_sk: StaticSecret::from(*enc_sk),
             sig_sk,
             hint_key,
             box_sk,
@@ -232,7 +232,8 @@ impl ContactRoot {
             self.expand(&[b"enc", &slot_bytes], &mut enc_sk)?;
             let mut sig_seed = Zeroizing::new([0u8; 32]);
             self.expand(&[b"sig", &slot_bytes], &mut sig_seed)?;
-            if x25519(*enc_sk, X25519_BASEPOINT_BYTES) == *card_enc_pk
+            let enc_sk = StaticSecret::from(*enc_sk);
+            if x25519_dalek::PublicKey::from(&enc_sk).as_bytes() == card_enc_pk
                 && SigningKey::from_bytes(&sig_seed).verifying_key().to_bytes() == *card_sig_pk
             {
                 return Ok(Some(slot));
@@ -321,7 +322,8 @@ pub fn key_check_tag(hint_key: &[u8; 32], n_y: &[u8; 32], n_x: &[u8; 32]) -> [u8
 
 /// The keys of one pairing record. Wiped on drop and never printed.
 pub struct ContactKeys {
-    enc_sk: Zeroizing<[u8; 32]>,
+    /// Wiped on drop by x25519-dalek.
+    enc_sk: StaticSecret,
     sig_sk: SigningKey,
     hint_key: Zeroizing<[u8; 32]>,
     box_sk: SecretKey,
@@ -332,12 +334,12 @@ impl ContactKeys {
     /// The X25519 secret bytes. Callers must not log them or copy them into memory that is not
     /// wiped.
     pub fn expose_enc_secret(&self) -> &[u8; 32] {
-        &self.enc_sk
+        self.enc_sk.as_bytes()
     }
 
     /// The X25519 public key the contact seals to.
     pub fn enc_public_key(&self) -> [u8; 32] {
-        x25519(*self.enc_sk, X25519_BASEPOINT_BYTES)
+        x25519_dalek::PublicKey::from(&self.enc_sk).to_bytes()
     }
 
     /// The Ed25519 signing key.
