@@ -22,18 +22,35 @@ pub(crate) fn host_text(endpoint: &RelayEndpoint) -> String {
 
 /// The endpoint of the home relay `host`, `domain[:port]`. A relay the wallet knows, its own or
 /// a built-in one, is reached as the wallet reaches it; any other over TLS, which a relay on the
-/// internet needs.
+/// internet needs, and only by a name on a port other than 0: a contact never makes the wallet
+/// dial an address, its own device or its network.
 pub(crate) fn endpoint_for(
     host: &str,
     relays: &ContactRelays,
 ) -> Result<RelayEndpoint, ContactError> {
     let (domain, port) = parse_host(host)?;
-    let candidate = RelayEndpoint::new(domain.clone(), port, Security::Tls);
     let ours = &relays.epicbox.settings().endpoint;
     let known = std::iter::once(ours)
         .chain(relays.built_in.iter())
         .find(|known| known.domain() == &domain && port.is_none_or(|port| port == known.port()));
-    Ok(known.cloned().unwrap_or(candidate))
+    if let Some(known) = known {
+        return Ok(known.clone());
+    }
+    if port == Some(0) || !is_relay_name(&domain) {
+        return Err(ContactError::RelayAddress);
+    }
+    Ok(RelayEndpoint::new(domain, port, Security::Tls))
+}
+
+/// Whether `domain` names a host on the internet: not an IPv4 address and not this device.
+fn is_relay_name(domain: &Domain) -> bool {
+    let name = domain.as_str().trim_end_matches('.').to_ascii_lowercase();
+    !(name.parse::<std::net::Ipv4Addr>().is_ok()
+        || name == "localhost"
+        || name.ends_with(".localhost")
+        || name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.'))
 }
 
 /// The domain and optional port of `host`, `domain[:port]`.
@@ -139,4 +156,33 @@ pub(crate) async fn post_envelope(
         .post(from, to, &armor(envelope))
         .await
         .map_err(ContactError::Relay)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_name_on_the_internet_is_a_contacts_relay() {
+        for host in [
+            "epicbox.example",
+            "relay2.test",
+            "1password.example",
+            "a1.b2",
+        ] {
+            assert!(is_relay_name(&Domain::parse(host).unwrap()), "{host}");
+        }
+        for host in [
+            "10.0.0.1",
+            "192.168.1.1",
+            "127.0.0.1",
+            "8.8.8.8",
+            "1.2.3",
+            "localhost",
+            "LOCALHOST",
+            "relay.localhost",
+        ] {
+            assert!(!is_relay_name(&Domain::parse(host).unwrap()), "{host}");
+        }
+    }
 }
