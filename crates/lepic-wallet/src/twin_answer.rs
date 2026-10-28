@@ -106,8 +106,10 @@ fn write(repos: &mut dyn Repositories, records: &[Record]) -> Result<(), StoreEr
     if records.is_empty() {
         return repos.delete_setting(TWIN_ANSWERS_SETTING);
     }
-    // Plain data always serializes.
-    let text = serde_json::to_string(records).unwrap_or_default();
+    let text = serde_json::to_string(records).map_err(|_| StoreError::Corrupt {
+        record: lepic_store::Record::Setting,
+        field: "unknown slate answers",
+    })?;
     repos.put_setting(TWIN_ANSWERS_SETTING, &text)
 }
 

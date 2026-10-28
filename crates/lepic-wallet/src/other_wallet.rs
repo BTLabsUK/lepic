@@ -23,7 +23,7 @@ use lepic_store::{
     TxDirection, TxId, TxState,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::state::StateChange;
 
@@ -74,10 +74,18 @@ fn corrupt(field: &'static str) -> StoreError {
     }
 }
 
+/// The record of the entry `tx_id`. One that no longer decodes is reported and read as absent,
+/// so it cannot stop every later refresh; the entry itself stays in the history.
 fn read(repos: &dyn Repositories, tx_id: TxId) -> Result<Option<Spend>, StoreError> {
     Ok(repos
         .setting(&key(tx_id))?
-        .and_then(|text| serde_json::from_str(&text).ok()))
+        .and_then(|text| match serde_json::from_str(&text) {
+            Ok(spend) => Some(spend),
+            Err(_) => {
+                warn!(tx_id = %tx_id, "record of another wallet's transaction unreadable");
+                None
+            }
+        }))
 }
 
 fn write(repos: &mut dyn Repositories, tx_id: TxId, spend: &Spend) -> Result<(), StoreError> {
@@ -85,10 +93,18 @@ fn write(repos: &mut dyn Repositories, tx_id: TxId, spend: &Spend) -> Result<(),
     repos.put_setting(&key(tx_id), &text)
 }
 
+/// The entries a scan may still credit change to. A list that no longer decodes is reported
+/// and read as empty: their change is then found as a receive of its own.
 fn open_entries(repos: &dyn Repositories) -> Result<Vec<u32>, StoreError> {
     Ok(repos
         .setting(OPEN_KEY)?
-        .and_then(|text| serde_json::from_str(&text).ok())
+        .and_then(|text| match serde_json::from_str(&text) {
+            Ok(open) => Some(open),
+            Err(_) => {
+                warn!("open entries of another wallet's spends unreadable");
+                None
+            }
+        })
         .unwrap_or_default())
 }
 
