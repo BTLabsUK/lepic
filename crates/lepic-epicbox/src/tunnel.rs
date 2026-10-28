@@ -721,6 +721,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_direct_connector_never_resolves_an_onion_name() {
+        let direct = TcpConnector::new(tls());
+        for domain in [
+            format!("{}.onion", "a".repeat(56)),
+            format!("{}.ONION.", "a".repeat(56)),
+        ] {
+            let error = direct.connect(&relay(&domain, 443)).await.err().unwrap();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{domain}");
+            assert!(error.to_string().contains("needs Tor"), "{domain}");
+        }
+    }
+
+    #[tokio::test]
     async fn a_discovered_onion_is_dialled() {
         let tunnel = Arc::new(FakeTunnel::new(true));
         let connector = connector(&tunnel);

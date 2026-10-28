@@ -195,6 +195,18 @@ impl Connector for TcpConnector {
         endpoint: &'a RelayEndpoint,
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
         Box::pin(async move {
+            if endpoint
+                .domain()
+                .as_str()
+                .to_ascii_lowercase()
+                .trim_end_matches('.')
+                .ends_with(".onion")
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "an onion relay needs Tor",
+                ));
+            }
             endpoint
                 .check_security()
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
