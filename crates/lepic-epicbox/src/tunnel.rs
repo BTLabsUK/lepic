@@ -12,7 +12,8 @@ use std::time::Duration;
 use lepic_transport::transport::BoxFuture;
 use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, OnceCell, watch};
+use tokio::time::Instant;
 use tokio_rustls::rustls::ClientConfig;
 use tracing::debug;
 
@@ -47,6 +48,8 @@ const MAX_RESPONSE_LEN: usize = 2 * MAX_DISCOVERY_LEN;
 
 /// How long discovery may take before the relay is reached through the exit instead.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
+/// How long a relay whose discovery failed to connect is not asked again.
+const DISCOVERY_RETRY: Duration = Duration::from_secs(600);
 
 /// The least time a connection through the tunnel is given: a first circuit to an onion often
 /// needs most of a minute.
@@ -293,8 +296,13 @@ pub struct TunnelConnector {
     tunnel: Arc<dyn Tunnel>,
     routes: Arc<OnionRoutes>,
     /// Discovery outcomes of this connector, by relay; `None` when the relay named no onion.
-    discovered: Mutex<HashMap<(String, u16), Option<DialTarget>>>,
+    /// Only answers are kept: a discovery that could not reach the relay is tried again.
+    discovered: Mutex<HashMap<RelayKey, Arc<OnceCell<Option<DialTarget>>>>>,
+    /// Relays whose discovery could not reach them, and when to try them again.
+    retry_after: Mutex<HashMap<RelayKey, Instant>>,
 }
+
+type RelayKey = (String, u16);
 
 impl TunnelConnector {
     /// With the built-in onion routes.
@@ -313,6 +321,7 @@ impl TunnelConnector {
             tunnel,
             routes,
             discovered: Mutex::default(),
+            retry_after: Mutex::default(),
         }
     }
 
@@ -347,21 +356,36 @@ impl TunnelConnector {
             endpoint.domain().as_str().to_ascii_lowercase(),
             endpoint.port(),
         );
-        let mut discovered = self.discovered.lock().await;
-        let found = match discovered.get(&key) {
-            Some(found) => found.clone(),
-            None => {
-                let found = match self.discover(endpoint).await {
-                    Ok(target) => Some(target),
+        let cell = Arc::clone(self.discovered.lock().await.entry(key.clone()).or_default());
+        let found = cell
+            .get_or_try_init(|| async {
+                if self
+                    .retry_after
+                    .lock()
+                    .await
+                    .get(&key)
+                    .is_some_and(|until| Instant::now() < *until)
+                {
+                    return Err(());
+                }
+                match self.discover(endpoint).await {
+                    Ok(target) => Ok(Some(target)),
+                    Err(error @ (DiscoveryError::Io(_) | DiscoveryError::Timeout)) => {
+                        debug!(error = %error, "epicbox relay could not be asked for its onion");
+                        if let Some(until) = Instant::now().checked_add(DISCOVERY_RETRY) {
+                            self.retry_after.lock().await.insert(key.clone(), until);
+                        }
+                        Err(())
+                    }
                     Err(error) => {
                         debug!(error = %error, "epicbox relay names no onion");
-                        None
+                        Ok(None)
                     }
-                };
-                discovered.insert(key, found.clone());
-                found
-            }
-        };
+                }
+            })
+            .await
+            .ok()
+            .and_then(Option::clone);
         found.unwrap_or_else(|| DialTarget {
             host: endpoint.domain().as_str().to_owned(),
             port: endpoint.port(),
@@ -395,7 +419,7 @@ impl TunnelConnector {
                 endpoint.domain().as_str().to_ascii_lowercase(),
                 endpoint.port(),
             ),
-            target,
+            Arc::new(OnceCell::new_with(Some(target))),
         );
     }
 
@@ -507,6 +531,8 @@ mod tests {
         opened: StdMutex<Vec<(String, u16)>>,
         /// Gets the far end of each stream opened; without it every open fails.
         serve: Option<mpsc::UnboundedSender<DuplexStream>>,
+        /// Opens to this host never finish.
+        hang: Option<&'static str>,
     }
 
     impl FakeTunnel {
@@ -515,6 +541,7 @@ mod tests {
                 active: watch::Sender::new(active),
                 opened: StdMutex::default(),
                 serve: None,
+                hang: None,
             }
         }
 
@@ -535,6 +562,9 @@ mod tests {
         ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
             self.opened.lock().unwrap().push((host.to_owned(), port));
             Box::pin(async move {
+                if self.hang == Some(host) {
+                    std::future::pending::<()>().await;
+                }
                 let Some(serve) = &self.serve else {
                     return Err(io::Error::other(REFUSED));
                 };
@@ -642,6 +672,52 @@ mod tests {
             tunnel.opened(),
             [(other, 8443), ("flooepicbox.btlabs.uk".to_owned(), 443)]
         );
+    }
+
+    fn plain(endpoint: &RelayEndpoint) -> DialTarget {
+        DialTarget {
+            host: endpoint.domain().as_str().to_owned(),
+            port: endpoint.port(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_discovery_does_not_hold_up_other_relays() {
+        let tunnel = Arc::new(FakeTunnel {
+            hang: Some("slow.example"),
+            ..FakeTunnel::new(true)
+        });
+        let connector = Arc::new(connector(&tunnel));
+        let slow = relay("slow.example", 443);
+        let quick = relay("quick.example", 443);
+        let asking = Arc::clone(&connector);
+        let waiting = tokio::spawn(async move { asking.dial_target(&slow).await });
+        tokio::task::yield_now().await;
+        let target = tokio::time::timeout(Duration::from_secs(1), connector.dial_target(&quick))
+            .await
+            .unwrap();
+        assert_eq!(target, plain(&quick));
+        assert!(!waiting.is_finished());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_discovery_that_could_not_connect_is_tried_again_later() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        let endpoint = relay("relay.example", 443);
+        let asked = || {
+            tunnel
+                .opened()
+                .iter()
+                .filter(|(host, _)| host == "relay.example")
+                .count()
+        };
+        assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
+        assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
+        assert_eq!(asked(), 1);
+        tokio::time::advance(DISCOVERY_RETRY + Duration::from_secs(1)).await;
+        assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
+        assert_eq!(asked(), 2);
     }
 
     #[tokio::test]
