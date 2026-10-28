@@ -86,11 +86,19 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// The index of kept payloads. A damaged one is an error rather than an empty index, which
+/// the next arrival would write over and so lose every payload kept.
 fn read_index(repos: &dyn Repositories) -> Result<Index, StoreError> {
-    Ok(repos
-        .setting(INDEX_KEY)?
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default())
+    let Some(text) = repos.setting(INDEX_KEY)? else {
+        return Ok(Index::default());
+    };
+    serde_json::from_str(&text).map_err(|_| {
+        warn!("payload index not readable");
+        StoreError::Corrupt {
+            record: lepic_store::Record::Contact,
+            field: "payload index",
+        }
+    })
 }
 
 fn write_index(repos: &mut dyn Repositories, index: &Index) -> Result<(), StoreError> {
@@ -233,16 +241,18 @@ where
                     else {
                         continue;
                     };
-                    let Some(kept) = repos
-                        .setting(&id.key())?
-                        .and_then(|text| serde_json::from_str::<Kept>(&text).ok())
-                    else {
+                    let Some(text) = repos.setting(&id.key())? else {
                         continue;
                     };
-                    let (Some(payload), Ok(received_at)) = (
-                        unhex(&kept.payload),
-                        Timestamp::from_millisecond(kept.received_at),
-                    ) else {
+                    let decoded = serde_json::from_str::<Kept>(&text).ok().and_then(|kept| {
+                        Some((
+                            unhex(&kept.payload)?,
+                            Timestamp::from_millisecond(kept.received_at).ok()?,
+                        ))
+                    });
+                    // One damaged entry does not hide the others.
+                    let Some((payload, received_at)) = decoded else {
+                        warn!("kept payload not readable, skipped");
                         continue;
                     };
                     payloads.push(ContactPayload {

@@ -157,14 +157,19 @@ struct Updates {
     all: Vec<i64>,
 }
 
+/// Collecting state under `key`. It only paces relays and contact updates, so a damaged value
+/// starts afresh, which the next write repairs.
 fn read_json<T: Default + for<'de> Deserialize<'de>>(
     repos: &dyn Repositories,
     key: &str,
 ) -> Result<T, StoreError> {
-    Ok(repos
-        .setting(key)?
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default())
+    let Some(text) = repos.setting(key)? else {
+        return Ok(T::default());
+    };
+    Ok(serde_json::from_str(&text).unwrap_or_else(|_| {
+        warn!("contact collecting state not readable, started afresh");
+        T::default()
+    }))
 }
 
 fn write_json<T: Serialize>(
