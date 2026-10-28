@@ -90,6 +90,11 @@ pub enum Event {
     /// payment, while it waits for its sender. Advisory: nothing changed, and the payment
     /// confirms only when a refresh finds the kernel, so the host should refresh now.
     PaymentPosted(PostedPayment),
+    /// The sender of a payment this wallet received and answered reports that it cancelled
+    /// the payment. Raised once per payment, while it waits for its sender. Advisory: nothing
+    /// changed and nothing was released; the host decides whether to cancel the payment here,
+    /// which [`crate::Wallet::cancel`] does by its usual rules.
+    PaymentCancelled(CancelledPayment),
     /// A reply to one of this wallet's invites paired a contact; its SAS waits for the user's
     /// check (RFC 0002 7.3).
     PairingReplied(ContactEvent),
@@ -327,6 +332,13 @@ pub struct UnknownSlate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SupersededReceive {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CancelledPayment {
+    /// The received payment.
     pub tx_id: TxId,
     pub slate_id: SlateId,
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! LEPIC notices over Epicbox (ADR 0016): short advisory messages between LEPIC wallets about an
-//! invoice, which are not slates.
+//! invoice or a payment, which are not slates.
 //!
 //! A notice is the JSON object `{"lepic":1,"type":<kind>,"slate_id":<uuid>}`, with the kernel
 //! `excess` added for `posted`, at most [`MAX_NOTICE_LEN`] bytes. This wallet pads every notice
@@ -32,6 +32,7 @@ const PAD: char = '0';
 const DECLINED: &str = "declined";
 const WITHDRAWN: &str = "withdrawn";
 const POSTED: &str = "posted";
+const CANCELLED: &str = "cancelled";
 const UNPAIRED: &str = "unpaired";
 
 /// What a notice says about its invoice.
@@ -44,6 +45,9 @@ pub enum NoticeKind {
     /// The issuer pushed the paid invoice to its node, with this kernel excess; sent to the
     /// payer.
     Posted { excess: Commitment },
+    /// The sender cancelled an ordinary payment the receiver had answered; sent to the
+    /// receiver.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +135,7 @@ pub fn classify_text(text: &str) -> Payload {
     let kind = match fields.kind.as_str() {
         DECLINED => NoticeKind::Declined,
         WITHDRAWN => NoticeKind::Withdrawn,
+        CANCELLED => NoticeKind::Cancelled,
         POSTED => match fields.excess.as_deref().map(Commitment::from_hex) {
             Some(Ok(excess)) => NoticeKind::Posted { excess },
             _ => return Payload::Malformed,
@@ -150,6 +155,7 @@ impl Notice {
             NoticeKind::Declined => (DECLINED, None),
             NoticeKind::Withdrawn => (WITHDRAWN, None),
             NoticeKind::Posted { excess } => (POSTED, Some(excess.to_hex())),
+            NoticeKind::Cancelled => (CANCELLED, None),
         };
         let mut written = Written {
             lepic: NOTICE_VERSION,
@@ -237,11 +243,12 @@ mod tests {
         format!("{head}}}")
     }
 
-    fn every_kind() -> [Notice; 3] {
+    fn every_kind() -> [Notice; 4] {
         [
             NoticeKind::Declined,
             NoticeKind::Withdrawn,
             NoticeKind::Posted { excess: excess() },
+            NoticeKind::Cancelled,
         ]
         .map(|kind| Notice {
             slate_id: slate_id(),
@@ -257,6 +264,7 @@ mod tests {
         {"lepic":1,"type":"declined","slate_id":"0436430c-2b02-624c-2032-570501212b00"}
         {"lepic":1,"type":"withdrawn","slate_id":"0436430c-2b02-624c-2032-570501212b00"}
         {"lepic":1,"type":"posted","slate_id":"0436430c-2b02-624c-2032-570501212b00","excess":"0950929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0"}
+        {"lepic":1,"type":"cancelled","slate_id":"0436430c-2b02-624c-2032-570501212b00"}
         "#
         );
     }
@@ -309,6 +317,8 @@ mod tests {
             r#"{"lepic":1}"#.to_owned(),
             r#"{"lepic":1,"type":"declined"}"#.to_owned(),
             r#"{"lepic":1,"type":"declined","slate_id":"nope"}"#.to_owned(),
+            r#"{"lepic":1,"type":"cancelled"}"#.to_owned(),
+            r#"{"lepic":1,"type":"cancelled","slate_id":7}"#.to_owned(),
             format!(r#"{{"lepic":1,"type":"posted","slate_id":"{SLATE_ID}"}}"#),
             format!(r#"{{"lepic":1,"type":"posted","slate_id":"{SLATE_ID}","excess":"00"}}"#),
             format!(
@@ -329,6 +339,45 @@ mod tests {
         assert_eq!(classify_text(&payload), Payload::Oversize);
     }
 
+    /// A reader that knows only the kinds before `cancelled`, as an older LEPIC build does:
+    /// what it makes of a `cancelled` notice.
+    fn classify_without_cancelled(text: &str) -> Payload {
+        match classify_text(text) {
+            Payload::Notice(Notice {
+                kind: NoticeKind::Cancelled,
+                ..
+            }) => Payload::Unknown,
+            other => other,
+        }
+    }
+
+    #[test]
+    fn a_cancelled_notice_is_a_notice_to_readers_that_do_not_know_it() {
+        let notice = Notice {
+            slate_id: slate_id(),
+            kind: NoticeKind::Cancelled,
+        };
+        let text = text(notice);
+        // The probe reads it as a notice, never as a slate, so an older reader that does not
+        // know the type ignores it rather than decoding it as one.
+        assert_ne!(classify_text(&text), Payload::Slate);
+        assert_eq!(classify_without_cancelled(&text), Payload::Unknown);
+        assert!(!is_unpaired(&text));
+    }
+
+    #[test]
+    fn a_cancelled_notice_with_an_excess_still_reads_as_cancelled() {
+        let payload =
+            format!(r#"{{"lepic":1,"type":"cancelled","slate_id":"{SLATE_ID}","excess":"zz"}}"#);
+        assert_eq!(
+            classify_text(&payload),
+            Payload::Notice(Notice {
+                slate_id: slate_id(),
+                kind: NoticeKind::Cancelled,
+            })
+        );
+    }
+
     #[test]
     fn unknown_fields_are_ignored() {
         let payload =
@@ -347,6 +396,7 @@ mod tests {
             Just(NoticeKind::Declined),
             Just(NoticeKind::Withdrawn),
             Just(NoticeKind::Posted { excess: excess() }),
+            Just(NoticeKind::Cancelled),
         ];
         (any::<[u8; 16]>(), kind).prop_map(|(bytes, kind)| Notice {
             slate_id: SlateId::from_bytes(bytes),

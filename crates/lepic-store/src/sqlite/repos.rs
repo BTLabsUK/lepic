@@ -618,6 +618,13 @@ fn decode_marks(row: &Row<'_>) -> Result<TxMarks, StoreError> {
             })
             .transpose()?,
         withdrawn_answered: decode_flag(row.get(7)?, "withdrawn answered")?,
+        sender_cancelled_at: row
+            .get::<_, Option<i64>>(8)?
+            .map(|value| {
+                timestamp_from_column(value, Record::TransactionRecord, "sender cancelled at")
+            })
+            .transpose()?,
+        cancelled_answered: decode_flag(row.get(9)?, "cancelled answered")?,
     })
 }
 
@@ -686,7 +693,7 @@ impl TxRecordRepository for SqliteRepos<'_> {
             .first(
                 "SELECT local_cutoff, finalized_at, kernel_absent_at, receive_seen_at,
                      receive_inputs_unspent, inputs_spent_elsewhere, sender_posted_at,
-                     withdrawn_answered
+                     withdrawn_answered, sender_cancelled_at, cancelled_answered
                  FROM tx_marks WHERE tx_id = ?1",
                 [i64::from(id.0)],
                 decode_marks,
@@ -704,8 +711,9 @@ impl TxRecordRepository for SqliteRepos<'_> {
         self.conn.execute(
             "INSERT OR REPLACE INTO tx_marks (tx_id, local_cutoff, finalized_at,
                  kernel_absent_at, receive_seen_at, receive_inputs_unspent,
-                 inputs_spent_elsewhere, sender_posted_at, withdrawn_answered)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 inputs_spent_elsewhere, sender_posted_at, withdrawn_answered,
+                 sender_cancelled_at, cancelled_answered)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 i64::from(id.0),
                 encode_height(marks.local_cutoff),
@@ -719,6 +727,11 @@ impl TxRecordRepository for SqliteRepos<'_> {
                     .map(timestamp_to_column)
                     .transpose()?,
                 marks.withdrawn_answered,
+                marks
+                    .sender_cancelled_at
+                    .map(timestamp_to_column)
+                    .transpose()?,
+                marks.cancelled_answered,
             ],
         )?;
         Ok(())

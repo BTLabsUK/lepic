@@ -251,6 +251,10 @@ pub struct TxReport {
     /// that it posted it, within the hour after; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_reported_posted_at: Option<String>,
+    /// For a received payment that is not confirmed, when its sender reported that it
+    /// cancelled it; `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_reported_cancelled_at: Option<String>,
 }
 
 /// What `wallet import-history` did; counts are of records.
@@ -1088,6 +1092,9 @@ fn write_show(out: &mut Vec<u8>, tx: &TxReport) -> std::io::Result<()> {
     if let Some(at) = &tx.sender_reported_posted_at {
         writeln!(out, "{:<12} posted at {at}", "Sender says")?;
     }
+    if let Some(at) = &tx.sender_reported_cancelled_at {
+        writeln!(out, "{:<12} cancelled at {at}", "Sender says")?;
+    }
     if let Some(origin) = &tx.origin {
         writeln!(out, "{:<12} {origin}", "Origin")?;
     }
@@ -1425,6 +1432,7 @@ mod tests {
             origin: None,
             imported: None,
             sender_reported_posted_at: None,
+            sender_reported_cancelled_at: None,
         }
     }
 

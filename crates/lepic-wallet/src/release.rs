@@ -537,11 +537,17 @@ where
                 })
             })
             .await?;
-        if !changes.is_empty() {
+        let released = !changes.is_empty();
+        if released {
             info!(height = %tip, "transaction released");
         }
         for change in changes {
             self.emit(change.into());
+        }
+        if released {
+            // The receiver waits for a post the network never took; it hears of the release
+            // as of a cancel. A failure to tell it is logged and not returned.
+            let _ = self.notify_cancelled(tx_id, true).await;
         }
         Ok(())
     }

@@ -1139,7 +1139,10 @@ where
                 self.answer(msg_id, attempt, envelope, &slate, reply_to)
                     .await
             }
-            Stage::S2 => self.complete(msg_id, envelope, &slate, reply_to).await,
+            Stage::S2 => {
+                self.complete(msg_id, attempt, envelope, &slate, reply_to)
+                    .await
+            }
             Stage::I1 => match self.bounced_invoice(&slate, reply_to).await? {
                 Some(bounced) => {
                     self.record_bounce(bounced).await?;
@@ -1528,10 +1531,12 @@ where
     /// Finalizes an S2 and posts it. A transaction that was finalized but not posted is
     /// settled: it waits in state `finalized` for [`Wallet::post`].
     /// An S2 finalized before, which arrives again when the receiver resent it, counts as
-    /// repeated; finalizing it again posts only if the first post did not succeed.
+    /// repeated; finalizing it again posts only if the first post did not succeed. A marked S2
+    /// of a send cancelled here is answered with a `cancelled` notice and refused.
     async fn complete(
         &self,
         msg_id: Option<&str>,
+        attempt: u32,
         envelope: &Envelope,
         reply: &Slate,
         reply_to: &Destination,
@@ -1594,6 +1599,28 @@ where
                 self.unknown_answer(msg_id, reply, Stage::S2, reply_to, Refusal::Finalize(error))
                     .await
             }
+            // The receiver answered a send cancelled here and waits for it to be posted: it
+            // hears of the cancel, as a `withdrawn` answers a late payment of an invoice. The
+            // answer came from the key the send went to, which finalizing checked first. The
+            // answer is kept for another try while the notice cannot be delivered, up to the
+            // hold bound.
+            Err(
+                error @ FinalizeError::NotFinalizable {
+                    tx_id,
+                    state: TxState::Cancelled,
+                },
+            ) if marked => match self.answer_cancelled_send(tx_id, reply_to).await {
+                Ok(()) => Err(Refusal::Finalize(error).into()),
+                Err(hold)
+                    if matches!(hold, Hold::Withheld)
+                        || reply_is_permanent(&hold)
+                        || self.hold_exhausted(msg_id, attempt).await? =>
+                {
+                    warn!(tx_id = %tx_id, error = %ErrorChain(&hold), "cancelled notice undelivered");
+                    Err(Refusal::Finalize(error).into())
+                }
+                Err(_) => Err(Hold::Finalize(error).into()),
+            },
             Err(error) if finalize_is_permanent(&error) => Err(Refusal::Finalize(error).into()),
             Err(error) => Err(Hold::Finalize(error).into()),
         }

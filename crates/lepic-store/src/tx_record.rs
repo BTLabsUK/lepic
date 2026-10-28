@@ -32,6 +32,10 @@ pub struct TxMarks {
     pub sender_posted_at: Option<Timestamp>,
     /// The payer of a cancelled invoice was told it is withdrawn.
     pub withdrawn_answered: bool,
+    /// When the sender of a received payment first reported that it cancelled it.
+    pub sender_cancelled_at: Option<Timestamp>,
+    /// The receiver of a cancelled send was told it is cancelled.
+    pub cancelled_answered: bool,
 }
 
 stored_enum! {

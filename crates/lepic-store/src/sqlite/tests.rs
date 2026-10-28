@@ -305,6 +305,19 @@ fn check_v9_seed(store: &SqliteStore) {
 }
 
 fn check_v10_seed(store: &SqliteStore) {
+    let marks = store.read(|repos| repos.tx_marks(TxId(1))).unwrap();
+    assert_eq!(
+        marks,
+        TxMarks {
+            sender_posted_at: Some(Timestamp::from_second(1_790_000_000).unwrap()),
+            withdrawn_answered: true,
+            ..TxMarks::default()
+        },
+        "the new marks start unset"
+    );
+}
+
+fn check_v11_seed(store: &SqliteStore) {
     check_empty(store);
     assert!(store.read(|repos| repos.tx_watches()).unwrap().is_empty());
 }
@@ -438,8 +451,20 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 10,
-        seed: "",
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, slate_id,
+                   amount_credited, amount_debited, created_at, updated_at)
+               VALUES (1, 0, 'incoming', 'received', X'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a',
+                   5, 0, 1, 1);
+               INSERT INTO tx_marks (tx_id, receive_inputs_unspent, inputs_spent_elsewhere,
+                   sender_posted_at, withdrawn_answered)
+               VALUES (1, 0, 0, 1790000000000000000, 1);",
         check: check_v10_seed,
+    },
+    UpgradeCase {
+        from: 11,
+        seed: "",
+        check: check_v11_seed,
     },
 ];
 

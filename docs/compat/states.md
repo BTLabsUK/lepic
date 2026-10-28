@@ -145,6 +145,12 @@ I2 or S2, which hold every input, output and the final offset.
   read on mainnet has its cutoff millions of blocks below the tip, while nobody pays a real
   request a year after it expired. One that expired more recently is refused as expired.
 
+The sender of an ordinary payment over Epicbox, or through a paired contact, tells a LEPIC
+receiver that answered it when it cancels or releases the send, with the `cancelled` notice of
+ADR 0016. The receiver records when and raises `PaymentCancelled`, and nothing else changes: the
+payment stays `received` until the host cancels it, by the owner's cancel above, or a refresh
+confirms or expires it.
+
 A received payment with no TTL, which every V2 slate is, would otherwise stay `received` for
 ever. A refresh records the tip at which it first sees one, not the slate's height, which the
 sender chose, and expires it 10,080 blocks later under the rules above. An issued invoice

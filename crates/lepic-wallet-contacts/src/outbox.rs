@@ -227,7 +227,8 @@ where
     /// Deletes outbox entries nothing waits for any more: delivered ones older than the relay
     /// keeps messages, stuck ones of no transaction as old, and any whose transaction
     /// confirmed, was cancelled or expired, except the queued `withdrawn` of an invoice this
-    /// wallet issued and cancelled, which the payer must still get.
+    /// wallet issued and cancelled, and the queued `cancelled` of a send, which the payer and
+    /// the receiver must still get.
     pub(crate) async fn prune_outbox(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         let pruned = self
@@ -261,7 +262,14 @@ where
                                     let withdrawal = direction == TxDirection::Incoming
                                         && tx.entry.state == TxState::Cancelled
                                         && entry.state == ContactOutboxState::Queued;
+                                    // So has a cancelled send its `cancelled`, queued under
+                                    // the S3 stage, which no slate of a send takes.
+                                    let cancellation = direction == TxDirection::Outgoing
+                                        && tx.entry.state == TxState::Cancelled
+                                        && entry.state == ContactOutboxState::Queued
+                                        && entry.stage == SlateStage::Standard3;
                                     ended |= !withdrawal
+                                        && !cancellation
                                         && matches!(
                                             tx.entry.state,
                                             TxState::Confirmed

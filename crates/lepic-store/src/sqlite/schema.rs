@@ -394,10 +394,18 @@ DELETE FROM settings WHERE substr(key, 1, 26) = 'notice.withdrawn_answered.'
     OR substr(key, 1, 15) = 'invoice.origin.';
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
+/// Two more marks of a transaction for the `cancelled` notice: when the sender of a received
+/// payment reported it cancelled it, and that the receiver of a cancelled send was told.
+const V11: &str = "
+ALTER TABLE tx_marks ADD COLUMN sender_cancelled_at INTEGER;
+ALTER TABLE tx_marks ADD COLUMN cancelled_answered INTEGER NOT NULL DEFAULT 0
+    CHECK (cancelled_answered IN (0, 1));
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

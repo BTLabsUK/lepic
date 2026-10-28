@@ -427,7 +427,10 @@ impl TxRecordRepository for MemoryRepos<'_> {
 
     fn put_tx_marks(&mut self, id: TxId, marks: &TxMarks) -> Result<(), StoreError> {
         self.require_transaction(id)?;
-        if let Some(at) = marks.sender_posted_at {
+        for at in [marks.sender_posted_at, marks.sender_cancelled_at]
+            .into_iter()
+            .flatten()
+        {
             timestamp_to_column(at)?;
         }
         if *marks == TxMarks::default() {
