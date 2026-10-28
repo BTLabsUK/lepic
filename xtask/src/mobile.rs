@@ -15,10 +15,13 @@
 //! `--package --no-tor` builds the library without its default `tor` feature (ADR 0026): no
 //! `lepic-tor` in it, by default into `dist/native-no-tor/` (`dist/native-mock-no-tor/` with
 //! `--mock`). Next to every library a `FEATURES` file lists the `lepic-ffi` features it was
-//! built with, one per line, so the binding's build hook can tell the two builds apart.
+//! built with, one per line, so the binding's build hook can tell the two builds apart, and a
+//! `SOURCE` file names the LEPIC commit and the rustc that built it, so the hook can refuse a
+//! library that was not built from the commit the binding pins.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
@@ -50,6 +53,12 @@ const MANIFEST_FILE: &str = "SHA256SUMS";
 /// The file `--package` writes next to each library with the `lepic-ffi` features it has, one
 /// per line. The binding's build hook reads it under the same name.
 const FEATURES_FILE: &str = "FEATURES";
+
+/// The file `--package` writes next to each library with where it came from: `lepic <commit>`,
+/// `tree clean` or `tree modified`, and `rustc <version>`. The binding's build hook reads it under
+/// the same name and refuses a library whose commit is not its `lepic.rev` or whose tree was
+/// modified.
+const SOURCE_FILE: &str = "SOURCE";
 
 /// The `lepic-ffi` feature with the in-process scripted node and relay the binding's tests drive.
 const MOCK_FEATURE: &str = "mock";
@@ -310,6 +319,37 @@ fn write_features(library: &Path, features: &[&str]) -> Result<PathBuf> {
     Ok(file)
 }
 
+/// The `SOURCE_FILE` text for libraries built from the checkout at `root` now.
+fn source_text(root: &Path) -> Result<String> {
+    let output = |program: &str, args: &[&str]| -> Result<String> {
+        let out = Command::new(program)
+            .args(args)
+            .current_dir(root)
+            .output()
+            .with_context(|| format!("could not run `{program}`"))?;
+        if !out.status.success() {
+            bail!("`{program} {}` failed", args.join(" "));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    let commit = output("git", &["rev-parse", "HEAD"])?;
+    let modified = !output("git", &["status", "--porcelain", "--untracked-files=no"])?.is_empty();
+    let rustc = output("rustc", &["-V"])?;
+    Ok(source_lines(&commit, modified, &rustc))
+}
+
+fn source_lines(commit: &str, modified: bool, rustc: &str) -> String {
+    let tree = if modified { "modified" } else { "clean" };
+    format!("lepic {commit}\ntree {tree}\n{rustc}\n")
+}
+
+/// Writes the `SOURCE_FILE` next to `library`.
+fn write_source(library: &Path, text: &str) -> Result<PathBuf> {
+    let file = library.with_file_name(SOURCE_FILE);
+    fs::write(&file, text).with_context(|| format!("could not write `{}`", file.display()))?;
+    Ok(file)
+}
+
 /// Writes the `MANIFEST_FILE` next to `library`: its SHA-256 and file name in `sha256sum`
 /// format, which the binding's build hook checks before it bundles the library.
 fn write_manifest(library: &Path) -> Result<PathBuf> {
@@ -359,12 +399,14 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
                     .join(out),
                 None => root.join(default_native_dir(mock, tor)),
             };
+            let source = source_text(root)?;
             for (target, args) in targets.iter().zip(commands) {
                 run_cargo(root, &args)?;
                 let packaged =
                     copy_into_package(&release_library(&target_dir, target), &native_dir, target)?;
                 write_manifest(&packaged)?;
                 write_features(&packaged, &package_features(mock, tor))?;
+                write_source(&packaged, &source)?;
                 eprintln!("xtask mobile: packaged {}", packaged.display());
             }
             Ok(())
@@ -694,6 +736,25 @@ mod tests {
             "aarch64-apple-ios",
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn writes_the_source_next_to_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = dir.path().join("liblepic_ffi.so");
+        let text = source_lines(
+            "659cb6a2bb42b9b9d4018754a17c7b01d01e1452",
+            true,
+            "rustc 1.99.0",
+        );
+
+        let file = write_source(&library, &text).unwrap();
+
+        assert_eq!(file, dir.path().join("SOURCE"));
+        assert_eq!(
+            fs::read_to_string(file).unwrap(),
+            "lepic 659cb6a2bb42b9b9d4018754a17c7b01d01e1452\ntree modified\nrustc 1.99.0\n"
+        );
     }
 
     #[test]
