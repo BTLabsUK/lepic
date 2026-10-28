@@ -36,6 +36,8 @@ security audit asked for the split.
     `epicbox_invoice` and `receive`.
 - `PairingFailure` moves to `lepic_wallet::event`, next to the event that carries it; the contacts
   crate re-exports it.
+- The LEPIC marker codecs move from `lepic-slate` to `lepic-epicbox::marker`, which may now
+  take `lepic-primitives` (their base fee) directly; `lepic-slate` already does.
 - The contact integration tests stay in `lepic-wallet/tests` with `lepic-wallet-contacts` as a
   dev-dependency, so both crates keep one test harness.
 

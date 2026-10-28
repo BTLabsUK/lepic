@@ -63,7 +63,7 @@ lepic-contact     -> (external only)
 lepic-node        -> lepic-primitives, lepic-crypto
 lepic-store       -> lepic-primitives
 lepic-transport   -> lepic-slate
-lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto
+lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto, lepic-primitives
 lepic-foreign     -> lepic-transport, lepic-slate
 lepic-tor         -> lepic-foreign, lepic-transport, lepic-slate
 lepic-wallet      -> all crates above
@@ -74,7 +74,8 @@ lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-telemetry, lepic
 ```
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a
-dev-dependency for its log-capture test helpers. Any other edge is a design change and needs an ADR.
+dev-dependency for its log-capture test helpers, and `lepic-wallet` takes `lepic-wallet-contacts`
+as one, so the contact tests run on the engine's own test harness (ADR 0029). Any other edge is a design change and needs an ADR.
 `lepic-ffi`'s edge to `lepic-tor` is optional, behind its default `tor` feature (ADR 0026).
 Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `contact`) may not depend on Tokio or the filesystem,
 read a clock, or create their own randomness.

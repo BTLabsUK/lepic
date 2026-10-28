@@ -11,6 +11,9 @@ use crate::cargo;
 const ARCHITECTURE_DOC: &str = "docs/architecture.md";
 const EDGES_HEADING: &str = "## Allowed dependency edges";
 const DEV_DEPENDENCY_ANYWHERE: &str = "lepic-telemetry";
+/// Dev-dependency edges `docs/architecture.md` allows besides its block: the engine's tests
+/// drive the contacts crate through the engine's own test harness (ADR 0029).
+const DEV_ONLY_EDGES: &[(&str, &str)] = &[("lepic-wallet", "lepic-wallet-contacts")];
 /// Members that are repository tooling rather than product crates. They may depend on no member.
 const TOOLING_MEMBERS: &[&str] = &["xtask"];
 
@@ -353,8 +356,9 @@ fn find_violations(policy: &EdgePolicy, metadata: &Metadata) -> Vec<Violation> {
             let to = dependency.name.as_str();
             let kind = dependency.edge_kind();
             let is_member_edge = to != from && members.contains_key(to);
-            let edge_allowed =
-                policy.allows(from, to) || (kind == EdgeKind::Dev && to == DEV_DEPENDENCY_ANYWHERE);
+            let edge_allowed = policy.allows(from, to)
+                || (kind == EdgeKind::Dev
+                    && (to == DEV_DEPENDENCY_ANYWHERE || DEV_ONLY_EDGES.contains(&(from, to))));
             if is_member_edge && !edge_allowed {
                 violations.push(Violation::ForbiddenEdge {
                     from: from.to_owned(),
@@ -593,6 +597,40 @@ lepic-telemetry   -> (external only)
                 "lepic-crypto",
                 "lepic-telemetry",
                 EdgeKind::Normal
+            )]
+        );
+    }
+
+    #[test]
+    fn allows_the_contacts_crate_only_as_a_dev_dependency_of_the_engine() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "ws/docs/architecture.md",
+            "## Allowed dependency edges\n```\nlepic-crypto -> (external only)\n\
+             lepic-primitives -> lepic-crypto\nlepic-telemetry -> (external only)\n\
+             lepic-wallet -> (external only)\nlepic-wallet-contacts -> lepic-wallet\n```\n",
+        );
+        let contacts = "lepic-wallet-contacts = { path = \"../lepic-wallet-contacts\" }\n";
+        fixture.member(
+            "lepic-wallet-contacts",
+            "[dependencies]\nlepic-wallet = { path = \"../lepic-wallet\" }\n",
+        );
+        fixture.member("lepic-wallet", &format!("[dev-dependencies]\n{contacts}"));
+        assert_eq!(fixture.violations(), []);
+
+        fixture.member(
+            "lepic-primitives",
+            &format!(
+                "[dependencies]\nlepic-crypto = {{ path = \"../lepic-crypto\" }}\n\n\
+                 [dev-dependencies]\n{contacts}"
+            ),
+        );
+        assert_eq!(
+            fixture.violations(),
+            [forbidden(
+                "lepic-primitives",
+                "lepic-wallet-contacts",
+                EdgeKind::Dev
             )]
         );
     }
