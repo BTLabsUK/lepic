@@ -49,8 +49,12 @@ fn hook_refuses_autosquash_subjects_with_no_autosquash() {
 
 #[test]
 fn commit_lint_relints_edited_titles_with_the_base_branch_hook() {
-    let workflow =
-        fs::read_to_string(repository().join(".github/workflows/commit-lint.yml")).unwrap();
+    // A copy without hosted workflows (the GitLab one) has no commit-lint job to check.
+    let path = repository().join(".github/workflows/commit-lint.yml");
+    if !path.is_file() {
+        return;
+    }
+    let workflow = fs::read_to_string(path).unwrap();
     let types = workflow
         .lines()
         .find(|line| line.trim_start().starts_with("types:"))
