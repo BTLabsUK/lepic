@@ -1,3 +1,9 @@
+// Portions Copyright 2018 The Grin Developers
+// Portions Copyright 2020 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic core/src/ser.rs, core/src/libtx/secp_ser.rs (Apache-2.0); see NOTICE
+// and upstream.toml.
+
 use std::fmt;
 
 use secp256k1zkp::constants::{BULLET_PROOF_MSG_SIZE, MAX_PROOF_SIZE, SINGLE_BULLET_PROOF_SIZE};
