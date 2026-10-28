@@ -6,7 +6,38 @@ use uuid::Uuid;
 
 use crate::account::AccountIndex;
 use crate::encoding::stored_enum;
-use crate::error::StoreError;
+use crate::error::{Record, StoreError};
+use crate::settings::SettingsRepository;
+
+/// The highest transaction id the store handed out. A deleted transaction's id is never handed
+/// out again, so records other modules keep under it cannot pass to a new transaction.
+const LAST_TRANSACTION_ID_SETTING: &str = "store.last_transaction_id";
+
+/// The id after both `in_table`, the highest id stored, and the highest one ever handed out,
+/// recorded as handed out. Fails with [`StoreError::OutOfRange`] once ids run out.
+pub(crate) fn next_transaction_id(
+    repos: &mut (impl SettingsRepository + ?Sized),
+    in_table: Option<TxId>,
+) -> Result<TxId, StoreError> {
+    let handed_out = repos
+        .setting(LAST_TRANSACTION_ID_SETTING)?
+        .map(|text| {
+            text.parse().map(TxId).map_err(|_| StoreError::Corrupt {
+                record: Record::Setting,
+                field: "last transaction id",
+            })
+        })
+        .transpose()?;
+    let id = match in_table.max(handed_out) {
+        None => Some(TxId(1)),
+        Some(TxId(last)) => last.checked_add(1).map(TxId),
+    }
+    .ok_or(StoreError::OutOfRange {
+        field: "transaction id",
+    })?;
+    repos.put_setting(LAST_TRANSACTION_ID_SETTING, &id.0.to_string())?;
+    Ok(id)
+}
 
 /// Local transaction log id, assigned by the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -32,7 +32,7 @@ use crate::slate::{SlateRepository, SlateStage, StoredSlate};
 use crate::store::{Repositories, WalletStore};
 use crate::transaction::{
     OpenReceipt, StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
-    TxState,
+    TxState, next_transaction_id,
 };
 
 type SlateKey = ([u8; 16], &'static str);
@@ -282,12 +282,8 @@ impl OutputRepository for MemoryRepos<'_> {
 impl TransactionRepository for MemoryRepos<'_> {
     fn insert_transaction(&mut self, entry: &TransactionEntry) -> Result<TxId, StoreError> {
         self.check_transaction(None, entry)?;
-        let id = next_key(&self.state.transactions, TxId(1), |TxId(last)| {
-            last.checked_add(1).map(TxId)
-        })
-        .ok_or(StoreError::OutOfRange {
-            field: "transaction id",
-        })?;
+        let in_table = self.state.transactions.last_key_value().map(|(id, _)| *id);
+        let id = next_transaction_id(self, in_table)?;
         self.state.transactions.insert(id, entry.clone());
         Ok(id)
     }

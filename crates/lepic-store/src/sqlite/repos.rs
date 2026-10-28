@@ -31,7 +31,7 @@ use crate::settings::SettingsRepository;
 use crate::slate::{SlateRepository, SlateStage, StoredSlate};
 use crate::transaction::{
     OpenReceipt, StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
-    TxState,
+    TxState, next_transaction_id,
 };
 
 /// The repositories over one open SQLite transaction.
@@ -374,16 +374,16 @@ impl TransactionRepository for SqliteRepos<'_> {
         let last: Option<i64> =
             self.conn
                 .query_row("SELECT MAX(id) FROM transactions", [], |row| row.get(0))?;
-        let id = match last {
-            None => Some(1),
-            Some(last) => u32::try_from(last)
-                .ok()
-                .and_then(|last| last.checked_add(1)),
-        }
-        .map(TxId)
-        .ok_or(StoreError::OutOfRange {
-            field: "transaction id",
-        })?;
+        let in_table = last
+            .map(|last| {
+                u32::try_from(last)
+                    .map(TxId)
+                    .map_err(|_| StoreError::OutOfRange {
+                        field: "transaction id",
+                    })
+            })
+            .transpose()?;
+        let id = next_transaction_id(self, in_table)?;
         self.write_transaction(
             &format!(
                 "INSERT INTO transactions ({TRANSACTION_COLUMNS})

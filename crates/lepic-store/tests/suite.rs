@@ -254,6 +254,26 @@ fn transactions_get_sequential_ids_and_round_trip<B: Backend>() {
     );
 }
 
+fn a_deleted_transactions_id_is_never_handed_out_again<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let entry = transaction(DEFAULT, None);
+    let newest = write(store, |repos| {
+        repos.insert_transaction(&entry)?;
+        repos.insert_transaction(&entry)
+    })
+    .unwrap();
+    assert_eq!(newest, TxId(2));
+
+    let next = write(store, |repos| {
+        repos.delete_transaction(newest)?;
+        repos.insert_transaction(&entry)
+    })
+    .unwrap();
+
+    assert_eq!(next, TxId(3));
+}
+
 fn update_transaction_replaces_entry<B: Backend>() {
     let backend = with_default_account::<B>();
     let store = backend.store();
@@ -2074,6 +2094,7 @@ for_each_backend!(
     rejects_output_for_unknown_account_or_transaction,
     outputs_of_transaction_lists_linked_outputs,
     transactions_get_sequential_ids_and_round_trip,
+    a_deleted_transactions_id_is_never_handed_out_again,
     update_transaction_replaces_entry,
     slate_id_is_unique_per_direction,
     rejects_transaction_for_unknown_account,
