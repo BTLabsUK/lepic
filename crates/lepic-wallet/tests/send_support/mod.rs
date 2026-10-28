@@ -126,7 +126,7 @@ impl Sender {
         let (config, registry) = transports(&harness, &mut peer);
         let mut ports: Ports<_, TestStores, TestVault> = Ports {
             transports: registry,
-            ..harness.ports(TestVault::default())
+            ..harness.ports(harness.vault.clone())
         };
         if let Some(clock) = clock {
             ports.clock = clock;
