@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::send_support::{ACCOUNT, Sender, context_key};
 use crate::support::{
-    Harness, MemoryStores, TestVault, TestWallet, complete_restore_scan, password,
+    Harness, TestStore, TestStores, TestVault, TestWallet, complete_restore_scan, password,
 };
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::mock_relay::MockRelay;
@@ -20,7 +20,7 @@ use lepic_epicbox::{
 };
 use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;
-use lepic_store::{AccountIndex, InboxEntry, MemoryStore, StoreError, TxState, WalletStore};
+use lepic_store::{AccountIndex, InboxEntry, StoreError, TxState, WalletStore};
 use lepic_transport::file::FileTransport;
 use lepic_transport::transport::Destination;
 use lepic_wallet::event::{TransportState, TransportStatus};
@@ -116,7 +116,7 @@ impl Receiver {
     }
 
     /// The wallet's database under its own context key; the wallet must exist.
-    pub fn store(&self) -> MemoryStore {
+    pub fn store(&self) -> TestStore {
         let seed = lepic_keychain::Seed::from_mnemonic(RECEIVER_MNEMONIC).unwrap();
         assert!(!self.harness.stores.is_empty(&self.harness.data_dir));
         lepic_wallet::StoreOpener::open(
@@ -148,7 +148,7 @@ impl Receiver {
         transports.register(Box::new(epicbox.clone())).unwrap();
         let mut config = self.harness.config(Network::Floonet);
         config.transports = vec![TRANSPORT_ID];
-        let ports: Ports<_, MemoryStores, TestVault> = Ports {
+        let ports: Ports<_, TestStores, TestVault> = Ports {
             transports,
             runtime,
             ..self.harness.ports(self.vault.clone())

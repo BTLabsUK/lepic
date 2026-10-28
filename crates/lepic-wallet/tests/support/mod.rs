@@ -1,4 +1,4 @@
-//! In-memory ports for engine integration tests: a store opener over `MemoryStore`, a secret
+//! Ports for engine integration tests: a store opener over `MemoryStore` or SQLite, a secret
 //! vault over the real `lepic-keychain` vault format, the mock node, a loopback transport, a
 //! fixed clock and a seeded RNG. Later engine tasks build on these.
 
@@ -12,6 +12,7 @@
     clippy::arithmetic_side_effects
 )]
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -25,18 +26,19 @@ use lepic_node::{NodeClient, NodeVersion, Tip};
 use lepic_primitives::amount::Height;
 use lepic_primitives::hash::Hash;
 use lepic_primitives::params::Network;
-use lepic_store::{ContextKey, MemoryStore, StoreError};
+use lepic_store::{ContextKey, MemoryStore, Repositories, SqliteStore, StoreError, WalletStore};
 use lepic_transport::file::FilePolicy;
 use lepic_transport::loopback::LoopbackTransport;
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, TransportId};
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::{
-    Clock, NodeEndpoint, Password, Ports, SecretVault, SecretVaultError, SharedRng, StoreOpener,
-    Wallet, WalletConfig, WalletName,
+    Clock, DATABASE_FILE, NodeEndpoint, Password, Ports, SecretVault, SecretVaultError, SharedRng,
+    SqliteStores, StoreOpener, Wallet, WalletConfig, WalletName,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 pub const LOOPBACK: TransportId = TransportId::new("loopback");
@@ -45,7 +47,7 @@ pub const LOOPBACK: TransportId = TransportId::new("loopback");
 pub const WALLET_SEED_VECTOR: &str =
     include_str!("../../../../testdata/vectors/keys/wallet_seed_seed32.json");
 
-pub type TestWallet = Wallet<NodeClient<MockNode>, MemoryStores, TestVault>;
+pub type TestWallet = Wallet<NodeClient<MockNode>, TestStores, TestVault>;
 
 /// The time the fixed clock always reports.
 pub fn fixed_time() -> Timestamp {
@@ -125,6 +127,171 @@ impl StoreOpener for MemoryStores {
             .entry(data_dir.to_owned())
             .or_insert_with(|| MemoryStore::new(ContextKey::from_bytes([0; 32])));
         Ok(store.reopen(key))
+    }
+}
+
+/// The database a [`TestStores`] opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreKind {
+    Memory,
+    Sqlite,
+}
+
+thread_local! {
+    static STORE_KIND: Cell<StoreKind> = const { Cell::new(StoreKind::Memory) };
+}
+
+/// Runs `test` with every [`TestStores::default`] made on this thread opening `kind`, so the
+/// harnesses a test builds, however deeply, all use the same database.
+pub fn with_store_kind<T>(kind: StoreKind, test: impl FnOnce() -> T) -> T {
+    struct Restore(StoreKind);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STORE_KIND.set(self.0);
+        }
+    }
+    let _restore = Restore(STORE_KIND.replace(kind));
+    test()
+}
+
+/// Runs each named test function twice, as `<name>::memory` over [`MemoryStores`] and
+/// `<name>::sqlite` over the product SQLite store in a temporary directory.
+// Test binaries that run on memory stores only never expand it.
+#[allow(unused_macros)]
+macro_rules! both_stores {
+    ($($name:ident),+ $(,)?) => {$(
+        mod $name {
+            #[test]
+            fn memory() {
+                crate::support::with_store_kind(crate::support::StoreKind::Memory, super::$name);
+            }
+
+            #[test]
+            fn sqlite() {
+                crate::support::with_store_kind(crate::support::StoreKind::Sqlite, super::$name);
+            }
+        }
+    )+};
+}
+
+// Test binaries that run on memory stores only never call it.
+#[allow(unused_imports)]
+pub(crate) use both_stores;
+
+/// SQLite databases by data directory, each in its own directory under one temporary root.
+/// Clones share the root, so a second wallet handle on the same directory opens the same file.
+#[derive(Clone)]
+pub struct SqliteDirs {
+    root: Arc<TempDir>,
+}
+
+impl SqliteDirs {
+    fn new() -> Self {
+        Self {
+            root: Arc::new(tempfile::tempdir().unwrap()),
+        }
+    }
+
+    /// Where the wallet's `data_dir` lives on disk; the engine's paths are absolute but fake.
+    fn dir(&self, data_dir: &Path) -> PathBuf {
+        let relative = data_dir.strip_prefix("/").unwrap_or(data_dir);
+        let dir = self.root.path().join(relative);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+}
+
+/// The store opener of a test: memory stores, or the product SQLite opener over a temporary
+/// directory. [`Default`] picks the kind [`with_store_kind`] set.
+#[derive(Clone)]
+pub enum TestStores {
+    Memory(MemoryStores),
+    Sqlite(SqliteDirs),
+}
+
+impl Default for TestStores {
+    fn default() -> Self {
+        Self::of_kind(STORE_KIND.get())
+    }
+}
+
+impl TestStores {
+    pub fn of_kind(kind: StoreKind) -> Self {
+        match kind {
+            StoreKind::Memory => Self::Memory(MemoryStores::default()),
+            StoreKind::Sqlite => Self::Sqlite(SqliteDirs::new()),
+        }
+    }
+
+    pub fn kind(&self) -> StoreKind {
+        match self {
+            Self::Memory(_) => StoreKind::Memory,
+            Self::Sqlite(_) => StoreKind::Sqlite,
+        }
+    }
+
+    pub fn is_empty(&self, data_dir: &Path) -> bool {
+        match self {
+            Self::Memory(stores) => stores.is_empty(data_dir),
+            Self::Sqlite(dirs) => !dirs.dir(data_dir).join(DATABASE_FILE).exists(),
+        }
+    }
+}
+
+impl StoreOpener for TestStores {
+    type Store = TestStore;
+
+    fn open(&self, data_dir: &Path, key: ContextKey) -> Result<TestStore, StoreError> {
+        match self {
+            Self::Memory(stores) => stores.open(data_dir, key).map(TestStore::Memory),
+            Self::Sqlite(dirs) => SqliteStores
+                .open(&dirs.dir(data_dir), key)
+                .map(TestStore::Sqlite),
+        }
+    }
+
+    fn open_existing(
+        &self,
+        data_dir: &Path,
+        key: ContextKey,
+    ) -> Result<Option<TestStore>, StoreError> {
+        match self {
+            Self::Memory(stores) => Ok(stores.open_existing(data_dir, key)?.map(TestStore::Memory)),
+            Self::Sqlite(dirs) => Ok(SqliteStores
+                .open_existing(&dirs.dir(data_dir), key)?
+                .map(TestStore::Sqlite)),
+        }
+    }
+}
+
+/// A database a [`TestStores`] opened.
+pub enum TestStore {
+    Memory(MemoryStore),
+    Sqlite(SqliteStore),
+}
+
+impl WalletStore for TestStore {
+    fn read<R, E>(&self, operation: impl FnOnce(&dyn Repositories) -> Result<R, E>) -> Result<R, E>
+    where
+        E: From<StoreError>,
+    {
+        match self {
+            Self::Memory(store) => store.read(operation),
+            Self::Sqlite(store) => store.read(operation),
+        }
+    }
+
+    fn write<R, E>(
+        &self,
+        operation: impl FnOnce(&mut dyn Repositories) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<StoreError>,
+    {
+        match self {
+            Self::Memory(store) => store.write(operation),
+            Self::Sqlite(store) => store.write(operation),
+        }
     }
 }
 
@@ -214,7 +381,7 @@ pub fn mock_node() -> MockNode {
 pub struct Harness {
     pub runtime: Runtime,
     pub node: MockNode,
-    pub stores: MemoryStores,
+    pub stores: TestStores,
     pub vault: TestVault,
     pub peer: Arc<Mutex<Option<LoopbackTransport>>>,
     pub data_dir: PathBuf,
@@ -227,7 +394,7 @@ impl Harness {
                 .build()
                 .unwrap(),
             node: mock_node(),
-            stores: MemoryStores::default(),
+            stores: TestStores::default(),
             vault: TestVault::default(),
             peer: Arc::default(),
             data_dir: PathBuf::from("/wallet-data"),
@@ -255,7 +422,7 @@ impl Harness {
         wallet
     }
 
-    pub fn ports(&self, vault: TestVault) -> Ports<NodeClient<MockNode>, MemoryStores, TestVault> {
+    pub fn ports(&self, vault: TestVault) -> Ports<NodeClient<MockNode>, TestStores, TestVault> {
         Ports {
             node: self.node.client(),
             stores: self.stores.clone(),

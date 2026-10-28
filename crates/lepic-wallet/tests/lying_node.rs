@@ -46,7 +46,9 @@ use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Ports, StoreOpener, Wallet};
 use scan_support::{PASSWORD, full_scan_vector, options, restore, snapshot};
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
-use support::{Harness, LOOPBACK, MemoryStores, TestVault, complete_restore_scan, password};
+use support::{
+    Harness, LOOPBACK, TestStore, TestStores, TestVault, complete_restore_scan, password,
+};
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -191,13 +193,13 @@ impl NodeApi for LyingNode {
     }
 }
 
-type LiarWallet = Wallet<LyingNode, MemoryStores, TestVault>;
+type LiarWallet = Wallet<LyingNode, TestStores, TestVault>;
 
 /// The funded sender of the send tests, over a node that can lie.
 struct Liar {
     harness: Harness,
     wallet: LiarWallet,
-    store: lepic_store::MemoryStore,
+    store: TestStore,
     lies: Arc<Mutex<Lies>>,
     funding: OutputRecord,
 }
@@ -745,7 +747,7 @@ fn serve(mut stream: TcpStream, badness: Badness, stop: &AtomicBool) {
     }
 }
 
-type HttpWallet = Wallet<NodeClient<HttpTransport>, MemoryStores, TestVault>;
+type HttpWallet = Wallet<NodeClient<HttpTransport>, TestStores, TestVault>;
 
 /// A second handle on the restored wallet whose node is `url`, with short timeouts.
 fn http_wallet(harness: &Harness, runtime: &tokio::runtime::Runtime, url: &str) -> HttpWallet {

@@ -30,8 +30,7 @@ use lepic_primitives::tx::Transaction;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::model::Slate;
 use lepic_store::{
-    AccountRecord, MemoryStore, OutputRecord, OutputStatus, SlateStage, StoreError, TxId, TxState,
-    WalletStore,
+    AccountRecord, OutputRecord, OutputStatus, SlateStage, StoreError, TxId, TxState, WalletStore,
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::{Destination, Inbound};
@@ -44,7 +43,10 @@ use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Clock, Event, Ports, StoreOpener, Wallet, WalletError};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
-use support::{Harness, LOOPBACK, MemoryStores, TestVault, TestWallet, fixed_time, password};
+use support::both_stores;
+use support::{
+    Harness, LOOPBACK, TestStore, TestStores, TestVault, TestWallet, fixed_time, password,
+};
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -96,7 +98,7 @@ struct Releasing {
     harness: Harness,
     clock: MovableClock,
     wallet: TestWallet,
-    store: MemoryStore,
+    store: TestStore,
     tx_id: TxId,
     funding: OutputRecord,
     s2: WireSlate,
@@ -130,7 +132,7 @@ impl Releasing {
     fn answered() -> Self {
         let harness = Harness::new();
         let clock = MovableClock(Arc::new(Mutex::new(fixed_time())));
-        let ports: Ports<_, MemoryStores, TestVault> = Ports {
+        let ports: Ports<_, TestStores, TestVault> = Ports {
             clock: Arc::new(clock.clone()),
             ..harness.ports(TestVault::default())
         };
@@ -311,7 +313,7 @@ fn transaction_events(
     changes
 }
 
-#[test]
+both_stores!(a_posted_send_whose_kernel_stays_missing_is_released);
 fn a_posted_send_whose_kernel_stays_missing_is_released() {
     let releasing = Releasing::posted();
     let before = releasing
@@ -346,7 +348,7 @@ fn a_posted_send_whose_kernel_stays_missing_is_released() {
     assert_eq!((after.releasable_from, after.releasable), (None, false));
 }
 
-#[test]
+both_stores!(a_finalized_send_the_node_refused_is_released);
 fn a_finalized_send_the_node_refused_is_released() {
     let releasing = Releasing::refused().made_releasable();
     let mut events = releasing.wallet.subscribe();
@@ -360,7 +362,7 @@ fn a_finalized_send_the_node_refused_is_released() {
     );
 }
 
-#[test]
+both_stores!(refuses_a_release_before_a_refresh_missed_the_kernel_at_the_release_height);
 fn refuses_a_release_before_a_refresh_missed_the_kernel_at_the_release_height() {
     let releasing = Releasing::posted();
     let too_early = |error: WalletError| {
@@ -393,7 +395,7 @@ fn refuses_a_release_before_a_refresh_missed_the_kernel_at_the_release_height() 
     releasing.assert_untouched(TxState::Posted, &outputs);
 }
 
-#[test]
+both_stores!(a_refresh_that_finds_the_kernel_confirms_the_send_instead);
 fn a_refresh_that_finds_the_kernel_confirms_the_send_instead() {
     let releasing = Releasing::posted();
     let mined = releasing.kernel_at(TIP + 1);
@@ -421,7 +423,7 @@ fn a_refresh_that_finds_the_kernel_confirms_the_send_instead() {
     );
 }
 
-#[test]
+both_stores!(refuses_a_release_when_the_kernel_reached_the_chain_since);
 fn refuses_a_release_when_the_kernel_reached_the_chain_since() {
     let releasing = Releasing::posted().made_releasable();
     let outputs = releasing.outputs();
@@ -440,7 +442,7 @@ fn refuses_a_release_when_the_kernel_reached_the_chain_since() {
     releasing.assert_untouched(TxState::Posted, &outputs);
 }
 
-#[test]
+both_stores!(refuses_a_release_when_the_node_pool_holds_the_transaction);
 fn refuses_a_release_when_the_node_pool_holds_the_transaction() {
     let releasing = Releasing::posted().made_releasable();
     let outputs = releasing.outputs();
@@ -460,7 +462,7 @@ fn refuses_a_release_when_the_node_pool_holds_the_transaction() {
     releasing.assert_untouched(TxState::Posted, &outputs);
 }
 
-#[test]
+both_stores!(refuses_a_release_when_the_node_cannot_be_asked);
 fn refuses_a_release_when_the_node_cannot_be_asked() {
     let releasing = Releasing::posted().made_releasable();
     let outputs = releasing.outputs();
@@ -482,7 +484,7 @@ fn refuses_a_release_when_the_node_cannot_be_asked() {
     assert_eq!(releasing.state(), TxState::Cancelled);
 }
 
-#[test]
+both_stores!(refuses_to_release_a_send_that_is_not_finalized_or_posted);
 fn refuses_to_release_a_send_that_is_not_finalized_or_posted() {
     let releasing = Releasing::answered();
 
@@ -562,7 +564,7 @@ impl Releasing {
     }
 }
 
-#[test]
+both_stores!(a_released_send_mined_inside_the_watch_is_confirmed_and_its_change_returns);
 fn a_released_send_mined_inside_the_watch_is_confirmed_and_its_change_returns() {
     let releasing = Releasing::posted().made_releasable();
     let change_before = releasing.change();
@@ -627,7 +629,7 @@ fn a_released_send_mined_inside_the_watch_is_confirmed_and_its_change_returns() 
     assert_eq!(releasing.state(), TxState::Confirmed);
 }
 
-#[test]
+both_stores!(a_released_send_mined_after_the_kernel_watch_is_found_by_its_change);
 fn a_released_send_mined_after_the_kernel_watch_is_found_by_its_change() {
     let releasing = Releasing::posted().made_releasable();
     let change_before = releasing.change();
@@ -661,7 +663,7 @@ fn a_released_send_mined_after_the_kernel_watch_is_found_by_its_change() {
     assert_eq!(change[0].status, OutputStatus::Unspent);
 }
 
-#[test]
+both_stores!(refuses_to_release_an_incoming_finalized_or_posted_transaction);
 fn refuses_to_release_an_incoming_finalized_or_posted_transaction() {
     for state in [TxState::Finalized, TxState::Posted] {
         let releasing = Releasing::answered();
@@ -743,7 +745,7 @@ impl Releasing {
     }
 }
 
-#[test]
+both_stores!(cancel_asks_the_node_pool_before_its_chain);
 fn cancel_asks_the_node_pool_before_its_chain() {
     let releasing = Releasing::refused();
 
@@ -756,7 +758,7 @@ fn cancel_asks_the_node_pool_before_its_chain() {
     );
 }
 
-#[test]
+both_stores!(release_asks_the_node_pool_before_its_chain);
 fn release_asks_the_node_pool_before_its_chain() {
     let releasing = Releasing::posted().made_releasable();
 
@@ -769,7 +771,7 @@ fn release_asks_the_node_pool_before_its_chain() {
     );
 }
 
-#[test]
+both_stores!(refuses_a_cancel_when_the_node_pool_cannot_be_asked);
 fn refuses_a_cancel_when_the_node_pool_cannot_be_asked() {
     let releasing = Releasing::refused();
     let outputs = releasing.outputs();
@@ -793,7 +795,7 @@ fn refuses_a_cancel_when_the_node_pool_cannot_be_asked() {
     releasing.assert_untouched(TxState::Finalized, &outputs);
 }
 
-#[test]
+both_stores!(a_late_confirmation_takes_over_the_change_a_scan_restored_first);
 fn a_late_confirmation_takes_over_the_change_a_scan_restored_first() {
     let releasing = Releasing::posted().made_releasable();
     let change_before = releasing.change();
@@ -839,9 +841,9 @@ fn a_late_confirmation_takes_over_the_change_a_scan_restored_first() {
     assert_eq!(credited, change_before[0].amount.value(), "counted once");
 }
 
-/// A released send mined after its input was linked to something else is not also counted as a
-/// spend by another wallet: the input leaves the history once, in the send.
-#[test]
+both_stores!(a_released_send_mined_late_debits_its_input_once);
+/// A released send mined after its input was linked to something else is not also counted
+/// as a spend by another wallet: the input leaves the history once, in the send.
 fn a_released_send_mined_late_debits_its_input_once() {
     let releasing = Releasing::posted().made_releasable();
     releasing.release().unwrap();
@@ -868,7 +870,7 @@ fn a_released_send_mined_late_debits_its_input_once() {
     assert_eq!(debited, releasing.funding.amount.value(), "debited once");
 }
 
-#[test]
+both_stores!(a_tip_held_as_pending_does_not_end_the_watch);
 fn a_tip_held_as_pending_does_not_end_the_watch() {
     let releasing = Releasing::posted().made_releasable();
     releasing.release().unwrap();

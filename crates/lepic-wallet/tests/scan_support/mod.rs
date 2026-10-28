@@ -26,17 +26,17 @@ use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::Transaction;
 use lepic_store::{
-    AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, MemoryStore, OutputRecord,
-    OutputStatus, Repositories, StoreError, StoredTransaction, TxDirection, TxState, WalletStore,
+    AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, OutputRecord, OutputStatus,
+    Repositories, StoreError, StoredTransaction, TxDirection, TxState, WalletStore,
 };
 use lepic_wallet::scan::{ScanOptions, ScannedBlock};
 use lepic_wallet::{Ports, StoreOpener, Wallet};
 use serde_json::Value;
 
-use crate::support::{Harness, MemoryStores, TestVault, password};
+use crate::support::{Harness, TestStore, TestStores, TestVault, password};
 
 /// A test wallet over any node, so tests can wrap the mock node.
-pub type AnyWallet<N> = Wallet<N, MemoryStores, TestVault>;
+pub type AnyWallet<N> = Wallet<N, TestStores, TestVault>;
 
 pub const PASSWORD: &str = "restore password";
 
@@ -252,7 +252,7 @@ pub fn location(output: &OutputRecord) -> OutputLocation {
 }
 
 /// The harness's database, shared with every wallet handle on it.
-pub fn store(harness: &Harness) -> MemoryStore {
+pub fn store(harness: &Harness) -> TestStore {
     harness
         .stores
         .open(

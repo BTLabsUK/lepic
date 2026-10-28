@@ -36,7 +36,8 @@ use lepic_wallet::scan::{ScanCancel, ScanError, ScanOptions, ScanStart};
 use lepic_wallet::{Event, Ports, Wallet, WalletError};
 use scan_support::{PASSWORD, Snapshot, full_scan_vector, options, restore, snapshot, write};
 use serde_json::Value;
-use support::{Harness, MemoryStores, TestVault, fixed_time, password};
+use support::both_stores;
+use support::{Harness, TestStores, TestVault, fixed_time, password};
 use tokio::sync::Notify;
 use tokio::sync::broadcast::Receiver;
 
@@ -152,7 +153,7 @@ impl NodeApi for DisturbedNode {
     }
 }
 
-type DisturbedWallet = Wallet<DisturbedNode, MemoryStores, TestVault>;
+type DisturbedWallet = Wallet<DisturbedNode, TestStores, TestVault>;
 
 fn disturbed_wallet(
     harness: &Harness,
@@ -301,7 +302,7 @@ fn transaction_state(harness: &Harness, tx: TxId) -> TxState {
         .state
 }
 
-#[test]
+both_stores!(restore_interrupted_by_a_node_failure_resumes_to_the_same_outputs);
 fn restore_interrupted_by_a_node_failure_resumes_to_the_same_outputs() {
     let vector = full_scan_vector();
     let expected = uninterrupted(&vector);
@@ -341,7 +342,7 @@ fn restore_interrupted_by_a_node_failure_resumes_to_the_same_outputs() {
     scan_support::assert_matches_upstream(&harness, &wallet, &vector, "resumed after failure");
 }
 
-#[test]
+both_stores!(cancelled_restore_resumes_to_the_same_outputs);
 fn cancelled_restore_resumes_to_the_same_outputs() {
     let vector = full_scan_vector();
     let expected = uninterrupted(&vector);
@@ -372,7 +373,7 @@ fn cancelled_restore_resumes_to_the_same_outputs() {
     scan_support::assert_matches_upstream(&harness, &wallet, &vector, "resumed after cancel");
 }
 
-#[test]
+both_stores!(page_size_does_not_change_what_a_restore_finds);
 fn page_size_does_not_change_what_a_restore_finds() {
     let vector = full_scan_vector();
     let harness = scan_support::harness(&vector);
@@ -394,7 +395,7 @@ fn page_size_does_not_change_what_a_restore_finds() {
     assert_eq!(syncs, pages + 2, "one start, one per page, one at the end");
 }
 
-#[test]
+both_stores!(cancelling_before_the_scan_stores_nothing);
 fn cancelling_before_the_scan_stores_nothing() {
     let vector = full_scan_vector();
     let harness = scan_support::harness(&vector);
@@ -412,7 +413,7 @@ fn cancelling_before_the_scan_stores_nothing() {
     assert!(state.checkpoint.is_none());
 }
 
-#[test]
+both_stores!(scan_of_a_locked_wallet_is_refused);
 fn scan_of_a_locked_wallet_is_refused() {
     let vector = full_scan_vector();
     let harness = scan_support::harness(&vector);
@@ -426,7 +427,7 @@ fn scan_of_a_locked_wallet_is_refused() {
     ));
 }
 
-#[test]
+both_stores!(update_scan_after_a_restore_changes_nothing);
 fn update_scan_after_a_restore_changes_nothing() {
     let (harness, wallet, vector) = scanned();
     let before = snapshot(&harness);
@@ -453,7 +454,7 @@ fn update_scan_after_a_restore_changes_nothing() {
     scan_support::assert_matches_upstream(&harness, &wallet, &vector, "update scan");
 }
 
-#[test]
+both_stores!(progress_starts_at_the_start_height_and_ends_at_the_tip);
 fn progress_starts_at_the_start_height_and_ends_at_the_tip() {
     let vector = full_scan_vector();
     let harness = scan_support::harness(&vector);
@@ -478,7 +479,7 @@ fn progress_starts_at_the_start_height_and_ends_at_the_tip() {
     assert!(progress.iter().all(|&(_, target)| target == 14));
 }
 
-#[test]
+both_stores!(start_above_the_tip_changes_nothing);
 fn start_above_the_tip_changes_nothing() {
     let vector = full_scan_vector();
     let harness = scan_support::harness(&vector);
@@ -500,7 +501,7 @@ fn start_above_the_tip_changes_nothing() {
     assert!(snapshot(&harness).last_scanned.is_none());
 }
 
-#[test]
+both_stores!(spent_output_found_unspent_is_revived_and_its_transaction_cancelled);
 fn spent_output_found_unspent_is_revived_and_its_transaction_cancelled() {
     let (harness, wallet, _) = scanned();
     let spending = open_transaction(&harness, TxDirection::Outgoing, TxState::Posted);
@@ -530,7 +531,7 @@ fn spent_output_found_unspent_is_revived_and_its_transaction_cancelled() {
     )));
 }
 
-#[test]
+both_stores!(revived_output_of_a_confirmed_transaction_leaves_it_confirmed);
 fn revived_output_of_a_confirmed_transaction_leaves_it_confirmed() {
     let (harness, wallet, _) = scanned();
     let mut output = output_by_child(&harness, 0);
@@ -584,7 +585,7 @@ fn unconfirmed_output(harness: &Harness, vector: &Value, tx: TxId) -> OutputReco
     }
 }
 
-#[test]
+both_stores!(locked_and_unconfirmed_outputs_change_only_with_delete_unconfirmed);
 fn locked_and_unconfirmed_outputs_change_only_with_delete_unconfirmed() {
     let (harness, wallet, vector) = scanned();
     let sending = open_transaction(&harness, TxDirection::Outgoing, TxState::Sent);
@@ -641,7 +642,7 @@ fn restore_failing_at(vector: &Value, page: usize) -> Snapshot {
     snapshot(&harness)
 }
 
-#[test]
+both_stores!(cancel_abandons_a_node_request_that_never_answers);
 fn cancel_abandons_a_node_request_that_never_answers() {
     let vector = full_scan_vector();
     let harness = scan_support::harness(&vector);
@@ -702,7 +703,7 @@ fn small_page_repair() -> ScanOptions {
     }
 }
 
-#[test]
+both_stores!(repair_scan_does_not_resume_an_interrupted_plain_scan);
 fn repair_scan_does_not_resume_an_interrupted_plain_scan() {
     let expected = {
         let (harness, wallet, sending) = locked_by_a_send();
@@ -783,7 +784,7 @@ fn chain_output(
     }
 }
 
-#[test]
+both_stores!(restore_finds_outputs_on_every_path_the_proofs_rewind_to);
 fn restore_finds_outputs_on_every_path_the_proofs_rewind_to() {
     let vector = full_scan_vector();
     let phrase = vector["inputs"]["subject"]["mnemonic"].as_str().unwrap();
@@ -867,7 +868,7 @@ fn restore_finds_outputs_on_every_path_the_proofs_rewind_to() {
     assert_eq!(harness.node.violations(), []);
 }
 
-#[test]
+both_stores!(details_of_a_restored_output_show_its_height_and_no_kernel);
 fn details_of_a_restored_output_show_its_height_and_no_kernel() {
     let (harness, wallet, _) = scanned();
     let restored = snapshot(&harness).outputs;
@@ -884,7 +885,7 @@ fn details_of_a_restored_output_show_its_height_and_no_kernel() {
     }
 }
 
-#[test]
+both_stores!(details_of_a_restored_output_keep_its_commitment_once_spent_and_after_another_restore);
 fn details_of_a_restored_output_keep_its_commitment_once_spent_and_after_another_restore() {
     let (harness, wallet, _) = scanned();
     let (again, again_wallet, _) = scanned();
@@ -941,7 +942,7 @@ fn details_of_a_restored_output_keep_its_commitment_once_spent_and_after_another
     );
 }
 
-#[test]
+both_stores!(a_repair_leaves_alone_what_a_send_or_receive_makes_while_it_runs);
 fn a_repair_leaves_alone_what_a_send_or_receive_makes_while_it_runs() {
     let (harness, wallet, vector) = scanned();
     wallet.close();
@@ -989,7 +990,7 @@ fn a_repair_leaves_alone_what_a_send_or_receive_makes_while_it_runs() {
     );
 }
 
-#[test]
+both_stores!(a_repair_cancels_a_send_as_a_cancel_does);
 fn a_repair_cancels_a_send_as_a_cancel_does() {
     let (harness, wallet, vector) = scanned();
     let sending = open_transaction(&harness, TxDirection::Outgoing, TxState::Sent);

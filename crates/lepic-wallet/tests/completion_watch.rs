@@ -32,8 +32,8 @@ use lepic_primitives::ser::ProtocolVersion;
 use lepic_primitives::tx::{Transaction, TransactionBody};
 use lepic_slate::codec::WireSlate;
 use lepic_store::{
-    AccountRecord, KeyId, MemoryStore, OutputRecord, OutputStatus, SlateStage, StoreError,
-    StoredSlate, TxId, TxState, WalletStore,
+    AccountRecord, KeyId, OutputRecord, OutputStatus, SlateStage, StoreError, StoredSlate, TxId,
+    TxState, WalletStore,
 };
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::finalize::FinalizeError;
@@ -44,7 +44,9 @@ use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{Clock, Ports, ReceiveRequest, StoreOpener, Wallet, WalletError};
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
 use serde_json::Value;
-use support::{Harness, LOOPBACK, MemoryStores, TestVault, TestWallet, fixed_time, password};
+use support::{
+    Harness, LOOPBACK, TestStore, TestStores, TestVault, TestWallet, fixed_time, password,
+};
 use uuid::Uuid;
 
 const AMOUNT: u64 = 100_000_000;
@@ -92,7 +94,7 @@ fn some_proof() -> lepic_crypto::RangeProof {
 struct Side {
     harness: Harness,
     wallet: TestWallet,
-    store: MemoryStore,
+    store: TestStore,
     keychain: Keychain,
 }
 
@@ -102,7 +104,7 @@ impl Side {
         if let Some(shared) = node {
             harness.node = shared.node.clone();
         }
-        let ports: Ports<_, MemoryStores, TestVault> = Ports {
+        let ports: Ports<_, TestStores, TestVault> = Ports {
             clock: Arc::new(clock.clone()),
             ..harness.ports(TestVault::default())
         };
@@ -857,7 +859,7 @@ fn slate_moved(bytes: &[u8], id: Uuid, height: u64) -> Vec<u8> {
 /// Stores a copy of the transaction `tx_id` and its slate at `stage` under a new slate id, with
 /// the slate's height set to `height`, as a database written before slate heights were checked
 /// may hold one. The copy holds no outputs.
-fn stored_copy(store: &MemoryStore, tx_id: TxId, stage: SlateStage, height: u64) -> TxId {
+fn stored_copy(store: &TestStore, tx_id: TxId, stage: SlateStage, height: u64) -> TxId {
     let id = Uuid::from_u128(u128::from(height) + 7);
     store
         .write(|repos| {

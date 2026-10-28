@@ -45,7 +45,7 @@ use lepic_wallet::{Ports, SharedRng, Wallet, WalletError};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use send_support::{ACCOUNT, PEER, Sender, TIP, legacy_codecs};
-use support::{FixedClock, LOOPBACK, MemoryStores, TestVault, fixed_time, password};
+use support::{FixedClock, LOOPBACK, TestStores, TestVault, fixed_time, password};
 use uuid::Uuid;
 
 const AMOUNT: u64 = 100_000_000;
@@ -168,7 +168,7 @@ impl NodeApi for Scripted {
     }
 }
 
-type ScriptedWallet = Wallet<Scripted, MemoryStores, TestVault>;
+type ScriptedWallet = Wallet<Scripted, TestStores, TestVault>;
 
 /// A second handle on the sender's wallet, unlocked, whose node answers as scripted.
 fn scripted(sender: &Sender, script: Script) -> ScriptedWallet {

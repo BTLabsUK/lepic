@@ -2,9 +2,14 @@
 //! their kernel, unposted transactions expire at their TTL cutoff, and a node behind the last
 //! refresh changes nothing.
 
-// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
-// treat as test code.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+// Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers
+// that clippy does not treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 
 mod send_support;
 mod support;
@@ -29,6 +34,7 @@ use lepic_wallet::refresh::{RefreshError, RefreshOutcome, RefreshSummary};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use send_support::{ACCOUNT, FUNDING, PEER, Sender, TIP, legacy_codecs};
+use support::both_stores;
 use support::{LOOPBACK, fixed_time};
 use uuid::Uuid;
 
@@ -116,7 +122,7 @@ fn events(receiver: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<Event> 
     std::iter::from_fn(|| receiver.try_recv().ok()).collect()
 }
 
-#[test]
+both_stores!(expires_an_unposted_send_at_its_ttl_cutoff_and_releases_its_inputs);
 fn expires_an_unposted_send_at_its_ttl_cutoff_and_releases_its_inputs() {
     let (sender, funding) = funded();
     let sent = sender
@@ -160,7 +166,7 @@ fn expires_an_unposted_send_at_its_ttl_cutoff_and_releases_its_inputs() {
     assert_eq!(again.expired_transactions, 0);
 }
 
-#[test]
+both_stores!(expires_an_unanswered_send_at_its_local_cutoff_as_at_a_ttl);
 fn expires_an_unanswered_send_at_its_local_cutoff_as_at_a_ttl() {
     let (sender, funding) = funded();
     let sent = sender
@@ -191,7 +197,7 @@ fn expires_an_unanswered_send_at_its_local_cutoff_as_at_a_ttl() {
     assert_eq!(output(&sender, &change), None);
 }
 
-#[test]
+both_stores!(expires_a_received_transaction_and_drops_its_output);
 fn expires_a_received_transaction_and_drops_its_output() {
     let (sender, _) = funded();
     let vector: serde_json::Value = serde_json::from_str(SEND_FILE_TTL_S2).unwrap();
@@ -255,7 +261,7 @@ fn expires_a_received_transaction_and_drops_its_output() {
     assert_eq!(output(&sender, &received), None);
 }
 
-#[test]
+both_stores!(never_expires_a_send_without_a_ttl_or_one_already_posted);
 fn never_expires_a_send_without_a_ttl_or_one_already_posted() {
     let (sender, funding) = funded();
     let without_ttl = sender
@@ -300,7 +306,7 @@ fn never_expires_a_send_without_a_ttl_or_one_already_posted() {
     );
 }
 
-#[test]
+both_stores!(confirms_a_send_once_its_change_is_on_chain_and_reports_the_balance);
 fn confirms_a_send_once_its_change_is_on_chain_and_reports_the_balance() {
     let (sender, funding) = funded();
     let sent = sender
@@ -406,7 +412,7 @@ fn posted_with_final_slate(sender: &Sender, change: Amount) -> (TxId, LocatedKer
     (tx_id, kernel)
 }
 
-#[test]
+both_stores!(confirms_a_send_without_change_once_its_kernel_is_on_chain);
 fn confirms_a_send_without_change_once_its_kernel_is_on_chain() {
     let (sender, _) = funded();
     let (tx_id, kernel) = posted_with_final_slate(&sender, Amount::ZERO);
@@ -434,7 +440,7 @@ fn confirms_a_send_without_change_once_its_kernel_is_on_chain() {
     assert_eq!(sender.harness.node.violations(), []);
 }
 
-#[test]
+both_stores!(leaves_a_send_with_change_to_its_change_output_instead_of_its_kernel);
 fn leaves_a_send_with_change_to_its_change_output_instead_of_its_kernel() {
     let (sender, _) = funded();
     let (tx_id, kernel) = posted_with_final_slate(&sender, Amount::new(1));
@@ -456,7 +462,7 @@ fn leaves_a_send_with_change_to_its_change_output_instead_of_its_kernel() {
     );
 }
 
-#[test]
+both_stores!(keeps_a_cancelled_send_cancelled_when_its_change_appears_on_chain);
 fn keeps_a_cancelled_send_cancelled_when_its_change_appears_on_chain() {
     let (sender, funding) = funded();
     let sent = sender
@@ -491,7 +497,7 @@ fn keeps_a_cancelled_send_cancelled_when_its_change_appears_on_chain() {
     );
 }
 
-#[test]
+both_stores!(reports_the_balance_in_every_category);
 fn reports_the_balance_in_every_category() {
     const TIP_HEIGHT: u64 = 30;
     let (sender, funding) = funded();
@@ -571,7 +577,7 @@ fn reports_the_balance_in_every_category() {
     );
 }
 
-#[test]
+both_stores!(changes_nothing_while_the_node_is_behind_the_last_refresh);
 fn changes_nothing_while_the_node_is_behind_the_last_refresh() {
     let (sender, funding) = funded();
     set_tip(&sender, TIP + 6);
@@ -600,7 +606,7 @@ fn changes_nothing_while_the_node_is_behind_the_last_refresh() {
     );
 }
 
-#[test]
+both_stores!(a_failed_node_request_changes_nothing);
 fn a_failed_node_request_changes_nothing() {
     let (sender, funding) = funded();
     sender
@@ -622,7 +628,7 @@ fn a_failed_node_request_changes_nothing() {
     assert_eq!(sender.wallet.last_confirmed_height().unwrap(), None);
 }
 
-#[test]
+both_stores!(refresh_needs_an_unlocked_wallet);
 fn refresh_needs_an_unlocked_wallet() {
     let (sender, _) = funded();
     sender.wallet.lock();
@@ -642,7 +648,7 @@ fn details(sender: &Sender, tx_id: TxId) -> TransactionDetails {
         .unwrap()
 }
 
-#[test]
+both_stores!(details_of_a_send_show_its_kernel_and_the_height_its_kernel_confirmed_it_at);
 fn details_of_a_send_show_its_kernel_and_the_height_its_kernel_confirmed_it_at() {
     let (sender, _) = funded();
     let (tx_id, kernel) = posted_with_final_slate(&sender, Amount::ZERO);
@@ -666,7 +672,7 @@ fn details_of_a_send_show_its_kernel_and_the_height_its_kernel_confirmed_it_at()
     assert_eq!(confirmed.confirmed_height, Some(kernel.height));
 }
 
-#[test]
+both_stores!(details_of_a_send_confirmed_by_its_change_show_the_change_height);
 fn details_of_a_send_confirmed_by_its_change_show_the_change_height() {
     let (sender, funding) = funded();
     let sent = sender
@@ -695,7 +701,7 @@ fn details_of_a_send_confirmed_by_its_change_show_the_change_height() {
     assert_eq!(confirmed.confirmed_height, Some(Height::new(TIP + 1)));
 }
 
-#[test]
+both_stores!(a_reorganisation_that_moves_the_confirming_change_moves_the_confirmation_height);
 fn a_reorganisation_that_moves_the_confirming_change_moves_the_confirmation_height() {
     let (sender, funding) = funded();
     let sent = sender
@@ -735,7 +741,7 @@ fn a_reorganisation_that_moves_the_confirming_change_moves_the_confirmation_heig
     assert_eq!(moved.confirmed_height, Some(Height::new(TIP + 3)));
 }
 
-#[test]
+both_stores!(a_kernel_confirmation_keeps_its_first_height_after_a_reorganisation);
 fn a_kernel_confirmation_keeps_its_first_height_after_a_reorganisation() {
     let (sender, _) = funded();
     let (tx_id, kernel) = posted_with_final_slate(&sender, Amount::ZERO);
@@ -763,7 +769,7 @@ fn a_kernel_confirmation_keeps_its_first_height_after_a_reorganisation() {
     );
 }
 
-#[test]
+both_stores!(details_of_an_unknown_transaction_fail);
 fn details_of_an_unknown_transaction_fail() {
     let (sender, _) = funded();
     let result = sender

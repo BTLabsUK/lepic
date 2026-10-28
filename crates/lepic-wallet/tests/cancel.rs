@@ -1,9 +1,14 @@
 //! Cancelling a send, before and after its slate was delivered: inputs become spendable again,
 //! change and private context are dropped, and a second cancel changes nothing.
 
-// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
-// treat as test code.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+// Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers
+// that clippy does not treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 
 mod send_support;
 mod support;
@@ -22,6 +27,7 @@ use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::state::InvalidTransition;
 use lepic_wallet::{ReceiveRequest, StoreOpener};
 use send_support::{ACCOUNT, PEER, Sender, context_key, uuid};
+use support::both_stores;
 use support::{Harness, LOOPBACK, TestVault, password};
 use tokio::sync::broadcast::error::TryRecvError;
 
@@ -65,7 +71,7 @@ fn assert_cancel_event(events: &mut tokio::sync::broadcast::Receiver<Event>, tx_
     assert_eq!(events.try_recv(), Err(TryRecvError::Empty));
 }
 
-#[test]
+both_stores!(cancel_before_delivery_releases_the_inputs_and_drops_the_pending_delivery);
 fn cancel_before_delivery_releases_the_inputs_and_drops_the_pending_delivery() {
     let sender = Sender::new();
     let error = sender
@@ -89,7 +95,7 @@ fn cancel_before_delivery_releases_the_inputs_and_drops_the_pending_delivery() {
     assert_cancel_event(&mut events, tx_id);
 }
 
-#[test]
+both_stores!(a_repair_scan_cancels_a_waiting_send_as_a_cancel_does);
 fn a_repair_scan_cancels_a_waiting_send_as_a_cancel_does() {
     let sender = Sender::new();
     let error = sender
@@ -117,7 +123,7 @@ fn a_repair_scan_cancels_a_waiting_send_as_a_cancel_does() {
     assert_cancelled(&sender, slate_id);
 }
 
-#[test]
+both_stores!(cancel_after_delivery_releases_the_inputs_for_the_next_send);
 fn cancel_after_delivery_releases_the_inputs_for_the_next_send() {
     let sender = Sender::new();
     let sent = sender
@@ -145,7 +151,7 @@ fn cancel_after_delivery_releases_the_inputs_for_the_next_send() {
     );
 }
 
-#[test]
+both_stores!(cancelling_twice_changes_nothing_the_second_time);
 fn cancelling_twice_changes_nothing_the_second_time() {
     let sender = Sender::new();
     let sent = sender
@@ -166,7 +172,7 @@ fn cancelling_twice_changes_nothing_the_second_time() {
     assert_eq!(events.try_recv(), Err(TryRecvError::Empty));
 }
 
-#[test]
+both_stores!(rejects_cancelling_a_posted_confirmed_or_expired_transaction);
 fn rejects_cancelling_a_posted_confirmed_or_expired_transaction() {
     for state in [TxState::Posted, TxState::Confirmed, TxState::Expired] {
         let sender = Sender::new();
@@ -203,7 +209,7 @@ fn rejects_cancelling_a_posted_confirmed_or_expired_transaction() {
     }
 }
 
-#[test]
+both_stores!(rejects_cancelling_an_unknown_transaction);
 fn rejects_cancelling_an_unknown_transaction() {
     let sender = Sender::new();
     let unknown = sender
@@ -216,7 +222,7 @@ fn rejects_cancelling_an_unknown_transaction() {
     );
 }
 
-#[test]
+both_stores!(cancel_of_a_received_transaction_drops_its_output_and_context);
 fn cancel_of_a_received_transaction_drops_its_output_and_context() {
     const RECEIVER_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal \
         winner thank year wave sausage worth useful legal winner thank year wave sausage worth \
@@ -326,7 +332,7 @@ fn state_of(sender: &Sender, tx_id: TxId) -> TxState {
     sender.read(|repos| repos.transaction(tx_id)).unwrap().state
 }
 
-#[test]
+both_stores!(a_finalized_transaction_whose_kernel_the_node_holds_is_not_cancelled);
 fn a_finalized_transaction_whose_kernel_the_node_holds_is_not_cancelled() {
     let sender = Sender::new();
     let (tx_id, kernel) = finalized_send(&sender);
@@ -347,7 +353,7 @@ fn a_finalized_transaction_whose_kernel_the_node_holds_is_not_cancelled() {
     assert_eq!(state_of(&sender, tx_id), TxState::Finalized);
 }
 
-#[test]
+both_stores!(a_finalized_transaction_the_node_does_not_know_is_cancelled);
 fn a_finalized_transaction_the_node_does_not_know_is_cancelled() {
     let sender = Sender::new();
     let (tx_id, _) = finalized_send(&sender);
@@ -360,7 +366,7 @@ fn a_finalized_transaction_the_node_does_not_know_is_cancelled() {
     assert_eq!(state_of(&sender, tx_id), TxState::Cancelled);
 }
 
-#[test]
+both_stores!(a_finalized_transaction_whose_kernel_the_node_pool_holds_is_not_cancelled);
 fn a_finalized_transaction_whose_kernel_the_node_pool_holds_is_not_cancelled() {
     let sender = Sender::new();
     let (tx_id, kernel) = finalized_send(&sender);

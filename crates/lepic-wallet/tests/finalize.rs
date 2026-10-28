@@ -3,9 +3,14 @@
 //! signatures do not verify, is refused with nothing stored; finalizing and posting again are
 //! harmless.
 
-// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
-// treat as test code.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+// Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers
+// that clippy does not treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 
 #[path = "receive/harness.rs"]
 mod receive_harness;
@@ -40,6 +45,7 @@ use send_support::{ACCOUNT, PEER, Sender, TIP, V2Only, legacy_codecs, uuid};
 use serde_json::Value;
 use std::sync::Arc;
 use support::LOOPBACK;
+use support::both_stores;
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -179,7 +185,7 @@ fn transaction_events(
     changes
 }
 
-#[test]
+both_stores!(finalize_stores_s3_drops_the_context_and_posts_the_transaction);
 fn finalize_stores_s3_drops_the_context_and_posts_the_transaction() {
     let exchange = exchange(request(), Some("thanks"));
     let mut events = exchange.sender.wallet.subscribe();
@@ -210,7 +216,7 @@ fn finalize_stores_s3_drops_the_context_and_posts_the_transaction() {
     );
 }
 
-#[test]
+both_stores!(finalize_verifies_and_keeps_a_requested_payment_proof);
 fn finalize_verifies_and_keeps_a_requested_payment_proof() {
     let exchange = exchange(
         SendRequest {
@@ -226,7 +232,7 @@ fn finalize_verifies_and_keeps_a_requested_payment_proof() {
     assert_eq!(exchange.state(), TxState::Posted);
 }
 
-#[test]
+both_stores!(finalizing_the_same_s2_again_changes_nothing);
 fn finalizing_the_same_s2_again_changes_nothing() {
     let exchange = exchange(request(), None);
     let first = exchange.finalize(&exchange.s2).unwrap();
@@ -247,7 +253,7 @@ fn finalizing_the_same_s2_again_changes_nothing() {
     assert!(transaction_events(&mut events).is_empty());
 }
 
-#[test]
+both_stores!(finalizing_the_same_s2_after_confirmation_changes_nothing);
 fn finalizing_the_same_s2_after_confirmation_changes_nothing() {
     let exchange = exchange(request(), None);
     let first = exchange.finalize(&exchange.s2).unwrap();
@@ -282,7 +288,7 @@ fn finalizing_the_same_s2_after_confirmation_changes_nothing() {
     ));
 }
 
-#[test]
+both_stores!(another_s2_for_a_finalized_slate_is_refused);
 fn another_s2_for_a_finalized_slate_is_refused() {
     let exchange = exchange(request(), None);
     exchange.finalize(&exchange.s2).unwrap();
@@ -301,7 +307,7 @@ fn another_s2_for_a_finalized_slate_is_refused() {
     assert_eq!(exchange.pushed(), 1);
 }
 
-#[test]
+both_stores!(a_failed_post_leaves_the_transaction_finalized_until_it_is_posted_again);
 fn a_failed_post_leaves_the_transaction_finalized_until_it_is_posted_again() {
     let exchange = exchange(request(), None);
     exchange
@@ -335,7 +341,7 @@ fn a_failed_post_leaves_the_transaction_finalized_until_it_is_posted_again() {
     assert!(transaction_events(&mut events).is_empty());
 }
 
-#[test]
+both_stores!(finalizing_again_after_a_failed_post_posts);
 fn finalizing_again_after_a_failed_post_posts() {
     let exchange = exchange(request(), None);
     exchange
@@ -351,7 +357,7 @@ fn finalizing_again_after_a_failed_post_posts() {
     assert_eq!(exchange.pushed(), 1);
 }
 
-#[test]
+both_stores!(a_reply_with_a_changed_amount_is_refused);
 fn a_reply_with_a_changed_amount_is_refused() {
     let exchange = exchange(request(), None);
     let changed = tampered(&exchange.s2, |slate| {
@@ -372,7 +378,7 @@ fn a_reply_with_a_changed_amount_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_wrong_receiver_partial_signature_is_refused);
 fn a_wrong_receiver_partial_signature_is_refused() {
     let exchange = exchange(request(), Some("signed"));
     // The receiver's message signature is a valid signature, but not over the kernel.
@@ -390,7 +396,7 @@ fn a_wrong_receiver_partial_signature_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_receiver_message_that_does_not_match_its_signature_is_refused);
 fn a_receiver_message_that_does_not_match_its_signature_is_refused() {
     let exchange = exchange(request(), Some("signed"));
     let forged = tampered(&exchange.s2, |slate| {
@@ -406,7 +412,7 @@ fn a_receiver_message_that_does_not_match_its_signature_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_receiver_output_whose_range_proof_does_not_verify_is_refused);
 fn a_receiver_output_whose_range_proof_does_not_verify_is_refused() {
     let exchange = exchange(request(), None);
     let receiver_commitment = exchange.sender.read(|repos| {
@@ -449,7 +455,7 @@ fn a_receiver_output_whose_range_proof_does_not_verify_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_receiver_excess_that_does_not_match_its_output_is_refused);
 fn a_receiver_excess_that_does_not_match_its_output_is_refused() {
     let exchange = exchange(request(), None);
     let s2 = legacy_codecs().decode(&exchange.s2).unwrap();
@@ -498,7 +504,7 @@ fn a_receiver_excess_that_does_not_match_its_output_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_reply_without_the_requested_payment_proof_is_refused);
 fn a_reply_without_the_requested_payment_proof_is_refused() {
     let exchange = exchange(
         SendRequest {
@@ -518,7 +524,7 @@ fn a_reply_without_the_requested_payment_proof_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_payment_proof_without_a_receiver_signature_is_refused);
 fn a_payment_proof_without_a_receiver_signature_is_refused() {
     let exchange = exchange(
         SendRequest {
@@ -545,7 +551,7 @@ fn a_payment_proof_without_a_receiver_signature_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_wrong_payment_proof_signature_is_refused);
 fn a_wrong_payment_proof_signature_is_refused() {
     let exchange = exchange(
         SendRequest {
@@ -571,7 +577,7 @@ fn a_wrong_payment_proof_signature_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_slate_past_its_ttl_is_not_finalized);
 fn a_slate_past_its_ttl_is_not_finalized() {
     let exchange = exchange(
         SendRequest {
@@ -609,7 +615,7 @@ fn is_expired_at(error: &FinalizeError, at: u64) -> bool {
         if *cutoff == Height::new(TIP + 2) && *tip == Height::new(at))
 }
 
-#[test]
+both_stores!(a_send_past_its_local_cutoff_is_not_finalized_though_its_v2_slate_has_no_ttl);
 fn a_send_past_its_local_cutoff_is_not_finalized_though_its_v2_slate_has_no_ttl() {
     let exchange = exchange_with(
         Sender::with_policy(Arc::new(V2Only)),
@@ -642,7 +648,7 @@ fn a_send_past_its_local_cutoff_is_not_finalized_though_its_v2_slate_has_no_ttl(
     assert_eq!(exchange.state(), TxState::Posted);
 }
 
-#[test]
+both_stores!(a_finalized_send_past_its_local_cutoff_is_not_pushed_again);
 fn a_finalized_send_past_its_local_cutoff_is_not_pushed_again() {
     let exchange = exchange(
         SendRequest {
@@ -679,7 +685,7 @@ fn a_finalized_send_past_its_local_cutoff_is_not_pushed_again() {
     assert_eq!(exchange.pushed(), 1);
 }
 
-#[test]
+both_stores!(the_earlier_of_the_slate_ttl_and_the_local_cutoff_applies);
 fn the_earlier_of_the_slate_ttl_and_the_local_cutoff_applies() {
     for (ttl_blocks, local_ttl_blocks) in [(5, 2), (2, 5)] {
         let exchange = exchange(
@@ -699,7 +705,7 @@ fn the_earlier_of_the_slate_ttl_and_the_local_cutoff_applies() {
     }
 }
 
-#[test]
+both_stores!(an_s1_or_a_reply_to_another_wallet_is_refused);
 fn an_s1_or_a_reply_to_another_wallet_is_refused() {
     let exchange = exchange(request(), None);
 
@@ -719,7 +725,7 @@ fn an_s1_or_a_reply_to_another_wallet_is_refused() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(only_a_finalized_or_posted_transaction_is_posted);
 fn only_a_finalized_or_posted_transaction_is_posted() {
     let exchange = exchange(request(), None);
 
@@ -746,7 +752,7 @@ fn only_a_finalized_or_posted_transaction_is_posted() {
     exchange.assert_untouched();
 }
 
-#[test]
+both_stores!(a_cancelled_transaction_is_neither_finalized_nor_posted);
 fn a_cancelled_transaction_is_neither_finalized_nor_posted() {
     let exchange = exchange(request(), None);
     exchange
@@ -780,7 +786,7 @@ fn a_cancelled_transaction_is_neither_finalized_nor_posted() {
     assert_eq!(exchange.pushed(), 0);
 }
 
-#[test]
+both_stores!(fee_error_text_carries_no_amounts);
 fn fee_error_text_carries_no_amounts() {
     let text = FinalizeError::FeeBelowMinimum {
         fee: lepic_primitives::amount::Fee::new(123_456_789),

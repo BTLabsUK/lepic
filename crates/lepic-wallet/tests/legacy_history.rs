@@ -34,7 +34,7 @@ use lepic_wallet::StoreOpener;
 use lepic_wallet::details::{SlateMessage, TransactionDetails};
 use lepic_wallet::legacy_history::{LegacyImportOutcome, LegacyImportStatus, TxOrigin};
 use lepic_wallet::scan::{FoundDuring, ScanFound};
-use support::{Harness, TestWallet, fixed_time, password};
+use support::{Harness, TestStore, TestWallet, fixed_time, password};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -116,7 +116,7 @@ impl World {
             .collect()
     }
 
-    fn store(&self) -> lepic_store::MemoryStore {
+    fn store(&self) -> TestStore {
         self.harness
             .stores
             .open(

@@ -1,9 +1,14 @@
 //! Sending: the S1 is stored with its inputs locked before it is delivered, a slate the
 //! transport cannot carry is refused with nothing stored, and a failed delivery can be retried.
 
-// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
-// treat as test code.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+// Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers
+// that clippy does not treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 
 mod send_support;
 mod support;
@@ -17,9 +22,7 @@ use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::error::{EncodeError, Unrepresentable};
 use lepic_slate::model::ProofAddress;
 use lepic_slate::stage::Stage;
-use lepic_store::{
-    MemoryStore, OutboxStatus, OutputStatus, SlateStage, TxDirection, TxState, WalletStore,
-};
+use lepic_store::{OutboxStatus, OutputStatus, SlateStage, TxDirection, TxState, WalletStore};
 use lepic_transport::error::TransportError;
 use lepic_transport::file::{FILE, FileTransport};
 use lepic_transport::policy::FormatPolicy;
@@ -32,7 +35,8 @@ use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use send_support::{
     ACCOUNT, FUNDING, NEXT_CHILD, PEER, SEND_FILE_PLAIN_S1, Sender, TIP, V2Only, uuid,
 };
-use support::LOOPBACK;
+use support::both_stores;
+use support::{LOOPBACK, TestStore};
 
 /// `send_file_plain`: 1 EPIC from the funding output, with one change output.
 const AMOUNT: u64 = 100_000_000;
@@ -61,7 +65,7 @@ fn receiver_address() -> ProofAddress {
     ProofAddress::from_bytes(bytes).unwrap()
 }
 
-#[test]
+both_stores!(send_stores_the_s1_with_its_inputs_locked_and_delivers_it);
 fn send_stores_the_s1_with_its_inputs_locked_and_delivers_it() {
     let sender = Sender::new();
     let sent = sender
@@ -141,7 +145,7 @@ fn send_stores_the_s1_with_its_inputs_locked_and_delivers_it() {
     assert!(sender.outbox(OutboxStatus::Pending).is_empty());
 }
 
-#[test]
+both_stores!(send_writes_a_v3_file_with_header_three_with_or_without_ttl);
 fn send_writes_a_v3_file_with_header_three_with_or_without_ttl() {
     let sender = Sender::new();
     sender.fund(1, FUNDING);
@@ -182,7 +186,7 @@ fn send_writes_a_v3_file_with_header_three_with_or_without_ttl() {
     ));
 }
 
-#[test]
+both_stores!(send_exports_the_s1_to_a_file);
 fn send_exports_the_s1_to_a_file() {
     let sender = Sender::with_transports(vec![Box::new(FileTransport::new())]);
     let dir = tempfile::tempdir().unwrap();
@@ -207,7 +211,7 @@ fn send_exports_the_s1_to_a_file() {
     assert!(sender.outbox(OutboxStatus::Delivered).is_empty());
 }
 
-#[test]
+both_stores!(refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything);
 fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() {
     let sender = Sender::with_policy(Arc::new(V2Only));
     let outputs_before = sender.outputs();
@@ -253,7 +257,7 @@ fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() 
     ));
 }
 
-#[test]
+both_stores!(a_send_with_change_waits_for_the_restore_scan_of_a_rebuilt_database);
 fn a_send_with_change_waits_for_the_restore_scan_of_a_rebuilt_database() {
     let sender = Sender::new();
     // As after a restore whose scan from genesis stopped part way: the funding output is
@@ -277,7 +281,7 @@ fn a_send_with_change_waits_for_the_restore_scan_of_a_rebuilt_database() {
     assert!(sender.received().is_none());
 }
 
-#[test]
+both_stores!(refuses_a_send_the_outputs_cannot_cover_before_storing_anything);
 fn refuses_a_send_the_outputs_cannot_cover_before_storing_anything() {
     let sender = Sender::new();
     let error = sender
@@ -295,7 +299,7 @@ fn refuses_a_send_the_outputs_cannot_cover_before_storing_anything() {
     assert_eq!(sender.next_child(), NEXT_CHILD);
 }
 
-#[test]
+both_stores!(refuses_a_transport_that_is_not_registered_or_cannot_deliver);
 fn refuses_a_transport_that_is_not_registered_or_cannot_deliver() {
     let sender = Sender::new();
     let unknown = sender
@@ -332,7 +336,7 @@ fn refuses_a_transport_that_is_not_registered_or_cannot_deliver() {
     assert!(sender.transactions().is_empty());
 }
 
-#[test]
+both_stores!(a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it);
 fn a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it() {
     let sender = Sender::new();
     let error = sender
@@ -384,7 +388,7 @@ fn a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it() {
     assert_eq!(sender.transactions().len(), 1);
 }
 
-#[test]
+both_stores!(a_send_is_undelivered_while_every_attempt_failed);
 fn a_send_is_undelivered_while_every_attempt_failed() {
     let sender = Sender::new();
     let undelivered = |tx_id| {
@@ -421,7 +425,7 @@ fn a_send_is_undelivered_while_every_attempt_failed() {
     assert!(!details.undelivered);
 }
 
-#[test]
+both_stores!(resend_refuses_a_transaction_that_is_not_waiting_for_delivery);
 fn resend_refuses_a_transaction_that_is_not_waiting_for_delivery() {
     let sender = Sender::new();
     let unknown = sender
@@ -457,7 +461,7 @@ fn resend_refuses_a_transaction_that_is_not_waiting_for_delivery() {
     );
 }
 
-#[test]
+both_stores!(send_needs_an_unlocked_wallet);
 fn send_needs_an_unlocked_wallet() {
     let sender = Sender::new();
     sender.wallet.lock();
@@ -482,7 +486,7 @@ struct SeenAtDelivery {
 
 /// A transport that, when asked to deliver, reads the sender's store instead of sending.
 struct Observer {
-    store: Arc<Mutex<Option<MemoryStore>>>,
+    store: Arc<Mutex<Option<TestStore>>>,
     seen: Arc<Mutex<Option<SeenAtDelivery>>>,
 }
 
@@ -538,7 +542,7 @@ impl Outbound for Observer {
     }
 }
 
-#[test]
+both_stores!(inputs_are_locked_and_the_s1_stored_before_the_transport_is_called);
 fn inputs_are_locked_and_the_s1_stored_before_the_transport_is_called() {
     let store = Arc::new(Mutex::new(None));
     let seen = Arc::new(Mutex::new(None));
@@ -547,9 +551,12 @@ fn inputs_are_locked_and_the_s1_stored_before_the_transport_is_called() {
         seen: Arc::clone(&seen),
     })]);
     *store.lock().unwrap() = Some(
-        sender
-            .store
-            .reopen(lepic_store::ContextKey::from_bytes([0; 32])),
+        lepic_wallet::StoreOpener::open(
+            &sender.harness.stores,
+            &sender.harness.data_dir,
+            lepic_store::ContextKey::from_bytes([0; 32]),
+        )
+        .unwrap(),
     );
     sender
         .harness

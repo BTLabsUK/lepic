@@ -1,4 +1,4 @@
-//! A receiving wallet over in-memory ports, and the G-03 slate vectors it is checked against.
+//! A receiving wallet over test ports, and the G-03 slate vectors it is checked against.
 //!
 //! Each standard-flow case is received the way the upstream receiver received it: the S1 its
 //! method delivered, the receiver's mnemonic and output key, a node at the slate's height, and
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::support::{
-    FixedClock, MemoryStores, TestVault, complete_restore_scan, fixed_time, password,
+    FixedClock, TestStore, TestStores, TestVault, complete_restore_scan, fixed_time, password,
 };
 use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
@@ -29,7 +29,7 @@ use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::EncodeError;
 use lepic_slate::model::Slate;
 use lepic_slate::origin::WireOrigin;
-use lepic_store::{AccountIndex, ContextKey, MemoryStore, StoreError, WalletStore};
+use lepic_store::{AccountIndex, ContextKey, StoreError, WalletStore};
 use lepic_transport::file::{FILE, FilePolicy};
 use lepic_transport::loopback::LoopbackTransport;
 use lepic_transport::policy::{Encoding, FormatPolicy};
@@ -182,12 +182,12 @@ pub fn node_at(height: u64) -> MockNode {
     ))
 }
 
-pub type ReceiverWallet = Wallet<NodeClient<MockNode>, MemoryStores, TestVault>;
+pub type ReceiverWallet = Wallet<NodeClient<MockNode>, TestStores, TestVault>;
 
 /// A receiving wallet restored from a mnemonic, with the file transport and the echo transport.
 pub struct Receiver {
     runtime: Runtime,
-    stores: MemoryStores,
+    stores: TestStores,
     pub node: MockNode,
     pub seed: Seed,
     pub wallet: ReceiverWallet,
@@ -206,7 +206,7 @@ impl Receiver {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let stores = MemoryStores::default();
+        let stores = TestStores::default();
         let node = node_at(tip);
         let mut transports = TransportRegistry::new();
         for (id, policy) in [
@@ -275,7 +275,7 @@ impl Receiver {
     }
 
     /// The wallet's database, opened with the key the engine seals contexts under.
-    pub fn store(&self) -> MemoryStore {
+    pub fn store(&self) -> TestStore {
         let mut mac =
             <Blake2bMac<U32> as KeyInit>::new_from_slice(self.seed.expose_bytes()).unwrap();
         mac.update(b"lepic-wallet private context key v1");
@@ -345,11 +345,11 @@ impl Receiver {
 }
 
 pub trait OpenForTest {
-    fn open_for_test(&self, data_dir: &Path, key: ContextKey) -> MemoryStore;
+    fn open_for_test(&self, data_dir: &Path, key: ContextKey) -> TestStore;
 }
 
-impl OpenForTest for MemoryStores {
-    fn open_for_test(&self, data_dir: &Path, key: ContextKey) -> MemoryStore {
+impl OpenForTest for TestStores {
+    fn open_for_test(&self, data_dir: &Path, key: ContextKey) -> TestStore {
         assert!(!self.is_empty(data_dir));
         lepic_wallet::StoreOpener::open(self, data_dir, key).unwrap()
     }

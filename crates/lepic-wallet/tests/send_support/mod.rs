@@ -20,9 +20,8 @@ use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    AccountIndex, AccountRecord, ContextKey, KeyId, MemoryStore, OutboxStatus, OutputRecord,
-    OutputStatus, ParticipantId, Repositories, StoreError, StoredOutbox, StoredTransaction,
-    WalletStore,
+    AccountIndex, AccountRecord, ContextKey, KeyId, OutboxStatus, OutputRecord, OutputStatus,
+    ParticipantId, Repositories, StoreError, StoredOutbox, StoredTransaction, WalletStore,
 };
 use lepic_transport::file::FilePolicy;
 use lepic_transport::loopback::LoopbackTransport;
@@ -33,7 +32,8 @@ use lepic_wallet::{Clock, Ports, StoreOpener, Wallet, WalletConfig};
 use uuid::Uuid;
 
 use crate::support::{
-    Harness, LOOPBACK, MemoryStores, TestVault, TestWallet, complete_restore_scan, password,
+    Harness, LOOPBACK, TestStore, TestStores, TestVault, TestWallet, complete_restore_scan,
+    password,
 };
 
 pub const SENDER_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon \
@@ -59,7 +59,7 @@ pub struct Sender {
     pub harness: Harness,
     pub wallet: TestWallet,
     /// The wallet's database, opened under the wallet's own context key.
-    pub store: MemoryStore,
+    pub store: TestStore,
     pub keychain: Keychain,
     /// The other end of the wallet's loopback transport.
     pub peer: LoopbackTransport,
@@ -124,7 +124,7 @@ impl Sender {
         let harness = Harness::new();
         let mut peer = None;
         let (config, registry) = transports(&harness, &mut peer);
-        let mut ports: Ports<_, MemoryStores, TestVault> = Ports {
+        let mut ports: Ports<_, TestStores, TestVault> = Ports {
             transports: registry,
             ..harness.ports(TestVault::default())
         };

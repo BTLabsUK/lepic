@@ -25,7 +25,7 @@ use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec as _, MediaType, WireSlate};
-use lepic_store::{AccountRecord, MemoryStore, SlateStage, StoreError, TxId, TxState, WalletStore};
+use lepic_store::{AccountRecord, SlateStage, StoreError, TxId, TxState, WalletStore};
 use lepic_transport::file::FILE;
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::event::TransactionState;
@@ -36,7 +36,7 @@ use lepic_wallet::{Event, Ports, StoreOpener, Wallet};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
 use serde_json::{Value, json};
-use support::{Harness, LOOPBACK, MemoryStores, TestVault, password};
+use support::{Harness, LOOPBACK, TestStore, TestStores, TestVault, password};
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -84,14 +84,14 @@ impl RpcTransport for PoolWithTransaction {
     }
 }
 
-type PoolWallet = Wallet<NodeClient<PoolWithTransaction>, MemoryStores, TestVault>;
+type PoolWallet = Wallet<NodeClient<PoolWithTransaction>, TestStores, TestVault>;
 
 /// The funded `send_file_plain` sender on that node, with a transaction sent and answered.
 struct Posting {
     harness: Harness,
     pool: PoolWithTransaction,
     wallet: PoolWallet,
-    store: MemoryStore,
+    store: TestStore,
     tx_id: TxId,
     s2: WireSlate,
 }
