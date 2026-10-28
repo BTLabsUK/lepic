@@ -45,7 +45,9 @@ impl Sas {
     }
 
     /// In person both nonces are zero and card A is the one with the lower sig key, so both
-    /// phones compute the same value from the two scanned cards.
+    /// phones compute the same value from the two scanned cards. Without a commitment it shows
+    /// only that each phone read the other's screen: whoever hands both phones their cards
+    /// finds a matching pair with about 2^16 keys per side (RFC 0002 7.4).
     pub fn in_person(network: Network, one: &ContactCard, other: &ContactCard) -> Self {
         let (first, second) = if one.sig_key().as_bytes() <= other.sig_key().as_bytes() {
             (one, other)

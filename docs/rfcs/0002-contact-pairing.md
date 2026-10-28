@@ -425,6 +425,15 @@ bytes` and the cards ordered by sig key for the SAS. Both screens show the SAS; 
 match" makes the contact Verified on that phone, because the camera saw the other phone. No
 network is used, so this works Offline.
 
+The in-person SAS is a consistency check whose strength is the physical channel: there is no
+commitment, so it only proves that each phone scanned the card the other one shows when both
+cameras looked at the other phone's screen. Someone who controls both QR codes (a card passed on
+as a screenshot, a photo or over a video call) can pick both cards they hand over after seeing
+the real ones, and finds two whose SAS agree with about 2^16 card keys per side, a birthday
+search over 32 bits. The app therefore offers "They match" in person only for cards its camera
+read from the other phone; a card that came any other way is paired online (7.1 to 7.3), whose
+commitment gives the full 2^-32 below.
+
 There is no invite, so no shared home relay: each card's mailbox (tag 08) is on the relay its
 owner uses when it shows the card (a service's card names its inbox), each side delivers to the
 other's tag 08 and collects its own mailbox there. The record keeps both relays. A card QR is
@@ -450,7 +459,9 @@ enough to read on a call.
 Security: A commits to `nA` and its card before B chooses `nB`, and reveals `nA` only after B's
 reply arrived. A MITM must fix what it sends each side before it learns the value that makes the
 other side's SAS, so it matches by chance with probability 2^-32 per pairing (the SAS-MCA
-argument, Vaudenay 2005). Without the commitment it could grind 2^32 keys offline.
+argument, Vaudenay 2005). Without the commitment it could grind keys offline: about 2^32 against
+one fixed card, and about 2^16 per side when it chooses the cards both sides see, as in person
+(7.4).
 
 Outcomes: "They match" → `verified`; "They don't match" → the record is deleted on this side, a
 status 04 confirm (A) or nothing (B) is sent, and the app says the link may have been changed on
