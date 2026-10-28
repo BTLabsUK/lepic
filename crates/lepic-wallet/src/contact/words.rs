@@ -78,7 +78,7 @@ where
             .map_err(ContactError::Words)?;
         let mut posts = Vec::with_capacity(relays.built_in.len());
         for relay in &relays.built_in {
-            let (rendezvous, from) = pairing_mailbox(*key.mailbox_seed(), network, relay)?;
+            let (rendezvous, from) = pairing_mailbox(&key.mailbox_seed(), network, relay)?;
             let posted = &posted;
             posts.push(async move {
                 let result = mailbox_client(relays, relay.clone(), None)
@@ -168,7 +168,7 @@ where
         for relay in &relays.built_in {
             let identities: Vec<Identity> = keys
                 .iter()
-                .map(|key| pairing_mailbox(*key.mailbox_seed(), network, relay).map(|(id, _)| id))
+                .map(|key| pairing_mailbox(&key.mailbox_seed(), network, relay).map(|(id, _)| id))
                 .collect::<Result<_, _>>()?;
             let keys = &keys;
             drains.push(async move {

@@ -64,7 +64,7 @@ pub(crate) fn box_identity(
 /// The mailbox of a pairing seed (`code`, `rc`) on `relay`: the identity that reads it, and the
 /// identity messages to it are posted from.
 pub(crate) fn pairing_mailbox(
-    seed: [u8; 16],
+    seed: &[u8; 16],
     network: Network,
     relay: &RelayEndpoint,
 ) -> Result<(Identity, Identity), ContactError> {

@@ -1683,7 +1683,7 @@ fn pairings_in_progress_are_listed_until_they_complete() {
 /// The read and post identities of the pairing mailbox of `seed` on the test relay.
 fn pairing_identities(seed: [u8; 16]) -> (lepic_epicbox::Identity, lepic_epicbox::Identity) {
     let (box_sk, from_sk) =
-        lepic_keychain::pairing_mailbox_keys(seed, lepic_primitives::params::Network::Floonet)
+        lepic_keychain::pairing_mailbox_keys(&seed, lepic_primitives::params::Network::Floonet)
             .unwrap();
     let identity = |secret: lepic_crypto::SecretKey| {
         let public = lepic_crypto::PublicKey::from_secret_key(&secret).unwrap();

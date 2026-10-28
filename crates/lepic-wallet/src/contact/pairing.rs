@@ -386,7 +386,7 @@ where
                         },
                     )
                     .map_err(ContactError::Encode)?;
-                    let (reply_box, _) = pairing_mailbox(*code.expose_bytes(), network, &home)?;
+                    let (reply_box, _) = pairing_mailbox(code.expose_bytes(), network, &home)?;
                     if let Some(secrets) = &private {
                         super::private::put_secrets(repos, new.contact_id, secrets)?;
                     }
@@ -555,8 +555,8 @@ where
                         super::private::put_secrets(repos, new.contact_id, secrets)?;
                     }
                     let code = *invite.fields().code.expose_bytes();
-                    let (reply_box, reply_from) = pairing_mailbox(code, network, &home)?;
-                    let (confirm_box, _) = pairing_mailbox(*rc.expose_bytes(), network, &home)?;
+                    let (reply_box, reply_from) = pairing_mailbox(&code, network, &home)?;
+                    let (confirm_box, _) = pairing_mailbox(rc.expose_bytes(), network, &home)?;
                     let to = match &invite.fields().service_inbox {
                         Some(inbox) => {
                             EpicboxAddress::parse(inbox.as_str(), relays_network(network))
@@ -857,7 +857,7 @@ where
                 }
             }
             .map_err(ContactError::Encode)?;
-            let (confirm_box, confirm_from) = pairing_mailbox(rc, self.config().network, home)?;
+            let (confirm_box, confirm_from) = pairing_mailbox(&rc, self.config().network, home)?;
             post_envelope(
                 relays,
                 &confirm_from,
@@ -1148,7 +1148,7 @@ where
             self.emit(Event::PairingReplied(ContactEvent { contact_id }));
         }
         if !by_hand {
-            let (confirm_box, confirm_from) = pairing_mailbox(rc, network, &home)?;
+            let (confirm_box, confirm_from) = pairing_mailbox(&rc, network, &home)?;
             post_envelope(
                 relays,
                 &confirm_from,

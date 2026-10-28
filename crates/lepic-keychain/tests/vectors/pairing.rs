@@ -108,7 +108,7 @@ fn pairing_reply_keys_match_the_kit() {
 }
 
 fn check_mailbox(seed: [u8; 16], net: &Value, expected: &Value) {
-    let (pbox, pfrom) = pairing_mailbox_keys(seed, network(net)).unwrap();
+    let (pbox, pfrom) = pairing_mailbox_keys(&seed, network(net)).unwrap();
     assert_eq!(hex(pbox.expose_bytes()), expected["pbox_sk"], "{expected}");
     assert_eq!(
         hex(pfrom.expose_bytes()),

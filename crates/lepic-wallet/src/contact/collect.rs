@@ -540,7 +540,7 @@ where
                     if pending_waiting(&host_text(&home)) {
                         continue;
                     }
-                    let (identity, _) = pairing_mailbox(seed, network, &home)?;
+                    let (identity, _) = pairing_mailbox(&seed, network, &home)?;
                     mailboxes.push(Mailbox {
                         job,
                         identity,

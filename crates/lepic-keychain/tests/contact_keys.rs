@@ -253,10 +253,10 @@ fn debug_output_is_redacted() {
 
 #[test]
 fn mailbox_keys_depend_on_seed_and_network() {
-    let (b1, f1) = pairing_mailbox_keys([1; 16], Network::Mainnet).unwrap();
-    let (b2, _) = pairing_mailbox_keys([1; 16], Network::Mainnet).unwrap();
-    let (b3, _) = pairing_mailbox_keys([2; 16], Network::Mainnet).unwrap();
-    let (b4, _) = pairing_mailbox_keys([1; 16], Network::Floonet).unwrap();
+    let (b1, f1) = pairing_mailbox_keys(&[1; 16], Network::Mainnet).unwrap();
+    let (b2, _) = pairing_mailbox_keys(&[1; 16], Network::Mainnet).unwrap();
+    let (b3, _) = pairing_mailbox_keys(&[2; 16], Network::Mainnet).unwrap();
+    let (b4, _) = pairing_mailbox_keys(&[1; 16], Network::Floonet).unwrap();
     assert_eq!(b1.expose_bytes(), b2.expose_bytes());
     assert_ne!(b1.expose_bytes(), b3.expose_bytes());
     assert_ne!(b1.expose_bytes(), b4.expose_bytes());
@@ -313,7 +313,7 @@ fn network_block(raw: &[u8; 32]) -> Value {
         let mailboxes: Vec<Value> = CODES
             .iter()
             .map(|seed| {
-                let (b, f) = pairing_mailbox_keys(*seed, network).unwrap();
+                let (b, f) = pairing_mailbox_keys(seed, network).unwrap();
                 json!({
                     "seed": hex(seed),
                     "box_secret": hex(b.expose_bytes()),

@@ -372,11 +372,11 @@ impl fmt::Debug for ContactKeys {
 /// The mailbox key pair of a pairing (RFC 0002 8.1): the key messages are read at and the key
 /// they are posted from.
 pub fn pairing_mailbox_keys(
-    seed: [u8; 16],
+    seed: &[u8; 16],
     network: Network,
 ) -> Result<(SecretKey, SecretKey), ContactKeyError> {
     let net = network_byte(network);
-    let hkdf = Hkdf::<Sha256>::new(Some(MAILBOX_SALT), &seed);
+    let hkdf = Hkdf::<Sha256>::new(Some(MAILBOX_SALT), seed);
     let derive = |label: &[u8]| {
         first_valid_key(
             |ctr, out| {
