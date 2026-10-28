@@ -11978,6 +11978,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_outputCommits = <Vec<String>>::sse_decode(deserializer);
         let mut var_spentCommits = <Vec<String>>::sse_decode(deserializer);
         let mut var_senderReportedPostedAtMs = <Option<i64>>::sse_decode(deserializer);
+        let mut var_senderReportedCancelledAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_unverified = <bool>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
@@ -12005,6 +12006,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             output_commits: var_outputCommits,
             spent_commits: var_spentCommits,
             sender_reported_posted_at_ms: var_senderReportedPostedAtMs,
+            sender_reported_cancelled_at_ms: var_senderReportedCancelledAtMs,
             unverified: var_unverified,
         };
     }
@@ -12361,6 +12363,7 @@ impl SseDecode for crate::api::types::WalletEventKind {
             30 => crate::api::types::WalletEventKind::ContactPaymentFinalized,
             31 => crate::api::types::WalletEventKind::ContactUnpaired,
             32 => crate::api::types::WalletEventKind::ContactPayload,
+            33 => crate::api::types::WalletEventKind::PaymentCancelled,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -15183,6 +15186,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
             self.sender_reported_posted_at_ms
                 .into_into_dart()
                 .into_dart(),
+            self.sender_reported_cancelled_at_ms
+                .into_into_dart()
+                .into_dart(),
             self.unverified.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -15564,6 +15570,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::ContactPaymentFinalized => 30.into_dart(),
             Self::ContactUnpaired => 31.into_dart(),
             Self::ContactPayload => 32.into_dart(),
+            Self::PaymentCancelled => 33.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -17449,6 +17456,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <Vec<String>>::sse_encode(self.output_commits, serializer);
         <Vec<String>>::sse_encode(self.spent_commits, serializer);
         <Option<i64>>::sse_encode(self.sender_reported_posted_at_ms, serializer);
+        <Option<i64>>::sse_encode(self.sender_reported_cancelled_at_ms, serializer);
         <bool>::sse_encode(self.unverified, serializer);
     }
 }
@@ -17792,6 +17800,7 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::ContactPaymentFinalized => 30,
                 crate::api::types::WalletEventKind::ContactUnpaired => 31,
                 crate::api::types::WalletEventKind::ContactPayload => 32,
+                crate::api::types::WalletEventKind::PaymentCancelled => 33,
                 _ => {
                     unimplemented!("");
                 }

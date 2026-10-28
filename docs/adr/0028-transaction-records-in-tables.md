@@ -45,6 +45,9 @@ schema. The 2026-10-27 security audit asked for these records to move into table
   (`contact_slates`, `contact_transactions`), and version 10 for the last two transaction facts
   kept by slate id (a sender's posted report and an answered withdrawal, now `tx_marks`
   columns), dropping the parked invoices' origin addresses that nothing writes any more.
+- Schema version 11 adds two `tx_marks` columns for the `cancelled` notice (ADR 0016): when the
+  sender of a received payment reported it cancelled it, and that the receiver of a cancelled
+  send was told. Nothing moves.
 - `settings` keeps true singletons only: network, fingerprint, chain reference, scan progress,
   minimum confirmations and the like.
 

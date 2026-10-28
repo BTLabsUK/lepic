@@ -22,6 +22,7 @@ A notice is a JSON object, not a slate:
 {"lepic":1,"type":"declined","slate_id":"<uuid>"}
 {"lepic":1,"type":"withdrawn","slate_id":"<uuid>"}
 {"lepic":1,"type":"posted","slate_id":"<uuid>","excess":"<66 hex>"}
+{"lepic":1,"type":"cancelled","slate_id":"<uuid>"}
 ```
 
 - `lepic` is the format version, a number. A slate written by LEPIC carries an object under
@@ -145,6 +146,43 @@ depends on it arriving.
   padded like the others, only sealed and signed in a contact mailbox. It says the sender
   removed the pairing; the receiver marks that pairing and keeps it. It names no slate, so a
   build that knows only the kinds above classifies it as unknown and ignores it.
+
+- Amendment, sender cancel: `cancelled` for ordinary sends. Mimblewimble gives the receiver of
+  a payment no way to see that its sender cancelled: the receiver answered with S2 and waits for
+  a post that never comes, until its no-TTL window of 10,080 blocks ends the payment. The sender
+  now tells it, with `{"lepic":1,"type":"cancelled","slate_id":"<uuid>"}`, padded like the
+  others.
+  - Sending, best effort, to a receiver proven to run LEPIC, or sealed to a paired contact's
+    mailbox for a payment sent through one, and once per send (the mark
+    `tx_marks.cancelled_answered`):
+    - after the owner's cancel or release of an outgoing ordinary payment over Epicbox whose
+      receiver's S2 this wallet finalized (its S3 is stored), as when the post failed or the
+      network dropped it. A send cancelled before any answer arrived sends nothing then: the
+      receiver may not hold the S1 yet, and a stock receiver is not proven.
+    - in answer to a marked S2 that arrives, in a listen or drain, from the key the send went
+      to, for a send already cancelled here. The S2 is refused as before; the answer is kept
+      unacknowledged while the notice cannot be delivered, up to the hold bound, as a late I2
+      of a withdrawn invoice is. A contact's S2 for a send cancelled here gets the notice in
+      its mailbox the same way. An unmarked S2, or one from another key, gets nothing.
+    A failure to send never fails the cancel or the release.
+  - Accepting: an incoming transaction under the slate id with its S2 stored, so a payment this
+    wallet answered, exchanged over Epicbox with the notice's `from` as its counterparty key, or
+    with the paired contact that sealed it. Anything else, including any invoice, is
+    acknowledged and dropped. For a payment still `received`, the first such notice stores the
+    time it arrived (`tx_marks.sender_cancelled_at`) and raises `Event::PaymentCancelled`; a
+    repeat, and a notice for a payment that is confirmed, cancelled or expired here, is noted
+    with no event.
+  - Effect. Advisory: the notice changes no state, unlocks nothing and asks the node nothing.
+    Whether to end the payment is the host's choice; a cancel it then makes is the owner's
+    cancel with its usual checks of the node's pool and chain, and keeps the kernel watched, so
+    a sender that posts after all still confirms the payment. A sender that lies only makes the
+    receiver's host offer that cancel early. `TransactionDetails::sender_reported_cancelled_at`
+    reports the stored time while the payment is not confirmed, also after it ended here, with
+    no window.
+  - An older LEPIC build classifies `cancelled` as a notice of an unknown type, acknowledges it
+    and ignores it; a stock wallet never gets one. The two marks are new columns of `tx_marks`
+    (schema version 11), a migration that only adds columns; a build before it refuses the
+    upgraded store as too new.
 
 ## Alternatives considered
 

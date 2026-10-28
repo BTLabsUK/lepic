@@ -1716,6 +1716,9 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
         sender_reported_posted_at_ms: details
             .sender_reported_posted_at
             .map(Timestamp::as_millisecond),
+        sender_reported_cancelled_at_ms: details
+            .sender_reported_cancelled_at
+            .map(Timestamp::as_millisecond),
         unverified: details.unverified,
     }
 }
@@ -1927,6 +1930,11 @@ fn invoice_event(event: &Event) -> Option<WalletEvent> {
             slate_id: Some(posted.slate_id.to_string()),
             kernel_excess: Some(posted.excess.to_hex()),
             ..WalletEvent::of(WalletEventKind::PaymentPosted)
+        },
+        Event::PaymentCancelled(cancelled) => WalletEvent {
+            tx_id: Some(cancelled.tx_id.0),
+            slate_id: Some(cancelled.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::PaymentCancelled)
         },
         _ => return None,
     })
@@ -2388,6 +2396,7 @@ mod tests {
             output_commits: vec![output],
             spent_commits: vec![output],
             sender_reported_posted_at: Some(confirmed),
+            sender_reported_cancelled_at: Some(created),
             unverified: true,
         };
 
@@ -2431,6 +2440,7 @@ mod tests {
                 output_commits: vec![output.to_hex()],
                 spent_commits: vec![output.to_hex()],
                 sender_reported_posted_at_ms: Some(1_790_000_600_456),
+                sender_reported_cancelled_at_ms: Some(1_790_000_000_123),
                 unverified: true,
             }
         );
@@ -2548,6 +2558,21 @@ mod tests {
         assert_eq!(event.tx_id, Some(6));
         assert_eq!(event.slate_id, Some(slate_id.to_string()));
         assert_eq!(event.sender, None);
+    }
+
+    #[test]
+    fn a_cancelled_payment_is_its_own_event() {
+        use lepic_wallet::event::{CancelledPayment, SlateId};
+        let slate_id = SlateId::from_bytes([9; 16]);
+        let event = wallet_event(&Event::PaymentCancelled(CancelledPayment {
+            tx_id: TxId(11),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(event.kind, WalletEventKind::PaymentCancelled);
+        assert_eq!(event.tx_id, Some(11));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
+        assert_eq!(event.kernel_excess, None);
     }
 
     #[test]

@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::account::AccountError;
 use crate::epicbox_invoice::display_message;
-use crate::epicbox_notice::posted_report;
+use crate::epicbox_notice::{cancelled_report, posted_report};
 use crate::error::WalletError;
 use crate::legacy_history::{self, TxOrigin};
 use crate::ports::{SecretVault, StoreOpener};
@@ -102,6 +102,11 @@ pub struct TransactionDetails {
     /// [`POSTED_REPORT_WINDOW`]. Advisory: the sender says so, and only a refresh that finds
     /// the kernel confirms the payment. `None` for any other transaction.
     pub sender_reported_posted_at: Option<Timestamp>,
+    /// For a received payment this wallet answered, when its sender reported that it cancelled
+    /// the payment, as long as the payment is not confirmed: while it waits for its sender, and
+    /// after it ended here. Advisory: nothing was released on the report, and a payment the
+    /// chain still confirms clears it. `None` for any other transaction.
+    pub sender_reported_cancelled_at: Option<Timestamp>,
 }
 
 /// What an imported transaction carries beyond its log entry.
@@ -150,6 +155,23 @@ fn sender_report(
         && entry.transport.as_deref() == Some(EPICBOX.as_str())
     {
         posted_report(repos, transaction.id, now)
+    } else {
+        Ok(None)
+    }
+}
+
+/// The sender's report that it cancelled a payment this wallet received, while the payment is
+/// not confirmed. Reads the marks only for an incoming payment.
+fn sender_cancel_report(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+) -> Result<Option<Timestamp>, StoreError> {
+    let entry = &transaction.entry;
+    if entry.slate_id.is_some()
+        && entry.direction == TxDirection::Incoming
+        && entry.state != TxState::Confirmed
+    {
+        cancelled_report(repos, transaction.id)
     } else {
         Ok(None)
     }
@@ -279,11 +301,13 @@ fn details(
     let output_commits = output_commits(repos, codecs, &transaction, flow)?;
     let spent_commits = spent_commits(repos, codecs, &transaction, flow)?;
     let sender_reported_posted_at = sender_report(repos, &transaction, now)?;
+    let sender_reported_cancelled_at = sender_cancel_report(repos, &transaction)?;
     let unverified =
         origin == TxOrigin::OtherWallet && crate::other_wallet::is_unverified(repos, tx_id)?;
     Ok(TransactionDetails {
         unverified,
         sender_reported_posted_at,
+        sender_reported_cancelled_at,
         output_commits,
         spent_commits,
         undelivered,

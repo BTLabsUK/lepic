@@ -15,7 +15,7 @@ use lepic_slate::model::SlateId;
 use lepic_slate::stage::Stage;
 use lepic_store::{
     ContactId, ContactRecord, ContactState, PendingInvoice, PendingInvoiceStatus, Repositories,
-    SlateStage, StoreError, TxDirection, TxId, WalletStore,
+    SlateStage, StoreError, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::Destination;
@@ -672,6 +672,20 @@ where
                 Ok(Handled::Later)
             }
             Err(error) if !lepic_wallet::inbox::finalize_is_permanent(&error) => Ok(Handled::Later),
+            // The contact answered a send cancelled here and waits for it to be posted: it
+            // hears of the cancel through its mailbox, as over Epicbox (ADR 0016).
+            Err(
+                error @ lepic_wallet::finalize::FinalizeError::NotFinalizable {
+                    tx_id,
+                    state: TxState::Cancelled,
+                },
+            ) => {
+                debug!(slate_id = %slate.id(), error = %ErrorChain(&error), "answer from a contact to a cancelled send");
+                if let Err(error) = self.wallet.notify_cancelled(tx_id, false).await {
+                    warn!(tx_id = %tx_id, error = %ErrorChain(&error), "cancelled notice not queued for the contact");
+                }
+                Ok(Handled::Stored)
+            }
             Err(error) => {
                 warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "answer from a contact not finalized");
                 Ok(Handled::Stored)
@@ -933,6 +947,9 @@ where
             NoticeKind::Posted { .. } | NoticeKind::Declined | NoticeKind::Withdrawn => {
                 SlateStage::Invoice1
             }
+            // Under the stage of the send's posted notice, which no slate of a send takes, so
+            // the outbox prune tells it from the send's S1.
+            NoticeKind::Cancelled => SlateStage::Standard3,
         };
         self.queue_contact_notice_as(contact_id, notice, stage)
             .await

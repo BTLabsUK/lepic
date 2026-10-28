@@ -11,6 +11,11 @@
 //! `posted` goes from the issuer of a paid invoice to its payer, and from the sender of an
 //! ordinary payment to its receiver. The receiver keeps the time of the first report it
 //! accepted, which the host shows for [`POSTED_REPORT_WINDOW`] while the payment waits.
+//!
+//! `cancelled` goes from the sender of an ordinary payment to its receiver once the sender
+//! cancelled or released the send after finalizing the receiver's answer, and in answer to a
+//! late S2 of a send already cancelled. The receiver keeps the time of the first report it
+//! accepted while the payment waited, and leaves the payment as it is.
 
 use lepic_epicbox::{EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::NodeApi;
@@ -27,7 +32,9 @@ use uuid::Uuid;
 
 use crate::details::POSTED_REPORT_WINDOW;
 use crate::epicbox_invoice::stored_codecs;
-use crate::event::{DeclinedInvoice, Event, PostedInvoice, PostedPayment, WithdrawnInvoice};
+use crate::event::{
+    CancelledPayment, DeclinedInvoice, Event, PostedInvoice, PostedPayment, WithdrawnInvoice,
+};
 use crate::finalize::kernel_excess;
 use crate::inbox::{ErrorChain, Handled, Hold, relay_network};
 use crate::invoice::check_signed_payment;
@@ -45,6 +52,9 @@ enum Effect {
     PaymentPosted {
         tx_id: TxId,
         excess: lepic_crypto::Commitment,
+    },
+    PaymentCancelled {
+        tx_id: TxId,
     },
     Declined {
         tx_id: TxId,
@@ -185,6 +195,7 @@ fn apply_notice(
             None => Effect::Dropped,
         },
         NoticeKind::Withdrawn => withdraw(repos, slate_id, &from, network)?,
+        NoticeKind::Cancelled => report_cancelled(repos, slate_id, &from, network, now)?,
     };
     if let NoticeFrom::Epicbox(key) = from
         && !matches!(effect, Effect::Dropped)
@@ -247,6 +258,47 @@ fn report_posted(
     marks.sender_posted_at = Some(now);
     repos.put_tx_marks(tx_id, &marks)?;
     Ok(Effect::PaymentPosted { tx_id, excess })
+}
+
+/// A `cancelled` from the sender of a payment received over Epicbox or from a paired contact.
+/// Accepted only from the payment's recorded counterparty, for a payment whose S2 is stored, so
+/// one this wallet answered. Only the first report for a payment that still waits for its sender
+/// is kept and raises an event; a repeat, or a report for a payment that confirmed or ended here,
+/// is noted. Nothing else changes: the host decides whether to cancel the payment.
+fn report_cancelled(
+    repos: &mut dyn Repositories,
+    slate_id: Uuid,
+    from: &NoticeFrom,
+    network: RelayNetwork,
+    now: jiff::Timestamp,
+) -> Result<Effect, StoreError> {
+    let Some((tx_id, state)) = transaction_with(
+        repos,
+        slate_id,
+        TxDirection::Incoming,
+        SlateStage::Standard2,
+        from,
+        network,
+    )?
+    else {
+        return Ok(Effect::Dropped);
+    };
+    let mut marks = repos.tx_marks(tx_id)?;
+    if state != TxState::Received || marks.sender_cancelled_at.is_some() {
+        return Ok(Effect::Noted);
+    }
+    marks.sender_cancelled_at = Some(now);
+    repos.put_tx_marks(tx_id, &marks)?;
+    Ok(Effect::PaymentCancelled { tx_id })
+}
+
+/// When the sender of the received payment `tx_id` reported that it cancelled it. The caller
+/// checks the payment's state.
+pub(crate) fn cancelled_report(
+    repos: &dyn Repositories,
+    tx_id: TxId,
+) -> Result<Option<jiff::Timestamp>, StoreError> {
+    Ok(repos.tx_marks(tx_id)?.sender_cancelled_at)
 }
 
 /// A parked invoice that is not paid is deleted; a paid one is only reported while its payment
@@ -316,6 +368,46 @@ fn withdrawal_target(
     }))
 }
 
+/// Where a `cancelled` for the cancelled send `tx_id` goes: the receiver of an ordinary payment
+/// sent over Epicbox or through a paired contact, while it was not told before. With
+/// `answered`, only when this wallet finalized the receiver's answer, so the receiver holds an
+/// S2 and waits for this wallet to post it; a send cancelled before any answer came is told
+/// when its late answer arrives. A contact's notice goes to its mailbox, which
+/// [`Wallet::send_notice`] finds by the slate, so its destination is not used.
+fn cancellation_target(
+    repos: &dyn Repositories,
+    tx_id: TxId,
+    answered: bool,
+) -> Result<Option<(SlateId, Destination)>, StoreError> {
+    let Some(entry) = repos.transaction(tx_id)? else {
+        return Ok(None);
+    };
+    let Some(slate_id) = entry.slate_id else {
+        return Ok(None);
+    };
+    let contact = crate::contact_link::slate_contact(repos, slate_id)?;
+    let over_epicbox =
+        entry.transport.as_deref() == Some(TRANSPORT_ID.as_str()) || contact.is_some();
+    if entry.direction != TxDirection::Outgoing
+        || entry.state != TxState::Cancelled
+        || !over_epicbox
+        || repos.slate(slate_id, SlateStage::Standard1)?.is_none()
+        || (answered && repos.slate(slate_id, SlateStage::Standard3)?.is_none())
+        || repos.tx_marks(tx_id)?.cancelled_answered
+    {
+        return Ok(None);
+    }
+    let to = match (repos.counterparty(tx_id)?, contact) {
+        (Some(to), _) => to,
+        (None, Some(_)) => String::new(),
+        (None, None) => return Ok(None),
+    };
+    Ok(Some((
+        SlateId::from_bytes(slate_id.into_bytes()),
+        Destination::new(to),
+    )))
+}
+
 /// Whether `payment` of the cancelled invoice `tx_id` is to be answered with a `withdrawn`: it
 /// pays the I1 this wallet issued under its slate id with a payer signature that verifies, and
 /// the payer of that slate was not told before. Once per slate, so repeating a payment sends
@@ -380,6 +472,10 @@ where
                 tx_id,
                 slate_id,
                 excess,
+            })),
+            Effect::PaymentCancelled { tx_id } => Some(Event::PaymentCancelled(CancelledPayment {
+                tx_id,
+                slate_id,
             })),
             Effect::Declined { tx_id } => {
                 Some(Event::InvoiceDeclined(DeclinedInvoice { tx_id, slate_id }))
@@ -527,6 +623,13 @@ where
                 })),
                 None,
             ),
+            Effect::PaymentCancelled { tx_id } => (
+                Some(Event::PaymentCancelled(CancelledPayment {
+                    tx_id,
+                    slate_id,
+                })),
+                None,
+            ),
             Effect::Declined { tx_id } => (
                 Some(Event::InvoiceDeclined(DeclinedInvoice { tx_id, slate_id })),
                 None,
@@ -636,6 +739,61 @@ where
             }
         }
         self.notify_withdrawn(tx_id).await
+    }
+
+    /// Tells the receiver of the cancelled send `tx_id` that it is cancelled, when it is an
+    /// ordinary payment sent over Epicbox or through a paired contact whose receiver was not
+    /// told before, and records that it was told. With `answered`, only when this wallet
+    /// finalized the receiver's answer: the cancel and release of a send call it so, and a late
+    /// answer to a cancelled send without. Over Epicbox only a receiver proven to run LEPIC is
+    /// told. Fails with why such a notice was not delivered; a cancel never fails on it.
+    pub async fn notify_cancelled(&self, tx_id: TxId, answered: bool) -> Result<(), Hold> {
+        let target = async {
+            let session = self.session()?;
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| cancellation_target(repos, tx_id, answered))?)
+            })
+            .await
+        };
+        let (slate_id, to) = match target.await {
+            Ok(Some(target)) => target,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                warn!(tx_id = %tx_id, error = %ErrorChain(&error), "notice not sent");
+                return Err(error.into());
+            }
+        };
+        let notice = Notice {
+            slate_id,
+            kind: NoticeKind::Cancelled,
+        };
+        self.send_notice(None, &to, notice).await?;
+        let recorded = self
+            .inbox_write(move |repos, _| {
+                let mut marks = repos.tx_marks(tx_id)?;
+                marks.cancelled_answered = true;
+                repos.put_tx_marks(tx_id, &marks)
+            })
+            .await;
+        if let Err(error) = recorded {
+            warn!(tx_id = %tx_id, error = %ErrorChain(&error), "cancelled notice not recorded");
+        }
+        Ok(())
+    }
+
+    /// Answers a marked late S2 of the cancelled send `tx_id`, from the key the send went to,
+    /// with a `cancelled`: the receiver answered after the cancel, or its answer reached this
+    /// wallet only after it. The marked S2 proves the receiver runs LEPIC. Once per send. Fails
+    /// with why that answer was due and not delivered.
+    pub(crate) async fn answer_cancelled_send(
+        &self,
+        tx_id: TxId,
+        reply_to: &Destination,
+    ) -> Result<(), Hold> {
+        self.record_receiving_peer(tx_id, reply_to).await;
+        self.notify_cancelled(tx_id, false).await
     }
 
     /// Tells the issuer of the parked invoice `slate_id` that it was declined, from the payments

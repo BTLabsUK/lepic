@@ -52,8 +52,9 @@ where
     ///
     /// A slate already delivered is not recalled; if the peer still completes it, the
     /// transaction can no longer be finalized here. For an invoice issued over Epicbox, the
-    /// payer is sent a `withdrawn` notice when it proved that it runs LEPIC; a failure to send
-    /// it is logged and not returned.
+    /// payer is sent a `withdrawn` notice when it proved that it runs LEPIC, and for an
+    /// ordinary send whose receiver's answer was finalized here, the receiver a `cancelled`
+    /// one; a failure to send either is logged and not returned.
     ///
     /// The peer may complete a transaction without this wallet once it holds this wallet's
     /// signature: a finalized one, whose post may have reached the node even though it failed,
@@ -136,6 +137,7 @@ where
                 self.emit(change.into());
             }
             let _ = self.notify_withdrawn(tx_id).await;
+            let _ = self.notify_cancelled(tx_id, true).await;
         }
         Ok(())
     }
