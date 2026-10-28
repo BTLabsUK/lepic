@@ -1064,6 +1064,7 @@ dependencies = [
  "lepic-tor",
  "lepic-transport",
  "lepic-wallet",
+ "lepic-wallet-contacts",
  "rand 0.10.3",
  "sha2",
  "tokio",
@@ -1132,7 +1133,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
- "x25519-dalek",
  "zeroize",
 ]
 
@@ -1275,6 +1275,37 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "lepic-wallet-contacts"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "ed25519-dalek",
+ "futures-util",
+ "hkdf",
+ "jiff",
+ "lepic-contact",
+ "lepic-crypto",
+ "lepic-epicbox",
+ "lepic-keychain",
+ "lepic-node",
+ "lepic-primitives",
+ "lepic-slate",
+ "lepic-store",
+ "lepic-transport",
+ "lepic-wallet",
+ "rand_core 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+ "x25519-dalek",
  "zeroize",
 ]
 
