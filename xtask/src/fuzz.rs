@@ -11,13 +11,17 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-const USAGE: &str = "usage: cargo xtask fuzz (--smoke | --full) [--target <name>]... [--jobs <n>]
+const USAGE: &str =
+    "usage: cargo xtask fuzz (--build | --smoke | --full) [--target <name>]... [--jobs <n>]
 
+  --build   only build every target, as the pull-request CI does
   --smoke   run each target for 60 seconds
   --full    run each target for 10 minutes
   --target  run only this target; repeatable
   --jobs    targets to run at the same time, default 1";
 
+/// `--build`: no target runs.
+const BUILD_ONLY: u64 = 0;
 const SMOKE_SECONDS: u64 = 60;
 const FULL_SECONDS: u64 = 600;
 
@@ -56,6 +60,8 @@ const TARGETS: &[&str] = &[
     "pair_words",
     "envelope_inner",
     "pair_answers",
+    "app_data_open",
+    "slate_marker",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -68,6 +74,9 @@ struct Options {
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let options = parse_args(args)?;
     let fuzz_dir = root.join("fuzz");
+    if options.seconds == BUILD_ONLY {
+        return build(&fuzz_dir);
+    }
     for target in &options.targets {
         let written = write_seeds(root, target, &fuzz_dir.join("corpus").join(target))?;
         eprintln!("xtask fuzz: {target}: {written} seeds");
@@ -95,9 +104,10 @@ fn parse_args(args: &[String]) -> Result<Options> {
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--smoke" | "--full" if seconds.is_some() => {
-                bail!("give one of --smoke and --full\n\n{USAGE}")
+            "--build" | "--smoke" | "--full" if seconds.is_some() => {
+                bail!("give one of --build, --smoke and --full\n\n{USAGE}")
             }
+            "--build" => seconds = Some(BUILD_ONLY),
             "--smoke" => seconds = Some(SMOKE_SECONDS),
             "--full" => seconds = Some(FULL_SECONDS),
             "--target" => {
@@ -120,7 +130,7 @@ fn parse_args(args: &[String]) -> Result<Options> {
             other => bail!("unknown argument `{other}`\n\n{USAGE}"),
         }
     }
-    let seconds = seconds.with_context(|| format!("give --smoke or --full\n\n{USAGE}"))?;
+    let seconds = seconds.with_context(|| format!("give --build, --smoke or --full\n\n{USAGE}"))?;
     if targets.is_empty() {
         targets = TARGETS.to_vec();
     }
@@ -439,6 +449,31 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                 }
             }
         }
+        "app_data_open" => {
+            for vector in read_area(&vectors, "app_data", "wfeh_")? {
+                seeds.extend(
+                    hex_fields(&vector, "file")
+                        .iter()
+                        .map(|file| prefixed(&[0], file)),
+                );
+                let inputs = vector.get("inputs").unwrap_or(&Value::Null);
+                let field = |name| hex_fields(inputs, name).into_iter().next();
+                if let (Some(salt), Some(nonce)) = (field("salt"), field("nonce")) {
+                    for payload in text_fields(inputs, "payload") {
+                        seeds.insert([&[1][..], &salt, &nonce, &payload].concat());
+                    }
+                }
+            }
+        }
+        "slate_marker" => {
+            for vector in read_area(&vectors, "slates", "")? {
+                for json in text_fields(&vector, "json") {
+                    seeds.insert(marked(&json, r#""lepic":{"version":1}"#));
+                    seeds.insert(marked(&json, MARKER_WITH_REPLY));
+                    seeds.insert(json);
+                }
+            }
+        }
         "envelope_inner" => {
             let envelopes = read_pairing(&vectors, "envelopes.json")?;
             for inner in hex_fields(&envelopes, "inner") {
@@ -613,6 +648,20 @@ fn read_pairing(vectors: &Path, file: &str) -> Result<Value> {
     serde_json::from_str(&text).with_context(|| format!("could not parse {}", path.display()))
 }
 
+/// A LEPIC marker with a reply key that is not of small order, as `MarkedV3JsonCodec` writes it.
+const MARKER_WITH_REPLY: &str = r#""lepic":{"version":1,"reply":"0900000000000000000000000000000000000000000000000000000000000000"}"#;
+
+/// `json` with `member` added as the last member of its top-level object.
+fn marked(json: &[u8], member: &str) -> Vec<u8> {
+    match json.iter().rposition(|byte| *byte == b'}') {
+        Some(end) => {
+            let (head, tail) = json.split_at(end);
+            [head, b",", member.as_bytes(), tail].concat()
+        }
+        None => json.to_vec(),
+    }
+}
+
 fn prefixed(prefix: &[u8], bytes: &[u8]) -> Vec<u8> {
     let mut seed = prefix.to_vec();
     seed.extend_from_slice(bytes);
@@ -775,6 +824,7 @@ mod tests {
                 jobs: 4
             }
         );
+        assert_eq!(parse_args(&args(&["--build"])).unwrap().seconds, BUILD_ONLY);
         let smoke = parse_args(&args(&["--smoke"])).unwrap();
         assert_eq!(smoke.seconds, SMOKE_SECONDS);
         assert_eq!(smoke.targets, TARGETS);
@@ -787,6 +837,7 @@ mod tests {
             &[][..],
             &["--target", "tx_decode"],
             &["--smoke", "--full"],
+            &["--build", "--smoke"],
             &["--smoke", "--target", "nope"],
             &["--smoke", "--jobs", "0"],
             &["--smoke", "--jobs"],

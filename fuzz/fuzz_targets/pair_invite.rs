@@ -2,9 +2,7 @@
 
 #![no_main]
 
-use lepic_contact::{
-    ConfirmBody, Invite, Network, PairingLink, ReplyBody, pairing_envelope_from_link,
-};
+use lepic_contact::{Confirm, Invite, Network, PairingLink, ReplyBody, pairing_envelope_from_link};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -21,10 +19,12 @@ fuzz_target!(|data: &[u8]| {
             );
         }
         if let Ok(reply) = ReplyBody::decode(data, network) {
-            assert_eq!(reply.encode(), data);
+            assert_eq!(reply.encode().as_slice(), data);
         }
-        if let Ok(confirm) = ConfirmBody::decode(data, network) {
-            assert_eq!(confirm.encode(), data);
+        match Confirm::decode(data, network) {
+            Ok(Confirm::Accepted(body)) => assert_eq!(body.encode(), data),
+            Ok(Confirm::Refused(_)) => assert_eq!(data.len(), 1, "a refusal is one status byte"),
+            Err(_) => {}
         }
         if let Ok(text) = std::str::from_utf8(data) {
             if let Ok(invite) = Invite::from_link(text, network) {

@@ -21,9 +21,18 @@ fuzz_target!(|data: &[u8]| {
     let Some(json) = progress.json else {
         return;
     };
-    assert!(json.len() <= MAX_SLATE_TEXT_LEN, "decoded text is over the limit");
+    assert!(
+        json.len() <= MAX_SLATE_TEXT_LEN,
+        "decoded text is over the limit"
+    );
     if let Ok(parts) = encode_ur_slate(&json, 200) {
-        let again = decode_ur_slate(&parts).ok().and_then(|progress| progress.json);
-        assert_eq!(again.as_deref(), Some(json.as_str()), "a decoded code re-encodes to itself");
+        let again = decode_ur_slate(&parts)
+            .ok()
+            .and_then(|progress| progress.json);
+        assert_eq!(
+            again.as_deref(),
+            Some(json.as_str()),
+            "a decoded code re-encodes to itself"
+        );
     }
 });

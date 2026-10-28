@@ -27,6 +27,7 @@ lepic-slate = { path = "../crates/lepic-slate" }
 lepic-transport = { path = "../crates/lepic-transport" }
 lepic-wallet = { path = "../crates/lepic-wallet" }
 rand_core = { version = "0.10.1", default-features = false }
+x25519-dalek = { version = "3.0.0", default-features = false }
 
 [lints.rust]
 unsafe_code = "deny"
@@ -185,6 +186,20 @@ bench = false
 [[bin]]
 name = "pair_answers"
 path = "fuzz_targets/pair_answers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "app_data_open"
+path = "fuzz_targets/app_data_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "slate_marker"
+path = "fuzz_targets/slate_marker.rs"
 test = false
 doc = false
 bench = false

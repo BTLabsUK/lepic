@@ -3,9 +3,9 @@
 
 #![no_main]
 
+use lepic_slate::model::MAX_MESSAGE_LEN;
 use lepic_wallet::epicbox_invoice::display_message;
 use lepic_wallet::notice::{MAX_NOTICE_LEN, Payload, classify_text};
-use lepic_slate::model::MAX_MESSAGE_LEN;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
