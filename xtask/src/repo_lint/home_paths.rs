@@ -100,13 +100,13 @@ mod tests {
     #[test]
     fn refuses_a_real_home_directory() {
         let violations = check(&[file(
-            "docs/drafts/note.md",
+            "docs/notes.md",
             concat!("intro\nsee `/home", "/jane/wallet/docs/README.md`\n"),
         )]);
         assert_eq!(
             violations,
             vec![Violation {
-                file: "docs/drafts/note.md".to_owned(),
+                file: "docs/notes.md".to_owned(),
                 line: 2,
                 path: concat!("/home", "/jane").to_owned(),
             }]
