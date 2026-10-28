@@ -19,7 +19,7 @@ the Rust half cannot leave the crate without changing the API.
 
 ## Decision
 
-- The binding moves to its own repository, gitlab.com/btlabs/lepic-flutter, as the Dart
+- The binding moves to its own repository, gitlab.com/bt-labs-group/lepic-flutter, as the Dart
   package `lepic`, version 0.1.0. It pins a LEPIC commit in `lepic.rev` and holds the codegen
   configuration, the generated Dart, the build hook, the tests, the device test app and
   `tool/lepic.sh`, which builds the native libraries from the pinned LEPIC per platform. Apps

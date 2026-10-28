@@ -12,7 +12,7 @@
 
 [Quick start](#quick-start) · [Build](#build-from-source) · [Architecture](docs/architecture.md) ·
 [Documentation](https://docs.btlabs.uk/developers/lepic/) ·
-[Flutter binding](https://gitlab.com/btlabs/lepic-flutter) · [Security](SECURITY.md)
+[Flutter binding](https://gitlab.com/bt-labs-group/lepic-flutter) · [Security](SECURITY.md)
 
 </div>
 
@@ -21,7 +21,7 @@ the app's own process. It creates and restores wallets, scans the chain through 
 sends and receives transactions with the standard `epic-wallet`. It is the wallet core of Epic Cash
 Mobile and Epic Cash Desktop. `lepic-ffi` is its FFI API, built on
 [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge); apps use it through the
-[Flutter binding](https://gitlab.com/btlabs/lepic-flutter), a separate repository.
+[Flutter binding](https://gitlab.com/bt-labs-group/lepic-flutter), a separate repository.
 
 > **Status: beta.** LEPIC runs in production in Epic Cash Desktop and Epic Cash Mobile since
 > 26.10. Its APIs may still change before 1.0.
@@ -73,10 +73,10 @@ Matching is checked, not assumed:
   pinned Epic Cash code, and LEPIC's tests must reproduce them exactly.
 - **Tests against the real programs.** An [interop suite](interop/README.md) runs LEPIC against an
   unmodified `epic-wallet`, node and Epicbox relay on a private test network.
-- **Watching upstream.** A weekly job reports changes in the Epic Cash code that LEPIC has not
-  reviewed yet.
-- **Dependencies checked.** Every change, and a weekly job, checks dependencies for known
-  vulnerabilities, licences and sources; dependencies and CI actions are pinned.
+- **Watching upstream.** `cargo xtask upstream-drift`, run every week, reports changes in the Epic
+  Cash code that LEPIC has not reviewed yet.
+- **Dependencies checked.** Every change, and a weekly run, checks dependencies for known
+  vulnerabilities, licences and sources (`cargo deny`); dependencies and toolchains are pinned.
 - **Fuzzing.** The parsers of untrusted input (slates, Epicbox messages, node responses, vault
   files) are fuzzed.
 
@@ -89,8 +89,8 @@ compiler. LEPIC is not on crates.io yet, so take it from git:
 
 ```toml
 [dependencies]
-lepic-wallet = { git = "https://gitlab.com/btlabs/lepic" }
-lepic-primitives = { git = "https://gitlab.com/btlabs/lepic" }
+lepic-wallet = { git = "https://gitlab.com/bt-labs-group/lepic" }
+lepic-primitives = { git = "https://gitlab.com/bt-labs-group/lepic" }
 ```
 
 Read a slate from `epic-wallet` without opening a wallet:
@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Apps use the Flutter binding, a separate repository:
-https://gitlab.com/btlabs/lepic-flutter. It wraps the full wallet: create or restore, scan the
+https://gitlab.com/bt-labs-group/lepic-flutter. It wraps the full wallet: create or restore, scan the
 chain, send and receive.
 
 ## Build from source
@@ -133,7 +133,7 @@ You need Git, Rust through `rustup` (the repository pins 1.99.0 in `rust-toolcha
 needed for the library.
 
 ```bash
-git clone https://gitlab.com/btlabs/lepic && cd lepic
+git clone https://gitlab.com/bt-labs-group/lepic && cd lepic
 cargo build --release            # the library crates and the lepic CLI
 cargo xtask install              # the lepic CLI into ~/.local/bin (or --dir <directory>)
 ```
@@ -150,7 +150,7 @@ The FFI library for apps is packaged per target with `cargo xtask mobile --packa
 | iOS | `aarch64-apple-ios`, `aarch64-apple-ios-sim` | Xcode |
 
 `--no-tor` builds the library without the wallet's Tor support (ADR 0026). The Flutter binding
-builds these for you: see [lepic-flutter](https://gitlab.com/btlabs/lepic-flutter).
+builds these for you: see [lepic-flutter](https://gitlab.com/bt-labs-group/lepic-flutter).
 
 ## Testing
 
@@ -159,12 +159,13 @@ cargo xtask check                # fmt, clippy, every test, cargo deny, the repo
 cargo test -p lepic-wallet       # one crate
 ```
 
-`cargo xtask check` is the gate every change passes, locally and in CI. Run it from a git checkout:
+`cargo xtask check` is the gate every change passes. Builds and tests run on our own machines,
+not on hosted CI: run the same gate before you send a change. Run it from a git checkout:
 it lists files through `git`. Tests never touch the network; the few live ones are `#[ignore]`d
 and need `LEPIC_LIVE_TESTS=1`. The [interop suite](interop/README.md)
 runs LEPIC against the real `epic-wallet`, node and Epicbox relay in Docker on a private chain, by
 hand. `conformance/` builds the pinned Epic Cash code, regenerates the golden vectors from it and
-runs the differential tests; CI runs it on every change.
+runs the differential tests (`cd conformance && cargo test --locked`).
 
 ## Project structure
 
@@ -205,7 +206,7 @@ report one privately.
 
 - Developer guide: https://docs.btlabs.uk/developers/lepic/ (security model:
   https://docs.btlabs.uk/developers/security-model/)
-- Wiki: https://gitlab.com/btlabs/lepic/-/wikis/home
+- Wiki: https://gitlab.com/bt-labs-group/lepic/-/wikis/home
 
 ## License
 

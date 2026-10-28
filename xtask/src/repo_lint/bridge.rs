@@ -20,7 +20,7 @@ pub(crate) const MANIFEST_FILE: &str = "crates/lepic-ffi/bridge.sha256";
 const BRIDGE_PACKAGE: &str = "flutter_rust_bridge";
 const VERSION_ITEM: &str = "FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = \"";
 const REGENERATE: &str = "generate the bindings again with `tool/lepic.sh generate` in the \
-                          binding repository, gitlab.com/btlabs/lepic-flutter";
+                          binding repository, gitlab.com/bt-labs-group/lepic-flutter";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Violation {

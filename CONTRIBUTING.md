@@ -55,7 +55,7 @@ The repository ships a `commit-msg` hook that rejects malformed messages. Enable
 git config core.hooksPath .githooks
 ```
 
-CI runs the same check, so a skipped hook only moves the failure later.
+Maintainers run the same check before a merge, so a skipped hook only moves the failure later.
 
 ## Developer Certificate of Origin
 
