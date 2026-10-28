@@ -834,6 +834,35 @@ fn a_late_confirmation_takes_over_the_change_a_scan_restored_first() {
     assert_eq!(credited, change_before[0].amount.value(), "counted once");
 }
 
+/// A released send mined after its input was linked to something else is not also counted as a
+/// spend by another wallet: the input leaves the history once, in the send.
+#[test]
+fn a_released_send_mined_late_debits_its_input_once() {
+    let releasing = Releasing::posted().made_releasable();
+    releasing.release().unwrap();
+    releasing
+        .store
+        .write(|repos| {
+            let mut input = repos.output(releasing.funding.commitment())?.unwrap();
+            input.tx = None;
+            repos.put_output(&input)
+        })
+        .unwrap();
+    let sends = releasing.history().len();
+    releasing.mined_elsewhere_at(RELEASABLE_FROM);
+
+    releasing.refresh();
+
+    assert_eq!(releasing.state(), TxState::Confirmed);
+    let history = releasing.history();
+    assert_eq!(history.len(), sends, "no entry of another wallet's spend");
+    let debited: u64 = history
+        .iter()
+        .map(|details| details.transaction.entry.amount_debited.value())
+        .sum();
+    assert_eq!(debited, releasing.funding.amount.value(), "debited once");
+}
+
 #[test]
 fn a_tip_held_as_pending_does_not_end_the_watch() {
     let releasing = Releasing::posted().made_releasable();

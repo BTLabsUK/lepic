@@ -24,8 +24,8 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    AccountIndex, KeyId, OutputRecord, OutputStatus, Repositories, StoreError, StoredTransaction,
-    TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, KeyId, OutputRecord, OutputStatus, Repositories, SlateStage, StoreError,
+    StoredTransaction, TxDirection, TxId, TxState, WalletStore,
 };
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
@@ -35,8 +35,11 @@ use crate::chain;
 use crate::error::WalletError;
 use crate::inbox::ErrorChain;
 use crate::lifecycle::Session;
+use crate::other_wallet;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::refresh::{RefreshError, balance_height, final_kernel, legacy_codecs, unless_refused};
+use crate::refresh::{
+    RefreshError, balance_height, final_kernel, legacy_codecs, stored_slate, unless_refused,
+};
 use crate::state::{StateChange, apply_transition, confirm_released, state_name};
 use crate::wallet::Wallet;
 
@@ -266,8 +269,10 @@ fn released_sends(repos: &dyn Repositories) -> Result<Vec<Watched>, StoreError> 
 /// stores the outputs it dropped as unspent from there, or takes over those a scan already
 /// stored. A transaction no longer cancelled or expired, or no longer watched in `phase`, is
 /// left as it is.
+#[allow(clippy::too_many_arguments)] // The watched send and where the chain mined it.
 fn confirm_mined_release(
     repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
     tx_id: TxId,
     account: AccountIndex,
     released: &ReleasedSend,
@@ -291,7 +296,42 @@ fn confirm_mined_release(
     let change = confirm_released(repos, tx_id, now)?;
     repos.set_confirmed_height(tx_id, height)?;
     repos.delete_setting(&record)?;
+    undo_spends_by_another_wallet(repos, codecs, tx_id)?;
     Ok(change)
+}
+
+/// Takes the inputs of `tx_id`, a send the chain mined after it ended here, out of any entry of
+/// another wallet's spend: a refresh that found them gone before it saw the send mined took
+/// them for one, and the send itself debits them.
+fn undo_spends_by_another_wallet(
+    repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+) -> Result<(), StoreError> {
+    let Some(slate_id) = repos.transaction(tx_id)?.and_then(|entry| entry.slate_id) else {
+        return Ok(());
+    };
+    let stages = [
+        SlateStage::Standard3,
+        SlateStage::Standard1,
+        SlateStage::Invoice2,
+    ];
+    let mut slate = None;
+    for stage in stages {
+        slate = stored_slate(repos, codecs, tx_id, slate_id, stage)?;
+        if slate.is_some() {
+            break;
+        }
+    }
+    let Some(slate) = slate else {
+        return Ok(());
+    };
+    for input in slate.inputs() {
+        if let Some(output) = repos.output(input.commitment.as_bytes())? {
+            other_wallet::revived(repos, &output)?;
+        }
+    }
+    Ok(())
 }
 
 /// Links a change output a scan stored before the late confirmation to the send that created
@@ -605,7 +645,8 @@ where
         mined.extend(self.find_late(session, late, height).await?);
         let session = Arc::clone(session);
         let changes = self
-            .blocking(move |_, _| {
+            .blocking(move |_, config| {
+                let codecs = legacy_codecs(config.network.params().default_base_fee());
                 Ok(session.store.write(|repos| {
                     for watched in &kernel_ended {
                         end_kernel_watch(repos, watched, height)?;
@@ -614,6 +655,7 @@ where
                     for (watched, at) in &mined {
                         changes.extend(confirm_mined_release(
                             repos,
+                            &codecs,
                             watched.tx_id,
                             watched.account,
                             &watched.send,
