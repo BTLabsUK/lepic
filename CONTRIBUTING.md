@@ -12,9 +12,10 @@ LEPIC takes contributions under the rules set out on this page.
 
 ## Making a change
 
-- One task per branch: `<type>/<task-id>-<slug>`, for example `feat/s-02-legacy-v3-codec`.
-- Commits follow Conventional Commits with a `Refs: <task-id>` footer and a DCO sign-off
-  (`git commit -s`), as described under "Commit messages" below.
+- One change per branch: `<type>/<slug>`, for example `feat/legacy-v3-codec`. A branch named after
+  a task id (`feat/s-02-legacy-v3-codec`) needs a `Refs: S-02` footer on its commits.
+- Commits follow Conventional Commits with a DCO sign-off (`git commit -s`), as described under
+  "Commit messages" below.
 - Every commit builds and passes `cargo xtask check`. Run it from a git checkout: its repository
   gates and their tests list files through `git`, so they fail in an unpacked source archive. It
   also reads the `conformance/` and `fuzz/` lockfiles, which needs their dependencies fetched once,
@@ -31,7 +32,7 @@ LEPIC takes contributions under the rules set out on this page.
 
 <body: what changed and why, wrapped at 72 columns>
 
-Refs: <task-id>
+Refs: <task-id, when the branch names one>
 BREAKING CHANGE: <what breaks and how to migrate>
 Signed-off-by: Full Name <email>
 ```
