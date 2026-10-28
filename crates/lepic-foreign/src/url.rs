@@ -54,7 +54,7 @@ impl ForeignUrl {
             return Err(UrlError::NoHost);
         }
         let host = host.to_ascii_lowercase();
-        if host.ends_with(".onion") {
+        if host.trim_end_matches('.').ends_with(".onion") {
             return Err(UrlError::OnionNeedsTor);
         }
         if scheme == Scheme::Http && plain == PlainHttp::LoopbackOnly && !is_loopback(&host) {
@@ -218,6 +218,14 @@ mod tests {
         assert_eq!(err("http://[::1]x"), UrlError::InvalidPort);
         assert_eq!(
             err("http://abcdefghijklmnop.onion"),
+            UrlError::OnionNeedsTor
+        );
+        assert_eq!(
+            err("https://abcdefghijklmnop.onion."),
+            UrlError::OnionNeedsTor
+        );
+        assert_eq!(
+            err("https://ABCDEFGHIJKLMNOP.Onion../"),
             UrlError::OnionNeedsTor
         );
     }
