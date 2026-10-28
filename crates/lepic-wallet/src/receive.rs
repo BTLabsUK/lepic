@@ -1,3 +1,8 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/foreign.rs,
+// libwallet/src/internal/tx.rs, libwallet/src/internal/selection.rs, libwallet/src/slate.rs
+// (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Receive: the receiver's step of the standard flow, from the sender's S1 to the S2 reply, as
 //! `epic-wallet`'s `receive_tx` does it (`docs/compat/legacy-slates.md`, "Lifecycle").
 

@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/internal/tx.rs, libwallet/src/internal/updater.rs
+// (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Cancelling a transaction that is not confirmed, as `epic-wallet`'s `cancel_tx` does: its
 //! unconfirmed outputs are dropped, the inputs it locked become spendable again, and its private
 //! context and pending deliveries are dropped with it. A posted transaction is not cancelled, nor

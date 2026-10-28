@@ -1,3 +1,9 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/owner.rs,
+// libwallet/src/api_impl/foreign.rs, libwallet/src/internal/tx.rs,
+// libwallet/src/internal/selection.rs, libwallet/src/slate.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! Invoice flow: the receiver asks to be paid. The issuer creates I1, the payer adds its
 //! inputs and signs (I2), and the issuer finalizes (I3) and posts, as `epic-wallet` `v4.0.2`
 //! does over the file method (`docs/compat/legacy-slates.md`, "Lifecycle"). Upstream has no

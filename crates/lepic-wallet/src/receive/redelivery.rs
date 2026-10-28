@@ -1,3 +1,8 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/foreign.rs,
+// libwallet/src/internal/tx.rs, libwallet/src/internal/selection.rs, libwallet/src/slate.rs
+// (Apache-2.0); see NOTICE and upstream.toml.
+
 //! A repeated S1: the relay hands a message out again when the app was suspended after storing
 //! S2 and before acknowledging, and a user receives the same file again when the reply file was
 //! lost. The receiver answers it with the S2 it stored, never a new one, so each inbound slate
