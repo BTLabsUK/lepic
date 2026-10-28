@@ -92,6 +92,10 @@ pub struct TransactionDetails {
     /// wallet added to the slate stage it built, as the store holds them; for a spend by
     /// another wallet, the outputs it spent. Empty for any other.
     pub spent_commits: Vec<Commitment>,
+    /// For a spend by another wallet ([`TxOrigin::OtherWallet`], outgoing), whether it rests on
+    /// the node's answers alone: no completed scan has covered its blocks yet. Show it as
+    /// unverified. `false` for every other transaction.
+    pub unverified: bool,
     /// For a payment received over Epicbox that still waits for its sender, when the sender
     /// reported that it posted the transaction, while that report is younger than
     /// [`POSTED_REPORT_WINDOW`]. Advisory: the sender says so, and only a refresh that finds
@@ -275,7 +279,10 @@ fn details(
     let output_commits = output_commits(repos, codecs, &transaction, flow)?;
     let spent_commits = spent_commits(repos, codecs, &transaction, flow)?;
     let sender_reported_posted_at = sender_report(repos, &transaction, now)?;
+    let unverified =
+        origin == TxOrigin::OtherWallet && crate::other_wallet::is_unverified(repos, tx_id)?;
     Ok(TransactionDetails {
+        unverified,
         sender_reported_posted_at,
         output_commits,
         spent_commits,

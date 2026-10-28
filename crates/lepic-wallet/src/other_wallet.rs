@@ -4,7 +4,8 @@
 //! transaction of its own spending them, records them as one outgoing entry per account and
 //! refresh, "sent from another wallet": its debit is their value, its fee is unknown, and a
 //! scan over the blocks where the spend can lie credits it with the outputs it finds there,
-//! taken to be the spend's change.
+//! taken to be the spend's change. Until that scan completes the entry is unverified: only the
+//! node's answers back it.
 //!
 //! Received: an update scan, which covers recent blocks only, stores an output it finds with no
 //! record here as an incoming entry of its own, "received by another wallet"; a restore and a
@@ -43,6 +44,14 @@ fn open_entries(repos: &dyn Repositories) -> Result<Vec<(TxId, OtherWalletSpend)
     let mut spends = repos.other_wallet_spends()?;
     spends.retain(|(_, spend)| spend.open);
     Ok(spends)
+}
+
+/// Whether the entry is another wallet's spend that no completed scan has covered yet, so only
+/// the node's answers back it.
+pub(crate) fn is_unverified(repos: &dyn Repositories, tx_id: TxId) -> Result<bool, StoreError> {
+    Ok(repos
+        .other_wallet_spend(tx_id)?
+        .is_some_and(|spend| spend.open))
 }
 
 /// Whether the entry records another wallet's spend or receive.

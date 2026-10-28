@@ -306,6 +306,10 @@ pub struct TransactionDetails {
     /// hour old. Advisory: show it as the sender's report, never as received; the payment
     /// confirms when a refresh finds the kernel. `None` for every other transaction.
     pub sender_reported_posted_at_ms: Option<i64>,
+    /// For origin `OtherWallet` outgoing: no completed scan has covered its blocks yet, so the
+    /// node's answers are its only evidence. Show it as unverified until a scan confirms it.
+    /// `false` for every other transaction.
+    pub unverified: bool,
 }
 
 /// Which scan stored an entry for an output it found with no record.

@@ -413,6 +413,19 @@ fn an_output_a_node_hid_comes_back_with_the_next_honest_answer() {
             .len()
     };
     assert_eq!(entries(&liar), 2);
+    let spend = liar
+        .store
+        .read(|repos| repos.transactions(ACCOUNT))
+        .unwrap()
+        .into_iter()
+        .map(|stored| stored.id)
+        .find(|id| *id != tx)
+        .unwrap();
+    let details = liar
+        .harness
+        .block_on(liar.wallet.transaction_details(spend))
+        .unwrap();
+    assert!(details.unverified, "only the node's answers back it");
 
     liar.lie(|lies| lies.hidden.clear());
     liar.set_tip(TIP + 10);

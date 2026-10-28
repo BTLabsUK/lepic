@@ -774,6 +774,7 @@ fn a_spend_by_the_other_install_shows_as_sent_from_another_wallet_with_its_chang
         "the change goes to the spend"
     );
     assert_eq!(spent.spent_commits.len(), 1);
+    assert!(!spent.unverified, "the update scan covered its blocks");
     assert!(transaction_events(&mut events).contains(&spent.transaction.id));
     // The change is the spend's, not a receive of its own.
     let incoming = twin

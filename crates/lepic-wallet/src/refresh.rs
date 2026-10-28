@@ -197,6 +197,8 @@ where
     /// wallet on the same recovery phrase: they become one confirmed outgoing entry per account
     /// of origin `OtherWallet` ([`crate::legacy_history::TxOrigin`]), raised as
     /// [`Event::Transaction`]; [`Wallet::refresh_scan`] after the refresh finds their change.
+    /// Until a completed scan covers its blocks, such an entry rests on the node's answers
+    /// alone and its details say it is unverified.
     ///
     /// The tip must be plausible: below the bounds [`crate::chain`] describes. Output and
     /// kernel heights must not be above the tip. An output or confirming kernel above it has

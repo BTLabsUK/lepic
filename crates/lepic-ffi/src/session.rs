@@ -1664,6 +1664,7 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
         sender_reported_posted_at_ms: details
             .sender_reported_posted_at
             .map(Timestamp::as_millisecond),
+        unverified: details.unverified,
     }
 }
 
@@ -2313,6 +2314,7 @@ mod tests {
             output_commits: vec![output],
             spent_commits: vec![output],
             sender_reported_posted_at: Some(confirmed),
+            unverified: true,
         };
 
         assert_eq!(
@@ -2355,6 +2357,7 @@ mod tests {
                 output_commits: vec![output.to_hex()],
                 spent_commits: vec![output.to_hex()],
                 sender_reported_posted_at_ms: Some(1_790_000_600_456),
+                unverified: true,
             }
         );
         let hex = excess.to_hex();

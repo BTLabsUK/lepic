@@ -11978,6 +11978,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_outputCommits = <Vec<String>>::sse_decode(deserializer);
         let mut var_spentCommits = <Vec<String>>::sse_decode(deserializer);
         let mut var_senderReportedPostedAtMs = <Option<i64>>::sse_decode(deserializer);
+        let mut var_unverified = <bool>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
             direction: var_direction,
@@ -12004,6 +12005,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             output_commits: var_outputCommits,
             spent_commits: var_spentCommits,
             sender_reported_posted_at_ms: var_senderReportedPostedAtMs,
+            unverified: var_unverified,
         };
     }
 }
@@ -15181,6 +15183,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
             self.sender_reported_posted_at_ms
                 .into_into_dart()
                 .into_dart(),
+            self.unverified.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -17446,6 +17449,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <Vec<String>>::sse_encode(self.output_commits, serializer);
         <Vec<String>>::sse_encode(self.spent_commits, serializer);
         <Option<i64>>::sse_encode(self.sender_reported_posted_at_ms, serializer);
+        <bool>::sse_encode(self.unverified, serializer);
     }
 }
 
