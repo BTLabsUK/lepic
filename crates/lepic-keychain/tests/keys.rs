@@ -119,7 +119,6 @@ fn keys_do_not_depend_on_the_network() {
         mainnet.commit(5, &id, SwitchCommitment::Regular),
         floonet.commit(5, &id, SwitchCommitment::Regular)
     );
-    assert_ne!(mainnet.version(), floonet.version());
 }
 
 #[test]

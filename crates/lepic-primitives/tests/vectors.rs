@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, RangeProof, SecretKey, Signature};
-use lepic_primitives::amount::{EPIC_BASE, Fee, Height, MICRO_EPIC, MILLI_EPIC};
+use lepic_primitives::amount::{EPIC_BASE, Fee, Height, MILLI_EPIC};
 use lepic_primitives::committed::KernelSumError;
 use lepic_primitives::crypto_ser::BlindingFactor;
 use lepic_primitives::fee::BodyCounts;
@@ -547,7 +547,6 @@ fn chain_parameters_match_upstream() {
         );
         assert_eq!(EPIC_BASE, decimal(expected, "epic_base"));
         assert_eq!(MILLI_EPIC, decimal(expected, "milli_epic"));
-        assert_eq!(MICRO_EPIC, decimal(expected, "micro_epic"));
         assert_eq!(
             params.default_base_fee(),
             Fee::new(decimal(expected, "default_base_fee"))

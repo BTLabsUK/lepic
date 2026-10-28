@@ -6,7 +6,7 @@ use lepic_crypto::{Commitment, CryptoError, PublicKey, SecretKey};
 use lepic_primitives::params::Network;
 use thiserror::Error;
 
-use crate::bip32::{Bip32Error, ExtKeyVersion, ExtendedPrivKey};
+use crate::bip32::{Bip32Error, ExtendedPrivKey};
 use crate::identifier::Identifier;
 use crate::mnemonic::{MnemonicError, Seed};
 
@@ -81,10 +81,6 @@ impl Keychain {
         self.network
     }
 
-    pub fn version(&self) -> ExtKeyVersion {
-        ExtKeyVersion::of(self.network)
-    }
-
     pub fn master(&self) -> &ExtendedPrivKey {
         &self.master
     }
@@ -132,7 +128,38 @@ impl fmt::Debug for Keychain {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::*;
+    use crate::bip32::ExtKeyVersion;
+
+    #[test]
+    fn extended_key_versions_match_the_derivation_vectors() {
+        for seed_name in ["seed16", "seed32"] {
+            for network in [Network::Mainnet, Network::Floonet] {
+                let label = if network == Network::Mainnet {
+                    "mainnet"
+                } else {
+                    "floonet"
+                };
+                let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../testdata/vectors/keys")
+                    .join(format!("derivation_{seed_name}_{label}.json"));
+                let vector: Value =
+                    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+                let master = &vector["expected"]["master"];
+                let version = ExtKeyVersion::of(network);
+                let hex = |bytes: [u8; 4]| lepic_crypto::hex::encode(&bytes);
+                assert_eq!(master["ext_priv_version"], hex(version.private));
+                assert_eq!(master["ext_pub_version"], hex(version.public));
+            }
+        }
+    }
+
+    #[test]
+    fn mainnet_and_floonet_use_different_versions() {
+        assert_ne!(ExtKeyVersion::MAINNET, ExtKeyVersion::FLOONET);
+    }
 
     #[test]
     fn switch_type_codes_round_trip() {

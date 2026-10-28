@@ -1,6 +1,5 @@
 use lepic_primitives::hash::{
     Hash, HashError, HashWriter, Hashed, MAX_KEY_LEN, ZERO_HASH, blake2b_256, blake2b_256_keyed,
-    verify_sorted_and_unique,
 };
 use lepic_primitives::ser::{
     ProtocolVersion, SerError, SerializationMode, Writeable, Writer, deserialize, ser_vec,
@@ -147,23 +146,6 @@ fn rejects_truncated_and_trailing_hash_encoding() {
         deserialize::<Hash>(&long, V2),
         Err(SerError::TrailingBytes { remaining: 1 })
     );
-}
-
-#[test]
-fn verify_sorted_and_unique_checks_hash_order() {
-    let mut items: Vec<u64> = (0..8).collect();
-    items.sort_by_key(Hashed::hash);
-    assert_eq!(verify_sorted_and_unique(&items), Ok(()));
-    assert_eq!(verify_sorted_and_unique::<u64>(&[]), Ok(()));
-
-    let duplicate = [items[0], items[0]];
-    assert_eq!(
-        verify_sorted_and_unique(&duplicate),
-        Err(SerError::Duplicate)
-    );
-
-    items.reverse();
-    assert_eq!(verify_sorted_and_unique(&items), Err(SerError::NotSorted));
 }
 
 proptest! {

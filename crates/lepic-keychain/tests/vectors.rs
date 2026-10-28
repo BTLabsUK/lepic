@@ -201,14 +201,6 @@ fn derives_master_and_child_keys_as_upstream() {
                 text(&master["public_key"]),
                 "{name}"
             );
-            assert_eq!(
-                hex(&keychain.version().private),
-                text(&master["ext_priv_version"])
-            );
-            assert_eq!(
-                hex(&keychain.version().public),
-                text(&master["ext_pub_version"])
-            );
 
             let inputs = cases(&vector["inputs"]["paths"]);
             let keys = cases(&vector["expected"]["keys"]);

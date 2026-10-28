@@ -178,19 +178,3 @@ pub fn blake2b_256_keyed(key: &[u8], data: &[u8]) -> Result<Hash, HashError> {
     state.update(data);
     Ok(Hash(state.finalize_fixed().into()))
 }
-
-/// Checks that `items` are in strictly increasing hash order, as the node requires of inputs,
-/// outputs and kernels.
-pub fn verify_sorted_and_unique<T: Hashed>(items: &[T]) -> Result<(), SerError> {
-    let hashes: Vec<Hash> = items.iter().map(Hashed::hash).collect();
-    for pair in hashes.windows(2) {
-        if let [previous, next] = pair {
-            match previous.cmp(next) {
-                std::cmp::Ordering::Less => {}
-                std::cmp::Ordering::Equal => return Err(SerError::Duplicate),
-                std::cmp::Ordering::Greater => return Err(SerError::NotSorted),
-            }
-        }
-    }
-    Ok(())
-}

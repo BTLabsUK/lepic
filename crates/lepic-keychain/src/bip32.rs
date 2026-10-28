@@ -5,6 +5,7 @@ use std::fmt;
 
 use hmac::{Hmac, KeyInit, Mac};
 use lepic_crypto::{CryptoError, PublicKey, SecretKey};
+#[cfg(test)]
 use lepic_primitives::params::Network;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256, Sha512};
@@ -78,25 +79,28 @@ impl From<ChildNumber> for u32 {
 }
 
 /// Extended-key version bytes. They are the only thing in a keychain that depends on the network.
+/// LEPIC never serialises extended keys, so only the vector tests read them.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExtKeyVersion {
-    pub private: [u8; 4],
-    pub public: [u8; 4],
+pub(crate) struct ExtKeyVersion {
+    pub(crate) private: [u8; 4],
+    pub(crate) public: [u8; 4],
 }
 
+#[cfg(test)]
 impl ExtKeyVersion {
-    pub const MAINNET: Self = Self {
+    pub(crate) const MAINNET: Self = Self {
         private: [0x03, 0x3C, 0x04, 0xA4],
         public: [0x03, 0x3C, 0x08, 0xDF],
     };
     /// Used by floonet and every other non-mainnet chain.
-    pub const FLOONET: Self = Self {
+    pub(crate) const FLOONET: Self = Self {
         private: [0x03, 0x27, 0x3A, 0x10],
         public: [0x03, 0x27, 0x3E, 0x4B],
     };
 
     /// `epic-wallet` uses the mainnet bytes on mainnet and the floonet ones elsewhere.
-    pub const fn of(network: Network) -> Self {
+    pub(crate) const fn of(network: Network) -> Self {
         match network {
             Network::Mainnet => Self::MAINNET,
             Network::Floonet => Self::FLOONET,

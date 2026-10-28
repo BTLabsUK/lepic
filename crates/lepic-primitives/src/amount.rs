@@ -10,9 +10,6 @@ pub const EPIC_BASE: u64 = 100_000_000;
 /// Base units in one thousandth of an EPIC, the default base fee per unit of weight.
 pub const MILLI_EPIC: u64 = EPIC_BASE / 1_000;
 
-/// Base units in one millionth of an EPIC.
-pub const MICRO_EPIC: u64 = MILLI_EPIC / 1_000;
-
 /// An arithmetic result that does not fit the type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ArithmeticError {
