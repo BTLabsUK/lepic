@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Participant messages in the transaction details: each party sees the messages of the latest
 //! stored stage whose signatures verify, a sender's message is cut on a character boundary
 //! before it is signed, and a message that does not verify is left out.

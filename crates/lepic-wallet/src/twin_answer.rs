@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Answers over Epicbox for a slate this store does not know (ADR 0016, amendment of 26.10.8).
 //!
 //! Two installs on one recovery phrase share the payments address, and the relay hands each

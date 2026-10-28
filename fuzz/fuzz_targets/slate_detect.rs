@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Codec detection over both legacy codecs, as a transport that does not know the format runs it.
 
 #![no_main]

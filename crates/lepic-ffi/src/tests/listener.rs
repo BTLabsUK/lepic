@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Epicbox listener's stream beside drains: a drain's connection never reads as the
 //! listener's, and a payments drain stays off the relay while the listener runs.
 

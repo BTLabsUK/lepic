@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Starts the reference node on a local test-mode (usernet) chain: no peers, no seeds, RandomX
 # blocks only so the interop miner can mine every block through the stratum server, and coinbase
 # rewards paid to the funder wallet's foreign API. The Dandelion settings stay at their defaults:

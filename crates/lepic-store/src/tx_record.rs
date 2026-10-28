@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the wallet keeps about a transaction besides its log entry: heights and flags of its
 //! limits, the watch on a transaction that ended unconfirmed, the spend another wallet on the
 //! same recovery phrase made, and how a scan found it. Every record belongs to one entry and is

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Settings, resolved once per command: a flag, then its `LEPIC_*` variable, then the config
 //! file, then the default.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Hex text to bytes and back, shared by every core crate so they all apply the same rules.
 //!
 //! Decoding accepts upper and lower case digits and no prefix. Lengths in [`HexError`] count hex

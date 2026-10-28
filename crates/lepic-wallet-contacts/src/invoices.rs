@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Invoices, withdrawals and notices between paired contacts through their mailboxes (RFC 0002
 //! sections 11 and 12): a contact's invoice parks only when the contact is verified and allowed
 //! to send invoices, payments and answers go through the outbox, and notices travel sealed.

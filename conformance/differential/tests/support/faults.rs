@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Stopping LEPIC at a persistence point. Every store write of the engine is one persistence
 //! point: a `write` either leaves everything or nothing behind. A [`FaultyStore`] armed with a
 //! [`CrashPoint`] lets the first writes commit and then behaves as a process that stopped: the

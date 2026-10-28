@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wallet-local limit of a send: a height, kept by this wallet only and not in the slate,
 //! past which the wallet neither finalizes nor posts the send and expires it if unanswered. It
 //! works on every method, also those whose slate shape cannot carry a TTL.

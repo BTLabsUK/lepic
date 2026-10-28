@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Creates an epic-wallet v4.1.0 wallet on the usernet chain on first start, points it at the
 # local node and relay, then either serves the foreign API (the funder, which the node pays
 # coinbase rewards to) or idles so the scenarios can drive it with `ew`.

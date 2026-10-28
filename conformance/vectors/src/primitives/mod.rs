@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Primitives and aggsig areas: binary layouts, hashes, kernel signature messages, weights, fees,
 //! chain parameters, transaction validation outcomes and the two-party signature flow, computed by
 //! the node code with fixed keys and nonces so every file regenerates byte for byte.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pure crates do no I/O, read no clock and create no randomness of their own
 //! (`docs/architecture.md`). deps-check keeps I/O crates out of their manifests; this gate keeps
 //! the standard library's I/O, clock and process access out of their sources.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! One run of a differential case: an upstream miner and an upstream peer, plus a subject that
 //! is either a LEPIC wallet or, in the reference run, an upstream wallet from the same mnemonic,
 //! all on one in-process test chain. A run records what every wallet reports at each

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Smoke area: proves the harness end to end with one deterministic case, the hash of a plain
 //! kernel serialized by the reference node code.
 

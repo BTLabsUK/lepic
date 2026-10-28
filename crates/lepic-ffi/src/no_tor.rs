@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the build without the `tor` feature has in place of `lepic-tor` (ADR 0026): a way
 //! through tor that is never on, so node requests and the relay connection always go directly
 //! and an onion host fails at once.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The lepic command-line wallet.
 
 use std::io::{self, IsTerminal as _};

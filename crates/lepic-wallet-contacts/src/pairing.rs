@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The pairing flows (RFC 0002 7.1 to 7.6): invites, replies, confirms, pairing in person and
 //! the SAS check.
 

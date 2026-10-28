@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A relay's onion discovery answer: relay-controlled HTTP read through tor.
 
 #![no_main]

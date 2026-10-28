@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! One-off drains of mailboxes that are not the wallet's address, and posts from their keys,
 //! against the mock relay.
 

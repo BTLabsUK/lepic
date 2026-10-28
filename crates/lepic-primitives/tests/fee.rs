@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
 use lepic_primitives::fee::BodyCounts;
 use lepic_primitives::ser::{ProtocolVersion, deserialize, ser_vec};

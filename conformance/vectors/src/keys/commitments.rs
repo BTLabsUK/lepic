@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pedersen commitments, switch commitments and blinding-factor sums: raw over given blinding
 //! factors, and through the node keychain at several paths and amounts.
 

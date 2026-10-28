@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Binary reads of every transaction part, at both protocol versions.
 //!
 //! Input: one byte choosing the type (see `TYPES`), one byte choosing the protocol version (odd

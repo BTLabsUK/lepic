@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `ur:epic-slate`: slate text as a sequence of QR codes, for two phones side by side
 //! (ADR 0025, `docs/compat/ur-epic-slate.md`).
 //!

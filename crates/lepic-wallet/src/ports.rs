@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The ports the engine runs on. The host supplies every one of them; the engine owns no
 //! runtime, clock, randomness or storage of its own (ADR 0011).
 

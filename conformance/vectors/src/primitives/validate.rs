@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Whole transactions: their layouts and hashes, and the outcome of the node's
 //! `Transaction::validate(Weighting::AsTransaction)`. Every invalid case breaks exactly one rule
 //! and is otherwise a valid transaction, so the rule that fails does not depend on the order in

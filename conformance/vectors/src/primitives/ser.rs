@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Binary serialization of the building blocks: integers, length-prefixed bytes, tuples and the
 //! protocol version, plus how the reader treats truncated input.
 

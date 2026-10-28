@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Schema versions and forward-only migrations.
 //!
 //! `MIGRATIONS[n]` takes a database from version `n` to version `n + 1`. A released migration is

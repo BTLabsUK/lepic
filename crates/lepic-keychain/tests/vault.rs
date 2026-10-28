@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Tests may unwrap, index and use plain arithmetic (docs/rules.md); helpers outside `#[test]`
 // functions are not covered by clippy's in-tests settings.
 #![allow(

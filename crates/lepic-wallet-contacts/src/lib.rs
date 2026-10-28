@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Contact pairing (RFC 0002 sections 7, 8 and 10): invites, replies and confirms through
 //! throwaway mailboxes on a home relay, in-person pairing by scanning cards, the SAS check, and
 //! the contact mailboxes each side collects.

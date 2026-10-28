@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Epicbox inbox: two LEPIC wallets transact through the mock relay; redeliveries after a
 //! crash produce no second S2; messages that cannot be used are recorded and acknowledged; a
 //! transient failure leaves the message on the relay.

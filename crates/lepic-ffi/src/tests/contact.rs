@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Contact pairing through the binding, between wallets on the mock relay: by link, by hand,
 //! in person and by pairing words, the words check, the settings of a contact, sealed slates,
 //! invoices between contacts, the outbox and the backup.

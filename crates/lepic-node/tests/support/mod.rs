@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A local HTTP/1.1 server that answers each request with whatever a test scripts, including
 //! answers no well-behaved node would give.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Direct transactions over HTTP (ADR 0017): sends answered in the same exchange, and the
 //! listener that answers payments sent to this wallet.
 

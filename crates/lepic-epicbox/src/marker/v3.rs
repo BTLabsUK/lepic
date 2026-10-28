@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The V3 JSON slate with the LEPIC marker, for invoice stages between LEPIC wallets over
 //! Epicbox (`docs/compat/epicbox.md`).
 //!

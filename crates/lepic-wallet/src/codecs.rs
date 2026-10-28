@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The codec registries legacy slates are read and written with: a V3 codec and a V2 codec,
 //! plain or carrying the LEPIC marker.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Builds inputs, outputs, kernels and whole transactions from fixed blinding factors and nonces,
 //! so every commitment, range proof and signature regenerates byte for byte.
 

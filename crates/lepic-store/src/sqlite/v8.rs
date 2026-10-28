@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Moves the per-transaction settings of schema version 7 into the tables version 8 adds.
 //!
 //! The decoders here read the text formats version 7 stored and are frozen with it. A setting

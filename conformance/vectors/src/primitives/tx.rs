@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Binary layouts of the crypto types and of every transaction part: output and kernel features,
 //! inputs, outputs and kernels, at protocol versions 1 and 2, with their hashes and kernel
 //! signature messages.

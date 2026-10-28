@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Bulletproofs: raw creation with given nonces, and outputs built through the node's
 //! `ProofBuilder` and `LegacyProofBuilder` with their rewinds.
 

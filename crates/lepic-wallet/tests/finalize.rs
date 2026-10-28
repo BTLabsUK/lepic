@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Finalizing: a LEPIC sender finalizes the S2 a LEPIC receiver returned, stores S3, drops its
 //! private context and posts the transaction; a reply that does not answer the S1, or whose
 //! signatures do not verify, is refused with nothing stored; finalizing and posting again are

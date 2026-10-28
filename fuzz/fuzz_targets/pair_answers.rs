@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The bodies of the pairing messages that answer one another (RFC 0002 7.3 and 7.8): a confirm
 //! or refusal, a key check and its answers, and the proofs a found or restored answer carries,
 //! checked against fixed cards. Every body that decodes encodes back to the same bytes.

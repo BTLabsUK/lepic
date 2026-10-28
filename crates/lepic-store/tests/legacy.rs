@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reads databases built exactly as epic-wallet writes them.
 
 // Test code may unwrap, index and use plain arithmetic (docs/rules.md); clippy's test

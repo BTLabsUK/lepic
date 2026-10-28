@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the G-02 golden vectors in `testdata/vectors/aggsig`. Kernel message hashing and kernel
 //! serialization in those files belong to `lepic-primitives`; here the message is an input.
 

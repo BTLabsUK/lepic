@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A scripted chain that a mock node answers from.
 
 use std::collections::BTreeMap;

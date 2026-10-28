@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Two upstream wallets on the upstream in-process test chain, wired the way the epic-wallet
 //! controller tests wire them: a `WalletProxy` thread owns the chain and answers each wallet's
 //! `LocalWalletClient`.

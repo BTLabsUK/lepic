@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! File import: the bytes of a slate file through the file method's format policy, which picks
 //! the codec from the header version as upstream does.
 

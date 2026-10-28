@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Two in-memory transports wired to each other, for engine tests. What one delivers, the
 //! other receives, with the relay's acknowledgement rules: an envelope handed out but not
 //! acknowledged comes back after [`LoopbackTransport::redeliver_unacknowledged`].

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Finalize against the G-03 slate vectors: the sender's S1, rebuilt from what its method
 //! delivered with the values upstream's test-RNG mode fixes, and the S2 the receiver returned
 //! give the final transaction upstream mined and the S3 it wrote, in every encoding.

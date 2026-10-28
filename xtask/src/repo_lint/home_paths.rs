@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Tracked text names no home directory of a real machine: a path such as `/home/<name>/...` or
 //! `C:\Users\<name>\...` ties the repository to one developer's checkout and leaks the account
 //! name. Examples use one of the placeholder names below.

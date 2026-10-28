@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The signed text of a push registration (the push service's PROTOCOL.md, "The signed text").
 //!
 //! The wallet proves to a push service that it owns an Epicbox address by signing a text of one

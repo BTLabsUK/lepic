@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! SQLite wallet storage behind repository traits.
 //!
 //! The engine sees only [`WalletStore`] and the repository traits. [`SqliteStore`] is the product

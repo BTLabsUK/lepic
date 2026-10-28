@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the G-01 golden vectors in `testdata/vectors/keys` that exercise this crate alone:
 //! commitments, switch commitments, blinding and commitment sums, and bulletproofs. Key derivation
 //! and proof builders are checked by `lepic-keychain`.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Inbox logs in their own binary, for the reason `lifecycle_logs.rs` gives.
 
 // Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not

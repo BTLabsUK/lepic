@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Restore and refresh cases on one upstream test chain built in a fixed order.
 //!
 //! Two upstream wallets share the chain: a miner, which takes most block rewards and trades with

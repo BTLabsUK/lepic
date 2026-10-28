@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # The steps run.sh runs, in order, against the host's lepic. Sourced by run.sh after ../lib.sh,
 # whose `lepic` helper drives a container; the one here replaces it with the binary under test.
 #

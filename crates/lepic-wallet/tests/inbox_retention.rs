@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Epicbox inbox forgets relay message ids the relay can no longer deliver, when a drain or
 //! listen starts and as messages settle during a listen.
 

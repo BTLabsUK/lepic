@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A restore from a block height on a real runtime against a public floonet node: the scan from
 //! that height leaves the restore scan pending, the scan the binding ran without a start before
 //! (from shortly before the last scan) does not end it, and a scan without a start now begins at

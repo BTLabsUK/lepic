@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `posted` notice for ordinary sends over Epicbox on the mock relay (ADR 0016, amendment
 //! W-31): S1 and S2 between LEPIC wallets carry the marker, the sender tells the receiver once
 //! it pushed the transaction, and the receiver keeps that report only from the payment's real

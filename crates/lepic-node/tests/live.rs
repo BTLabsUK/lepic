@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Opt-in live reads against a public floonet node (docs/rules.md), which also records the
 //! fixtures under `testdata/node/`.
 //!

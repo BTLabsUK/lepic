@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Slates area: the slate JSON upstream writes at every stage of the standard and invoice flows,
 //! the exact bytes of the file method and the Epicbox plaintext, and upstream's parse outcome for
 //! malformed slates. Every case runs two upstream wallets on a fresh in-process test chain in

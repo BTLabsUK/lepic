@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sealed slates in files and pastes (RFC 0002 sections 5 and 9): sending to a paired contact
 //! sealed and signed, opening what arrives by hint, answering on the same channel, the plain
 //! fallback, and anonymous answers to the reply key in the LEPIC marker.

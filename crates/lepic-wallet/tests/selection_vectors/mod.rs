@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The G-05 selection vectors (`testdata/vectors/engine/selection_*.json`): LEPIC selection over
 //! the recorded UTXO set chooses the inputs, fee and change upstream chose, and the account's
 //! next output keys are the change keys upstream derived.

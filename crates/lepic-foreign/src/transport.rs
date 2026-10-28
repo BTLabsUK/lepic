@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The HTTP method as a transport (ADR 0003, ADR 0017): its format policy and the client as its
 //! outbound side. It has no inbound side: payments to this wallet reach the listener.
 //!

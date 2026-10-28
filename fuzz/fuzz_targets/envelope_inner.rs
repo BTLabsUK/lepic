@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The inner fields of an opened envelope: the TLV fields, the card in tag 07, the sender key and
 //! the signature. `seal_open` reaches them only through a valid AEAD tag, so this target feeds
 //! them to the decoder directly. The first byte picks the network and whether the target signs

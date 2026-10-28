@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What commands print. With `--output json` every command prints exactly one JSON document on
 //! stdout, its fields named as below; amounts are strings of EPIC with eight decimals, so they
 //! survive parsers that read numbers as doubles. Logs go to stderr either way.

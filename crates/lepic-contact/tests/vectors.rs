@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the RFC 0002 vectors in `testdata/vectors/pairing`, written by the independent pairing
 //! kit (RFC 0002 section 14): the HPKE suite against RFC 9180 A.2.1, envelopes of every type sealed
 //! with a fixed ephemeral key, cards, invites, replies, confirms and refusals, the SAS, pairing

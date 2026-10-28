@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Epicbox address text on both networks.
 
 #![no_main]

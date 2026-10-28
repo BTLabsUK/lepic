@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the wallet keeps of transactions imported from another wallet's history, beyond the
 //! log entry each one is stored as.
 //!

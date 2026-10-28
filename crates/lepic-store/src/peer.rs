@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What each peer is proven to support, keyed by its Epicbox public key alone, because the relay
 //! authenticates the key of a message and never its domain.
 

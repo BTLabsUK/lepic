@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Tor on desktop and Android (ADR 0018): the wallet's onion service and sending to onion
 //! addresses, over a `tor` binary the host bundles and runs as a child process per open wallet.
 

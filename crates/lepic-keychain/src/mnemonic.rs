@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2019 The Grin Developers
 // Ported from EpicCash/epic keychain/src/mnemonic.rs (Apache-2.0); see NOTICE and upstream.toml.
 

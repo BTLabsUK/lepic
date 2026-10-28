@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Hostile callers of the listener, speaking HTTP and JSON-RPC the way a client never does:
 //! batches and pipelines that try to carry more payments than the budget allows, framing that
 //! disagrees with itself, declared sizes far past the limit, header floods, deep JSON and paths

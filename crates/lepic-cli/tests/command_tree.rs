@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The command tree: every option keeps one meaning, every help page renders, and no option
 //! takes a secret.
 

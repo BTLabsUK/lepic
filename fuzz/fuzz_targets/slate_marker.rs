@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The LEPIC marker probes, which read whole relay-delivered slate JSON before any codec does.
 
 #![no_main]

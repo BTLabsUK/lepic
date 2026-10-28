@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Runs every Epicbox and file interop scenario between lepic and epic-wallet v4.0.2 on a fresh
 # local stack and prints a pass or fail table. Exits 0 only when every scenario passed.
 #

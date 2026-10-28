@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The V3 JSON codec beyond the vector replay: each decode rejection rule of
 //! `docs/compat/legacy-slates.md`, height-locked kernels, round-trip properties and one snapshot
 //! per stage.

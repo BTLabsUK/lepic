@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Tracing subscribers and redaction helpers for the CLI and mobile hosts.
 //!
 //! Library crates only emit `tracing` spans and events. The binaries install

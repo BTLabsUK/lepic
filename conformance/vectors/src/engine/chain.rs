@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The upstream in-process test chain: an `AutomatedTesting` chain in a scratch directory, grown
 //! with upstream's own block helper, plus a fork builder for reorganisation scenarios.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The secp256k1-zkp wrapper is the only git dependency, and it must resolve to the commit
 //! ADR 0009 records. cargo-deny allows the repository but cannot pin the commit.
 

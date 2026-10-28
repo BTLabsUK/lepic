@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The desktop secret storage: the `lepic-keychain` vault in a file in the data directory.
 
 use std::fs::{self, File, OpenOptions};

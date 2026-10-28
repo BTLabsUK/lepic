@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What another wallet on the same recovery phrase did, as the chain shows it.
 //!
 //! Spent: a refresh that finds outputs this wallet held unspent gone from the chain, with no

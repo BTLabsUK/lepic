@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The context is created once per process, so this binary holds the single test that randomizes
 // it first. Helpers outside `#[test]` functions are not covered by clippy's allow-unwrap-in-tests
 // setting, and tests may unwrap, index and use plain arithmetic (docs/rules.md).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The upstream in-process test chain behind a loopback HTTP server that speaks the node's foreign
 //! JSON-RPC API. Both wallets reach the chain through it: upstream with its `HTTPNodeClient`,
 //! LEPIC with its `HttpTransport`. Reads go to the node's own `epic_api::Foreign` handlers.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Changing the password of a password wallet: the vault in the app's store is re-encrypted
 //! under the new password without ever leaving the store without a vault that opens. A reset
 //! after a forgotten password installs a new vault holding the seed the same way.

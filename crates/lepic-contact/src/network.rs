@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use crate::error::{DecodeError, Malformed};
 
 /// The chain a format belongs to; its byte keeps mainnet and floonet data apart.

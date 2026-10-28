@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Epicbox address keys and payment-proof keys, derived by the wallet's
 //! `address::address_from_derivation_path`, and the default Epicbox address string on each network.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Several identities of one wallet against the mock relay, and the prefilter that drops
 //! messages from unknown senders before they are opened.
 

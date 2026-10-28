@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Scans through the binding: the result the last event carries, the `delete_unconfirmed`
 //! repair, cancelling a scan that waits on the node, and the start of a scan while a restore
 //! scan is pending.

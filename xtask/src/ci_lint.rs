@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A tag or branch can be moved to different code after review; a full commit SHA cannot.
 //! This keeps every external action and reusable workflow under `.github` pinned to one, and
 //! keeps Dependabot pointed only at directories that exist, since it fails on the others.

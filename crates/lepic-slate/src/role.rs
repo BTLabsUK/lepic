@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The two parties of a slate, named by the direction funds move rather than by position.
 
 /// A party to a two-party transaction. The sender pays and the receiver is paid, whichever of

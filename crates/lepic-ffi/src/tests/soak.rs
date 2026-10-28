@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Soak of the desktop app's Epicbox listener with its node polls, refreshes and invoice drains,
 //! on a real runtime against public floonet servers. Ignored and opt-in (`docs/rules.md`):
 //!

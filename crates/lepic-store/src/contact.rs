@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Paired contacts, their mailboxes, pairings in progress and the outbox of sealed messages
 //! (RFC 0002 sections 7.6, 10.1, 10.3 and 12.4).
 //!

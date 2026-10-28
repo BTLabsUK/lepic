@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Mines the interop stack's local test-mode chain through the reference node's stratum server.
 //!
 //! The node's built-in test miner solves only Cuckatoo, which the node's proof-of-work policy

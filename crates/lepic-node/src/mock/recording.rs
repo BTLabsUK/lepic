@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Recorded node sessions in the exchange format of `testdata/vectors/README.md`, served as a
 //! fixed node state.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Valid crypto values and slates for the model tests. None of them verify as a transaction;
 //! the model checks structure, not signatures.
 

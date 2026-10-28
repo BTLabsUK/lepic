@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The transports a wallet offers, looked up by id. Adding a method is one module plus one
 //! [`TransportRegistry::register`] call.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the engine tells the host while it runs. Events go to every subscriber of
 //! [`crate::Wallet::subscribe`]; a subscriber that falls more than [`EVENT_CAPACITY`] events
 //! behind misses the oldest ones and is told how many it missed.

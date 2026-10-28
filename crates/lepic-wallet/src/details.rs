@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the wallet knows about one stored transaction beyond its log entry.
 
 use jiff::Timestamp;

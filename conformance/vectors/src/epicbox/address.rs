@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Address cases: the text a user or relay supplies, the network it is read on, and what upstream
 //! makes of it. Accepted cases record every field and both printed forms.
 

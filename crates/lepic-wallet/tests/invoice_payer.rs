@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The payer's side of an invoice once it has answered with an I2: the issuer can still post
 //! the payment, so a cancel asks the node first and keeps the payment watched. And the payer
 //! refuses an invoice whose kernel the chain could not take yet.

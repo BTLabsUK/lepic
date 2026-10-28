@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `Transaction::decode`, the read a node runs on a pushed transaction, with its consensus checks.
 //!
 //! Input: one byte choosing the protocol version (odd is version 1, even is version 2), then the

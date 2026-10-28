@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The invoice flow against the G-03 invoice vectors (`testdata/vectors/slates/invoice_*`):
 //! each stage, built with the values upstream's test-RNG mode fixes from the slate the previous
 //! party's file carried, gives the slate upstream wrote in every encoding, and the I3 gives the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The contact-identity keys of RFC 0002 sections 2.1 to 2.3, and the pairing mailbox keys of
 //! section 8.1.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What crates that build features on the engine plug in. `lepic-wallet-contacts` is the one
 //! user: it drives the engine through the public wallet calls, the unlocked [`Session`], the
 //! event stream and the hooks here, so the engine itself holds no contact code.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `WFEH` app data file a user picks to restore: header, key check and AEAD body.
 
 #![no_main]

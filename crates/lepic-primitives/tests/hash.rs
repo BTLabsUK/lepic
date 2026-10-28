@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_primitives::hash::{
     Hash, HashError, HashWriter, Hashed, MAX_KEY_LEN, ZERO_HASH, blake2b_256, blake2b_256_keyed,
 };

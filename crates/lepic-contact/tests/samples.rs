@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! One envelope of each type, a card and an invite, sealed with a fixed RNG. The snapshot pins
 //! the wire bytes and text forms, and `cargo xtask fuzz` seeds the corpora from it.
 

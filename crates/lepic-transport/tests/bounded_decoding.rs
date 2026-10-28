@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Memory spent by the file policy on slate files of the largest accepted size that are mostly
 //! data no slate needs. Reading the version must not grow with the input, so the bound is the
 //! one `lepic-slate` sets for its codecs.

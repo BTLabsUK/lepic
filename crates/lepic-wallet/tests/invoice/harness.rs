@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A party to the invoice flow over in-memory ports: a wallet restored from a mnemonic, the
 //! file transport on one end of a loopback pair, a mock node shared with the other party, and
 //! an RNG that repeats the byte 1, which gives the nonces `epic-wallet`'s test-RNG mode uses.

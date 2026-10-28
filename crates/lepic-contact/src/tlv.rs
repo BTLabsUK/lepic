@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The field list shared by envelope content, cards and invites: `tag (u8) || length (u16) ||
 //! value`, tags strictly increasing, unknown tags below 0x80 refused and from 0x80 up skipped,
 //! the signature (when the format has one) last.

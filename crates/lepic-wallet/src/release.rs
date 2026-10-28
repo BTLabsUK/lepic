@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Releasing a send the network never took: a finalized or posted send whose kernel a refresh
 //! did not find on chain [`RELEASE_AFTER_BLOCKS`] or more after it was finalized. Releasing it
 //! cancels it as [`Wallet::cancel`] does, so its inputs can be spent again.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Paired contacts as the host manages them: listing, removing, the per-contact switches, and
 //! the backup of the pairing records (RFC 0002 7.6, 10.5 and 11.1).
 

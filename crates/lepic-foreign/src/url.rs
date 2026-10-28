@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The address of a listening wallet: `http(s)://host[:port][/path]`, normalised to its
 //! `/v2/foreign` endpoint the way `epic-wallet` appends it.
 

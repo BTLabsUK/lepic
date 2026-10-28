@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the G-04 golden vectors in `testdata/vectors/epicbox`: address parse and display,
 //! signatures over relay texts, and messages encrypted by `epic-wallet`.
 

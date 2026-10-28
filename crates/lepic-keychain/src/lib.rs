@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Mnemonics, key derivation, switch commitments, proof builders and seed vaults.
 
 pub mod address_key;

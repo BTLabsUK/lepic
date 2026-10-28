@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Accounts: the derivation subtrees `m/<index>/0` that hold a wallet's outputs, with a label and
 //! the counter of the next unused output key.
 

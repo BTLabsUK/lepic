@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use crate::context::secp;
 use crate::error::{CryptoError, Item};
 use crate::limits::{MAX_SUM_TERMS, check_batch_len};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Invoices, withdrawals and notices between paired contacts through their mailboxes and the
 //! outbox (RFC 0002 sections 11 and 12, cases C-03, C-07, C-20, C-23 and C-25).
 

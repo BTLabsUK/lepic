@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wallet's tor in a build without the `tor` feature (ADR 0026): the session has none.
 //! Every call that needs tor fails with `Unsupported`, Tor reports as off, and the settings of
 //! Epicbox and node requests over Tor read as off and change nothing, so the relay and the

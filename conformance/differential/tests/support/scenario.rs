@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Seeded scenarios for the differential soak. One seed decides everything a case varies: the
 //! flow and its direction, the outputs each party holds and how deep they are buried, the
 //! amount, how the payer selects inputs and change, the minimum confirmations, TTL, payment

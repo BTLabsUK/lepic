@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Private pairings: a pairing class for two wallets of one owner, whose channel someone with
 //! the recovery phrase alone can neither find, read nor write.
 //!

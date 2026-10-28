@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Fixed test values and the JSON shapes shared by the primitives and aggsig areas.
 
 use epic_core::core::transaction::{

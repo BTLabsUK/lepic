@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Settings precedence: flag, then `LEPIC_*` variable, then config file, then default.
 
 // Tests may unwrap (docs/rules.md).

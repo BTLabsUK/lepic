@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Onion addresses typed by users or named by peers, and the head of a SOCKS reply from tor.
 
 #![no_main]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A node that lies. The wallet cannot trust what a node says, so a hostile or broken node may
 //! hide outputs, confirm a kernel and take it back, jump the tip, answer with commitments the
 //! wallet never asked for, or answer slowly or with a huge body. Each ends in a typed error or a

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The product SQLite store, with a handle the CLI keeps to read history that the engine has no
 //! query for yet.
 

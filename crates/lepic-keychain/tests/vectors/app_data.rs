@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the app data vectors in `testdata/vectors/app_data`: the wallet root secret, checked
 //! through its hash, and `WFEH` version 1 files sealed by an independent implementation.
 

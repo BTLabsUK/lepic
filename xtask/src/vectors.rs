@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask vectors`: golden vector generation and replay (ADR 0009).
 
 use std::ffi::OsString;

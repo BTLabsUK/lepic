@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Declares the cfg flutter_rust_bridge's attributes test for, so the compiler accepts it.
 
 fn main() {

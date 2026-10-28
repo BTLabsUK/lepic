@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::OutputIdentifier;
 

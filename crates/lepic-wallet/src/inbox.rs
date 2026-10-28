@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Epicbox inbox: what the engine does with each message the relay hands out (ADR 0004).
 //!
 //! A message is decoded with the Epicbox policy and routed by stage: an S1 is received and

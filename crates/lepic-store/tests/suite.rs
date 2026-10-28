@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! One behavioural suite, run against the SQLite and the in-memory store.
 
 // Test code may unwrap, index and use plain arithmetic (docs/rules.md); clippy's test

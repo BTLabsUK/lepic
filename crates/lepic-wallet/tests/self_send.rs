@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sends to the wallet itself: a split into several outputs and a consolidation into one,
 //! built, received and finalized in one store transaction and posted.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Engine area: output selection, and the node responses of restore and refresh sessions on an
 //! upstream in-process test chain, with the wallet state upstream ends in.
 //!

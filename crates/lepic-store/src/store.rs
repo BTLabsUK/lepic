@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use crate::account::AccountRepository;
 use crate::contact::ContactRepository;
 use crate::context::ContextRepository;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A receiving wallet over test ports, and the G-03 slate vectors it is checked against.
 //!
 //! Each standard-flow case is received the way the upstream receiver received it: the S1 its

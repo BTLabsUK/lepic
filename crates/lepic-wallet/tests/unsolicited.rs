@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Payments nobody asked for, as a listener receives them: open receipts of one transport are
 //! capped in total, and an S1 received before is still answered at the cap.
 

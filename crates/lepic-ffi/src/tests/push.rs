@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `EpicWallet::push_signature`: the text it signs, what it refuses, and that it needs a relay.
 
 use lepic_epicbox::mock_relay::MockRelay;

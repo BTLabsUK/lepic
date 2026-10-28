@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask soak`: the randomized differential soak in `conformance/differential`. Each
 //! iteration runs one seeded scenario against the reference wallet; iteration `i` uses seed
 //! `seed + i`, so a failing seed replays on its own with `--iterations 1 --seed <seed>`.

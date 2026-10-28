@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2018 The Grin Developers
 // Ported from EpicCash/epic core/src/core/committed.rs (Apache-2.0); see NOTICE and upstream.toml.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Output selection beyond the upstream vectors: inputs upstream does not handle, accounts, and
 //! the guarantees the send stage relies on.
 

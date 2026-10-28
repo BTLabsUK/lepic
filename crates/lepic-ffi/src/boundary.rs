@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Where Dart calls enter the engine: every operation runs as a task on the runtime's Tokio
 //! runtime, under the runtime's log subscriber, and a panic in it becomes an error instead of
 //! unwinding into Dart.

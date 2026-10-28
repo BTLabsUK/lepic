@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The scripted node of `mock` builds, which the Dart package tests drive through
 //! `crate::api::testing`.
 

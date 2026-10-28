@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Which paired contact a slate or a transaction was exchanged with. `lepic-wallet-contacts`
 //! writes these links when it seals or opens a contact's slate; the engine reads them so a
 //! contact's slates keep to the contact's mailbox and a contact's notices match only its own

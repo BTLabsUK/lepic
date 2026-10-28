@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An in-memory node for tests of the engine, the CLI and the bindings.
 //!
 //! [`MockNode`] answers at the JSON-RPC level, so every answer passes through the same decoding

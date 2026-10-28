@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Moving an open wallet to another node or relay: calls running first, the next call on the
 //! new node, the listener on the new relay with the new address, the old servers kept on a
 //! refusal.

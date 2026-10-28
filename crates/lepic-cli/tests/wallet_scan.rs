@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `lepic wallet scan` against the mock node: the pending restore scan, an update from the last
 //! scan, a start height, the `--delete-unconfirmed` repair and the chain reset.
 

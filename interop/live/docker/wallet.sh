@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Creates an epic-wallet v4.0.2 floonet wallet on first start, points it at the public floonet
 # node through the loopback node proxy (node-proxy.py) and at the local relay, then either serves the foreign API on loopback
 # (the funder, whose build_coinbase the live miner calls) or idles so the live test can drive it

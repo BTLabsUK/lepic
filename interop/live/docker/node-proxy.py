@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Loopback proxy from the live stack to a public floonet node's API.
 
 epic-wallet v4.0.2 asks its node's owner API for `get_status` and keeps its HTTP and Epicbox

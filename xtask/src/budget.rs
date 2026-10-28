@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask budget`: measures the shipped library size per mobile target, restore and Epicbox
 //! drain time and peak memory, and fails when a measurement exceeds its budget in
 //! `docs/budgets.md`.

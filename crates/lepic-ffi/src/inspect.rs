@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reading a slate the app holds as text, without a wallet.
 
 use lepic_primitives::amount::Height;

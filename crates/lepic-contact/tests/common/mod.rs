@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Each test binary uses a different part of these helpers, and helpers outside `#[test]`
 // functions are test code too.
 #![allow(

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Epicbox method as a transport (ADR 0003): its format policy, and the relay client as its
 //! outbound side.
 //!

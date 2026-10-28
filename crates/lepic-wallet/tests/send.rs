@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sending: the S1 is stored with its inputs locked before it is delivered, a slate the
 //! transport cannot carry is refused with nothing stored, and a failed delivery can be retried.
 

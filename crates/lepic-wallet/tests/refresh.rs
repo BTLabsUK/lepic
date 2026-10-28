@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Refresh: outputs follow the node's UTXO set, transactions are confirmed by their outputs or
 //! their kernel, unposted transactions expire at their TTL cutoff, and a node behind the last
 //! refresh changes nothing.

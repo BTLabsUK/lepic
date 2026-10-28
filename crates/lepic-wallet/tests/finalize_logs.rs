@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Finalize logs in their own binary, for the reason `lifecycle_logs.rs` gives: finalize and a
 //! later post log in their operation spans with the field vocabulary, and never log a key, the
 //! seed or an amount above `debug`.

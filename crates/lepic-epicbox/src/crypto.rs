@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2019 The vault713 Developers
 // Portions Copyright 2026 The Epic Cash Developers
 // Ported from EpicCash/epic-wallet libwallet/src/crypto.rs, libwallet/src/message.rs (Apache-2.0);

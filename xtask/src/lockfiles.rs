@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The separate workspaces build the product crates too, so a product dependency change must
 //! update their lockfiles in the same commit. Their scheduled jobs build with `--locked` and
 //! would otherwise fail long after the change merged.

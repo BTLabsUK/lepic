@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Helpers outside `#[test]` functions are test code too and may unwrap, index and panic.
 #![allow(
     clippy::unwrap_used,

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Fetches the pinned upstream sources and compiles every binary the interop stack runs:
 # the reference node, the reference wallet, the relay's signature checker, the interop miner
 # and lepic. Everything it writes goes under interop/.work. Rerunning it is incremental.

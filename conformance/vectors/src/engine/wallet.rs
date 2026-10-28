@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Upstream wallets on disk, and the state the vectors record about them.
 
 use std::path::{Path, PathBuf};

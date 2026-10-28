@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Epicbox area: address parse and display, the signatures the relay checks, and messages encrypted
 //! by the reference `EncryptedMessage`.
 //!

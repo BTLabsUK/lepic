@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Tor transport against a fake SOCKS5 server on loopback that forwards to an in-process
 //! foreign API listener, so a whole S1 → S2 exchange runs offline.
 

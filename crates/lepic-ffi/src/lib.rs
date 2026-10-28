@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! flutter_rust_bridge API over the LEPIC wallet engine for the app (ADR 0007, ADR 0023).
 //!
 //! `api` is what the app sees. The binding's own repository, gitlab.com/bt-labs-group/lepic-flutter,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A small Epicbox client for checking what the public relay and a stock `epic-wallet` listener
 //! do with the messages LEPIC plans to send. It speaks raw relay frames through the frame and
 //! message types of `lepic-epicbox`, so each step is visible and nothing is retried or hidden.

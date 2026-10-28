@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Scan and restore over the G-05 restore session: interruption and resume, cancellation,
 //! repeated scans, progress events and the reconciliation of stored outputs.
 

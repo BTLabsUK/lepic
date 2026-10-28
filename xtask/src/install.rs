@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask install` builds the release `lepic` binary and copies it into a directory on the
 //! user's `PATH`, `~/.local/bin` unless `--dir` names another.
 //!

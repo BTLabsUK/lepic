@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The panic hook `RustLib.init()` installs keeps panic messages out of stderr. The hook is
 //! process-wide, so the test runs itself again as a child process and reads the child's stderr.
 

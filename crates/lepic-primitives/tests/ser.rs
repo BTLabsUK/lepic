@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_primitives::ser::{
     MAX_MULTI_COUNT, MAX_READ_LEN, ProtocolVersion, Readable, Reader, SerError, SerializationMode,
     VecWriter, Writeable, Writer, deserialize, ser_vec,

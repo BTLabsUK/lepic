@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How a transport picks the wire format of a slate (ADR 0003). The engine never names a
 //! codec; it asks the transport's [`FormatPolicy`] to decode and encode.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The log test runs in its own binary, as `tests/lifecycle_logs.rs` explains: send, a failed
 //! delivery, resend and cancel log in their operation spans with the field vocabulary, and
 //! never log a key, the seed or an amount above `debug`.

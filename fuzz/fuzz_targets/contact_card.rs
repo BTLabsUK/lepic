@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Contact cards: binary bytes and the `epiccash://contact/1/` link.
 
 #![no_main]

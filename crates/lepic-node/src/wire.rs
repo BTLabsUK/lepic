@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2018 The Grin Developers
 // Portions Copyright 2019 The Grin Developers
 // Portions Copyright 2020 The Grin Developers

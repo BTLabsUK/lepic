@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What `node_tip` reports of the node.
 
 use super::Fixture;

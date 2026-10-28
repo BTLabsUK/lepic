@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The set of codecs a wallet speaks, and detection of the codec of an unknown wire slate.
 
 use crate::codec::{Codec, CodecId, EncodeContext, WireSlate};

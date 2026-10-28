@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Mnemonic to entropy and back, with the node keychain's `mnemonic` module, which the wallet calls
 //! for `WalletSeed::from_mnemonic` and `to_mnemonic`. The entropy is the wallet seed.
 

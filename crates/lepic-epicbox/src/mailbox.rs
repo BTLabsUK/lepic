@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! One-off drains of mailboxes that are not the wallet's own address, such as pairing and
 //! contact mailboxes, and posts from their keys (RFC 0002 8.2).
 //!

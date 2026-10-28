@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Send, receive and finalize between two CLI instances, through slate files and through the
 //! mock relay, against one mock node.
 

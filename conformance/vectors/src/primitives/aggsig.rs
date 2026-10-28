@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Aggregate signatures through `core/src/libtx/aggsig.rs`, called in the order `epic-wallet`'s
 //! slate code calls them for a two-party transaction: the sender subtracts the offset from its
 //! excess, each party signs a partial signature over the nonce and key sums, each partial is

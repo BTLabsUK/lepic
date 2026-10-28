@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What a host does once when its process starts, before any wallet exists.
 
 use rand_core::CryptoRng;

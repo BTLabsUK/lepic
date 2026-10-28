@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Armored text of an envelope (RFC 0002 3.5): `BEGINEPICSEALED. <payload>. ENDEPICSEALED.`,
 //! framed as RFC 0001 section 7 frames slatepack-style text.
 

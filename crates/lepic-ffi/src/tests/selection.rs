@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How sends and estimates through the binding choose inputs and change.
 
 use super::http::{EPIC, Pair, funded_pair, password};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Direct transactions over HTTP between two wallets of one runtime on the scripted chain,
 //! through the listener on loopback.
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Builds what the live floonet stack runs. ../build.sh compiles the pinned reference wallet, the
 # relay's checker and lepic (and the reference node, which the live stack does not run); this
 # script adds the live miner and stages the binaries the runtime image copies in

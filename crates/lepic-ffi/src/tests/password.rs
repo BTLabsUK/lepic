@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Changing a wallet's password, and resetting a forgotten one from the recovery phrase, also
 //! when the app stops or its store fails part way.
 

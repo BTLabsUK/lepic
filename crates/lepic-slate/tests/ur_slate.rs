@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `ur:epic-slate`: each decode rejection, the encoder's limits, round trips through lost and
 //! reordered frames, the frame counts of real slates and one snapshot.
 

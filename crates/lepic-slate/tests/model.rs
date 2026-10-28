@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Invariants of the slate model and its stage transitions.
 
 #![cfg(test)]

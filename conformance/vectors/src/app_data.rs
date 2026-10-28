@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! App data area: the wallet root secret `epic-wallet` derives at `m` with
 //! `derive_key(0, root_key_id, Regular)`, recorded only as the BLAKE2b-256 hash its
 //! `set_keychain` stores as the master checksum, and a `WFEH` version 1 file sealed under it.

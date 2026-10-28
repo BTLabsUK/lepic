@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A sender check the engine supplies for an address that accepts only known senders.
 
 use lepic_crypto::PublicKey;

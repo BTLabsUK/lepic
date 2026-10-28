@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The invoice flow between two LEPIC wallets over the file method: the issuer stores and
 //! delivers I1, the payer stores its locked inputs and returns I2, the issuer finalizes, stores
 //! I3, drops its private context and posts. Slates that do not fit the step, or whose data does

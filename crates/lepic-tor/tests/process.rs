@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The tor process and its states against a fake tor: `tests/fixtures/fake-tor.sh` stands in
 //! for the binary, and this test serves its control port, answering as tor does. The fake
 //! derives the onion from the key `ADD_ONION` carries the way tor does, so the published onion

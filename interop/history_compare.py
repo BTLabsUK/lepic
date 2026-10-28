@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Compares an epic-wallet's own record of its history (taken before the import) with what lepic
 holds after `wallet import-history`, and prints one row per old transaction and a check list.
 

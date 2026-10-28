@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Armored sealed text as it arrives in a file, a paste or a mailbox.
 
 #![no_main]

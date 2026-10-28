@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The foreign API's JSON-RPC decoders: requests from any HTTP caller, answers from any
 //! remote listener. The first byte picks the decoder.
 

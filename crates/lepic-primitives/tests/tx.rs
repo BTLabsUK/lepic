@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_crypto::{Commitment, PublicKey, RangeProof, SecretKey, Signature};
 use lepic_primitives::amount::{ArithmeticError, Fee, Height};
 use lepic_primitives::crypto_ser::{BlindingFactor, BlindingFactorError};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask fuzz`: seeds the corpora from the golden vectors and runs the cargo-fuzz targets
 //! in `fuzz/` (task V-04).
 

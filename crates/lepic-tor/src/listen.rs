@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The listener the wallet's onion forwards to.
 
 use lepic_foreign::{Exposure, ListenSettings};

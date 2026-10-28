@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The file transport: byte-exact export and import, the size limit, unreadable paths, and its
 //! registration.
 

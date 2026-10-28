@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Node JSON-RPC response bodies through every pure decoder of `lepic_node::decode`.
 
 #![no_main]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The eight-byte envelope hint that lets a recipient pick the opening key (RFC 0002 3.2).
 
 use crate::hash::{first8, hmac_sha256, sha256};

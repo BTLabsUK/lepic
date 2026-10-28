@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How an HTTP transport opens its byte streams. By default hyper's own connector resolves the
 //! node's host and connects; a [`NodeDialer`] takes that over, so the app can send the bytes
 //! another way, such as through tor. TLS and the `Host` header stay those of the node's URL

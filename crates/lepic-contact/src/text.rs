@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Text carried in cards, invites and envelopes, checked once when it is built or read.
 
 use std::fmt;

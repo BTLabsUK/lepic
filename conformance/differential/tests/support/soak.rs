@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! One soak iteration: the scenario of a seed, run once with LEPIC as the subject and once
 //! with the reference wallet in its place, then compared.
 

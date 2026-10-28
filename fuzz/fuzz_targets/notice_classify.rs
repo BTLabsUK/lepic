@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The decrypted Epicbox payload as the inbox classifies it, and the invoice message as a host
 //! displays it.
 

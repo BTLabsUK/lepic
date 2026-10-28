@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Receive (S1 to S2): what it stores and the slates it rejects.
 
 // Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Mines floonet blocks through a public node's foreign API, with the coinbase built by an
 //! epic-wallet foreign API, so no local node is needed.
 //!

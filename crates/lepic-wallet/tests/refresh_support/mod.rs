@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The G-05 refresh sessions (`testdata/vectors/engine/refresh_*.json`) as engine fixtures: the
 //! subject's wallet seeded with the state upstream started from, over a `MockNode` that replays
 //! the session, and the comparison of the wallet's stored state with the state upstream ended

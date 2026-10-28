@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pairing words (RFC 0002 7.7): five SAS-table entries that find an invite posted to a
 //! rendezvous mailbox on the meeting relays, for when there is nothing to scan or paste.
 

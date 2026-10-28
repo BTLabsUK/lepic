@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Tor method as a transport: the foreign API exchange of `lepic-foreign` (`check_version`,
 //! then `receive_tx`) over a SOCKS stream to `<onion>:80`, through the wallet's own tor.
 //!

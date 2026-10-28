@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Wallet creation, restore, import and unlock: how a seed becomes a keychain and an open
 //! database, and what is checked on the way.
 

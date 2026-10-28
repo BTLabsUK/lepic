@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Helpers the fuzz targets share. A target panics only to report a defect: a decoder that
 //! panicked itself, or a decoded value that breaks a property the decoder promises.
 

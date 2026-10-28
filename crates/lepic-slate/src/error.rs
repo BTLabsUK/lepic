@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Errors of the slate model, its validation helpers, codecs and the codec registry.
 
 use lepic_crypto::{Commitment, CryptoError};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A transaction the peer can still complete without this wallet: a received payment once its
 //! S2 exists, or a finalized send. Cancelling or expiring one first asks the node whether it
 //! already holds the kernel, and afterwards keeps it watched, so a later refresh confirms it

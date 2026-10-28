@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! JSON-RPC 2.0 framing as the node's foreign API speaks it.
 //!
 //! The node wraps each handler's outcome in `result` as `{"Ok": value}` or `{"Err": error}`;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Error text as a host may display it. An error's message, and the messages of the errors
 //! under it, can quote text from a node, a peer or a file, so every entry is cleaned and bounded
 //! before a terminal or an app shows it.

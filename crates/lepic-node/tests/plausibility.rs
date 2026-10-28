@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Node answers that are well formed but cannot be true: a tip far ahead of the one the client
 //! saw moments ago, and outputs or kernels in blocks above the tip.
 

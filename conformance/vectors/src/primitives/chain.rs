@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Weights, fees and the chain parameters a wallet depends on, per network.
 
 use epic_core::consensus;

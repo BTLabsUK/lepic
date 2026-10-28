@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wallet password of PIN unlock: generated, sealed and opened again inside Rust, so Dart
 //! holds only the sealed text (ADR 0014).
 //!

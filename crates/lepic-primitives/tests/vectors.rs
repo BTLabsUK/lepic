@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Golden vectors for serialization, hashing, transaction types, fees and chain parameters,
 //! written by the G-02 generator from the Epic node at the commit each file records.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Scanned `ur:epic-slate` QR texts, one per line, through the stateless decoder. A complete
 //! code must yield bounded JSON text that encodes and decodes to itself.
 

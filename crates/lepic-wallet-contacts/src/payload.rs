@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Opaque payloads over private pairings: bytes the host app sends its other wallet, sealed
 //! under the pairing's channel key and signed, queued in the outbox, and kept on arrival until
 //! the host acknowledges them. LEPIC never reads them. Contacts never carry them.

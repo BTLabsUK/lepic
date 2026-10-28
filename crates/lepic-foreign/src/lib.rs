@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wallet foreign API over HTTP (ADR 0017): send a slate to a wallet listening at an
 //! `http(s)://` address and get its answer in the same exchange, and listen for payments the
 //! same way. Wire-compatible with `epic-wallet` `v4.1.0` `send -m http` and `listen -m http`.

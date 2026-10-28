@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Checks and field parsers shared by the codecs, so every legacy format applies the same rules
 //! (`docs/compat/legacy-slates.md`, "Checks LEPIC performs on decode").
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `lepic` command-line wallet, as a library so tests drive it in-process with a mock node
 //! and a mock relay.
 //!

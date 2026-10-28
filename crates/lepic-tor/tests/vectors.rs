@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Onion v3 vectors.
 //!
 //! - `testdata/vectors/keys/address_keys_seed{16,32}.json` (generated from `epic-wallet` by

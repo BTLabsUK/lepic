@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wallet's minimum confirmations: the stored setting, its range, and the balance split
 //! following it (ADR 0027).
 

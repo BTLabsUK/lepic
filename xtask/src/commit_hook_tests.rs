@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Tests of `.githooks/commit-msg` and of how the commit-lint workflow runs it. The hook is a
 //! bash script, so these run on Unix only.
 #![cfg(unix)]

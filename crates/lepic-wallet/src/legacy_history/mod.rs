@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Import of an `epic-wallet` wallet's transaction history (ADR 0019), and what the scan and
 //! the transaction list need of imported entries.
 //!

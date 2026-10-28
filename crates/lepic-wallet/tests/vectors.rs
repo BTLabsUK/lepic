@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Golden vector replays of the engine (docs/rules.md): `cargo xtask vectors verify` runs exactly
 //! this target.
 

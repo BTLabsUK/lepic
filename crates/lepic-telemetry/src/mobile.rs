@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Logs kept on the device for support: a size-bounded ring of redacted records in a directory
 //! the app owns, and the support bundle exported from it.
 //!

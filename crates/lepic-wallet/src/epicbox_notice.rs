@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Notices over Epicbox in the engine (ADR 0016): which peers may be sent one, what a received
 //! one does, and who sends which.
 //!

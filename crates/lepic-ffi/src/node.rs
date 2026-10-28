@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How node requests leave the binding: over HTTP to the configured node, or, in a `mock` build,
 //! to an in-process scripted chain.
 

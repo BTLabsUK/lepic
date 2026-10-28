@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pairing secrets and the reply and confirm messages (RFC 0002 7.1 to 7.3).
 
 use std::fmt;

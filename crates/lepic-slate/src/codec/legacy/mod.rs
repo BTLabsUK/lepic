@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2019 The Epic Developers
 // Ported from EpicCash/epic-wallet libwallet/src/slate_versions/mod.rs (Apache-2.0); see NOTICE
 // and upstream.toml.

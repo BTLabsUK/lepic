@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An issuer and a funded payer on one mock relay and one mock node, each with an Epicbox
 //! transport, a clock the test moves and a store that counts its write transactions.
 

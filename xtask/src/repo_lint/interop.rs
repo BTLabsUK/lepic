@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The interop stack runs third-party images and services next to test wallets. Base images are
 //! pinned by digest so a moved tag cannot change what runs, containers do not run as root, and
 //! services listen on loopback only.

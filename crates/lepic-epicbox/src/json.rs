@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use serde_json::error::Category;
 
 /// Why a JSON document did not parse, without any of its text: a parser's message can quote the

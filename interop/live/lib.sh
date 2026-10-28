@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Helpers for the live floonet test. Sourced by run.sh after ../lib.sh, whose generic helpers
 # (dc, lepic, ew, to_units, balances, ew_tx_confirmed, drain_until) it reuses with INTEROP_DIR
 # pointing at this directory.

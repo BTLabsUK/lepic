@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An output the wallet spent shows up unspent again: a node that lies about it, or the chain
 //! after someone replays the transaction that created it (Mimblewimble lets a spent output
 //! appear twice in the output set). A confirmed send is history the chain recorded; what a node

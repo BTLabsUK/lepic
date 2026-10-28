@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Cancelling a send, before and after its slate was delivered: inputs become spendable again,
 //! change and private context are dropped, and a second cancel changes nothing.
 

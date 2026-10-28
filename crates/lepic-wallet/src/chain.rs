@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How far the wallet knows the chain has come, and the checks a node's tip, heights and
 //! indices pass before the engine acts on them.
 //!

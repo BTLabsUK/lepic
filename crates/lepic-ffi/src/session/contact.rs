@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Contact pairing, sealed slates and invoices between paired contacts (RFC 0002), over the
 //! engine's contact calls. Contacts belong to the default account, as invoices do.
 

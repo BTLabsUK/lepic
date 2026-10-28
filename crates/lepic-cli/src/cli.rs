@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The command tree. Nouns, then verbs. Global options are the only options shared by every
 //! command; an option name keeps one meaning wherever it appears (`tests/command_tree.rs`).
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Splits and consolidations through the binding, mined on the scripted chain.
 
 use super::http::{EPIC, funded_pair, password};

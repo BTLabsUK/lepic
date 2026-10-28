@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Private pairings in the store: two wallets of one owner, whose channel carries only the host
 //! app's payloads.
 //!

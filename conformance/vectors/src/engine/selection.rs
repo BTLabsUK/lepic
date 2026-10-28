@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Output selection cases: a stated UTXO set in an upstream wallet, then upstream's fee estimate
 //! and upstream's send-slate selection for one request.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A minimal client for tor's control port: `SAFECOOKIE` authentication, ownership, the SOCKS
 //! address, bootstrap progress, the onion service and shutdown.
 //!

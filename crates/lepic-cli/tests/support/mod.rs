@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! CLI instances driven in-process: each has its own data directory and home, and all of them
 //! share one mock node and one mock relay, as wallets on one chain do.
 

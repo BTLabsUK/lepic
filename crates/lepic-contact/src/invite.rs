@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The pairing invite (RFC 0002 7.1) and its `epiccash://pair/1/` link.
 
 use std::fmt;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_primitives::amount::{ArithmeticError, Height};
 use lepic_primitives::params::{ChainParams, Network};
 

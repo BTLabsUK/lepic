@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The scripted mock node, as the engine, CLI and binding tests will drive it.
 
 // Tests may unwrap and use plain arithmetic (docs/rules.md), including in helpers that clippy

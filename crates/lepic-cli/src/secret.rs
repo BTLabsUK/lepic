@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Secrets come from `LEPIC_PASSWORD` (the wallet password only), a prompt with echo off when
 //! standard input is a terminal, or one line of standard input each. Never from arguments, which
 //! other users can read from the process table and shells write to history.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An upstream `epic-wallet` v4.1.0 party: `DefaultLCProvider` over its own sqlite backend,
 //! talking to the test node through upstream's `HTTPNodeClient`, and driven the way the
 //! `epic-wallet` CLI drives the file method (`controller/src/command.rs`).

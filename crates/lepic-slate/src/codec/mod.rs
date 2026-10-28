@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The codec framework: one [`Codec`] per wire format, mapping between [`WireSlate`] and the
 //! domain [`Slate`]. Codecs own their wire structs and never convert into each other.
 

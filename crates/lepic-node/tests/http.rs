@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The HTTP client against a local server: valid recorded answers, and every kind of hostile
 //! answer a node or a man in the middle could give. Each must end in a typed error, never a
 //! panic, a hang or an unbounded read.

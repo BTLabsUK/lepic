@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use std::fmt;
 
 use secp256k1zkp::Error as BackendError;

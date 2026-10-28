@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Onion v3 addresses and the key tor publishes them with.
 //!
 //! The wallet's onion is its payment-proof key in onion form, so it equals what

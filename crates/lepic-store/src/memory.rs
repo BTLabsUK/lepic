@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An in-memory [`WalletStore`] with the same behaviour as the SQLite one, for engine tests.
 
 use std::collections::BTreeMap;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An in-process relay with the semantics of the public relay (`docs/compat/epicbox.md`), for
 //! deterministic tests of the client, the engine and the bindings.
 //!

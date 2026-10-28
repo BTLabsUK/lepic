@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Standard and invoice flows, each run as the epic-wallet CLI runs it for the file and Epicbox
 //! methods (`controller/src/command.rs`, `impls/src/adapters/{file,epicbox}.rs`).
 

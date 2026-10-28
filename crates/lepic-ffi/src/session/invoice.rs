@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Invoices by file, issued to and paid by anyone (RFC 0002 11.5), and the expiry of invoices on
 //! both sides.
 

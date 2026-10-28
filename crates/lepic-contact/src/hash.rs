@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 

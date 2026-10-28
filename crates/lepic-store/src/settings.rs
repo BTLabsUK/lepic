@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use crate::error::StoreError;
 
 pub trait SettingsRepository {

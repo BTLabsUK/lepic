@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An `epic-wallet` wallet folder built as upstream writes it, for a seed the test controls, and
 //! the chain that wallet's unspent outputs sit on. Row keys are the `{:?}` text of the key
 //! bytes and row data is the serde JSON of the record, as `crates/lepic-store/tests/legacy.rs`

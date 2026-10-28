@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A send over Epicbox whose delivery failed: reported as undelivered, and delivered again to
 //! the address it was sent to with `resend_epicbox`.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Ports for engine integration tests: a store opener over `MemoryStore` or SQLite, a secret
 //! vault over the real `lepic-keychain` vault format, the mock node, a loopback transport, a
 //! fixed clock and a seeded RNG. Later engine tasks build on these.

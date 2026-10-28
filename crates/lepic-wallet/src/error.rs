@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_keychain::vault::SecretNameError;
 use lepic_keychain::{
     AppDataError, IdentifierError, KeychainError, MnemonicError, SecretStoreError, WalletSeedError,

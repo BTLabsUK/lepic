@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sends to the wallet itself, to split its outputs or merge them into one, as
 //! `epic-wallet send -m self` does through its own foreign API: the S1 is built, received into
 //! the same account and finalized in one store transaction, then posted. No transport carries

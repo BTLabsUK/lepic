@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Signatures by the address key over app-chosen bytes, kept apart from every text the key signs
 //! for the relay.
 //!

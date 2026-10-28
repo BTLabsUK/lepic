@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Differential tests of the file method: an upstream `epic-wallet` v4.1.0 and a LEPIC wallet
 //! exchange slate files on one in-process test chain, in both directions, for the standard and
 //! invoice flows, in the V2 and V3 shapes, with and without TTL, payment proof and messages.

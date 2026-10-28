@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Invoices by file through the binding, between wallets on the mock node: issued to anyone as
 //! text or a file, paid, finalized and posted with the calls of a send, the refusals of an
 //! answer that is not the payment of an invoice this wallet issued, and an unpaid invoice

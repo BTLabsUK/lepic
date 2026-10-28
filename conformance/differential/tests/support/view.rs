@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What each wallet reports at a checkpoint, in upstream's terms, and how two reports are
 //! compared. LEPIC states are mapped to upstream's through `docs/compat/states.md`.
 

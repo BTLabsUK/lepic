@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The V2 JSON codec beyond the vector replay: what the V2 shape cannot carry, the decode
 //! rejection rules of `docs/compat/legacy-slates.md` on the V2 path, round-trip properties and one
 //! snapshot per stage.

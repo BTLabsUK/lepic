@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! One open wallet: the engine over the binding's ports, and the glue between engine calls,
 //! the app's secret store and Dart streams.
 

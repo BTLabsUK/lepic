@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Posts to a listening wallet's foreign API: hyper over rustls with the Mozilla roots, bounded
 //! answers and timeouts, no redirects.
 

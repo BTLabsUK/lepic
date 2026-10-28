@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Opt-in: a real tor publishes an onion for a throwaway random key, and this wallet reaches it
 //! over tor's SOCKS port with `check_version`. Needs the network and a tor binary:
 //!

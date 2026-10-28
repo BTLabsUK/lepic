@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Signature cases: ECDSA over SHA-256 of the exact text, DER-encoded as hex, as `Subscribe` signs
 //! a challenge, `PostSlate` signs `str` and `Made` signs the relay message id.
 

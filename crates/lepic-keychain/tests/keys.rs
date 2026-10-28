@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_crypto::PublicKey;
 use lepic_keychain::{
     ChildNumber, Identifier, IdentifierError, Keychain, KeychainError, MnemonicError, Seed,

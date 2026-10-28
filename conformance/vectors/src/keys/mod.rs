@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Keys area: mnemonics, BIP32 derivation, commitments, switch commitments, range proofs from both
 //! proof builders and their rewinds, Epicbox address keys, payment-proof keys and the encrypted
 //! `wallet.seed` file, all computed by the reference node and wallet code.

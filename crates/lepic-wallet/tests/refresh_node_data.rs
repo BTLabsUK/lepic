@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Refresh against node answers that cannot be true: a tip far beyond what the chain can have
 //! reached, heights above the tip, a tip that moves while transactions are being expired, an
 //! output that goes missing for one answer. None of them may expire, spend or confirm anything.

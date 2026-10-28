@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
 // treat as test code.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]

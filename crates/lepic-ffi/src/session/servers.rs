@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Moving an open wallet to another node or Epicbox relay without locking it.
 //!
 //! A switch takes the session's server gate for writing: the wallet calls running when it

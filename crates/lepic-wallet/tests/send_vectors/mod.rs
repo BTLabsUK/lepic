@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The G-03 S1 vectors (`testdata/vectors/slates/send_*_s1_*.json`): selection over the
 //! sender's recorded inputs, then `build_s1` with the values upstream's test RNG mode fixes,
 //! gives the S1 upstream wrote, byte for byte, in every encoding a legacy method uses.

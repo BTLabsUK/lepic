@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pairing words as the user types them, and the text posted to a rendezvous mailbox. The first
 //! byte picks which; the posted text is opened with the stretched words of a golden vector, since
 //! Argon2id is far too slow to run per input, and sealed again under a nonce from the input.

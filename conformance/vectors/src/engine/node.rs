@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A loopback HTTP server that speaks the node's foreign JSON-RPC API, so upstream wallets talk to
 //! the in-process test chain through upstream's own `HTTPNodeClient`.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The legacy V2 JSON slate codec: detection and decoding of any bytes.
 
 #![no_main]

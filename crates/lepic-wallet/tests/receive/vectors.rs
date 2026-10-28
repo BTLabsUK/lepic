@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Receive against the G-03 slate vectors: each S1 received with the recorded randomness yields
 //! the recorded S2 in every encoding.
 

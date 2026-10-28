@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
 // unwrap and index (docs/rules.md).
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]

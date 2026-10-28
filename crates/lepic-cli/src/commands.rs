@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Each command: what it asks the engine and what it reports.
 
 use std::future::Future;

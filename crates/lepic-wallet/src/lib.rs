@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The LEPIC wallet engine.
 //!
 //! A [`Wallet`] is built from a [`WalletConfig`] and the [`Ports`] it runs on: the node, the

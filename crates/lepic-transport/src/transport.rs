@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The capabilities a transaction method offers (ADR 0003). A method implements [`Transport`]
 //! and returns the capability traits it supports; the engine asks for the one it needs.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The slate text the app reads without a wallet (`inspect_slate`), on both chains.
 
 #![no_main]

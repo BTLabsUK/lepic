@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Android builds go through `cargo ndk` so the NDK linker, sysroot and API level are set for every
 //! C dependency.
 //!

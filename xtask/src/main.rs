@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Repository automation, run as `cargo xtask <command>`.
 
 mod budget;

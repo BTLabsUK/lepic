@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Our keys for a contact (RFC 0002 2.2), the pairing mailbox keys (8.1), and the cards made
 //! from them.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Two wallets on one mock relay, shared by the inbox tests and the inbox log test.
 
 // Each test binary uses a different subset of these helpers, and test helpers may unwrap and

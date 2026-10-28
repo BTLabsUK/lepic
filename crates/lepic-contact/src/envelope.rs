@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The sealed envelope (RFC 0002 section 3): HPKE base mode to the recipient's X25519 key,
 //! optionally signed with the sender's Ed25519 key for this contact. The signature is tag 0xFF,
 //! so optional fields from 0x80 up sit before it and are signed too.

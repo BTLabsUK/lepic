@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Rust half of the flutter_rust_bridge bindings, `crates/lepic-ffi/src/frb_generated.rs`, is
 //! generated together with the Dart half in the binding's own repository, from the API in
 //! `crates/lepic-ffi/src/api`. That run records the SHA-256 of every API file and of the generated

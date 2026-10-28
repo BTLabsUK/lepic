@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `wallet.seed` file as `epic-wallet` writes it when a wallet is created from a mnemonic with
 //! a password. Upstream draws the salt and nonce itself, so these are the randomized cases of the
 //! area: the recorded file is kept as long as the pin and the case inputs are unchanged and

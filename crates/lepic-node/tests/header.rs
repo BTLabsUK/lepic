@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `get_header`: decoding the node's answer, every rejection, and the client's request shape.
 
 // Tests may unwrap and use plain arithmetic (docs/rules.md), including in helpers that clippy

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the G-01 golden vectors in `testdata/vectors/keys` that cover mnemonics, BIP32
 //! derivation, identifiers, keychain commitments, Epicbox address keys and payment-proof keys.
 //! It also replays the proof builder vectors, the `wallet.seed` vectors of the read-only seed

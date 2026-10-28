@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Epicbox log lines written by the spawned inbox task reach the host's log layer, which is
 //! installed for the calling thread only.
 

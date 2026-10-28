@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Lines a long-running command writes to stderr while it runs, for people watching it: scan
 //! progress during a restore, and the relay connection and transaction changes while
 //! listening. Only with human output; JSON output keeps stderr for logs.

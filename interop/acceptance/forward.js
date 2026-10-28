@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Forwards TCP ports for the acceptance gateway: `node forward.js <listen>=<host>:<port> ...`.
 // It listens on each of the container's own IPv4 interface addresses, never on a wildcard, so
 // that what it exposes is exactly the networks the container is attached to.

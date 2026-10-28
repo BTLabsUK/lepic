@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Errors of transports, format policies and the transport registry.
 
 use lepic_slate::codec::CodecId;

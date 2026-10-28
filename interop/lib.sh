@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Helpers the scenarios use to drive the interop stack. Sourced by run.sh.
 # shellcheck shell=bash
 

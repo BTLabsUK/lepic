@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `EpicWallet::sign_with_address_key` and `verify_address_signature`: one wallet's signature
 //! verifies against its address key on any device that holds the wallet, and nothing else
 //! passes.

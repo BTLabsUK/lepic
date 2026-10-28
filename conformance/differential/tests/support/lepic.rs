@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A LEPIC party: the `lepic-wallet` engine on an in-memory store, reaching the test node through
 //! `lepic-node`'s HTTP transport and exchanging slates through `lepic-transport`'s file method.
 

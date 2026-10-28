@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Properties of the pure decoders: arbitrary input never panics, and valid answers round-trip.
 
 // Tests may unwrap and use plain arithmetic (docs/rules.md), including in helpers that clippy

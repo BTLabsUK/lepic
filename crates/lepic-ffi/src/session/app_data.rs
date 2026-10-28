@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The host app's data files, sealed and opened by the engine under the wallet's root secret.
 
 use zeroize::Zeroizing;

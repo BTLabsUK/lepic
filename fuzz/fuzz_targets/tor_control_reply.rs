@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Lines from the tor control port: replies assembled line by line, asynchronous events and
 //! their keyword arguments.
 

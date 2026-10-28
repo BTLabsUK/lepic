@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A cancel and a finalize of the same send running at once on one wallet: whichever commits
 //! second must see the other's commit, so the send ends either cancelled with nothing pushed or
 //! posted with its inputs still locked.

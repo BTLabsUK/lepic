@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Contact pairing between LEPIC wallets on the mock relay (RFC 0002 section 7 and the cases
 //! file): by link through the pairing mailboxes, by hand, and in person, the SAS check, expiry,
 //! removal, backup, and what a changed invite or reply does.

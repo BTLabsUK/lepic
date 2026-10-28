@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! How far the chain can honestly move between two answers, so a single lying answer cannot
 //! move the wallet's view of the chain arbitrarily far.
 

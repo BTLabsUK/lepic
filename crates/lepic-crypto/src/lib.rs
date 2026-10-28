@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Safe boundary over the secp256k1-zkp wrapper for commitments, proofs and signatures.
 //!
 //! Every value is checked when it is constructed, so the wrapper only ever sees well-formed keys,

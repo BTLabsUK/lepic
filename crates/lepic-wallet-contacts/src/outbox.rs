@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The outbox of sealed messages that must reach a contact's mailbox on the home relay (RFC 0002
 //! 12.4): payments of invoices, answers to withdrawals, notices. It lives in the store, so a
 //! killed app loses nothing, and retries at once, then after 30 s, 2 min, 10 min and every

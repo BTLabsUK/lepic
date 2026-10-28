@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The read API a host shows history, balances and send previews from: the transaction list
 //! with its details, the balance without the node, and fee estimates that equal the fee of the
 //! send that follows them.

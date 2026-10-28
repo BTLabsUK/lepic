@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The `epiccash://<kind>/<version>/<payload>` links and the checksummed base64url payload they
 //! and the armor share: `base64url(bytes || H(H(bytes))[0..4])`, without padding.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Invoices received on the invoice address and waiting for the user, and that address's index.
 //!
 //! The slate bytes of a pending invoice are sealed under the private context key, with the slate

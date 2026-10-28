@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Mutations of a valid reply: a sender finalizes the S2 that answers its S1, and an issuer the
 //! I2 that answers its I1. Every field a reply could change is changed in turn, and finalizing
 //! refuses each one with a typed error and stores nothing: no S3 or I3, no new transaction state,

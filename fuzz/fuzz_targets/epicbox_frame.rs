@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Epicbox frames in both directions, and the path a pushed `Slate` frame takes in the client:
 //! sender address, signature over `str`, then decryption for our key.
 

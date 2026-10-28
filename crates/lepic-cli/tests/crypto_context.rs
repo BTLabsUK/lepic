@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The first `run` of a process blinds the secp256k1 context. The context is created once per
 //! process, so this binary holds only this test.
 

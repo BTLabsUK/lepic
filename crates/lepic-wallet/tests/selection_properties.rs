@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Output selection for arbitrary wallets: whatever it returns pays for itself, spends only what
 //! may be spent, and accounts for every base unit.
 

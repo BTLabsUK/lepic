@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! An issuer may hand the payer any I1 it likes. Whatever field of a valid I1 is changed, paying
 //! it either refuses with a typed error and leaves the payer's wallet as it was, or pays exactly
 //! the approved amount plus the fee of an honest payment of the same invoice: the issuer cannot

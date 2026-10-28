@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Direct transactions over Tor between two wallets of one runtime on the scripted chain.
 //! `tests/fixtures/fake-tor.sh` stands in for tor; each wallet's control port is served here,
 //! and one fake SOCKS server stands in for the Tor network: it connects `<onion>:80` to the

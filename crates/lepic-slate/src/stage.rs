@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Flows and the stages a slate passes through in each.
 
 use crate::role::Role;

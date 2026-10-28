@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Export and import of pairing records for the app's `.wfeh` history payload (RFC 0002 10.5).
 //!
 //! The document is `{"version":1,"network":"mainnet","contacts":[...],"slot_counters":[...]}`

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Failures reach the user as typed exit codes and, with `--output json`, as one JSON document.
 
 // Tests may unwrap and index (docs/rules.md).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The engine's `SecretVault` port over the app's store. The engine reads and writes the vault
 //! synchronously, while the app's store answers asynchronously from Dart, so the vault bytes are
 //! loaded before an engine call and written back after it.

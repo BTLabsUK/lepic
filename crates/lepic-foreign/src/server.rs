@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The listener: serves `check_version` and `receive_tx` at `/v2/foreign`, as
 //! `epic-wallet listen -m http` does, so any wallet that sends over HTTP can pay this one.
 //!

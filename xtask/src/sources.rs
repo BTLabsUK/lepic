@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reading the repository's own files for the text-level gates in `repo_lint`.
 
 use std::fs;

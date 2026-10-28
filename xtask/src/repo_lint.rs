@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask repo-lint`: repository rules that neither the compiler nor cargo-deny can check.
 //! Each gate returns its findings; this module only gathers the inputs and reports.
 

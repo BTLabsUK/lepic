@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Measures Argon2id unlock time for candidate vault parameters.
 //!
 //! `cargo bench -p lepic-keychain --bench argon2` on the host. On Android, build it with

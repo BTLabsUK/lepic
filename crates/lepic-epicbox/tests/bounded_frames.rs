@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Memory spent decoding relay frames of the largest accepted length whose content is one long
 //! array of empty objects, the densest way to write many JSON values. Decoding must not grow
 //! with the content the wallet ignores.

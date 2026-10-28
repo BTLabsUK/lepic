@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Slate domain model, slate codecs and the codec registry.
 
 pub mod codec;

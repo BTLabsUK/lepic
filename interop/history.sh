@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # The import-history scenario: builds a history in a fresh epic-wallet v4.0.2 wallet (`hist`, in the
 # peer container, apart from the peer's own wallet), copies the stopped wallet's folder, imports
 # it into lepic and compares both sides field by field. Sourced by scenarios.sh.

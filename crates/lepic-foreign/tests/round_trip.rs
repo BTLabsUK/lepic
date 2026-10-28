@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The client against the listener on loopback, with a wallet that answers every S1 with a
 //! fixed S2.
 

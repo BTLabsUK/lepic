@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the G-03 file vectors in `testdata/vectors/slates`: the file transport reads every file
 //! upstream's file method wrote, byte for byte and as upstream reads it, and writes every slate in
 //! the V3 shape with header `3/3/<b>` (ADR 0015).

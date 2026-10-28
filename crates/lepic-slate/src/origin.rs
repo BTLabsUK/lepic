@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Where a decoded slate came from, so a reply can echo what the peer sent.
 
 use crate::codec::CodecId;

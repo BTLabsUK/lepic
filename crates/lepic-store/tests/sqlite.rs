@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Behaviour only the SQLite store has: the file, its schema version and its journal.
 
 // Test code may unwrap, index and use plain arithmetic (docs/rules.md); clippy's test

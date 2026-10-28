@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Codec registration, detection and dispatch, with codecs defined only for this test.
 
 #![cfg(test)]

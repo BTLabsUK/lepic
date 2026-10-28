@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Slate text as animated QR codes (`ur:epic-slate`), without a wallet.
 
 use lepic_wallet::slate::ur_slate::{

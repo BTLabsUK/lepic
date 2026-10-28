@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Amounts as people type and read them: EPIC with up to eight decimals.
 
 use lepic_primitives::amount::{Amount, EPIC_BASE, Fee};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The output list through the binding.
 
 use super::http::{EPIC, funded_pair};

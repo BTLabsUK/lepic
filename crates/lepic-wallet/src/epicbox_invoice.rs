@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Invoices over Epicbox, the payer's side and the housekeeping of both sides.
 //!
 //! A parked invoice waits in the store for the user to pay or decline it; nothing in the inbox

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! JSON arrays read with a cap on the elements kept, so the memory a decode spends is bounded by
 //! the counts a legacy slate may have, not by the length of the input. Elements past the cap are
 //! skipped unparsed but counted, so the count checks refuse the slate exactly as they would have

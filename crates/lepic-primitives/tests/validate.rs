@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Rejections and orderings of `Transaction::validate` that the golden vectors do not cover.
 
 use lepic_crypto::{

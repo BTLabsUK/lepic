@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the G-03 golden vectors in `testdata/vectors/slates` through the legacy codecs.
 
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may

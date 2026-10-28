@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # The setup and the scenarios run.sh runs, in order. Sourced by run.sh.
 #
 # Each scenario sets DETAIL to one line and returns 0 when every check held. They share one

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Posting to a node whose pool already holds the transaction: the node refuses the repeated
 //! push with its pool's duplicate answer, and the wallet records the transaction as posted
 //! instead of reporting a failed post. The node is the mock node behind a transport that gives

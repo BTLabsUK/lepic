@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wallet's tor (ADR 0018): one tor per session, with a listener of its own on
 //! `127.0.0.1` that the onion forwards to, and sends to other wallets' onions.
 

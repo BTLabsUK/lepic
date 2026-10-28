@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reaching home relays: their endpoints, one-off mailbox clients, and posts (RFC 0002 8.2).
 
 use lepic_contact::armor;

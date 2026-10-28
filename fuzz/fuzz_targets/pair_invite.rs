@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pairing invites, their `epiccash://pair/1/` link, and the reply and confirm bodies.
 
 #![no_main]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Re-pairing after a restore, the key check (RFC 0002 7.8). X holds an old record for a contact
 //! and has paired with it again; over the new pairing it asks whether the other side (Y) still
 //! holds the old keys. Y answers found with a proof by the old slot key, X answers restored with a

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Comparing a LEPIC run with its reference run of the same story.
 
 use super::view::{differences, restarted_differences};

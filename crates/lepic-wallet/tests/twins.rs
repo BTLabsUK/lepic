@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Two installs of one wallet, restored from one recovery phrase, on one Epicbox address of the
 //! mock relay and one mock node: an answer that one install cannot use is left for the other,
 //! and a payment that both answered ends on the install whose answer the sender did not

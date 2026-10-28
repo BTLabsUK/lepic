@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reading the old wallet's database and storing its history.
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The open receipt caps that bound payments nobody asked for, on every transport that takes
 //! them: [`MAX_OPEN_RECEIPTS_PER_SENDER`] per sender, where the transport names one, and
 //! [`MAX_OPEN_RECEIPTS`] in all. Each transport counts only its own open receipts.

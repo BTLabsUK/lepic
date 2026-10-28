@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2018 The Grin Developers
 // Portions Copyright 2026 The Epic Cash Developers
 // Ported from EpicCash/epic core/src/consensus.rs, core/src/global.rs (Apache-2.0); see NOTICE and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Golden vector generator. Runs the pinned reference code and writes one JSON file per case to
 //! `testdata/vectors/<area>/<name>.json`, in the format `testdata/vectors/README.md` defines.
 //!

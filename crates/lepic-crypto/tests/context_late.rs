@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The context is created once per process, so this binary holds the single test that uses it
 // before randomizing. Tests may unwrap (docs/rules.md).
 #![allow(clippy::unwrap_used)]

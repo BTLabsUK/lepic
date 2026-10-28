@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Errors of the foreign API client, the listener and the messages they exchange.
 
 use thiserror::Error;

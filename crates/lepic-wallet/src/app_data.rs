@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sealing and opening the host app's own data files under a key only this wallet's seed
 //! gives, so the app keeps its backups readable without ever holding a key.
 

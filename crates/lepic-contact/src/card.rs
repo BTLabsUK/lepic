@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The self-signed contact card (RFC 0002 section 6) and its `epiccash://contact/1/` link.
 
 use std::fmt;

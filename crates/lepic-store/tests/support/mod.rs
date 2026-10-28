@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Backends and record builders shared by the store tests.
 
 // Each test binary uses a different subset of these helpers.

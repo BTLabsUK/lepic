@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! SOCKS5 to an onion through tor: the domain address type, so tor resolves the name and no
 //! DNS query leaves the computer, and username/password credentials, so each send gets its own
 //! circuit under `IsolateSOCKSAuth`. Tor's extended replies (`ExtendedErrors`) say why an onion

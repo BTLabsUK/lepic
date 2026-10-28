@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! A funded sender for the send and cancel tests: the wallet of the G-03 `send_file_plain`
 //! sender, holding the coinbase output that case spends, on a node at the case's height.
 

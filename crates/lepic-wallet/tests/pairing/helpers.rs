@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pairing two wallets of the test world, shared by the pairing and sealed slate tests.
 
 // Test helpers may unwrap, index and panic (docs/rules.md).

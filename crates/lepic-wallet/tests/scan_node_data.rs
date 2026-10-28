@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Scan against node answers that cannot be true: a tip far beyond what the chain can have
 //! reached, outputs above the tip, a spent output the node does not confirm when asked again,
 //! and a stored scan position above the node's tip.

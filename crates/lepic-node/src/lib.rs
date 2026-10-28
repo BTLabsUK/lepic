@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Client for the Epic node foreign JSON-RPC API.
 //!
 //! [`NodeApi`] is the port the wallet engine uses. [`NodeClient`] implements it over any

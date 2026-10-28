@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Invoices over Epicbox between two LEPIC wallets on the mock relay: the payer pays or
 //! declines a parked invoice, the issuer finalizes and posts the payment, recognises an invoice
 //! a stock wallet sent back, and both sides expire what was left unpaid.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Private transaction contexts (blinding factors and nonces) and their encryption at rest.
 //!
 //! A context is sealed with XChaCha20-Poly1305 under a key the engine derives from the wallet's

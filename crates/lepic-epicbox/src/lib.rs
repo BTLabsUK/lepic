@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Epicbox addresses, message crypto, protocol frames and relay transport.
 
 mod address;

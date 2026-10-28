@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use lepic_keychain::{MnemonicError, Seed};
 use proptest::prelude::*;
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Message cases: a plaintext encrypted by upstream's `EncryptedMessage` from a sender to a
 //! receiver, the `str` the sender posts, and the sender's signature over it.
 //!

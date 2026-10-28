@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Epicbox client (ADR 0004): settings, the wallet's relay identity, sending, and the entry
 //! points to listening and draining.
 

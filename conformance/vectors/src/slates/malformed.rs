@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Upstream's verdict on slates that differ from what it emits: each case mutates a slate the
 //! flows produced and records whether the file method's parser (`Slate::deserialize_upgrade`) and
 //! the Epicbox listener's parser (the untagged `VersionedSlate`) accept it, and what they make of

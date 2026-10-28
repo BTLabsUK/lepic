@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Collecting: one-off drains of the pairing mailboxes and the contact mailboxes, grouped by
 //! relay, with per-relay backoff (RFC 0002 8.2 to 8.5).
 

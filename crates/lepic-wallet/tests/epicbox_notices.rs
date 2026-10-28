@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Notices between LEPIC wallets over Epicbox on the mock relay (ADR 0016): the payer hears
 //! that its payment was posted or the invoice withdrawn, also from an issuer that withdrew it
 //! offline and answers the payment once it arrives, the issuer hears a decline, notices

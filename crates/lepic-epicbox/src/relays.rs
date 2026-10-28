@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The relays LEPIC ships with, per network: where pairing words (RFC 0002 7.7) are posted, all
 //! of them, and looked for, in this order. They are a meeting list only; a wallet's own relay can
 //! be any other.

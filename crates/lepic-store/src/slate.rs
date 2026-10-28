@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use uuid::Uuid;
 
 use crate::encoding::stored_enum;

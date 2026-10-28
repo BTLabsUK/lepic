@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Conversions between record fields and the column types both implementations agree on.
 
 use jiff::Timestamp;

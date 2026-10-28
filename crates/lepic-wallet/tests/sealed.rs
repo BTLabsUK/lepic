@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sealed slates between paired contacts in files and pastes (RFC 0002 sections 5 and 9): a
 //! payment sealed and signed both ways, the plain fallback, text sealed for another wallet or
 //! install, and the anonymous answer to the reply key in the LEPIC marker.

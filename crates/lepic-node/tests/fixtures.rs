@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The live fixtures under `testdata/node/`, replayed offline: through `MockNode`, and as raw
 //! HTTP answers from a local server. Both paths must accept every recorded answer and agree.
 

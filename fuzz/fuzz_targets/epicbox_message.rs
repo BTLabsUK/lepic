@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The encrypted Epicbox message (the `str` of `PostSlate` and `Slate` frames): parsing, key
 //! derivation and decryption, without the signature check that guards it in the client.
 

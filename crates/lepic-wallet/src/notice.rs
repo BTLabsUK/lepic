@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! LEPIC notices over Epicbox (ADR 0016): short advisory messages between LEPIC wallets about an
 //! invoice, which are not slates.
 //!

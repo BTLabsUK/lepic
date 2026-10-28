@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Operations a peer, a relay and the user can start at the same moment on one transaction:
 //! finalize against cancel, two finalizes of one S2, two sends from one coin. Each pair runs with
 //! the second operation started after a sweep of scheduler yields, so the store writes of the two

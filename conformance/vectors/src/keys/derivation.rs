@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! BIP32 master key and child derivation as the node keychain does it, on both networks.
 
 use epic_keychain::extkey_bip32::{BIP32GrinHasher, ChildNumber, ExtendedPrivKey, ExtendedPubKey};

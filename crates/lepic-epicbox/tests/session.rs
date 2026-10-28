@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Session setup against the mock relay: version gating, keepalive and the TCP connector.
 
 #![allow(clippy::unwrap_used, clippy::panic)]

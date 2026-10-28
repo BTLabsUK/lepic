@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The key of the wallet's onion service (ADR 0018): the payment-proof key of the default
 //! account, so the onion equals what `epic-wallet address` prints and survives a restore.
 

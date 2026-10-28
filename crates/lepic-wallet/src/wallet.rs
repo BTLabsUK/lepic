@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use lepic_keychain::{Seed, WalletSeedError, WalletSeedFile};

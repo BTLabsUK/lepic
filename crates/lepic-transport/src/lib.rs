@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Transport traits, transport registry, format policy and the file transport.
 
 pub mod error;

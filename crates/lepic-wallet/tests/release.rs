@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Releasing a send the network never took. A send becomes releasable once a refresh at or
 //! above `RELEASE_AFTER_BLOCKS` past its finalizing height misses its kernel, and the release
 //! asks the node once more before it cancels the send.

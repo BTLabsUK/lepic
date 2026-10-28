@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Epicbox client against the mock relay: subscribing, receiving, acknowledging, sending,
 //! redelivery, robustness, stopping and draining.
 

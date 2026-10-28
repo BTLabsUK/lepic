@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Every workspace member inherits `[workspace.lints]`, which denies `unsafe_code`. The only
 //! relaxation allowed is the attribute on the module flutter_rust_bridge generates.
 

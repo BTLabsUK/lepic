@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The G-05 restore sessions (`testdata/vectors/engine/restore_*.json`) as engine fixtures: a
 //! wallet restored from the subject's phrase over a `MockNode` that replays the session, and the
 //! comparison of the wallet's stored state with the state upstream ended in, mapped through

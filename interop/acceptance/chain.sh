@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Drives the stack `run.sh --stack-only` keeps running, for tests of a lepic outside the stack,
 # such as the Flutter binding (BTLabs-EPIC/lepic-flutter). It takes no lock: the run.sh
 # holding the stack holds it.

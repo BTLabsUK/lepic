@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2021 The Grin Developers
 // Portions Copyright 2026 The Epic Cash Developers
 // Ported from EpicCash/epic-wallet impls/src/node_clients/http.rs (Apache-2.0); see NOTICE and

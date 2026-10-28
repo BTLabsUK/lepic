@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! BLAKE2b-256 as the node computes it: unkeyed through the `Hashed` trait, over raw bytes and over
 //! the serialization of typed values, and keyed as the proof nonces use it.
 

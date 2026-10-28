@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Import of an `epic-wallet` wallet's history (ADR 0019): the dates, kinds, amounts, messages
 //! and links the old wallet's database gives the new wallet's log, how the scan reconciles them
 //! with the chain, and the statuses of what cannot be imported.

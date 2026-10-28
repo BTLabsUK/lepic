@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Contact pairing formats (RFC 0002): the sealed envelope and its armor, contact cards,
 //! invites, the pairing reply and confirm, the key check, the SAS and pairing words. Pure:
 //! callers pass keys, the RNG and the time in.

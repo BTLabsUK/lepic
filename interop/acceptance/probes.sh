@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Probes of the relay and epic-wallet behaviour that invoices and notices over Epicbox rely on
 # (recorded in docs/compat/epicbox.md). `run.sh --probes` sources this after
 # steps.sh and runs PROBE_STEPS instead of STEPS, with step_probe_setup as its setup step.

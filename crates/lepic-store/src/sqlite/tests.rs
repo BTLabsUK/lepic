@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Migration harness: every older schema version must open and migrate with its data intact.
 //!
 //! A schema change adds a migration and an [`UpgradeCase`] for the version it replaces. The seed

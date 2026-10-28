@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The vault file header and framing, read before any key is derived.
 
 #![no_main]

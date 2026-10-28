@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Live floonet smoke test between lepic and epic-wallet v4.0.2, over slate files and over a local
 # Epicbox relay, on the public floonet chain. Opt-in: does nothing unless LEPIC_LIVE_TESTS=1.
 #

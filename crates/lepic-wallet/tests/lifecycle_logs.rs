@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The log test runs in its own binary: `tracing` caches per call site whether anyone listens,
 //! and tests on other threads that run without a subscriber can reset that cache while this
 //! test captures, which drops its records.

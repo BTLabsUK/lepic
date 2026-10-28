@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Replays the RFC 0002 key vectors in `testdata/vectors/pairing`, written by the independent
 //! pairing kit: contact roots and slot keys, the slot search, one-time reply keys, and the
 //! pairing mailbox keys of codes and of pairing words, and the key check's tag and slot search.

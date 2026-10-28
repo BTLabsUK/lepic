@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The Epicbox inbox stays bounded: a reply the relay refuses or never answers does not stop the
 //! messages behind it, a slate expired by a stale tip is settled after one refresh, and
 //! unsolicited payments are capped per sender key and in total.

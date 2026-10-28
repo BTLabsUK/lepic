@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Pure decoders for node response bodies: JSON-RPC framing, then strict validation against
 //! the request that was made. The client uses them, and so can fuzz targets.
 

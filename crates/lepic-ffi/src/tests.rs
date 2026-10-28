@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Binding behaviour that needs a runtime, a wallet directory and the app's store, driven
 //! through the API the app calls.
 

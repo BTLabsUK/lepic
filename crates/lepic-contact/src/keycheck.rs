@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Re-pairing after a restore (RFC 0002 7.8): the key check (type 06), its answers (type 07: not
 //! found, found, restored), and the contact update (type 05, 8.5).
 //!

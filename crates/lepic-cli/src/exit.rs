@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Typed command failures and the exit codes they map to. The codes are part of the CLI's
 //! interface: scripts branch on them, so a code never changes meaning.
 

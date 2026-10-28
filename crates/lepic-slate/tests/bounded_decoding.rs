@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Memory spent decoding legacy slates whose arrays are far longer than any slate LEPIC accepts.
 //! It must stay bounded by the counts LEPIC accepts, not grow with the input.
 //!

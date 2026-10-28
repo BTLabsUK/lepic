@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Fee estimates: the selection a send would make, without the send.
 
 use lepic_node::NodeApi;

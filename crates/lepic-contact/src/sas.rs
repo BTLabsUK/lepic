@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The short authentication string both screens show after pairing (RFC 0002 7.5).
 
 use crate::card::ContactCard;

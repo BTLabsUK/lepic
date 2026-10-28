@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wallet's own tor: one child process per open wallet, on private `auto` ports, driven over
 //! its control port so the wallet knows when it can send and receive, and why it cannot.
 //!

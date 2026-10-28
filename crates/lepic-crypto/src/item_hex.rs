@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Hex decoding that reports failures as [`CryptoError`] for the item being decoded.
 
 use zeroize::Zeroize;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The HTTP transport: hyper over rustls (ADR 0006), with the limits the node client relies on.
 
 use std::net::IpAddr;

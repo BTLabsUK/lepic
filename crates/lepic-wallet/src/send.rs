@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2019 The Epic Developers
 // Ported from EpicCash/epic-wallet libwallet/src/api_impl/owner.rs, libwallet/src/internal/tx.rs,
 // libwallet/src/internal/selection.rs, libwallet/src/slate.rs, libwallet/src/types.rs

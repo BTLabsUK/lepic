@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The G-05 node recordings (`testdata/vectors/engine/{restore,refresh}_*.json`), replayed
 //! through `MockNode` into the real client, so every recorded node answer passes LEPIC's
 //! validation and the LEPIC replay rules serve the calls LEPIC's engine will make.

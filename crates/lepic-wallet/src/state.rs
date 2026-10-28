@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The transaction state machine. `docs/compat/states.md` maps these states to the transaction log
 //! types and confirmation flag `epic-wallet` stores.
 //!

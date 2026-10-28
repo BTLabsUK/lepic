@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reaching the relay through a tunnel, such as the wallet's tor (ADR 0021). Only the byte
 //! stream goes another way: to the relay's onion when one is known, else to the relay's domain
 //! through the tunnel's exit. The TLS server name and the websocket URL stay the relay's

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The clippy.toml test allowance covers #[test] functions only, not the
 // helpers of an integration test crate.
 #![allow(clippy::unwrap_used)]

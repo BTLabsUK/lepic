@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! What the CLI takes from the machine it runs on.
 
 use std::future::Future;

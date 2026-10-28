@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The line a human error ends with, saying what to try next. It is built from the error's
 //! typed fields and the settings the command ran with, so it can name the data directory, the
 //! node or the relay the command used. JSON errors carry no hint; scripts branch on `kind`.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Sealed envelopes: decoding and opening untrusted bytes, and sealing then opening any body.
 
 #![no_main]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `lepic contact`: pairing with contacts (RFC 0002) and invoices and slates exchanged with them
 //! through their mailboxes.
 

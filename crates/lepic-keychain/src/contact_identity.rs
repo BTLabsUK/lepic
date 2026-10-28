@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The contact-identity key of RFC 0002 section 2.1: the plain BIP32 key at `m/<a>/2/0` under an
 //! account. The contact key schedule built on it is a feature of `lepic-wallet-contacts`, not part
 //! of Epic compatibility, and lives there.

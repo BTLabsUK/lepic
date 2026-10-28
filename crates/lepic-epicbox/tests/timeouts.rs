@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Every limit the client puts on a relay that goes quiet. Each test ends on the
 //! `ClientError::Timeout` the limit produces, within twice the limit, on paused time. The suite
 //! runs for the payments address at index 0 and for an invoice address, a second identity with

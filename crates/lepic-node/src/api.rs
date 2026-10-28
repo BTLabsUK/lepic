@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The node port the wallet engine depends on, and the validated values it returns.
 
 use std::future::Future;

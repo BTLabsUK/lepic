@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Forwarding of log records to the app's Dart stream and to the on-device log ring.
 
 use std::sync::{Arc, PoisonError, RwLock};

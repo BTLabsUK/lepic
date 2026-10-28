@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The wallet's tor for its Epicbox relay connection (ADR 0021): streams to the relay's onion,
 //! or to its domain through an exit, while the setting is on. With the setting on it never
 //! goes directly until the host detaches tor or turns the setting off.

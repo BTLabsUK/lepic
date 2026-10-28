@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Portions Copyright 2019 The Grin Developers
 // Portions of the Rust Bitcoin Library, written in 2014 by Andrew Poelstra (CC0)
 // Ported from EpicCash/epic keychain/src/extkey_bip32.rs (Apache-2.0); see NOTICE and
