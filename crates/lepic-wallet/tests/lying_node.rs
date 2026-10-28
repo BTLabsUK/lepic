@@ -64,6 +64,8 @@ struct Lies {
     echo_and_forge: bool,
     /// Every n-th output of a page of unspent outputs is left out.
     hide_every: Option<usize>,
+    /// Left out of every `get_outputs` answer.
+    hidden: Vec<Commitment>,
 }
 
 /// The mock node's client, with answers a hostile node would add or take away.
@@ -116,9 +118,13 @@ impl NodeApi for LyingNode {
         commitments: &[Commitment],
     ) -> impl Future<Output = Result<Vec<OutputLocation>, NodeError>> + Send {
         let answer = self.inner.get_outputs(commitments);
-        let extra = self.lies().extra_locations.clone();
+        let (extra, hidden) = {
+            let lies = self.lies();
+            (lies.extra_locations.clone(), lies.hidden.clone())
+        };
         async move {
             let mut found = answer.await?;
+            found.retain(|location| !hidden.contains(&location.commitment));
             found.extend(extra);
             Ok(found)
         }
@@ -382,6 +388,38 @@ fn the_wrapper_passes_honest_answers_through() {
     let outcome = liar.refresh().unwrap();
 
     assert!(matches!(outcome, RefreshOutcome::Refreshed(_)));
+    assert_eq!(liar.state(tx), TxState::Confirmed);
+}
+
+/// A node that leaves an unspent output out of both of a refresh's answers makes it count as
+/// spent by another wallet, but only until a later refresh finds it held again: the output is
+/// unspent again and the entry of the other wallet's spend is gone.
+#[test]
+fn an_output_a_node_hid_comes_back_with_the_next_honest_answer() {
+    let liar = Liar::new();
+    let tx = liar.send(None);
+    let change = liar.change();
+    mine_the_send(&liar, &change);
+    liar.refresh().unwrap();
+    assert_eq!(balance_total(&liar), change.amount.value());
+
+    liar.lie(|lies| lies.hidden = vec![change.id.commitment]);
+    liar.refresh().unwrap();
+    assert_eq!(balance_total(&liar), 0);
+    let entries = |liar: &Liar| {
+        liar.store
+            .read(|repos| repos.transactions(ACCOUNT))
+            .unwrap()
+            .len()
+    };
+    assert_eq!(entries(&liar), 2);
+
+    liar.lie(|lies| lies.hidden.clear());
+    liar.set_tip(TIP + 10);
+    liar.refresh().unwrap();
+
+    assert_eq!(balance_total(&liar), change.amount.value());
+    assert_eq!(entries(&liar), 1);
     assert_eq!(liar.state(tx), TxState::Confirmed);
 }
 

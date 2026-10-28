@@ -228,7 +228,8 @@ where
         let now = self.ports().clock.now();
         let known = {
             let session = Arc::clone(&session);
-            self.blocking(move |_, _| Ok(session.store.read(known_state)))
+            let height = tip.height;
+            self.blocking(move |_, _| Ok(session.store.read(|repos| known_state(repos, height))))
                 .await??
         };
         chain::check_tip(self.config().network, &known.position, tip.height, now)?;
@@ -885,18 +886,23 @@ fn record_confirmed(
 struct KnownState {
     last_confirmed: Option<Height>,
     position: ChainPosition,
-    /// Every output the node is asked about, all those not stored as spent, in every account.
+    /// Every output the node is asked about, in every account: all those not stored as spent,
+    /// and those a recent refresh took for another wallet's spend.
     tracked: Vec<(Commitment, OutputStatus)>,
 }
 
-fn known_state(repos: &dyn Repositories) -> Result<KnownState, RefreshError> {
+fn known_state(repos: &dyn Repositories, tip: Height) -> Result<KnownState, RefreshError> {
+    let recently_spent = other_wallet::recently_spent(repos, tip)?;
     let mut tracked = Vec::new();
     for account in repos.accounts()? {
         tracked.extend(
             repos
                 .outputs(account.index, None)?
                 .into_iter()
-                .filter(|output| output.status != OutputStatus::Spent)
+                .filter(|output| {
+                    output.status != OutputStatus::Spent
+                        || recently_spent.contains(&output.id.commitment)
+                })
                 .map(|output| (output.id.commitment, output.status)),
         );
     }
@@ -926,6 +932,18 @@ fn apply_outputs(
             continue;
         };
         let updated = match found.get(commitment) {
+            // Only another wallet's spend leaves a spent output tracked: the node holds it
+            // unspent after all, so that spend is undone.
+            Some(location) if stored.status == OutputStatus::Spent => {
+                other_wallet::revived(repos, &stored)?;
+                debug!(height = %location.height, "output taken for another wallet's spend found again");
+                OutputRecord {
+                    status: OutputStatus::Unspent,
+                    height: location.height,
+                    mmr_index: Some(location.mmr_index),
+                    ..stored.clone()
+                }
+            }
             Some(location) => on_chain(repos, stored.clone(), location, now, &mut outcome)?,
             None => {
                 if other_wallet::spent_elsewhere(repos, &stored, seen.tip, seen.coinbase_maturity)?

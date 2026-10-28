@@ -45,6 +45,11 @@ struct Spend {
     to: u64,
 }
 
+/// Blocks after a refresh took outputs for another wallet's spend during which a refresh still
+/// asks the node for them, so a node that left them out of two answers cannot make them
+/// disappear until a scan from genesis.
+const REVIVE_WINDOW: u64 = 1_440;
+
 fn key(tx_id: TxId) -> String {
     format!("{PREFIX}{tx_id}")
 }
@@ -109,6 +114,36 @@ pub(crate) fn spent_by(
             .filter_map(|hex| Commitment::from_hex(hex).ok())
             .collect()
     }))
+}
+
+/// The outputs entries of another wallet's spend took, recorded at a tip at most
+/// [`REVIVE_WINDOW`] blocks below `tip`. A refresh still asks for them and undoes the spend
+/// when the node holds one unspent after all.
+pub(crate) fn recently_spent(
+    repos: &dyn Repositories,
+    tip: Height,
+) -> Result<Vec<Commitment>, StoreError> {
+    let mut spent = Vec::new();
+    for account in repos.accounts()? {
+        for stored in repos.transactions(account.index)? {
+            if stored.entry.direction != TxDirection::Outgoing || stored.entry.slate_id.is_some() {
+                continue;
+            }
+            let Some(spend) = read(repos, stored.id)? else {
+                continue;
+            };
+            if spend.to.saturating_add(REVIVE_WINDOW) < tip.value() {
+                continue;
+            }
+            spent.extend(
+                spend
+                    .spent
+                    .iter()
+                    .filter_map(|hex| Commitment::from_hex(hex).ok()),
+            );
+        }
+    }
+    Ok(spent)
 }
 
 /// Whether `stored`, which a refresh is about to mark spent, was spent by another wallet: it was
