@@ -1768,6 +1768,13 @@ const fn transport_connection(connection: Connection) -> TransportConnection {
 }
 
 fn wallet_event(event: &Event) -> Option<WalletEvent> {
+    session_event(event)
+        .or_else(|| invoice_event(event))
+        .or_else(|| contact_wallet_event(event))
+}
+
+/// The wallet's own events: session, balance, transactions, sync and transports.
+fn session_event(event: &Event) -> Option<WalletEvent> {
     Some(match event {
         Event::Session(state) => WalletEvent {
             session: Some(match state {
@@ -1810,6 +1817,13 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             transport_connection: Some(transport_connection(status.connection)),
             ..WalletEvent::of(WalletEventKind::Transport)
         },
+        _ => return None,
+    })
+}
+
+/// Events about invoices, notices and slates the wallet did not expect.
+fn invoice_event(event: &Event) -> Option<WalletEvent> {
+    Some(match event {
         Event::InvoiceParked(parked) => WalletEvent {
             slate_id: Some(parked.slate_id.to_string()),
             amount: Some(parked.amount.value()),
@@ -1863,6 +1877,13 @@ fn wallet_event(event: &Event) -> Option<WalletEvent> {
             kernel_excess: Some(posted.excess.to_hex()),
             ..WalletEvent::of(WalletEventKind::PaymentPosted)
         },
+        _ => return None,
+    })
+}
+
+/// Events of the contact engine.
+fn contact_wallet_event(event: &Event) -> Option<WalletEvent> {
+    Some(match event {
         Event::PairingReplied(news) => {
             contact::contact_event(WalletEventKind::PairingReplied, news)
         }
