@@ -118,9 +118,9 @@ pub(crate) enum SeedSource {
 }
 
 /// The unlocked state of a wallet: the root key and the database it opened.
-pub(crate) struct Session<D> {
-    pub(crate) keychain: Keychain,
-    pub(crate) store: D,
+pub struct Session<D> {
+    pub keychain: Keychain,
+    pub store: D,
 }
 
 /// Where a wallet lives and what it must match, for work on the blocking pool.

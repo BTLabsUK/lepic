@@ -4,15 +4,15 @@
 //! It writes exactly what [`V2JsonCodec`] writes, plus `"lepic":{"version":1}` as the last
 //! top-level key, and reads what [`V2JsonCodec`] reads. Stock `epic-wallet` ignores the key and
 //! drops it when it rewrites the slate, so a reply that still carries it came from LEPIC, and
-//! [`carries_lepic_marker`](super::marked_v3::carries_lepic_marker) finds it in either shape. No
+//! [`carries_lepic_marker`](super::v3::carries_lepic_marker) finds it in either shape. No
 //! slate signature covers the key: it proves a capability, never anything about the slate. It
 //! shares the id `legacy-v2`, because on the wire it is a V2 slate; a registry holds either it
 //! or [`V2JsonCodec`].
 
-use crate::codec::legacy::v2_json::V2JsonCodec;
-use crate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
-use crate::error::{DecodeError, EncodeError};
-use crate::model::Slate;
+use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::{DecodeError, EncodeError};
+use lepic_slate::model::Slate;
 
 /// What follows the last key of the V2 object.
 const MARKER: &str = ",\"lepic\":{\"version\":1}";
@@ -62,8 +62,8 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::codec::legacy::v3_json::V3JsonCodec;
-    use crate::codec::marked_v3::carries_lepic_marker;
+    use crate::marker::v3::carries_lepic_marker;
+    use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 
     const VECTORS: [&str; 3] = [
         include_str!("../../../../testdata/vectors/slates/send_epicbox_plain_s1_v2.json"),

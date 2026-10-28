@@ -110,7 +110,7 @@ impl From<AccountRecord> for Account {
     }
 }
 
-pub(crate) fn parent_key_id(index: AccountIndex) -> Result<Identifier, WalletError> {
+pub fn parent_key_id(index: AccountIndex) -> Result<Identifier, WalletError> {
     Ok(Identifier::new(2, [index.0, 0, 0, 0])?)
 }
 

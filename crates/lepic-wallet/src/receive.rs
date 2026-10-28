@@ -7,6 +7,8 @@ use lepic_crypto::aggsig::{
 };
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, SecretKey, Signature};
 use lepic_epicbox::TRANSPORT_ID as EPICBOX;
+use lepic_epicbox::marker::v2::MarkedV2JsonCodec;
+use lepic_epicbox::marker::v3::{MarkedV3JsonCodec, carries_lepic_marker};
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{
     Identifier, Keychain, KeychainError, ProofBuilder, ProofError, SwitchCommitment,
@@ -23,8 +25,6 @@ use lepic_primitives::tx::TransactionBody;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
-use lepic_slate::codec::marked_v2::MarkedV2JsonCodec;
-use lepic_slate::codec::marked_v3::{MarkedV3JsonCodec, carries_lepic_marker};
 use lepic_slate::codec::{Codec as _, EncodeContext};
 use lepic_slate::error::{DecodeError, RegistryError, SlateError};
 use lepic_slate::model::{
@@ -432,7 +432,7 @@ pub(crate) fn receive_own<D>(
 }
 
 /// The codecs a legacy transport policy decodes and encodes with, at the network's base fee.
-pub(crate) fn legacy_codecs(network: Network) -> Result<CodecRegistry, ReceiveError> {
+pub fn legacy_codecs(network: Network) -> Result<CodecRegistry, ReceiveError> {
     Ok(codecs::legacy(network.params().default_base_fee()))
 }
 

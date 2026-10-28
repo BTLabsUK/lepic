@@ -24,6 +24,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client and the `http` transport, the listener. | network |
 | `lepic-tor` | Tor on desktop (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5, the `tor` transport. | network, child process |
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. | through ports |
+| `lepic-wallet-contacts` | Contacts on the engine (RFC 0002): pairing, contact mailboxes, sealed slates, contact invoices, key checks and app payloads. Drives `lepic-wallet` through its public calls and the hooks of `lepic_wallet::extension`. | through ports |
 | `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stderr, files |
 | `lepic-cli` | The `lepic` binary. | all |
 | `lepic-ffi` | LEPIC's FFI API, built with flutter_rust_bridge (ADR 0007). The Flutter binding is a separate repository (ADR 0023). | all |
@@ -36,21 +37,20 @@ Outside the product workspace, with their own `Cargo.lock`:
 - `fuzz/` holds cargo-fuzz targets.
 - `interop/` runs LEPIC against real `epic-wallet` binaries and a local Epicbox relay.
 
-### Feature code in the pure crates
+### Feature code kept out of the money core
 
-Three modules in the pure crates implement features of LEPIC and its app, not Epic compatibility.
-Nothing in consensus, keys of funds or the slates `epic-wallet` reads depends on them, so a review
-of the money core can leave them out:
+Contact pairing and its key schedule (RFC 0002) live in `lepic-wallet-contacts` (ADR 0029), the
+LEPIC marker of slates sent between LEPIC wallets in `lepic-epicbox` (`marker`), next to the
+transport that uses it. What the pure crates keep of LEPIC's own features is the least the
+features need from the wallet's keychain:
 
+- `lepic-keychain` `contact_identity`: the plain key at `m/<a>/2/0` that the contact key
+  schedule starts from.
 - `lepic-keychain` `app_data`: the app's `WFEH` backup file (`docs/compat/wfeh.md`), sealed under
   a key derived from the wallet root.
-- `lepic-keychain` `contact_key`: the contact and private-pairing key schedule of RFC 0002,
-  derived from the wallet's keychain.
-- `lepic-slate` `codec::marked_v3`: the LEPIC marker a V3 slate may carry (a reply key for sealed
-  answers, RFC 0002), which `epic-wallet` ignores.
 
-They sit in the pure crates because each needs the wallet's keychain or the V3 codec, and those
-crates may not depend on `lepic-contact` (see the edges below).
+Nothing in consensus, keys of funds or the slates `epic-wallet` reads depends on them, so a review
+of the money core can leave them out.
 
 ## Allowed dependency edges
 
@@ -67,9 +67,10 @@ lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto
 lepic-foreign     -> lepic-transport, lepic-slate
 lepic-tor         -> lepic-foreign, lepic-transport, lepic-slate
 lepic-wallet      -> all crates above
+lepic-wallet-contacts -> all crates above
 lepic-telemetry   -> (external only)
-lepic-cli         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
-lepic-ffi         -> lepic-wallet, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
 ```
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a

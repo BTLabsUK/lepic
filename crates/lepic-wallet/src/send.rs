@@ -18,6 +18,8 @@ use blake2::Blake2b256;
 use blake2::digest::{FixedOutput, Update};
 use jiff::Timestamp;
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, SecretKey, aggsig};
+use lepic_epicbox::marker::v2::MarkedV2JsonCodec;
+use lepic_epicbox::marker::v3::MarkedV3JsonCodec;
 use lepic_epicbox::{EpicboxAddress, TRANSPORT_ID as EPICBOX};
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{
@@ -33,8 +35,6 @@ use lepic_primitives::params::Network;
 use lepic_primitives::tx::TransactionBody;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
-use lepic_slate::codec::marked_v2::MarkedV2JsonCodec;
-use lepic_slate::codec::marked_v3::MarkedV3JsonCodec;
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, ProofAddressError, SlateError};
 use lepic_slate::model::{
@@ -63,6 +63,7 @@ use crate::account::{self, AccountError, next_output_key};
 use crate::codecs;
 use crate::epicbox_invoice::invoice_origin;
 use crate::error::WalletError;
+use crate::extension::ReplyKeys;
 use crate::inbox::relay_network;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::with_spend_confirmations;
@@ -569,16 +570,12 @@ fn encode_for_delivery(
     let policy = transport(env.transports, delivery)?.policy();
     // A file or paste S1 carries the reply key in the LEPIC marker, so a LEPIC receiver can
     // answer sealed (RFC 0002 5); stock wallets ignore the extra key.
-    let reply_key = (delivery.transport() == FILE)
-        .then(|| {
-            crate::contact::reply_public_key(
-                env.keychain,
-                env.network,
-                account,
-                *slate.id().as_bytes(),
-            )
-        })
-        .flatten();
+    let reply_key = env
+        .reply_keys
+        .filter(|_| delivery.transport() == FILE)
+        .and_then(|keys| {
+            keys.reply_public_key(env.keychain, env.network, account, *slate.id().as_bytes())
+        });
     let codecs = match reply_key {
         Some(key) => codecs::legacy_with(
             Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_reply_key(key)),
@@ -611,6 +608,7 @@ struct SendEnvironment<'a> {
     keychain: &'a Keychain,
     network: Network,
     now: Timestamp,
+    reply_keys: Option<&'a dyn ReplyKeys>,
 }
 
 impl SendEnvironment<'_> {
@@ -942,7 +940,7 @@ fn stored_s1_for_delivery(
     };
     // A slate exchanged with a paired contact goes again only through its outbox, sealed.
     if matches!(delivery, Delivery::Deliver { .. })
-        && crate::contact::slate_contact(repos, slate_uuid)?.is_some()
+        && crate::contact_link::slate_contact(repos, slate_uuid)?.is_some()
     {
         return Err(not_resendable);
     }
@@ -1099,6 +1097,7 @@ where
             .height;
         self.check_plausible_tip(&session, tip).await?;
         let target = delivery.clone();
+        let reply_keys = self.reply_keys();
         let stored = self
             .blocking(move |ports, config| {
                 let env = SendEnvironment {
@@ -1106,6 +1105,7 @@ where
                     keychain: &session.keychain,
                     network: config.network,
                     now: ports.clock.now(),
+                    reply_keys: reply_keys.as_deref(),
                 };
                 let randomness = S1Randomness::draw(&mut **ports.rng.lock());
                 Ok(randomness.map_err(SendError::from).and_then(|randomness| {
@@ -1158,6 +1158,7 @@ where
         let session = self.session()?;
         transport(&self.ports().transports, &delivery)?;
         let target = delivery.clone();
+        let reply_keys = self.reply_keys();
         let stored = self
             .blocking(move |ports, config| {
                 let env = SendEnvironment {
@@ -1165,6 +1166,7 @@ where
                     keychain: &session.keychain,
                     network: config.network,
                     now: ports.clock.now(),
+                    reply_keys: reply_keys.as_deref(),
                 };
                 Ok(session
                     .store

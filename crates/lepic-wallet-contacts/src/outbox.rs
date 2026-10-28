@@ -20,10 +20,10 @@ use uuid::Uuid;
 use super::keys::{box_identity, contact_keys, contact_network};
 use super::relay::{check_online, endpoint_for, mailbox_client};
 use super::{ContactError, ContactRelays};
-use crate::event::{Event, OutboxNews};
-use crate::inbox::ErrorChain;
-use crate::ports::{SecretVault, StoreOpener};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::event::{Event, OutboxNews};
+use lepic_wallet::inbox::ErrorChain;
+use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// Waits before the next try, one step per failed try; the last repeats.
 const RETRY: [Duration; 4] = [
@@ -76,7 +76,7 @@ fn retry_after(attempts: u32) -> Duration {
         .unwrap_or_default()
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
@@ -92,7 +92,7 @@ where
         stage: SlateStage,
         envelope: &[u8],
     ) -> Result<ContactOutboxId, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let payload = armor(envelope);
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
@@ -103,7 +103,7 @@ where
                 for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
                     if let Some(mut tx) = repos.transaction_by_slate(slate_id, direction)?
                         && tx.entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
-                        && super::sealed::tx_contact(repos, tx.id)? == Some(contact_id)
+                        && lepic_wallet::contact_link::tx_contact(repos, tx.id)? == Some(contact_id)
                     {
                         tx.entry.transport = Some(TRANSPORT_ID.as_str().to_owned());
                         repos.update_transaction(tx.id, &tx.entry)?;
@@ -133,13 +133,13 @@ where
     ///
     /// Fails with [`ContactError::Offline`] or [`ContactError::EpicboxOff`] before connecting,
     /// and as the store does; a relay that fails is counted, not returned.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contacts_outbox_deliver(
         &self,
         relays: &ContactRelays,
     ) -> Result<OutboxReport, ContactError> {
         check_online(relays)?;
-        let _turn = self.contact_turn().await;
+        let _turn = self.wallet.contact_turn().await;
         self.deliver_outbox(relays, false).await
     }
 
@@ -151,7 +151,7 @@ where
         all: bool,
     ) -> Result<OutboxReport, ContactError> {
         check_online(relays)?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let due = {
             let session = std::sync::Arc::clone(&session);
             self.contact_work(move |ports, _| {
@@ -173,7 +173,7 @@ where
             let delivered = self.post_outbox_entry(relays, &stored.entry).await;
             let id = stored.id;
             let mut entry = stored.entry;
-            let now = self.ports().clock.now();
+            let now = self.wallet.ports().clock.now();
             entry.attempts = entry.attempts.saturating_add(1);
             let news = match &delivered {
                 Ok(()) => {
@@ -214,7 +214,7 @@ where
             })
             .await?;
             if let Some(news) = news {
-                self.emit(news);
+                self.wallet.emit(news);
             }
         }
         if report != OutboxReport::default() {
@@ -228,7 +228,7 @@ where
     /// confirmed, was cancelled or expired, except the queued `withdrawn` of an invoice this
     /// wallet issued and cancelled, which the payer must still get.
     pub(crate) async fn prune_outbox(&self) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let pruned = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -295,15 +295,15 @@ where
     /// cancelled or expired), with
     /// [`ContactError::Offline`] or [`ContactError::EpicboxOff`], and with
     /// [`ContactError::Relay`] when the relay fails.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_outbox_resend(
         &self,
         relays: &ContactRelays,
         id: ContactOutboxId,
     ) -> Result<(), ContactError> {
         check_online(relays)?;
-        let _turn = self.contact_turn().await;
-        let session = self.session()?;
+        let _turn = self.wallet.contact_turn().await;
+        let session = self.wallet.session()?;
         let stored = {
             let session = std::sync::Arc::clone(&session);
             self.contact_work(move |_, _| {
@@ -329,7 +329,7 @@ where
         };
         self.post_outbox_entry(relays, &stored.entry).await?;
         let mut entry = stored.entry;
-        let now = self.ports().clock.now();
+        let now = self.wallet.ports().clock.now();
         entry.attempts = entry.attempts.saturating_add(1);
         entry.state = ContactOutboxState::Delivered;
         entry.delivered_at = Some(now);
@@ -348,7 +348,7 @@ where
         &self,
         contact_id: ContactId,
     ) -> Result<Vec<OutboxView>, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -388,8 +388,8 @@ where
         relays: &ContactRelays,
         entry: &ContactOutboxEntry,
     ) -> Result<(), ContactError> {
-        let network = self.config().network;
-        let session = self.session()?;
+        let network = self.wallet.config().network;
+        let session = self.wallet.session()?;
         let contact_id = entry.contact_id;
         let (record, mailbox) = self
             .contact_work(move |_, _| {
@@ -404,7 +404,7 @@ where
                 })
             })
             .await?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let keys = contact_keys(
             &session.keychain,
             network,

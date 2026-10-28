@@ -5,9 +5,14 @@
 //! A pairing record holds no secret: our keys for a contact come from the seed, the account, the
 //! record's slot and its box salt. The secrets of a pairing in progress are sealed in the store.
 //! Nothing here touches the wallet's payments address, its listener or the node.
+//!
+//! The crate drives the engine of `lepic-wallet` from outside: it borrows a wallet as
+//! [`ContactBook`] with [`WalletContacts::contact_book`], and [`install`] gives the engine the reply key
+//! of file and paste slates. The engine keeps no contact code of its own.
 
 mod collect;
 mod invoices;
+mod key_schedule;
 mod keycheck;
 mod keys;
 mod manage;
@@ -19,25 +24,33 @@ mod relay;
 mod sealed;
 mod words;
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::future::BoxFuture;
 use jiff::Timestamp;
-
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{MailboxError, RelayEndpoint};
+use lepic_node::NodeApi;
 use lepic_store::{AccountIndex, ContactId, ContactState, PairingId, SealMode, StoreError};
+use lepic_wallet::Wallet;
+use lepic_wallet::error::WalletError;
+use lepic_wallet::extension::ContactNotices;
+use lepic_wallet::notice::Notice;
+use lepic_wallet::ports::{SecretVault, StoreOpener};
 use thiserror::Error;
 
-use crate::error::WalletError;
-
 pub use collect::{CollectReport, CollectTrigger};
-pub(crate) use invoices::slate_contact;
 pub use invoices::{ContactInvoice, InvoiceDetails, SAME_AMOUNT_WINDOW};
+pub use key_schedule::{
+    BOX_SALT_LEN, ContactKeyError, ContactKeys, ContactRoot, PRIVATE_SLOT_BASE, ReplyKey,
+    SLOT_COUNT, contact_root, key_check_tag, pairing_mailbox_keys,
+};
 pub use keycheck::{KEY_CHECK_WINDOW, KeyCheckStart, KeysDecision};
-pub(crate) use keys::reply_public_key;
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{ContactKind, PairingClass, Purpose, Refusal, SasSymbol};
 pub use lepic_store::PairingRole;
+pub use lepic_wallet::event::PairingFailure;
 pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, PendingPairingView};
 pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
 pub use pairing::{
@@ -46,9 +59,63 @@ pub use pairing::{
 };
 pub use payload::{ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, PayloadId};
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
-pub(crate) use sealed::tx_contact;
 pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
 pub use words::WORDS_INVITE_EXPIRY;
+
+/// The contact engine of one wallet: pairing, contact mailboxes, sealed slates, contact
+/// invoices, key checks and app payloads.
+pub struct ContactBook<'w, N, S: StoreOpener, V> {
+    wallet: &'w Wallet<N, S, V>,
+}
+
+/// Borrows a wallet's contact engine.
+pub trait WalletContacts<N, S: StoreOpener, V> {
+    fn contact_book(&self) -> ContactBook<'_, N, S, V>;
+}
+
+impl<N, S: StoreOpener, V> WalletContacts<N, S, V> for Wallet<N, S, V> {
+    fn contact_book(&self) -> ContactBook<'_, N, S, V> {
+        ContactBook { wallet: self }
+    }
+}
+
+/// Gives `wallet` what the engine takes from the contact engine: the reply key a file or
+/// paste S1 and an I1 carry, so a LEPIC peer can answer them sealed. Call it once for each
+/// wallet handle, before its first send.
+pub fn install<N, S, V>(wallet: &Wallet<N, S, V>)
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    wallet.set_reply_keys(Arc::new(keys::ContactReplyKeys));
+    wallet.set_contact_notices(Arc::new(SealedNotices));
+}
+
+/// The engine's hook for notices about a contact's slates: sealed into the contact's mailbox.
+struct SealedNotices;
+
+impl<N, S, V> ContactNotices<N, S, V> for SealedNotices
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    fn queue<'a>(
+        &'a self,
+        wallet: &'a Wallet<N, S, V>,
+        contact: ContactId,
+        notice: Notice,
+    ) -> BoxFuture<'a, Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+        Box::pin(async move {
+            wallet
+                .contact_book()
+                .queue_contact_notice(contact, notice)
+                .await
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error + Send + Sync>)
+        })
+    }
+}
 
 /// How long an inviter keeps draining its reply mailbox after the invite expired, for the clock
 /// skew of RFC 0002 C-26. Also the skew an invitee allows an invite's expiry.
@@ -157,22 +224,6 @@ pub struct ContactView {
     pub created_at: Timestamp,
 }
 
-/// Why a pairing ended without a record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingFailure {
-    /// The confirm does not match the invite's commitment or enc key: something changed the
-    /// invite on the way. Nothing was stored.
-    ChangedOnTheWay,
-    /// The invite expired before a reply arrived.
-    Expired,
-    /// This wallet answered an invite and no confirm came in time, or, as the inviter, could
-    /// not deliver its confirm in time: the other side cannot have finished, so nothing of the
-    /// pairing is kept.
-    NotConfirmed,
-    /// The inviter refused the reply: the invite was used, expired or cancelled. Advisory.
-    Refused(lepic_contact::Refusal),
-}
-
 /// Why a pairing operation failed.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -192,7 +243,7 @@ pub enum ContactError {
     #[error("pairing message could not be built")]
     Encode(#[source] lepic_contact::EncodeError),
     #[error("contact key derivation failed")]
-    Keys(#[source] lepic_keychain::ContactKeyError),
+    Keys(#[source] crate::key_schedule::ContactKeyError),
     #[error("name is not allowed")]
     Name(#[source] lepic_contact::TextError),
     #[error("relay address is not a domain with an optional port")]
@@ -232,11 +283,11 @@ pub enum ContactError {
     #[error("a slate at stage {0} is not taken here")]
     Stage(lepic_slate::stage::Stage),
     #[error("slate was not received")]
-    Receive(#[source] crate::receive::ReceiveError),
+    Receive(#[source] lepic_wallet::receive::ReceiveError),
     #[error("invoice was not handled")]
-    Invoice(#[source] crate::invoice::InvoiceError),
+    Invoice(#[source] lepic_wallet::invoice::InvoiceError),
     #[error("slate was not finalized")]
-    Finalize(#[source] crate::finalize::FinalizeError),
+    Finalize(#[source] lepic_wallet::finalize::FinalizeError),
     /// The text is larger than this call reads.
     #[error("text is larger than {max} bytes")]
     TooLarge { max: usize },

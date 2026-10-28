@@ -45,7 +45,7 @@ pub fn built_in_pairing_relays(chain: Chain) -> Vec<String> {
     crate::boundary::guard_or("built_in_pairing_relays", Vec::new(), || {
         lepic_epicbox::built_in_relays(crate::session::relay_network(chain.network()))
             .iter()
-            .map(lepic_wallet::contact::meeting_host)
+            .map(lepic_wallet_contacts::meeting_host)
             .collect()
     })
 }

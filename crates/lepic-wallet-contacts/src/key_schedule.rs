@@ -20,18 +20,11 @@ use thiserror::Error;
 use x25519_dalek::StaticSecret;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::identifier::Identifier;
-use crate::keychain::{Keychain, KeychainError, SwitchCommitment};
+use lepic_keychain::{Identifier, Keychain, KeychainError};
 
 const ROOT_SALT: &[u8] = b"epic-contact/1";
 const MAILBOX_SALT: &[u8] = b"epic-pair/1 mailbox";
 const KEY_CHECK_DOMAIN: &[u8] = b"epic-pair/1 keycheck";
-
-/// The depth of an account's own path `m/<a>/0`.
-const ACCOUNT_DEPTH: u8 = 2;
-
-/// The second path component of the contact-identity branch.
-const CONTACT_BRANCH: u32 = 2;
 
 /// A slot is any u32. A wallet keeps its slots below `SLOT_COUNT`, the range the slot searches
 /// cover, and refuses new pairings once it used them all; a service never searches and may use
@@ -60,26 +53,6 @@ pub enum ContactKeyError {
     Keychain(#[from] KeychainError),
 }
 
-/// The path `m/<a>/2/0` of the contact-identity root key under the account at `parent`, which
-/// must be the account's own path `m/<a>/0`.
-pub fn contact_identity_key_id(parent: &Identifier) -> Result<Identifier, KeychainError> {
-    let depth = parent.depth();
-    let mut components = parent.components();
-    if depth != ACCOUNT_DEPTH || components.get(1) != Some(&0) {
-        return Err(KeychainError::NotAnAccountPath { depth });
-    }
-    if let Some(branch) = components.get_mut(1) {
-        *branch = CONTACT_BRANCH;
-    }
-    if let Some(slot) = components.get_mut(usize::from(depth)) {
-        *slot = 0;
-    }
-    let child_depth = depth
-        .checked_add(1)
-        .ok_or(KeychainError::NotAnAccountPath { depth })?;
-    Identifier::new(child_depth, components).map_err(|_| KeychainError::NotAnAccountPath { depth })
-}
-
 const fn network_byte(network: Network) -> u8 {
     match network {
         Network::Mainnet => 0,
@@ -87,17 +60,14 @@ const fn network_byte(network: Network) -> u8 {
     }
 }
 
-impl Keychain {
-    /// The contact-identity root of the account at `parent` on `network` (RFC 0002 2.1).
-    pub fn contact_root(
-        &self,
-        parent: &Identifier,
-        network: Network,
-    ) -> Result<ContactRoot, ContactKeyError> {
-        let id = contact_identity_key_id(parent)?;
-        let raw = self.derive_key(0, &id, SwitchCommitment::None)?;
-        ContactRoot::from_raw(raw.expose_bytes(), network)
-    }
+/// The contact-identity root of the account at `parent` on `network` (RFC 0002 2.1).
+pub fn contact_root(
+    keychain: &Keychain,
+    parent: &Identifier,
+    network: Network,
+) -> Result<ContactRoot, ContactKeyError> {
+    let raw = keychain.contact_identity_secret(parent)?;
+    ContactRoot::from_raw(raw.expose_bytes(), network)
 }
 
 /// The 32-byte contact-identity root. Wiped on drop and never printed.
@@ -106,7 +76,7 @@ pub struct ContactRoot(Zeroizing<[u8; 32]>);
 impl ContactRoot {
     /// The root for a raw account key `raw` (the plain BIP32 output at `m/<a>/2/0`) on `network`:
     /// `HKDF(salt = "epic-contact/1", ikm = BLAKE2b-256(raw), info = "root" || net)`. This is the
-    /// step [`Keychain::contact_root`] performs after deriving `raw`, exposed so other
+    /// step [`contact_root`] performs after deriving `raw`, exposed so other
     /// implementations can be checked against it from a raw key alone.
     pub fn from_raw(raw: &[u8; 32], network: Network) -> Result<Self, ContactKeyError> {
         let mut state = Blake2b256::default();
@@ -426,42 +396,6 @@ mod tests {
         assert_ne!(one.enc_public_key(), contact.enc_public_key());
         assert_ne!(one.sig_public_key(), contact.sig_public_key());
         assert_ne!(one.expose_hint_key(), contact.expose_hint_key());
-    }
-
-    #[test]
-    fn contact_path_of_default_account() {
-        let parent = Identifier::new(2, [0, 0, 0, 0]).unwrap();
-        let id = contact_identity_key_id(&parent).unwrap();
-        assert_eq!(id, Identifier::new(3, [0, 2, 0, 0]).unwrap());
-        assert_eq!(id.to_bip32_path(), "m/0/2/0");
-    }
-
-    #[test]
-    fn refuses_a_parent_that_is_not_an_account_path() {
-        for (depth, components) in [
-            (0, [0, 0, 0, 0]),
-            (1, [0, 0, 0, 0]),
-            (2, [0, 1, 0, 0]),
-            (2, [0, 2, 0, 0]),
-            (3, [0, 0, 0, 0]),
-            (4, [0, 0, 0, 0]),
-        ] {
-            let parent = Identifier::new(depth, components).unwrap();
-            assert_eq!(
-                contact_identity_key_id(&parent),
-                Err(KeychainError::NotAnAccountPath { depth }),
-                "{components:?} at depth {depth}"
-            );
-        }
-    }
-
-    #[test]
-    fn contact_path_of_another_account() {
-        let parent = Identifier::new(2, [7, 0, 0, 0]).unwrap();
-        assert_eq!(
-            contact_identity_key_id(&parent).unwrap().to_bip32_path(),
-            "m/7/2/0"
-        );
     }
 
     #[test]

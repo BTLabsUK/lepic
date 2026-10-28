@@ -121,7 +121,7 @@ fn transaction_with(
     let Some(stored) = repos.transaction_by_slate(slate_id, direction)? else {
         return Ok(None);
     };
-    let contact = crate::contact::slate_contact(repos, slate_id)?;
+    let contact = crate::contact_link::slate_contact(repos, slate_id)?;
     let exchanged = match from {
         NoticeFrom::Epicbox(key) => {
             contact.is_none()
@@ -131,7 +131,7 @@ fn transaction_with(
         // Matched by the transaction the exchange with the contact made, never by a slate id
         // a contact could have claimed.
         NoticeFrom::Contact(id) => {
-            contact == Some(*id) && crate::contact::tx_contact(repos, stored.id)? == Some(*id)
+            contact == Some(*id) && crate::contact_link::tx_contact(repos, stored.id)? == Some(*id)
         }
     };
     if !exchanged || repos.slate(slate_id, stage)?.is_none() {
@@ -271,7 +271,7 @@ fn withdraw(
             parked.sender_key == *key && parked.status != PendingInvoiceStatus::Paid
         }
         (Some(parked), NoticeFrom::Contact(id)) => {
-            crate::contact::slate_contact(repos, slate_id)? == Some(*id)
+            crate::contact_link::slate_contact(repos, slate_id)? == Some(*id)
                 && parked.status != PendingInvoiceStatus::Paid
         }
         (None, _) => false,
@@ -309,7 +309,7 @@ fn withdrawal_target(
         return Ok(None);
     };
     let over_epicbox = entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
-        || crate::contact::slate_contact(repos, slate_id)?.is_some();
+        || crate::contact_link::slate_contact(repos, slate_id)?.is_some();
     if entry.direction != TxDirection::Incoming
         || !over_epicbox
         || repos.slate(slate_id, SlateStage::Invoice1)?.is_none()
@@ -503,7 +503,7 @@ where
         self.blocking(move |_, _| {
             Ok(session
                 .store
-                .read(|repos| crate::contact::slate_contact(repos, uuid(slate_id)))?)
+                .read(|repos| crate::contact_link::slate_contact(repos, uuid(slate_id)))?)
         })
         .await
         .ok()
@@ -513,7 +513,7 @@ where
     /// Applies a notice the paired contact `contact_id` sent sealed and signed, for a slate
     /// exchanged with that contact only, and raises its event. Returns the payment to cancel
     /// for a `withdrawn` of an invoice this wallet paid.
-    pub(crate) async fn apply_contact_notice(
+    pub async fn apply_contact_notice(
         &self,
         notice: Notice,
         contact_id: ContactId,
@@ -563,7 +563,7 @@ where
     }
 
     /// Tells the payer that the paid invoice `tx_id` was pushed with `excess`.
-    pub(crate) async fn notify_posted(
+    pub async fn notify_posted(
         &self,
         tx_id: TxId,
         slate_id: SlateId,
@@ -704,11 +704,15 @@ where
         let slate_id = notice.slate_id;
         if let Some(contact_id) = self.contact_of_slate(slate_id).await {
             // Exchanges with a paired contact keep their notices in its mailbox, sealed.
-            return self
-                .queue_contact_notice(contact_id, notice)
+            let Some(notices) = self.contact_notices() else {
+                warn!(slate_id = %slate_id, "notice for a contact not queued, contacts are off");
+                return Err(Hold::Withheld);
+            };
+            return notices
+                .queue(self, contact_id, notice)
                 .await
                 .map_err(|error| {
-                    warn!(slate_id = %slate_id, error = %ErrorChain(&error), "notice not queued");
+                    warn!(slate_id = %slate_id, error = %ErrorChain(&*error), "notice not queued");
                     Hold::Withheld
                 });
         }

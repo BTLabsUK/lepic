@@ -13,9 +13,9 @@ use uuid::Uuid;
 
 use super::private::{RecordClass, class_of};
 use super::{ContactError, ContactRelays, LockedRng, new_id};
-use crate::event::{ContactEvent, Event};
-use crate::ports::{SecretVault, StoreOpener};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::event::{ContactEvent, Event};
+use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// The largest payload one message carries.
 pub const MAX_APP_PAYLOAD_LEN: usize = 64 * 1024;
@@ -161,7 +161,7 @@ fn sendable(record: &ContactRecord) -> bool {
         )
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
@@ -176,7 +176,7 @@ where
     /// [`ContactError::WrongClass`] for a contact, [`ContactError::NotVerified`] before both
     /// sides matched the words check, [`ContactError::UnknownContact`] for no such pairing or
     /// one whose secrets do not open, and as the store does.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_post_payload(
         &self,
         relays: &ContactRelays,
@@ -189,7 +189,7 @@ where
             });
         }
         self.check_contact_network(relays)?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let (record, id) = self
             .contact_work(move |ports, _| {
                 session.store.read(|repos| {
@@ -231,7 +231,7 @@ where
 
     /// The payloads contacts sent that the host has not acknowledged, oldest first.
     pub async fn contact_payloads(&self) -> Result<Vec<ContactPayload>, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.read(|repos| {
                 let mut payloads = Vec::new();
@@ -272,7 +272,7 @@ where
     /// forgotten.
     pub async fn contact_payloads_ack(&self, ids: &[PayloadId]) -> Result<usize, ContactError> {
         let ids: Vec<PayloadId> = ids.to_vec();
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.write(|repos| {
                 let mut index = read_index(repos)?;
@@ -311,7 +311,7 @@ where
             debug!("malformed payload from a contact dropped");
             return Ok(Handled::Stored);
         };
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let body = content.body;
         let kept = self
             .contact_work(move |ports, _| {
@@ -324,7 +324,8 @@ where
         Ok(match kept {
             Arrival::New => {
                 debug!("payload from a contact kept");
-                self.emit(Event::ContactPayload(ContactEvent { contact_id }));
+                self.wallet
+                    .emit(Event::ContactPayload(ContactEvent { contact_id }));
                 Handled::Stored
             }
             Arrival::Repeat => Handled::Stored,

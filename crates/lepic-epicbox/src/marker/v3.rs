@@ -15,11 +15,11 @@
 use lepic_crypto::hex;
 use serde::Deserialize;
 
-use crate::codec::legacy::v3_json::V3JsonCodec;
-use crate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
-use crate::error::{DecodeError, EncodeError};
-use crate::model::Slate;
-use crate::validate::check_size;
+use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::{DecodeError, EncodeError};
+use lepic_slate::model::Slate;
+use lepic_slate::validate::check_size;
 
 /// What follows the last key of the V3 object.
 const MARKER: &str = ",\"lepic\":{\"version\":1}";

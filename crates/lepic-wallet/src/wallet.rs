@@ -1,4 +1,4 @@
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use lepic_keychain::{Seed, WalletSeedError, WalletSeedFile};
 use lepic_node::NodeApi;
@@ -10,6 +10,7 @@ use crate::account::{self, Account, AccountLabel};
 use crate::config::{ConfigError, WalletConfig};
 use crate::error::WalletError;
 use crate::event::{EVENT_CAPACITY, Event, SessionState};
+use crate::extension::{ContactNotices, ReplyKeys};
 use crate::lifecycle::{
     self, Password, PhraseCheck, RecoveryPhrase, SeedSource, Session, Target, WordCount,
     generate_seed, recovery_phrase,
@@ -29,6 +30,8 @@ pub struct Wallet<N, S: StoreOpener, V> {
     events: broadcast::Sender<Event>,
     unsolicited: tokio::sync::Mutex<()>,
     contacts: tokio::sync::Mutex<()>,
+    reply_keys: OnceLock<Arc<dyn ReplyKeys>>,
+    contact_notices: OnceLock<Arc<dyn ContactNotices<N, S, V>>>,
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -55,6 +58,8 @@ where
             events,
             unsolicited: tokio::sync::Mutex::new(()),
             contacts: tokio::sync::Mutex::new(()),
+            reply_keys: OnceLock::new(),
+            contact_notices: OnceLock::new(),
         })
     }
 
@@ -64,6 +69,26 @@ where
 
     pub fn ports(&self) -> &Ports<N, S, V> {
         &self.ports
+    }
+
+    /// Installs the hook that gives file and paste S1s and I1s their reply key. The first hook
+    /// installed stays; returns whether this one was.
+    pub fn set_reply_keys(&self, keys: Arc<dyn ReplyKeys>) -> bool {
+        self.reply_keys.set(keys).is_ok()
+    }
+
+    pub(crate) fn reply_keys(&self) -> Option<Arc<dyn ReplyKeys>> {
+        self.reply_keys.get().cloned()
+    }
+
+    /// Installs the hook that seals notices about a paired contact's slates into its mailbox.
+    /// The first hook installed stays; returns whether this one was.
+    pub fn set_contact_notices(&self, notices: Arc<dyn ContactNotices<N, S, V>>) -> bool {
+        self.contact_notices.set(notices).is_ok()
+    }
+
+    pub(crate) fn contact_notices(&self) -> Option<Arc<dyn ContactNotices<N, S, V>>> {
+        self.contact_notices.get().cloned()
     }
 
     /// Events from now on. See [`crate::event`] for what a slow subscriber misses.
@@ -307,7 +332,8 @@ where
         Ok(())
     }
 
-    pub(crate) fn session(&self) -> Result<Arc<Session<S::Store>>, WalletError> {
+    /// The unlocked wallet's keychain and store. Fails with [`WalletError::Locked`].
+    pub fn session(&self) -> Result<Arc<Session<S::Store>>, WalletError> {
         self.session
             .read()
             .unwrap_or_else(PoisonError::into_inner)
@@ -324,11 +350,12 @@ where
     /// Serves the contact engine's runs one at a time: a collecting cycle, a pairing link
     /// entered by hand and an outbox run each read, reach a relay and write, so two at once
     /// could take one message twice or post one entry twice.
-    pub(crate) async fn contact_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+    pub async fn contact_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.contacts.lock().await
     }
 
-    pub(crate) fn emit(&self, event: Event) {
+    /// Sends `event` to every subscriber.
+    pub fn emit(&self, event: Event) {
         // Sending fails only when nobody is subscribed, which is not an error.
         let _ = self.events.send(event);
     }
@@ -337,7 +364,7 @@ where
     /// is never stalled by Argon2 or disk access. The work runs under the caller's subscriber
     /// and inside the operation's span, so what it logs is attributed and filtered like the rest
     /// of the operation.
-    pub(crate) async fn blocking<T, F>(&self, work: F) -> Result<T, WalletError>
+    pub async fn blocking<T, F>(&self, work: F) -> Result<T, WalletError>
     where
         T: Send + 'static,
         F: FnOnce(&Ports<N, S, V>, &WalletConfig) -> Result<T, WalletError> + Send + 'static,

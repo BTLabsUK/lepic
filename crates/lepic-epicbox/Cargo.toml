@@ -35,6 +35,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+lepic-primitives.workspace = true
 lepic-telemetry = { path = "../lepic-telemetry" }
 lepic-epicbox = { path = ".", features = ["mock-relay"] }
 proptest = { workspace = true, features = ["std"] }

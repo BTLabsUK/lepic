@@ -28,10 +28,12 @@ use lepic_epicbox::{Domain, EpicboxAddress, Identity, MailboxClient, Network as 
 use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, ContactOutboxState, SlateStage, TxState, WalletStore};
 use lepic_wallet::Event;
-use lepic_wallet::contact::{ContactRelays, InviteRequest, InvoiceDetails, RelayMode, SasDecision};
 use lepic_wallet::invoice::{InvoiceRequest, IssuedInvoice};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
+use lepic_wallet_contacts::{
+    ContactRelays, InviteRequest, InvoiceDetails, RelayMode, SasDecision, WalletContacts,
+};
 use rand::SeedableRng;
 use world::{ACCOUNT, AMOUNT, Party, World, pay_request};
 
@@ -40,7 +42,7 @@ impl World {
     /// allows the issuer's invoices. Returns the issuer's and the payer's contact ids.
     fn pair_for_invoices(&self, kind: ContactKind) -> (ContactId, ContactId) {
         let link = self
-            .block_on(self.issuer.wallet.pairing_invite(
+            .block_on(self.issuer.wallet.contact_book().pairing_invite(
                 &relays(&self.issuer),
                 InviteRequest {
                     kind,
@@ -53,6 +55,7 @@ impl World {
             .block_on(
                 self.payer
                     .wallet
+                    .contact_book()
                     .pairing_accept(&relays(&self.payer), accept(&link, "Ben", false)),
             )
             .unwrap();
@@ -60,19 +63,24 @@ impl World {
         assert_eq!(self.collect(&self.payer).paired, 1);
         let shop_side = self.only_contact(&self.issuer);
         let ben_side = answered.contact_id;
-        self.block_on(self.payer.wallet.pairing_sas(
+        self.block_on(self.payer.wallet.contact_book().pairing_sas(
             &relays(&self.payer),
             ben_side,
             SasDecision::Match,
         ))
         .unwrap();
-        self.block_on(self.payer.wallet.contact_set_allow_invoices(ben_side, true))
-            .unwrap();
+        self.block_on(
+            self.payer
+                .wallet
+                .contact_book()
+                .contact_set_allow_invoices(ben_side, true),
+        )
+        .unwrap();
         (shop_side, ben_side)
     }
 
     fn invoice_contact(&self, shop_side: ContactId, reference: &str) -> IssuedInvoice {
-        self.block_on(self.issuer.wallet.contact_issue_invoice(
+        self.block_on(self.issuer.wallet.contact_book().contact_issue_invoice(
             &relays(&self.issuer),
             shop_side,
             InvoiceRequest {
@@ -91,7 +99,7 @@ impl World {
     }
 
     fn pay_contact(&self, issued: &IssuedInvoice) -> lepic_wallet::invoice::PaidInvoice {
-        self.block_on(self.payer.wallet.contact_pay_invoice(
+        self.block_on(self.payer.wallet.contact_book().contact_pay_invoice(
             &relays(&self.payer),
             issued.slate_id,
             pay_request(),
@@ -114,7 +122,7 @@ fn a_contact_invoice_is_parked_paid_through_the_outbox_and_posted() {
     world.collect(&world.payer);
 
     let parked = world
-        .block_on(world.payer.wallet.contact_invoices())
+        .block_on(world.payer.wallet.contact_book().contact_invoices())
         .unwrap();
     assert_eq!(parked.len(), 1);
     assert_eq!(parked[0].slate_id, issued.slate_id);
@@ -135,7 +143,7 @@ fn a_contact_invoice_is_parked_paid_through_the_outbox_and_posted() {
 
     let paid = world.pay_contact(&issued);
     let outbox = world
-        .block_on(world.payer.wallet.contact_outbox(ben_side))
+        .block_on(world.payer.wallet.contact_book().contact_outbox(ben_side))
         .unwrap();
     assert_eq!(outbox.len(), 1);
     assert_eq!(outbox[0].stage, SlateStage::Invoice2);
@@ -164,6 +172,7 @@ fn invoices_from_unverified_contacts_strangers_and_plain_text_never_park() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -176,7 +185,7 @@ fn invoices_from_unverified_contacts_strangers_and_plain_text_never_park() {
     world.collect(&world.payer);
     assert!(
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .is_empty()
     );
@@ -222,7 +231,7 @@ fn invoices_from_unverified_contacts_strangers_and_plain_text_never_park() {
 
     assert!(
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .is_empty()
     );
@@ -245,7 +254,7 @@ fn turning_invoices_off_declines_the_unpaid_ones_and_lets_the_paid_one_finish() 
     world.collect(&world.payer);
     assert_eq!(
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .len(),
         3
@@ -258,6 +267,7 @@ fn turning_invoices_off_declines_the_unpaid_ones_and_lets_the_paid_one_finish() 
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contact_set_allow_invoices(ben_side, false),
         )
         .unwrap();
@@ -266,13 +276,14 @@ fn turning_invoices_off_declines_the_unpaid_ones_and_lets_the_paid_one_finish() 
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contacts_outbox_deliver(&relays(&world.payer)),
         )
         .unwrap();
 
     assert!(
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .is_empty()
     );
@@ -295,7 +306,7 @@ fn turning_invoices_off_declines_the_unpaid_ones_and_lets_the_paid_one_finish() 
     world.collect(&world.payer);
     assert!(
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .is_empty()
     );
@@ -328,7 +339,7 @@ fn a_withdrawn_reaches_the_payer_through_the_issuers_next_collect() {
         .collect();
     assert_eq!(told, vec![withdrawn.slate_id]);
     let left: Vec<_> = world
-        .block_on(world.payer.wallet.contact_invoices())
+        .block_on(world.payer.wallet.contact_book().contact_invoices())
         .unwrap()
         .into_iter()
         .map(|invoice| invoice.slate_id)
@@ -357,6 +368,7 @@ fn a_signed_withdrawn_for_a_paid_invoice_cancels_the_payment() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .contacts_outbox_deliver(&relays(&world.issuer)),
         )
         .unwrap();
@@ -375,7 +387,7 @@ fn a_signed_withdrawn_for_a_paid_invoice_cancels_the_payment() {
     assert_eq!(world.tx_state(&world.payer, paid.tx_id), TxState::Cancelled);
     assert!(
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .is_empty()
     );
@@ -391,7 +403,7 @@ fn the_outbox_retries_reaches_the_home_relay_from_another_relay_and_gets_stuck()
     world.pay_contact(&issued);
     let entry = |world: &World| {
         world
-            .block_on(world.payer.wallet.contact_outbox(ben_side))
+            .block_on(world.payer.wallet.contact_book().contact_outbox(ben_side))
             .unwrap()
             .remove(0)
     };
@@ -404,6 +416,7 @@ fn the_outbox_retries_reaches_the_home_relay_from_another_relay_and_gets_stuck()
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contacts_outbox_deliver(&relays(&world.payer)),
         )
         .unwrap();
@@ -427,7 +440,13 @@ fn the_outbox_retries_reaches_the_home_relay_from_another_relay_and_gets_stuck()
         mode: RelayMode::Online,
     };
     let report = world
-        .block_on(world.payer.wallet.contacts_outbox_deliver(&elsewhere))
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .contacts_outbox_deliver(&elsewhere),
+        )
         .unwrap();
     assert_eq!(report.delivered, 1);
     world.collect(&world.issuer);
@@ -446,6 +465,7 @@ fn the_outbox_retries_reaches_the_home_relay_from_another_relay_and_gets_stuck()
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contacts_outbox_deliver(&relays(&world.payer)),
         )
         .unwrap();
@@ -465,7 +485,7 @@ fn same_amount_requests_within_ten_minutes_are_grouped() {
     world.collect(&world.payer);
 
     let parked = world
-        .block_on(world.payer.wallet.contact_invoices())
+        .block_on(world.payer.wallet.contact_book().contact_invoices())
         .unwrap();
 
     let of = |slate_id| {
@@ -500,7 +520,7 @@ fn a_withdrawal_through_the_mailbox_is_received_and_answered_through_the_outbox(
         ))
         .unwrap();
     world
-        .block_on(world.payer.wallet.contact_post_slate(
+        .block_on(world.payer.wallet.contact_book().contact_post_slate(
             &relays(&world.payer),
             ben_side,
             sent.tx_id,
@@ -526,16 +546,14 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
     let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
     // The shop's update: its card for this pairing with its mailbox on a new relay.
     let record = world.issuer.read(|repos| repos.contact(shop_side)).unwrap();
-    let keys = world
-        .issuer
-        .keychain()
-        .contact_root(
-            &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
-            lepic_primitives::params::Network::Floonet,
-        )
-        .unwrap()
-        .contact_keys(record.slot, record.box_salt)
-        .unwrap();
+    let keys = lepic_wallet_contacts::contact_root(
+        &world.issuer.keychain(),
+        &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
+        lepic_primitives::params::Network::Floonet,
+    )
+    .unwrap()
+    .contact_keys(record.slot, record.box_salt)
+    .unwrap();
     let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
     let signer = SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
     let key_text = own.fields().mailbox.as_str().split('@').next().unwrap();
@@ -586,7 +604,8 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
             world
                 .payer
                 .wallet
-                .contacts_collect(&built_in, lepic_wallet::contact::CollectTrigger::Open),
+                .contact_book()
+                .contacts_collect(&built_in, lepic_wallet_contacts::CollectTrigger::Open),
         )
         .unwrap();
 
@@ -613,7 +632,8 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
             world
                 .payer
                 .wallet
-                .contacts_collect(&built_in, lepic_wallet::contact::CollectTrigger::Open),
+                .contact_book()
+                .contacts_collect(&built_in, lepic_wallet_contacts::CollectTrigger::Open),
         )
         .unwrap();
     assert_eq!(report.mailboxes, 2);
@@ -623,7 +643,8 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
             world
                 .payer
                 .wallet
-                .contacts_collect(&built_in, lepic_wallet::contact::CollectTrigger::Open),
+                .contact_book()
+                .contacts_collect(&built_in, lepic_wallet_contacts::CollectTrigger::Open),
         )
         .unwrap();
     assert_eq!(report.mailboxes, 1);
@@ -709,17 +730,16 @@ fn a_home_relay_moves_only_to_a_named_relay_and_never_by_a_plain_card() {
 }
 
 /// The party's keys for its contact `contact`, as the wallet derives them.
-fn keys_for(party: &Party, contact: ContactId) -> lepic_keychain::ContactKeys {
+fn keys_for(party: &Party, contact: ContactId) -> lepic_wallet_contacts::ContactKeys {
     let record = party.read(|repos| repos.contact(contact)).unwrap();
-    party
-        .keychain()
-        .contact_root(
-            &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
-            lepic_primitives::params::Network::Floonet,
-        )
-        .unwrap()
-        .contact_keys(record.slot, record.box_salt)
-        .unwrap()
+    lepic_wallet_contacts::contact_root(
+        &party.keychain(),
+        &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
+        lepic_primitives::params::Network::Floonet,
+    )
+    .unwrap()
+    .contact_keys(record.slot, record.box_salt)
+    .unwrap()
 }
 
 /// Seals `content` from the party to its contact `contact`, signed, and posts it from the
@@ -832,7 +852,7 @@ fn a_parked_invoice_is_paid_only_while_its_contact_is_trusted() {
     world.collect(&world.payer);
     assert_eq!(
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .len(),
         1
@@ -848,12 +868,12 @@ fn a_parked_invoice_is_paid_only_while_its_contact_is_trusted() {
         .unwrap();
     let transactions = world.payer.read(|repos| repos.transactions(ACCOUNT)).len();
     assert!(matches!(
-        world.block_on(world.payer.wallet.contact_pay_invoice(
+        world.block_on(world.payer.wallet.contact_book().contact_pay_invoice(
             &relays(&world.payer),
             first.slate_id,
             pay_request(),
         )),
-        Err(lepic_wallet::contact::ContactError::NotVerified)
+        Err(lepic_wallet_contacts::ContactError::NotVerified)
     ));
     assert_eq!(
         world.payer.read(|repos| repos.transactions(ACCOUNT)).len(),
@@ -863,12 +883,12 @@ fn a_parked_invoice_is_paid_only_while_its_contact_is_trusted() {
     // Removing the contact deletes what it left parked.
     assert!(
         world
-            .block_on(world.payer.wallet.contact_remove(ben_side))
+            .block_on(world.payer.wallet.contact_book().contact_remove(ben_side))
             .unwrap()
     );
     assert!(
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .is_empty()
     );
@@ -896,6 +916,7 @@ fn one_contact_invoice_is_declined_and_the_contact_told() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contact_decline_invoice(declined.slate_id),
         )
         .unwrap();
@@ -904,14 +925,15 @@ fn one_contact_invoice_is_declined_and_the_contact_told() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contact_decline_invoice(declined.slate_id)
         ),
-        Err(lepic_wallet::contact::ContactError::Invoice(
+        Err(lepic_wallet_contacts::ContactError::Invoice(
             lepic_wallet::invoice::InvoiceError::NotParked { .. }
         ))
     ));
     let left: Vec<_> = world
-        .block_on(world.payer.wallet.contact_invoices())
+        .block_on(world.payer.wallet.contact_book().contact_invoices())
         .unwrap()
         .into_iter()
         .map(|invoice| invoice.slate_id)
@@ -922,6 +944,7 @@ fn one_contact_invoice_is_declined_and_the_contact_told() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contacts_outbox_deliver(&relays(&world.payer)),
         )
         .unwrap();
@@ -958,7 +981,7 @@ fn send_through_mailbox(
         ))
         .unwrap();
     world
-        .block_on(world.payer.wallet.contact_post_slate(
+        .block_on(world.payer.wallet.contact_book().contact_post_slate(
             relays,
             contact,
             sent.tx_id,
@@ -1045,7 +1068,13 @@ fn address_invoice_calls_never_act_on_a_contact_invoice() {
         world.block_on(wallet.decline_invoice(unpaid.slate_id)),
         Err(lepic_wallet::invoice::InvoiceError::NotParked { .. })
     ));
-    assert_eq!(world.block_on(wallet.contact_invoices()).unwrap().len(), 2);
+    assert_eq!(
+        world
+            .block_on(wallet.contact_book().contact_invoices())
+            .unwrap()
+            .len(),
+        2
+    );
 
     let paid = world.pay_contact(&to_pay);
     assert!(matches!(
@@ -1083,9 +1112,10 @@ fn send_again_refuses_a_cancelled_payment() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contact_outbox_resend(&relays(&world.payer), entry.id)
         ),
-        Err(lepic_wallet::contact::ContactError::UnknownTransaction)
+        Err(lepic_wallet_contacts::ContactError::UnknownTransaction)
     ));
 }
 
@@ -1136,16 +1166,16 @@ fn an_explicit_collect_delivers_the_outbox_at_once_and_reports_it() {
         .unwrap();
 
     let tick = world
-        .block_on(world.payer.wallet.contacts_collect(
+        .block_on(world.payer.wallet.contact_book().contacts_collect(
             &relays(&world.payer),
-            lepic_wallet::contact::CollectTrigger::Foreground,
+            lepic_wallet_contacts::CollectTrigger::Foreground,
         ))
         .unwrap();
     assert_eq!(tick.delivered, 0);
     let push = world
-        .block_on(world.payer.wallet.contacts_collect(
+        .block_on(world.payer.wallet.contact_book().contacts_collect(
             &relays(&world.payer),
-            lepic_wallet::contact::CollectTrigger::Push,
+            lepic_wallet_contacts::CollectTrigger::Push,
         ))
         .unwrap();
     assert_eq!(push.delivered, 0);
@@ -1192,6 +1222,7 @@ fn mailbox_slates_are_recorded_as_epicbox_and_sealed_files_as_files() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contact_seal_slate(ben_side, sent.tx_id, None),
         )
         .unwrap();
@@ -1274,7 +1305,13 @@ fn a_contact_cannot_take_over_another_payment_by_its_slate_id() {
     assert_eq!(world.tx_state(&world.payer, paid.tx_id), TxState::Sent);
     assert_eq!(
         world
-            .block_on(world.payer.wallet.contact_of_transaction(paid.tx_id))
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .contact_of_transaction(paid.tx_id)
+            )
             .unwrap(),
         None
     );
@@ -1288,7 +1325,7 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
     let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
     let mut payer_events = world.payer.wallet.subscribe();
     let signed = world
-        .block_on(world.issuer.wallet.contact_issue_invoice(
+        .block_on(world.issuer.wallet.contact_book().contact_issue_invoice(
             &relays(&world.issuer),
             shop_side,
             InvoiceRequest {
@@ -1341,7 +1378,7 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
     world.collect(&world.payer);
 
     let parked = world
-        .block_on(world.payer.wallet.contact_invoices())
+        .block_on(world.payer.wallet.contact_book().contact_invoices())
         .unwrap();
     assert_eq!(parked.len(), 2);
     let message_of = |slate_id| {
@@ -1405,9 +1442,9 @@ fn a_contact_waiting_on_a_mailbox_payment_is_collected_on_the_foreground_tick() 
     world.payer.clock.advance(Duration::from_secs(25 * 60 * 60));
     let tick = || {
         world
-            .block_on(world.payer.wallet.contacts_collect(
+            .block_on(world.payer.wallet.contact_book().contacts_collect(
                 &relays(&world.payer),
-                lepic_wallet::contact::CollectTrigger::Foreground,
+                lepic_wallet_contacts::CollectTrigger::Foreground,
             ))
             .unwrap()
     };
@@ -1516,7 +1553,7 @@ fn a_contact_message_sealed_long_ago_or_without_its_send_time_is_not_taken() {
         u64::try_from(lepic_wallet::ports::Clock::now(&world.payer.clock).as_second()).unwrap();
     let parked = || {
         world
-            .block_on(world.payer.wallet.contact_invoices())
+            .block_on(world.payer.wallet.contact_book().contact_invoices())
             .unwrap()
             .len()
     };
@@ -1545,7 +1582,7 @@ fn a_contact_message_sealed_long_ago_or_without_its_send_time_is_not_taken() {
     post(None, "unstamped after a stamped one");
     assert_eq!(parked(), 2);
     let invoices = world
-        .block_on(world.payer.wallet.contact_invoices())
+        .block_on(world.payer.wallet.contact_book().contact_invoices())
         .unwrap();
     assert!(
         invoices

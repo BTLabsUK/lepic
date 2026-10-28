@@ -11,11 +11,11 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use lepic_crypto::PublicKey;
-use lepic_keychain::{
-    ContactRoot, Identifier, Keychain, SLOT_COUNT, SwitchCommitment, contact_identity_key_id,
-    key_check_tag, pairing_mailbox_keys,
-};
+use lepic_keychain::{Identifier, Keychain, SwitchCommitment, contact_identity_key_id};
 use lepic_primitives::params::Network;
+use lepic_wallet_contacts::{
+    ContactRoot, SLOT_COUNT, contact_root, key_check_tag, pairing_mailbox_keys,
+};
 use serde_json::{Value, json};
 
 const PHRASE: &str = "pipe stock song coast pair always emotion member joy sting dash theory";
@@ -44,9 +44,9 @@ fn pub_hex(key: &lepic_crypto::SecretKey) -> String {
 #[test]
 fn root_is_deterministic_and_network_separated() {
     let kc = keychain();
-    let a = kc.contact_root(&account(), Network::Mainnet).unwrap();
-    let b = kc.contact_root(&account(), Network::Mainnet).unwrap();
-    let f = kc.contact_root(&account(), Network::Floonet).unwrap();
+    let a = contact_root(&kc, &account(), Network::Mainnet).unwrap();
+    let b = contact_root(&kc, &account(), Network::Mainnet).unwrap();
+    let f = contact_root(&kc, &account(), Network::Floonet).unwrap();
     assert_eq!(a.expose_bytes(), b.expose_bytes());
     assert_ne!(a.expose_bytes(), f.expose_bytes());
 }
@@ -57,7 +57,7 @@ fn keychain_root_is_from_raw_of_the_derived_key() {
     let id = contact_identity_key_id(&account()).unwrap();
     let raw = kc.derive_key(0, &id, SwitchCommitment::None).unwrap();
     for (network, _) in NETWORKS {
-        let a = kc.contact_root(&account(), network).unwrap();
+        let a = contact_root(&kc, &account(), network).unwrap();
         let b = ContactRoot::from_raw(raw.expose_bytes(), network).unwrap();
         assert_eq!(a.expose_bytes(), b.expose_bytes());
     }
@@ -67,16 +67,14 @@ fn keychain_root_is_from_raw_of_the_derived_key() {
 fn root_differs_per_account() {
     let kc = keychain();
     let other = Identifier::new(2, [1, 0, 0, 0]).unwrap();
-    let a = kc.contact_root(&account(), Network::Mainnet).unwrap();
-    let b = kc.contact_root(&other, Network::Mainnet).unwrap();
+    let a = contact_root(&kc, &account(), Network::Mainnet).unwrap();
+    let b = contact_root(&kc, &other, Network::Mainnet).unwrap();
     assert_ne!(a.expose_bytes(), b.expose_bytes());
 }
 
 #[test]
 fn keys_are_deterministic_and_separated() {
-    let root = keychain()
-        .contact_root(&account(), Network::Mainnet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Mainnet).unwrap();
     let a = root.contact_keys(1, [9; 16]).unwrap();
     let a2 = root.contact_keys(1, [9; 16]).unwrap();
     let b = root.contact_keys(2, [9; 16]).unwrap();
@@ -94,9 +92,7 @@ fn keys_are_deterministic_and_separated() {
 
 #[test]
 fn box_salt_changes_only_the_mailbox_key() {
-    let root = keychain()
-        .contact_root(&account(), Network::Mainnet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Mainnet).unwrap();
     let a = root.contact_keys(5, [1; 16]).unwrap();
     let b = root.contact_keys(5, [2; 16]).unwrap();
     assert_eq!(a.expose_enc_secret(), b.expose_enc_secret());
@@ -107,9 +103,7 @@ fn box_salt_changes_only_the_mailbox_key() {
 
 #[test]
 fn hint_key_alone_equals_the_slot_keys_hint_key() {
-    let root = keychain()
-        .contact_root(&account(), Network::Floonet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Floonet).unwrap();
     for slot in [0, 1, 4097, SLOT_COUNT - 1] {
         let keys = root.contact_keys(slot, [3; 16]).unwrap();
         assert_eq!(*root.hint_key(slot).unwrap(), *keys.expose_hint_key());
@@ -118,9 +112,7 @@ fn hint_key_alone_equals_the_slot_keys_hint_key() {
 
 #[test]
 fn derives_keys_for_any_u32_slot() {
-    let root = keychain()
-        .contact_root(&account(), Network::Mainnet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Mainnet).unwrap();
     let below = root.contact_keys(SLOT_COUNT - 1, [0; 16]).unwrap();
     for slot in [SLOT_COUNT, SLOT_COUNT + 1, u32::MAX] {
         let keys = root.contact_keys(slot, [0; 16]).unwrap();
@@ -131,9 +123,7 @@ fn derives_keys_for_any_u32_slot() {
 
 #[test]
 fn slot_searches_cover_only_the_wallet_range() {
-    let root = keychain()
-        .contact_root(&account(), Network::Mainnet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Mainnet).unwrap();
     let (n_y, n_x) = ([5; 32], [6; 32]);
     let keys = root.contact_keys(SLOT_COUNT, [0; 16]).unwrap();
     let tag = key_check_tag(keys.expose_hint_key(), &n_y, &n_x);
@@ -151,9 +141,7 @@ fn slot_searches_cover_only_the_wallet_range() {
 
 #[test]
 fn find_slot_by_tag_recovers_the_slot_for_these_new_keys_only() {
-    let root = keychain()
-        .contact_root(&account(), Network::Floonet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Floonet).unwrap();
     let (n_y, n_x) = ([5; 32], [6; 32]);
     for slot in [0, 31_337, SLOT_COUNT - 1] {
         let hint_key = root.hint_key(slot).unwrap();
@@ -162,18 +150,14 @@ fn find_slot_by_tag_recovers_the_slot_for_these_new_keys_only() {
         assert_eq!(root.find_slot_by_tag(&tag, &n_x, &n_y).unwrap(), None);
         assert_eq!(root.find_slot_by_tag(&tag, &n_y, &[7; 32]).unwrap(), None);
     }
-    let other = keychain()
-        .contact_root(&account(), Network::Mainnet)
-        .unwrap();
+    let other = contact_root(&keychain(), &account(), Network::Mainnet).unwrap();
     let tag = key_check_tag(&root.hint_key(9).unwrap(), &n_y, &n_x);
     assert_eq!(other.find_slot_by_tag(&tag, &n_y, &n_x).unwrap(), None);
 }
 
 #[test]
 fn find_slot_recovers_the_slot_of_a_card() {
-    let root = keychain()
-        .contact_root(&account(), Network::Mainnet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Mainnet).unwrap();
     for slot in [0, 31_337, SLOT_COUNT - 1] {
         let keys = root.contact_keys(slot, [4; 16]).unwrap();
         let found = root
@@ -189,9 +173,7 @@ fn find_slot_recovers_the_slot_of_a_card() {
 
 #[test]
 fn find_slot_refuses_cards_of_another_seed_or_mixed_keys() {
-    let root = keychain()
-        .contact_root(&account(), Network::Mainnet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Mainnet).unwrap();
     let ours = root.contact_keys(12, [0; 16]).unwrap();
     let other = ContactRoot::from_raw(&[0x33; 32], Network::Mainnet)
         .unwrap()
@@ -223,8 +205,7 @@ fn find_slot_refuses_cards_of_another_seed_or_mixed_keys() {
         ),
         None
     );
-    let floonet = keychain()
-        .contact_root(&account(), Network::Floonet)
+    let floonet = contact_root(&keychain(), &account(), Network::Floonet)
         .unwrap()
         .contact_keys(12, [0; 16])
         .unwrap();
@@ -240,9 +221,7 @@ fn find_slot_refuses_cards_of_another_seed_or_mixed_keys() {
 
 #[test]
 fn debug_output_is_redacted() {
-    let root = keychain()
-        .contact_root(&account(), Network::Mainnet)
-        .unwrap();
+    let root = contact_root(&keychain(), &account(), Network::Mainnet).unwrap();
     let keys = root.contact_keys(1, [1; 16]).unwrap();
     let reply = root.reply_key([1; 16]).unwrap();
     let shown = format!("{root:?} {keys:?} {reply:?}");

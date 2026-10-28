@@ -8,7 +8,9 @@
 //! open is neither class: nothing is sent or taken through it.
 
 use lepic_contact::{ChannelKey, PrivateSecret};
-use lepic_keychain::{ContactKeys, Keychain, PRIVATE_SLOT_BASE};
+use lepic_keychain::Keychain;
+
+use crate::key_schedule::{ContactKeys, PRIVATE_SLOT_BASE};
 use lepic_primitives::params::Network;
 use lepic_store::{
     AccountIndex, ContactId, ContactRecord, ParticipantId, PrivateContext, Repositories, StoreError,
@@ -18,7 +20,7 @@ use zeroize::Zeroizing;
 
 use super::ContactError;
 use super::keys::contact_keys;
-use crate::account::parent_key_id;
+use lepic_wallet::account::parent_key_id;
 
 /// The participant byte the secrets are sealed under: no slate participant uses it.
 const SECRETS: ParticipantId = ParticipantId(0xc1);
@@ -206,8 +208,7 @@ pub(crate) fn private_keys(
     slot: u32,
     own: &PrivateSecret,
 ) -> Result<ContactKeys, ContactError> {
-    let root = keychain
-        .contact_root(&parent_key_id(account)?, network)
+    let root = crate::key_schedule::contact_root(keychain, &parent_key_id(account)?, network)
         .map_err(ContactError::Keys)?;
     root.private_keys(slot, own.expose_bytes())
         .map_err(ContactError::Keys)

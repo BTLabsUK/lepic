@@ -7,13 +7,15 @@ use lepic_contact::{
 };
 use lepic_crypto::PublicKey;
 use lepic_epicbox::{EpicboxAddress, Identity, RelayEndpoint};
-use lepic_keychain::{BOX_SALT_LEN, ContactKeys, Keychain, pairing_mailbox_keys};
+use lepic_keychain::Keychain;
+
+use crate::key_schedule::{BOX_SALT_LEN, ContactKeys, pairing_mailbox_keys};
 use lepic_primitives::params::Network;
 use lepic_store::AccountIndex;
 
 use super::ContactError;
-use crate::account::parent_key_id;
-use crate::inbox::relay_network;
+use lepic_wallet::account::parent_key_id;
+use lepic_wallet::inbox::relay_network;
 
 /// The envelope version this wallet reads, which its cards announce.
 const MAX_ENVELOPE_VERSION: u8 = 1;
@@ -33,8 +35,7 @@ pub(crate) fn contact_keys(
     slot: u32,
     box_salt: [u8; BOX_SALT_LEN],
 ) -> Result<ContactKeys, ContactError> {
-    let root = keychain
-        .contact_root(&parent_key_id(account)?, network)
+    let root = crate::key_schedule::contact_root(keychain, &parent_key_id(account)?, network)
         .map_err(ContactError::Keys)?;
     root.contact_keys(slot, box_salt)
         .map_err(ContactError::Keys)
@@ -124,19 +125,33 @@ pub(crate) fn signing_key(keys: &ContactKeys) -> SigningKey {
 /// The public key of the one-time reply key for the slate `slate_id` this wallet starts in
 /// `account` (RFC 0002 2.3), for the LEPIC marker. `None` when it cannot be derived; the slate
 /// then goes out without one and its answer comes back plain.
-pub(crate) fn reply_public_key(
+fn reply_public_key(
     keychain: &Keychain,
     network: Network,
     account: AccountIndex,
     slate_id: [u8; 16],
 ) -> Option<[u8; 32]> {
-    let root = keychain
-        .contact_root(&parent_key_id(account).ok()?, network)
-        .ok()?;
+    let root =
+        crate::key_schedule::contact_root(keychain, &parent_key_id(account).ok()?, network).ok()?;
     let reply = root.reply_key(slate_id).ok()?;
     Some(
         *EncSecretKey::from_bytes(*reply.expose_x25519_secret())
             .public_key()
             .as_bytes(),
     )
+}
+
+/// The engine's reply key hook: the key [`reply_public_key`] derives.
+pub(crate) struct ContactReplyKeys;
+
+impl lepic_wallet::extension::ReplyKeys for ContactReplyKeys {
+    fn reply_public_key(
+        &self,
+        keychain: &Keychain,
+        network: Network,
+        account: AccountIndex,
+        slate_id: [u8; 16],
+    ) -> Option<[u8; 32]> {
+        reply_public_key(keychain, network, account, slate_id)
+    }
 }

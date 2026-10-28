@@ -8,6 +8,7 @@ mod crypto;
 mod frame;
 mod json;
 mod mailbox;
+pub mod marker;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
 mod prefilter;

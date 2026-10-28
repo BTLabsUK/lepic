@@ -5,7 +5,6 @@ use lepic_node::NodeError;
 use lepic_store::StoreError;
 use lepic_telemetry::TelemetryError;
 use lepic_transport::error::TransportError;
-use lepic_wallet::contact::ContactError;
 use lepic_wallet::error_text::display_error_chain;
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::InboxError;
@@ -15,6 +14,7 @@ use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{AccountError, ReceiveError, WalletError};
+use lepic_wallet_contacts::ContactError;
 use thiserror::Error;
 
 use crate::amount::AmountError;

@@ -21,6 +21,7 @@ mod build;
 use jiff::Timestamp;
 use lepic_crypto::{Commitment, CryptoError};
 use lepic_epicbox::TRANSPORT_ID as EPICBOX;
+use lepic_epicbox::marker::v3::MarkedV3JsonCodec;
 use lepic_keychain::{IdentifierError, Keychain, KeychainError, ProofError, SwitchCommitment};
 use lepic_node::{NodeApi, NodeError, Propagation};
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
@@ -30,7 +31,6 @@ use lepic_primitives::params::Network;
 use lepic_primitives::validate::ValidationError;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
-use lepic_slate::codec::marked_v3::MarkedV3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, RegistryError, SlateError};
 use lepic_slate::model::{Slate, SlateId};
@@ -60,6 +60,7 @@ pub use build::{
 use crate::account::{AccountError, next_output_key};
 use crate::codecs;
 use crate::error::WalletError;
+use crate::extension::ReplyKeys;
 use crate::finalize::{Finalized, FinalizedSlate, PushFailure};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::with_spend_confirmations;
@@ -549,6 +550,7 @@ struct InvoiceEnvironment<'a> {
     network: Network,
     tip: Height,
     now: Timestamp,
+    reply_keys: Option<&'a dyn ReplyKeys>,
 }
 
 impl InvoiceEnvironment<'_> {
@@ -603,12 +605,14 @@ fn issue_stored(
     )?;
     let slate = built.slate;
     let context = encode_context(env.network, &slate);
-    let reply_key = crate::contact::reply_public_key(
-        env.keychain,
-        env.network,
-        request.account,
-        *slate.id().as_bytes(),
-    );
+    let reply_key = env.reply_keys.and_then(|keys| {
+        keys.reply_public_key(
+            env.keychain,
+            env.network,
+            request.account,
+            *slate.id().as_bytes(),
+        )
+    });
     let wire = encode_with(
         &invoice_codecs(transport.id(), env.base_fee(), reply_key)?,
         new_invoice_encoding(transport, &slate, &context),
@@ -966,7 +970,7 @@ where
 
     /// Issues and stores an invoice as [`Wallet::issue_invoice`] does, encoded for the
     /// transport of `delivery` and recording its destination, without delivering it.
-    pub(crate) async fn issue_unsent(
+    pub async fn issue_unsent(
         &self,
         request: InvoiceRequest,
         delivery: Delivery,
@@ -981,12 +985,14 @@ where
             .map_err(InvoiceError::Node)?
             .height;
         self.check_plausible_tip(&session, tip).await?;
+        let reply_keys = self.reply_keys();
         self.blocking(move |ports, config| {
             let env = InvoiceEnvironment {
                 keychain: &session.keychain,
                 network: config.network,
                 tip,
                 now: ports.clock.now(),
+                reply_keys: reply_keys.as_deref(),
             };
             let issued =
                 registered(&ports.transports, delivery.transport()).and_then(|transport| {
@@ -1050,7 +1056,7 @@ where
 
     /// Checks and pays a decoded I1, as [`Wallet::pay_invoice`] describes. With `parked`, the
     /// same store transaction marks that parked invoice paid and records where the I2 goes.
-    pub(crate) async fn pay_decoded(
+    pub async fn pay_decoded(
         &self,
         transport: TransportId,
         i1: Slate,
@@ -1093,6 +1099,7 @@ where
                     network,
                     tip,
                     now: ports.clock.now(),
+                    reply_keys: None,
                 };
                 let paid = registered(&ports.transports, transport).and_then(|carrier| {
                     let randomness = I2Randomness::draw(&mut **ports.rng.lock())
@@ -1180,6 +1187,7 @@ where
                     network,
                     tip,
                     now: ports.clock.now(),
+                    reply_keys: None,
                 };
                 Ok(session
                     .store

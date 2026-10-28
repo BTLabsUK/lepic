@@ -2,8 +2,8 @@
 //! pairing kit: contact roots and slot keys, the slot search, one-time reply keys, and the
 //! pairing mailbox keys of codes and of pairing words, and the key check's tag and slot search.
 
-use lepic_keychain::{ContactRoot, key_check_tag, pairing_mailbox_keys};
 use lepic_primitives::params::Network;
+use lepic_wallet_contacts::{ContactRoot, key_check_tag, pairing_mailbox_keys};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};

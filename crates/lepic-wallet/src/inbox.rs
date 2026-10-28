@@ -35,6 +35,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use lepic_epicbox::marker::v3::carries_lepic_marker;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
     AddressError, Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
@@ -44,7 +45,6 @@ use lepic_epicbox::{
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::params::Network;
 use lepic_slate::codec::WireSlate;
-use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -358,7 +358,7 @@ pub(crate) enum Refusal {
 
 /// A failure that leaves the message for the relay to deliver again.
 #[derive(Debug, Error)]
-pub(crate) enum Hold {
+pub enum Hold {
     #[error("wallet operation failed")]
     Wallet(#[from] WalletError),
     #[error("transport {transport} cannot deliver the reply")]
@@ -386,7 +386,7 @@ impl From<StoreError> for Hold {
 }
 
 /// Displays an error with its source chain, for the `error` log field.
-pub(crate) struct ErrorChain<'a>(pub(crate) &'a (dyn StdError + 'static));
+pub struct ErrorChain<'a>(pub &'a (dyn StdError + 'static));
 
 impl fmt::Display for ErrorChain<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -428,7 +428,7 @@ fn receive_is_permanent(error: &ReceiveError) -> bool {
 
 /// Failures of finalizing an S2 that the same message would meet again. A slate that was
 /// finalized and stored but not posted is not a failure of the message; the caller handles it.
-pub(crate) fn finalize_is_permanent(error: &FinalizeError) -> bool {
+pub fn finalize_is_permanent(error: &FinalizeError) -> bool {
     match error {
         FinalizeError::Wallet(_)
         | FinalizeError::UnknownTransport { .. }
@@ -466,7 +466,7 @@ pub(crate) fn finalize_is_permanent(error: &FinalizeError) -> bool {
 
 /// Failures of finalizing an I2 that the same message would meet again, as for an S2. A late
 /// I2 for an invoice cancelled or expired here is refused this way.
-pub(crate) fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
+pub fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
     match error {
         InvoiceError::Wallet(_)
         | InvoiceError::Node(_)
@@ -551,7 +551,7 @@ fn backoff(epicbox: &EpicboxTransport) -> Backoff {
     epicbox.settings().backoff
 }
 
-pub(crate) fn relay_network(network: Network) -> RelayNetwork {
+pub fn relay_network(network: Network) -> RelayNetwork {
     match network {
         Network::Mainnet => RelayNetwork::Mainnet,
         Network::Floonet => RelayNetwork::Floonet,

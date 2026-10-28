@@ -33,9 +33,9 @@ use super::{
     CLOCK_SKEW, CONFIRM_WAIT, ContactError, ContactRelays, ContactView, LATE_DRAIN_WAIT, LockedRng,
     PairingFailure, new_id, pairing_id_of, same_secret,
 };
-use crate::event::{ContactEvent, Event, FailedPairing};
-use crate::ports::{SecretVault, StoreOpener};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::event::{ContactEvent, Event, FailedPairing};
+use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// Slots a new store starts at are drawn below this, so twin installs rarely meet (RFC 0002 2.2).
 const SLOT_START_BOUND: u32 = 32_768;
@@ -282,7 +282,7 @@ struct NewSlot {
     box_salt: [u8; 16],
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
@@ -304,14 +304,14 @@ where
     /// Fails with [`ContactError::Name`] for a name the card cannot carry, with
     /// [`ContactError::NetworkMismatch`], and as the store does, for example when every slot of
     /// the account is used or 64 pairings are pending.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_invite(
         &self,
         relays: &ContactRelays,
         request: InviteRequest,
     ) -> Result<InviteOffer, ContactError> {
         self.check_contact_network(relays)?;
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let home = home_relay(request.home_relay.as_deref(), relays)?;
         let offer_words = request.offer_words;
         let class = request.class;
@@ -331,7 +331,7 @@ where
         } else {
             request.expiry.duration()
         };
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let mut offer = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -462,9 +462,9 @@ where
     }
 
     fn read_invite(&self, link: &str) -> Result<Invite, ContactError> {
-        let invite = Invite::from_link(link, contact_network(self.config().network))
+        let invite = Invite::from_link(link, contact_network(self.wallet.config().network))
             .map_err(ContactError::Decode)?;
-        let now = unix_seconds(self.ports().clock.now());
+        let now = unix_seconds(self.wallet.ports().clock.now());
         let deadline = invite.fields().expires.saturating_add(CLOCK_SKEW.as_secs());
         if now >= deadline {
             return Err(ContactError::InviteExpired);
@@ -479,7 +479,7 @@ where
     ///
     /// Fails as [`Wallet::pairing_preview`] does, with [`ContactError::AlreadyPaired`] for an
     /// invite this wallet made or answered already, and as the store does.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_accept(
         &self,
         relays: &ContactRelays,
@@ -491,9 +491,9 @@ where
             return Err(ContactError::WrongClass);
         }
         let class = request.class;
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let invite_for_work = invite.clone();
         let home_for_work = home.clone();
         let (contact_id, envelope, from, to) = self
@@ -610,7 +610,7 @@ where
             {
                 Ok(()) => true,
                 Err(error) => {
-                    warn!(peer_relay = %host_text(&home), error = %crate::inbox::ErrorChain(&error), "pairing reply not posted");
+                    warn!(peer_relay = %host_text(&home), error = %lepic_wallet::inbox::ErrorChain(&error), "pairing reply not posted");
                     false
                 }
             };
@@ -627,16 +627,16 @@ where
     /// card. Nothing is sent, so this works offline.
     ///
     /// Fails as [`Wallet::pairing_invite`] does.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_show_card(
         &self,
         relays: &ContactRelays,
         request: CardRequest,
     ) -> Result<CardOffer, ContactError> {
         self.check_contact_network(relays)?;
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let home = home_relay(request.home_relay.as_deref(), relays)?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             session.store.write(|repos| {
@@ -688,18 +688,18 @@ where
     /// Fails with [`ContactError::UnknownContact`] when `contact_id` is not a card this wallet
     /// shows, [`ContactError::Decode`] for a link that is not a card on the wallet's network,
     /// and [`ContactError::AlreadyPaired`] for a card of a contact this wallet holds or its own.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_scan_card(
         &self,
         relays: &ContactRelays,
         contact_id: ContactId,
         link: &str,
     ) -> Result<ContactView, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let peer =
             ContactCard::from_link(link, contact_network(network)).map_err(ContactError::Decode)?;
         let peer_relay = mailbox_relay(&peer, relays)?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let view = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -751,7 +751,8 @@ where
             })
             .await?;
         info!("contact paired in person");
-        self.emit(Event::PairingConfirmed(ContactEvent { contact_id }));
+        self.wallet
+            .emit(Event::PairingConfirmed(ContactEvent { contact_id }));
         Ok(view)
     }
 
@@ -760,14 +761,14 @@ where
     /// inviter posts a refusal to the invitee's confirm mailbox, best effort.
     ///
     /// Fails with [`ContactError::UnknownContact`] when no paired contact has that id.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_sas(
         &self,
         relays: &ContactRelays,
         contact_id: ContactId,
         decision: SasDecision,
     ) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let tell = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -816,7 +817,7 @@ where
         info!("sas check recorded");
         // The inviter tells the invitee, whose confirm may still wait on the relay.
         if let Some((rc, invite, peer, channel)) = tell {
-            let net = contact_network(self.config().network);
+            let net = contact_network(self.wallet.config().network);
             let card = ContactCard::decode(&peer, net).map_err(ContactError::StoredData)?;
             let invite = Invite::decode(&invite, net).map_err(ContactError::StoredData)?;
             let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
@@ -849,7 +850,7 @@ where
     ) {
         let posted = async {
             let envelope = {
-                let mut guard = self.ports().rng.lock();
+                let mut guard = self.wallet.ports().rng.lock();
                 let mut rng = LockedRng(&mut **guard);
                 match channel {
                     None => seal_refusal(invitee, refusal, &mut rng),
@@ -857,7 +858,8 @@ where
                 }
             }
             .map_err(ContactError::Encode)?;
-            let (confirm_box, confirm_from) = pairing_mailbox(&rc, self.config().network, home)?;
+            let (confirm_box, confirm_from) =
+                pairing_mailbox(&rc, self.wallet.config().network, home)?;
             post_envelope(
                 relays,
                 &confirm_from,
@@ -868,7 +870,7 @@ where
             .await
         };
         if let Err(error) = posted.await {
-            warn!(error = %crate::inbox::ErrorChain(&error), "pairing refusal not posted");
+            warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing refusal not posted");
         }
     }
 
@@ -878,19 +880,19 @@ where
     /// finishes a pairing this wallet answered.
     ///
     /// Fails with [`ContactError::Decode`] for any other text.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_enter_link(
         &self,
         relays: &ContactRelays,
         text: &str,
     ) -> Result<LinkOutcome, ContactError> {
-        let network = contact_network(self.config().network);
-        let _turn = self.contact_turn().await;
+        let network = contact_network(self.wallet.config().network);
+        let _turn = self.wallet.contact_turn().await;
         if let Ok(envelope) = pairing_envelope_from_link(text, PairingLink::Reply) {
             let sealed =
                 SealedEnvelope::decode(&envelope, network).map_err(ContactError::Decode)?;
             let invite_id = *sealed.hint().as_bytes();
-            let session = self.session()?;
+            let session = self.wallet.session()?;
             let pending = self
                 .contact_work(move |_, _| {
                     Ok(session
@@ -917,7 +919,7 @@ where
         }
         let envelope =
             pairing_envelope_from_link(text, PairingLink::Confirm).map_err(ContactError::Decode)?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let waiting = self
             .contact_work(move |_, _| Ok(session.store.read(|repos| repos.pending_pairings())?))
             .await?;
@@ -947,9 +949,9 @@ where
         envelope: &[u8],
         by_hand: bool,
     ) -> Result<Taken, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let Some((pending, record, class)) = self.pending_with_record(pairing_id).await? else {
             return Ok(Taken::Ignored);
         };
@@ -1145,7 +1147,8 @@ where
         // and a confirm that did not leave goes out when the kept reply is taken again.
         if first {
             info!("pairing reply taken");
-            self.emit(Event::PairingReplied(ContactEvent { contact_id }));
+            self.wallet
+                .emit(Event::PairingReplied(ContactEvent { contact_id }));
         }
         if !by_hand {
             let (confirm_box, confirm_from) = pairing_mailbox(&rc, network, &home)?;
@@ -1176,9 +1179,9 @@ where
         pairing_id: PairingId,
         envelope: &[u8],
     ) -> Result<Taken, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let Some((pending, record, class)) = self.pending_with_record(pairing_id).await? else {
             return Ok(Taken::Ignored);
         };
@@ -1221,7 +1224,7 @@ where
                     contact_id,
                     reason: PairingFailure::Refused(refusal),
                 };
-                self.emit(Event::PairingFailed(failed));
+                self.wallet.emit(Event::PairingFailed(failed));
                 return Ok(Taken::Failed(Some(failed)));
             }
             Err(_) => return Ok(Taken::Ignored),
@@ -1244,7 +1247,7 @@ where
                 contact_id,
                 reason: PairingFailure::ChangedOnTheWay,
             };
-            self.emit(Event::PairingFailed(failed));
+            self.wallet.emit(Event::PairingFailed(failed));
             return Ok(Taken::Failed(Some(failed)));
         }
         let n_b = Nonce::from_bytes(n_b);
@@ -1303,14 +1306,15 @@ where
             Err(error) => return Err(error),
         }
         info!("pairing confirmed");
-        self.emit(Event::PairingConfirmed(ContactEvent { contact_id }));
+        self.wallet
+            .emit(Event::PairingConfirmed(ContactEvent { contact_id }));
         Ok(Taken::Paired(contact_id))
     }
 
     /// Records that the confirm of `pairing_id` reached the relay or was handed to the user, so
     /// the invitee may hold the pairing.
     async fn mark_confirm_out(&self, pairing_id: PairingId) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.write(|repos| {
                 if repos.pending_pairing(pairing_id)?.is_some() {
@@ -1327,7 +1331,7 @@ where
         &self,
         pairing_id: PairingId,
     ) -> Result<Option<(PendingPairing, ContactRecord, RecordClass)>, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.read(|repos| {
                 let Some(pending) = repos.pending_pairing(pairing_id)? else {
@@ -1344,7 +1348,9 @@ where
     }
 
     pub(crate) fn check_contact_network(&self, relays: &ContactRelays) -> Result<(), ContactError> {
-        if relays.epicbox.network() != crate::inbox::relay_network(self.config().network) {
+        if relays.epicbox.network()
+            != lepic_wallet::inbox::relay_network(self.wallet.config().network)
+        {
             return Err(ContactError::NetworkMismatch);
         }
         Ok(())
@@ -1354,17 +1360,21 @@ where
     pub(crate) async fn contact_work<T, F>(&self, work: F) -> Result<T, ContactError>
     where
         T: Send + 'static,
-        F: FnOnce(&crate::Ports<N, S, V>, &crate::WalletConfig) -> Result<T, ContactError>
+        F: FnOnce(
+                &lepic_wallet::Ports<N, S, V>,
+                &lepic_wallet::WalletConfig,
+            ) -> Result<T, ContactError>
             + Send
             + 'static,
     {
-        self.blocking(move |ports, config| Ok(work(ports, config)))
+        self.wallet
+            .blocking(move |ports, config| Ok(work(ports, config)))
             .await?
     }
 }
 
 fn relays_network(network: lepic_primitives::params::Network) -> lepic_epicbox::Network {
-    crate::inbox::relay_network(network)
+    lepic_wallet::inbox::relay_network(network)
 }
 
 /// Takes the account's next slot, starting at a random slot for a new store, and a fresh salt
@@ -1419,7 +1429,7 @@ fn new_keys(
     account: AccountIndex,
     new: &NewSlot,
     private: Option<&PrivateSecrets>,
-) -> Result<lepic_keychain::ContactKeys, ContactError> {
+) -> Result<crate::key_schedule::ContactKeys, ContactError> {
     match private {
         None => contact_keys(keychain, network, account, new.slot, new.box_salt),
         Some(secrets) => {

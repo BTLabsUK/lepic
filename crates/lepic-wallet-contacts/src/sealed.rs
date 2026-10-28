@@ -2,6 +2,7 @@
 //! sealed and signed, opening what arrives by hint, answering on the same channel, the plain
 //! fallback, and anonymous answers to the reply key in the LEPIC marker.
 
+use lepic_wallet::contact_link::{link_tx, tx_contact};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -9,8 +10,8 @@ use lepic_contact::{
     Capabilities, ContactCard, Content, EncPublicKey, EncSecretKey, Hint, HintKey, HintRule,
     MessageType, Purpose, SealedEnvelope, armor, dearmor, seal,
 };
+use lepic_epicbox::marker::v3::lepic_marker_reply_key;
 use lepic_node::{NodeApi, Propagation};
-use lepic_slate::codec::marked_v3::lepic_marker_reply_key;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -23,17 +24,14 @@ use uuid::Uuid;
 
 use super::keys::{contact_keys, contact_network, enc_secret, signing_key};
 use super::{ContactError, LockedRng};
-use crate::finalize::Finalized;
-use crate::invoice::{PaidInvoice, PayRequest};
-use crate::ports::{SecretVault, StoreOpener};
-use crate::receive::{ReceiveRequest, Received, legacy_codecs};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::finalize::Finalized;
+use lepic_wallet::invoice::{PaidInvoice, PayRequest};
+use lepic_wallet::ports::{SecretVault, StoreOpener};
+use lepic_wallet::receive::{ReceiveRequest, Received, legacy_codecs};
 
 /// A contact with no envelope opened for this long is shown as lapsed (RFC 0002 9.4).
 pub const SEAL_LAPSE: Duration = Duration::from_secs(90 * 24 * 60 * 60);
-
-/// Prefix of the setting that names the contact a transaction was sealed to or from.
-const TX_CONTACT_PREFIX: &str = "contact.tx.";
 
 /// Sealed text that opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +48,7 @@ pub struct SealedSlate {
     /// When the sender stops honouring the slate, in unix seconds; advisory.
     pub expires: Option<u64>,
     /// The slate's messages whose signatures verify, as transaction details show them.
-    pub messages: Vec<crate::details::SlateMessage>,
+    pub messages: Vec<lepic_wallet::details::SlateMessage>,
 }
 
 /// How an answer goes back on the channel its slate came by.
@@ -86,45 +84,6 @@ enum Opening {
     },
     /// The one-time reply key of a slate this wallet started.
     Reply { key: EncSecretKey },
-}
-
-fn tx_key(tx_id: TxId) -> String {
-    format!("{TX_CONTACT_PREFIX}{tx_id}")
-}
-
-/// Records that the transaction `tx_id` is an exchange with `contact`.
-pub(crate) fn link_tx(
-    repos: &mut dyn Repositories,
-    tx_id: TxId,
-    contact: ContactId,
-) -> Result<(), StoreError> {
-    repos.put_setting(&tx_key(tx_id), &hex(&contact.0))
-}
-
-/// The contact the transaction `tx_id` was exchanged with, if any: what a contact's notices
-/// are matched by.
-pub(crate) fn tx_contact(
-    repos: &dyn Repositories,
-    tx_id: TxId,
-) -> Result<Option<ContactId>, StoreError> {
-    Ok(repos
-        .setting(&tx_key(tx_id))?
-        .and_then(|text| contact_id_from_hex(&text)))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn contact_id_from_hex(text: &str) -> Option<ContactId> {
-    let mut id = [0u8; 16];
-    if text.len() != 32 {
-        return None;
-    }
-    for (slot, pair) in id.iter_mut().zip(text.as_bytes().chunks(2)) {
-        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(ContactId(id))
 }
 
 /// The stage of the slate this wallet last wrote for a transaction: what it sends onwards.
@@ -190,7 +149,7 @@ pub(crate) fn lapsed(record: &ContactRecord, now: Timestamp) -> bool {
     last.checked_add(SEAL_LAPSE).is_ok_and(|end| end <= now)
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
@@ -206,7 +165,7 @@ where
     /// changed, [`ContactError::SealOff`] when sealing is off for it or its card says it cannot
     /// open sealed files, and [`ContactError::UnknownTransaction`] when the transaction has no
     /// slate to send.
-    #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name, tx_id = %tx_id))]
     pub async fn contact_seal_slate(
         &self,
         contact_id: ContactId,
@@ -228,8 +187,8 @@ where
         &self,
         contact_id: ContactId,
     ) -> Result<(), ContactError> {
-        let net = contact_network(self.config().network);
-        let session = self.session()?;
+        let net = contact_network(self.wallet.config().network);
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             session.store.read(|repos| {
                 let record = repos
@@ -257,9 +216,9 @@ where
         purpose: Option<Purpose>,
         channel: Channel,
     ) -> Result<String, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let armored = self
             .contact_work(move |ports, _| {
                 session.store.write(|repos| {
@@ -308,7 +267,7 @@ where
                         &mut LockedRng(&mut **ports.rng.lock()),
                     )
                     .map_err(ContactError::Encode)?;
-                    repos.put_setting(&tx_key(tx_id), &hex(&contact_id.0))?;
+                    link_tx(repos, tx_id, contact_id)?;
                     Ok(armor(&envelope))
                 })
             })
@@ -325,7 +284,7 @@ where
     ///
     /// Fails as [`Wallet::contact_seal_slate`] does, except that [`ContactError::SealOff`] means
     /// only that the contact's card says it cannot open sealed slates.
-    #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name, tx_id = %tx_id))]
     pub async fn contact_post_slate(
         &self,
         relays: &super::ContactRelays,
@@ -337,7 +296,7 @@ where
             .seal_stored_slate(contact_id, tx_id, purpose, Channel::Mailbox)
             .await?;
         let envelope = dearmor(&armored).map_err(ContactError::StoredData)?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let (slate_id, stage) = self
             .contact_work(move |_, _| {
                 session.store.write(|repos| {
@@ -348,7 +307,7 @@ where
                     let stage = outgoing_stage(repos, slate_id, entry.direction)?
                         .ok_or(ContactError::UnknownTransaction)?;
                     // A slate another contact holds is never moved to this one.
-                    if !super::invoices::link_slate(repos, slate_id, contact_id)? {
+                    if !lepic_wallet::contact_link::link_slate(repos, slate_id, contact_id)? {
                         return Err(ContactError::UnknownTransaction);
                     }
                     Ok((slate_id, stage))
@@ -371,15 +330,15 @@ where
     /// signer is not the contact of the key that opened it (sealed for another wallet or
     /// install), [`ContactError::CannotOpen`], and [`ContactError::NotASlate`] for an envelope
     /// that holds no slate.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_open(&self, text: &str) -> Result<SealedSlate, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
         let envelope = dearmor(text).map_err(ContactError::Decode)?;
         let sealed = SealedEnvelope::decode(&envelope, net).map_err(ContactError::Decode)?;
         let hint = sealed.hint();
         let enc = *sealed.enc();
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let opening = self
             .contact_work(move |_, _| {
                 session
@@ -438,7 +397,7 @@ where
                 .reference
                 .map(|reference| reference.as_str().to_owned()),
             expires: content.expires,
-            messages: crate::details::verified_messages(&slate),
+            messages: lepic_wallet::details::verified_messages(&slate),
         })
     }
 
@@ -448,7 +407,7 @@ where
     ///
     /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage, and
     /// with [`ContactError::Receive`] as [`Wallet::receive`] does.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_receive(
         &self,
         text: &str,
@@ -459,6 +418,7 @@ where
             return Err(ContactError::Stage(opened.stage));
         }
         let received = self
+            .wallet
             .receive(FILE, &opened.wire, request)
             .await
             .map_err(ContactError::Receive)?;
@@ -479,7 +439,7 @@ where
     ///
     /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage, and
     /// with [`ContactError::Invoice`] as [`Wallet::pay_invoice`] does.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_pay(
         &self,
         text: &str,
@@ -490,6 +450,7 @@ where
             return Err(ContactError::Stage(opened.stage));
         }
         let paid = self
+            .wallet
             .pay_invoice(FILE, &opened.wire, request)
             .await
             .map_err(ContactError::Invoice)?;
@@ -504,7 +465,7 @@ where
     ///
     /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage,
     /// and with [`ContactError::Finalize`] or [`ContactError::Invoice`].
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_finalize(
         &self,
         text: &str,
@@ -513,10 +474,12 @@ where
         let opened = self.sealed_open(text).await?;
         match opened.stage {
             Stage::S2 => self
+                .wallet
                 .finalize(FILE, &opened.wire, propagation)
                 .await
                 .map_err(ContactError::Finalize),
             Stage::I2 => self
+                .wallet
                 .finalize_invoice(FILE, &opened.wire, propagation)
                 .await
                 .map_err(ContactError::Invoice),
@@ -540,9 +503,9 @@ where
     /// a second transaction. The contact it was sealed to has its seal set to degraded.
     ///
     /// Fails with [`ContactError::UnknownTransaction`] when the transaction has no slate to send.
-    #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name, tx_id = %tx_id))]
     pub async fn contact_plain_fallback(&self, tx_id: TxId) -> Result<WireSlate, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let bytes = self
             .contact_work(move |_, _| {
                 session.store.write(|repos| {
@@ -558,9 +521,7 @@ where
                     let stored = repos
                         .slate(slate_id, stage)?
                         .ok_or(ContactError::UnknownTransaction)?;
-                    if let Some(contact_id) = repos
-                        .setting(&tx_key(tx_id))?
-                        .and_then(|text| contact_id_from_hex(&text))
+                    if let Some(contact_id) = tx_contact(repos, tx_id)?
                         && let Some(mut record) = repos.contact(contact_id)?
                     {
                         record.seal = SealMode::Degraded;
@@ -579,14 +540,9 @@ where
         &self,
         tx_id: TxId,
     ) -> Result<Option<ContactId>, ContactError> {
-        let session = self.session()?;
-        self.contact_work(move |_, _| {
-            Ok(session
-                .store
-                .read(|repos| repos.setting(&tx_key(tx_id)))?
-                .and_then(|text| contact_id_from_hex(&text)))
-        })
-        .await
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| Ok(session.store.read(|repos| tx_contact(repos, tx_id))?))
+            .await
     }
 
     /// Seals `reply`, the answer to `incoming`, for the channel `incoming` came by.
@@ -598,9 +554,9 @@ where
         reply: &WireSlate,
     ) -> Result<SealedAnswer, ContactError> {
         if let Some(contact_id) = contact {
-            let network = self.config().network;
+            let network = self.wallet.config().network;
             let net = contact_network(network);
-            let session = self.session()?;
+            let session = self.wallet.session()?;
             let body = reply.as_bytes().to_vec();
             let armored = self
                 .contact_work(move |ports, _| {
@@ -634,7 +590,7 @@ where
                             &mut LockedRng(&mut **ports.rng.lock()),
                         )
                         .map_err(ContactError::Encode)?;
-                        repos.put_setting(&tx_key(tx_id), &hex(&contact_id.0))?;
+                        link_tx(repos, tx_id, contact_id)?;
                         Ok(armor(&envelope))
                     })
                 })
@@ -660,12 +616,12 @@ where
             return Ok(None);
         };
         let envelope = seal(
-            contact_network(self.config().network),
+            contact_network(self.wallet.config().network),
             &key,
             HintRule::ReplyKey,
             &Content::new(MessageType::Slate, reply.as_bytes().to_vec()),
             None,
-            &mut LockedRng(&mut **self.ports().rng.lock()),
+            &mut LockedRng(&mut **self.wallet.ports().rng.lock()),
         )
         .map_err(ContactError::Encode)?;
         Ok(Some(armor(&envelope)))
@@ -695,9 +651,12 @@ fn find_opening(
         }
     }
     for (account, slot, records) in slots {
-        let root = keychain
-            .contact_root(&crate::account::parent_key_id(account)?, network)
-            .map_err(ContactError::Keys)?;
+        let root = crate::key_schedule::contact_root(
+            keychain,
+            &lepic_wallet::account::parent_key_id(account)?,
+            network,
+        )
+        .map_err(ContactError::Keys)?;
         let hint_key = root.hint_key(slot).map_err(ContactError::Keys)?;
         if Hint::contact(&HintKey::from_bytes(*hint_key), enc) != *hint {
             continue;
@@ -712,9 +671,12 @@ fn find_opening(
         }));
     }
     for account in repos.accounts()? {
-        let root = keychain
-            .contact_root(&crate::account::parent_key_id(account.index)?, network)
-            .map_err(ContactError::Keys)?;
+        let root = crate::key_schedule::contact_root(
+            keychain,
+            &lepic_wallet::account::parent_key_id(account.index)?,
+            network,
+        )
+        .map_err(ContactError::Keys)?;
         for stored in repos.transactions(account.index)? {
             let entry = &stored.entry;
             let waiting = matches!(

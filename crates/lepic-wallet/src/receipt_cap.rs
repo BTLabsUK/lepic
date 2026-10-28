@@ -220,7 +220,7 @@ where
                 let mut open = Vec::new();
                 for receipt in repos.open_receipts(transport.as_str())? {
                     let contact = match repos.transaction(receipt.id)?.and_then(|tx| tx.slate_id) {
-                        Some(slate) => crate::contact::slate_contact(repos, slate)?,
+                        Some(slate) => crate::contact_link::slate_contact(repos, slate)?,
                         None => None,
                     };
                     if contact.is_none() {

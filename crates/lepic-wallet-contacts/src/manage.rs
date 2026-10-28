@@ -9,8 +9,8 @@ use lepic_store::{
 use tracing::{info, instrument, warn};
 
 use super::{ContactError, ContactRelays, ContactView, RelayMode, pairing_id_of};
-use crate::ports::{SecretVault, StoreOpener};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 fn kind(kind: lepic_store::ContactKind) -> ContactKind {
     match kind {
@@ -131,7 +131,7 @@ fn restore_record(
         record.slot,
         record.box_salt,
     )?;
-    let relay_network = crate::inbox::relay_network(network);
+    let relay_network = lepic_wallet::inbox::relay_network(network);
     let ours = lepic_epicbox::EpicboxAddress::parse(own.fields().mailbox.as_str(), relay_network);
     let mine = *own.sig_key() == super::keys::signing_key(&keys).verifying_key()
         && own.enc_key() == &super::keys::enc_secret(&keys).public_key()
@@ -176,16 +176,16 @@ fn paired(
         .ok_or(ContactError::UnknownContact)
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
     /// The paired contacts, oldest first. Pairings still in progress and private pairings are
-    /// left out. Fails with [`crate::WalletError::Locked`] and as the store does.
+    /// left out. Fails with [`lepic_wallet::WalletError::Locked`] and as the store does.
     pub async fn contacts(&self) -> Result<Vec<ContactView>, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -209,10 +209,10 @@ where
     /// The pairings still in progress, oldest first: invites waiting for a reply and replies
     /// waiting for the confirmation. A pairing that completed is listed by
     /// [`Wallet::contacts`] instead. Cancel one with [`Wallet::contact_remove`]. Fails with
-    /// [`crate::WalletError::Locked`] and as the store does.
+    /// [`lepic_wallet::WalletError::Locked`] and as the store does.
     pub async fn pairings_pending(&self) -> Result<Vec<PendingPairingView>, ContactError> {
-        let net = super::keys::contact_network(self.config().network);
-        let session = self.session()?;
+        let net = super::keys::contact_network(self.wallet.config().network);
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             session.store.read(|repos| {
                 let mut views = Vec::new();
@@ -244,10 +244,10 @@ where
     /// The private pairings (two wallets of one owner), oldest first, in progress or paired;
     /// the state tells which. Their words check is mandatory before payloads pass: see
     /// [`Wallet::pairing_sas`]. Remove one with [`Wallet::contact_remove`] or
-    /// [`Wallet::contact_unpair`]. Fails with [`crate::WalletError::Locked`] and as the store
+    /// [`Wallet::contact_unpair`]. Fails with [`lepic_wallet::WalletError::Locked`] and as the store
     /// does.
     pub async fn private_pairings(&self) -> Result<Vec<ContactView>, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -270,7 +270,7 @@ where
 
     /// One paired contact. Fails with [`ContactError::UnknownContact`].
     pub async fn contact(&self, contact_id: ContactId) -> Result<ContactView, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             session.store.read(|repos| {
@@ -288,9 +288,9 @@ where
     /// Removes a pairing or a pairing in progress: its record, mailboxes and pending pairing go,
     /// and the contact is not told (RFC 0002 C-19). The slot stays used. Returns whether
     /// anything was removed.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_remove(&self, contact_id: ContactId) -> Result<bool, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let removed = self
             .contact_work(move |_, _| {
                 Ok(session.store.write(|repos| {
@@ -315,7 +315,7 @@ where
     /// seconds for the relay, so it stops sending through a pairing nobody reads (RFC 0002
     /// 7.6). Nothing is sent Offline, with Epicbox off, for a pairing still in progress, or for
     /// one the contact removed first. Returns whether anything was removed.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_unpair(
         &self,
         relays: &ContactRelays,
@@ -328,7 +328,7 @@ where
                 Ok(Ok(true)) => info!("unpaired notice posted"),
                 Ok(Ok(false)) => {}
                 Ok(Err(error)) => {
-                    warn!(error = %crate::inbox::ErrorChain(&error), "unpaired notice not posted");
+                    warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "unpaired notice not posted");
                 }
                 Err(_) => warn!("unpaired notice not posted in time"),
             }
@@ -342,8 +342,8 @@ where
         relays: &ContactRelays,
         contact_id: ContactId,
     ) -> Result<bool, ContactError> {
-        let network = self.config().network;
-        let session = self.session()?;
+        let network = self.wallet.config().network;
+        let session = self.wallet.session()?;
         let found = self
             .contact_work(move |_, _| {
                 Ok(session.store.read(|repos| {
@@ -375,11 +375,11 @@ where
                 &record,
                 lepic_contact::Content::new(
                     lepic_contact::MessageType::Notice,
-                    crate::notice::unpaired_notice().into_bytes(),
+                    lepic_wallet::notice::unpaired_notice().into_bytes(),
                 ),
             )
             .await?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let class = {
             let session = std::sync::Arc::clone(&session);
             let record = record.clone();
@@ -403,7 +403,7 @@ where
 
     /// The contact said it removed its pairing: the record is marked, once, and kept.
     pub(crate) async fn take_unpaired(&self, contact_id: ContactId) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let first = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -418,9 +418,10 @@ where
             .await?;
         if first {
             info!("contact removed the pairing");
-            self.emit(crate::event::Event::ContactUnpaired(
-                crate::event::ContactEvent { contact_id },
-            ));
+            self.wallet
+                .emit(lepic_wallet::event::Event::ContactUnpaired(
+                    lepic_wallet::event::ContactEvent { contact_id },
+                ));
         }
         Ok(())
     }
@@ -461,7 +462,7 @@ where
     /// invoices: turning them on for another fails with [`ContactError::NotVerified`]. Turning
     /// them off deletes the contact's unpaid parked invoices and queues a sealed `declined` for
     /// each; a paid one finishes. Fails with [`ContactError::UnknownContact`].
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_set_allow_invoices(
         &self,
         contact_id: ContactId,
@@ -517,7 +518,7 @@ where
         contact_id: ContactId,
         change: impl FnOnce(&mut ContactRecord) -> Result<(), ContactError> + Send + 'static,
     ) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             session.store.write(|repos| {
@@ -535,8 +536,8 @@ where
     /// `.wfeh` history payload (RFC 0002 10.5). It holds no secret.
     #[cfg(feature = "sqlite")]
     pub async fn contacts_export(&self) -> Result<String, ContactError> {
-        let session = self.session()?;
-        let network = self.config().network;
+        let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         self.contact_work(move |_, _| {
             Ok(session.store.read(|repos| {
                 lepic_store::export_contacts_where(repos, network, |record| {
@@ -554,7 +555,7 @@ where
     /// Fails with [`ContactError::TooLarge`] for a document over [`MAX_BACKUP_LEN`] bytes, and
     /// with a store error for a document this build cannot read; nothing is imported then.
     #[cfg(feature = "sqlite")]
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contacts_import(
         &self,
         document: String,
@@ -564,8 +565,8 @@ where
                 max: MAX_BACKUP_LEN,
             });
         }
-        let session = self.session()?;
-        let network = self.config().network;
+        let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         let summary = self
             .contact_work(move |_, _| {
                 let read_card = |bytes: &[u8]| {

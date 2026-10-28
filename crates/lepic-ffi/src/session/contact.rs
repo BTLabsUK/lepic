@@ -6,18 +6,18 @@ use lepic_store::{ContactId, ContactOutboxId, ContactOutboxState, ContactState, 
 use lepic_transport::file::FILE;
 use lepic_transport::transport::Location;
 use lepic_wallet::ReceiveRequest;
-use lepic_wallet::contact::{
+use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
+use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
+use lepic_wallet::send::{Delivery, SendError};
+use lepic_wallet::slate::{Slate, Stage, WireSlate};
+use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger as EngineTrigger, ContactKind as EngineKind,
     ContactRelays, ContactView as EngineContactView, InviteExpiry as EngineExpiry,
     InvitePreview as EnginePreview, InviteRequest, InvoiceDetails,
     KeyCheckStart as EngineKeyCheckStart, KeysDecision as EngineKeysDecision, LinkOutcome,
     PairingClass as EngineClass, PairingFailure, PairingRole, Purpose, RelayMode,
-    SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer,
+    SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer, WalletContacts,
 };
-use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
-use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
-use lepic_wallet::send::{Delivery, SendError};
-use lepic_wallet::slate::{Slate, Stage, WireSlate};
 use tracing::{info, warn};
 
 use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid};
@@ -308,7 +308,7 @@ impl Session {
                         "meeting relay too long",
                     ));
                 }
-                Ok(relays.with_meeting(lepic_wallet::contact::meeting_relays(&hosts)?))
+                Ok(relays.with_meeting(lepic_wallet_contacts::meeting_relays(&hosts)?))
             }
         }
     }
@@ -350,6 +350,7 @@ impl Session {
         };
         let offer = self
             .engine
+            .contact_book()
             .pairing_invite(
                 &relays,
                 InviteRequest {
@@ -381,7 +382,7 @@ impl Session {
 
     pub(crate) fn pairing_preview(&self, link: &str) -> Result<InvitePreview, WalletError> {
         let link = bounded(link, MAX_LINK_TEXT, "link")?;
-        Ok(preview(self.engine.pairing_preview(link)?))
+        Ok(preview(self.engine.contact_book().pairing_preview(link)?))
     }
 
     pub(crate) async fn pairing_find_words(
@@ -397,8 +398,12 @@ impl Session {
             ));
         }
         let relays = self.meeting_relays(mode, meeting)?;
-        let link = self.engine.pairing_find_words(&relays, &words).await?;
-        let preview = preview(self.engine.pairing_preview(&link)?);
+        let link = self
+            .engine
+            .contact_book()
+            .pairing_find_words(&relays, &words)
+            .await?;
+        let preview = preview(self.engine.contact_book().pairing_preview(&link)?);
         Ok(FoundInvite { link, preview })
     }
 
@@ -414,6 +419,7 @@ impl Session {
         let relays = self.contact_relays(mode)?;
         let outcome = self
             .engine
+            .contact_book()
             .pairing_accept(
                 &relays,
                 AcceptRequest {
@@ -439,23 +445,30 @@ impl Session {
     ) -> Result<PairingLinkResult, WalletError> {
         let text = bounded(text, MAX_LINK_TEXT, "link")?;
         let relays = self.contact_relays(mode)?;
-        Ok(match self.engine.pairing_enter_link(&relays, text).await? {
-            LinkOutcome::Confirm { contact_id, link } => PairingLinkResult {
-                outcome: PairingLinkOutcome::Confirm,
-                contact_id: Some(contact_id.to_string()),
-                link: Some(link),
+        Ok(
+            match self
+                .engine
+                .contact_book()
+                .pairing_enter_link(&relays, text)
+                .await?
+            {
+                LinkOutcome::Confirm { contact_id, link } => PairingLinkResult {
+                    outcome: PairingLinkOutcome::Confirm,
+                    contact_id: Some(contact_id.to_string()),
+                    link: Some(link),
+                },
+                LinkOutcome::Paired { contact_id } => PairingLinkResult {
+                    outcome: PairingLinkOutcome::Paired,
+                    contact_id: Some(contact_id.to_string()),
+                    link: None,
+                },
+                LinkOutcome::Ignored => PairingLinkResult {
+                    outcome: PairingLinkOutcome::Ignored,
+                    contact_id: None,
+                    link: None,
+                },
             },
-            LinkOutcome::Paired { contact_id } => PairingLinkResult {
-                outcome: PairingLinkOutcome::Paired,
-                contact_id: Some(contact_id.to_string()),
-                link: None,
-            },
-            LinkOutcome::Ignored => PairingLinkResult {
-                outcome: PairingLinkOutcome::Ignored,
-                contact_id: None,
-                link: None,
-            },
-        })
+        )
     }
 
     pub(crate) async fn pairing_show_card(
@@ -469,6 +482,7 @@ impl Session {
         let relays = self.contact_relays(mode)?;
         let offer = self
             .engine
+            .contact_book()
             .pairing_show_card(
                 &relays,
                 CardRequest {
@@ -495,7 +509,10 @@ impl Session {
         let link = bounded(link, MAX_LINK_TEXT, "link")?;
         let relays = self.contact_relays(mode)?;
         Ok(view(
-            self.engine.pairing_scan_card(&relays, id, link).await?,
+            self.engine
+                .contact_book()
+                .pairing_scan_card(&relays, id, link)
+                .await?,
         ))
     }
 
@@ -512,7 +529,11 @@ impl Session {
             SasDecision::Mismatch => EngineSasDecision::Mismatch,
             SasDecision::Skip => EngineSasDecision::Skip,
         };
-        Ok(self.engine.pairing_sas(&relays, id, decision).await?)
+        Ok(self
+            .engine
+            .contact_book()
+            .pairing_sas(&relays, id, decision)
+            .await?)
     }
 
     pub(crate) async fn contacts_collect(
@@ -543,6 +564,7 @@ impl Session {
         };
         let report = self
             .engine
+            .contact_book()
             .contacts_collect_only(&relays, trigger, only.as_deref())
             .await?;
         Ok(ContactCollectReport {
@@ -565,6 +587,7 @@ impl Session {
     pub(crate) async fn contacts(&self) -> Result<Vec<ContactView>, WalletError> {
         Ok(self
             .engine
+            .contact_book()
             .contacts()
             .await?
             .into_iter()
@@ -574,7 +597,7 @@ impl Session {
 
     pub(crate) async fn contact(&self, contact_id: &str) -> Result<ContactView, WalletError> {
         let id = self::contact_id(contact_id)?;
-        Ok(view(self.engine.contact(id).await?))
+        Ok(view(self.engine.contact_book().contact(id).await?))
     }
 
     pub(crate) async fn pairings_for_app_contact(
@@ -583,6 +606,7 @@ impl Session {
     ) -> Result<Vec<ContactView>, WalletError> {
         Ok(self
             .engine
+            .contact_book()
             .contacts()
             .await?
             .into_iter()
@@ -594,6 +618,7 @@ impl Session {
     pub(crate) async fn pairings_pending(&self) -> Result<Vec<PendingPairingView>, WalletError> {
         Ok(self
             .engine
+            .contact_book()
             .pairings_pending()
             .await?
             .into_iter()
@@ -611,20 +636,20 @@ impl Session {
 
     pub(crate) async fn pairing_cancel(&self, contact_id: &str) -> Result<(), WalletError> {
         let id = self::contact_id(contact_id)?;
-        let pending = self.engine.pairings_pending().await?;
+        let pending = self.engine.contact_book().pairings_pending().await?;
         if !pending.iter().any(|pairing| pairing.contact_id == id) {
             return Err(WalletError::new(
                 WalletErrorKind::PairingNotFound,
                 "no such pairing in progress",
             ));
         }
-        self.engine.contact_remove(id).await?;
+        self.engine.contact_book().contact_remove(id).await?;
         Ok(())
     }
 
     pub(crate) async fn contact_remove(&self, contact_id: &str) -> Result<bool, WalletError> {
         let id = self::contact_id(contact_id)?;
-        Ok(self.engine.contact_remove(id).await?)
+        Ok(self.engine.contact_book().contact_remove(id).await?)
     }
 
     pub(crate) async fn contact_unpair(
@@ -634,7 +659,11 @@ impl Session {
     ) -> Result<bool, WalletError> {
         let id = self::contact_id(contact_id)?;
         let relays = self.contact_relays(mode)?;
-        Ok(self.engine.contact_unpair(&relays, id).await?)
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_unpair(&relays, id)
+            .await?)
     }
 
     pub(crate) async fn contact_set_label(
@@ -643,7 +672,11 @@ impl Session {
         label: String,
     ) -> Result<(), WalletError> {
         let id = self::contact_id(contact_id)?;
-        Ok(self.engine.contact_set_label(id, label).await?)
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_set_label(id, label)
+            .await?)
     }
 
     pub(crate) async fn contact_set_seal(
@@ -652,7 +685,11 @@ impl Session {
         seal: bool,
     ) -> Result<(), WalletError> {
         let id = self::contact_id(contact_id)?;
-        Ok(self.engine.contact_set_seal(id, seal).await?)
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_set_seal(id, seal)
+            .await?)
     }
 
     pub(crate) async fn contact_set_allow_invoices(
@@ -661,7 +698,11 @@ impl Session {
         allow: bool,
     ) -> Result<(), WalletError> {
         let id = self::contact_id(contact_id)?;
-        Ok(self.engine.contact_set_allow_invoices(id, allow).await?)
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_set_allow_invoices(id, allow)
+            .await?)
     }
 
     pub(crate) async fn contact_attach(
@@ -670,7 +711,11 @@ impl Session {
         app_contact: Option<String>,
     ) -> Result<(), WalletError> {
         let id = self::contact_id(contact_id)?;
-        Ok(self.engine.contact_attach(id, app_contact).await?)
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_attach(id, app_contact)
+            .await?)
     }
 
     pub(crate) async fn contact_key_check(
@@ -682,7 +727,12 @@ impl Session {
         let (new, old) = (contact_id(new)?, contact_id(old)?);
         let relays = self.contact_relays(mode)?;
         Ok(
-            match self.engine.contact_key_check(&relays, new, old).await? {
+            match self
+                .engine
+                .contact_book()
+                .contact_key_check(&relays, new, old)
+                .await?
+            {
                 EngineKeyCheckStart::Sent => KeyCheckStart::Sent,
                 EngineKeyCheckStart::KeysChanged => KeyCheckStart::KeysChanged,
             },
@@ -699,7 +749,11 @@ impl Session {
             KeysDecision::KeepOld => EngineKeysDecision::KeepOld,
             KeysDecision::UseNew => EngineKeysDecision::UseNew,
         };
-        Ok(self.engine.contact_keys_resolve(new, decision).await?)
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_keys_resolve(new, decision)
+            .await?)
     }
 
     pub(crate) async fn contact_seal_slate(
@@ -711,6 +765,7 @@ impl Session {
         let id = self::contact_id(contact_id)?;
         Ok(self
             .engine
+            .contact_book()
             .contact_seal_slate(id, TxId(tx_id), purpose.map(engine_purpose))
             .await?)
     }
@@ -726,6 +781,7 @@ impl Session {
         let relays = self.contact_relays(mode)?;
         Ok(self
             .engine
+            .contact_book()
             .contact_post_slate(&relays, id, TxId(tx_id), purpose.map(engine_purpose))
             .await?)
     }
@@ -745,7 +801,10 @@ impl Session {
     ) -> Result<SentTx, WalletError> {
         let id = self::contact_id(contact_id)?;
         let relays = self.contact_relays(mode)?;
-        self.engine.contact_check_mailbox_send(id).await?;
+        self.engine
+            .contact_book()
+            .contact_check_mailbox_send(id)
+            .await?;
         let scratch = ScratchFile::new(&self.data_dir)?;
         let sent = match self
             .engine
@@ -772,6 +831,7 @@ impl Session {
         let tx_id = TxId(sent.tx_id);
         if let Err(error) = self
             .engine
+            .contact_book()
             .contact_post_slate(&relays, id, tx_id, purpose.map(engine_purpose))
             .await
         {
@@ -788,7 +848,7 @@ impl Session {
 
     pub(crate) async fn sealed_open(&self, text: &str) -> Result<SealedSlateView, WalletError> {
         let text = bounded(text, MAX_SEALED_TEXT, "sealed text")?;
-        let sealed = self.engine.sealed_open(text).await?;
+        let sealed = self.engine.contact_book().sealed_open(text).await?;
         let info = crate::inspect::inspect(wire_text(&sealed.wire)?, self.network)?;
         Ok(SealedSlateView {
             contact_id: sealed.contact_id.map(|id| id.to_string()),
@@ -818,6 +878,7 @@ impl Session {
         let text = bounded(text, MAX_SEALED_TEXT, "sealed text")?;
         let done = self
             .engine
+            .contact_book()
             .sealed_receive(
                 text,
                 ReceiveRequest {
@@ -839,7 +900,7 @@ impl Session {
     ) -> Result<SealedAnswer, WalletError> {
         let text = bounded(text, MAX_SEALED_TEXT, "sealed text")?;
         let request = Self::pay_request(amount, minimum_confirmations, message, options)?;
-        let done = self.engine.sealed_pay(text, request).await?;
+        let done = self.engine.contact_book().sealed_pay(text, request).await?;
         answer(done.paid.tx_id, &done.paid.slate, done.answer)
     }
 
@@ -847,6 +908,7 @@ impl Session {
         let text = bounded(text, MAX_SEALED_TEXT, "sealed text")?;
         let finalized = self
             .engine
+            .contact_book()
             .sealed_finalize(text, lepic_node::Propagation::Fluff)
             .await?;
         Ok(FinalizedTx {
@@ -864,11 +926,20 @@ impl Session {
         bounded(&reply, MAX_SEALED_TEXT, "slate")?;
         let incoming = WireSlate::text(lepic_wallet::slate::MediaType::JSON, incoming);
         let reply = WireSlate::text(lepic_wallet::slate::MediaType::JSON, reply);
-        Ok(self.engine.sealed_answer_to_marker(&incoming, &reply)?)
+        Ok(self
+            .engine
+            .contact_book()
+            .sealed_answer_to_marker(&incoming, &reply)?)
     }
 
     pub(crate) async fn contact_plain_fallback(&self, tx_id: u32) -> Result<String, WalletError> {
-        wire_text(&self.engine.contact_plain_fallback(TxId(tx_id)).await?)
+        wire_text(
+            &self
+                .engine
+                .contact_book()
+                .contact_plain_fallback(TxId(tx_id))
+                .await?,
+        )
     }
 
     pub(crate) async fn contact_of_transaction(
@@ -877,6 +948,7 @@ impl Session {
     ) -> Result<Option<String>, WalletError> {
         Ok(self
             .engine
+            .contact_book()
             .contact_of_transaction(TxId(tx_id))
             .await?
             .map(|id| id.to_string()))
@@ -897,6 +969,7 @@ impl Session {
         let relays = self.contact_relays(mode)?;
         let issued = self
             .engine
+            .contact_book()
             .contact_issue_invoice(
                 &relays,
                 id,
@@ -923,6 +996,7 @@ impl Session {
     pub(crate) async fn contact_invoices(&self) -> Result<Vec<ContactInvoiceView>, WalletError> {
         Ok(self
             .engine
+            .contact_book()
             .contact_invoices()
             .await?
             .into_iter()
@@ -958,6 +1032,7 @@ impl Session {
         let relays = self.contact_relays(mode)?;
         let paid = self
             .engine
+            .contact_book()
             .contact_pay_invoice(&relays, slate_id, request)
             .await?;
         Ok(PaidInvoice {
@@ -970,7 +1045,11 @@ impl Session {
 
     pub(crate) async fn contact_decline_invoice(&self, slate_id: &str) -> Result<(), WalletError> {
         let slate_id = self::slate_id(slate_id)?;
-        Ok(self.engine.contact_decline_invoice(slate_id).await?)
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_decline_invoice(slate_id)
+            .await?)
     }
 
     pub(crate) async fn contact_outbox(
@@ -980,6 +1059,7 @@ impl Session {
         let id = self::contact_id(contact_id)?;
         Ok(self
             .engine
+            .contact_book()
             .contact_outbox(id)
             .await?
             .into_iter()
@@ -1009,6 +1089,7 @@ impl Session {
         let relays = self.contact_relays(mode)?;
         Ok(self
             .engine
+            .contact_book()
             .contact_outbox_resend(&relays, ContactOutboxId(id))
             .await?)
     }
@@ -1020,7 +1101,7 @@ impl Session {
         mode: ContactRelayMode,
     ) -> Result<String, WalletError> {
         let id = super::contact::contact_id(contact_id)?;
-        if payload.len() > lepic_wallet::contact::MAX_APP_PAYLOAD_LEN {
+        if payload.len() > lepic_wallet_contacts::MAX_APP_PAYLOAD_LEN {
             return Err(WalletError::new(
                 WalletErrorKind::InvalidArgument,
                 "payload larger than one message carries",
@@ -1029,6 +1110,7 @@ impl Session {
         let relays = self.contact_relays(mode)?;
         let sent = self
             .engine
+            .contact_book()
             .contact_post_payload(&relays, id, payload)
             .await?;
         Ok(sent.to_string())
@@ -1037,6 +1119,7 @@ impl Session {
     pub(crate) async fn private_pairings(&self) -> Result<Vec<ContactView>, WalletError> {
         Ok(self
             .engine
+            .contact_book()
             .private_pairings()
             .await?
             .into_iter()
@@ -1047,6 +1130,7 @@ impl Session {
     pub(crate) async fn contact_payloads(&self) -> Result<Vec<ContactPayloadView>, WalletError> {
         Ok(self
             .engine
+            .contact_book()
             .contact_payloads()
             .await?
             .into_iter()
@@ -1060,7 +1144,7 @@ impl Session {
     }
 
     pub(crate) async fn contact_payloads_ack(&self, ids: Vec<String>) -> Result<u32, WalletError> {
-        if ids.len() > lepic_wallet::contact::MAX_KEPT_PAYLOADS {
+        if ids.len() > lepic_wallet_contacts::MAX_KEPT_PAYLOADS {
             return Err(WalletError::new(
                 WalletErrorKind::InvalidArgument,
                 "more payload ids than are ever kept",
@@ -1069,12 +1153,17 @@ impl Session {
         let ids = ids
             .iter()
             .map(|id| {
-                lepic_wallet::contact::PayloadId::parse(id).ok_or_else(|| {
+                lepic_wallet_contacts::PayloadId::parse(id).ok_or_else(|| {
                     WalletError::new(WalletErrorKind::InvalidArgument, "not a payload id")
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(count(self.engine.contact_payloads_ack(&ids).await?))
+        Ok(count(
+            self.engine
+                .contact_book()
+                .contact_payloads_ack(&ids)
+                .await?,
+        ))
     }
 
     pub(crate) async fn contacts_outbox_deliver(
@@ -1082,7 +1171,11 @@ impl Session {
         mode: ContactRelayMode,
     ) -> Result<OutboxReport, WalletError> {
         let relays = self.contact_relays(mode)?;
-        let report = self.engine.contacts_outbox_deliver(&relays).await?;
+        let report = self
+            .engine
+            .contact_book()
+            .contacts_outbox_deliver(&relays)
+            .await?;
         Ok(OutboxReport {
             delivered: count(report.delivered),
             failed: count(report.failed),
@@ -1091,14 +1184,14 @@ impl Session {
     }
 
     pub(crate) async fn contacts_export(&self) -> Result<String, WalletError> {
-        Ok(self.engine.contacts_export().await?)
+        Ok(self.engine.contact_book().contacts_export().await?)
     }
 
     pub(crate) async fn contacts_import(
         &self,
         document: String,
     ) -> Result<ContactImportSummary, WalletError> {
-        let summary = self.engine.contacts_import(document).await?;
+        let summary = self.engine.contact_book().contacts_import(document).await?;
         Ok(ContactImportSummary {
             imported: count(summary.imported),
             skipped_existing: count(summary.skipped_existing),
@@ -1152,7 +1245,7 @@ mod tests {
 
         let failed = mapped(&Event::PairingFailed(FailedPairing {
             contact_id,
-            reason: PairingFailure::Refused(lepic_wallet::contact::Refusal::AlreadyUsed),
+            reason: PairingFailure::Refused(lepic_wallet_contacts::Refusal::AlreadyUsed),
         }));
         assert_eq!(failed.kind, WalletEventKind::PairingFailed);
         assert_eq!(failed.pairing_failure, Some(PairingFailureReason::Refused));

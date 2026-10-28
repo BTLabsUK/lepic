@@ -250,7 +250,9 @@ impl Harness {
     }
 
     pub fn wallet_with(&self, config: WalletConfig, vault: TestVault) -> TestWallet {
-        Wallet::new(config, self.ports(vault)).unwrap()
+        let wallet = Wallet::new(config, self.ports(vault)).unwrap();
+        lepic_wallet_contacts::install(&wallet);
+        wallet
     }
 
     pub fn ports(&self, vault: TestVault) -> Ports<NodeClient<MockNode>, MemoryStores, TestVault> {

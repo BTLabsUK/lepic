@@ -432,6 +432,7 @@ impl Session {
             runtime: runtime.boundary.handle.clone(),
         };
         let engine = Wallet::new(engine_config, ports)?;
+        lepic_wallet_contacts::install(&engine);
         Ok(Self {
             engine,
             network,

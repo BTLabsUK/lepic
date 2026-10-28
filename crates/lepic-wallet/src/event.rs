@@ -109,7 +109,7 @@ pub enum Event {
     ContactKeysChanged(ContactEvent),
     /// The contact removed its pairing with this wallet and said so in a signed notice: its
     /// mailbox is no longer read, so nothing sent through the pairing arrives. The record stays,
-    /// marked [`crate::contact::ContactView::removed_by_peer`], until the user removes it too.
+    /// marked removed by the peer (`lepic_wallet_contacts::ContactView::removed_by_peer`), until the user removes it too.
     /// Raised once per pairing.
     ContactUnpaired(ContactEvent),
     /// A verified contact that may send invoices sent one; it is parked for the user to pay or
@@ -180,7 +180,23 @@ pub struct ContactEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FailedPairing {
     pub contact_id: lepic_store::ContactId,
-    pub reason: crate::contact::PairingFailure,
+    pub reason: PairingFailure,
+}
+
+/// Why a pairing ended without a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingFailure {
+    /// The confirm does not match the invite's commitment or enc key: something changed the
+    /// invite on the way. Nothing was stored.
+    ChangedOnTheWay,
+    /// The invite expired before a reply arrived.
+    Expired,
+    /// This wallet answered an invite and no confirm came in time, or, as the inviter, could
+    /// not deliver its confirm in time: the other side cannot have finished, so nothing of the
+    /// pairing is kept.
+    NotConfirmed,
+    /// The inviter refused the reply: the invite was used, expired or cancelled. Advisory.
+    Refused(lepic_contact::Refusal),
 }
 
 /// A home relay that did not answer, as `domain:port`.

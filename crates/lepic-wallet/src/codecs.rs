@@ -28,10 +28,10 @@ pub(crate) fn legacy_with(v3: Box<dyn Codec>, v2: Box<dyn Codec>) -> CodecRegist
 
 #[cfg(test)]
 mod tests {
+    use lepic_epicbox::marker::v2::MarkedV2JsonCodec;
+    use lepic_epicbox::marker::v3::MarkedV3JsonCodec;
     use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
     use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
-    use lepic_slate::codec::marked_v2::MarkedV2JsonCodec;
-    use lepic_slate::codec::marked_v3::MarkedV3JsonCodec;
 
     use super::*;
 

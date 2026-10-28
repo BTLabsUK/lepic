@@ -16,8 +16,8 @@ use tracing::{debug, info, instrument};
 use super::keys::{contact_network, pairing_mailbox};
 use super::relay::{check_online, mailbox_client};
 use super::{ContactError, ContactRelays, LockedRng, new_id};
-use crate::ports::{SecretVault, StoreOpener};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// An invite offered as words lasts this long (RFC 0002 7.1).
 pub const WORDS_INVITE_EXPIRY: Duration = Duration::from_secs(10 * 60);
@@ -34,7 +34,7 @@ fn unix_seconds(time: jiff::Timestamp) -> u64 {
     u64::try_from(time.as_second()).unwrap_or(0)
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
@@ -52,9 +52,9 @@ where
         invite: &Invite,
     ) -> Result<[SasSymbol; WORD_COUNT], ContactError> {
         check_online(relays)?;
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let words = {
-            let mut rng = LockedRng(&mut **self.ports().rng.lock());
+            let mut rng = LockedRng(&mut **self.wallet.ports().rng.lock());
             let bytes = new_id(&mut rng);
             let mut five = [0u8; WORD_COUNT];
             for (slot, byte) in five.iter_mut().zip(bytes) {
@@ -65,7 +65,7 @@ where
         let symbols = words
             .symbols()
             .map_err(|_| ContactError::Words(lepic_contact::WordsError::Unknown))?;
-        let window = WordsWindow::at(unix_seconds(self.ports().clock.now()));
+        let window = WordsWindow::at(unix_seconds(self.wallet.ports().clock.now()));
         let key = self
             .contact_work(move |_, _| {
                 words
@@ -74,7 +74,10 @@ where
             })
             .await?;
         let posted = key
-            .seal_invite(invite, &mut LockedRng(&mut **self.ports().rng.lock()))
+            .seal_invite(
+                invite,
+                &mut LockedRng(&mut **self.wallet.ports().rng.lock()),
+            )
             .map_err(ContactError::Words)?;
         let mut posts = Vec::with_capacity(relays.built_in.len());
         for relay in &relays.built_in {
@@ -85,7 +88,7 @@ where
                     .post(&from, rendezvous.address(), posted)
                     .await;
                 if let Err(error) = &result {
-                    debug!(peer_relay = %relay.domain(), error = %crate::inbox::ErrorChain(error), "pairing words not posted");
+                    debug!(peer_relay = %relay.domain(), error = %lepic_wallet::inbox::ErrorChain(error), "pairing words not posted");
                 }
                 result
             });
@@ -139,7 +142,7 @@ where
     /// [`ContactError::Relay`] when not one meeting relay could be drained,
     /// [`ContactError::WordsUnavailable`] when there is no meeting relay, and
     /// [`ContactError::Offline`] or [`ContactError::EpicboxOff`] before connecting.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_find_words<T: AsRef<str>>(
         &self,
         relays: &ContactRelays,
@@ -151,8 +154,8 @@ where
         if relays.built_in.is_empty() {
             return Err(ContactError::WordsUnavailable);
         }
-        let network = self.config().network;
-        let now = unix_seconds(self.ports().clock.now());
+        let network = self.wallet.config().network;
+        let now = unix_seconds(self.wallet.ports().clock.now());
         let keys = self
             .contact_work(move |_, _| {
                 WordsWindow::to_try(now)
@@ -199,7 +202,7 @@ where
             match drained {
                 Ok(_) => reached = true,
                 Err(error) => {
-                    debug!(peer_relay = %relay.domain(), error = %crate::inbox::ErrorChain(&error), "rendezvous drain failed");
+                    debug!(peer_relay = %relay.domain(), error = %lepic_wallet::inbox::ErrorChain(&error), "rendezvous drain failed");
                     failed = Some(error);
                 }
             }

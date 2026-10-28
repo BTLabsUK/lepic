@@ -2,7 +2,6 @@
 //! [`WalletError::kind`] or the stable [`WalletError::code`], never on the message.
 
 use lepic_keychain::AppDataError;
-use lepic_wallet::contact::ContactError;
 use lepic_wallet::error_text::{display_error_chain, display_error_message};
 use lepic_wallet::inbox::InboxError;
 use lepic_wallet::invoice::InvoiceError;
@@ -12,6 +11,7 @@ use lepic_wallet::selection::SelectionError;
 use lepic_wallet::self_send::SelfSendError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{FinalizeError, ReceiveError};
+use lepic_wallet_contacts::ContactError;
 
 /// What went wrong, in terms the app can act on. The numbers in [`WalletErrorKind::code`] are
 /// part of the API and never change meaning; the binding's README lists them.

@@ -2,6 +2,7 @@
 //! sections 11 and 12): a contact's invoice parks only when the contact is verified and allowed
 //! to send invoices, payments and answers go through the outbox, and notices travel sealed.
 
+use lepic_wallet::contact_link::{link_slate, slate_contact, tx_contact};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -23,20 +24,19 @@ use uuid::Uuid;
 
 use super::keys::{contact_network, signing_key};
 use super::{ContactError, ContactRelays, LockedRng, RelayMode};
-use crate::event::{ContactInvoiceEvent, ContactSlateEvent, Event};
-use crate::inbox::ErrorChain;
-use crate::invoice::{InvoiceError, InvoiceRequest, IssuedInvoice, PaidInvoice, PayRequest};
-use crate::notice::{Notice, NoticeKind, Payload, classify_text};
-use crate::ports::{SecretVault, StoreOpener};
-use crate::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::event::{ContactInvoiceEvent, ContactSlateEvent, Event};
+use lepic_wallet::inbox::ErrorChain;
+use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, IssuedInvoice, PaidInvoice, PayRequest};
+use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
+use lepic_wallet::ports::{SecretVault, StoreOpener};
+use lepic_wallet::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
 
 /// Requests for the same amount from one contact within this window are grouped, so the user
 /// is asked before a second payment (RFC 0002 12.6).
 pub const SAME_AMOUNT_WINDOW: Duration = Duration::from_secs(10 * 60);
 
 const INVOICE_PREFIX: &str = "contact.invoice.";
-const SLATE_PREFIX: &str = "contact.slate.";
 
 /// What a contact's invoice says beyond the slate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +58,7 @@ pub struct ContactInvoice {
     pub reference: Option<String>,
     pub expires: Option<u64>,
     /// The issuer's message, only when its signature verifies, made safe to display by
-    /// [`crate::epicbox_invoice::display_message`].
+    /// [`lepic_wallet::epicbox_invoice::display_message`].
     pub message: Option<String>,
     pub received_at: Timestamp,
     /// Other parked invoices from the same contact for the same amount received within
@@ -114,21 +114,6 @@ fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
 }
 
-/// Records that the slate `slate_id` belongs to an exchange with `contact`, so its answers go
-/// through the contact's mailbox. A slate another contact holds is never moved: returns false
-/// and changes nothing.
-pub(crate) fn link_slate(
-    repos: &mut dyn Repositories,
-    slate_id: Uuid,
-    contact: ContactId,
-) -> Result<bool, StoreError> {
-    if slate_contact(repos, slate_id)?.is_some_and(|other| other != contact) {
-        return Ok(false);
-    }
-    repos.put_setting(&format!("{SLATE_PREFIX}{slate_id}"), &hex(&contact.0))?;
-    Ok(true)
-}
-
 /// Whether the contact may start an exchange under the slate id it chose (RFC 0002 3.4): no
 /// other contact holds the id, and no transaction of this wallet uses it, but for this
 /// contact's own repeat in the `repeat` direction. A contact can never take over a slate id
@@ -144,23 +129,12 @@ fn slate_free_for(
     }
     for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
         if let Some(tx) = repos.transaction_by_slate(slate_id, direction)?
-            && (Some(direction) != repeat
-                || super::sealed::tx_contact(repos, tx.id)? != Some(contact))
+            && (Some(direction) != repeat || tx_contact(repos, tx.id)? != Some(contact))
         {
             return Ok(false);
         }
     }
     Ok(true)
-}
-
-/// The contact the slate `slate_id` was exchanged with, if any.
-pub(crate) fn slate_contact(
-    repos: &dyn Repositories,
-    slate_id: Uuid,
-) -> Result<Option<ContactId>, StoreError> {
-    Ok(repos
-        .setting(&format!("{SLATE_PREFIX}{slate_id}"))?
-        .and_then(|text| contact_from_hex(&text)))
 }
 
 /// Deletes every unpaid invoice parked from the contact, for a contact that lost the trust they
@@ -190,7 +164,7 @@ fn contact_sender_key(contact_id: ContactId) -> String {
     format!("contact:{}", hex(&contact_id.0))
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
@@ -204,7 +178,7 @@ where
     /// Fails with [`ContactError::UnknownContact`] for a contact that is not paired or whose keys
     /// changed, [`ContactError::DoesNotPayInvoices`] when its card says it does not pay invoices,
     /// and [`ContactError::Invoice`] as [`Wallet::issue_invoice`] does.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_issue_invoice(
         &self,
         relays: &ContactRelays,
@@ -212,8 +186,8 @@ where
         request: InvoiceRequest,
         details: InvoiceDetails,
     ) -> Result<IssuedInvoice, ContactError> {
-        let net = contact_network(self.config().network);
-        let session = self.session()?;
+        let net = contact_network(self.wallet.config().network);
+        let session = self.wallet.session()?;
         let (record, peer_mailbox) = self
             .contact_work(move |_, _| {
                 session.store.read(|repos| {
@@ -239,9 +213,10 @@ where
             return Err(ContactError::DoesNotPayInvoices);
         }
         let (tx_id, slate, wire) = self
+            .wallet
             .issue_unsent(
                 request,
-                crate::send::Delivery::Deliver {
+                lepic_wallet::send::Delivery::Deliver {
                     transport: FILE,
                     to: Destination::new(peer_mailbox),
                 },
@@ -266,11 +241,11 @@ where
             )
             .await?;
         let slate_uuid = uuid(slate.id());
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.write(|repos| {
                 link_slate(repos, slate_uuid, contact_id)?;
-                super::sealed::link_tx(repos, tx_id, contact_id)
+                lepic_wallet::contact_link::link_tx(repos, tx_id, contact_id)
             })?)
         })
         .await?;
@@ -287,8 +262,8 @@ where
 
     /// The parked invoices from contacts, oldest first.
     pub async fn contact_invoices(&self) -> Result<Vec<ContactInvoice>, ContactError> {
-        let network = self.config().network;
-        let session = self.session()?;
+        let network = self.wallet.config().network;
+        let session = self.wallet.session()?;
         let parked = self
             .contact_work(move |_, _| {
                 Ok(session.store.read(|repos| {
@@ -322,7 +297,7 @@ where
                     purpose: note.purpose.and_then(purpose_of),
                     reference: note.reference,
                     expires: note.expires,
-                    message: crate::epicbox_invoice::issuer_message(&slate),
+                    message: lepic_wallet::epicbox_invoice::issuer_message(&slate),
                     received_at: invoice.received_at,
                     same_amount: Vec::new(),
                 })
@@ -356,19 +331,19 @@ where
     /// from a contact with that id waits, [`ContactError::NotVerified`] when its contact is no
     /// longer verified with invoices allowed (nothing is paid), and as [`Wallet::pay_invoice`]
     /// does.
-    #[instrument(skip_all, fields(wallet = %self.config().name, slate_id = %slate_id))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name, slate_id = %slate_id))]
     pub async fn contact_pay_invoice(
         &self,
         relays: &ContactRelays,
         slate_id: SlateId,
         request: PayRequest,
     ) -> Result<PaidInvoice, ContactError> {
-        let network = self.config().network;
-        let session = self.session()?;
+        let network = self.wallet.config().network;
+        let session = self.wallet.session()?;
         let slate_uuid = uuid(slate_id);
         // The trust check and the payment take one turn of the contact engine, so no
         // collecting cycle can end the contact's trust between them.
-        let turn = self.contact_turn().await;
+        let turn = self.wallet.contact_turn().await;
         let (parked, contact_id) = self
             .contact_work(move |_, _| {
                 session.store.read(|repos| {
@@ -395,6 +370,7 @@ where
             .decode(&WireSlate::binary(MediaType::JSON, parked.bytes))
             .map_err(|_| ContactError::NotASlate)?;
         let paid = self
+            .wallet
             .pay_decoded(
                 FILE,
                 i1,
@@ -426,14 +402,14 @@ where
         stage: SlateStage,
         reply: &WireSlate,
     ) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let record = self
             .contact_work(move |_, _| {
                 session.store.write(|repos| {
                     if !link_slate(repos, slate_id, contact_id)? {
                         return Err(ContactError::UnknownTransaction);
                     }
-                    super::sealed::link_tx(repos, tx_id, contact_id)?;
+                    lepic_wallet::contact_link::link_tx(repos, tx_id, contact_id)?;
                     repos
                         .contact(contact_id)?
                         .ok_or(ContactError::UnknownContact)
@@ -457,12 +433,12 @@ where
         record: &ContactRecord,
         content: Content,
     ) -> Result<Vec<u8>, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
         let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
         let card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
         let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let class = {
             let session = std::sync::Arc::clone(&session);
             let record = record.clone();
@@ -475,10 +451,10 @@ where
         };
         let keys = super::private::record_keys(&session.keychain, network, record, &class)?;
         let content = Content {
-            sent_at: super::collect::send_time(self.ports().clock.now()),
+            sent_at: super::collect::send_time(self.wallet.ports().clock.now()),
             ..content
         };
-        let mut rng = LockedRng(&mut **self.ports().rng.lock());
+        let mut rng = LockedRng(&mut **self.wallet.ports().rng.lock());
         match class.private() {
             None => seal(
                 net,
@@ -530,7 +506,7 @@ where
         content: Content,
     ) -> Result<lepic_epicbox::Handled, ContactError> {
         use lepic_epicbox::Handled;
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let contact_id = record.contact_id;
         let Ok(text) = String::from_utf8(content.body) else {
             return Ok(Handled::Stored);
@@ -577,7 +553,11 @@ where
                     debug!("payment from a contact over the open receipt caps dropped");
                     return Ok(Handled::Stored);
                 }
-                let received = match self.receive(FILE, &wire, ReceiveRequest::default()).await {
+                let received = match self
+                    .wallet
+                    .receive(FILE, &wire, ReceiveRequest::default())
+                    .await
+                {
                     Ok(received) => received,
                     Err(ReceiveError::Node(_) | ReceiveError::Wallet(_)) => {
                         return Ok(Handled::Later);
@@ -601,11 +581,12 @@ where
                     slate_id: slate.id(),
                     amount: slate.amount(),
                 };
-                self.emit(if content.purpose == Some(Purpose::Withdrawal) {
-                    Event::WithdrawalFromContact(news)
-                } else {
-                    Event::SealedReceived(news)
-                });
+                self.wallet
+                    .emit(if content.purpose == Some(Purpose::Withdrawal) {
+                        Event::WithdrawalFromContact(news)
+                    } else {
+                        Event::SealedReceived(news)
+                    });
                 Ok(Handled::Stored)
             }
             Stage::S2 | Stage::I2
@@ -616,14 +597,15 @@ where
                 warn!(slate_id = %slate.id(), "answer from a contact for a slate not exchanged with it dropped");
                 Ok(Handled::Stored)
             }
-            Stage::S2 => match self.finalize(FILE, &wire, Propagation::Stem).await {
+            Stage::S2 => match self.wallet.finalize(FILE, &wire, Propagation::Stem).await {
                 Ok(finalized) => {
-                    self.emit(Event::ContactPaymentFinalized(ContactSlateEvent {
-                        contact_id,
-                        tx_id: finalized.tx_id,
-                        slate_id: finalized.slate.id(),
-                        amount: finalized.slate.amount(),
-                    }));
+                    self.wallet
+                        .emit(Event::ContactPaymentFinalized(ContactSlateEvent {
+                            contact_id,
+                            tx_id: finalized.tx_id,
+                            slate_id: finalized.slate.id(),
+                            amount: finalized.slate.amount(),
+                        }));
                     // The receiver hears that it was posted, as over Epicbox (ADR 0016): sealed
                     // to it through its mailbox, which the outbox run of this cycle delivers.
                     if finalized.pushed
@@ -647,43 +629,55 @@ where
                 // Finalized and stored, but the node did not take it: the host hears of it now,
                 // and the message stays so the next collect finalizes it again from the stored
                 // slate and posts it again, as the Epicbox inbox does.
-                Err(crate::finalize::FinalizeError::NotPosted { tx_id, source }) => {
+                Err(lepic_wallet::finalize::FinalizeError::NotPosted { tx_id, source }) => {
                     warn!(tx_id = %tx_id, error = %ErrorChain(&source), "answer from a contact finalized but not posted");
-                    self.emit(Event::ContactPaymentFinalized(ContactSlateEvent {
-                        contact_id,
-                        tx_id,
-                        slate_id: slate.id(),
-                        amount: slate.amount(),
-                    }));
+                    self.wallet
+                        .emit(Event::ContactPaymentFinalized(ContactSlateEvent {
+                            contact_id,
+                            tx_id,
+                            slate_id: slate.id(),
+                            amount: slate.amount(),
+                        }));
                     Ok(Handled::Later)
                 }
-                Err(error) if !crate::inbox::finalize_is_permanent(&error) => Ok(Handled::Later),
+                Err(error) if !lepic_wallet::inbox::finalize_is_permanent(&error) => {
+                    Ok(Handled::Later)
+                }
                 Err(error) => {
                     warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "answer from a contact not finalized");
                     Ok(Handled::Stored)
                 }
             },
-            Stage::I2 => match self.finalize_invoice(FILE, &wire, Propagation::Stem).await {
+            Stage::I2 => match self
+                .wallet
+                .finalize_invoice(FILE, &wire, Propagation::Stem)
+                .await
+            {
                 Ok(finalized) => {
-                    self.emit(Event::InvoiceFinalized(crate::event::FinalizedInvoice {
-                        tx_id: finalized.tx_id,
-                        slate_id: finalized.slate.id(),
-                    }));
+                    self.wallet.emit(Event::InvoiceFinalized(
+                        lepic_wallet::event::FinalizedInvoice {
+                            tx_id: finalized.tx_id,
+                            slate_id: finalized.slate.id(),
+                        },
+                    ));
                     if let Some(kernel) = finalized.transaction.kernels().first() {
-                        self.notify_posted(finalized.tx_id, finalized.slate.id(), kernel.excess)
+                        self.wallet
+                            .notify_posted(finalized.tx_id, finalized.slate.id(), kernel.excess)
                             .await;
                     }
                     Ok(Handled::Stored)
                 }
                 Err(InvoiceError::NotPosted { tx_id, source }) => {
                     warn!(tx_id = %tx_id, error = %ErrorChain(&source), "payment from a contact finalized but not posted");
-                    self.emit(Event::InvoiceFinalized(crate::event::FinalizedInvoice {
-                        tx_id,
-                        slate_id: slate.id(),
-                    }));
+                    self.wallet.emit(Event::InvoiceFinalized(
+                        lepic_wallet::event::FinalizedInvoice {
+                            tx_id,
+                            slate_id: slate.id(),
+                        },
+                    ));
                     Ok(Handled::Later)
                 }
-                Err(error) if !crate::inbox::invoice_finalize_is_permanent(&error) => {
+                Err(error) if !lepic_wallet::inbox::invoice_finalize_is_permanent(&error) => {
                     Ok(Handled::Later)
                 }
                 Err(error) => {
@@ -703,7 +697,7 @@ where
         contact_id: ContactId,
         slate_id: Uuid,
     ) -> Result<bool, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.read(|repos| slate_contact(repos, slate_id))? == Some(contact_id))
         })
@@ -717,7 +711,7 @@ where
         slate_id: Uuid,
         repeat: Option<TxDirection>,
     ) -> Result<bool, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session
                 .store
@@ -727,15 +721,15 @@ where
     }
 
     /// Whether a new S1 `slate_id` from the contact fits the open receipt caps the inbox keeps
-    /// for senders (RFC 0002 12.5): at most [`crate::inbox::MAX_OPEN_RECEIPTS_PER_SENDER`] open
-    /// from this contact and [`crate::inbox::MAX_OPEN_RECEIPTS`] from all contacts. One received
+    /// for senders (RFC 0002 12.5): at most [`lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER`] open
+    /// from this contact and [`lepic_wallet::inbox::MAX_OPEN_RECEIPTS`] from all contacts. One received
     /// before always fits, so its stored S2 goes back again.
     async fn contact_receipt_room(
         &self,
         contact_id: ContactId,
         slate_id: Uuid,
     ) -> Result<bool, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.read(|repos| {
                 if repos
@@ -763,8 +757,10 @@ where
                         None => {}
                     }
                 }
-                Ok(from_contact < crate::inbox::MAX_OPEN_RECEIPTS_PER_SENDER
-                    && from_contacts < crate::inbox::MAX_OPEN_RECEIPTS)
+                Ok(
+                    from_contact < lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER
+                        && from_contacts < lepic_wallet::inbox::MAX_OPEN_RECEIPTS,
+                )
             })?)
         })
         .await
@@ -780,7 +776,7 @@ where
         expires: Option<u64>,
     ) -> Result<(), ContactError> {
         let contact_id = record.contact_id;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let slate_uuid = uuid(slate.id());
         let bytes = wire.as_bytes().to_vec();
         let note = InvoiceNote {
@@ -835,15 +831,16 @@ where
             .await?;
         if parked {
             info!("invoice from a contact parked");
-            self.emit(Event::InvoiceFromContact(ContactInvoiceEvent {
-                contact_id,
-                slate_id: slate.id(),
-                amount: slate.amount(),
-                purpose,
-                reference,
-                expires,
-                message: crate::epicbox_invoice::issuer_message(slate),
-            }));
+            self.wallet
+                .emit(Event::InvoiceFromContact(ContactInvoiceEvent {
+                    contact_id,
+                    slate_id: slate.id(),
+                    amount: slate.amount(),
+                    purpose,
+                    reference,
+                    expires,
+                    message: lepic_wallet::epicbox_invoice::issuer_message(slate),
+                }));
         }
         Ok(())
     }
@@ -860,7 +857,7 @@ where
         let Ok(text) = std::str::from_utf8(body) else {
             return Ok(Handled::Stored);
         };
-        if crate::notice::is_unpaired(text) {
+        if lepic_wallet::notice::is_unpaired(text) {
             self.take_unpaired(record.contact_id).await?;
             return Ok(Handled::Stored);
         }
@@ -871,12 +868,16 @@ where
         let Payload::Notice(notice) = classify_text(text) else {
             return Ok(Handled::Stored);
         };
-        let Ok(effect) = self.apply_contact_notice(notice, record.contact_id).await else {
+        let Ok(effect) = self
+            .wallet
+            .apply_contact_notice(notice, record.contact_id)
+            .await
+        else {
             return Ok(Handled::Later);
         };
         if let Some(tx_id) = effect {
             // A signed withdrawn for a paid invoice ends the payment (RFC 0002 11.4).
-            if let Err(error) = self.cancel(tx_id).await {
+            if let Err(error) = self.wallet.cancel(tx_id).await {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&error), "withdrawn payment not cancelled");
             } else {
                 info!(tx_id = %tx_id, "payment cancelled on the contact's withdrawn notice");
@@ -908,7 +909,7 @@ where
         notice: Notice,
         stage: SlateStage,
     ) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let record = self
             .contact_work(move |_, _| {
                 session.store.read(|repos| {
@@ -934,9 +935,9 @@ where
     ///
     /// Fails with [`ContactError::Invoice`] carrying [`InvoiceError::NotParked`] when no unpaid
     /// invoice from a contact with that id waits, and as the store does.
-    #[instrument(skip_all, fields(wallet = %self.config().name, slate_id = %slate_id))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name, slate_id = %slate_id))]
     pub async fn contact_decline_invoice(&self, slate_id: SlateId) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let slate_uuid = uuid(slate_id);
         let contact_id = self
             .contact_work(move |_, _| {
@@ -971,7 +972,7 @@ where
         &self,
         contact_id: ContactId,
     ) -> Result<usize, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let declined = self
             .contact_work(move |_, _| {
                 Ok(session

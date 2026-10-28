@@ -250,7 +250,7 @@ where
         let parked = session.store.read(|repos| {
             let mut parked = Vec::new();
             for invoice in repos.pending_invoices()? {
-                if crate::contact::slate_contact(repos, invoice.slate_id)?.is_none() {
+                if crate::contact_link::slate_contact(repos, invoice.slate_id)?.is_none() {
                     parked.push(invoice);
                 }
             }
@@ -319,7 +319,7 @@ where
             .blocking(move |_, _| {
                 Ok(session
                     .store
-                    .read(|repos| crate::contact::slate_contact(repos, slate_uuid))?)
+                    .read(|repos| crate::contact_link::slate_contact(repos, slate_uuid))?)
             })
             .await?;
         if from_contact.is_some() {
@@ -392,7 +392,7 @@ where
         let session = self.session()?;
         session.store.write(|repos| {
             // A contact's invoice is declined with `contact_decline_invoice` only.
-            if crate::contact::slate_contact(repos, uuid(slate_id))?.is_some() {
+            if crate::contact_link::slate_contact(repos, uuid(slate_id))?.is_some() {
                 return Err(InvoiceError::NotParked { slate_id });
             }
             match repos.set_pending_invoice_status(uuid(slate_id), PendingInvoiceStatus::Declined) {
@@ -538,7 +538,7 @@ fn epicbox_decode(
 }
 
 /// The issuer's message of an I1, when its signature verifies, for display.
-pub(crate) fn issuer_message(slate: &Slate) -> Option<String> {
+pub fn issuer_message(slate: &Slate) -> Option<String> {
     slate.participants().find_map(|(_, participant)| {
         let message = participant.message.as_ref()?;
         verify_message(message, &participant.public_blind_excess)
@@ -579,7 +579,7 @@ fn issued_unpaid_before(
             };
             let issued_here = matches!(entry.transport.as_deref(), Some(transport)
                 if transport == TRANSPORT_ID.as_str() || transport == FILE.as_str());
-            if (!issued_here && crate::contact::slate_contact(repos, slate_uuid)?.is_none())
+            if (!issued_here && crate::contact_link::slate_contact(repos, slate_uuid)?.is_none())
                 || entry.created_at > cutoff
                 || repos.slate(slate_uuid, SlateStage::Invoice1)?.is_none()
             {
@@ -633,7 +633,7 @@ pub(crate) fn epicbox_invoice_payment(
         return Ok(None);
     };
     if (entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
-        && crate::contact::slate_contact(repos, slate_uuid)?.is_none())
+        && crate::contact_link::slate_contact(repos, slate_uuid)?.is_none())
         || repos.slate(slate_uuid, SlateStage::Invoice2)?.is_none()
     {
         return Ok(None);

@@ -29,7 +29,6 @@ serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2 = { workspace = true, features = ["zeroize"] }
 thiserror.workspace = true
-x25519-dalek = { workspace = true, features = ["static_secrets", "zeroize"] }
 zeroize.workspace = true
 
 [dev-dependencies]

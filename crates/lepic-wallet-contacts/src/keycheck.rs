@@ -26,11 +26,11 @@ use super::invoices::drop_contact_invoices;
 use super::keys::{CardDetails, contact_keys, contact_network, enc_secret, our_card, signing_key};
 use super::pairing::{peer_card, same_keys};
 use super::{ContactError, ContactRelays, LockedRng, new_id, pairing_id_of};
-use crate::account::parent_key_id;
-use crate::event::{ContactEvent, Event};
-use crate::inbox::relay_network;
-use crate::ports::{SecretVault, StoreOpener};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::account::parent_key_id;
+use lepic_wallet::event::{ContactEvent, Event};
+use lepic_wallet::inbox::relay_network;
+use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// A check is started and answered only within this long of the new pairing, and an open check
 /// waits this long for its answer.
@@ -152,7 +152,7 @@ fn slot_used(
         .is_some_and(|at| within_window(at, now)))
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
@@ -171,16 +171,16 @@ where
     ///
     /// Fails with [`ContactError::UnknownContact`] unless both are paired and differ, and with
     /// [`ContactError::KeyCheckRefused`] when the new pairing's check already ended.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_key_check(
         &self,
         relays: &ContactRelays,
         new: ContactId,
         old: ContactId,
     ) -> Result<KeyCheckStart, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let envelope = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -252,7 +252,8 @@ where
             None => return Ok(KeyCheckStart::Sent),
             Some(None) => {
                 info!("key check not allowed now; keys changed");
-                self.emit(Event::ContactKeysChanged(ContactEvent { contact_id: new }));
+                self.wallet
+                    .emit(Event::ContactKeysChanged(ContactEvent { contact_id: new }));
                 return Ok(KeyCheckStart::KeysChanged);
             }
             Some(Some(envelope)) => envelope,
@@ -271,13 +272,13 @@ where
 
     /// Resolves a new pairing in keys-changed (RFC 0002 7.8, step 7). Fails with
     /// [`ContactError::UnknownContact`] when `new` is not in keys-changed.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_keys_resolve(
         &self,
         new: ContactId,
         decision: KeysDecision,
     ) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             session.store.write(|repos| {
                 let mut record = repos
@@ -320,12 +321,12 @@ where
         record: &ContactRecord,
         envelope: &[u8],
     ) -> Result<Handled, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
         let new = record.contact_id;
         let record = record.clone();
         let check_envelope = envelope.to_vec();
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let answer = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -353,10 +354,12 @@ where
                     repos.put_setting(&key(DONE_PREFIX, new), "y")?;
                     let n_y = signing_key(&keys).verifying_key();
                     let n_x = *new_peer.sig_key();
-                    let root = session
-                        .keychain
-                        .contact_root(&parent_key_id(record.account)?, network)
-                        .map_err(ContactError::Keys)?;
+                    let root = crate::key_schedule::contact_root(
+                        &session.keychain,
+                        &parent_key_id(record.account)?,
+                        network,
+                    )
+                    .map_err(ContactError::Keys)?;
                     let mut found: Option<(u32, Option<ContactRecord>)> = None;
                     for other in repos.contacts()? {
                         if other.contact_id == new
@@ -366,8 +369,11 @@ where
                             continue;
                         }
                         let hint = root.hint_key(other.slot).map_err(ContactError::Keys)?;
-                        let tag =
-                            lepic_keychain::key_check_tag(&hint, n_y.as_bytes(), n_x.as_bytes());
+                        let tag = crate::key_schedule::key_check_tag(
+                            &hint,
+                            n_y.as_bytes(),
+                            n_x.as_bytes(),
+                        );
                         if tag == check.tag {
                             found = Some((other.slot, Some(other)));
                             break;
@@ -483,10 +489,10 @@ where
         record: &ContactRecord,
         envelope: &[u8],
     ) -> Result<Handled, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
         let new = record.contact_id;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let new_peer = card_of(record, net)?;
         let keys = contact_keys(
             &session.keychain,
@@ -509,7 +515,8 @@ where
             KeyCheckAnswer::NotFound => {
                 if self.close_check(new).await? {
                     info!("key check not found");
-                    self.emit(Event::ContactKeysChanged(ContactEvent { contact_id: new }));
+                    self.wallet
+                        .emit(Event::ContactKeysChanged(ContactEvent { contact_id: new }));
                 }
             }
             KeyCheckAnswer::Found(_) => {
@@ -529,10 +536,10 @@ where
         new_peer: &ContactCard,
         own_new: &VerifyingKey,
     ) -> Result<(), ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
         let new = record.contact_id;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let answer = answer.clone();
         let found_envelope = found_envelope.to_vec();
         let new_peer = new_peer.clone();
@@ -624,7 +631,7 @@ where
             )
             .await?;
             info!("contact keys restored");
-            self.emit(Event::ContactKeysRestored(ContactEvent {
+            self.wallet.emit(Event::ContactKeysRestored(ContactEvent {
                 contact_id: old_id,
             }));
         }
@@ -639,10 +646,10 @@ where
         new_peer: &ContactCard,
         own_new: &VerifyingKey,
     ) -> Result<(), ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
         let new = record.contact_id;
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let answer = answer.clone();
         let new_peer = new_peer.clone();
         let own_new = *own_new;
@@ -766,7 +773,7 @@ where
             .await?;
         if let Some(kept) = restored {
             info!("contact keys restored");
-            self.emit(Event::ContactKeysRestored(ContactEvent {
+            self.wallet.emit(Event::ContactKeysRestored(ContactEvent {
                 contact_id: kept,
             }));
         }
@@ -776,7 +783,7 @@ where
     /// Ends an open check on the new pairing `new` as not found: the new pairing goes to
     /// keys-changed and the old record stays. Returns whether a check was open.
     async fn close_check(&self, new: ContactId) -> Result<bool, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.write(|repos| {
                 let Some(sent) = read::<SentCheck>(repos, &key(SENT_PREFIX, new))? else {
@@ -794,7 +801,7 @@ where
     /// Ends checks that went unanswered for a day, and removes new pairings folded into an old
     /// record once nothing for them waits in the outbox.
     pub(crate) async fn tend_key_checks(&self) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let changed = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -837,7 +844,8 @@ where
             .await?;
         for contact_id in changed {
             info!("key check unanswered");
-            self.emit(Event::ContactKeysChanged(ContactEvent { contact_id }));
+            self.wallet
+                .emit(Event::ContactKeysChanged(ContactEvent { contact_id }));
         }
         Ok(())
     }

@@ -1191,8 +1191,10 @@ impl<H: Host> Run<'_, H> {
                 lepic_tor::TRANSPORT_ID,
             ],
         };
+        let wallet = Wallet::new(config, ports)?;
+        lepic_wallet_contacts::install(&wallet);
         Ok(Opened {
-            wallet: Wallet::new(config, ports)?,
+            wallet,
             epicbox,
             http,
             tor,

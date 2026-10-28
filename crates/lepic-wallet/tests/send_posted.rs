@@ -24,10 +24,10 @@ mod world;
 use std::time::Duration;
 
 use lepic_crypto::Commitment;
+use lepic_epicbox::marker::v3::carries_lepic_marker;
 use lepic_epicbox::{EpicboxAddress, EpicboxClient, TRANSPORT_ID};
 use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::Amount;
-use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::SlateId;
 use lepic_store::{PeerSupport, SlateStage, TxDirection, TxId, TxState, WalletStore};

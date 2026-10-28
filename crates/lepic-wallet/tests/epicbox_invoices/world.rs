@@ -23,6 +23,7 @@ use blake2::digest::{FixedOutput, KeyInit, Update};
 use jiff::Timestamp;
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::Connector;
+use lepic_epicbox::marker::v3::carries_lepic_marker;
 use lepic_epicbox::mock_relay::MockRelay;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
@@ -37,7 +38,6 @@ use lepic_primitives::hash::Hash;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
-use lepic_slate::codec::marked_v3::carries_lepic_marker;
 use lepic_slate::codec::{Codec, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -300,6 +300,7 @@ impl Party {
             transports: vec![TRANSPORT_ID],
         };
         let wallet = Wallet::new(config, ports).unwrap();
+        lepic_wallet_contacts::install(&wallet);
         runtime
             .block_on(wallet.restore(password(name), mnemonic))
             .unwrap();

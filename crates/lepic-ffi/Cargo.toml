@@ -36,6 +36,7 @@ lepic-telemetry.workspace = true
 lepic-tor = { workspace = true, optional = true }
 lepic-transport.workspace = true
 lepic-wallet.workspace = true
+lepic-wallet-contacts.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
 sha2.workspace = true
 tokio = { workspace = true, features = ["fs", "net", "rt", "rt-multi-thread", "sync", "time"] }

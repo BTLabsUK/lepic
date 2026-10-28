@@ -2,7 +2,7 @@
 
 #![no_main]
 
-use lepic_slate::codec::marked_v3::{carries_lepic_marker, lepic_marker_reply_key};
+use lepic_epicbox::marker::v3::{carries_lepic_marker, lepic_marker_reply_key};
 use lepic_slate::codec::{MediaType, WireSlate};
 use libfuzzer_sys::fuzz_target;
 use x25519_dalek::x25519;

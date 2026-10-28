@@ -13,9 +13,9 @@ use std::time::Duration;
 use lepic_contact::ContactKind;
 use lepic_store::{AccountIndex, ContactId};
 use lepic_wallet::Event;
-use lepic_wallet::contact::{
+use lepic_wallet_contacts::{
     AcceptRequest, CollectTrigger, ContactRelays, InviteExpiry, InviteRequest, PairingClass,
-    RelayMode,
+    RelayMode, WalletContacts,
 };
 use tokio::sync::broadcast::Receiver;
 
@@ -71,16 +71,18 @@ impl World {
         self.block_on(
             party
                 .wallet
+                .contact_book()
                 .pairing_invite(&relays(party), invite_request(name)),
         )
         .unwrap()
         .link
     }
 
-    pub fn collect(&self, party: &Party) -> lepic_wallet::contact::CollectReport {
+    pub fn collect(&self, party: &Party) -> lepic_wallet_contacts::CollectReport {
         self.block_on(
             party
                 .wallet
+                .contact_book()
                 .contacts_collect(&relays(party), CollectTrigger::Open),
         )
         .unwrap()
@@ -93,6 +95,7 @@ impl World {
             .block_on(
                 self.payer
                     .wallet
+                    .contact_book()
                     .pairing_accept(&relays(&self.payer), accept(&link, "Ben", false)),
             )
             .unwrap();
@@ -113,6 +116,7 @@ impl World {
             .block_on(
                 invitee
                     .wallet
+                    .contact_book()
                     .pairing_accept(&relays(invitee), accept(&link, "Ben", false)),
             )
             .unwrap();
@@ -138,7 +142,7 @@ impl World {
     }
 
     pub fn contact_ids(&self, party: &Party) -> Vec<ContactId> {
-        self.block_on(party.wallet.contacts())
+        self.block_on(party.wallet.contact_book().contacts())
             .unwrap()
             .into_iter()
             .map(|view| view.contact_id)
@@ -146,13 +150,15 @@ impl World {
     }
 
     pub fn only_contact(&self, party: &Party) -> ContactId {
-        let contacts = self.block_on(party.wallet.contacts()).unwrap();
+        let contacts = self
+            .block_on(party.wallet.contact_book().contacts())
+            .unwrap();
         assert_eq!(contacts.len(), 1, "{contacts:?}");
         contacts[0].contact_id
     }
 
     pub fn sas(&self, party: &Party, contact: ContactId) -> Vec<&'static str> {
-        self.block_on(party.wallet.contact(contact))
+        self.block_on(party.wallet.contact_book().contact(contact))
             .unwrap()
             .sas
             .unwrap()

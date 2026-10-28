@@ -29,12 +29,12 @@ use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{Domain, Network as RelayNetwork, RelayEndpoint, Security};
 use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
-use lepic_wallet::contact::{
+use lepic_wallet::event::{ContactEvent, FailedPairing};
+use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry,
     InviteRequest, KeyCheckStart, KeysDecision, LinkOutcome, PairingClass, PairingFailure,
-    RelayMode, SasDecision,
+    RelayMode, SasDecision, WalletContacts,
 };
-use lepic_wallet::event::{ContactEvent, FailedPairing};
 use rand::SeedableRng;
 use world::{Party, World};
 
@@ -47,10 +47,10 @@ fn two_wallets_pair_by_link_through_the_relay_and_see_one_sas() {
     let (anna_side, ben_side) = world.pair_by_link();
 
     let issuer_view = world
-        .block_on(world.issuer.wallet.contact(anna_side))
+        .block_on(world.issuer.wallet.contact_book().contact(anna_side))
         .unwrap();
     let payer_view = world
-        .block_on(world.payer.wallet.contact(ben_side))
+        .block_on(world.payer.wallet.contact_book().contact(ben_side))
         .unwrap();
     assert_eq!(issuer_view.state, ContactState::Paired);
     assert_eq!(payer_view.state, ContactState::Paired);
@@ -90,6 +90,7 @@ fn a_pairing_by_hand_needs_no_relay() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", true)),
         )
         .unwrap();
@@ -101,6 +102,7 @@ fn a_pairing_by_hand_needs_no_relay() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .pairing_enter_link(&relays(&world.issuer), &answered.reply_link),
         )
         .unwrap();
@@ -112,6 +114,7 @@ fn a_pairing_by_hand_needs_no_relay() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_enter_link(&relays(&world.payer), &link),
         )
         .unwrap();
@@ -133,7 +136,7 @@ fn two_phones_pair_in_person_by_scanning_each_others_card() {
     let world = World::new();
     let show = |party: &Party, name: &str| {
         world
-            .block_on(party.wallet.pairing_show_card(
+            .block_on(party.wallet.contact_book().pairing_show_card(
                 &relays(party),
                 CardRequest {
                     account: AccountIndex(0),
@@ -148,14 +151,14 @@ fn two_phones_pair_in_person_by_scanning_each_others_card() {
     let ben = show(&world.payer, "Ben");
 
     let on_issuer = world
-        .block_on(world.issuer.wallet.pairing_scan_card(
+        .block_on(world.issuer.wallet.contact_book().pairing_scan_card(
             &relays(&world.issuer),
             anna.contact_id,
             &ben.link,
         ))
         .unwrap();
     let on_payer = world
-        .block_on(world.payer.wallet.pairing_scan_card(
+        .block_on(world.payer.wallet.contact_book().pairing_scan_card(
             &relays(&world.payer),
             ben.contact_id,
             &anna.link,
@@ -168,7 +171,7 @@ fn two_phones_pair_in_person_by_scanning_each_others_card() {
     // A card already paired is not taken twice.
     let again = show(&world.issuer, "Anna");
     assert!(matches!(
-        world.block_on(world.issuer.wallet.pairing_scan_card(
+        world.block_on(world.issuer.wallet.contact_book().pairing_scan_card(
             &relays(&world.issuer),
             again.contact_id,
             &ben.link,
@@ -177,7 +180,7 @@ fn two_phones_pair_in_person_by_scanning_each_others_card() {
     ));
     // Nor is a wallet's own card.
     assert!(matches!(
-        world.block_on(world.issuer.wallet.pairing_scan_card(
+        world.block_on(world.issuer.wallet.contact_book().pairing_scan_card(
             &relays(&world.issuer),
             again.contact_id,
             &again.link,
@@ -193,34 +196,55 @@ fn the_sas_check_verifies_or_deletes_and_only_verified_contacts_send_invoices() 
     let wallet = &world.issuer.wallet;
 
     assert!(matches!(
-        world.block_on(wallet.contact_set_allow_invoices(anna_side, true)),
+        world.block_on(
+            wallet
+                .contact_book()
+                .contact_set_allow_invoices(anna_side, true)
+        ),
         Err(ContactError::NotVerified)
     ));
     world
-        .block_on(wallet.pairing_sas(&relays(&world.issuer), anna_side, SasDecision::Skip))
+        .block_on(wallet.contact_book().pairing_sas(
+            &relays(&world.issuer),
+            anna_side,
+            SasDecision::Skip,
+        ))
         .unwrap();
     assert_eq!(
-        world.block_on(wallet.contact(anna_side)).unwrap().state,
+        world
+            .block_on(wallet.contact_book().contact(anna_side))
+            .unwrap()
+            .state,
         ContactState::Paired
     );
     world
-        .block_on(wallet.pairing_sas(&relays(&world.issuer), anna_side, SasDecision::Match))
+        .block_on(wallet.contact_book().pairing_sas(
+            &relays(&world.issuer),
+            anna_side,
+            SasDecision::Match,
+        ))
         .unwrap();
-    let view = world.block_on(wallet.contact(anna_side)).unwrap();
+    let view = world
+        .block_on(wallet.contact_book().contact(anna_side))
+        .unwrap();
     assert_eq!(view.state, ContactState::Verified);
     assert!(view.verified_at.is_some());
     world
-        .block_on(wallet.contact_set_allow_invoices(anna_side, true))
+        .block_on(
+            wallet
+                .contact_book()
+                .contact_set_allow_invoices(anna_side, true),
+        )
         .unwrap();
     assert!(
         world
-            .block_on(wallet.contact(anna_side))
+            .block_on(wallet.contact_book().contact(anna_side))
             .unwrap()
             .allow_invoices
     );
 
     world
-        .block_on(world.payer.wallet.pairing_sas(
+        .block_on(world.payer.wallet.contact_book().pairing_sas(
             &relays(&world.payer),
             ben_side,
             SasDecision::Mismatch,
@@ -228,7 +252,7 @@ fn the_sas_check_verifies_or_deletes_and_only_verified_contacts_send_invoices() 
         .unwrap();
     assert!(
         world
-            .block_on(world.payer.wallet.contacts())
+            .block_on(world.payer.wallet.contact_book().contacts())
             .unwrap()
             .is_empty()
     );
@@ -239,7 +263,7 @@ fn an_expired_invite_is_refused_after_the_skew_and_ends_on_the_inviter() {
     let world = World::new();
     let mut issuer_events = world.issuer.wallet.subscribe();
     let link = world
-        .block_on(world.issuer.wallet.pairing_invite(
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
             &relays(&world.issuer),
             InviteRequest {
                 expiry: InviteExpiry::OneHour,
@@ -251,10 +275,17 @@ fn an_expired_invite_is_refused_after_the_skew_and_ends_on_the_inviter() {
 
     // Within ten minutes of skew the invite still opens.
     world.payer.clock.advance(HOUR + 5 * MINUTE);
-    assert!(world.payer.wallet.pairing_preview(&link).is_ok());
+    assert!(
+        world
+            .payer
+            .wallet
+            .contact_book()
+            .pairing_preview(&link)
+            .is_ok()
+    );
     world.payer.clock.advance(10 * MINUTE);
     assert!(matches!(
-        world.payer.wallet.pairing_preview(&link),
+        world.payer.wallet.contact_book().pairing_preview(&link),
         Err(ContactError::InviteExpired)
     ));
     assert!(matches!(
@@ -262,6 +293,7 @@ fn an_expired_invite_is_refused_after_the_skew_and_ends_on_the_inviter() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false))
         ),
         Err(ContactError::InviteExpired)
@@ -297,6 +329,7 @@ fn an_invite_answered_twice_pairs_once() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -304,6 +337,7 @@ fn an_invite_answered_twice_pairs_once() {
     let second = world
         .block_on(
             twin.wallet
+                .contact_book()
                 .pairing_accept(&relays(&twin), accept(&link, "Ben again", false)),
         )
         .unwrap();
@@ -311,7 +345,9 @@ fn an_invite_answered_twice_pairs_once() {
 
     assert_eq!(world.collect(&world.issuer).paired, 1);
 
-    let contacts = world.block_on(world.issuer.wallet.contacts()).unwrap();
+    let contacts = world
+        .block_on(world.issuer.wallet.contact_book().contacts())
+        .unwrap();
     assert_eq!(contacts.len(), 1);
     assert_eq!(contacts[0].claimed_name.as_deref(), Some("Ben"));
     assert_eq!(world.collect(&world.payer).paired, 1);
@@ -340,7 +376,7 @@ fn an_invite_answered_twice_pairs_once() {
 fn an_answer_whose_confirm_never_comes_ends_as_not_confirmed_after_the_invites_window() {
     let world = World::new();
     let link = world
-        .block_on(world.issuer.wallet.pairing_invite(
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
             &relays(&world.issuer),
             InviteRequest {
                 expiry: InviteExpiry::OneHour,
@@ -354,13 +390,20 @@ fn an_answer_whose_confirm_never_comes_ends_as_not_confirmed_after_the_invites_w
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
     // The inviter cancels before it collects.
     let pending = world.issuer.read(|repos| repos.pending_pairings());
     world
-        .block_on(world.issuer.wallet.contact_remove(pending[0].contact_id))
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .contact_remove(pending[0].contact_id),
+        )
         .unwrap();
     let mut payer_events = world.payer.wallet.subscribe();
 
@@ -391,14 +434,14 @@ fn a_removed_contact_is_no_longer_collected() {
 
     assert!(
         world
-            .block_on(world.issuer.wallet.contact_remove(anna_side))
+            .block_on(world.issuer.wallet.contact_book().contact_remove(anna_side))
             .unwrap()
     );
 
     assert_eq!(world.collect(&world.issuer).mailboxes, 0);
     assert!(
         world
-            .block_on(world.issuer.wallet.contacts())
+            .block_on(world.issuer.wallet.contact_book().contacts())
             .unwrap()
             .is_empty()
     );
@@ -412,7 +455,7 @@ fn a_collect_limited_to_contacts_drains_only_their_mailboxes() {
     let (with_stranger, _) = world.pair(&world.issuer, &stranger);
     let only = |ids: &[ContactId]| {
         world
-            .block_on(world.issuer.wallet.contacts_collect_only(
+            .block_on(world.issuer.wallet.contact_book().contacts_collect_only(
                 &relays(&world.issuer),
                 CollectTrigger::Open,
                 Some(ids),
@@ -438,6 +481,7 @@ fn an_answer_stored_before_its_post_survives_a_relay_that_fails() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -451,6 +495,7 @@ fn an_answer_stored_before_its_post_survives_a_relay_that_fails() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .pairing_enter_link(&relays(&world.issuer), &answered.reply_link),
         )
         .unwrap();
@@ -467,7 +512,7 @@ fn offline_and_epicbox_off_refuse_to_collect_without_connecting() {
         (RelayMode::EpicboxOff, "epicbox off"),
     ] {
         let error = world
-            .block_on(world.issuer.wallet.contacts_collect(
+            .block_on(world.issuer.wallet.contact_book().contacts_collect(
                 &ContactRelays {
                     mode,
                     ..relays(&world.issuer)
@@ -492,6 +537,7 @@ fn offline_and_epicbox_off_refuse_to_collect_without_connecting() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&offline, accept(&link, "Ben", true)),
         )
         .unwrap();
@@ -519,6 +565,7 @@ fn a_pairing_works_when_the_invitee_uses_another_relay() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&elsewhere, accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -530,13 +577,20 @@ fn a_pairing_works_when_the_invitee_uses_another_relay() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .contacts_collect(&elsewhere, CollectTrigger::Open),
         )
         .unwrap();
 
     assert_eq!(report.paired, 1);
     let view = world
-        .block_on(world.payer.wallet.contact(answered.contact_id))
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .contact(answered.contact_id),
+        )
         .unwrap();
     assert_eq!(view.home_relay.as_deref(), Some("relay.test:80"));
 }
@@ -559,6 +613,7 @@ fn twin_installs_on_one_seed_forced_into_one_slot_keep_their_mailboxes_apart() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&first, "Ben", false)),
         )
         .unwrap();
@@ -566,6 +621,7 @@ fn twin_installs_on_one_seed_forced_into_one_slot_keep_their_mailboxes_apart() {
         .block_on(
             ben_twin
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&ben_twin), accept(&second, "Cleo", false)),
         )
         .unwrap();
@@ -598,19 +654,19 @@ fn a_backup_restores_the_same_keys_and_pairings_on_another_install() {
     let world = World::new();
     let (anna_side, _) = world.pair_by_link();
     world
-        .block_on(world.issuer.wallet.pairing_sas(
+        .block_on(world.issuer.wallet.contact_book().pairing_sas(
             &relays(&world.issuer),
             anna_side,
             SasDecision::Match,
         ))
         .unwrap();
     let document = world
-        .block_on(world.issuer.wallet.contacts_export())
+        .block_on(world.issuer.wallet.contact_book().contacts_export())
         .unwrap();
     let restored = world.issuer_twin();
 
     let summary = world
-        .block_on(restored.wallet.contacts_import(document))
+        .block_on(restored.wallet.contact_book().contacts_import(document))
         .unwrap();
 
     assert_eq!(summary.imported, 1);
@@ -657,7 +713,7 @@ fn a_swapped_invite_key_is_caught_by_the_commitment() {
     )
     .unwrap();
     let answered = world
-        .block_on(world.payer.wallet.pairing_accept(
+        .block_on(world.payer.wallet.contact_book().pairing_accept(
             &relays(&world.payer),
             accept(&swapped.to_link(), "Ben", true),
         ))
@@ -673,6 +729,7 @@ fn a_swapped_invite_key_is_caught_by_the_commitment() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .pairing_enter_link(&relays(&world.issuer), &forwarded_link),
         )
         .unwrap()
@@ -685,6 +742,7 @@ fn a_swapped_invite_key_is_caught_by_the_commitment() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_enter_link(&relays(&world.payer), &confirm),
         )
         .unwrap();
@@ -711,6 +769,7 @@ fn a_swapped_reply_gives_different_sas_on_the_two_sides() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", true)),
         )
         .unwrap();
@@ -719,6 +778,7 @@ fn a_swapped_reply_gives_different_sas_on_the_two_sides() {
         .block_on(
             mallory
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&mallory), accept(&link, "Ben", true)),
         )
         .unwrap();
@@ -730,6 +790,7 @@ fn a_swapped_reply_gives_different_sas_on_the_two_sides() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .pairing_enter_link(&relays(&world.issuer), &mallory_answer.reply_link),
         )
         .unwrap()
@@ -744,6 +805,7 @@ fn a_swapped_reply_gives_different_sas_on_the_two_sides() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_enter_link(&relays(&world.payer), &confirm),
         )
         .unwrap();
@@ -752,6 +814,7 @@ fn a_swapped_reply_gives_different_sas_on_the_two_sides() {
         .block_on(
             mallory
                 .wallet
+                .contact_book()
                 .pairing_enter_link(&relays(&mallory), &confirm),
         )
         .unwrap();
@@ -782,16 +845,14 @@ fn a_swapped_reply_gives_different_sas_on_the_two_sides() {
 /// as a contact update (type 05) and posted to the issuer's mailbox from the payer's.
 fn post_update(world: &World, ben_side: ContactId, seq: u32, mailbox_host: &str) {
     let record = world.payer.read(|repos| repos.contact(ben_side)).unwrap();
-    let keys = world
-        .payer
-        .keychain()
-        .contact_root(
-            &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
-            lepic_primitives::params::Network::Floonet,
-        )
-        .unwrap()
-        .contact_keys(record.slot, record.box_salt)
-        .unwrap();
+    let keys = lepic_wallet_contacts::contact_root(
+        &world.payer.keychain(),
+        &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
+        lepic_primitives::params::Network::Floonet,
+    )
+    .unwrap()
+    .contact_keys(record.slot, record.box_salt)
+    .unwrap();
     let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
     let signer = lepic_contact::SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
     let key_text = own.fields().mailbox.as_str().split('@').next().unwrap();
@@ -877,17 +938,16 @@ fn contact_updates_refresh_the_card_within_three_a_day() {
 }
 
 /// The party's keys for its contact `contact`, as the wallet derives them.
-fn contact_keys(party: &Party, contact: ContactId) -> lepic_keychain::ContactKeys {
+fn contact_keys(party: &Party, contact: ContactId) -> lepic_wallet_contacts::ContactKeys {
     let record = party.read(|repos| repos.contact(contact)).unwrap();
-    party
-        .keychain()
-        .contact_root(
-            &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
-            lepic_primitives::params::Network::Floonet,
-        )
-        .unwrap()
-        .contact_keys(record.slot, record.box_salt)
-        .unwrap()
+    lepic_wallet_contacts::contact_root(
+        &party.keychain(),
+        &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
+        lepic_primitives::params::Network::Floonet,
+    )
+    .unwrap()
+    .contact_keys(record.slot, record.box_salt)
+    .unwrap()
 }
 
 /// Posts `envelope` from the party's mailbox for `contact` to the contact's mailbox, as the
@@ -934,7 +994,12 @@ fn key_news(events: &[Event]) -> (Vec<ContactId>, Vec<ContactId>) {
 
 fn key_check(world: &World, party: &Party, new: ContactId, old: ContactId) {
     world
-        .block_on(party.wallet.contact_key_check(&relays(party), new, old))
+        .block_on(
+            party
+                .wallet
+                .contact_book()
+                .contact_key_check(&relays(party), new, old),
+        )
         .unwrap();
 }
 
@@ -954,7 +1019,7 @@ fn a_re_pairing_without_the_backup_brings_the_old_keys_back() {
     let world = World::new();
     let (anna_side, ben_side) = world.pair_by_link();
     world
-        .block_on(world.issuer.wallet.pairing_sas(
+        .block_on(world.issuer.wallet.contact_book().pairing_sas(
             &relays(&world.issuer),
             anna_side,
             SasDecision::Match,
@@ -1005,7 +1070,7 @@ fn a_re_pairing_without_the_backup_brings_the_old_keys_back() {
     let mut issuer_events = world.issuer.wallet.subscribe();
     assert_eq!(
         world
-            .block_on(world.issuer.wallet.contact_key_check(
+            .block_on(world.issuer.wallet.contact_book().contact_key_check(
                 &relays(&world.issuer),
                 again,
                 anna_side
@@ -1028,6 +1093,7 @@ fn a_re_pairing_without_the_backup_brings_the_old_keys_back() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .contact_keys_resolve(again, KeysDecision::UseNew),
         )
         .unwrap();
@@ -1041,11 +1107,11 @@ fn a_re_pairing_with_the_backup_folds_into_the_restored_record() {
     let world = World::new();
     let (anna_side, ben_side) = world.pair_by_link();
     let document = world
-        .block_on(world.payer.wallet.contacts_export())
+        .block_on(world.payer.wallet.contact_book().contacts_export())
         .unwrap();
     let restored = world.payer_twin();
     world
-        .block_on(restored.wallet.contacts_import(document))
+        .block_on(restored.wallet.contact_book().contacts_import(document))
         .unwrap();
     let before = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
     let (new_on_issuer, _) = world.pair(&world.issuer, &restored);
@@ -1069,7 +1135,7 @@ fn a_re_pairing_with_another_seed_shows_keys_changed_on_the_new_pairing() {
     let world = World::new();
     let (anna_side, _) = world.pair_by_link();
     world
-        .block_on(world.issuer.wallet.pairing_sas(
+        .block_on(world.issuer.wallet.contact_book().pairing_sas(
             &relays(&world.issuer),
             anna_side,
             SasDecision::Match,
@@ -1088,7 +1154,7 @@ fn a_re_pairing_with_another_seed_shows_keys_changed_on_the_new_pairing() {
         .len();
     assert_eq!(
         world
-            .block_on(world.issuer.wallet.contact_key_check(
+            .block_on(world.issuer.wallet.contact_book().contact_key_check(
                 &relays(&world.issuer),
                 new_on_issuer,
                 anna_side
@@ -1125,6 +1191,7 @@ fn a_re_pairing_with_another_seed_shows_keys_changed_on_the_new_pairing() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .contact_keys_resolve(new_on_issuer, KeysDecision::UseNew),
         )
         .unwrap();
@@ -1135,7 +1202,7 @@ fn a_re_pairing_with_another_seed_shows_keys_changed_on_the_new_pairing() {
         .unwrap();
     assert_eq!(used.state, ContactState::Paired);
     world
-        .block_on(world.issuer.wallet.pairing_sas(
+        .block_on(world.issuer.wallet.contact_book().pairing_sas(
             &relays(&world.issuer),
             new_on_issuer,
             SasDecision::Match,
@@ -1190,6 +1257,7 @@ fn a_key_check_unanswered_for_a_day_shows_keys_changed() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .contact_keys_resolve(new_on_issuer, KeysDecision::KeepOld),
         )
         .unwrap();
@@ -1295,7 +1363,7 @@ fn an_in_person_pairing_moves_both_mailboxes_on_the_first_collect() {
     let world = World::new();
     let show = |party: &Party, name: &str| {
         world
-            .block_on(party.wallet.pairing_show_card(
+            .block_on(party.wallet.contact_book().pairing_show_card(
                 &relays(party),
                 CardRequest {
                     account: AccountIndex(0),
@@ -1309,14 +1377,14 @@ fn an_in_person_pairing_moves_both_mailboxes_on_the_first_collect() {
     let anna = show(&world.issuer, "Anna");
     let ben = show(&world.payer, "Ben");
     world
-        .block_on(world.issuer.wallet.pairing_scan_card(
+        .block_on(world.issuer.wallet.contact_book().pairing_scan_card(
             &relays(&world.issuer),
             anna.contact_id,
             &ben.link,
         ))
         .unwrap();
     world
-        .block_on(world.payer.wallet.pairing_scan_card(
+        .block_on(world.payer.wallet.contact_book().pairing_scan_card(
             &relays(&world.payer),
             ben.contact_id,
             &anna.link,
@@ -1364,7 +1432,7 @@ fn an_in_person_pairing_moves_both_mailboxes_on_the_first_collect() {
 
 fn invite_with_words(world: &World, party: &Party) -> Vec<&'static str> {
     world
-        .block_on(party.wallet.pairing_invite(
+        .block_on(party.wallet.contact_book().pairing_invite(
             &relays_with_words(party),
             InviteRequest {
                 offer_words: true,
@@ -1383,6 +1451,7 @@ fn find_words(world: &World, party: &Party, words: &[&str]) -> Result<String, Co
     world.block_on(
         party
             .wallet
+            .contact_book()
             .pairing_find_words(&relays_with_words(party), words),
     )
 }
@@ -1393,7 +1462,7 @@ fn find_words(world: &World, party: &Party, words: &[&str]) -> Result<String, Co
 fn pairing_words_find_the_invite_once() {
     let world = World::new();
     assert!(matches!(
-        world.block_on(world.issuer.wallet.pairing_invite(
+        world.block_on(world.issuer.wallet.contact_book().pairing_invite(
             &relays(&world.issuer),
             InviteRequest {
                 offer_words: true,
@@ -1416,6 +1485,7 @@ fn pairing_words_find_the_invite_once() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -1464,7 +1534,7 @@ fn pairing_words_work_on_any_relay_and_skip_a_refusing_one() {
     world.relay.set_domain_refused("blocked.test");
     let posts = world.relay.received("PostSlate");
     let words: Vec<&str> = world
-        .block_on(world.issuer.wallet.pairing_invite(
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
             &words_relays(&world.issuer),
             InviteRequest {
                 offer_words: true,
@@ -1484,6 +1554,7 @@ fn pairing_words_work_on_any_relay_and_skip_a_refusing_one() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_find_words(&words_relays(&world.payer), &words),
         )
         .unwrap();
@@ -1492,6 +1563,7 @@ fn pairing_words_work_on_any_relay_and_skip_a_refusing_one() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -1501,7 +1573,7 @@ fn pairing_words_work_on_any_relay_and_skip_a_refusing_one() {
     for party in [&world.issuer, &world.payer] {
         assert!(
             world
-                .block_on(party.wallet.pairings_pending())
+                .block_on(party.wallet.contact_book().pairings_pending())
                 .unwrap()
                 .is_empty()
         );
@@ -1509,7 +1581,7 @@ fn pairing_words_work_on_any_relay_and_skip_a_refusing_one() {
 }
 
 fn meeting(party: &Party, hosts: &[&str]) -> ContactRelays {
-    relays(party).with_meeting(lepic_wallet::contact::meeting_relays(hosts).unwrap())
+    relays(party).with_meeting(lepic_wallet_contacts::meeting_relays(hosts).unwrap())
 }
 
 /// Words go to the meeting relays the inviter names, and are found by a wallet that asks
@@ -1520,7 +1592,7 @@ fn pairing_words_meet_on_any_shared_relay_of_the_named_sets() {
     let world = World::new();
     world.relay.set_domain_refused("blocked.test");
     let words: Vec<&str> = world
-        .block_on(world.issuer.wallet.pairing_invite(
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
             &meeting(
                 &world.issuer,
                 &["Other.test", "other.test:443", "blocked.test"],
@@ -1537,7 +1609,7 @@ fn pairing_words_meet_on_any_shared_relay_of_the_named_sets() {
         .map(|symbol| symbol.name)
         .collect();
     let link = world
-        .block_on(world.payer.wallet.pairing_find_words(
+        .block_on(world.payer.wallet.contact_book().pairing_find_words(
             &meeting(&world.payer, &["blocked.test", "third.test", "other.test"]),
             &words,
         ))
@@ -1548,6 +1620,7 @@ fn pairing_words_meet_on_any_shared_relay_of_the_named_sets() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_find_words(&meeting(&world.payer, &["other.test"]), &words)
         ),
         Err(ContactError::WordsNotFound)
@@ -1556,7 +1629,7 @@ fn pairing_words_meet_on_any_shared_relay_of_the_named_sets() {
 
 #[test]
 fn meeting_relays_are_validated_lowercased_and_deduplicated() {
-    use lepic_wallet::contact::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
+    use lepic_wallet_contacts::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
     let parsed = meeting_relays(&["A.test", "a.test:443", "b.test:7443"]).unwrap();
     let hosts: Vec<String> = parsed.iter().map(meeting_host).collect();
     assert_eq!(hosts, ["a.test", "b.test:7443"]);
@@ -1594,7 +1667,7 @@ fn pairing_words_with_no_relay_are_a_relay_error() {
     world.relay.set_domain_refused("blocked.test");
     world.relay.set_domain_refused("other.test");
     assert!(matches!(
-        world.block_on(world.issuer.wallet.pairing_invite(
+        world.block_on(world.issuer.wallet.contact_book().pairing_invite(
             &words_relays(&world.issuer),
             InviteRequest {
                 offer_words: true,
@@ -1605,7 +1678,7 @@ fn pairing_words_with_no_relay_are_a_relay_error() {
     ));
     assert!(
         world
-            .block_on(world.issuer.wallet.pairings_pending())
+            .block_on(world.issuer.wallet.contact_book().pairings_pending())
             .unwrap()
             .is_empty()
     );
@@ -1616,6 +1689,7 @@ fn pairing_words_with_no_relay_are_a_relay_error() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_find_words(&words_relays(&world.payer), &words)
         ),
         Err(ContactError::Relay(_))
@@ -1629,24 +1703,25 @@ fn pairings_in_progress_are_listed_until_they_complete() {
     let world = World::new();
     let link = world.invite(&world.issuer, "Anna");
     let pending = world
-        .block_on(world.issuer.wallet.pairings_pending())
+        .block_on(world.issuer.wallet.contact_book().pairings_pending())
         .unwrap();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].role, lepic_wallet::contact::PairingRole::Inviter);
+    assert_eq!(pending[0].role, lepic_wallet_contacts::PairingRole::Inviter);
     assert_eq!(pending[0].invite_name, "Anna");
     let answered = world
         .block_on(
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
     let waiting = world
-        .block_on(world.payer.wallet.pairings_pending())
+        .block_on(world.payer.wallet.contact_book().pairings_pending())
         .unwrap();
     assert_eq!(waiting.len(), 1);
-    assert_eq!(waiting[0].role, lepic_wallet::contact::PairingRole::Invitee);
+    assert_eq!(waiting[0].role, lepic_wallet_contacts::PairingRole::Invitee);
     assert_eq!(waiting[0].contact_id, answered.contact_id);
     assert_eq!(waiting[0].invite_name, "Anna");
 
@@ -1655,7 +1730,7 @@ fn pairings_in_progress_are_listed_until_they_complete() {
     for party in [&world.issuer, &world.payer] {
         assert!(
             world
-                .block_on(party.wallet.pairings_pending())
+                .block_on(party.wallet.contact_book().pairings_pending())
                 .unwrap()
                 .is_empty()
         );
@@ -1664,17 +1739,17 @@ fn pairings_in_progress_are_listed_until_they_complete() {
     let cancelled = world.invite(&world.issuer, "Anna");
     assert!(!cancelled.is_empty());
     let id = world
-        .block_on(world.issuer.wallet.pairings_pending())
+        .block_on(world.issuer.wallet.contact_book().pairings_pending())
         .unwrap()[0]
         .contact_id;
     assert!(
         world
-            .block_on(world.issuer.wallet.contact_remove(id))
+            .block_on(world.issuer.wallet.contact_book().contact_remove(id))
             .unwrap()
     );
     assert!(
         world
-            .block_on(world.issuer.wallet.pairings_pending())
+            .block_on(world.issuer.wallet.contact_book().pairings_pending())
             .unwrap()
             .is_empty()
     );
@@ -1682,9 +1757,11 @@ fn pairings_in_progress_are_listed_until_they_complete() {
 
 /// The read and post identities of the pairing mailbox of `seed` on the test relay.
 fn pairing_identities(seed: [u8; 16]) -> (lepic_epicbox::Identity, lepic_epicbox::Identity) {
-    let (box_sk, from_sk) =
-        lepic_keychain::pairing_mailbox_keys(&seed, lepic_primitives::params::Network::Floonet)
-            .unwrap();
+    let (box_sk, from_sk) = lepic_wallet_contacts::pairing_mailbox_keys(
+        &seed,
+        lepic_primitives::params::Network::Floonet,
+    )
+    .unwrap();
     let identity = |secret: lepic_crypto::SecretKey| {
         let public = lepic_crypto::PublicKey::from_secret_key(&secret).unwrap();
         let address = lepic_epicbox::EpicboxAddress::new(
@@ -1774,6 +1851,7 @@ fn a_reply_with_a_card_already_paired_gets_no_confirm() {
         .block_on(
             stranger
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&stranger), accept(&link, "Cleo", false)),
         )
         .unwrap();
@@ -1790,7 +1868,7 @@ fn a_restored_answer_cannot_replace_the_keys_of_a_kept_record() {
     let world = World::new();
     let (anna_side, ben_side) = world.pair_by_link();
     world
-        .block_on(world.payer.wallet.pairing_sas(
+        .block_on(world.payer.wallet.contact_book().pairing_sas(
             &relays(&world.payer),
             ben_side,
             SasDecision::Match,
@@ -1885,10 +1963,18 @@ fn every_contact_future_is_send() {
     let slate_id = lepic_wallet::event::SlateId::from_bytes([2; 16]);
     let tx_id = lepic_store::TxId(1);
     let words: [&str; 5] = ["a", "b", "c", "d", "e"];
-    assert_send(wallet.pairing_invite(&relays, invite_request("Anna")));
-    assert_send(wallet.pairing_accept(&relays, accept("link", "Ben", false)));
-    assert_send(wallet.pairing_enter_link(&relays, "link"));
-    assert_send(wallet.pairing_show_card(
+    assert_send(
+        wallet
+            .contact_book()
+            .pairing_invite(&relays, invite_request("Anna")),
+    );
+    assert_send(
+        wallet
+            .contact_book()
+            .pairing_accept(&relays, accept("link", "Ben", false)),
+    );
+    assert_send(wallet.contact_book().pairing_enter_link(&relays, "link"));
+    assert_send(wallet.contact_book().pairing_show_card(
         &relays,
         CardRequest {
             account: AccountIndex(0),
@@ -1897,26 +1983,46 @@ fn every_contact_future_is_send() {
             home_relay: None,
         },
     ));
-    assert_send(wallet.pairing_scan_card(&relays, id, "link"));
-    assert_send(wallet.pairing_sas(&relays, id, SasDecision::Match));
-    assert_send(wallet.pairing_find_words(&relays, &words));
-    assert_send(wallet.pairings_pending());
-    assert_send(wallet.contacts_collect(&relays, CollectTrigger::Open));
-    assert_send(wallet.contact_key_check(&relays, id, id));
-    assert_send(wallet.contact_keys_resolve(id, KeysDecision::KeepOld));
-    assert_send(wallet.contacts_outbox_deliver(&relays));
-    assert_send(wallet.contact_outbox_resend(&relays, lepic_store::ContactOutboxId(1)));
-    assert_send(wallet.contact_outbox(id));
-    assert_send(wallet.contacts());
-    assert_send(wallet.contact(id));
-    assert_send(wallet.contact_remove(id));
-    assert_send(wallet.contact_set_label(id, "Anna".to_owned()));
-    assert_send(wallet.contact_set_seal(id, true));
-    assert_send(wallet.contact_set_allow_invoices(id, true));
-    assert_send(wallet.contact_attach(id, None));
-    assert_send(wallet.contacts_export());
-    assert_send(wallet.contacts_import(String::new()));
-    assert_send(wallet.contact_issue_invoice(
+    assert_send(wallet.contact_book().pairing_scan_card(&relays, id, "link"));
+    assert_send(
+        wallet
+            .contact_book()
+            .pairing_sas(&relays, id, SasDecision::Match),
+    );
+    assert_send(wallet.contact_book().pairing_find_words(&relays, &words));
+    assert_send(wallet.contact_book().pairings_pending());
+    assert_send(
+        wallet
+            .contact_book()
+            .contacts_collect(&relays, CollectTrigger::Open),
+    );
+    assert_send(wallet.contact_book().contact_key_check(&relays, id, id));
+    assert_send(
+        wallet
+            .contact_book()
+            .contact_keys_resolve(id, KeysDecision::KeepOld),
+    );
+    assert_send(wallet.contact_book().contacts_outbox_deliver(&relays));
+    assert_send(
+        wallet
+            .contact_book()
+            .contact_outbox_resend(&relays, lepic_store::ContactOutboxId(1)),
+    );
+    assert_send(wallet.contact_book().contact_outbox(id));
+    assert_send(wallet.contact_book().contacts());
+    assert_send(wallet.contact_book().contact(id));
+    assert_send(wallet.contact_book().contact_remove(id));
+    assert_send(
+        wallet
+            .contact_book()
+            .contact_set_label(id, "Anna".to_owned()),
+    );
+    assert_send(wallet.contact_book().contact_set_seal(id, true));
+    assert_send(wallet.contact_book().contact_set_allow_invoices(id, true));
+    assert_send(wallet.contact_book().contact_attach(id, None));
+    assert_send(wallet.contact_book().contacts_export());
+    assert_send(wallet.contact_book().contacts_import(String::new()));
+    assert_send(wallet.contact_book().contact_issue_invoice(
         &relays,
         id,
         lepic_wallet::invoice::InvoiceRequest {
@@ -1925,14 +2031,14 @@ fn every_contact_future_is_send() {
             message: None,
             ttl_blocks: None,
         },
-        lepic_wallet::contact::InvoiceDetails {
+        lepic_wallet_contacts::InvoiceDetails {
             purpose: lepic_contact::Purpose::Request,
             reference: None,
             expires: None,
         },
     ));
-    assert_send(wallet.contact_invoices());
-    assert_send(wallet.contact_pay_invoice(
+    assert_send(wallet.contact_book().contact_invoices());
+    assert_send(wallet.contact_book().contact_pay_invoice(
         &relays,
         slate_id,
         lepic_wallet::invoice::PayRequest::new(
@@ -1940,21 +2046,33 @@ fn every_contact_future_is_send() {
             lepic_primitives::amount::Amount::new(1),
         ),
     ));
-    assert_send(wallet.contact_decline_invoice(slate_id));
-    assert_send(wallet.contact_seal_slate(id, tx_id, None));
-    assert_send(wallet.contact_post_slate(&relays, id, tx_id, None));
-    assert_send(wallet.sealed_open("text"));
-    assert_send(wallet.sealed_receive("text", lepic_wallet::ReceiveRequest::default()));
-    assert_send(wallet.sealed_pay(
+    assert_send(wallet.contact_book().contact_decline_invoice(slate_id));
+    assert_send(wallet.contact_book().contact_seal_slate(id, tx_id, None));
+    assert_send(
+        wallet
+            .contact_book()
+            .contact_post_slate(&relays, id, tx_id, None),
+    );
+    assert_send(wallet.contact_book().sealed_open("text"));
+    assert_send(
+        wallet
+            .contact_book()
+            .sealed_receive("text", lepic_wallet::ReceiveRequest::default()),
+    );
+    assert_send(wallet.contact_book().sealed_pay(
         "text",
         lepic_wallet::invoice::PayRequest::new(
             AccountIndex(0),
             lepic_primitives::amount::Amount::new(1),
         ),
     ));
-    assert_send(wallet.sealed_finalize("text", lepic_node::Propagation::Stem));
-    assert_send(wallet.contact_plain_fallback(tx_id));
-    assert_send(wallet.contact_of_transaction(tx_id));
+    assert_send(
+        wallet
+            .contact_book()
+            .sealed_finalize("text", lepic_node::Propagation::Stem),
+    );
+    assert_send(wallet.contact_book().contact_plain_fallback(tx_id));
+    assert_send(wallet.contact_book().contact_of_transaction(tx_id));
 }
 
 /// R2-07: two collecting cycles started at once run one after the other, so a reply pairs once
@@ -1968,22 +2086,18 @@ fn collecting_cycles_started_at_once_take_a_reply_once() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
     let mut issuer_events = world.issuer.wallet.subscribe();
     let relays = relays(&world.issuer);
 
+    let book = world.issuer.wallet.contact_book();
     let (first, second) = world.block_on(async {
         tokio::join!(
-            world
-                .issuer
-                .wallet
-                .contacts_collect(&relays, CollectTrigger::Open),
-            world
-                .issuer
-                .wallet
-                .contacts_collect(&relays, CollectTrigger::Open),
+            book.contacts_collect(&relays, CollectTrigger::Open),
+            book.contacts_collect(&relays, CollectTrigger::Open),
         )
     });
 
@@ -2045,6 +2159,7 @@ fn a_found_answer_after_not_found_is_refused() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .contact_keys_resolve(new_on_issuer, KeysDecision::UseNew),
         )
         .unwrap();
@@ -2068,6 +2183,7 @@ fn a_key_check_never_takes_a_slot_a_shown_card_holds() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_show_card(&relays(&world.payer), card_request("Ben")),
         )
         .unwrap();
@@ -2075,12 +2191,13 @@ fn a_key_check_never_takes_a_slot_a_shown_card_holds() {
         .block_on(
             stranger
                 .wallet
+                .contact_book()
                 .pairing_show_card(&relays(&stranger), card_request("Cleo")),
         )
         .unwrap();
     // Only the stranger scans: it holds the payer's shown card as a contact.
     let old = world
-        .block_on(stranger.wallet.pairing_scan_card(
+        .block_on(stranger.wallet.contact_book().pairing_scan_card(
             &relays(&stranger),
             own.contact_id,
             &shown.link,
@@ -2160,6 +2277,7 @@ fn a_used_invite_sends_at_most_three_refusals() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -2167,7 +2285,7 @@ fn a_used_invite_sends_at_most_three_refusals() {
     let invite = Invite::from_link(&link, ContactNetwork::Floonet).unwrap();
     let stranger = world.stranger();
     let shown = world
-        .block_on(stranger.wallet.pairing_show_card(
+        .block_on(stranger.wallet.contact_book().pairing_show_card(
             &relays(&stranger),
             CardRequest {
                 account: AccountIndex(0),
@@ -2226,7 +2344,7 @@ fn a_words_invite_offline_stores_nothing() {
         ..relays_with_words(&world.issuer)
     };
     assert!(matches!(
-        world.block_on(world.issuer.wallet.pairing_invite(
+        world.block_on(world.issuer.wallet.contact_book().pairing_invite(
             &offline,
             InviteRequest {
                 offer_words: true,
@@ -2237,7 +2355,7 @@ fn a_words_invite_offline_stores_nothing() {
     ));
     assert!(
         world
-            .block_on(world.issuer.wallet.pairings_pending())
+            .block_on(world.issuer.wallet.contact_book().pairings_pending())
             .unwrap()
             .is_empty()
     );
@@ -2255,7 +2373,7 @@ fn a_backup_restores_only_this_seeds_records_with_mailboxes_from_the_cards() {
         .read(|repos| repos.contact_mailbox(anna_side))
         .unwrap();
     let document = world
-        .block_on(world.issuer.wallet.contacts_export())
+        .block_on(world.issuer.wallet.contact_book().contacts_export())
         .unwrap();
     // The document's mailbox fields name other mailboxes.
     let mut tampered: serde_json::Value = serde_json::from_str(&document).unwrap();
@@ -2266,7 +2384,12 @@ fn a_backup_restores_only_this_seeds_records_with_mailboxes_from_the_cards() {
     }
     let restored = world.issuer_twin();
     let summary = world
-        .block_on(restored.wallet.contacts_import(tampered.to_string()))
+        .block_on(
+            restored
+                .wallet
+                .contact_book()
+                .contacts_import(tampered.to_string()),
+        )
         .unwrap();
     assert_eq!(summary.imported, 1);
     let mailbox = restored
@@ -2280,7 +2403,7 @@ fn a_backup_restores_only_this_seeds_records_with_mailboxes_from_the_cards() {
     // Another seed's backup brings nothing in.
     let stranger = world.stranger();
     let summary = world
-        .block_on(stranger.wallet.contacts_import(document))
+        .block_on(stranger.wallet.contact_book().contacts_import(document))
         .unwrap();
     assert_eq!(summary.imported, 0);
     assert!(stranger.read(|repos| repos.contacts()).is_empty());
@@ -2304,7 +2427,7 @@ fn an_ended_pairing_keeps_no_confirm() {
     assert!(world.issuer.read(|repos| repos.setting(&confirm)).is_some());
 
     world
-        .block_on(world.issuer.wallet.pairing_sas(
+        .block_on(world.issuer.wallet.contact_book().pairing_sas(
             &relays(&world.issuer),
             anna_side,
             SasDecision::Mismatch,
@@ -2332,26 +2455,46 @@ fn labels_and_address_book_ids_are_checked() {
         "x".repeat(49),
     ] {
         assert!(matches!(
-            world.block_on(wallet.contact_set_label(anna_side, bad)),
+            world.block_on(wallet.contact_book().contact_set_label(anna_side, bad)),
             Err(ContactError::Name(_))
         ));
     }
     world
-        .block_on(wallet.contact_set_label(anna_side, "Ben".to_owned()))
+        .block_on(
+            wallet
+                .contact_book()
+                .contact_set_label(anna_side, "Ben".to_owned()),
+        )
         .unwrap();
     world
-        .block_on(wallet.contact_set_label(anna_side, String::new()))
+        .block_on(
+            wallet
+                .contact_book()
+                .contact_set_label(anna_side, String::new()),
+        )
         .unwrap();
     assert!(matches!(
-        world.block_on(wallet.contact_attach(anna_side, Some("a\u{7}b".to_owned()))),
+        world.block_on(
+            wallet
+                .contact_book()
+                .contact_attach(anna_side, Some("a\u{7}b".to_owned()))
+        ),
         Err(ContactError::Name(_))
     ));
     assert!(matches!(
-        world.block_on(wallet.contact_attach(anna_side, Some("x".repeat(257)))),
+        world.block_on(
+            wallet
+                .contact_book()
+                .contact_attach(anna_side, Some("x".repeat(257)))
+        ),
         Err(ContactError::Name(_))
     ));
     world
-        .block_on(wallet.contact_attach(anna_side, Some("contact-7".to_owned())))
+        .block_on(
+            wallet
+                .contact_book()
+                .contact_attach(anna_side, Some("contact-7".to_owned())),
+        )
         .unwrap();
 }
 
@@ -2383,6 +2526,7 @@ fn a_confirm_that_did_not_leave_still_tells_the_inviter_and_goes_out_later() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -2417,7 +2561,7 @@ fn a_confirm_that_did_not_leave_still_tells_the_inviter_and_goes_out_later() {
 fn a_confirm_that_never_leaves_ends_the_inviters_half_as_not_confirmed() {
     let world = World::new();
     let link = world
-        .block_on(world.issuer.wallet.pairing_invite(
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
             &relays(&world.issuer),
             InviteRequest {
                 expiry: InviteExpiry::OneHour,
@@ -2431,6 +2575,7 @@ fn a_confirm_that_never_leaves_ends_the_inviters_half_as_not_confirmed() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -2464,13 +2609,14 @@ fn a_confirm_that_never_leaves_removes_only_its_own_pairing() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .contact_attach(old_side, Some("book-1".to_owned())),
         )
         .unwrap();
     let old = world.issuer.read(|repos| repos.contact(old_side)).unwrap();
     let twin = world.payer_twin();
     let link = world
-        .block_on(world.issuer.wallet.pairing_invite(
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
             &relays(&world.issuer),
             InviteRequest {
                 expiry: InviteExpiry::OneHour,
@@ -2482,6 +2628,7 @@ fn a_confirm_that_never_leaves_removes_only_its_own_pairing() {
     world
         .block_on(
             twin.wallet
+                .contact_book()
                 .pairing_accept(&relays(&twin), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -2493,6 +2640,7 @@ fn a_confirm_that_never_leaves_removes_only_its_own_pairing() {
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .contact_attach(fresh, Some("book-1".to_owned())),
         )
         .unwrap();
@@ -2518,7 +2666,7 @@ fn a_confirm_that_never_leaves_removes_only_its_own_pairing() {
 fn a_reply_waiting_on_a_relay_that_was_down_completes_the_pairing_late() {
     let world = World::new();
     let link = world
-        .block_on(world.issuer.wallet.pairing_invite(
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
             &relays(&world.issuer),
             InviteRequest {
                 expiry: InviteExpiry::OneHour,
@@ -2532,6 +2680,7 @@ fn a_reply_waiting_on_a_relay_that_was_down_completes_the_pairing_late() {
             world
                 .payer
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
         )
         .unwrap();
@@ -2542,6 +2691,7 @@ fn a_reply_waiting_on_a_relay_that_was_down_completes_the_pairing_late() {
             .block_on(
                 party
                     .wallet
+                    .contact_book()
                     .contacts_collect(&relays(party), CollectTrigger::Foreground),
             )
             .unwrap()
@@ -2587,6 +2737,7 @@ fn removing_a_pairing_tells_the_contact_once() {
                 world
                     .issuer
                     .wallet
+                    .contact_book()
                     .contact_unpair(&relays(&world.issuer), anna_side)
             )
             .unwrap()
@@ -2594,7 +2745,7 @@ fn removing_a_pairing_tells_the_contact_once() {
     assert!(world.contact_ids(&world.issuer).is_empty());
     assert!(
         !world
-            .block_on(world.payer.wallet.contact(ben_side))
+            .block_on(world.payer.wallet.contact_book().contact(ben_side))
             .unwrap()
             .removed_by_peer
     );
@@ -2603,7 +2754,7 @@ fn removing_a_pairing_tells_the_contact_once() {
     world.collect(&world.payer);
 
     let view = world
-        .block_on(world.payer.wallet.contact(ben_side))
+        .block_on(world.payer.wallet.contact_book().contact(ben_side))
         .unwrap();
     assert!(view.removed_by_peer);
     assert_eq!(view.state, ContactState::Paired);
@@ -2625,6 +2776,7 @@ fn removing_a_pairing_tells_the_contact_once() {
                 world
                     .payer
                     .wallet
+                    .contact_book()
                     .contact_unpair(&relays(&world.payer), ben_side)
             )
             .unwrap()
@@ -2665,7 +2817,7 @@ fn an_unsigned_unpaired_notice_is_dropped() {
 
     assert!(
         !world
-            .block_on(world.issuer.wallet.contact(anna_side))
+            .block_on(world.issuer.wallet.contact_book().contact(anna_side))
             .unwrap()
             .removed_by_peer
     );
@@ -2675,7 +2827,7 @@ fn an_unsigned_unpaired_notice_is_dropped() {
 /// Returns the two record ids, the inviter's first.
 fn private_pair(world: &World, inviter: &Party, joiner: &Party) -> (ContactId, ContactId) {
     let invite = world
-        .block_on(inviter.wallet.pairing_invite(
+        .block_on(inviter.wallet.contact_book().pairing_invite(
             &relays(inviter),
             InviteRequest {
                 class: PairingClass::Private,
@@ -2683,18 +2835,23 @@ fn private_pair(world: &World, inviter: &Party, joiner: &Party) -> (ContactId, C
             },
         ))
         .unwrap();
-    let preview = joiner.wallet.pairing_preview(&invite.link).unwrap();
+    let preview = joiner
+        .wallet
+        .contact_book()
+        .pairing_preview(&invite.link)
+        .unwrap();
     assert_eq!(preview.class, PairingClass::Private);
     assert!(matches!(
         world.block_on(
             joiner
                 .wallet
+                .contact_book()
                 .pairing_accept(&relays(joiner), accept(&invite.link, "Desk", false))
         ),
         Err(ContactError::WrongClass)
     ));
     let answered = world
-        .block_on(joiner.wallet.pairing_accept(
+        .block_on(joiner.wallet.contact_book().pairing_accept(
             &relays(joiner),
             AcceptRequest {
                 class: PairingClass::Private,
@@ -2706,7 +2863,9 @@ fn private_pair(world: &World, inviter: &Party, joiner: &Party) -> (ContactId, C
     assert_eq!(world.collect(inviter).paired, 1);
     assert_eq!(world.collect(joiner).paired, 1);
     let sas = |party: &Party| {
-        let pairings = world.block_on(party.wallet.private_pairings()).unwrap();
+        let pairings = world
+            .block_on(party.wallet.contact_book().private_pairings())
+            .unwrap();
         assert_eq!(pairings.len(), 1, "{pairings:?}");
         pairings[0].sas.unwrap()
     };
@@ -2717,18 +2876,20 @@ fn private_pair(world: &World, inviter: &Party, joiner: &Party) -> (ContactId, C
     );
     for (party, id) in [(inviter, invite.contact_id), (joiner, answered.contact_id)] {
         world
-            .block_on(
-                party
-                    .wallet
-                    .pairing_sas(&relays(party), id, SasDecision::Match),
-            )
+            .block_on(party.wallet.contact_book().pairing_sas(
+                &relays(party),
+                id,
+                SasDecision::Match,
+            ))
             .unwrap();
     }
     (invite.contact_id, answered.contact_id)
 }
 
-fn payloads(world: &World, party: &Party) -> Vec<lepic_wallet::contact::ContactPayload> {
-    world.block_on(party.wallet.contact_payloads()).unwrap()
+fn payloads(world: &World, party: &Party) -> Vec<lepic_wallet_contacts::ContactPayload> {
+    world
+        .block_on(party.wallet.contact_book().contact_payloads())
+        .unwrap()
 }
 
 /// Two installs of one recovery phrase pair privately and pass payloads both ways; the
@@ -2740,7 +2901,7 @@ fn two_installs_of_one_phrase_pair_privately_and_pass_payloads_both_ways() {
     let (phone, desk) = private_pair(&world, &world.issuer, &twin);
 
     let to_desk = world
-        .block_on(world.issuer.wallet.contact_post_payload(
+        .block_on(world.issuer.wallet.contact_book().contact_post_payload(
             &relays(&world.issuer),
             phone,
             b"to the desk".to_vec(),
@@ -2754,10 +2915,11 @@ fn two_installs_of_one_phrase_pair_privately_and_pass_payloads_both_ways() {
         (to_desk, desk, b"to the desk".as_slice())
     );
     world
-        .block_on(
-            twin.wallet
-                .contact_post_payload(&relays(&twin), desk, b"back".to_vec()),
-        )
+        .block_on(twin.wallet.contact_book().contact_post_payload(
+            &relays(&twin),
+            desk,
+            b"back".to_vec(),
+        ))
         .unwrap();
     world.collect(&world.issuer);
     let kept = payloads(&world, &world.issuer);
@@ -2765,16 +2927,21 @@ fn two_installs_of_one_phrase_pair_privately_and_pass_payloads_both_ways() {
     assert_eq!(kept[0].payload, b"back");
 
     for party in [&world.issuer, &twin] {
-        assert!(world.block_on(party.wallet.contacts()).unwrap().is_empty());
         assert!(
             world
-                .block_on(party.wallet.pairings_pending())
+                .block_on(party.wallet.contact_book().contacts())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            world
+                .block_on(party.wallet.contact_book().pairings_pending())
                 .unwrap()
                 .is_empty()
         );
     }
     assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_post_slate(
+        world.block_on(world.issuer.wallet.contact_book().contact_post_slate(
             &relays(&world.issuer),
             phone,
             lepic_store::TxId(1),
@@ -2783,7 +2950,7 @@ fn two_installs_of_one_phrase_pair_privately_and_pass_payloads_both_ways() {
         Err(ContactError::WrongClass)
     ));
     assert!(matches!(
-        world.block_on(world.issuer.wallet.pairing_invite(
+        world.block_on(world.issuer.wallet.contact_book().pairing_invite(
             &relays_with_words(&world.issuer),
             InviteRequest {
                 class: PairingClass::Private,
@@ -2800,7 +2967,7 @@ fn payloads_wait_for_the_words_check_and_never_travel_over_a_contact() {
     let world = World::new();
     let (anna_side, _) = world.pair_by_link();
     assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_post_payload(
+        world.block_on(world.issuer.wallet.contact_book().contact_post_payload(
             &relays(&world.issuer),
             anna_side,
             vec![1],
@@ -2809,7 +2976,7 @@ fn payloads_wait_for_the_words_check_and_never_travel_over_a_contact() {
     ));
     let twin = world.issuer_twin();
     let invite = world
-        .block_on(world.issuer.wallet.pairing_invite(
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
             &relays(&world.issuer),
             InviteRequest {
                 class: PairingClass::Private,
@@ -2818,7 +2985,7 @@ fn payloads_wait_for_the_words_check_and_never_travel_over_a_contact() {
         ))
         .unwrap();
     world
-        .block_on(twin.wallet.pairing_accept(
+        .block_on(twin.wallet.contact_book().pairing_accept(
             &relays(&twin),
             AcceptRequest {
                 class: PairingClass::Private,
@@ -2829,7 +2996,7 @@ fn payloads_wait_for_the_words_check_and_never_travel_over_a_contact() {
     world.collect(&world.issuer);
     world.collect(&twin);
     assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_post_payload(
+        world.block_on(world.issuer.wallet.contact_book().contact_post_payload(
             &relays(&world.issuer),
             invite.contact_id,
             vec![1],
@@ -2845,7 +3012,7 @@ fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
     let (anna_side, ben_side) = private_pair(&world, &world.issuer, &twin);
     let mut ben_events = twin.wallet.subscribe();
     let id = world
-        .block_on(world.issuer.wallet.contact_post_payload(
+        .block_on(world.issuer.wallet.contact_book().contact_post_payload(
             &relays(&world.issuer),
             anna_side,
             b"opaque bytes".to_vec(),
@@ -2853,13 +3020,14 @@ fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
         .unwrap();
     // The outbox posts it once more, as a retry would.
     let outbox = world
-        .block_on(world.issuer.wallet.contact_outbox(anna_side))
+        .block_on(world.issuer.wallet.contact_book().contact_outbox(anna_side))
         .unwrap();
     world
         .block_on(
             world
                 .issuer
                 .wallet
+                .contact_book()
                 .contact_outbox_resend(&relays(&world.issuer), outbox[0].id),
         )
         .unwrap();
@@ -2879,16 +3047,16 @@ fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
     assert_eq!(arrived, 1);
     assert_eq!(
         world
-            .block_on(twin.wallet.contact_payloads_ack(&[id, id]))
+            .block_on(twin.wallet.contact_book().contact_payloads_ack(&[id, id]))
             .unwrap(),
         1
     );
     assert!(payloads(&world, &twin).is_empty());
     assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_post_payload(
+        world.block_on(world.issuer.wallet.contact_book().contact_post_payload(
             &relays(&world.issuer),
             anna_side,
-            vec![0; lepic_wallet::contact::MAX_APP_PAYLOAD_LEN + 1],
+            vec![0; lepic_wallet_contacts::MAX_APP_PAYLOAD_LEN + 1],
         )),
         Err(ContactError::TooLarge { .. })
     ));

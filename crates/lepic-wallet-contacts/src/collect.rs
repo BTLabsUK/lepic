@@ -28,10 +28,10 @@ use super::{
     ContactError, ContactRelays, LATE_DRAIN_WAIT, PairingFailure, UPDATES_PER_CONTACT_PER_DAY,
     UPDATES_PER_HOUR,
 };
-use crate::event::{ContactEvent, Event, FailedPairing, UnreachableRelay};
-use crate::inbox::{ErrorChain, relay_network};
-use crate::ports::{SecretVault, StoreOpener};
-use crate::wallet::Wallet;
+use crate::ContactBook;
+use lepic_wallet::event::{ContactEvent, Event, FailedPairing, UnreachableRelay};
+use lepic_wallet::inbox::{ErrorChain, relay_network};
+use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// What started a collecting cycle (RFC 0002 8.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,7 +274,7 @@ fn unhex16(text: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
-impl<N, S, V> Wallet<N, S, V>
+impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
     S: StoreOpener + 'static,
@@ -304,7 +304,7 @@ where
     /// their pairings in progress included, when it is given: a cheap look at a few pairings.
     /// The turn the other contacts take across cycles is left as it was; everything else a
     /// cycle does runs as it always does.
-    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contacts_collect_only(
         &self,
         relays: &ContactRelays,
@@ -313,7 +313,7 @@ where
     ) -> Result<CollectReport, ContactError> {
         self.check_contact_network(relays)?;
         check_online(relays)?;
-        let _turn = self.contact_turn().await;
+        let _turn = self.wallet.contact_turn().await;
         let mut report = CollectReport::default();
         // The user's own triggers retry at once what waits: relays in backoff and outbox
         // entries not yet due (RFC 0002 12.4). The foreground tick and push wake-ups, which
@@ -323,7 +323,7 @@ where
             self.reset_backoff().await?;
         }
         for failed in self.end_expired_pairings().await? {
-            self.emit(Event::PairingFailed(failed));
+            self.wallet.emit(Event::PairingFailed(failed));
             report.failed.push(failed);
         }
         self.tend_key_checks().await?;
@@ -357,7 +357,7 @@ where
                     Job::Contact(..) => None,
                 })
                 .collect();
-            let started = self.ports().clock.now();
+            let started = self.wallet.ports().clock.now();
             let mut handler = Collector {
                 wallet: self,
                 relays,
@@ -378,16 +378,17 @@ where
                     // The relay held everything that reached it by `started`: what is past
                     // its deadline then has had its last chance.
                     for failed in self.end_drained_pairings(pairings, started).await? {
-                        self.emit(Event::PairingFailed(failed));
+                        self.wallet.emit(Event::PairingFailed(failed));
                         report.failed.push(failed);
                     }
                 }
                 Err(error @ (MailboxError::Unreachable(_) | MailboxError::Lost(_))) => {
                     warn!(peer_relay = %host, error = %ErrorChain(&error), "home relay not answering");
                     self.relay_failed(&host).await?;
-                    self.emit(Event::HomeRelayUnreachable(UnreachableRelay {
-                        relay: host.clone(),
-                    }));
+                    self.wallet
+                        .emit(Event::HomeRelayUnreachable(UnreachableRelay {
+                            relay: host.clone(),
+                        }));
                     report.unreachable.push(host);
                 }
                 Err(error) => {
@@ -408,7 +409,7 @@ where
     /// invite's expiry and the clock skew, an answer's wait for its confirm) with no drain of
     /// their home relay, and cards shown in person but never paired.
     async fn end_expired_pairings(&self) -> Result<Vec<FailedPairing>, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.write(|repos| {
@@ -458,7 +459,7 @@ where
         if pairings.is_empty() {
             return Ok(Vec::new());
         }
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session.store.write(|repos| {
                 let mut ended = Vec::new();
@@ -490,8 +491,8 @@ where
         trigger: CollectTrigger,
         only: Option<BTreeSet<ContactId>>,
     ) -> Result<Vec<Mailbox>, ContactError> {
-        let network = self.config().network;
-        let session = self.session()?;
+        let network = self.wallet.config().network;
+        let session = self.wallet.session()?;
         let relays_for_work = relays.clone();
         self.contact_work(move |ports, _| {
             let relays = relays_for_work;
@@ -657,7 +658,7 @@ where
 
     /// Forgets every relay's backoff, so an explicit trigger tries them all at once.
     async fn reset_backoff(&self) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session
                 .store
@@ -667,7 +668,7 @@ where
     }
 
     async fn relay_answered(&self, host: &str) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let host = host.to_owned();
         self.contact_work(move |_, _| {
             Ok(session.store.write(|repos| {
@@ -682,7 +683,7 @@ where
     }
 
     async fn relay_failed(&self, host: &str) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let host = host.to_owned();
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
@@ -705,14 +706,14 @@ where
 
     /// Whether an envelope with `hash` was handled before.
     async fn seen_before(&self, hash: [u8; 32]) -> Result<bool, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| Ok(session.store.read(|repos| repos.envelope_seen(&hash))?))
             .await
     }
 
     /// Remembers that an envelope with `hash` was handled.
     async fn remember(&self, hash: [u8; 32]) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session
@@ -724,7 +725,7 @@ where
 
     /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer.
     async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             let cutoff = now.checked_sub(SEEN_LIFETIME).unwrap_or(now);
@@ -745,7 +746,7 @@ where
         contact_id: ContactId,
         sent_at: Option<u64>,
     ) -> Result<bool, ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let key = stamped_key(contact_id);
             let Some(sent_at) = sent_at else {
@@ -786,9 +787,9 @@ where
         envelope: &[u8],
         told: &mut std::collections::BTreeSet<ContactId>,
     ) -> Result<Handled, ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let found = {
             let session = std::sync::Arc::clone(&session);
             self.contact_work(move |_, _| {
@@ -839,7 +840,8 @@ where
                 debug!("envelope in a contact mailbox did not open");
                 // Once a cycle per contact, however much junk the mailbox holds.
                 if told.insert(contact_id) {
-                    self.emit(Event::SealedUnopenable(ContactEvent { contact_id }));
+                    self.wallet
+                        .emit(Event::SealedUnopenable(ContactEvent { contact_id }));
                 }
                 return Ok(Handled::Stored);
             }
@@ -890,7 +892,7 @@ where
             self.forget_old_salt(contact_id).await?;
         }
         let record = {
-            let session = self.session()?;
+            let session = self.wallet.session()?;
             self.contact_work(move |_, _| {
                 Ok(session.store.read(|repos| repos.contact(contact_id))?)
             })
@@ -925,8 +927,8 @@ where
         card: ContactCard,
         update: Option<&ContactRelays>,
     ) -> Result<(), ContactError> {
-        let session = self.session()?;
-        let network = self.config().network;
+        let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
         let relays = update.cloned();
         let updated = self
@@ -1051,7 +1053,8 @@ where
             .await?;
         if updated {
             info!("contact updated");
-            self.emit(Event::ContactUpdated(ContactEvent { contact_id }));
+            self.wallet
+                .emit(Event::ContactUpdated(ContactEvent { contact_id }));
         }
         Ok(())
     }
@@ -1060,9 +1063,9 @@ where
     /// tells the contact with a contact update (RFC 0002 7.4): anyone who saw the card QR knows
     /// the old one. The old mailbox is still read until the contact writes to the new one.
     async fn move_in_person_mailboxes(&self, relays: &ContactRelays) -> Result<(), ContactError> {
-        let network = self.config().network;
+        let network = self.wallet.config().network;
         let net = contact_network(network);
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         let relays = relays.clone();
         let moved = self
             .contact_work(move |ports, _| {
@@ -1148,7 +1151,7 @@ where
     /// The contact wrote to the mailbox our current card names, so it took our new card: the
     /// mailbox of the old box salt is no longer read.
     async fn forget_old_salt(&self, contact_id: ContactId) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             Ok(session
                 .store
@@ -1158,7 +1161,7 @@ where
     }
 
     pub(crate) async fn mark_sealed_in(&self, contact_id: ContactId) -> Result<(), ContactError> {
-        let session = self.session()?;
+        let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.write(|repos| {
@@ -1195,7 +1198,8 @@ fn has_pending(repos: &dyn Repositories, contact_id: ContactId) -> Result<bool, 
     }
     for invoice in repos.pending_invoices()? {
         if invoice.status == PendingInvoiceStatus::Parked
-            && super::invoices::slate_contact(repos, invoice.slate_id)? == Some(contact_id)
+            && lepic_wallet::contact_link::slate_contact(repos, invoice.slate_id)?
+                == Some(contact_id)
         {
             return Ok(true);
         }
@@ -1236,7 +1240,7 @@ fn within_update_limits(
 
 /// Hands each drained message to the engine and acknowledges it once its effect is stored.
 struct Collector<'a, N, S: StoreOpener, V> {
-    wallet: &'a Wallet<N, S, V>,
+    wallet: &'a ContactBook<'a, N, S, V>,
     relays: &'a ContactRelays,
     jobs: Vec<Job>,
     messages: usize,
