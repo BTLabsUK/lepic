@@ -217,6 +217,7 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 | `06` | expires | u64 unix seconds | When the sender stops honouring it (invoices and withdrawals). Advisory, see 12.6 |
 | `07` | card | bytes | The sender's current contact card (section 6), so every message refreshes delivery addresses |
 | `08` | sender key | 32 | The sender's Ed25519 `sig_pk` for this contact. Required when tag `FF` is present |
+| `80` | sent at | u64 unix seconds | When the sender sealed it, in every signed slate, notice and payload. An extension, so a reader that predates it skips it; a value of another length is skipped too. Recipients refuse one sealed over 30 days ago or over a day ahead of their clock, remember what they took for longer than that, and, once a contact sent it, refuse that contact's slates, notices and payloads without it |
 | `FF` | signature | 64 | Ed25519 by `sig_sk` over the signing input below. Last |
 
 Signing input: `"epic-seal/1 sig" || header (16 bytes) || recipient X25519 public key || every

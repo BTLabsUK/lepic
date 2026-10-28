@@ -296,6 +296,7 @@ where
                     let content = Content {
                         purpose,
                         card: Some(own),
+                        sent_at: super::collect::send_time(ports.clock.now()),
                         ..Content::new(MessageType::Slate, stored.bytes)
                     };
                     let envelope = seal(
@@ -621,6 +622,7 @@ where
                         )?;
                         let content = Content {
                             card: Some(own),
+                            sent_at: super::collect::send_time(ports.clock.now()),
                             ..Content::new(MessageType::Slate, body)
                         };
                         let envelope = seal(

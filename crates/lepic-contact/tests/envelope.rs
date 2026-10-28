@@ -32,6 +32,7 @@ fn full_content(card_owner: &Side) -> Content {
         reference: Some(Reference::new("dep-0042").unwrap()),
         expires: Some(1_800_000_000),
         card: Some(card_owner.card("Alice", NET)),
+        sent_at: Some(1_790_000_000),
     }
 }
 
@@ -431,6 +432,41 @@ fn high_tags_are_skipped_and_signed() {
 }
 
 #[test]
+fn the_send_time_is_an_extension_covered_by_the_signature() {
+    let (alice, bob) = (Side::new(1), Side::new(11));
+    let header = header([0; 8]);
+    let sent_at = 1_790_000_000u64.to_be_bytes();
+    let inner = signed_with(
+        &alice,
+        &header,
+        &bob.enc_pk(),
+        &minimal(),
+        &field(0x80, &sent_at),
+    );
+    let opened = open(&seal_raw(&bob.enc_pk(), &header, &inner), &bob.enc).unwrap();
+    assert_eq!(opened.content.sent_at, Some(1_790_000_000));
+
+    let mut changed = inner.clone();
+    let position = changed.windows(8).position(|w| w == sent_at).unwrap();
+    changed[position + 7] ^= 1;
+    assert_eq!(
+        open(&seal_raw(&bob.enc_pk(), &header, &changed), &bob.enc).err(),
+        Some(DecodeError::BadSignature)
+    );
+
+    // Any other value is an extension this reader does not know.
+    let short = signed_with(
+        &alice,
+        &header,
+        &bob.enc_pk(),
+        &minimal(),
+        &field(0x80, &[1]),
+    );
+    let opened = open(&seal_raw(&bob.enc_pk(), &header, &short), &bob.enc).unwrap();
+    assert_eq!(opened.content.sent_at, None);
+}
+
+#[test]
 fn a_bad_signature_or_weak_sender_key_is_refused() {
     let (alice, bob) = (Side::new(1), Side::new(11));
     let header = header([0; 8]);
@@ -590,6 +626,7 @@ proptest! {
         reply in proptest::option::of(1u8..=255),
         signed in any::<bool>(),
         with_card in any::<bool>(),
+        sent_at in proptest::option::of(any::<u64>()),
         seed in any::<u8>(),
     ) {
         let (alice, bob) = (Side::new(1), Side::new(11));
@@ -601,6 +638,7 @@ proptest! {
             reference: reference.map(|text| Reference::new(&text).unwrap()),
             expires,
             card: with_card.then(|| alice.card("Alice", NET)),
+            sent_at,
         };
         let envelope = seal_to(&bob, &content, signed.then_some(&alice), seed);
         let armored = armor(&envelope);

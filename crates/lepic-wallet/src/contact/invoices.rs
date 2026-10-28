@@ -474,6 +474,10 @@ where
             .await?
         };
         let keys = super::private::record_keys(&session.keychain, network, record, &class)?;
+        let content = Content {
+            sent_at: super::collect::send_time(self.ports().clock.now()),
+            ..content
+        };
         let mut rng = LockedRng(&mut **self.ports().rng.lock());
         match class.private() {
             None => seal(

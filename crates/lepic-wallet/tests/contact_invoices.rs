@@ -1330,6 +1330,11 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
         shop_side,
         &Content {
             purpose: Some(Purpose::Request),
+            // As the contact's own wallet seals it, once it sent one with its send time.
+            sent_at: u64::try_from(
+                lepic_wallet::ports::Clock::now(&world.issuer.clock).as_second(),
+            )
+            .ok(),
             ..Content::new(MessageType::Slate, tampered.into_bytes())
         },
     );
@@ -1481,4 +1486,70 @@ fn an_answer_finalized_but_not_posted_is_reported_and_posted_on_the_next_collect
     world.collect(&world.payer);
     assert_eq!(world.node.pushed_transactions().len(), 1);
     assert_ne!(world.tx_state(&world.payer, tx_id), TxState::Finalized);
+}
+
+/// A contact's message sealed long ago, or ahead of our clock, is not taken when a relay hands
+/// it over; once a contact sent its send time, a message without one is not taken either.
+#[test]
+fn a_contact_message_sealed_long_ago_or_without_its_send_time_is_not_taken() {
+    let world = World::new();
+    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let unsigned_invoice = |message: &str| {
+        let file = tempfile::tempdir().unwrap().keep().join("i1.tx");
+        world
+            .block_on(world.issuer.wallet.issue_invoice(
+                InvoiceRequest {
+                    account: ACCOUNT,
+                    amount: Amount::new(AMOUNT),
+                    message: Some(message.to_owned()),
+                    ttl_blocks: None,
+                },
+                Delivery::Export {
+                    transport: lepic_transport::file::FILE,
+                    to: lepic_transport::transport::Location::File(file.clone()),
+                },
+            ))
+            .unwrap();
+        std::fs::read_to_string(&file).unwrap().into_bytes()
+    };
+    let now =
+        u64::try_from(lepic_wallet::ports::Clock::now(&world.payer.clock).as_second()).unwrap();
+    let parked = || {
+        world
+            .block_on(world.payer.wallet.contact_invoices())
+            .unwrap()
+            .len()
+    };
+    let post = |sent_at: Option<u64>, message: &str| {
+        post_signed(
+            &world,
+            &world.issuer,
+            shop_side,
+            &Content {
+                purpose: Some(Purpose::Request),
+                sent_at,
+                ..Content::new(MessageType::Slate, unsigned_invoice(message))
+            },
+        );
+        world.collect(&world.payer);
+    };
+
+    post(Some(now - 31 * 24 * 3600), "old");
+    post(Some(now + 2 * 24 * 3600), "ahead");
+    assert_eq!(parked(), 0);
+    // A contact that never sent a send time is still heard, as an older wallet is.
+    post(None, "older wallet");
+    assert_eq!(parked(), 1);
+    post(Some(now - 3600), "recent");
+    assert_eq!(parked(), 2);
+    post(None, "unstamped after a stamped one");
+    assert_eq!(parked(), 2);
+    let invoices = world
+        .block_on(world.payer.wallet.contact_invoices())
+        .unwrap();
+    assert!(
+        invoices
+            .iter()
+            .all(|invoice| invoice.contact_id == ben_side)
+    );
 }

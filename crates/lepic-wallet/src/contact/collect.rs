@@ -84,14 +84,34 @@ const PREVIOUS_HOME_KEPT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// A card shown in person and never scanned back is forgotten after this.
 const SHOWN_CARD_LIFETIME: Duration = Duration::from_secs(60 * 60);
 
-/// Envelopes seen are remembered as long as a relay keeps a message, and a little longer.
-const SEEN_LIFETIME: Duration = Duration::from_secs(8 * 24 * 60 * 60);
+/// A slate, notice or payload sealed longer ago than this is refused, however it arrives.
+const MAX_ENVELOPE_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// How far ahead of our clock a sender's may be.
+const MAX_CLOCK_AHEAD: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Envelopes seen are remembered longer than one is accepted after it was sealed, so one that
+/// arrives again is always recognised.
+const SEEN_LIFETIME: Duration =
+    Duration::from_secs(MAX_ENVELOPE_AGE.as_secs() + MAX_CLOCK_AHEAD.as_secs() + 24 * 60 * 60);
 
 /// Relays with fewer distinct contact mailboxes than this are drained in full on every tick.
 const FEW_RELAYS: usize = 3;
 
 const IN_PERSON_PREFIX: &str = "contact.inperson.";
 const OLD_SALT_PREFIX: &str = "contact.oldsalt.";
+const STAMPED_PREFIX: &str = "contact.stamped.";
+
+/// The setting that marks a contact whose envelopes carry their send time: from then on one
+/// without it is refused.
+pub(crate) fn stamped_key(contact_id: ContactId) -> String {
+    format!("{STAMPED_PREFIX}{}", hex(&contact_id.0))
+}
+
+/// The send time to seal into an envelope sealed at `now`.
+pub(crate) fn send_time(now: Timestamp) -> Option<u64> {
+    u64::try_from(now.as_second()).ok()
+}
 
 /// The setting that marks a contact paired in person whose mailbox has not moved yet.
 pub(crate) fn in_person_key(contact_id: ContactId) -> String {
@@ -711,6 +731,45 @@ where
         .await
     }
 
+    /// Whether an envelope of the contact sealed at `sent_at` may be taken: sealed within
+    /// [`MAX_ENVELOPE_AGE`] and not ahead of our clock by more than [`MAX_CLOCK_AHEAD`]. One
+    /// without a send time is taken only from a contact that never sent one with it, as a
+    /// wallet sealing before send times existed does.
+    async fn sent_recently(
+        &self,
+        contact_id: ContactId,
+        sent_at: Option<u64>,
+    ) -> Result<bool, ContactError> {
+        let session = self.session()?;
+        self.contact_work(move |ports, _| {
+            let key = stamped_key(contact_id);
+            let Some(sent_at) = sent_at else {
+                let stamped = session.store.read(|repos| repos.setting(&key))?.is_some();
+                if stamped {
+                    debug!("envelope without a send time dropped");
+                }
+                return Ok(!stamped);
+            };
+            let now = u64::try_from(ports.clock.now().as_second()).unwrap_or(0);
+            if sent_at > now.saturating_add(MAX_CLOCK_AHEAD.as_secs()) {
+                debug!("envelope sealed ahead of our clock dropped");
+                return Ok(false);
+            }
+            if now.saturating_sub(sent_at) > MAX_ENVELOPE_AGE.as_secs() {
+                debug!("envelope sealed too long ago dropped");
+                return Ok(false);
+            }
+            session.store.write(|repos| {
+                if repos.setting(&key)?.is_none() {
+                    repos.put_setting(&key, "1")?;
+                }
+                Ok::<_, StoreError>(())
+            })?;
+            Ok(true)
+        })
+        .await
+    }
+
     /// Takes an envelope from a contact's mailbox. It must be signed by the contact's recorded
     /// key; an anonymous one is dropped and never attributed. A contact update or a newer card in
     /// the envelope refreshes the record within the limits of RFC 0002 8.5.
@@ -797,6 +856,16 @@ where
         };
         if !allowed {
             warn!("message of a kind its pairing does not carry dropped");
+            return Ok(Handled::Stored);
+        }
+        // Updates and key checks carry their own order: a card's seq, a check's open state.
+        if matches!(
+            opened.content.kind,
+            MessageType::Slate | MessageType::Notice | MessageType::AppPayload
+        ) && !self
+            .sent_recently(contact_id, opened.content.sent_at)
+            .await?
+        {
             return Ok(Handled::Stored);
         }
         let update = match opened.content.kind {

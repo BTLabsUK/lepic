@@ -44,6 +44,9 @@ const TAG_REFERENCE: u8 = 0x05;
 const TAG_EXPIRES: u8 = 0x06;
 const TAG_CARD: u8 = 0x07;
 const TAG_SENDER_KEY: u8 = 0x08;
+/// An extension, so readers that predate it skip it; signed like every field before 0xFF. A
+/// value that is not eight bytes is skipped like any extension this reader does not know.
+const TAG_SENT_AT: u8 = 0x80;
 const TAG_SIGNATURE: u8 = 0xff;
 
 type SealKem = X25519HkdfSha256;
@@ -144,6 +147,9 @@ pub struct Content {
     pub expires: Option<u64>,
     /// The sender's current card for this contact.
     pub card: Option<ContactCard>,
+    /// Unix seconds when the sender sealed it, so a recipient can refuse an old envelope that
+    /// arrives again; signed with the rest of a signed envelope.
+    pub sent_at: Option<u64>,
 }
 
 impl fmt::Debug for Content {
@@ -156,6 +162,7 @@ impl fmt::Debug for Content {
             .field("reference", &self.reference.is_some())
             .field("expires", &self.expires)
             .field("card", &self.card)
+            .field("sent_at", &self.sent_at)
             .finish()
     }
 }
@@ -170,6 +177,7 @@ impl Content {
             reference: None,
             expires: None,
             card: None,
+            sent_at: None,
         }
     }
 }
@@ -370,6 +378,16 @@ fn encode_content(
     writer.optional(TAG_CARD, content.card.as_ref().map(ContactCard::as_bytes))?;
     if let Some(signer) = signer {
         writer.field(TAG_SENDER_KEY, signer.verifying_key().as_bytes())?;
+    }
+    writer.optional(
+        TAG_SENT_AT,
+        content
+            .sent_at
+            .map(u64::to_be_bytes)
+            .as_ref()
+            .map(|bytes| &bytes[..]),
+    )?;
+    if let Some(signer) = signer {
         let signature = signer.sign(&signing_input(header, recipient, writer.as_bytes()));
         writer.field(TAG_SIGNATURE, &signature.to_bytes())?;
     }
@@ -585,6 +603,10 @@ pub fn decode_content(
         .get(TAG_CARD)
         .map(|bytes| ContactCard::decode(bytes, network))
         .transpose()?;
+    let sent_at = fields
+        .extension(TAG_SENT_AT)
+        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+        .map(u64::from_be_bytes);
 
     let sender = match (
         fields.optional_array::<32>(TAG_SENDER_KEY)?,
@@ -627,6 +649,7 @@ pub fn decode_content(
             reference,
             expires,
             card,
+            sent_at,
         },
         sender,
     })
