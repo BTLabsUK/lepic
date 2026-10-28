@@ -4,6 +4,7 @@
 
 use lepic_epicbox::DEFAULT_PORT;
 use lepic_node::NodeError;
+use lepic_store::TxId;
 use lepic_transport::error::TransportError;
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::InboxError;
@@ -34,50 +35,13 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         ));
     }
     match error {
-        CliError::Invoice(InvoiceError::Undelivered { tx_id, .. }) => {
-            return Some(format!(
-                "the invoice is stored but the payer did not get it; withdraw it with `lepic tx \
-                 cancel {tx_id}` and issue it again"
-            ));
-        }
-        CliError::Invoice(InvoiceError::PaymentUndelivered { tx_id, .. }) => {
-            return Some(format!(
-                "the payment is stored and its inputs stay locked; deliver it again with `lepic \
-                 tx resend {tx_id} --to <ADDRESS>`, the sender's address `lepic epicbox allow \
-                 list` shows, or give up with `lepic tx cancel {tx_id}`"
-            ));
-        }
-        CliError::Invoice(InvoiceError::NotParked { .. }) => {
-            return Some(
-                "`lepic invoice list` shows the invoices waiting to be paid; a request from a \
-                 paired contact is in `lepic contact invoices`, paid with `lepic contact \
-                 pay-invoice` or declined with `lepic contact decline`"
-                    .to_owned(),
-            );
+        CliError::Invoice(invoice) => {
+            if let Some(text) = invoice_hint(invoice) {
+                return Some(text);
+            }
         }
         CliError::Send(SendError::Undelivered { tx_id, source, .. }) => {
-            let mut text = format!(
-                "the inputs stay locked; deliver it again with `lepic tx resend {tx_id} --to \
-                 <ADDRESS>` or `--to-file <FILE>`, or give up with `lepic tx cancel {tx_id}`"
-            );
-            if let Some(settings) = settings
-                && !matches!(source, TransportError::File(_))
-                && !matches!(
-                    source,
-                    TransportError::Backend { transport, .. }
-                        if *transport == lepic_foreign::TRANSPORT_ID
-                            || *transport == lepic_tor::TRANSPORT_ID
-                )
-                && settings.relay.port() != DEFAULT_PORT
-            {
-                text.push_str(&format!(
-                    ". Addresses on {} must name its port, as in <key>@{}:{}",
-                    settings.relay.url(),
-                    settings.relay.domain(),
-                    settings.relay.port()
-                ));
-            }
-            return Some(text);
+            return Some(undelivered_send_hint(*tx_id, source, settings));
         }
         CliError::HttpReplyLost { tx_id } => {
             return Some(format!(
@@ -98,19 +62,8 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
                 "use https, or add --allow-plain-http to send this slate unencrypted".to_owned(),
             );
         }
-        CliError::Finalize(FinalizeError::NotPosted { tx_id, .. })
-        | CliError::Invoice(InvoiceError::NotPosted { tx_id, .. }) => {
-            return Some(format!(
-                "the transaction is stored, and the node neither took it nor holds its kernel; \
-                 `lepic tx post {tx_id}` sends it again"
-            ));
-        }
-        CliError::Invoice(InvoiceError::AmountMismatch { invoiced, approved }) => {
-            return Some(format!(
-                "the invoice asks for {} EPIC and {} EPIC was approved; nothing was paid",
-                format_amount(*invoiced),
-                format_amount(*approved)
-            ));
+        CliError::Finalize(FinalizeError::NotPosted { tx_id, .. }) => {
+            return Some(not_posted_hint(*tx_id));
         }
         CliError::Inbox(InboxError::Subscription(_) | InboxError::Transport(_)) => {
             return settings.map(|settings| {
@@ -142,6 +95,69 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         return settings.map(|settings| node_hint(error, settings));
     }
     None
+}
+
+fn invoice_hint(error: &InvoiceError) -> Option<String> {
+    match error {
+        InvoiceError::Undelivered { tx_id, .. } => Some(format!(
+            "the invoice is stored but the payer did not get it; withdraw it with `lepic tx \
+             cancel {tx_id}` and issue it again"
+        )),
+        InvoiceError::PaymentUndelivered { tx_id, .. } => Some(format!(
+            "the payment is stored and its inputs stay locked; deliver it again with `lepic tx \
+             resend {tx_id} --to <ADDRESS>`, the sender's address `lepic epicbox allow list` \
+             shows, or give up with `lepic tx cancel {tx_id}`"
+        )),
+        InvoiceError::NotParked { .. } => Some(
+            "`lepic invoice list` shows the invoices waiting to be paid; a request from a paired \
+             contact is in `lepic contact invoices`, paid with `lepic contact pay-invoice` or \
+             declined with `lepic contact decline`"
+                .to_owned(),
+        ),
+        InvoiceError::NotPosted { tx_id, .. } => Some(not_posted_hint(*tx_id)),
+        InvoiceError::AmountMismatch { invoiced, approved } => Some(format!(
+            "the invoice asks for {} EPIC and {} EPIC was approved; nothing was paid",
+            format_amount(*invoiced),
+            format_amount(*approved)
+        )),
+        _ => None,
+    }
+}
+
+fn not_posted_hint(tx_id: TxId) -> String {
+    format!(
+        "the transaction is stored, and the node neither took it nor holds its kernel; `lepic \
+         tx post {tx_id}` sends it again"
+    )
+}
+
+fn undelivered_send_hint(
+    tx_id: TxId,
+    source: &TransportError,
+    settings: Option<&Settings>,
+) -> String {
+    let mut text = format!(
+        "the inputs stay locked; deliver it again with `lepic tx resend {tx_id} --to <ADDRESS>` \
+         or `--to-file <FILE>`, or give up with `lepic tx cancel {tx_id}`"
+    );
+    if let Some(settings) = settings
+        && !matches!(source, TransportError::File(_))
+        && !matches!(
+            source,
+            TransportError::Backend { transport, .. }
+                if *transport == lepic_foreign::TRANSPORT_ID
+                    || *transport == lepic_tor::TRANSPORT_ID
+        )
+        && settings.relay.port() != DEFAULT_PORT
+    {
+        text.push_str(&format!(
+            ". Addresses on {} must name its port, as in <key>@{}:{}",
+            settings.relay.url(),
+            settings.relay.domain(),
+            settings.relay.port()
+        ));
+    }
+    text
 }
 
 fn wallet_hint(error: &WalletError, settings: Option<&Settings>) -> Option<String> {
@@ -250,7 +266,6 @@ fn tor_hint(kind: lepic_tor::FailureKind) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use lepic_primitives::amount::Amount;
-    use lepic_store::TxId;
 
     use super::*;
     use crate::cli::GlobalArgs;

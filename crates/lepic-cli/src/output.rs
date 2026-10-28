@@ -825,6 +825,53 @@ fn write_expired(out: &mut Vec<u8>, expired: Option<&ExpiredReport>) -> std::io:
 
 fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
+        Report::Init(_)
+        | Report::Restore(_)
+        | Report::Scan(_)
+        | Report::Info(_)
+        | Report::Address(_)
+        | Report::ImportHistory(_)
+        | Report::NodeStatus(_) => write_wallet_human(out, report),
+        Report::Send(_)
+        | Report::Resend(_)
+        | Report::Receive(_)
+        | Report::Finalize(_)
+        | Report::Post(_)
+        | Report::Cancel(_)
+        | Report::Release(_)
+        | Report::List(_)
+        | Report::Show(_) => write_transaction_human(out, report),
+        Report::InvoiceIssue(_)
+        | Report::InvoicePay(_)
+        | Report::InvoiceList(_)
+        | Report::InvoiceDecline(_)
+        | Report::Peer(_) => write_invoice_human(out, report),
+        Report::Inbox(_)
+        | Report::HttpListen(_)
+        | Report::TorAddress(_)
+        | Report::TorListen(_)
+        | Report::EpicboxStatus(_) => write_transport_human(out, report),
+        Report::ContactInvite(_)
+        | Report::ContactPreview(_)
+        | Report::ContactAccept(_)
+        | Report::ContactLink(_)
+        | Report::ContactCollect(_)
+        | Report::ContactCard(_) => write_pairing_human(out, report),
+        Report::Contact(_)
+        | Report::ContactList(_)
+        | Report::ContactRemove(_)
+        | Report::ContactSlate(_)
+        | Report::ContactKeyCheck(_)
+        | Report::ContactInvoiceIssue(_)
+        | Report::ContactInvoices(_)
+        | Report::ContactExport(_)
+        | Report::ContactImport(_) => write_contact_human(out, report),
+    }
+}
+
+/// A wallet, scan or node report. Writes nothing for any other.
+fn write_wallet_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
+    match report {
         Report::Init(r) => {
             writeln!(out, "Wallet created on {} in {}.", r.network, r.data_dir)?;
             writeln!(
@@ -903,6 +950,19 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                 r.dated
             )
         }
+        Report::NodeStatus(r) => {
+            writeln!(out, "Node     {} (version {})", r.node, r.node_version)?;
+            writeln!(out, "Height   {}", r.height)?;
+            writeln!(out, "Block    {}", r.last_block)?;
+            writeln!(out, "Header   version {}", r.block_header_version)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A report on one transaction or the transaction list. Writes nothing for any other.
+fn write_transaction_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
+    match report {
         Report::Send(r) if r.state == "posted" => writeln!(
             out,
             "Transaction {} sent {} EPIC (fee {}) by {} to {}, finalized and posted.\nSlate {}.",
@@ -1044,6 +1104,13 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             }
             Ok(())
         }
+        _ => Ok(()),
+    }
+}
+
+/// An invoice report, or what is known about a peer's invoices. Writes nothing for any other.
+fn write_invoice_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
+    match report {
         Report::InvoiceIssue(r) => match &r.file {
             Some(file) => writeln!(
                 out,
@@ -1101,6 +1168,31 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                 r.slate_id, r.state
             )
         }
+        Report::Peer(r) => match r.capability {
+            "lepic" => writeln!(
+                out,
+                "{} runs LEPIC: it pays invoices and is sent notices.",
+                r.address
+            ),
+            "no_invoices" => writeln!(
+                out,
+                "{} sent an invoice back unpaid: it does not pay invoices. Send it a slate file \
+                 instead.",
+                r.address
+            ),
+            _ => writeln!(
+                out,
+                "Nothing is known yet about {}: it has not paid an invoice or sent one back.",
+                r.address
+            ),
+        },
+        _ => Ok(()),
+    }
+}
+
+/// An inbox, listener, Tor or Epicbox report. Writes nothing for any other.
+fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
+    match report {
         Report::Inbox(r) => {
             writeln!(
                 out,
@@ -1134,6 +1226,13 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             writeln!(out, "Address  {}", r.address)?;
             writeln!(out, "Pending  {} deliveries", r.pending_deliveries)
         }
+        _ => Ok(()),
+    }
+}
+
+/// A pairing report. Writes nothing for any other.
+fn write_pairing_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
+    match report {
         Report::ContactInvite(r) => {
             writeln!(out, "Share this invite: {}", r.link)?;
             if !r.words.is_empty() {
@@ -1199,6 +1298,13 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             "Show this card: {}\nThen scan the other one with `lepic contact scan-card {} <LINK>`.",
             r.link, r.contact_id
         ),
+        _ => Ok(()),
+    }
+}
+
+/// A report on paired contacts. Writes nothing for any other.
+fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
+    match report {
         Report::Contact(r) => write_contact(out, r),
         Report::ContactList(r) => {
             if r.contacts.is_empty() {
@@ -1265,30 +1371,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             "{} pairings restored; {} were here already and {} clashed with another.",
             r.imported, r.skipped_existing, r.skipped_conflict
         ),
-        Report::Peer(r) => match r.capability {
-            "lepic" => writeln!(
-                out,
-                "{} runs LEPIC: it pays invoices and is sent notices.",
-                r.address
-            ),
-            "no_invoices" => writeln!(
-                out,
-                "{} sent an invoice back unpaid: it does not pay invoices. Send it a slate file \
-                 instead.",
-                r.address
-            ),
-            _ => writeln!(
-                out,
-                "Nothing is known yet about {}: it has not paid an invoice or sent one back.",
-                r.address
-            ),
-        },
-        Report::NodeStatus(r) => {
-            writeln!(out, "Node     {} (version {})", r.node, r.node_version)?;
-            writeln!(out, "Height   {}", r.height)?;
-            writeln!(out, "Block    {}", r.last_block)?;
-            writeln!(out, "Header   version {}", r.block_header_version)
-        }
+        _ => Ok(()),
     }
 }
 
