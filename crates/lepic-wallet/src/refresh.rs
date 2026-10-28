@@ -46,6 +46,7 @@ use crate::ports::{SecretVault, StoreOpener};
 use crate::release::{
     RELEASED_WATCH_BLOCKS, ReleaseCheck, record_kernel_absent, record_watch, release_check,
 };
+use crate::selection::SelectionRequest;
 use crate::self_send::SELF;
 use crate::send_limit::effective_cutoff;
 use crate::state::{StateChange, apply_transition, is_final};
@@ -850,6 +851,24 @@ pub(crate) fn minimum_confirmations(repos: &dyn Repositories) -> Result<u64, Sto
         .and_then(|text| text.parse().ok())
         .filter(|count| MINIMUM_CONFIRMATIONS_RANGE.contains(count))
         .unwrap_or(DEFAULT_MINIMUM_CONFIRMATIONS))
+}
+
+/// `request` as a spend from this wallet runs it: never with fewer confirmations than the
+/// minimum the user stored (ADR 0027), whatever the caller asked for, and never with none, so
+/// an unconfirmed output is never spent.
+pub(crate) fn with_spend_confirmations(
+    repos: &dyn Repositories,
+    mut request: SelectionRequest,
+) -> Result<SelectionRequest, StoreError> {
+    let stored = repos
+        .setting(MINIMUM_CONFIRMATIONS_SETTING)?
+        .and_then(|text| text.parse().ok())
+        .filter(|count| MINIMUM_CONFIRMATIONS_RANGE.contains(count));
+    request.minimum_confirmations = request
+        .minimum_confirmations
+        .max(stored.unwrap_or(1))
+        .max(1);
+    Ok(request)
 }
 
 /// A stored height that does not parse is ignored: the next refresh applies whatever the node

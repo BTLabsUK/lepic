@@ -62,6 +62,7 @@ use crate::codecs;
 use crate::error::WalletError;
 use crate::finalize::{Finalized, FinalizedSlate, PushFailure};
 use crate::ports::{SecretVault, StoreOpener};
+use crate::refresh::with_spend_confirmations;
 use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
 use crate::send::{
     ChangeOutput, Delivery, SendRequest, block_header_version, record_counterparty, spendable_here,
@@ -682,16 +683,19 @@ fn pay_stored(
             repos.outputs(request.account, None)?,
             &request.exclude_outputs,
         ),
-        &SelectionRequest {
-            account: request.account,
-            amount: i1.amount(),
-            tip: env.tip,
-            minimum_confirmations: request.minimum_confirmations,
-            max_outputs: request.max_outputs,
-            change_outputs: request.change_outputs,
-            strategy: request.strategy,
-            base_fee: env.base_fee(),
-        },
+        &with_spend_confirmations(
+            repos,
+            SelectionRequest {
+                account: request.account,
+                amount: i1.amount(),
+                tip: env.tip,
+                minimum_confirmations: request.minimum_confirmations,
+                max_outputs: request.max_outputs,
+                change_outputs: request.change_outputs,
+                strategy: request.strategy,
+                base_fee: env.base_fee(),
+            },
+        )?,
     )?;
     let change = selection
         .change

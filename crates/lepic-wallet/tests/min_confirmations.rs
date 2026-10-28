@@ -14,6 +14,8 @@ use lepic_wallet::event::Event;
 use lepic_wallet::refresh::{
     BalanceCategory, DEFAULT_MINIMUM_CONFIRMATIONS, MINIMUM_CONFIRMATIONS_RANGE,
 };
+use lepic_wallet::selection::{SelectionError, SelectionOptions};
+use lepic_wallet::send::SendError;
 use send_support::{ACCOUNT, FUNDING, Sender, TIP};
 
 #[test]
@@ -95,4 +97,32 @@ fn the_balance_split_follows_the_setting_and_a_change_is_announced() {
             .iter()
             .all(|output| output.category == Some(BalanceCategory::AwaitingConfirmation))
     );
+}
+
+/// A spend never takes fewer confirmations than the user stored, whatever the caller asks for:
+/// the funding output, with 4 confirmations at the tip, pays a send asking for 1 until the
+/// setting asks for 5.
+#[test]
+fn a_spend_takes_at_least_the_stored_setting() {
+    let sender = Sender::new();
+    let options = SelectionOptions {
+        minimum_confirmations: 1,
+        ..SelectionOptions::new(ACCOUNT)
+    };
+    let estimate = |sender: &Sender| {
+        sender.harness.block_on(
+            sender
+                .wallet
+                .estimate_fee(Amount::new(100_000_000), options.clone()),
+        )
+    };
+    sender.wallet.set_minimum_confirmations(4).unwrap();
+    assert!(estimate(&sender).is_ok());
+
+    sender.wallet.set_minimum_confirmations(5).unwrap();
+
+    assert!(matches!(
+        estimate(&sender),
+        Err(SendError::Selection(SelectionError::NotEnoughFunds { .. }))
+    ));
 }

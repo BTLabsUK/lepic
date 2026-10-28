@@ -8,6 +8,7 @@ use tracing::{debug, instrument};
 use crate::account::AccountError;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
+use crate::refresh::with_spend_confirmations;
 use crate::selection::{
     self, Selection, SelectionError, SelectionOptions, SelectionRequest, SelfSendShape,
 };
@@ -96,7 +97,9 @@ where
                         repos.outputs(options.account, None)?,
                         &options.exclude_outputs,
                     );
-                    Ok(choose(&outputs, &options.request(amount, tip, base_fee))?)
+                    let request =
+                        with_spend_confirmations(repos, options.request(amount, tip, base_fee))?;
+                    Ok(choose(&outputs, &request)?)
                 }))
             })
             .await??;

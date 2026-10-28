@@ -21,6 +21,7 @@ use crate::event::{Event, SelfSentTransaction};
 use crate::finalize::{FinalizeError, finalize_own};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::{ReceiveError, receive_own};
+use crate::refresh::with_spend_confirmations;
 use crate::selection::{
     self, Selection, SelectionError, SelectionOptions, SelectionRequest, SelectionStrategy,
     SelfSendShape,
@@ -164,8 +165,11 @@ where
                         repos.outputs(options.account, None)?,
                         &options.exclude_outputs,
                     );
-                    let chosen = choose(&outputs, &options.request(Amount::ZERO, tip, base_fee))
-                        .map_err(SendError::from)?;
+                    let request = with_spend_confirmations(
+                        repos,
+                        options.request(Amount::ZERO, tip, base_fee),
+                    )?;
+                    let chosen = choose(&outputs, &request).map_err(SendError::from)?;
                     let request = SendRequest {
                         minimum_confirmations: options.minimum_confirmations,
                         max_outputs: options.max_outputs,

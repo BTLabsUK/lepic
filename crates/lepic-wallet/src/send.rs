@@ -65,6 +65,7 @@ use crate::epicbox_invoice::invoice_origin;
 use crate::error::WalletError;
 use crate::inbox::relay_network;
 use crate::ports::{SecretVault, StoreOpener};
+use crate::refresh::with_spend_confirmations;
 use crate::selection::{self, Selection, SelectionError, SelectionOptions, SelectionStrategy};
 use crate::send_limit::record_local_cutoff;
 use crate::wallet::Wallet;
@@ -673,9 +674,12 @@ fn create_s1(
     );
     let selection = selection::select(
         &outputs,
-        &request
-            .selection_options()
-            .request(request.amount, tip, base_fee),
+        &with_spend_confirmations(
+            repos,
+            request
+                .selection_options()
+                .request(request.amount, tip, base_fee),
+        )?,
     )?;
     let built = store_s1(
         repos,
