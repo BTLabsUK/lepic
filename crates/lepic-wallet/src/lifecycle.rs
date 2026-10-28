@@ -478,16 +478,14 @@ pub(crate) fn fingerprint(keychain: &Keychain) -> Result<String, WalletError> {
 /// Keyed BLAKE2b of a domain string under the seed: the same seed always opens its database,
 /// and the key reveals nothing about the seed.
 fn context_key(seed: &Seed) -> Result<ContextKey, WalletError> {
-    let bytes = context_key_bytes(seed)?;
-    Ok(ContextKey::from_bytes(*bytes))
+    ContextKey::filled_by(|key| fill_context_key(seed, key))
 }
 
-fn context_key_bytes(seed: &Seed) -> Result<Zeroizing<[u8; CONTEXT_KEY_LEN]>, WalletError> {
+fn fill_context_key(seed: &Seed, key: &mut [u8; CONTEXT_KEY_LEN]) -> Result<(), WalletError> {
     let mut mac = seed_mac(seed)?;
     mac.update(CONTEXT_KEY_DOMAIN);
-    let mut key = Zeroizing::new([0u8; CONTEXT_KEY_LEN]);
-    mac.finalize_into((&mut *key).into());
-    Ok(key)
+    mac.finalize_into(key.into());
+    Ok(())
 }
 
 /// BLAKE2b-256 keyed by the seed, for a domain string to be added.
@@ -561,6 +559,8 @@ mod tests {
         let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(&[5; 32]).unwrap();
         mac.update(b"lepic-wallet private context key v1");
         let expected: [u8; 32] = mac.finalize_fixed().into();
-        assert_eq!(*context_key_bytes(&seed).unwrap(), expected);
+        let mut key = [0; CONTEXT_KEY_LEN];
+        fill_context_key(&seed, &mut key).unwrap();
+        assert_eq!(key, expected);
     }
 }

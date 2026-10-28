@@ -29,6 +29,16 @@ impl ContextKey {
     pub fn from_bytes(bytes: [u8; CONTEXT_KEY_LEN]) -> Self {
         Self(Zeroizing::new(bytes))
     }
+
+    /// A key that `fill` writes straight into its own wiped buffer, so a key derived here
+    /// leaves no copy behind. Fails with the error of `fill`.
+    pub fn filled_by<E>(
+        fill: impl FnOnce(&mut [u8; CONTEXT_KEY_LEN]) -> Result<(), E>,
+    ) -> Result<Self, E> {
+        let mut key = Self(Zeroizing::new([0; CONTEXT_KEY_LEN]));
+        fill(&mut key.0)?;
+        Ok(key)
+    }
 }
 
 impl fmt::Debug for ContextKey {
