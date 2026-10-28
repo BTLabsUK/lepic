@@ -85,11 +85,21 @@ ECDSA over secp256k1 of SHA-256 of the UTF-8 string, DER-encoded, hex. `Subscrib
 challenge, `PostSlate` signs `str` exactly as transmitted, `Made` signs the message id. Verify against
 the received `str` bytes; never re-serialize before verifying.
 
+None of the signed texts names the relay, so a signature made for one relay is valid at any
+other. LEPIC therefore subscribes each key at one relay only: the wallet's address key at its
+own relay, and every contact or pairing mailbox under a key of its own for that relationship.
+Binding the texts to the relay's domain would need a protocol change on both sides.
+
 ## Receiving a slate
 
 Parse `from` (network version bytes checked), verify the signature over `str` with the sender key,
 require `destination.public_key` to equal our own key, derive the shared secret with the sender's key
 and decrypt, then decode the slate.
+
+Only the sender's key in `from` is authenticated: a relay may change its `@domain:port`, and the
+destination's domain is not checked either. The sender's domain is advisory. LEPIC posts every
+reply through its own relay, never to the relay a `from` names, and keys contacts, notices and
+invoices on the public key alone.
 
 ## Relay retention
 
