@@ -110,7 +110,7 @@ pub fn open(keychain: &Keychain, file: &[u8]) -> Result<Zeroizing<Vec<u8>>, AppD
     }
     let header = Header::parse(file)?;
     let keys = FileKeys::derive(keychain, &header.salt)?;
-    if keys.check != header.check {
+    if !equal_in_constant_time(&keys.check, &header.check) {
         return Err(AppDataError::ForeignWallet);
     }
     let body = file.get(HEADER_LEN..).ok_or(AppDataError::NotAppData)?;
@@ -172,6 +172,14 @@ fn array<const N: usize>(bytes: &[u8]) -> Result<[u8; N], AppDataError> {
     bytes.try_into().map_err(|_| AppDataError::NotAppData)
 }
 
+/// Compares derived values without stopping at the first difference.
+fn equal_in_constant_time(ours: &[u8; CHECK_LEN], theirs: &[u8; CHECK_LEN]) -> bool {
+    ours.iter()
+        .zip(theirs)
+        .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
+}
+
 /// The cipher key and check value of one file. The key is wiped on drop.
 struct FileKeys {
     key: Zeroizing<[u8; 32]>,
@@ -206,6 +214,17 @@ mod tests {
             .chunks(2)
             .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn constant_time_comparison_sees_a_difference_in_any_position() {
+        let ours = [7u8; CHECK_LEN];
+        assert!(equal_in_constant_time(&ours, &ours));
+        for index in 0..CHECK_LEN {
+            let mut theirs = ours;
+            theirs[index] ^= 0x80;
+            assert!(!equal_in_constant_time(&ours, &theirs));
+        }
     }
 
     /// RFC 5869 appendix A, test cases 1 to 3: HKDF-SHA256 as `FileKeys` calls it, with a salt
