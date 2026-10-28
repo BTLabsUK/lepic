@@ -19,7 +19,7 @@ default = ["tor"]
 tor = ["dep:lepic-tor"]
 # An in-process scripted node and Epicbox relay for the binding's own tests
 # (the binding repository's `test/`). Never in an app build.
-mock = ["lepic-node/mock", "lepic-epicbox/mock-relay"]
+mock = ["lepic-node/mock", "lepic-epicbox/mock-relay", "lepic-keychain/test-kdf"]
 
 [dependencies]
 base64 = { workspace = true, features = ["alloc"] }

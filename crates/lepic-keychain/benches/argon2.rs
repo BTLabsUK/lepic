@@ -38,7 +38,7 @@ fn main() {
     );
     for memory in MEMORY_MIB {
         for iterations in ITERATIONS {
-            let params = KdfParams::new(memory * MIB, iterations, 1).unwrap();
+            let params = KdfParams::for_tests(memory * MIB, iterations, 1).unwrap();
             let times = measure(samples, || unlock(params));
             println!(
                 "{memory:>8} {iterations:>3} {:>11} {:>11}",

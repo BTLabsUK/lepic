@@ -110,7 +110,7 @@ impl Host for TestHost {
     }
 
     fn vault_kdf(&self) -> KdfParams {
-        KdfParams::new(8, 1, 1).unwrap()
+        KdfParams::for_tests(8, 1, 1).unwrap()
     }
 
     fn interrupted(&self) -> Interrupt {

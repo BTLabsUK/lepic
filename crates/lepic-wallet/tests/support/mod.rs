@@ -180,7 +180,7 @@ impl SecretVault for TestVault {
             self.storage.clone(),
             StdRng::seed_from_u64(11),
             password.expose_bytes(),
-            KdfParams::new(8, 1, 1).unwrap(),
+            KdfParams::for_tests(8, 1, 1).unwrap(),
         )
         .map_err(vault_error)
     }

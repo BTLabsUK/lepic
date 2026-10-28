@@ -18,6 +18,15 @@ pub const MAX_MEMORY_KIB: u32 = 128 * 1024;
 pub const MAX_ITERATIONS: u32 = 4;
 pub const MAX_PARALLELISM: u32 = 8;
 
+/// The least memory a new vault's key derivation may use: 19 MiB, the smallest setting OWASP
+/// recommends for Argon2id. Files with weaker parameters still open; LEPIC only refuses to write
+/// them.
+pub const MIN_WRITE_MEMORY_KIB: u32 = 19 * 1024;
+/// The least memory times passes a new vault's key derivation may use: 19 MiB with two passes,
+/// so one pass needs at least 38 MiB. OWASP's 46 MiB with one pass and 19 MiB with two passes
+/// both meet it.
+pub const MIN_WRITE_COST_KIB: u32 = MIN_WRITE_MEMORY_KIB * 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error(
     "argon2id parameters m={memory_kib} KiB t={iterations} p={parallelism} are outside the \
@@ -30,12 +39,25 @@ pub struct KdfParamsError {
 }
 
 /// Argon2id version 0x13 cost parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct KdfParams {
     memory_kib: u32,
     iterations: u32,
     parallelism: u32,
+    /// Set only by [`KdfParams::for_tests`]: the vault may write these below the floor.
+    below_floor_allowed: bool,
 }
+
+/// Equal when the cost parameters are; whether they came from [`KdfParams::for_tests`] does
+/// not matter, so a vault reopened from its file reports the parameters it was created with.
+impl PartialEq for KdfParams {
+    fn eq(&self, other: &Self) -> bool {
+        (self.memory_kib, self.iterations, self.parallelism)
+            == (other.memory_kib, other.iterations, other.parallelism)
+    }
+}
+
+impl Eq for KdfParams {}
 
 impl KdfParams {
     /// The parameters new vaults use. `docs/spikes/k-03-argon2.md` records how they were chosen.
@@ -43,10 +65,12 @@ impl KdfParams {
         memory_kib: 64 * 1024,
         iterations: 3,
         parallelism: 1,
+        below_floor_allowed: false,
     };
 
     /// Accepts any setting Argon2 allows (at least 8 KiB per lane, one pass, one lane) up to the
-    /// `MAX_*` bounds.
+    /// `MAX_*` bounds, so every vault LEPIC can read opens. A new vault or a rekey takes only
+    /// parameters that also meet the write floor ([`KdfParams::meets_write_floor`]).
     pub fn new(memory_kib: u32, iterations: u32, parallelism: u32) -> Result<Self, KdfParamsError> {
         let error = KdfParamsError {
             memory_kib,
@@ -67,7 +91,37 @@ impl KdfParams {
             memory_kib,
             iterations,
             parallelism,
+            below_floor_allowed: false,
         })
+    }
+
+    /// Parameters a vault may write even below the floor, so tests of the layers above stay
+    /// fast. Only with the `test-kdf` feature, which app builds never enable.
+    #[cfg(any(test, feature = "test-kdf"))]
+    pub fn for_tests(
+        memory_kib: u32,
+        iterations: u32,
+        parallelism: u32,
+    ) -> Result<Self, KdfParamsError> {
+        Ok(Self {
+            below_floor_allowed: true,
+            ..Self::new(memory_kib, iterations, parallelism)?
+        })
+    }
+
+    /// Whether a new vault may use these parameters: at least [`MIN_WRITE_MEMORY_KIB`] of
+    /// memory and [`MIN_WRITE_COST_KIB`] of memory times passes.
+    pub fn meets_write_floor(&self) -> bool {
+        self.memory_kib >= MIN_WRITE_MEMORY_KIB
+            && self
+                .memory_kib
+                .checked_mul(self.iterations)
+                .is_none_or(|cost| cost >= MIN_WRITE_COST_KIB)
+    }
+
+    /// Whether [`crate::Vault::create`] and [`crate::Vault::rekey`] may write these parameters.
+    pub(crate) fn writable(&self) -> bool {
+        self.below_floor_allowed || self.meets_write_floor()
     }
 
     pub fn memory_kib(&self) -> u32 {

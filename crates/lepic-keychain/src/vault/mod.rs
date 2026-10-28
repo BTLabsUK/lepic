@@ -21,7 +21,8 @@ pub use format::{
     NONCE_LEN, TAG_LEN, VaultFile, VaultHeader,
 };
 pub use kdf::{
-    KEY_LEN, KdfParams, KdfParamsError, MAX_ITERATIONS, MAX_MEMORY_KIB, MAX_PARALLELISM, SALT_LEN,
+    KEY_LEN, KdfParams, KdfParamsError, MAX_ITERATIONS, MAX_MEMORY_KIB, MAX_PARALLELISM,
+    MIN_WRITE_COST_KIB, MIN_WRITE_MEMORY_KIB, SALT_LEN,
 };
 pub use store::{
     BackendError, MAX_SECRET_NAME_LEN, SecretBytes, SecretName, SecretNameError, SecretStore,
@@ -54,6 +55,9 @@ pub enum VaultError {
     UnsupportedKdf { kdf: u8 },
     #[error("vault key derivation parameters are invalid")]
     KdfParams(#[from] KdfParamsError),
+    /// A new vault or a rekey asked for parameters below the write floor.
+    #[error("argon2id parameters m={memory_kib} KiB t={iterations} are too weak for a new vault")]
+    WeakKdf { memory_kib: u32, iterations: u32 },
     #[error("vault key could not be derived")]
     Kdf(#[source] argon2::Error),
     #[error("vault could not be encrypted")]
@@ -69,6 +73,17 @@ pub enum VaultError {
     SecretTooLarge { actual: usize, max: usize },
     #[error("vault storage failed")]
     Storage(#[source] BackendError),
+}
+
+fn check_writable(params: KdfParams) -> Result<(), VaultError> {
+    if params.writable() {
+        Ok(())
+    } else {
+        Err(VaultError::WeakKdf {
+            memory_kib: params.memory_kib(),
+            iterations: params.iterations(),
+        })
+    }
 }
 
 /// Where the vault file lives. The desktop implementation is a file next to the wallet database.
@@ -129,13 +144,15 @@ pub struct Vault<S, R> {
 
 impl<S: VaultStorage, R: CryptoRng> Vault<S, R> {
     /// Creates an empty vault and writes it. Fails with [`VaultError::AlreadyExists`] rather
-    /// than overwrite a stored vault.
+    /// than overwrite a stored vault, and with [`VaultError::WeakKdf`] for parameters below the
+    /// write floor.
     pub fn create(
         storage: S,
         mut rng: R,
         password: &[u8],
         params: KdfParams,
     ) -> Result<Self, VaultError> {
+        check_writable(params)?;
         if storage.load().map_err(VaultError::Storage)?.is_some() {
             return Err(VaultError::AlreadyExists);
         }
@@ -179,8 +196,10 @@ impl<S: VaultStorage, R: CryptoRng> Vault<S, R> {
     }
 
     /// Re-encrypts every secret under `password` with `params` and a fresh salt. The vault keeps
-    /// its previous password and parameters if the write fails.
+    /// its previous password and parameters if the write fails. Fails with
+    /// [`VaultError::WeakKdf`] for parameters below the write floor.
     pub fn rekey(&mut self, password: &[u8], params: KdfParams) -> Result<(), VaultError> {
+        check_writable(params)?;
         let salt = random_array(&mut self.rng);
         let key = params
             .derive_key(password, &salt)

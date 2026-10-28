@@ -38,6 +38,7 @@ tracing = { workspace = true, features = ["std"] }
 zeroize = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
+lepic-keychain = { workspace = true, features = ["test-kdf"] }
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 lepic-node = { workspace = true, features = ["mock"] }
 tempfile.workspace = true

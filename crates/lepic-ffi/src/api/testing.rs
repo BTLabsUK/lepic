@@ -51,7 +51,7 @@ impl MockChain {
         guard("mock_chain_runtime", || {
             #[cfg(feature = "mock")]
             {
-                let kdf = lepic_keychain::KdfParams::new(8, 1, 1)
+                let kdf = lepic_keychain::KdfParams::for_tests(8, 1, 1)
                     .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
                 LepicRuntime::start(
                     log_level,

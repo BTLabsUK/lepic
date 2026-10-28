@@ -1199,6 +1199,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "lepic-crypto",
+ "lepic-keychain",
  "lepic-primitives",
  "lepic-telemetry",
  "pbkdf2",

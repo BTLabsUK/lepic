@@ -39,6 +39,7 @@ insta.workspace = true
 proptest = { workspace = true, features = ["std"] }
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 lepic-crypto.workspace = true
+lepic-keychain = { workspace = true, features = ["test-kdf"] }
 lepic-node = { workspace = true, features = ["mock"] }
 lepic-primitives.workspace = true
 lepic-telemetry.workspace = true

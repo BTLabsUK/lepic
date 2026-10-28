@@ -154,7 +154,7 @@ mod tests {
     use super::*;
 
     fn cheap() -> KdfParams {
-        KdfParams::new(8, 1, 1).unwrap()
+        KdfParams::for_tests(8, 1, 1).unwrap()
     }
 
     #[test]

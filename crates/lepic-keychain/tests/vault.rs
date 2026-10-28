@@ -33,7 +33,7 @@ const VERSION_1_VAULT: &str = concat!(
 );
 
 fn fast() -> KdfParams {
-    KdfParams::new(8, 1, 1).unwrap()
+    KdfParams::for_tests(8, 1, 1).unwrap()
 }
 
 fn rng(seed: u64) -> StdRng {
@@ -169,7 +169,7 @@ fn rekey_re_encrypts_under_the_new_password_and_parameters() {
     vault.put(&seed_name(), &seed).unwrap();
     let before = VaultFile::decode(&stored(&vault)).unwrap();
 
-    let params = KdfParams::new(16, 2, 2).unwrap();
+    let params = KdfParams::for_tests(16, 2, 2).unwrap();
     vault.rekey(b"new password", params).unwrap();
     assert_eq!(vault.params(), params);
 
@@ -205,6 +205,60 @@ fn create_refuses_to_overwrite_a_stored_vault() {
         Vault::create(vault.storage().clone(), rng(3), PASSWORD, fast()),
         Err(VaultError::AlreadyExists)
     ));
+}
+
+#[test]
+fn create_and_rekey_refuse_parameters_below_the_write_floor() {
+    let weak = KdfParams::new(8, 1, 1).unwrap();
+    assert!(matches!(
+        Vault::create(MemoryVaultStorage::new(), rng(1), PASSWORD, weak),
+        Err(VaultError::WeakKdf {
+            memory_kib: 8,
+            iterations: 1
+        })
+    ));
+
+    let mut vault = new_vault();
+    vault
+        .put(&seed_name(), &SecretBytes::from_slice(&[7; 32]))
+        .unwrap();
+    let before = stored(&vault);
+    assert!(matches!(
+        vault.rekey(b"new password", KdfParams::new(32 * 1024, 1, 1).unwrap()),
+        Err(VaultError::WeakKdf { .. })
+    ));
+    assert_eq!(stored(&vault), before);
+    assert_eq!(vault.params(), fast());
+}
+
+#[test]
+fn the_write_floor_admits_the_default_and_the_owasp_settings_only() {
+    let floor = |memory_kib, iterations| {
+        KdfParams::new(memory_kib, iterations, 1)
+            .unwrap()
+            .meets_write_floor()
+    };
+    assert!(KdfParams::DEFAULT.meets_write_floor());
+    assert!(floor(19 * 1024, 2));
+    assert!(floor(46 * 1024, 1));
+    assert!(!floor(19 * 1024, 1));
+    assert!(!floor(19 * 1024 - 1, 4));
+    assert!(!floor(37 * 1024, 1));
+    assert!(!floor(8, 1));
+}
+
+#[test]
+fn a_vault_with_parameters_below_the_floor_still_opens() {
+    let bytes = unhex(VERSION_1_VAULT);
+    let header = VaultFile::decode(&bytes).unwrap().header().params;
+    assert!(!header.meets_write_floor());
+    let vault = Vault::open(
+        MemoryVaultStorage::with_contents(bytes),
+        rng(1),
+        b"lepic vault v1",
+    )
+    .unwrap();
+    assert_eq!(vault.params(), KdfParams::new(8, 1, 1).unwrap());
 }
 
 #[test]
@@ -367,7 +421,7 @@ fn a_failed_write_leaves_the_vault_and_storage_unchanged() {
         Err(SecretStoreError::Backend(_))
     ));
     assert!(matches!(
-        vault.rekey(b"new password", KdfParams::new(16, 1, 1).unwrap()),
+        vault.rekey(b"new password", KdfParams::for_tests(16, 1, 1).unwrap()),
         Err(VaultError::Storage(_))
     ));
 
