@@ -1,3 +1,8 @@
+// Portions Copyright 2019 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic-wallet impls/src/adapters/epicbox.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! One websocket connection to a relay: connecting, framing, keepalive, and the greeting every
 //! session starts with.
 
