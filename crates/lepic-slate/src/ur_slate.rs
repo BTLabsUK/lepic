@@ -1,5 +1,5 @@
 //! `ur:epic-slate`: slate text as a sequence of QR codes, for two phones side by side
-//! (ADR 0024, `docs/compat/ur-epic-slate.md`).
+//! (ADR 0025, `docs/compat/ur-epic-slate.md`).
 //!
 //! The slate JSON is deflated and wrapped in a small CBOR map, then split into BC-UR multipart
 //! parts with fountain codes, so a receiver that misses frames of the looping animation still
