@@ -53,10 +53,11 @@ fn to(destination: &str) -> Delivery {
     }
 }
 
-/// A valid ed25519 point to stand for a receiver's payment proof address.
+/// A valid ed25519 point of large order (the base point) to stand for a receiver's payment proof
+/// address.
 fn receiver_address() -> ProofAddress {
-    let mut bytes = [0u8; 32];
-    bytes[0] = 1;
+    let mut bytes = [0x66u8; 32];
+    bytes[0] = 0x58;
     ProofAddress::from_bytes(bytes).unwrap()
 }
 
