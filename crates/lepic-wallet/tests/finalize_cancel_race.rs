@@ -19,6 +19,7 @@ mod support;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use futures_util::FutureExt as _;
 use lepic_crypto::Commitment;
 use lepic_node::mock::{MockFailure, MockNode};
 use lepic_node::{
@@ -248,8 +249,8 @@ impl Race {
         }
     }
 
-    /// Starts the finalize, runs the whole cancel while the finalize is held at the gate, then
-    /// lets the finalize go on.
+    /// Starts the finalize and, while it is held at the gate, runs the cancel as far as it gets,
+    /// then lets the finalize go on.
     fn cancel_while_finalize_is_held(
         &self,
     ) -> (Result<Finalized, FinalizeError>, Result<(), WalletError>) {
@@ -258,16 +259,29 @@ impl Race {
             let finalize = self.wallet.finalize(LOOPBACK, &self.s2, Propagation::Stem);
             let cancel = async {
                 self.gate.reached.notified().await;
-                let cancelled = self.wallet.cancel(self.tx_id).await;
+                // The cancel runs as far as it can while the finalize is held: to its end, or
+                // until it waits for the held finalize. Then the finalize goes on.
+                let mut cancelling = std::pin::pin!(self.wallet.cancel(self.tx_id));
+                let mut early = None;
+                for _ in 0..CANCEL_POLLS {
+                    if let Some(cancelled) = cancelling.as_mut().now_or_never() {
+                        early = Some(cancelled);
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
                 self.gate.release.notify_one();
-                cancelled
+                match early {
+                    Some(cancelled) => cancelled,
+                    None => cancelling.await,
+                }
             };
             tokio::join!(finalize, cancel)
         })
     }
 
-    /// Starts the cancel, runs the whole finalize while the cancel is held at the gate, then
-    /// lets the cancel go on.
+    /// Starts the cancel and, while it is held at the gate, runs the finalize as far as it gets,
+    /// then lets the cancel go on.
     fn finalize_while_cancel_is_held(
         &self,
     ) -> (Result<Finalized, FinalizeError>, Result<(), WalletError>) {
@@ -276,12 +290,21 @@ impl Race {
             let cancel = self.wallet.cancel(self.tx_id);
             let finalize = async {
                 self.gate.reached.notified().await;
-                let finalized = self
-                    .wallet
-                    .finalize(LOOPBACK, &self.s2, Propagation::Stem)
-                    .await;
+                let mut finalizing =
+                    std::pin::pin!(self.wallet.finalize(LOOPBACK, &self.s2, Propagation::Stem));
+                let mut early = None;
+                for _ in 0..CANCEL_POLLS {
+                    if let Some(finalized) = finalizing.as_mut().now_or_never() {
+                        early = Some(finalized);
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
                 self.gate.release.notify_one();
-                finalized
+                match early {
+                    Some(finalized) => finalized,
+                    None => finalizing.await,
+                }
             };
             let (cancelled, finalized) = tokio::join!(cancel, finalize);
             (finalized, cancelled)
@@ -352,6 +375,10 @@ fn is_refused_transition(error: &WalletError, from: TxState) -> bool {
     )
 }
 
+/// Times the cancel is polled, with a yield to the blocking pool in between, while the
+/// other call is held: enough for an unhindered cancel or finalize to finish.
+const CANCEL_POLLS: usize = 200;
+
 both_stores!(a_cancel_committed_while_finalize_waits_on_the_tip_keeps_the_send_cancelled);
 fn a_cancel_committed_while_finalize_waits_on_the_tip_keeps_the_send_cancelled() {
     let race = Race::new(Held::Tip);
@@ -372,8 +399,8 @@ fn a_cancel_committed_while_finalize_waits_on_the_tip_keeps_the_send_cancelled()
     race.assert_cancelled();
 }
 
-both_stores!(a_post_committed_while_cancel_waits_on_the_kernel_lookup_keeps_the_send_posted);
-fn a_post_committed_while_cancel_waits_on_the_kernel_lookup_keeps_the_send_posted() {
+both_stores!(a_post_while_cancel_waits_on_the_kernel_lookup_waits_and_pushes_nothing);
+fn a_post_while_cancel_waits_on_the_kernel_lookup_waits_and_pushes_nothing() {
     let race = Race::new(Held::Kernel);
     race.sender
         .harness
@@ -387,10 +414,19 @@ fn a_post_committed_while_cancel_waits_on_the_kernel_lookup_keeps_the_send_poste
 
     let (finalized, cancelled) = race.finalize_while_cancel_is_held();
 
-    assert!(finalized.unwrap().pushed);
-    let error = cancelled.unwrap_err();
-    assert!(is_refused_transition(&error, TxState::Posted), "{error:?}");
-    race.assert_posted(1);
+    // The post waits for the cancel that started first, then finds the send cancelled and
+    // leaves it with the wallet: the node never gets it.
+    cancelled.unwrap();
+    let error = finalized.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            FinalizeError::Wallet(WalletError::Transition(transition))
+                if transition.from == TxState::Cancelled && transition.to == TxState::Posted
+        ),
+        "{error:?}"
+    );
+    race.assert_cancelled();
 }
 
 both_stores!(a_cancel_while_finalize_pushes_does_not_release_inputs_the_node_took);
@@ -403,8 +439,10 @@ fn a_cancel_while_finalize_pushes_does_not_release_inputs_the_node_took() {
         (Ok(finalized), Err(error)) => {
             assert!(finalized.pushed);
             assert!(
-                matches!(error, WalletError::ChangedDuringCancel(_))
-                    || is_refused_transition(&error, TxState::Posted),
+                matches!(
+                    error,
+                    WalletError::ChangedDuringCancel(_) | WalletError::InPool(_)
+                ) || is_refused_transition(&error, TxState::Posted),
                 "{error:?}"
             );
             race.assert_posted(1);

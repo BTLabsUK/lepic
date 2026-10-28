@@ -480,6 +480,7 @@ where
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn release(&self, tx_id: TxId) -> Result<(), WalletError> {
         let session = self.session()?;
+        let _posting = self.posting_turn().await;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
         let (observed, check) = {
             let session = Arc::clone(&session);

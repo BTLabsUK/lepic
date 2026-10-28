@@ -54,7 +54,7 @@ use crate::ports::{SecretVault, StoreOpener};
 use crate::release::record_finalized;
 use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version, epicbox_key};
 use crate::send_limit::effective_cutoff;
-use crate::state::{StateChange, apply_transition, state_name};
+use crate::state::{StateChange, apply_transition, check_transition, state_name};
 use crate::wallet::Wallet;
 
 /// A slate field the receiver may not change between S1 and S2.
@@ -1032,6 +1032,25 @@ where
         tx_id: TxId,
         propagation: Propagation,
     ) -> Result<Posted, PushFailure> {
+        let posting = self.posting_turn().await;
+        let session = self.session().map_err(PushFailure::Wallet)?;
+        // A cancel or release that ended the transaction since it was finalized wins: its
+        // inputs may already be spendable again, so the node must not get it now.
+        let state = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| repos.transaction(tx_id))?
+                    .map(|entry| entry.state))
+            })
+            .await
+            .map_err(PushFailure::Wallet)?
+        };
+        if let Some(state) = state {
+            check_transition(tx_id, state, TxState::Posted)
+                .map_err(|invalid| PushFailure::Wallet(invalid.into()))?;
+        }
         let posted = match self
             .ports()
             .node
@@ -1055,7 +1074,6 @@ where
                 None => return Err(PushFailure::NotPosted(source)),
             },
         };
-        let session = self.session().map_err(PushFailure::Wallet)?;
         let change = self
             .blocking(move |ports, _| {
                 let now = ports.clock.now();
@@ -1065,6 +1083,7 @@ where
             })
             .await
             .map_err(PushFailure::Wallet)?;
+        drop(posting);
         match change {
             Some(change) => {
                 info!("transaction posted");

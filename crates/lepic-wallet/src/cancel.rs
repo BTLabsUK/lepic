@@ -76,6 +76,7 @@ where
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
     pub async fn cancel(&self, tx_id: TxId) -> Result<(), WalletError> {
         let session = self.session()?;
+        let posting = self.posting_turn().await;
         let codecs = legacy_codecs(self.config().network.params().default_base_fee());
         let (observed, lookup) = {
             let session = Arc::clone(&session);
@@ -121,6 +122,7 @@ where
                     .write(|repos| cancel_transaction(repos, tx_id, observed, watch, now))
             })
             .await?;
+        drop(posting);
         if changes.is_empty() {
             debug!("transaction already cancelled");
         } else {

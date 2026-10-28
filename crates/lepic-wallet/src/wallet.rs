@@ -32,6 +32,7 @@ pub struct Wallet<N, S: StoreOpener, V> {
     contacts: tokio::sync::Mutex<()>,
     reply_keys: OnceLock<Arc<dyn ReplyKeys>>,
     contact_notices: OnceLock<Arc<dyn ContactNotices<N, S, V>>>,
+    posting: tokio::sync::Mutex<()>,
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -60,6 +61,7 @@ where
             contacts: tokio::sync::Mutex::new(()),
             reply_keys: OnceLock::new(),
             contact_notices: OnceLock::new(),
+            posting: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -345,6 +347,14 @@ where
     /// hold under concurrent listeners.
     pub(crate) async fn unsolicited_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.unsolicited.lock().await
+    }
+
+    /// Keeps a push of a finalized transaction and a cancel or release from overlapping: a push
+    /// holds it from its state check to the write of `posted`, a cancel or release from its
+    /// lookup to its write. Otherwise a cancel could release the inputs of a transaction the
+    /// node takes a moment later.
+    pub(crate) async fn posting_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.posting.lock().await
     }
 
     /// Serves the contact engine's runs one at a time: a collecting cycle, a pairing link
