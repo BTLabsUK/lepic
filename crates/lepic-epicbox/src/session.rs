@@ -366,10 +366,9 @@ impl Connection {
                     match frame {
                         Some(frame) => info!(
                             code = u16::from(frame.code),
-                            error = %frame.reason,
                             "epicbox relay sent a close frame"
                         ),
-                        None => info!("epicbox relay sent a close frame without a reason"),
+                        None => info!("epicbox relay sent a close frame without a code"),
                     }
                     return Err(ClientError::Closed);
                 }
