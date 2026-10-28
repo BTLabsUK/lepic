@@ -20,10 +20,12 @@ lepic-contact = { path = "../crates/lepic-contact" }
 lepic-crypto = { path = "../crates/lepic-crypto" }
 lepic-epicbox = { path = "../crates/lepic-epicbox" }
 lepic-ffi = { path = "../crates/lepic-ffi" }
+lepic-foreign = { path = "../crates/lepic-foreign" }
 lepic-keychain = { path = "../crates/lepic-keychain" }
 lepic-node = { path = "../crates/lepic-node" }
 lepic-primitives = { path = "../crates/lepic-primitives" }
 lepic-slate = { path = "../crates/lepic-slate" }
+lepic-tor = { path = "../crates/lepic-tor" }
 lepic-transport = { path = "../crates/lepic-transport" }
 lepic-wallet = { path = "../crates/lepic-wallet" }
 rand_core = { version = "0.10.1", default-features = false }
@@ -200,6 +202,34 @@ bench = false
 [[bin]]
 name = "slate_marker"
 path = "fuzz_targets/slate_marker.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "foreign_rpc"
+path = "fuzz_targets/foreign_rpc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tor_control_reply"
+path = "fuzz_targets/tor_control_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "onion_parse"
+path = "fuzz_targets/onion_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relay_discovery"
+path = "fuzz_targets/relay_discovery.rs"
 test = false
 doc = false
 bench = false

@@ -62,6 +62,10 @@ const TARGETS: &[&str] = &[
     "pair_answers",
     "app_data_open",
     "slate_marker",
+    "foreign_rpc",
+    "tor_control_reply",
+    "onion_parse",
+    "relay_discovery",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -508,6 +512,55 @@ fn seeds(root: &Path, target: &str) -> Result<BTreeSet<Vec<u8>>> {
                 }
             }
         }
+        "foreign_rpc" => {
+            let version = br#"{"jsonrpc":"2.0","method":"check_version","id":1,"params":[]}"#;
+            seeds.insert(prefixed(&[0], version));
+            seeds.insert(prefixed(
+                &[2],
+                br#"{"id":1,"jsonrpc":"2.0","result":{"Ok":{"foreign_api_version":2,"supported_slate_versions":["V3","V2"]}}}"#,
+            ));
+            for vector in read_area(&vectors, "slates", "")? {
+                for json in text_fields(&vector, "json") {
+                    let json = String::from_utf8_lossy(&json);
+                    let request = format!(
+                        r#"{{"jsonrpc":"2.0","method":"receive_tx","id":1,"params":[{json},null,null]}}"#
+                    );
+                    seeds.insert(prefixed(&[0], request.as_bytes()));
+                    let answer = format!(r#"{{"id":1,"jsonrpc":"2.0","result":{{"Ok":{json}}}}}"#);
+                    seeds.insert(prefixed(&[1], answer.as_bytes()));
+                }
+            }
+        }
+        "tor_control_reply" => {
+            for lines in TOR_CONTROL_SEEDS {
+                seeds.insert(lines.as_bytes().to_vec());
+            }
+        }
+        "onion_parse" => {
+            for text in [
+                ONION_SEED.to_owned(),
+                ONION_SEED.trim_end_matches(".onion").to_owned(),
+                ONION_SEED.to_ascii_uppercase(),
+            ] {
+                seeds.insert(text.into_bytes());
+            }
+            for head in [[5, 0, 0, 1], [5, 0, 0, 3], [5, 0, 0, 4], [5, 4, 0, 1]] {
+                seeds.insert(head.to_vec());
+            }
+        }
+        "relay_discovery" => {
+            let document = format!(
+                r#"{{"domain":"epicbox.example","port":443,"onion":"{ONION_SEED}","onion_port":443,"tls_name":"epicbox.example"}}"#
+            );
+            seeds.insert(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{document}",
+                    document.len()
+                )
+                .into_bytes(),
+            );
+            seeds.insert(format!("HTTP/1.0 200 OK\r\n\r\n{document}").into_bytes());
+        }
         other => bail!("no seed rule for fuzz target `{other}`"),
     }
     if seeds.is_empty() {
@@ -524,6 +577,22 @@ struct SerReadRule {
     type_index: u8,
     versions: &'static [u8],
 }
+
+/// A v3 onion host, for the seeds of the onion and discovery targets.
+const ONION_SEED: &str = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+
+/// Control-port exchanges as tor writes them: a reply per seed, with events between.
+const TOR_CONTROL_SEEDS: &[&str] = &[
+    "250-version=0.4.8.13\r\n250 OK\r\n",
+    "250-PROTOCOLINFO 1\r\n250-AUTH METHODS=COOKIE,SAFECOOKIE COOKIEFILE=\"/tmp/tor/control_auth_cookie\"\r\n250-VERSION Tor=\"0.4.8.13\"\r\n250 OK\r\n",
+    "250 AUTHCHALLENGE SERVERHASH=0000000000000000000000000000000000000000000000000000000000000000 SERVERNONCE=0000000000000000000000000000000000000000000000000000000000000000\r\n",
+    "650 STATUS_CLIENT NOTICE BOOTSTRAP PROGRESS=100 TAG=done SUMMARY=\"Done\"\r\n",
+    "650 HS_DESC UPLOADED j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad UNKNOWN $AAAA\r\n",
+    "250+onions/current=\r\nj2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad\r\n.\r\n250 OK\r\n",
+    "250-ServiceID=j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad\r\n250 OK\r\n",
+    "551 Unable to add hidden service\r\n",
+    "650 NETWORK_LIVENESS DOWN\r\n",
+];
 
 const SER_TRANSACTION_BODY: u8 = 1;
 
