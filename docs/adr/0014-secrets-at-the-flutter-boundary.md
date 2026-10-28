@@ -3,8 +3,10 @@
 Status: accepted
 Date: 2026-10-03 (amended the same day to name the PIN variant, to state what the sealed text
 protects, and to list the PIN key and the node API secret; amended 2026-10-25 to list the contact
-pairing invite link and pairing words, RFC 0002)
-Supersedes: the "no secrets cross the boundary" line of ADR 0007.
+pairing invite link and pairing words, RFC 0002; amended 2026-10-28 to state the six-character PIN
+minimum the code enforces and to list every call that takes a recovery phrase)
+Supersedes: the "no secrets cross the boundary" line of ADR 0007 and the matching hard rule of the
+project rules, now `docs/rules.md`.
 
 ## Context
 
@@ -14,8 +16,11 @@ Dart strings cannot be wiped, so every crossing must be deliberate and as rare a
 
 ## Decision
 
-- Into Rust: secrets the user types (password, PIN, recovery phrase on restore), and the node API
-  secret the user configures, in `WalletConfig`. Nothing else.
+- Into Rust: secrets the user types (password, PIN, recovery phrase), and the node API secret the
+  user configures, in `WalletConfig`. Nothing else. The calls that take a typed recovery phrase are
+  the restore calls, `validate_mnemonic` (the restore form's check), `wallet_fingerprint` (which
+  wallet a typed phrase belongs to) and `reset_password` (a new password proven by the phrase).
+  `MockChain::fund` takes one too, in builds with the `mock` feature only, which no app ships.
 - Out of Rust: the recovery phrase, only through `EpicWallet::mnemonic(password)` or
   `EpicWallet::mnemonic_with_pin(pin, sealed_password)` after the credential is verified, for display
   on the backup screen. A new wallet is created without a phrase argument;
@@ -38,7 +43,7 @@ Dart strings cannot be wiped, so every crossing must be deliberate and as rare a
   platform keystore. The sealed text alone, or with the vault, does not reveal the PIN. With the
   store's contents the PIN can be guessed offline at the cost of Argon2id per guess, so the store
   must not leave the device. Through the binding, PIN attempts are counted in the store and delayed
-  after repeated failures, and a PIN has at least four characters.
+  after repeated failures, and a PIN has at least six characters.
 - The binding README states exactly which values cross, in which direction.
 
 ## Consequences
