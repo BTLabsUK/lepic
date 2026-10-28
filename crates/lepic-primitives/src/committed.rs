@@ -1,3 +1,6 @@
+// Portions Copyright 2018 The Grin Developers
+// Ported from EpicCash/epic core/src/core/committed.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Kernel sums, as the node's `core::committed` computes them for a transaction: the outputs
 //! plus the fee, less the inputs, must equal the kernel excesses plus `commit(0, offset)`.
 

@@ -1,3 +1,6 @@
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic core/src/core/hash.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! BLAKE2b-256 hashing of serialized values, compatible with the Epic node's `core::hash`.
 
 use blake2::digest::{FixedOutput, KeyInit, Update};

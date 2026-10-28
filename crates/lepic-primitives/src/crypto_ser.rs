@@ -1,3 +1,9 @@
+// Portions Copyright 2018 The Grin Developers
+// Portions Copyright 2020 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic core/src/ser.rs, core/src/libtx/secp_ser.rs (Apache-2.0); see NOTICE
+// and upstream.toml.
+
 //! Binary encodings of the crypto types, as the node's `core::ser` writes them, and the
 //! [`BlindingFactor`] that transactions carry as their offset.
 //!

@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic core/src/core/transaction.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! Transaction kernels, equal in encoding, hash and signature message to the node's `TxKernel`
 //! and `KernelFeatures`.
 
