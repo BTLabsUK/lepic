@@ -234,6 +234,15 @@ impl OutputRepository for MemoryRepos<'_> {
         Ok(())
     }
 
+    fn insert_output(&mut self, output: &OutputRecord) -> Result<(), StoreError> {
+        if self.state.outputs.contains_key(output.commitment()) {
+            return Err(StoreError::Duplicate {
+                record: Record::Output,
+            });
+        }
+        self.put_output(output)
+    }
+
     fn output(&self, commitment: &CommitmentBytes) -> Result<Option<OutputRecord>, StoreError> {
         Ok(self.state.outputs.get(commitment).cloned())
     }

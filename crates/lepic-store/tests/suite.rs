@@ -137,6 +137,27 @@ fn outputs_round_trip_and_filter_by_account_and_status<B: Backend>() {
     assert_eq!(missing, None);
 }
 
+fn insert_output_refuses_a_stored_commitment_and_keeps_it<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let stored = output(0, DEFAULT, OutputStatus::Unspent);
+    write(store, |repos| repos.insert_output(&stored)).unwrap();
+    let mut again = stored.clone();
+    again.status = OutputStatus::Unconfirmed;
+    again.amount = Amount::new(1);
+
+    let result = write(store, |repos| repos.insert_output(&again));
+
+    assert!(matches!(
+        result,
+        Err(StoreError::Duplicate {
+            record: Record::Output
+        })
+    ));
+    let kept = read(store, |repos| repos.output(stored.commitment())).unwrap();
+    assert_eq!(kept, Some(stored));
+}
+
 fn put_output_replaces_and_delete_removes<B: Backend>() {
     let backend = with_default_account::<B>();
     let store = backend.store();
@@ -2049,6 +2070,7 @@ for_each_backend!(
     rejects_label_used_by_another_account,
     outputs_round_trip_and_filter_by_account_and_status,
     put_output_replaces_and_delete_removes,
+    insert_output_refuses_a_stored_commitment_and_keeps_it,
     rejects_output_for_unknown_account_or_transaction,
     outputs_of_transaction_lists_linked_outputs,
     transactions_get_sequential_ids_and_round_trip,

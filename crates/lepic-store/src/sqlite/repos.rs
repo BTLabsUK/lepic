@@ -264,6 +264,15 @@ impl OutputRepository for SqliteRepos<'_> {
         Ok(())
     }
 
+    fn insert_output(&mut self, output: &OutputRecord) -> Result<(), StoreError> {
+        if self.output(output.commitment())?.is_some() {
+            return Err(StoreError::Duplicate {
+                record: Record::Output,
+            });
+        }
+        self.put_output(output)
+    }
+
     fn output(&self, commitment: &CommitmentBytes) -> Result<Option<OutputRecord>, StoreError> {
         self.first(
             &format!("SELECT {OUTPUT_COLUMNS} FROM outputs WHERE commitment = ?1"),

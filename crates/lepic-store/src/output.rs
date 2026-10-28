@@ -55,6 +55,11 @@ pub trait OutputRepository {
     /// transaction when set, must exist.
     fn put_output(&mut self, output: &OutputRecord) -> Result<(), StoreError>;
 
+    /// Inserts an output the wallet has just derived. Fails with [`StoreError::Duplicate`] when
+    /// an output with the same commitment is stored, which is left unchanged. The account, and
+    /// the transaction when set, must exist.
+    fn insert_output(&mut self, output: &OutputRecord) -> Result<(), StoreError>;
+
     fn output(&self, commitment: &CommitmentBytes) -> Result<Option<OutputRecord>, StoreError>;
 
     /// Outputs of an account, optionally only those with `status`, ordered by commitment.
