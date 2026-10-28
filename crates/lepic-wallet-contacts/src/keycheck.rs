@@ -322,7 +322,6 @@ where
         envelope: &[u8],
     ) -> Result<Handled, ContactError> {
         let network = self.wallet.config().network;
-        let net = contact_network(network);
         let new = record.contact_id;
         let record = record.clone();
         let check_envelope = envelope.to_vec();
@@ -331,141 +330,15 @@ where
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
-                    if !within_window(record.created_at, now)
-                        || repos.setting(&key(DONE_PREFIX, new))?.is_some()
-                    {
-                        debug!("key check outside its window or repeated dropped");
-                        return Ok(None);
-                    }
-                    let new_peer = card_of(&record, net)?;
-                    let keys = contact_keys(
+                    answer_key_check(
+                        repos,
+                        &ports.rng,
                         &session.keychain,
                         network,
-                        record.account,
-                        record.slot,
-                        record.box_salt,
-                    )?;
-                    let sealed = SealedEnvelope::decode(&check_envelope, net)
-                        .map_err(ContactError::StoredData)?;
-                    let Ok(check) = open_key_check(&sealed, &enc_secret(&keys), new_peer.sig_key())
-                    else {
-                        return Ok(None);
-                    };
-                    repos.put_setting(&key(DONE_PREFIX, new), "y")?;
-                    let n_y = signing_key(&keys).verifying_key();
-                    let n_x = *new_peer.sig_key();
-                    let root = crate::key_schedule::contact_root(
-                        &session.keychain,
-                        &parent_key_id(record.account)?,
-                        network,
-                    )
-                    .map_err(ContactError::Keys)?;
-                    let mut found: Option<(u32, Option<ContactRecord>)> = None;
-                    for other in repos.contacts()? {
-                        if other.contact_id == new
-                            || other.account != record.account
-                            || other.peer.is_none()
-                        {
-                            continue;
-                        }
-                        let hint = root.hint_key(other.slot).map_err(ContactError::Keys)?;
-                        let tag = crate::key_schedule::key_check_tag(
-                            &hint,
-                            n_y.as_bytes(),
-                            n_x.as_bytes(),
-                        );
-                        if tag == check.tag {
-                            found = Some((other.slot, Some(other)));
-                            break;
-                        }
-                    }
-                    if found.is_none() {
-                        // A slot any record holds, a shown card or a pending invite included,
-                        // is never taken a second time.
-                        let held: Vec<u32> = repos
-                            .contacts()?
-                            .iter()
-                            .filter(|other| other.account == record.account)
-                            .map(|other| other.slot)
-                            .collect();
-                        found = root
-                            .find_slot_by_tag(&check.tag, n_y.as_bytes(), n_x.as_bytes())
-                            .map_err(ContactError::Keys)?
-                            .filter(|slot| !held.contains(slot))
-                            .map(|slot| (slot, None));
-                    }
-                    let mut rng = LockedRng(&mut **ports.rng.lock());
-                    let Some((slot, existing)) = found else {
-                        let envelope = seal_not_found(&new_peer, &signing_key(&keys), &mut rng)
-                            .map_err(ContactError::Encode)?;
-                        return Ok(Some(envelope));
-                    };
-                    if slot_used(repos, &record, slot, now)? {
-                        debug!("key check for a slot checked in the last day dropped");
-                        return Ok(None);
-                    }
-                    repos.put_setting(&slot_key(&record, slot), &now.as_second().to_string())?;
-                    let salt = existing
-                        .as_ref()
-                        .map_or_else(|| new_id(&mut rng), |old| old.box_salt);
-                    let old_keys =
-                        contact_keys(&session.keychain, network, record.account, slot, salt)?;
-                    let refreshed = match &existing {
-                        Some(old) => {
-                            let own = ContactCard::decode(&old.own_card, net)
-                                .map_err(ContactError::StoredData)?;
-                            let mut fields = own.fields().clone();
-                            fields.seq = check.seq.max(fields.seq).saturating_add(1);
-                            ContactCard::sign(net, fields, &signing_key(&old_keys))
-                                .map_err(ContactError::Encode)?
-                        }
-                        None => {
-                            let own = ContactCard::decode(&record.own_card, net)
-                                .map_err(ContactError::StoredData)?;
-                            let home = EpicboxAddress::parse(
-                                own.fields().mailbox.as_str(),
-                                relay_network(network),
-                            )
-                            .map_err(|_| ContactError::RelayAddress)?;
-                            let mailbox = EpicboxAddress::new(
-                                *old_keys.box_public_key(),
-                                relay_network(network),
-                                home.domain().clone(),
-                                home.port(),
-                            );
-                            our_card(
-                                &old_keys,
-                                network,
-                                &mailbox,
-                                &CardDetails {
-                                    kind: own.fields().kind,
-                                    name: own.fields().name.as_str(),
-                                    seq: check.seq.saturating_add(1),
-                                },
-                            )?
-                        }
-                    };
-                    let envelope = seal_found(
-                        &new_peer,
-                        &signing_key(&keys),
+                        &record,
                         &check_envelope,
-                        &refreshed,
-                        &signing_key(&old_keys),
-                        &mut rng,
+                        now,
                     )
-                    .map_err(ContactError::Encode)?;
-                    repos.put_setting(
-                        &key(FOUND_PREFIX, new),
-                        &json(&FoundAnswer {
-                            slot,
-                            salt: hex(&salt),
-                            card: hex(refreshed.as_bytes()),
-                            envelope: hex(&envelope),
-                            record: existing.map(|old| hex(&old.contact_id.0)),
-                            at: now.as_second(),
-                        })?,
-                    )?;
-                    Ok(Some(envelope))
                 })
             })
             .await?;
@@ -549,17 +422,7 @@ where
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
-                    let Some(sent) = read::<SentCheck>(repos, &key(SENT_PREFIX, new))? else {
-                        return Ok(None);
-                    };
-                    let sent_at = Timestamp::from_second(sent.at)
-                        .map_err(|_| ContactError::KeyCheckRefused)?;
-                    if !within_window(sent_at, now) {
-                        return Ok(None);
-                    }
-                    let (Some(old_id), Some(check_envelope)) =
-                        (id_of(&sent.old), unhex(&sent.envelope))
-                    else {
+                    let Some((old_id, check_envelope)) = open_sent_check(repos, new, now)? else {
                         return Ok(None);
                     };
                     let Some(mut old) = repos.contact(old_id)? else {
@@ -576,20 +439,8 @@ where
                         warn!("key check answer without a valid proof refused");
                         return Ok(None);
                     };
-                    let old_keys = contact_keys(
-                        &session.keychain,
-                        network,
-                        old.account,
-                        old.slot,
-                        old.box_salt,
-                    )?;
-                    let new_keys = contact_keys(
-                        &session.keychain,
-                        network,
-                        new_record.account,
-                        new_record.slot,
-                        new_record.box_salt,
-                    )?;
+                    let old_keys = keys_of(&session.keychain, network, &old)?;
+                    let new_keys = keys_of(&session.keychain, network, &new_record)?;
                     let own_old = ContactCard::decode(&old.own_card, net)
                         .map_err(ContactError::StoredData)?;
                     let envelope = seal_restored(
@@ -610,12 +461,7 @@ where
                     }
                     old.updated_at = now;
                     repos.put_contact(&old)?;
-                    if let Some(mut mailbox) = repos.contact_mailbox(old_id)? {
-                        let peer_mailbox = refreshed.fields().mailbox.as_str().to_owned();
-                        repos.redirect_contact_outbox(old_id, &peer_mailbox)?;
-                        mailbox.peer_mailbox = peer_mailbox;
-                        repos.put_contact_mailbox(&mailbox)?;
-                    }
+                    redirect_to_card(repos, old_id, &refreshed)?;
                     repos.delete_setting(&key(SENT_PREFIX, new))?;
                     repos.put_setting(&key(FOLD_PREFIX, new), "1")?;
                     Ok(Some((old_id, envelope)))
@@ -658,15 +504,9 @@ where
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
-                    let Some(found) = read::<FoundAnswer>(repos, &key(FOUND_PREFIX, new))? else {
+                    let Some(found) = fresh_found(repos, new, now)? else {
                         return Ok(None);
                     };
-                    let fresh =
-                        Timestamp::from_second(found.at).is_ok_and(|at| within_window(at, now));
-                    if !fresh {
-                        repos.delete_setting(&key(FOUND_PREFIX, new))?;
-                        return Ok(None);
-                    }
                     let (Some(found_envelope), Some(card), Some(salt)) = (
                         unhex(&found.envelope),
                         unhex(&found.card),
@@ -686,19 +526,7 @@ where
                     };
                     let existing = found.record.as_deref().and_then(id_of);
                     let existing = existing.map(|id| repos.contact(id)).transpose()?.flatten();
-                    // A kept record keeps its keys: the restored card must carry exactly the
-                    // keys it holds for X, or anyone who knows our card for the slot could take
-                    // over a verified contact. A record made again after a restore takes the
-                    // card only with its proof, and only when no other record holds its key.
-                    let keys_fit = match existing.as_ref().and_then(|record| record.peer.as_ref()) {
-                        Some(stored) => same_keys(stored, &old_card),
-                        None => {
-                            existing.is_none()
-                                && repos
-                                    .contact_by_peer_sig_key(&old_card.sig_key().to_bytes())?
-                                    .is_none()
-                        }
-                    };
+                    let keys_fit = restored_keys_fit(repos, existing.as_ref(), &old_card)?;
                     if !keys_fit {
                         warn!("restored answer with keys the record does not hold refused");
                         repos.delete_setting(&key(FOUND_PREFIX, new))?;
@@ -706,26 +534,14 @@ where
                     }
                     let mut kept = match existing {
                         Some(record) => record,
-                        None => ContactRecord {
-                            contact_id: ContactId(new_id(&mut LockedRng(&mut **ports.rng.lock()))),
-                            account: new_record.account,
-                            slot: found.slot,
-                            box_salt: salt,
-                            own_card: card.clone(),
-                            peer: None,
-                            alternate: None,
-                            label: new_record.label.clone(),
-                            state: new_record.state,
-                            sas: new_record.sas,
-                            verified_at: new_record.verified_at,
-                            allow_invoices: false,
-                            seal: SealMode::On,
-                            last_sealed_in: None,
-                            app_contact: new_record.app_contact.clone(),
-                            imported_from_backup: false,
-                            created_at: now,
-                            updated_at: now,
-                        },
+                        None => remade_record(
+                            ContactId(new_id(&mut LockedRng(&mut **ports.rng.lock()))),
+                            &new_record,
+                            found.slot,
+                            salt,
+                            card.clone(),
+                            now,
+                        ),
                     };
                     kept.own_card = card.clone();
                     kept.peer = Some(peer_card(&old_card));
@@ -736,33 +552,7 @@ where
                     kept.updated_at = now;
                     repos.put_contact(&kept)?;
                     let own = ContactCard::decode(&card, net).map_err(ContactError::StoredData)?;
-                    let peer_mailbox = old_card.fields().mailbox.as_str().to_owned();
-                    // A kept record keeps its home relay; a record made again takes the new
-                    // pairing's, where its card's mailbox is.
-                    let mailbox = match repos.contact_mailbox(kept.contact_id)? {
-                        Some(mut mailbox) => {
-                            if mailbox.peer_mailbox != peer_mailbox {
-                                repos.redirect_contact_outbox(kept.contact_id, &peer_mailbox)?;
-                            }
-                            mailbox.peer_mailbox = peer_mailbox;
-                            mailbox
-                        }
-                        None => {
-                            let (home_relay, onion) = match repos.contact_mailbox(new)? {
-                                Some(mailbox) => (mailbox.home_relay, mailbox.onion),
-                                None => (String::new(), None),
-                            };
-                            ContactMailbox {
-                                contact_id: kept.contact_id,
-                                peer_mailbox,
-                                our_mailbox: own.fields().mailbox.as_str().to_owned(),
-                                home_relay,
-                                onion,
-                                previous: None,
-                                backoff: Vec::new(),
-                            }
-                        }
-                    };
+                    let mailbox = restored_mailbox(repos, kept.contact_id, new, &old_card, &own)?;
                     repos.put_contact_mailbox(&mailbox)?;
                     repos.raise_contact_slot_counter(kept.account, found.slot.saturating_add(1))?;
                     repos.delete_setting(&key(FOUND_PREFIX, new))?;
@@ -849,6 +639,312 @@ where
         }
         Ok(())
     }
+}
+
+/// Y's answer to the key check `check_envelope` over the new pairing `record`, decided and kept
+/// in one store transaction: `None` sends nothing.
+fn answer_key_check(
+    repos: &mut dyn Repositories,
+    rng: &lepic_wallet::SharedRng,
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    record: &ContactRecord,
+    check_envelope: &[u8],
+    now: Timestamp,
+) -> Result<Option<Vec<u8>>, ContactError> {
+    let net = contact_network(network);
+    let new = record.contact_id;
+    if !within_window(record.created_at, now) || repos.setting(&key(DONE_PREFIX, new))?.is_some() {
+        debug!("key check outside its window or repeated dropped");
+        return Ok(None);
+    }
+    let new_peer = card_of(record, net)?;
+    let keys = keys_of(keychain, network, record)?;
+    let sealed = SealedEnvelope::decode(check_envelope, net).map_err(ContactError::StoredData)?;
+    let Ok(check) = open_key_check(&sealed, &enc_secret(&keys), new_peer.sig_key()) else {
+        return Ok(None);
+    };
+    repos.put_setting(&key(DONE_PREFIX, new), "y")?;
+    let n_y = signing_key(&keys).verifying_key();
+    let n_x = *new_peer.sig_key();
+    let root =
+        crate::key_schedule::contact_root(keychain, &parent_key_id(record.account)?, network)
+            .map_err(ContactError::Keys)?;
+    let found = find_checked_slot(repos, &root, record, &check, &n_y, &n_x)?;
+    let mut rng = LockedRng(&mut **rng.lock());
+    let Some((slot, existing)) = found else {
+        let envelope = seal_not_found(&new_peer, &signing_key(&keys), &mut rng)
+            .map_err(ContactError::Encode)?;
+        return Ok(Some(envelope));
+    };
+    if slot_used(repos, record, slot, now)? {
+        debug!("key check for a slot checked in the last day dropped");
+        return Ok(None);
+    }
+    repos.put_setting(&slot_key(record, slot), &now.as_second().to_string())?;
+    let salt = existing
+        .as_ref()
+        .map_or_else(|| new_id(&mut rng), |old| old.box_salt);
+    let old_keys = contact_keys(keychain, network, record.account, slot, salt)?;
+    let refreshed = refreshed_card(network, record, existing.as_ref(), &old_keys, check.seq)?;
+    let envelope = seal_found(
+        &new_peer,
+        &signing_key(&keys),
+        check_envelope,
+        &refreshed,
+        &signing_key(&old_keys),
+        &mut rng,
+    )
+    .map_err(ContactError::Encode)?;
+    repos.put_setting(
+        &key(FOUND_PREFIX, new),
+        &json(&FoundAnswer {
+            slot,
+            salt: hex(&salt),
+            card: hex(refreshed.as_bytes()),
+            envelope: hex(&envelope),
+            record: existing.map(|old| hex(&old.contact_id.0)),
+            at: now.as_second(),
+        })?,
+    )?;
+    Ok(Some(envelope))
+}
+
+/// The slot a key check names with its tag: one of the account's records, or else a slot no
+/// record of the account holds.
+fn find_checked_slot(
+    repos: &dyn Repositories,
+    root: &crate::key_schedule::ContactRoot,
+    record: &ContactRecord,
+    check: &lepic_contact::KeyCheck,
+    n_y: &VerifyingKey,
+    n_x: &VerifyingKey,
+) -> Result<Option<(u32, Option<ContactRecord>)>, ContactError> {
+    for other in repos.contacts()? {
+        if other.contact_id == record.contact_id
+            || other.account != record.account
+            || other.peer.is_none()
+        {
+            continue;
+        }
+        let hint = root.hint_key(other.slot).map_err(ContactError::Keys)?;
+        let tag = crate::key_schedule::key_check_tag(&hint, n_y.as_bytes(), n_x.as_bytes());
+        if tag == check.tag {
+            return Ok(Some((other.slot, Some(other))));
+        }
+    }
+    // A slot any record holds, a shown card or a pending invite included,
+    // is never taken a second time.
+    let held: Vec<u32> = repos
+        .contacts()?
+        .iter()
+        .filter(|other| other.account == record.account)
+        .map(|other| other.slot)
+        .collect();
+    Ok(root
+        .find_slot_by_tag(&check.tag, n_y.as_bytes(), n_x.as_bytes())
+        .map_err(ContactError::Keys)?
+        .filter(|slot| !held.contains(slot))
+        .map(|slot| (slot, None)))
+}
+
+/// Our card for the slot a key check found, under its keys `old_keys`: the kept record's card
+/// re-signed, or one made again on the new pairing's relay, past the check's sequence number.
+fn refreshed_card(
+    network: lepic_primitives::params::Network,
+    record: &ContactRecord,
+    existing: Option<&ContactRecord>,
+    old_keys: &crate::key_schedule::ContactKeys,
+    check_seq: u32,
+) -> Result<ContactCard, ContactError> {
+    let net = contact_network(network);
+    Ok(match existing {
+        Some(old) => {
+            let own = ContactCard::decode(&old.own_card, net).map_err(ContactError::StoredData)?;
+            let mut fields = own.fields().clone();
+            fields.seq = check_seq.max(fields.seq).saturating_add(1);
+            ContactCard::sign(net, fields, &signing_key(old_keys)).map_err(ContactError::Encode)?
+        }
+        None => {
+            let own =
+                ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
+            let home = EpicboxAddress::parse(own.fields().mailbox.as_str(), relay_network(network))
+                .map_err(|_| ContactError::RelayAddress)?;
+            let mailbox = EpicboxAddress::new(
+                *old_keys.box_public_key(),
+                relay_network(network),
+                home.domain().clone(),
+                home.port(),
+            );
+            our_card(
+                old_keys,
+                network,
+                &mailbox,
+                &CardDetails {
+                    kind: own.fields().kind,
+                    name: own.fields().name.as_str(),
+                    seq: check_seq.saturating_add(1),
+                },
+            )?
+        }
+    })
+}
+
+/// Our keys for a record, from its slot and box salt.
+fn keys_of(
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    record: &ContactRecord,
+) -> Result<crate::key_schedule::ContactKeys, ContactError> {
+    contact_keys(
+        keychain,
+        network,
+        record.account,
+        record.slot,
+        record.box_salt,
+    )
+}
+
+/// The old record and the check envelope of X's open check on the new pairing `new`, while the
+/// check is within its day.
+fn open_sent_check(
+    repos: &dyn Repositories,
+    new: ContactId,
+    now: Timestamp,
+) -> Result<Option<(ContactId, Vec<u8>)>, ContactError> {
+    let Some(sent) = read::<SentCheck>(repos, &key(SENT_PREFIX, new))? else {
+        return Ok(None);
+    };
+    let sent_at = Timestamp::from_second(sent.at).map_err(|_| ContactError::KeyCheckRefused)?;
+    if !within_window(sent_at, now) {
+        return Ok(None);
+    }
+    let (Some(old_id), Some(check_envelope)) = (id_of(&sent.old), unhex(&sent.envelope)) else {
+        return Ok(None);
+    };
+    Ok(Some((old_id, check_envelope)))
+}
+
+/// Points the contact's mailbox and its queued outbox at the mailbox `card` names.
+fn redirect_to_card(
+    repos: &mut dyn Repositories,
+    contact_id: ContactId,
+    card: &ContactCard,
+) -> Result<(), StoreError> {
+    if let Some(mut mailbox) = repos.contact_mailbox(contact_id)? {
+        let peer_mailbox = card.fields().mailbox.as_str().to_owned();
+        repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
+        mailbox.peer_mailbox = peer_mailbox;
+        repos.put_contact_mailbox(&mailbox)?;
+    }
+    Ok(())
+}
+
+/// Y's found answer on the new pairing `new`, while a restored answer may still be taken; a
+/// found answer past its day is forgotten.
+fn fresh_found(
+    repos: &mut dyn Repositories,
+    new: ContactId,
+    now: Timestamp,
+) -> Result<Option<FoundAnswer>, StoreError> {
+    let Some(found) = read::<FoundAnswer>(repos, &key(FOUND_PREFIX, new))? else {
+        return Ok(None);
+    };
+    let fresh = Timestamp::from_second(found.at).is_ok_and(|at| within_window(at, now));
+    if !fresh {
+        repos.delete_setting(&key(FOUND_PREFIX, new))?;
+        return Ok(None);
+    }
+    Ok(Some(found))
+}
+
+/// Whether a restored answer's `old_card` may go into the record. A kept record keeps its
+/// keys: the restored card must carry exactly the keys it holds for X, or anyone who knows our
+/// card for the slot could take over a verified contact. A record made again after a restore
+/// takes the card only with its proof, and only when no other record holds its key.
+fn restored_keys_fit(
+    repos: &dyn Repositories,
+    existing: Option<&ContactRecord>,
+    old_card: &ContactCard,
+) -> Result<bool, StoreError> {
+    Ok(match existing.and_then(|record| record.peer.as_ref()) {
+        Some(stored) => same_keys(stored, old_card),
+        None => {
+            existing.is_none()
+                && repos
+                    .contact_by_peer_sig_key(&old_card.sig_key().to_bytes())?
+                    .is_none()
+        }
+    })
+}
+
+/// The record of a slot a restore found that no record held, made again from the new pairing
+/// `new_record`, with our card `own_card` for the slot.
+fn remade_record(
+    contact_id: ContactId,
+    new_record: &ContactRecord,
+    slot: u32,
+    box_salt: [u8; 16],
+    own_card: Vec<u8>,
+    now: Timestamp,
+) -> ContactRecord {
+    ContactRecord {
+        contact_id,
+        account: new_record.account,
+        slot,
+        box_salt,
+        own_card,
+        peer: None,
+        alternate: None,
+        label: new_record.label.clone(),
+        state: new_record.state,
+        sas: new_record.sas,
+        verified_at: new_record.verified_at,
+        allow_invoices: false,
+        seal: SealMode::On,
+        last_sealed_in: None,
+        app_contact: new_record.app_contact.clone(),
+        imported_from_backup: false,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+/// The mailbox of the record `kept` after a restore, pointed at the mailbox of `old_card`. A
+/// kept record keeps its home relay; a record made again takes the new pairing's, where its
+/// card's mailbox is.
+fn restored_mailbox(
+    repos: &mut dyn Repositories,
+    kept: ContactId,
+    new: ContactId,
+    old_card: &ContactCard,
+    own: &ContactCard,
+) -> Result<ContactMailbox, StoreError> {
+    let peer_mailbox = old_card.fields().mailbox.as_str().to_owned();
+    Ok(match repos.contact_mailbox(kept)? {
+        Some(mut mailbox) => {
+            if mailbox.peer_mailbox != peer_mailbox {
+                repos.redirect_contact_outbox(kept, &peer_mailbox)?;
+            }
+            mailbox.peer_mailbox = peer_mailbox;
+            mailbox
+        }
+        None => {
+            let (home_relay, onion) = match repos.contact_mailbox(new)? {
+                Some(mailbox) => (mailbox.home_relay, mailbox.onion),
+                None => (String::new(), None),
+            };
+            ContactMailbox {
+                contact_id: kept,
+                peer_mailbox,
+                our_mailbox: own.fields().mailbox.as_str().to_owned(),
+                home_relay,
+                onion,
+                previous: None,
+                backoff: Vec::new(),
+            }
+        }
+    })
 }
 
 /// Ends the open check `sent` on the new pairing `record` as not found: the pairing goes to
