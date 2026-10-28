@@ -2,8 +2,8 @@
 
 ## Reporting a vulnerability
 
-Do not open a public issue. Email **support@btlabs.uk**, or use GitHub's private vulnerability
-reporting: the "Security" tab of this repository, then "Report a vulnerability".
+Do not open a public issue. Email **support@btlabs.uk**, or open a *confidential* issue on GitLab
+(New issue, then tick "Turn on confidentiality"); only the maintainers can see it.
 
 Include the affected version or commit, what an attacker controls, what happens, and the smallest
 reproduction you have.
