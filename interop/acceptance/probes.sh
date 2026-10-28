@@ -1,5 +1,5 @@
 # Probes of the relay and epic-wallet behaviour that invoices and notices over Epicbox rely on
-# (plan task V-10, recorded in docs/compat/epicbox.md). `run.sh --probes` sources this after
+# (recorded in docs/compat/epicbox.md). `run.sh --probes` sources this after
 # steps.sh and runs PROBE_STEPS instead of STEPS, with step_probe_setup as its setup step.
 #
 # The probe client is ../probe: it posts any payload from a key of its own, and drains and

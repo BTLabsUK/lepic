@@ -607,7 +607,7 @@ lepic_nothing_pending() {
 }
 
 # A received output awaits confirmation at one and two confirmations and is spendable at three
-# (operator decision D1); a send that needs it fails before.
+# (by design); a send that needs it fails before.
 scenario_three_confirmations_body() {
     local amount=0.45 slate=/exchange/three-confirmations.slate
     ew peer send -m file -d "${slate}" -c 1 -s smallest "${amount}" >>"${RUN_LOG}" || fail "epic-wallet send failed" || return 1

@@ -1,6 +1,6 @@
 # Project rules
 
-The rules every change to LEPIC follows, for human and AI contributors alike. `CONTRIBUTING.md`
+The rules every change to LEPIC follows. `CONTRIBUTING.md`
 covers branches, commit messages and the sign-off; `docs/logging.md` covers logging; the ADRs in
 `docs/adr/` record the decisions these rules point to. A hard rule changes only with the
 maintainer's approval and a note in the change that makes it.

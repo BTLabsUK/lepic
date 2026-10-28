@@ -5,7 +5,7 @@ Date: 2026-10-28
 
 ## Context
 
-ADR 0005 promised a real schema. Over waves 13 to 21 the wallet nevertheless kept a growing set
+ADR 0005 promised a real schema. Over the invoice, cancel and pairing changes of October 2026 the wallet nevertheless kept a growing set
 of per-transaction facts in the `settings` table, under keys built from a prefix and the
 transaction id (`send.local_cutoff.<id>`, `release.released.<id>`, `tx.other_wallet.<id>`,
 `scan.found.<id>` and others), with hand-rolled encodings: space- and colon-separated text, JSON,

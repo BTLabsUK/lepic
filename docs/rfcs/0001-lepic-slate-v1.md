@@ -1,6 +1,6 @@
 # RFC 0001 lepic.v1: compact native slates, armored packs and capability advertisement
 
-Status: draft, awaiting the operator's decision OD-5
+Status: draft, not adopted (ADR 0012 is still proposed)
 Date: 2026-10-02
 Proposes: ADR 0012. Implemented by X-02 (codec) and X-03 (packs, text transport, capabilities).
 Amended by: RFC 0002 for encryption (a dedicated per-contact key instead of D1's payment-proof key,
@@ -19,8 +19,8 @@ Epicbox. A party's native address is its existing payment-proof ed25519 key in b
 the capability advertisement; the Epicbox address string is never changed, and a wallet that drops
 the advertisement falls back to the legacy formats, which still work.
 
-The operator chooses among the options in "Decisions for OD-5". The normative sections assume the
-recommended option for each.
+"Open decisions" lists the choices still open. The normative sections assume the recommended
+option for each.
 
 ## Scope
 
@@ -31,7 +31,7 @@ must do with partial bodies.
 Not in scope: changes to the legacy V2 and V3 codecs (frozen, `docs/rules.md`), the HTTP and Tor
 methods, transactions with more than two parties, per-transaction addresses, and app UI.
 
-## Decisions for OD-5
+## Open decisions
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|

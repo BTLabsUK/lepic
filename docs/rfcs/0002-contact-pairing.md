@@ -1172,8 +1172,7 @@ Estimates, not measurements; one implementer per line unless noted.
 | App, phone and desktop (U-25, U-26) | Pairing, SAS, contact trust, invoices settings, deposit request, outbox states | 6 |
 | Review | A security review of the envelope, pairing and invoice changes before release | 2 |
 
-About 7.5 weeks of single-agent work, about 3 calendar weeks with four lanes in parallel. The
-critical path is K-04 → X-05 → W-28 → W-30 → U-24 → U-25 and V-15.
+The critical path is K-04 → X-05 → W-28 → W-30 → U-24 → U-25 and V-15.
 
 ## Open decisions
 
