@@ -2096,6 +2096,8 @@ fn tx_record_fixture() -> (TxMarks, TxWatch, OtherWalletSpend, ScanFoundRecord) 
         inputs_spent_elsewhere: false,
         sender_posted_at: Some(Timestamp::from_nanosecond(1_727_000_000_123_456_789).unwrap()),
         withdrawn_answered: true,
+        sender_cancelled_at: Some(Timestamp::from_nanosecond(1_727_000_100_987_654_321).unwrap()),
+        cancelled_answered: true,
     };
     let watch = TxWatch {
         phase: WatchPhase::Kernel,
