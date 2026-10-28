@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet impls/src/adapters/file.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! What the file policy dispatches on, read without building a JSON document tree. Everything
 //! else in the file is skipped while it is parsed, so the memory used does not grow with it.
 
