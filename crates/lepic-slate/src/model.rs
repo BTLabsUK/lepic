@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/slate.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! The version-free slate (ADR 0002): what two parties agree on while building a transaction,
 //! independent of any wire format.
 //!

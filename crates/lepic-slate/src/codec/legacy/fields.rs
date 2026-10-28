@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/slate_versions/ser.rs (Apache-2.0); see NOTICE
+// and upstream.toml.
+
 //! Field codecs shared by the legacy JSON formats: reading every value form upstream accepts into
 //! typed field errors, and writing values in exactly the form upstream writes.
 

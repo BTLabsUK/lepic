@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/slate_versions/v3.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! The V3 JSON slate as `epic-wallet` `v4.1.0` reads and writes it (`docs/compat/legacy-slates.md`).
 //!
 //! This module repeats most of `v2_json.rs` on purpose: ADR 0002 gives every codec its own wire
