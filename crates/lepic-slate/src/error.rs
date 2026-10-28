@@ -1,6 +1,6 @@
 //! Errors of the slate model, its validation helpers, codecs and the codec registry.
 
-use lepic_crypto::CryptoError;
+use lepic_crypto::{Commitment, CryptoError};
 use lepic_primitives::amount::Fee;
 use lepic_primitives::amount::Height;
 use thiserror::Error;
@@ -35,6 +35,14 @@ pub enum SlateError {
     FeeBeforeSender { stage: Stage, fee: Fee },
     #[error("body weight {weight} exceeds the transaction limit {max}")]
     BodyTooHeavy { weight: u64, max: u64 },
+    #[error("a coinbase output cannot be part of a slate")]
+    CoinbaseOutput,
+    #[error("input commitment {} appears more than once", .commitment.to_hex())]
+    DuplicateInput { commitment: Commitment },
+    #[error("output commitment {} appears more than once", .commitment.to_hex())]
+    DuplicateOutput { commitment: Commitment },
+    #[error("commitment {} is both an input and an output", .commitment.to_hex())]
+    InputSpendsOutput { commitment: Commitment },
     #[error("participant message of {len} bytes exceeds {max} bytes")]
     MessageTooLong { len: usize, max: usize },
     #[error("{transition} is not allowed at stage {stage}")]

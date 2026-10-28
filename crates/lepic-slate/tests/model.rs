@@ -4,7 +4,10 @@
 
 mod model_fixtures;
 
+use lepic_crypto::Commitment;
 use lepic_primitives::amount::{Amount, Fee, Height};
+use lepic_primitives::input::Input;
+use lepic_primitives::output::{Output, OutputFeatures};
 use lepic_primitives::params::{
     BLOCK_INPUT_WEIGHT, BLOCK_KERNEL_WEIGHT, BLOCK_OUTPUT_WEIGHT, MAX_TX_WEIGHT,
 };
@@ -439,9 +442,15 @@ fn rejects_body_above_the_transaction_weight_limit() {
     let fitting = MAX_TX_WEIGHT - BLOCK_KERNEL_WEIGHT;
     let mut parts = s1().into_parts();
     parts.outputs = Vec::new();
-    parts.inputs = vec![input(1); usize::try_from(fitting).unwrap()];
+    let distinct_input = |n: u64| {
+        Input::new(
+            OutputFeatures::Plain,
+            Commitment::commit_value(n + 1).unwrap(),
+        )
+    };
+    parts.inputs = (0..fitting).map(distinct_input).collect();
     assert!(Slate::from_parts(parts.clone()).is_ok());
-    parts.inputs.push(input(1));
+    parts.inputs.push(distinct_input(fitting));
     assert_eq!(
         Slate::from_parts(parts),
         Err(SlateError::BodyTooHeavy {
@@ -449,6 +458,63 @@ fn rejects_body_above_the_transaction_weight_limit() {
             max: MAX_TX_WEIGHT
         })
     );
+}
+
+#[test]
+fn rejects_a_coinbase_output() {
+    let mut parts = s1().into_parts();
+    parts.outputs = vec![Output {
+        features: OutputFeatures::Coinbase,
+        ..output(1)
+    }];
+    assert_eq!(Slate::from_parts(parts), Err(SlateError::CoinbaseOutput));
+}
+
+#[test]
+fn rejects_duplicate_input_commitments() {
+    let mut parts = s1().into_parts();
+    parts.inputs = vec![input(1), input(2), input(1)];
+    parts.outputs = vec![output(3)];
+    assert_eq!(
+        Slate::from_parts(parts),
+        Err(SlateError::DuplicateInput {
+            commitment: commitment(1)
+        })
+    );
+}
+
+#[test]
+fn rejects_duplicate_output_commitments() {
+    let mut parts = s1().into_parts();
+    parts.inputs = vec![input(1)];
+    parts.outputs = vec![output(2), output(3), output(2)];
+    assert_eq!(
+        Slate::from_parts(parts),
+        Err(SlateError::DuplicateOutput {
+            commitment: commitment(2)
+        })
+    );
+}
+
+#[test]
+fn rejects_a_commitment_that_is_both_input_and_output() {
+    let mut parts = s1().into_parts();
+    parts.inputs = vec![input(1), input(2)];
+    parts.outputs = vec![output(3), output(2)];
+    assert_eq!(
+        Slate::from_parts(parts),
+        Err(SlateError::InputSpendsOutput {
+            commitment: commitment(2)
+        })
+    );
+}
+
+#[test]
+fn accepts_a_coinbase_input() {
+    let mut parts = s1().into_parts();
+    parts.inputs = vec![Input::new(OutputFeatures::Coinbase, commitment(1))];
+    parts.outputs = vec![output(2)];
+    assert!(Slate::from_parts(parts).is_ok());
 }
 
 #[test]

@@ -13,6 +13,8 @@ use lepic_primitives::input::Input;
 use lepic_primitives::kernel::{KernelFeatures, TxKernel};
 use lepic_primitives::output::Output;
 use lepic_primitives::params::MAX_TX_WEIGHT;
+use std::collections::HashSet;
+
 use uuid::Uuid;
 
 use crate::error::{ProofAddressError, SlateError, SlateIdError, Transition};
@@ -578,6 +580,35 @@ fn check_body(parts: &SlateParts) -> Result<(), SlateError> {
             weight,
             max: MAX_TX_WEIGHT,
         });
+    }
+    check_commitments(parts)
+}
+
+/// The node's read rules for a body that do not depend on order.
+fn check_commitments(parts: &SlateParts) -> Result<(), SlateError> {
+    if parts.outputs.iter().any(Output::is_coinbase) {
+        return Err(SlateError::CoinbaseOutput);
+    }
+    let mut inputs = HashSet::with_capacity(parts.inputs.len());
+    for input in &parts.inputs {
+        if !inputs.insert(input.commitment) {
+            return Err(SlateError::DuplicateInput {
+                commitment: input.commitment,
+            });
+        }
+    }
+    let mut outputs = HashSet::with_capacity(parts.outputs.len());
+    for output in &parts.outputs {
+        if !outputs.insert(output.commitment) {
+            return Err(SlateError::DuplicateOutput {
+                commitment: output.commitment,
+            });
+        }
+        if inputs.contains(&output.commitment) {
+            return Err(SlateError::InputSpendsOutput {
+                commitment: output.commitment,
+            });
+        }
     }
     Ok(())
 }
