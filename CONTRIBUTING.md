@@ -4,7 +4,9 @@ LEPIC takes contributions under the rules set out on this page.
 
 ## Before you start
 
-1. Read `README.md` and `docs/architecture.md` for goals, non-goals and the crate layout.
+1. Read `README.md` and `docs/architecture.md` for goals, non-goals and the crate layout, and
+   `docs/rules.md` for the hard rules and the rules for Rust code, compatibility, testing and
+   security that every change follows.
 2. Open an issue or pick an open one.
 3. Read the ADRs and `docs/compat/` pages the task names.
 

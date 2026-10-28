@@ -46,7 +46,7 @@ which no crate has. The client and the server share the message shapes.
 ## Consequences
 
 - A LEPIC wallet can pay, and be paid by, any `epic-wallet` 4.x or GUI wallet over HTTP.
-- `docs/architecture.md` gains the crate and its edges; the project rules drop the
+- `docs/architecture.md` gains the crate and its edges; the project rules (`docs/rules.md`) drop the
   HTTP listener and the foreign JSON-RPC server from the non-goals (D2).
 - Tor reuses the client through a SOCKS5 connector and the listener behind an onion service.
 - Invoices over HTTP (`finalize_invoice_tx`) are not served: an invoice arriving unannounced
