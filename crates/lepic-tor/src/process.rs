@@ -570,92 +570,45 @@ async fn supervise(
     socks: Arc<SharedSocks>,
 ) {
     let timings = timings_for(settings.timings, &TorPaths::new(&settings.data_dir).data);
-    let mut running = match launch(&settings, &socks).await {
-        Ok(running) => running,
-        Err((failure, child)) => {
-            if let Some(child) = child {
-                kill(*child, timings.stop).await;
-            }
-            fail(&state, failure, &mut requests).await;
-            return;
-        }
+    let Some((mut running, mut progress)) =
+        start(&settings, &state, &mut requests, &socks, timings).await
+    else {
+        return;
     };
-    let now = Instant::now();
-    let mut progress = Progress {
-        progress: 0,
-        tag: String::new(),
-        bootstrapped: false,
-        published: None,
-        stall_deadline: after(now, timings.stall),
-        bootstrap_deadline: after(running.started, timings.bootstrap),
-        publish_deadline: None,
-    };
-    if let Ok(phase) = running.control.bootstrap_phase().await {
-        on_bootstrap(&mut progress, phase, timings, running.started);
-    }
-    state.send_replace(progress.visible());
     // Turned off by `network_lost`, until a refresh turns it on.
     let mut network_off = false;
     let failure = loop {
         let deadline = next_deadline(&progress);
         let armed = Instant::now();
         tokio::select! {
-            request = requests.recv() => match request {
-                None => {
-                    shutdown(running, progress.published.as_ref(), timings).await;
-                    return;
-                }
-                Some(Request::Stop { reply }) => {
-                    shutdown(running, progress.published.as_ref(), timings).await;
-                    state.send_replace(TorState::Off);
-                    info!("tor stopped");
-                    let _ = reply.send(());
-                    return;
-                }
-                Some(Request::Publish { key, expected, listener_port, reply }) => {
-                    let result =
-                        add_onion(&running, &mut progress, &key, expected, listener_port, timings)
-                            .await;
-                    drop(key);
-                    let _ = reply.send(result);
-                }
-                Some(Request::Refresh { network_changed, reply }) => {
-                    let network_changed = network_changed || network_off;
-                    match refresh(&running, &mut progress, network_changed, timings, &socks).await {
-                        Ok(()) => {
-                            network_off = false;
-                            let _ = reply.send(Ok(()));
-                        }
-                        Err(error) => {
-                            let failure = exit_failure(
-                                &progress,
-                                format!("tor did not answer after a pause: {error}"),
-                            );
-                            let _ = reply.send(Err(failure.clone()));
-                            break failure;
-                        }
+            request = requests.recv() => {
+                let handled = match request {
+                    None => Handled::Stop { reply: None },
+                    Some(request) => {
+                        let mut session = Session {
+                            running: &running,
+                            progress: &mut progress,
+                            network_off: &mut network_off,
+                            timings,
+                            socks: &socks,
+                        };
+                        session.handle(request).await
                     }
-                }
-                Some(Request::NetworkLost { reply }) if !progress.bootstrapped || network_off => {
-                    let _ = reply.send(Ok(()));
-                }
-                Some(Request::NetworkLost { reply }) => {
-                    match network_lost(&running, &mut progress).await {
-                        Ok(()) => {
-                            network_off = true;
-                            let _ = reply.send(Ok(()));
+                };
+                match handled {
+                    Handled::Done => {}
+                    Handled::Stop { reply } => {
+                        shutdown(running, progress.published.as_ref(), timings).await;
+                        if let Some(reply) = reply {
+                            state.send_replace(TorState::Off);
+                            info!("tor stopped");
+                            let _ = reply.send(());
                         }
-                        Err(error) => {
-                            let failure = exit_failure(
-                                &progress,
-                                format!("tor did not answer when the network went: {error}"),
-                            );
-                            let _ = reply.send(Err(failure.clone()));
-                            break failure;
-                        }
+                        return;
                     }
+                    Handled::Failed(failure) => break failure,
                 }
-            },
+            }
             event = running.events.recv() => match event {
                 Some((position, event)) => {
                     if let Some(failure) =
@@ -684,17 +637,156 @@ async fn supervise(
             }
         }
         catch_dropped_upload(&running.control, &mut progress, running.started);
-        let visible = progress.visible();
-        state.send_if_modified(|current| {
-            let changed = *current != visible;
-            if changed {
-                *current = visible;
-            }
-            changed
-        });
+        show(&state, &progress);
     };
     kill(running.child, timings.stop).await;
     fail(&state, failure, &mut requests).await;
+}
+
+/// Launches tor and reads its first bootstrap phase. `None` when the launch failed, after
+/// reporting the failure.
+async fn start(
+    settings: &TorSettings,
+    state: &watch::Sender<TorState>,
+    requests: &mut mpsc::Receiver<Request>,
+    socks: &SharedSocks,
+    timings: TorTimings,
+) -> Option<(Running, Progress)> {
+    let running = match launch(settings, socks).await {
+        Ok(running) => running,
+        Err((failure, child)) => {
+            if let Some(child) = child {
+                kill(*child, timings.stop).await;
+            }
+            fail(state, failure, requests).await;
+            return None;
+        }
+    };
+    let now = Instant::now();
+    let mut progress = Progress {
+        progress: 0,
+        tag: String::new(),
+        bootstrapped: false,
+        published: None,
+        stall_deadline: after(now, timings.stall),
+        bootstrap_deadline: after(running.started, timings.bootstrap),
+        publish_deadline: None,
+    };
+    if let Ok(phase) = running.control.bootstrap_phase().await {
+        on_bootstrap(&mut progress, phase, timings, running.started);
+    }
+    state.send_replace(progress.visible());
+    Some((running, progress))
+}
+
+/// Publishes the state `progress` shows, when it changed.
+fn show(state: &watch::Sender<TorState>, progress: &Progress) {
+    let visible = progress.visible();
+    state.send_if_modified(|current| {
+        let changed = *current != visible;
+        if changed {
+            *current = visible;
+        }
+        changed
+    });
+}
+
+/// What the supervisor does after a request.
+enum Handled {
+    Done,
+    /// The handle asked tor to stop, or is gone (`reply` is `None`).
+    Stop {
+        reply: Option<oneshot::Sender<()>>,
+    },
+    /// Tor did not answer as asked; the supervisor ends it.
+    Failed(TorFailure),
+}
+
+/// What a request may change while tor runs.
+struct Session<'a> {
+    running: &'a Running,
+    progress: &'a mut Progress,
+    network_off: &'a mut bool,
+    timings: TorTimings,
+    socks: &'a SharedSocks,
+}
+
+impl Session<'_> {
+    async fn handle(&mut self, request: Request) -> Handled {
+        match request {
+            Request::Stop { reply } => Handled::Stop { reply: Some(reply) },
+            Request::Publish {
+                key,
+                expected,
+                listener_port,
+                reply,
+            } => {
+                let result = add_onion(
+                    self.running,
+                    self.progress,
+                    &key,
+                    expected,
+                    listener_port,
+                    self.timings,
+                )
+                .await;
+                drop(key);
+                let _ = reply.send(result);
+                Handled::Done
+            }
+            Request::Refresh {
+                network_changed,
+                reply,
+            } => {
+                let network_changed = network_changed || *self.network_off;
+                let refreshed = refresh(
+                    self.running,
+                    self.progress,
+                    network_changed,
+                    self.timings,
+                    self.socks,
+                )
+                .await;
+                self.answer(refreshed, reply, "tor did not answer after a pause", false)
+            }
+            Request::NetworkLost { reply } if !self.progress.bootstrapped || *self.network_off => {
+                let _ = reply.send(Ok(()));
+                Handled::Done
+            }
+            Request::NetworkLost { reply } => {
+                let lost = network_lost(self.running, self.progress).await;
+                self.answer(
+                    lost,
+                    reply,
+                    "tor did not answer when the network went",
+                    true,
+                )
+            }
+        }
+    }
+
+    /// Replies to a refresh or a network loss: on success the network is now `network_off`,
+    /// on an error tor is failed with `what` and the error.
+    fn answer(
+        &mut self,
+        result: Result<(), ControlError>,
+        reply: oneshot::Sender<Result<(), TorFailure>>,
+        what: &str,
+        network_off: bool,
+    ) -> Handled {
+        match result {
+            Ok(()) => {
+                *self.network_off = network_off;
+                let _ = reply.send(Ok(()));
+                Handled::Done
+            }
+            Err(error) => {
+                let failure = exit_failure(self.progress, format!("{what}: {error}"));
+                let _ = reply.send(Err(failure.clone()));
+                Handled::Failed(failure)
+            }
+        }
+    }
 }
 
 fn on_bootstrap(
