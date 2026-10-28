@@ -1,3 +1,6 @@
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic core/src/libtx/proof.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Range proof builders: the nonces and message a wallet puts into an output's bulletproof, and
 //! the rewind that recognises the wallet's own outputs, as the node's `libtx::proof` does.
 

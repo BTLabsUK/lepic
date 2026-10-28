@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/address.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! The Epicbox address key, derived as `epic-wallet`'s `address_from_derivation_path` does, and
 //! the payment-proof key built on it.
 

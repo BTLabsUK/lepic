@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet impls/src/lifecycle/seed.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! Read-only import of the `wallet.seed` file `epic-wallet` writes. LEPIC never writes this
 //! format (ADR 0005).
 //!

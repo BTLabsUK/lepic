@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet impls/src/lifecycle/seed.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! The `SecretStore` port: named secrets kept by the vault on desktop and by the platform
 //! keystore, through the host app, on mobile.
 

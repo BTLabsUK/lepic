@@ -1,3 +1,6 @@
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic keychain/src/mnemonic.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! BIP39 English mnemonics and the wallet seed they encode.
 //!
 //! The wallet seed is the BIP39 entropy itself, not the PBKDF2 seed BIP39 defines, because that is

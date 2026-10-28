@@ -1,3 +1,7 @@
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic keychain/src/keychain.rs, keychain/src/types.rs (Apache-2.0); see
+// NOTICE and upstream.toml.
+
 //! The keychain: a master key and the output keys and commitments derived from it.
 
 use std::fmt;

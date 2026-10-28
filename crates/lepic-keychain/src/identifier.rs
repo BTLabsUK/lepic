@@ -1,3 +1,6 @@
+// Portions Copyright 2019 The Grin Developers
+// Ported from EpicCash/epic keychain/src/types.rs (Apache-2.0); see NOTICE and upstream.toml.
+
 //! Key identifiers: a derivation depth and up to four BIP32 path components in 17 bytes.
 
 use std::fmt;
