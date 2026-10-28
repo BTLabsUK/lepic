@@ -12,7 +12,7 @@
 
 [Quick start](#quick-start) · [Build](#build-from-source) · [Architecture](docs/architecture.md) ·
 [Documentation](https://docs.btlabs.uk/developers/lepic/) ·
-[Flutter binding](https://gitlab.com/bt-labs-group/lepic-flutter) · [Security](SECURITY.md)
+[Flutter binding](https://gitlab.com/epic-cash-bt/lepic-flutter) · [Security](SECURITY.md)
 
 </div>
 
@@ -21,7 +21,7 @@ the app's own process. It creates and restores wallets, scans the chain through 
 sends and receives transactions with the standard `epic-wallet`. It is the wallet core of Epic Cash
 Mobile and Epic Cash Desktop. `lepic-ffi` is its FFI API, built on
 [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge); apps use it through the
-[Flutter binding](https://gitlab.com/bt-labs-group/lepic-flutter), a separate repository.
+[Flutter binding](https://gitlab.com/epic-cash-bt/lepic-flutter), a separate repository.
 
 > **Status: beta.** LEPIC runs in production in Epic Cash Desktop and Epic Cash Mobile since
 > 26.10. Its APIs may still change before 1.0.
@@ -89,8 +89,8 @@ compiler. LEPIC is not on crates.io yet, so take it from git:
 
 ```toml
 [dependencies]
-lepic-wallet = { git = "https://gitlab.com/bt-labs-group/lepic" }
-lepic-primitives = { git = "https://gitlab.com/bt-labs-group/lepic" }
+lepic-wallet = { git = "https://gitlab.com/epic-cash-bt/lepic" }
+lepic-primitives = { git = "https://gitlab.com/epic-cash-bt/lepic" }
 ```
 
 Read a slate from `epic-wallet` without opening a wallet:
@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Apps use the Flutter binding, a separate repository:
-https://gitlab.com/bt-labs-group/lepic-flutter. It wraps the full wallet: create or restore, scan the
+https://gitlab.com/epic-cash-bt/lepic-flutter. It wraps the full wallet: create or restore, scan the
 chain, send and receive.
 
 ## Build from source
@@ -133,7 +133,7 @@ You need Git, Rust through `rustup` (the repository pins 1.99.0 in `rust-toolcha
 needed for the library.
 
 ```bash
-git clone https://gitlab.com/bt-labs-group/lepic && cd lepic
+git clone https://gitlab.com/epic-cash-bt/lepic && cd lepic
 cargo build --release            # the library crates and the lepic CLI
 cargo xtask install              # the lepic CLI into ~/.local/bin (or --dir <directory>)
 ```
@@ -150,7 +150,7 @@ The FFI library for apps is packaged per target with `cargo xtask mobile --packa
 | iOS | `aarch64-apple-ios`, `aarch64-apple-ios-sim` | Xcode |
 
 `--no-tor` builds the library without the wallet's Tor support (ADR 0026). The Flutter binding
-builds these for you: see [lepic-flutter](https://gitlab.com/bt-labs-group/lepic-flutter).
+builds these for you: see [lepic-flutter](https://gitlab.com/epic-cash-bt/lepic-flutter).
 
 ## Testing
 
@@ -206,7 +206,7 @@ report one privately.
 
 - Developer guide: https://docs.btlabs.uk/developers/lepic/ (security model:
   https://docs.btlabs.uk/developers/security-model/)
-- Wiki: https://gitlab.com/bt-labs-group/lepic/-/wikis/home
+- Wiki: https://gitlab.com/epic-cash-bt/lepic/-/wikis/home
 
 ## License
 
