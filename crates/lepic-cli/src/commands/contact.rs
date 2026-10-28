@@ -18,8 +18,11 @@ use lepic_wallet_contacts::{
 use super::{Opened, Run, Spend};
 use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
-    ContactArgs, ContactCommand, ContactKindArg, ContactOpenSealedArgs, InviteExpiryArg, KeysArg,
-    OnOffArg, PurposeArg, SasArg,
+    ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
+    ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
+    ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactOpenSealedArgs,
+    ContactPayArgs, ContactPlainArgs, ContactSasArgs, ContactSealArgs, ContactSendSlateArgs,
+    ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
@@ -209,38 +212,7 @@ impl<H: Host> Run<'_, H> {
         let wallet = &opened.wallet;
         let relays = relays(&opened, &args);
         Ok(match args.command {
-            ContactCommand::Invite(args) => {
-                let offer = wallet
-                    .contact_book()
-                    .pairing_invite(
-                        &relays,
-                        InviteRequest {
-                            account: CONTACT_ACCOUNT,
-                            name: args.name.name,
-                            kind: kind(args.kind),
-                            expiry: match args.expiry {
-                                InviteExpiryArg::Hour => InviteExpiry::OneHour,
-                                InviteExpiryArg::Day => InviteExpiry::OneDay,
-                                InviteExpiryArg::Week => InviteExpiry::SevenDays,
-                            },
-                            offer_words: args.pairing_words,
-                            home_relay: None,
-                            class: PairingClass::Contact,
-                        },
-                    )
-                    .await?;
-                Report::ContactInvite(ContactInviteReport {
-                    contact_id: offer.contact_id.to_string(),
-                    link: offer.link,
-                    expires_at: offer.expires_at.to_string(),
-                    words: offer
-                        .words
-                        .iter()
-                        .flatten()
-                        .map(|symbol| format!("{} {}", symbol.emoji, symbol.name))
-                        .collect(),
-                })
-            }
+            ContactCommand::Invite(args) => invite(&opened, &relays, args).await?,
             ContactCommand::Open(args) => {
                 let preview = wallet.contact_book().pairing_preview(&args.link)?;
                 Report::ContactPreview(ContactPreviewReport {
@@ -251,123 +223,11 @@ impl<H: Host> Run<'_, H> {
                     service: preview.service,
                 })
             }
-            ContactCommand::Accept(args) => {
-                let outcome = wallet
-                    .contact_book()
-                    .pairing_accept(
-                        &relays,
-                        AcceptRequest {
-                            link: args.link.link,
-                            account: CONTACT_ACCOUNT,
-                            name: args.name.name,
-                            by_hand: args.by_hand,
-                            class: PairingClass::Contact,
-                        },
-                    )
-                    .await?;
-                Report::ContactAccept(ContactAcceptReport {
-                    contact_id: outcome.contact_id.to_string(),
-                    reply_link: outcome.reply_link,
-                    posted: outcome.posted,
-                })
-            }
-            ContactCommand::Enter(args) => {
-                let link = match args.input.as_slice() {
-                    [link] if link.trim_start().starts_with("epiccash:") => link.clone(),
-                    words => {
-                        let link = wallet
-                            .contact_book()
-                            .pairing_find_words(&relays, words)
-                            .await?;
-                        return Ok(Report::ContactLink(ContactLinkReport {
-                            outcome: "invite",
-                            contact_id: None,
-                            link: Some(link),
-                        }));
-                    }
-                };
-                let outcome = wallet
-                    .contact_book()
-                    .pairing_enter_link(&relays, &link)
-                    .await?;
-                Report::ContactLink(match outcome {
-                    LinkOutcome::Confirm { contact_id, link } => ContactLinkReport {
-                        outcome: "confirm",
-                        contact_id: Some(contact_id.to_string()),
-                        link: Some(link),
-                    },
-                    LinkOutcome::Paired { contact_id } => ContactLinkReport {
-                        outcome: "paired",
-                        contact_id: Some(contact_id.to_string()),
-                        link: None,
-                    },
-                    LinkOutcome::Ignored => ContactLinkReport {
-                        outcome: "ignored",
-                        contact_id: None,
-                        link: None,
-                    },
-                })
-            }
-            ContactCommand::Collect => {
-                // The cycle runs the outbox itself, every queued entry at once.
-                let collected = wallet
-                    .contact_book()
-                    .contacts_collect(&relays, CollectTrigger::Pull)
-                    .await?;
-                Report::ContactCollect(ContactCollectReport {
-                    mailboxes: collected.mailboxes,
-                    messages: collected.messages,
-                    paired: collected.paired,
-                    delivered: collected.delivered,
-                    failed: collected
-                        .failed
-                        .iter()
-                        .map(|failed| ContactFailureReport {
-                            contact_id: failed.contact_id.to_string(),
-                            reason: failure_name(failed.reason),
-                        })
-                        .collect(),
-                    unreachable: collected.unreachable,
-                })
-            }
-            ContactCommand::Sas(args) => {
-                let id = contact_id(&args.contact.contact)?;
-                let decision = match args.result {
-                    SasArg::Match => SasDecision::Match,
-                    SasArg::Mismatch => SasDecision::Mismatch,
-                    SasArg::Skip => SasDecision::Skip,
-                };
-                wallet
-                    .contact_book()
-                    .pairing_sas(&relays, id, decision)
-                    .await?;
-                if decision == SasDecision::Mismatch {
-                    Report::ContactRemove(ContactRemoveReport {
-                        contact_id: id.to_string(),
-                        removed: true,
-                    })
-                } else {
-                    Report::Contact(contact_report(&wallet.contact_book().contact(id).await?))
-                }
-            }
-            ContactCommand::ShowCard(args) => {
-                let offer = wallet
-                    .contact_book()
-                    .pairing_show_card(
-                        &relays,
-                        CardRequest {
-                            account: CONTACT_ACCOUNT,
-                            name: args.name.name,
-                            kind: kind(args.kind),
-                            home_relay: None,
-                        },
-                    )
-                    .await?;
-                Report::ContactCard(ContactCardReport {
-                    contact_id: offer.contact_id.to_string(),
-                    link: offer.link,
-                })
-            }
+            ContactCommand::Accept(args) => accept(&opened, &relays, args).await?,
+            ContactCommand::Enter(args) => enter(&opened, &relays, args).await?,
+            ContactCommand::Collect => collect(&opened, &relays).await?,
+            ContactCommand::Sas(args) => sas(&opened, &relays, args).await?,
+            ContactCommand::ShowCard(args) => show_card(&opened, &relays, args).await?,
             ContactCommand::ScanCard(args) => {
                 let id = contact_id(&args.contact.contact)?;
                 let view = wallet
@@ -385,102 +245,13 @@ impl<H: Host> Run<'_, H> {
                     .map(contact_report)
                     .collect(),
             }),
-            ContactCommand::KeyCheck(args) => {
-                let new = contact_id(&args.new)?;
-                let old = contact_id(&args.old)?;
-                wallet
-                    .contact_book()
-                    .contact_key_check(&relays, new, old)
-                    .await?;
-                Report::ContactKeyCheck(ContactKeyCheckReport {
-                    contact_id: new.to_string(),
-                    old_contact_id: old.to_string(),
-                })
-            }
-            ContactCommand::Keys(args) => {
-                let new = contact_id(&args.new)?;
-                match args.choice {
-                    KeysArg::KeepOld => {
-                        wallet
-                            .contact_book()
-                            .contact_keys_resolve(new, KeysDecision::KeepOld)
-                            .await?;
-                        Report::ContactRemove(ContactRemoveReport {
-                            contact_id: new.to_string(),
-                            removed: true,
-                        })
-                    }
-                    KeysArg::UseNew => {
-                        wallet
-                            .contact_book()
-                            .contact_keys_resolve(new, KeysDecision::UseNew)
-                            .await?;
-                        Report::Contact(contact_report(&wallet.contact_book().contact(new).await?))
-                    }
-                }
-            }
-            ContactCommand::Seal(args) => {
-                let id = contact_id(&args.slate.contact.contact)?;
-                let tx_id = TxId(args.slate.tx.tx_id);
-                let text = wallet
-                    .contact_book()
-                    .contact_seal_slate(id, tx_id, args.slate.purpose.map(purpose))
-                    .await?;
-                let (file, text) = write_or_print(args.out.out, text)?;
-                Report::ContactSlate(ContactSlateReport {
-                    action: "sealed",
-                    contact_id: Some(id.to_string()),
-                    tx_id: Some(tx_id.0),
-                    slate_id: None,
-                    stage: None,
-                    amount: None,
-                    file,
-                    text,
-                })
-            }
-            ContactCommand::SendSlate(args) => {
-                let id = contact_id(&args.contact.contact)?;
-                let tx_id = TxId(args.tx.tx_id);
-                wallet
-                    .contact_book()
-                    .contact_post_slate(&relays, id, tx_id, args.purpose.map(purpose))
-                    .await?;
-                Report::ContactSlate(ContactSlateReport {
-                    action: "sent",
-                    contact_id: Some(id.to_string()),
-                    tx_id: Some(tx_id.0),
-                    slate_id: None,
-                    stage: None,
-                    amount: None,
-                    file: None,
-                    text: None,
-                })
-            }
-            ContactCommand::Plain(args) => {
-                let tx_id = TxId(args.tx.tx_id);
-                let wire = wallet.contact_book().contact_plain_fallback(tx_id).await?;
-                let text = wire.as_text().unwrap_or_default().to_owned();
-                let (file, text) = write_or_print(args.out.out, text)?;
-                Report::ContactSlate(ContactSlateReport {
-                    action: "plain",
-                    contact_id: None,
-                    tx_id: Some(tx_id.0),
-                    slate_id: None,
-                    stage: None,
-                    amount: None,
-                    file,
-                    text,
-                })
-            }
+            ContactCommand::KeyCheck(args) => key_check(&opened, &relays, args).await?,
+            ContactCommand::Keys(args) => resolve_keys(&opened, args).await?,
+            ContactCommand::Seal(args) => seal(&opened, args).await?,
+            ContactCommand::SendSlate(args) => send_slate(&opened, &relays, args).await?,
+            ContactCommand::Plain(args) => plain(&opened, args).await?,
             ContactCommand::OpenSealed(args) => open_sealed(&opened, args).await?,
-            ContactCommand::Label(args) => {
-                let id = contact_id(&args.contact.contact)?;
-                wallet
-                    .contact_book()
-                    .contact_set_label(id, args.label)
-                    .await?;
-                Report::Contact(contact_report(&wallet.contact_book().contact(id).await?))
-            }
+            ContactCommand::Label(args) => label(&opened, args).await?,
             ContactCommand::Remove(args) => {
                 let id = contact_id(&args.contact)?;
                 Report::ContactRemove(ContactRemoveReport {
@@ -488,143 +259,518 @@ impl<H: Host> Run<'_, H> {
                     removed: wallet.contact_book().contact_remove(id).await?,
                 })
             }
-            ContactCommand::AllowInvoices(args) => {
-                let id = contact_id(&args.contact.contact)?;
-                wallet
-                    .contact_book()
-                    .contact_set_allow_invoices(id, args.state == OnOffArg::On)
-                    .await?;
-                wallet
-                    .contact_book()
-                    .contacts_outbox_deliver(&relays)
-                    .await?;
-                Report::Contact(contact_report(&wallet.contact_book().contact(id).await?))
-            }
-            ContactCommand::Invoice(args) => {
-                let id = contact_id(&args.contact.contact)?;
-                let amount = parse_amount(&args.amount)?;
-                let account = wallet.account(&args.account.account)?;
-                let issued = wallet
-                    .contact_book()
-                    .contact_issue_invoice(
-                        &relays,
-                        id,
-                        InvoiceRequest {
-                            account: account.index,
-                            amount,
-                            message: None,
-                            ttl_blocks: None,
-                        },
-                        InvoiceDetails {
-                            purpose: purpose(args.purpose),
-                            reference: args.reference,
-                            expires: None,
-                        },
-                    )
-                    .await?;
-                let view = wallet.contact_book().contact(id).await.ok();
-                Report::ContactInvoiceIssue(ContactInvoiceIssueReport {
-                    contact_id: id.to_string(),
-                    contact_name: contact_name(view.as_ref(), id),
-                    tx_id: issued.tx_id.0,
-                    slate_id: issued.slate_id.to_string(),
-                    amount: format_amount(issued.amount),
-                })
-            }
-            ContactCommand::Invoices => {
-                let contacts = wallet.contact_book().contacts().await?;
-                let view = |id: ContactId| contacts.iter().find(|view| view.contact_id == id);
-                Report::ContactInvoices(ContactInvoiceListReport {
-                    invoices: wallet
-                        .contact_book()
-                        .contact_invoices()
-                        .await?
-                        .into_iter()
-                        .map(|invoice| ContactInvoiceReport {
-                            slate_id: invoice.slate_id.to_string(),
-                            contact_id: invoice.contact_id.to_string(),
-                            contact_name: contact_name(
-                                view(invoice.contact_id),
-                                invoice.contact_id,
-                            ),
-                            verified: view(invoice.contact_id)
-                                .is_some_and(|view| view.state == ContactState::Verified),
-                            amount: format_amount(invoice.amount),
-                            purpose: invoice.purpose.map(purpose_name),
-                            reference: invoice.reference,
-                            received_at: invoice.received_at.to_string(),
-                            same_amount: invoice
-                                .same_amount
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect(),
-                        })
-                        .collect(),
-                })
-            }
-            ContactCommand::PayInvoice(args) => {
-                let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
-                let amount: Amount = parse_amount(&args.amount)?;
-                let spend = Spend::from_args(&args.spend)?;
-                let account = wallet.account(&args.account.account)?;
-                let request = spend.pay_request(account.index, amount, args.message.message);
-                let contact = wallet
-                    .contact_book()
-                    .contact_invoices()
-                    .await?
-                    .into_iter()
-                    .find(|invoice| invoice.slate_id == slate_id)
-                    .map(|invoice| invoice.contact_id.to_string())
-                    .unwrap_or_default();
-                let paid = wallet
-                    .contact_book()
-                    .contact_pay_invoice(&relays, slate_id, request)
-                    .await?;
-                Report::InvoicePay(InvoicePayReport {
-                    tx_id: paid.tx_id.0,
-                    slate_id: paid.slate.id().to_string(),
-                    amount: format_amount(paid.slate.amount()),
-                    fee: format_fee(paid.slate.fee()),
-                    transport: "contact".to_owned(),
-                    destination: contact,
-                    reply_file: None,
-                })
-            }
-            ContactCommand::Decline(args) => {
-                let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
-                wallet
-                    .contact_book()
-                    .contact_decline_invoice(slate_id)
-                    .await?;
-                wallet
-                    .contact_book()
-                    .contacts_outbox_deliver(&relays)
-                    .await?;
-                Report::InvoiceDecline(InvoiceDeclineReport {
-                    slate_id: slate_id.to_string(),
-                    state: "declined".to_owned(),
-                })
-            }
-            ContactCommand::Export(args) => {
-                let document = wallet.contact_book().contacts_export().await?;
-                std::fs::write(&args.file, document)
-                    .map_err(CliError::io("write the contact backup"))?;
-                Report::ContactExport(ContactExportReport {
-                    file: args.file.display().to_string(),
-                })
-            }
-            ContactCommand::Import(args) => {
-                let document = std::fs::read_to_string(&args.file)
-                    .map_err(CliError::io("read the contact backup"))?;
-                let summary = wallet.contact_book().contacts_import(document).await?;
-                Report::ContactImport(ContactImportReport {
-                    imported: summary.imported,
-                    skipped_existing: summary.skipped_existing,
-                    skipped_conflict: summary.skipped_conflict,
-                })
-            }
+            ContactCommand::AllowInvoices(args) => allow_invoices(&opened, &relays, args).await?,
+            ContactCommand::Invoice(args) => issue_invoice(&opened, &relays, args).await?,
+            ContactCommand::Invoices => invoices(&opened).await?,
+            ContactCommand::PayInvoice(args) => pay_invoice(&opened, &relays, args).await?,
+            ContactCommand::Decline(args) => decline(&opened, &relays, args).await?,
+            ContactCommand::Export(args) => export(&opened, args).await?,
+            ContactCommand::Import(args) => import(&opened, args).await?,
         })
     }
+}
+
+/// `lepic contact invite`: makes an invite to pair with a contact.
+async fn invite<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactInviteArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let offer = wallet
+        .contact_book()
+        .pairing_invite(
+            relays,
+            InviteRequest {
+                account: CONTACT_ACCOUNT,
+                name: args.name.name,
+                kind: kind(args.kind),
+                expiry: match args.expiry {
+                    InviteExpiryArg::Hour => InviteExpiry::OneHour,
+                    InviteExpiryArg::Day => InviteExpiry::OneDay,
+                    InviteExpiryArg::Week => InviteExpiry::SevenDays,
+                },
+                offer_words: args.pairing_words,
+                home_relay: None,
+                class: PairingClass::Contact,
+            },
+        )
+        .await?;
+    Ok(Report::ContactInvite(ContactInviteReport {
+        contact_id: offer.contact_id.to_string(),
+        link: offer.link,
+        expires_at: offer.expires_at.to_string(),
+        words: offer
+            .words
+            .iter()
+            .flatten()
+            .map(|symbol| format!("{} {}", symbol.emoji, symbol.name))
+            .collect(),
+    }))
+}
+
+/// `lepic contact accept`: answers an invite.
+async fn accept<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactAcceptArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let outcome = wallet
+        .contact_book()
+        .pairing_accept(
+            relays,
+            AcceptRequest {
+                link: args.link.link,
+                account: CONTACT_ACCOUNT,
+                name: args.name.name,
+                by_hand: args.by_hand,
+                class: PairingClass::Contact,
+            },
+        )
+        .await?;
+    Ok(Report::ContactAccept(ContactAcceptReport {
+        contact_id: outcome.contact_id.to_string(),
+        reply_link: outcome.reply_link,
+        posted: outcome.posted,
+    }))
+}
+
+/// `lepic contact enter`: takes a pairing link entered by hand, or finds an invite by its pairing words.
+async fn enter<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactEnterArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let link = match args.input.as_slice() {
+        [link] if link.trim_start().starts_with("epiccash:") => link.clone(),
+        words => {
+            let link = wallet
+                .contact_book()
+                .pairing_find_words(relays, words)
+                .await?;
+            return Ok(Report::ContactLink(ContactLinkReport {
+                outcome: "invite",
+                contact_id: None,
+                link: Some(link),
+            }));
+        }
+    };
+    let outcome = wallet
+        .contact_book()
+        .pairing_enter_link(relays, &link)
+        .await?;
+    Ok(Report::ContactLink(match outcome {
+        LinkOutcome::Confirm { contact_id, link } => ContactLinkReport {
+            outcome: "confirm",
+            contact_id: Some(contact_id.to_string()),
+            link: Some(link),
+        },
+        LinkOutcome::Paired { contact_id } => ContactLinkReport {
+            outcome: "paired",
+            contact_id: Some(contact_id.to_string()),
+            link: None,
+        },
+        LinkOutcome::Ignored => ContactLinkReport {
+            outcome: "ignored",
+            contact_id: None,
+            link: None,
+        },
+    }))
+}
+
+/// `lepic contact sas`: records the user's SAS check.
+async fn sas<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactSasArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = contact_id(&args.contact.contact)?;
+    let decision = match args.result {
+        SasArg::Match => SasDecision::Match,
+        SasArg::Mismatch => SasDecision::Mismatch,
+        SasArg::Skip => SasDecision::Skip,
+    };
+    wallet
+        .contact_book()
+        .pairing_sas(relays, id, decision)
+        .await?;
+    Ok(if decision == SasDecision::Mismatch {
+        Report::ContactRemove(ContactRemoveReport {
+            contact_id: id.to_string(),
+            removed: true,
+        })
+    } else {
+        Report::Contact(contact_report(&wallet.contact_book().contact(id).await?))
+    })
+}
+
+/// `lepic contact show-card`: shows a card to pair in person.
+async fn show_card<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactCardArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let offer = wallet
+        .contact_book()
+        .pairing_show_card(
+            relays,
+            CardRequest {
+                account: CONTACT_ACCOUNT,
+                name: args.name.name,
+                kind: kind(args.kind),
+                home_relay: None,
+            },
+        )
+        .await?;
+    Ok(Report::ContactCard(ContactCardReport {
+        contact_id: offer.contact_id.to_string(),
+        link: offer.link,
+    }))
+}
+
+/// `lepic contact key-check`: starts the key check of a contact paired again.
+async fn key_check<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactKeyCheckArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let new = contact_id(&args.new)?;
+    let old = contact_id(&args.old)?;
+    wallet
+        .contact_book()
+        .contact_key_check(relays, new, old)
+        .await?;
+    Ok(Report::ContactKeyCheck(ContactKeyCheckReport {
+        contact_id: new.to_string(),
+        old_contact_id: old.to_string(),
+    }))
+}
+
+/// `lepic contact keys`: resolves a new pairing in keys-changed.
+async fn resolve_keys<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactKeysArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let new = contact_id(&args.new)?;
+    Ok(match args.choice {
+        KeysArg::KeepOld => {
+            wallet
+                .contact_book()
+                .contact_keys_resolve(new, KeysDecision::KeepOld)
+                .await?;
+            Report::ContactRemove(ContactRemoveReport {
+                contact_id: new.to_string(),
+                removed: true,
+            })
+        }
+        KeysArg::UseNew => {
+            wallet
+                .contact_book()
+                .contact_keys_resolve(new, KeysDecision::UseNew)
+                .await?;
+            Report::Contact(contact_report(&wallet.contact_book().contact(new).await?))
+        }
+    })
+}
+
+/// `lepic contact seal`: seals a transaction's slate for a contact, to a file or to print.
+async fn seal<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactSealArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = contact_id(&args.slate.contact.contact)?;
+    let tx_id = TxId(args.slate.tx.tx_id);
+    let text = wallet
+        .contact_book()
+        .contact_seal_slate(id, tx_id, args.slate.purpose.map(purpose))
+        .await?;
+    let (file, text) = write_or_print(args.out.out, text)?;
+    Ok(Report::ContactSlate(ContactSlateReport {
+        action: "sealed",
+        contact_id: Some(id.to_string()),
+        tx_id: Some(tx_id.0),
+        slate_id: None,
+        stage: None,
+        amount: None,
+        file,
+        text,
+    }))
+}
+
+/// `lepic contact send-slate`: posts a transaction's slate sealed to a contact's mailbox.
+async fn send_slate<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactSendSlateArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = contact_id(&args.contact.contact)?;
+    let tx_id = TxId(args.tx.tx_id);
+    wallet
+        .contact_book()
+        .contact_post_slate(relays, id, tx_id, args.purpose.map(purpose))
+        .await?;
+    Ok(Report::ContactSlate(ContactSlateReport {
+        action: "sent",
+        contact_id: Some(id.to_string()),
+        tx_id: Some(tx_id.0),
+        slate_id: None,
+        stage: None,
+        amount: None,
+        file: None,
+        text: None,
+    }))
+}
+
+/// `lepic contact plain`: a transaction's slate unsealed, for a contact that cannot open sealed ones.
+async fn plain<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactPlainArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let tx_id = TxId(args.tx.tx_id);
+    let wire = wallet.contact_book().contact_plain_fallback(tx_id).await?;
+    let text = wire.as_text().unwrap_or_default().to_owned();
+    let (file, text) = write_or_print(args.out.out, text)?;
+    Ok(Report::ContactSlate(ContactSlateReport {
+        action: "plain",
+        contact_id: None,
+        tx_id: Some(tx_id.0),
+        slate_id: None,
+        stage: None,
+        amount: None,
+        file,
+        text,
+    }))
+}
+
+/// `lepic contact label`: sets a contact's label.
+async fn label<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactLabelArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = contact_id(&args.contact.contact)?;
+    wallet
+        .contact_book()
+        .contact_set_label(id, args.label)
+        .await?;
+    Ok(Report::Contact(contact_report(
+        &wallet.contact_book().contact(id).await?,
+    )))
+}
+
+/// `lepic contact allow-invoices`: lets a contact send invoices, or stops it.
+async fn allow_invoices<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactSwitchArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = contact_id(&args.contact.contact)?;
+    wallet
+        .contact_book()
+        .contact_set_allow_invoices(id, args.state == OnOffArg::On)
+        .await?;
+    wallet
+        .contact_book()
+        .contacts_outbox_deliver(relays)
+        .await?;
+    Ok(Report::Contact(contact_report(
+        &wallet.contact_book().contact(id).await?,
+    )))
+}
+
+/// `lepic contact invoice`: sends a contact an invoice through its mailbox.
+async fn issue_invoice<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactInvoiceArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = contact_id(&args.contact.contact)?;
+    let amount = parse_amount(&args.amount)?;
+    let account = wallet.account(&args.account.account)?;
+    let issued = wallet
+        .contact_book()
+        .contact_issue_invoice(
+            relays,
+            id,
+            InvoiceRequest {
+                account: account.index,
+                amount,
+                message: None,
+                ttl_blocks: None,
+            },
+            InvoiceDetails {
+                purpose: purpose(args.purpose),
+                reference: args.reference,
+                expires: None,
+            },
+        )
+        .await?;
+    let view = wallet.contact_book().contact(id).await.ok();
+    Ok(Report::ContactInvoiceIssue(ContactInvoiceIssueReport {
+        contact_id: id.to_string(),
+        contact_name: contact_name(view.as_ref(), id),
+        tx_id: issued.tx_id.0,
+        slate_id: issued.slate_id.to_string(),
+        amount: format_amount(issued.amount),
+    }))
+}
+
+/// `lepic contact pay-invoice`: pays a contact's invoice.
+async fn pay_invoice<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactPayArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
+    let amount: Amount = parse_amount(&args.amount)?;
+    let spend = Spend::from_args(&args.spend)?;
+    let account = wallet.account(&args.account.account)?;
+    let request = spend.pay_request(account.index, amount, args.message.message);
+    let contact = wallet
+        .contact_book()
+        .contact_invoices()
+        .await?
+        .into_iter()
+        .find(|invoice| invoice.slate_id == slate_id)
+        .map(|invoice| invoice.contact_id.to_string())
+        .unwrap_or_default();
+    let paid = wallet
+        .contact_book()
+        .contact_pay_invoice(relays, slate_id, request)
+        .await?;
+    Ok(Report::InvoicePay(InvoicePayReport {
+        tx_id: paid.tx_id.0,
+        slate_id: paid.slate.id().to_string(),
+        amount: format_amount(paid.slate.amount()),
+        fee: format_fee(paid.slate.fee()),
+        transport: "contact".to_owned(),
+        destination: contact,
+        reply_file: None,
+    }))
+}
+
+/// `lepic contact decline`: declines a contact's invoice.
+async fn decline<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactSlateIdArg,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
+    wallet
+        .contact_book()
+        .contact_decline_invoice(slate_id)
+        .await?;
+    wallet
+        .contact_book()
+        .contacts_outbox_deliver(relays)
+        .await?;
+    Ok(Report::InvoiceDecline(InvoiceDeclineReport {
+        slate_id: slate_id.to_string(),
+        state: "declined".to_owned(),
+    }))
+}
+
+/// `lepic contact export`: writes the contact backup.
+async fn export<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactExportArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let document = wallet.contact_book().contacts_export().await?;
+    std::fs::write(&args.file, document).map_err(CliError::io("write the contact backup"))?;
+    Ok(Report::ContactExport(ContactExportReport {
+        file: args.file.display().to_string(),
+    }))
+}
+
+/// `lepic contact import`: reads a contact backup.
+async fn import<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactImportArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let document =
+        std::fs::read_to_string(&args.file).map_err(CliError::io("read the contact backup"))?;
+    let summary = wallet.contact_book().contacts_import(document).await?;
+    Ok(Report::ContactImport(ContactImportReport {
+        imported: summary.imported,
+        skipped_existing: summary.skipped_existing,
+        skipped_conflict: summary.skipped_conflict,
+    }))
+}
+
+/// `lepic contact collect`: runs one collecting cycle.
+async fn collect<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    // The cycle runs the outbox itself, every queued entry at once.
+    let collected = wallet
+        .contact_book()
+        .contacts_collect(relays, CollectTrigger::Pull)
+        .await?;
+    Ok(Report::ContactCollect(ContactCollectReport {
+        mailboxes: collected.mailboxes,
+        messages: collected.messages,
+        paired: collected.paired,
+        delivered: collected.delivered,
+        failed: collected
+            .failed
+            .iter()
+            .map(|failed| ContactFailureReport {
+                contact_id: failed.contact_id.to_string(),
+                reason: failure_name(failed.reason),
+            })
+            .collect(),
+        unreachable: collected.unreachable,
+    }))
+}
+
+/// `lepic contact invoices`: lists the contacts' invoices waiting for the user.
+async fn invoices<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let contacts = wallet.contact_book().contacts().await?;
+    let view = |id: ContactId| contacts.iter().find(|view| view.contact_id == id);
+    Ok(Report::ContactInvoices(ContactInvoiceListReport {
+        invoices: wallet
+            .contact_book()
+            .contact_invoices()
+            .await?
+            .into_iter()
+            .map(|invoice| ContactInvoiceReport {
+                slate_id: invoice.slate_id.to_string(),
+                contact_id: invoice.contact_id.to_string(),
+                contact_name: contact_name(view(invoice.contact_id), invoice.contact_id),
+                verified: view(invoice.contact_id)
+                    .is_some_and(|view| view.state == ContactState::Verified),
+                amount: format_amount(invoice.amount),
+                purpose: invoice.purpose.map(purpose_name),
+                reference: invoice.reference,
+                received_at: invoice.received_at.to_string(),
+                same_amount: invoice
+                    .same_amount
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            })
+            .collect(),
+    }))
 }
 
 /// The amount a V3 slate's JSON names, for showing an invoice before it is paid.
