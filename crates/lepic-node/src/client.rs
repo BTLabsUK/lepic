@@ -1,3 +1,8 @@
+// Portions Copyright 2021 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic-wallet impls/src/node_clients/http.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
 //! The JSON-RPC node client, generic over how requests reach a node.
 
 use std::collections::BTreeSet;
