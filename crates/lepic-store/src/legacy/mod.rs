@@ -38,13 +38,16 @@ pub struct LegacyLimits {
     pub max_accounts: usize,
 }
 
+/// Sized for a phone: every row is held in memory until the import is stored, so the database
+/// size bounds what an import can allocate. The counts leave room for a long-used wallet with
+/// many coinbase outputs.
 impl Default for LegacyLimits {
     fn default() -> Self {
         Self {
-            max_db_bytes: 1 << 30,
+            max_db_bytes: 256 << 20,
             max_row_bytes: 256 * 1024,
-            max_transactions: 500_000,
-            max_outputs: 2_000_000,
+            max_transactions: 250_000,
+            max_outputs: 500_000,
             max_accounts: 1_000,
         }
     }
