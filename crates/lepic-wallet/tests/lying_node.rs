@@ -755,6 +755,7 @@ fn http_wallet(harness: &Harness, runtime: &tokio::runtime::Runtime, url: &str) 
         connect_timeout: Duration::from_secs(1),
         request_timeout: Duration::from_millis(600),
         max_response_bytes: 64 * 1024,
+        pool_idle_timeout: Duration::from_secs(10),
         api_secret: None,
     };
     let transport = HttpTransport::new(url, &settings, webpki_tls_config().unwrap()).unwrap();

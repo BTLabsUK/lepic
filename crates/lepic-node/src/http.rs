@@ -13,7 +13,7 @@ use hyper::{Method, Request, StatusCode, Uri};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioTimer};
 use rustls::ClientConfig;
 use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
@@ -32,6 +32,11 @@ pub struct HttpSettings {
     /// From sending the request to the last byte of the response.
     pub request_timeout: Duration,
     pub max_response_bytes: usize,
+    /// How long an idle connection is kept for the next request. It must stay below the idle
+    /// keep-alive timeout of the node's server, by more than a round trip: a connection the
+    /// server closes just as a request goes out on it fails that request. BT Labs' nginx closes
+    /// idle connections after 15 s.
+    pub pool_idle_timeout: Duration,
     /// The node's foreign API secret, when it requires one.
     pub api_secret: Option<SecretString>,
 }
@@ -44,6 +49,7 @@ impl Default for HttpSettings {
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             max_response_bytes: 8 * 1024 * 1024,
+            pool_idle_timeout: Duration::from_secs(10),
             api_secret: None,
         }
     }
@@ -133,7 +139,10 @@ impl HttpTransport {
             .https_or_http()
             .enable_http1()
             .wrap_connector(route);
-        let client = Client::builder(TokioExecutor::new()).build(connector);
+        let client = Client::builder(TokioExecutor::new())
+            .pool_idle_timeout(settings.pool_idle_timeout)
+            .pool_timer(TokioTimer::new())
+            .build(connector);
         let authorization = settings
             .api_secret
             .as_ref()

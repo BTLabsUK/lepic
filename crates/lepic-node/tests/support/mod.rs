@@ -236,3 +236,62 @@ async fn read_request(stream: &mut TcpStream) -> Option<Received> {
         body,
     })
 }
+
+/// A server that keeps connections open between requests, as nginx does, and gives up on a
+/// connection idle for `idle_close`. Its close is modelled as crossing the next request in
+/// flight, the race a client meets when it reuses a connection at the server's timeout: a
+/// request that arrives on a connection idle that long is read and dropped unanswered. Every
+/// other request gets `body`.
+pub struct KeepAliveServer {
+    pub addr: SocketAddr,
+    connections: Arc<AtomicUsize>,
+}
+
+impl KeepAliveServer {
+    pub async fn start(idle_close: Duration, body: Vec<u8>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let body = Arc::new(body);
+        {
+            let connections = connections.clone();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else {
+                        return;
+                    };
+                    connections.fetch_add(1, Ordering::SeqCst);
+                    let body = body.clone();
+                    tokio::spawn(async move {
+                        let mut answered = None::<tokio::time::Instant>;
+                        while read_request(&mut stream).await.is_some() {
+                            if answered.is_some_and(|at| at.elapsed() >= idle_close) {
+                                return;
+                            }
+                            let head = format!(
+                                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                                body.len()
+                            );
+                            if stream.write_all(head.as_bytes()).await.is_err()
+                                || stream.write_all(&body).await.is_err()
+                            {
+                                return;
+                            }
+                            answered = Some(tokio::time::Instant::now());
+                        }
+                    });
+                }
+            });
+        }
+        Self { addr, connections }
+    }
+
+    pub fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    /// Connections accepted so far.
+    pub fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
+    }
+}

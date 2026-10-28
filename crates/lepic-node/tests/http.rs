@@ -23,7 +23,7 @@ use lepic_primitives::ser::ProtocolVersion;
 use lepic_primitives::tx::Transaction;
 use secrecy::SecretString;
 use serde_json::{Value, json};
-use support::{Received, Reply, TestServer};
+use support::{KeepAliveServer, Received, Reply, TestServer};
 
 const QUICK_RETRY: RetryPolicy = RetryPolicy {
     max_attempts: 3,
@@ -37,6 +37,7 @@ fn settings() -> HttpSettings {
         connect_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(10),
         max_response_bytes: 64 * 1024,
+        pool_idle_timeout: Duration::from_secs(10),
         api_secret: None,
     }
 }
@@ -749,6 +750,51 @@ async fn retries_transient_failures_of_reads_only() {
         Height::new(4)
     );
     assert_eq!(server.received().len(), 2);
+}
+
+/// The tip answer of a keep-alive server, and a client of it with no retries and `idle`.
+#[cfg(test)]
+async fn keep_alive_pair(
+    idle_close: Duration,
+    idle: Duration,
+) -> (KeepAliveServer, NodeClient<HttpTransport>) {
+    let tip = ok_body(&json!({"height": 10, "last_block_pushed": "11".repeat(32)}));
+    let server = KeepAliveServer::start(idle_close, tip).await;
+    let client = client_with(
+        &server.url(),
+        &HttpSettings {
+            pool_idle_timeout: idle,
+            ..settings()
+        },
+        CallPolicy {
+            retry: RetryPolicy::NONE,
+            ..CallPolicy::default()
+        },
+    );
+    (server, client)
+}
+
+#[tokio::test]
+async fn drops_an_idle_connection_before_the_server_closes_it() {
+    let (server, client) =
+        keep_alive_pair(Duration::from_millis(400), Duration::from_millis(150)).await;
+    client.get_tip().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let second = client.get_tip().await;
+
+    assert!(second.is_ok(), "{second:?}");
+    assert_eq!(server.connections(), 2);
+}
+
+#[tokio::test]
+async fn reuses_a_connection_while_it_is_fresh() {
+    let (server, client) = keep_alive_pair(Duration::from_secs(5), Duration::from_secs(2)).await;
+    for _ in 0..3 {
+        client.get_tip().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(server.connections(), 1);
 }
 
 #[tokio::test]
