@@ -35,6 +35,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0027](0027-minimum-confirmations.md) | Minimum confirmations is a per-wallet setting, default 6 | accepted |
 | [0028](0028-transaction-records-in-tables.md) | Per-transaction state lives in tables that cascade with the transaction | accepted |
 | [0029](0029-contacts-on-the-engine.md) | Contacts are a crate on top of the engine | accepted |
+| [0030](0030-all-configuration-in-settings-toml.md) | All configuration in settings.toml (no hardcoded configuration) | accepted |
 
 Template:
 
