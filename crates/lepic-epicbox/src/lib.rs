@@ -14,14 +14,12 @@ pub mod marker;
 pub mod mock_relay;
 mod prefilter;
 mod push;
-mod relays;
 mod session;
 pub mod transport;
 pub mod tunnel;
 
 pub use address::{
-    AddressError, DEFAULT_DOMAIN, DEFAULT_PORT, Domain, EpicboxAddress, MAX_ADDRESS_LEN,
-    MAX_DOMAIN_LEN, Network,
+    AddressError, DEFAULT_PORT, Domain, EpicboxAddress, MAX_ADDRESS_LEN, MAX_DOMAIN_LEN, Network,
 };
 pub use address_signature::{
     address_message_verifies, sign_address_message, verify_address_message,
@@ -51,7 +49,6 @@ pub use mailbox::{
 };
 pub use prefilter::{Admission, Prefilter};
 pub use push::{MAX_PUSH_TOKEN_LEN, PushAction, PushError, PushRequest};
-pub use relays::{BUILT_IN_RELAYS, built_in_relays, is_built_in_relay};
 pub use session::{
     Connector, DEFAULT_PLAIN_PORT, EndpointError, ProtocolVersion, RelayEndpoint, RelayStream,
     Security, TcpConnector,

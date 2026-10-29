@@ -57,6 +57,7 @@ async fn session_on(
         node_api_secret: None,
         epicbox_domain: String::new(),
         epicbox_port: 443,
+        onion_routes: Vec::new(),
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     Arc::new(
@@ -269,8 +270,12 @@ async fn plain_http_to_another_computer_needs_consent() {
         .send_http(EPIC, 1, "http://203.0.113.7:3415", false, None)
         .await;
     assert_eq!(kind(refused), WalletErrorKind::PlainHttpNotAllowed);
-    for invalid in ["203.0.113.7:3415", "ftp://host", "http://abcdefgh.onion"] {
-        let refused = pair.alice.send_http(EPIC, 1, invalid, true, None).await;
+    for invalid in [
+        "203.0.113.7:3415".to_owned(),
+        "ftp://host".to_owned(),
+        format!("http://{}.onion", "abcdefgh"),
+    ] {
+        let refused = pair.alice.send_http(EPIC, 1, &invalid, true, None).await;
         assert_eq!(kind(refused), WalletErrorKind::HttpUrlInvalid, "{invalid}");
     }
     assert!(sends(&pair.alice).await.is_empty());

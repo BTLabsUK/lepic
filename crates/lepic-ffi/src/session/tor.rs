@@ -58,6 +58,34 @@ pub(super) fn session_routes(data_dir: &std::path::Path) -> (RelayTor, RelayTor)
     (routes(true), routes(true))
 }
 
+/// `routes` after checking every one: a host name, an onion v3 host and two ports that are not
+/// 0, and at most [`MAX_ONION_ROUTES`] of them.
+pub(super) fn checked_onion_routes(
+    routes: Vec<OnionRoute>,
+) -> Result<Vec<lepic_epicbox::tunnel::OnionRoute>, WalletError> {
+    if routes.len() > MAX_ONION_ROUTES {
+        return Err(invalid("too many onion routes"));
+    }
+    routes
+        .into_iter()
+        .map(|route| {
+            let domain = lepic_epicbox::Domain::parse(&route.host)
+                .map_err(|_| invalid("onion route host is not a host name"))?;
+            let onion = lepic_tor::parse_onion(&route.onion)
+                .map_err(|_| invalid("onion route onion is not an onion v3 address"))?;
+            if route.port == 0 || route.onion_port == 0 {
+                return Err(invalid("onion route port is 0"));
+            }
+            Ok(lepic_epicbox::tunnel::OnionRoute {
+                domain,
+                port: route.port,
+                onion: onion.host(),
+                onion_port: route.onion_port,
+            })
+        })
+        .collect()
+}
+
 /// How long a start waits for the tor that is stopping to be down: the tor it stops shares
 /// the data directory with the new one.
 const STOPPING_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -661,31 +689,10 @@ impl Session {
         self.relay_tor.enabled()
     }
 
-    /// Replaces the onion routes of the session after checking every one: a host name, an
-    /// onion v3 host and two ports that are not 0. Nothing changes when one is invalid.
+    /// Replaces the onion routes of the session after checking every one, as
+    /// [`checked_onion_routes`] does. Nothing changes when one is invalid.
     pub(crate) fn set_onion_routes(&self, routes: Vec<OnionRoute>) -> Result<(), WalletError> {
-        if routes.len() > MAX_ONION_ROUTES {
-            return Err(invalid("too many onion routes"));
-        }
-        let checked = routes
-            .into_iter()
-            .map(|route| {
-                let domain = lepic_epicbox::Domain::parse(&route.host)
-                    .map_err(|_| invalid("onion route host is not a host name"))?;
-                let onion = lepic_tor::parse_onion(&route.onion)
-                    .map_err(|_| invalid("onion route onion is not an onion v3 address"))?;
-                if route.port == 0 || route.onion_port == 0 {
-                    return Err(invalid("onion route port is 0"));
-                }
-                Ok(lepic_epicbox::tunnel::OnionRoute {
-                    domain,
-                    port: route.port,
-                    onion: onion.host(),
-                    onion_port: route.onion_port,
-                })
-            })
-            .collect::<Result<Vec<_>, WalletError>>()?;
-        self.onion_routes.replace(checked);
+        self.onion_routes.replace(checked_onion_routes(routes)?);
         Ok(())
     }
 

@@ -149,12 +149,13 @@ fn contact_report(view: &ContactView) -> ContactReport {
     }
 }
 
-/// The CLI's relays: its Epicbox transport, and LEPIC's built-in relays of its network, where
-/// pairing words are offered and looked for. `--offline` and `--epicbox-off` keep every
+/// The CLI's relays: its Epicbox transport, and the `[pairing] servers` of the settings file,
+/// where pairing words are offered and looked for. `--offline` and `--epicbox-off` keep every
 /// contact command off the relays.
 fn relays<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     args: &ContactArgs,
+    meeting: &[lepic_epicbox::RelayEndpoint],
 ) -> ContactRelays {
     let mode = if args.offline {
         RelayMode::Offline
@@ -163,7 +164,7 @@ fn relays<N: lepic_node::NodeApi + 'static>(
     } else {
         RelayMode::Online
     };
-    ContactRelays::new(opened.epicbox.clone(), mode)
+    ContactRelays::new(opened.epicbox.clone(), mode).with_meeting(meeting.to_vec())
 }
 
 /// The longest sealed text read from a file or standard input.
@@ -211,7 +212,7 @@ impl<H: Host> Run<'_, H> {
     pub(super) async fn contact(&mut self, args: ContactArgs) -> Result<Report, CliError> {
         let opened: Opened<HostNode<H>> = self.open().await?;
         let wallet = &opened.wallet;
-        let relays = relays(&opened, &args);
+        let relays = relays(&opened, &args, &self.settings.servers.meeting_relays);
         Ok(match args.command {
             ContactCommand::Invite(args) => invite(&opened, &relays, args).await?,
             ContactCommand::Open(args) => {

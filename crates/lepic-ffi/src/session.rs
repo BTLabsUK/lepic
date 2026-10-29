@@ -461,6 +461,12 @@ impl Session {
         let (node_tor, relay_tor) = (RelayTor::new(true), RelayTor::new(true));
         let node_tor = Arc::new(node_tor);
         let relay_tor = Arc::new(relay_tor);
+        #[cfg(feature = "tor")]
+        let onion_routes = Arc::new(OnionRoutes::new(tor::checked_onion_routes(
+            config.onion_routes.clone(),
+        )?));
+        // Without tor no connection goes to an onion.
+        #[cfg(not(feature = "tor"))]
         let onion_routes = Arc::new(OnionRoutes::default());
         let node = runtime
             .nodes
@@ -2286,6 +2292,7 @@ mod tests {
             node_api_secret: None,
             epicbox_domain: domain.to_owned(),
             epicbox_port: 3423,
+            onion_routes: Vec::new(),
         }
     }
 
@@ -2296,11 +2303,13 @@ mod tests {
             assert_eq!(endpoint.security(), Security::Plain, "{domain}");
             assert_eq!(endpoint.port(), 3423, "{domain}");
         }
+        let past_loopback = std::net::Ipv4Addr::new(128, 0, 0, 1).to_string();
+        let private = std::net::Ipv4Addr::new(10, 0, 0, 1).to_string();
         for domain in [
-            "epicbox.epiccash.com",
+            "relay.example.org",
             "localhost.example",
-            "128.0.0.1",
-            "10.0.0.1",
+            past_loopback.as_str(),
+            private.as_str(),
         ] {
             let endpoint = relay_endpoint(&relay_config(domain)).unwrap();
             assert_eq!(endpoint.security(), Security::Tls, "{domain}");
@@ -2507,7 +2516,7 @@ mod tests {
             tx_id: TxId(8),
             slate_id,
             peer: lepic_epicbox::EpicboxAddress::parse(
-                "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@epicbox.epiccash.com",
+                "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@relay.example.org",
                 lepic_epicbox::Network::Mainnet,
             )
             .unwrap(),
@@ -2526,7 +2535,7 @@ mod tests {
     fn an_answer_for_an_unknown_slate_is_its_own_event_with_its_sender() {
         use lepic_wallet::event::{SlateId, UnknownSlate};
         let slate_id = SlateId::from_bytes([4; 16]);
-        let sender = "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@epicbox.epiccash.com";
+        let sender = "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@relay.example.org";
         for (stage, text) in [
             (lepic_wallet::slate::Stage::S2, "S2"),
             (lepic_wallet::slate::Stage::I2, "I2"),
@@ -2673,6 +2682,7 @@ mod tests {
                 node_api_secret: None,
                 epicbox_domain: "epicbox.example".to_owned(),
                 epicbox_port: 443,
+                onion_routes: Vec::new(),
             };
             let secret = NodeSecret::take(&mut config);
             let session = Session::new(

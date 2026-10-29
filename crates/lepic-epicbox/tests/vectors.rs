@@ -108,7 +108,16 @@ fn addresses_parse_and_display_as_upstream() {
         let name = text(&vector["name"]);
         let inputs = &vector["inputs"];
         let expected = &vector["expected"];
-        let parsed = EpicboxAddress::parse(text(&inputs["text"]), network(&inputs["network"]));
+        // Upstream's default domain, as the vector expects it for an address without one.
+        let default_domain = expected["domain"]
+            .as_str()
+            .map_or_else(|| Domain::parse("relay.example.org"), Domain::parse)
+            .unwrap();
+        let parsed = EpicboxAddress::parse_with_default(
+            text(&inputs["text"]),
+            network(&inputs["network"]),
+            &default_domain,
+        );
 
         if expected["accepted"] == false {
             assert!(parsed.is_err(), "{name}: accepted {parsed:?}");
@@ -212,8 +221,11 @@ fn messages_match_upstream_in_both_directions() {
             "{name}"
         );
 
-        let from = EpicboxAddress::new(sender_public, network, Domain::default(), None);
-        let to = EpicboxAddress::parse(text(&inputs["to"]), network).unwrap();
+        let (_, from_domain) = text(&expected["from"]).split_once('@').unwrap();
+        let from_domain = Domain::parse(from_domain).unwrap();
+        let to =
+            EpicboxAddress::parse_with_default(text(&inputs["to"]), network, &from_domain).unwrap();
+        let from = EpicboxAddress::new(sender_public, network, from_domain, None);
         assert_eq!(from.to_string(), text(&expected["from"]), "{name}");
         assert_eq!(to.to_string(), text(&expected["to"]), "{name}");
         assert_eq!(*to.public_key(), receiver_public, "{name}");

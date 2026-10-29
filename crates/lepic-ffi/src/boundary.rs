@@ -266,7 +266,7 @@ mod tests {
         );
         assert_eq!(
             source_path(
-                "/home/dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.0.0/src/lib.rs"
+                "/home/dev/.cargo/registry/src/index.registry.example-1949cf8c6b5b557f/tokio-1.0.0/src/lib.rs"
             ),
             "tokio-1.0.0/src/lib.rs"
         );
@@ -278,7 +278,7 @@ mod tests {
         );
         assert_eq!(
             source_path(
-                r"C:\Users\dev\.cargo\registry\src\index.crates.io-1949\ring-0.17.0\src\a.rs"
+                r"C:\Users\dev\.cargo\registry\src\index.registry.example-1949\ring-0.17.0\src\a.rs"
             ),
             r"ring-0.17.0\src\a.rs"
         );

@@ -26,8 +26,14 @@ use ContactRelayMode::{EpicboxOff, Offline, Online};
 
 const EPIC: u64 = 100_000_000;
 
-/// A built-in floonet relay, so pairing words are offered; the mock relay serves it.
-const RELAY: &str = "epicbox.btlabs.uk";
+/// The wallets' relay and their meeting relay, so pairing words are offered; the mock relay
+/// serves it.
+const RELAY: &str = "relay.example.org";
+
+/// The meeting relays every pairing call names, as the app's settings would.
+fn meeting() -> Vec<String> {
+    vec![RELAY.to_owned()]
+}
 
 struct World {
     chain: MockChain,
@@ -59,6 +65,7 @@ impl World {
             node_api_secret: None,
             epicbox_domain: epicbox_domain.to_owned(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
         };
         self.dirs.push(dir);
         config
@@ -103,7 +110,7 @@ async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
             InviteExpiry::OneDay,
             false,
             Online,
-            None,
+            meeting(),
             None,
             PairingClass::Contact,
         )
@@ -163,7 +170,7 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
             InviteExpiry::OneDay,
             false,
             Online,
-            None,
+            meeting(),
             None,
             PairingClass::Private,
         )
@@ -265,7 +272,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
             InviteExpiry::OneHour,
             false,
             Online,
-            None,
+            meeting(),
             None,
             PairingClass::Contact,
         )
@@ -310,7 +317,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
     assert_eq!(anna_view.sas, ben_view.sas);
     assert_eq!(
         anna_view.home_relay.as_deref(),
-        Some("epicbox.btlabs.uk:443")
+        Some(format!("{RELAY}:443").as_str())
     );
     assert_eq!(anna_view.seal, SealState::On);
     assert_eq!(anna.contacts().await.unwrap(), vec![anna_view]);
@@ -368,7 +375,7 @@ async fn a_pairing_by_hand_needs_no_relay() {
             InviteExpiry::SevenDays,
             false,
             Offline,
-            None,
+            meeting(),
             None,
             PairingClass::Contact,
         )
@@ -462,7 +469,7 @@ async fn pairing_words_find_the_invite_once() {
             InviteExpiry::OneDay,
             true,
             Online,
-            None,
+            meeting(),
             None,
             PairingClass::Contact,
         )
@@ -474,22 +481,25 @@ async fn pairing_words_find_the_invite_once() {
 
     assert_eq!(
         kind(
-            ben.pairing_find_words(vec!["nonsense".to_owned(); 5], Online, None)
+            ben.pairing_find_words(vec!["nonsense".to_owned(); 5], Online, meeting())
                 .await
         ),
         WalletErrorKind::InvalidPairingWords
     );
     assert_eq!(
-        kind(ben.pairing_find_words(words.clone(), Offline, None).await),
+        kind(
+            ben.pairing_find_words(words.clone(), Offline, meeting())
+                .await
+        ),
         WalletErrorKind::ContactsOffline
     );
     let found = ben
-        .pairing_find_words(words.clone(), Online, None)
+        .pairing_find_words(words.clone(), Online, meeting())
         .await
         .unwrap();
     assert_eq!(found.preview.claimed_name, "Anna");
     assert_eq!(
-        kind(ben.pairing_find_words(words, Online, None).await),
+        kind(ben.pairing_find_words(words, Online, meeting()).await),
         WalletErrorKind::PairingWordsNotFound
     );
     ben.pairing_accept(
@@ -534,7 +544,7 @@ async fn words_are_offered_whatever_relay_the_wallet_uses() {
             InviteExpiry::OneDay,
             true,
             Online,
-            None,
+            meeting(),
             None,
             PairingClass::Contact,
         )
@@ -542,7 +552,10 @@ async fn words_are_offered_whatever_relay_the_wallet_uses() {
         .unwrap();
     let words: Vec<String> = invite.words.iter().map(|word| word.name.clone()).collect();
     assert_eq!(words.len(), 5);
-    let found = ben.pairing_find_words(words, Online, None).await.unwrap();
+    let found = ben
+        .pairing_find_words(words, Online, meeting())
+        .await
+        .unwrap();
     assert_eq!(found.preview.home_relay, "relay.example:443");
     ben.pairing_accept(
         found.link,
@@ -573,7 +586,7 @@ async fn a_pending_invite_is_listed_until_cancelled() {
             InviteExpiry::OneDay,
             false,
             EpicboxOff,
-            None,
+            meeting(),
             None,
             PairingClass::Contact,
         )
@@ -647,7 +660,7 @@ async fn the_relay_mode_and_bad_input_are_refused_before_anything_happens() {
                 InviteExpiry::OneDay,
                 false,
                 Online,
-                None,
+                meeting(),
                 None,
                 PairingClass::Contact
             )
@@ -1017,7 +1030,7 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
             InviteExpiry::OneDay,
             false,
             Online,
-            None,
+            meeting(),
             None,
             PairingClass::Contact,
         )

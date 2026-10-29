@@ -65,6 +65,10 @@ pub struct GlobalArgs {
     /// Config file [env: LEPIC_CONFIG] [default: ~/.lepic/config.toml when it exists]
     #[arg(long, global = true, value_name = "FILE")]
     pub config: Option<PathBuf>,
+    /// Settings file with the servers [env: LEPIC_SETTINGS] [default: ~/.lepic/settings.toml,
+    /// written on first use]
+    #[arg(long, global = true, value_name = "FILE")]
+    pub settings: Option<PathBuf>,
     /// Log filter: a level or tracing directives [env: LEPIC_LOG_LEVEL] [default: warn]
     #[arg(long, global = true, value_name = "FILTER")]
     pub log_level: Option<String>,

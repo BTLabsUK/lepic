@@ -80,8 +80,8 @@ where
                 &mut LockedRng(&mut **self.wallet.ports().rng.lock()),
             )
             .map_err(ContactError::Words)?;
-        let mut posts = Vec::with_capacity(relays.built_in.len());
-        for relay in &relays.built_in {
+        let mut posts = Vec::with_capacity(relays.meeting.len());
+        for relay in &relays.meeting {
             let (rendezvous, from) = pairing_mailbox(&key.mailbox_seed(), network, relay)?;
             let posted = &posted;
             posts.push(async move {
@@ -152,7 +152,7 @@ where
         check_online(relays)?;
         self.check_contact_network(relays)?;
         let words = PairingWords::parse(typed).map_err(ContactError::Words)?;
-        if relays.built_in.is_empty() {
+        if relays.meeting.is_empty() {
             return Err(ContactError::WordsUnavailable);
         }
         let network = self.wallet.config().network;
@@ -169,7 +169,7 @@ where
             })
             .await?;
         let mut drains = FuturesUnordered::new();
-        for relay in &relays.built_in {
+        for relay in &relays.meeting {
             let identities: Vec<Identity> = keys
                 .iter()
                 .map(|key| pairing_mailbox(&key.mailbox_seed(), network, relay).map(|(id, _)| id))

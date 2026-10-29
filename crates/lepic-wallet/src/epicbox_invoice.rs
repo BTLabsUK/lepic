@@ -206,7 +206,10 @@ where
     /// network, and with [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub fn peer_capability(&self, address: &str) -> Result<PeerInvoiceSupport, InboxError> {
-        let key = peer_key(&self.parse_address(address)?);
+        let network = relay_network(self.config().network);
+        let key = EpicboxAddress::parse_key(address, network)
+            .map(|key| EpicboxAddress::key_text_of(&key, network))
+            .map_err(InboxError::Address)?;
         let session = self.session()?;
         let learned = session
             .store
@@ -438,11 +441,6 @@ where
             }
         }
         Ok(sweep)
-    }
-
-    fn parse_address(&self, address: &str) -> Result<EpicboxAddress, InboxError> {
-        EpicboxAddress::parse(address, relay_network(self.config().network))
-            .map_err(InboxError::Address)
     }
 
     /// The issued invoice, when an I1 that arrived from `reply_to` is one this wallet issued to

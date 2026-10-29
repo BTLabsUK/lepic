@@ -26,7 +26,7 @@ fn address(byte: u8) -> EpicboxAddress {
     EpicboxAddress::new(
         PublicKey::from_secret_key(&secret(byte)).unwrap(),
         Network::Mainnet,
-        Domain::default(),
+        Domain::parse("relay.example.org").unwrap(),
         None,
     )
 }
@@ -50,7 +50,7 @@ fn open_as_receiver(from: &str, str: &str, signature: &str) -> Result<String, Me
 
 fn message_json(ciphertext: &str, salt: &str, nonce: &str) -> String {
     format!(
-        r#"{{"destination":{{"public_key":"{}","domain":"epicbox.epiccash.com","port":null}},"encrypted_message":"{ciphertext}","salt":"{salt}","nonce":"{nonce}"}}"#,
+        r#"{{"destination":{{"public_key":"{}","domain":"relay.example.org","port":null}},"encrypted_message":"{ciphertext}","salt":"{salt}","nonce":"{nonce}"}}"#,
         address(2).key_text()
     )
 }
@@ -223,7 +223,7 @@ fn rejects_str_changed_after_signing() {
     let message = signed("slate");
     let changed = message
         .str
-        .replacen("epicbox.epiccash.com", "relay.example.org", 1);
+        .replacen("relay.example.org", "other.example.org", 1);
     assert_ne!(changed, message.str);
     assert!(matches!(
         open_as_receiver(
@@ -261,7 +261,7 @@ fn rejects_sender_on_another_network() {
     let floonet_sender = EpicboxAddress::new(
         *address(1).public_key(),
         Network::Floonet,
-        Domain::default(),
+        Domain::parse("relay.example.org").unwrap(),
         None,
     );
     assert!(matches!(

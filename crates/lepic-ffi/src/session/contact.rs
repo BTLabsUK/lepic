@@ -293,25 +293,24 @@ impl Session {
         Ok(ContactRelays::new(self.epicbox()?, relay_mode(mode)))
     }
 
-    /// The relays contact calls reach, with `meeting` as the meeting relays when given.
+    /// The relays contact calls reach, with `meeting` as the meeting relays. With none the
+    /// engine refuses pairing words after its online checks.
     fn meeting_relays(
         &self,
         mode: ContactRelayMode,
-        meeting: Option<Vec<String>>,
+        meeting: &[String],
     ) -> Result<ContactRelays, WalletError> {
         let relays = self.contact_relays(mode)?;
-        match meeting {
-            None => Ok(relays),
-            Some(hosts) => {
-                if hosts.iter().any(|host| host.len() > MAX_RELAY_HOST) {
-                    return Err(WalletError::new(
-                        WalletErrorKind::InvalidArgument,
-                        "meeting relay too long",
-                    ));
-                }
-                Ok(relays.with_meeting(lepic_wallet_contacts::meeting_relays(&hosts)?))
-            }
+        if meeting.is_empty() {
+            return Ok(relays);
         }
+        if meeting.iter().any(|host| host.len() > MAX_RELAY_HOST) {
+            return Err(WalletError::new(
+                WalletErrorKind::InvalidArgument,
+                "meeting relay too long",
+            ));
+        }
+        Ok(relays.with_meeting(lepic_wallet_contacts::meeting_relays(meeting)?))
     }
 
     pub(super) fn pay_request(
@@ -339,13 +338,13 @@ impl Session {
         expiry: InviteExpiry,
         offer_words: bool,
         mode: ContactRelayMode,
-        meeting: Option<Vec<String>>,
+        meeting: Vec<String>,
         home_relay: Option<String>,
         class: PairingClass,
     ) -> Result<PairingInvite, WalletError> {
         check_home_relay(home_relay.as_deref())?;
         let relays = if offer_words {
-            self.meeting_relays(mode, meeting)?
+            self.meeting_relays(mode, &meeting)?
         } else {
             self.contact_relays(mode)?
         };
@@ -390,7 +389,7 @@ impl Session {
         &self,
         words: Vec<String>,
         mode: ContactRelayMode,
-        meeting: Option<Vec<String>>,
+        meeting: Vec<String>,
     ) -> Result<FoundInvite, WalletError> {
         if words.len() > MAX_TYPED_WORDS || words.iter().any(|word| word.len() > MAX_LINK_TEXT) {
             return Err(WalletError::new(
@@ -398,7 +397,7 @@ impl Session {
                 "too many or too long pairing words",
             ));
         }
-        let relays = self.meeting_relays(mode, meeting)?;
+        let relays = self.meeting_relays(mode, &meeting)?;
         let link = self
             .engine
             .contact_book()

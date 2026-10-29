@@ -29,10 +29,17 @@ pub struct WalletConfig {
     pub node_url: String,
     /// Basic-auth secret for the node, when it needs one.
     pub node_api_secret: Option<String>,
-    /// Epicbox relay domain, such as `epicbox.epiccash.com`. Empty disables Epicbox. A loopback
+    /// Epicbox relay domain, such as `relay.example.org`. Empty disables Epicbox. A loopback
     /// host (`localhost` or `127.x.x.x`) is reached over a plain websocket, any other over TLS.
     pub epicbox_domain: String,
     pub epicbox_port: u16,
+    /// The hosts known to be onion services, from the app's settings, in effect from the
+    /// wallet's first connection. Read when a wallet is created, restored or opened, checked
+    /// as `EpicWallet::set_onion_routes` checks them (an invalid one fails the call with
+    /// `InvalidArgument`), and replaced later only by that call:
+    /// `set_servers` and `node_tip_for` ignore them. Empty leaves no route. Ignored in a build
+    /// without tor.
+    pub onion_routes: Vec<crate::api::tor::OnionRoute>,
 }
 
 impl std::fmt::Debug for WalletConfig {
@@ -47,6 +54,7 @@ impl std::fmt::Debug for WalletConfig {
             )
             .field("epicbox_domain", &self.epicbox_domain)
             .field("epicbox_port", &self.epicbox_port)
+            .field("onion_routes", &self.onion_routes)
             .finish()
     }
 }
@@ -1440,6 +1448,7 @@ mod tests {
             node_api_secret: Some("node-secret-value".to_owned()),
             epicbox_domain: String::new(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
         };
         let printed = format!("{config:?}");
         assert!(!printed.contains("node-secret-value"));

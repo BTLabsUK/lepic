@@ -886,8 +886,18 @@ impl<H: Host> Run<'_, H> {
                 ))
             }
             (Some(address), _) => {
-                EpicboxAddress::parse(&address, relay_network(self.settings.network))
-                    .map_err(CliError::Address)?;
+                let parsed = EpicboxAddress::parse_with_default(
+                    &address,
+                    relay_network(self.settings.network),
+                    &self.settings.servers.default_epicbox_domain,
+                )
+                .map_err(CliError::Address)?;
+                // A relay the user wrote is kept as written: the message carries its port.
+                let address = if address.contains('@') {
+                    address
+                } else {
+                    parsed.to_string()
+                };
                 Ok((
                     Delivery::Deliver {
                         transport: TRANSPORT_ID,
@@ -1935,7 +1945,7 @@ mod tests {
     #[test]
     fn a_bounced_invoice_names_the_invoice_and_its_peer() {
         let peer = EpicboxAddress::parse(
-            "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@epicbox.epiccash.com",
+            "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@relay.example.org",
             lepic_epicbox::Network::Mainnet,
         )
         .unwrap();
@@ -1948,7 +1958,7 @@ mod tests {
             receipt_line(&bounced).as_deref(),
             Some(
                 "invoice 07070707-0707-0707-0707-070707070707 sent back unpaid by \
-                 esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@epicbox.epiccash.com, which \
+                 esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@relay.example.org, which \
                  does not pay invoices; `lepic tx cancel 5` withdraws it"
             )
         );

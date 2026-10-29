@@ -84,7 +84,7 @@ impl Host for ProcessHost {
                 tls,
                 Arc::new(CliNodeDialer {
                     tor,
-                    routes: OnionRoutes::default(),
+                    routes: OnionRoutes::new(settings.servers.onion_routes.clone()),
                 }),
             )?,
             None => HttpTransport::new(settings.node.as_str(), &http, tls)?,
@@ -96,12 +96,13 @@ impl Host for ProcessHost {
         let tls = lepic_node::webpki_tls_config()?;
         Ok(match self.tor(settings) {
             None => Arc::new(TcpConnector::new(tls)),
-            Some(tor) => Arc::new(TunnelConnector::new(
+            Some(tor) => Arc::new(TunnelConnector::with_routes(
                 tls,
                 Arc::new(RelayTunnel {
                     tor,
                     active: tokio::sync::watch::Sender::new(true),
                 }),
+                Arc::new(OnionRoutes::new(settings.servers.onion_routes.clone())),
             )),
         })
     }

@@ -450,7 +450,7 @@ mod tests {
         EpicboxAddress::new(
             PublicKey::from_secret_key(key).unwrap(),
             Network::Mainnet,
-            crate::address::Domain::default(),
+            crate::address::Domain::parse("relay.example.org").unwrap(),
             None,
         )
     }

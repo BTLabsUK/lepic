@@ -65,6 +65,7 @@ impl Fixture {
             node_api_secret: None,
             epicbox_domain: String::new(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
         }
     }
 
@@ -589,19 +590,19 @@ async fn a_build_without_tor_answers_every_tor_call_without_tor() {
     )
     .await
     .unwrap();
-    let onion = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+    let onion = format!("{}.onion", "a".repeat(56));
 
-    assert!(!crate::api::tor::validate_onion_address(onion.to_owned()));
+    assert!(!crate::api::tor::validate_onion_address(onion.clone()));
     assert_eq!(
         kind(wallet.onion_address().await),
         WalletErrorKind::Unsupported
     );
     assert_eq!(
-        kind(wallet.send_tor(1, 1, onion.to_owned(), None, None).await),
+        kind(wallet.send_tor(1, 1, onion.clone(), None, None).await),
         WalletErrorKind::Unsupported
     );
     assert_eq!(
-        kind(wallet.resend_tor(1, onion.to_owned()).await),
+        kind(wallet.resend_tor(1, onion.clone()).await),
         WalletErrorKind::Unsupported
     );
     assert_eq!(

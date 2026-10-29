@@ -279,12 +279,22 @@ mod tests {
 
     use super::*;
 
-    const NODE_ONION: &str = "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion";
+    /// The node the test dialer knows an onion for, [`node_onion`].
+    const MAPPED_NODE: &str = "mapped-node.example";
+
+    fn node_onion() -> String {
+        lepic_tor::OnionAddress::from_public_key(&[5; 32]).host()
+    }
 
     fn dialer(tor: &Arc<RelayTor>) -> TorNodeDialer {
         TorNodeDialer {
             tor: Arc::clone(tor),
-            routes: Arc::new(OnionRoutes::default()),
+            routes: Arc::new(OnionRoutes::new(vec![lepic_epicbox::tunnel::OnionRoute {
+                domain: lepic_epicbox::Domain::parse(MAPPED_NODE).unwrap(),
+                port: 443,
+                onion: node_onion(),
+                onion_port: 443,
+            }])),
             connect_timeout: Duration::from_secs(5),
         }
     }
@@ -318,20 +328,21 @@ mod tests {
         (address, served)
     }
 
-    /// Manual: `LEPIC_TEST_TOR_SOCKS=127.0.0.1:19150 cargo test -p lepic-ffi
-    /// live_node_through_tor -- --ignored` with a tor listening there. Asks the BT Labs node
-    /// for its tip at its onion, with TLS for `node.btlabs.uk`.
+    /// Manual: `LEPIC_TEST_TOR_SOCKS=127.0.0.1:19150 LEPIC_TEST_NODE_URL=<https url> cargo
+    /// test -p lepic-ffi live_node_through_tor -- --ignored` with a tor listening there. Asks
+    /// the node for its tip through a Tor exit, with TLS for its name.
     #[tokio::test]
-    #[ignore = "needs a running tor and the public node"]
+    #[ignore = "needs a running tor and a public node"]
     async fn live_node_through_tor() {
         let socks: SocketAddr = std::env::var("LEPIC_TEST_TOR_SOCKS")
             .unwrap()
             .parse()
             .unwrap();
+        let node_url = std::env::var("LEPIC_TEST_NODE_URL").unwrap();
         let tor = Arc::new(RelayTor::new(true));
         tor.attach_socks(FixedSocks(socks));
         let http = HttpTransport::with_dialer(
-            "https://node.btlabs.uk",
+            &node_url,
             &HttpSettings {
                 request_timeout: Duration::from_secs(120),
                 ..HttpSettings::default()
@@ -352,10 +363,10 @@ mod tests {
         let (socks, served) = socks_server().await;
         let tor = Arc::new(RelayTor::new(true));
         tor.attach_socks(FixedSocks(socks));
-        dialer(&tor).dial("node.btlabs.uk", 443).await.unwrap();
+        dialer(&tor).dial(MAPPED_NODE, 443).await.unwrap();
         assert_eq!(
             served.await.unwrap(),
-            lepic_tor::socks::encode_connect(NODE_ONION, 443).unwrap()
+            lepic_tor::socks::encode_connect(&node_onion(), 443).unwrap()
         );
     }
 
@@ -432,6 +443,7 @@ mod refusal_tests {
             node_api_secret: None,
             epicbox_domain: String::new(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
         }
     }
 
@@ -517,7 +529,7 @@ mod refusal_tests {
         let tor = Arc::new(RelayTor::new(true));
         let routes = Arc::new(OnionRoutes::default());
         let secret = |config: &mut WalletConfig| NodeSecret::take(config);
-        for url in ["http://node.btlabs.uk", "http://203.0.113.5:3413"] {
+        for url in ["http://node.example", "http://203.0.113.5:3413"] {
             let mut config = config(url);
             let secret = secret(&mut config);
             let error = NodeFactory::Http
@@ -527,12 +539,12 @@ mod refusal_tests {
             assert_eq!(error.kind, WalletErrorKind::InvalidArgument, "{url}");
         }
         for url in [
-            "https://node.btlabs.uk",
-            "http://127.0.0.1:3413",
-            "http://localhost:3413",
-            "http://abc.onion:3413",
+            "https://node.example".to_owned(),
+            "http://127.0.0.1:3413".to_owned(),
+            "http://localhost:3413".to_owned(),
+            format!("http://{}.onion:3413", "a".repeat(56)),
         ] {
-            let mut config = config(url);
+            let mut config = config(&url);
             let secret = secret(&mut config);
             assert!(
                 NodeFactory::Http

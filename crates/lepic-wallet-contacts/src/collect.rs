@@ -230,18 +230,13 @@ fn relay_host(address: &EpicboxAddress) -> String {
     )
 }
 
-/// Whether a service may move its home relay to the relay of `address`: a built-in relay, or a
+/// Whether a service may move its home relay to the relay of `address`: a meeting relay, or a
 /// named host (never an IP address) on the default port.
-fn acceptable_home(
-    address: &EpicboxAddress,
-    relays: &ContactRelays,
-    network: lepic_primitives::params::Network,
-) -> bool {
+fn acceptable_home(address: &EpicboxAddress, relays: &ContactRelays) -> bool {
     let port = address.port().unwrap_or(lepic_epicbox::DEFAULT_PORT);
-    let built_in = relays
-        .built_in
+    let meeting = relays
+        .meeting
         .iter()
-        .chain(lepic_epicbox::built_in_relays(relay_network(network)).iter())
         .any(|known| known.domain() == address.domain() && known.port() == port);
     let domain = address.domain().as_str();
     let ip_literal = domain.parse::<std::net::IpAddr>().is_ok()
@@ -250,7 +245,7 @@ fn acceptable_home(
             .trim_end_matches(']')
             .parse::<std::net::Ipv6Addr>()
             .is_ok();
-    built_in || (!ip_literal && port == lepic_epicbox::DEFAULT_PORT)
+    meeting || (!ip_literal && port == lepic_epicbox::DEFAULT_PORT)
 }
 
 /// Ends the pairing in progress `pending`, past its deadline, and says what ended: `None` when
@@ -863,7 +858,7 @@ where
     /// Replaces the contact's card with `card` when it carries the same keys and kind and a
     /// higher sequence number. Only a contact update (`update` holds the relays) may change the
     /// card's mailbox, within the limits of RFC 0002 8.5: a person's mailbox stays on its relay,
-    /// and a service moves its home relay only to a built-in relay or a named host on the
+    /// and a service moves its home relay only to a meeting relay or a named host on the
     /// default port. After a move, our new card goes to the contact at once in a contact update.
     /// A card in any other envelope that names another mailbox is ignored.
     pub(crate) async fn refresh_card(
@@ -1299,7 +1294,7 @@ fn may_move(
         .ok()
         .map(|old| relay_host(&old));
     let other_relay = old_relay.as_deref() != Some(relay_host(relay).as_str());
-    !(other_relay && (!service || !acceptable_home(relay, relays, network)))
+    !(other_relay && (!service || !acceptable_home(relay, relays)))
 }
 
 /// Our card re-signed for a service's move to the relay of `relay`: our mailbox there and the

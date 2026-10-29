@@ -28,7 +28,7 @@ pub const MINUTE: Duration = Duration::from_secs(60);
 pub fn relays(party: &Party) -> ContactRelays {
     ContactRelays {
         epicbox: party.epicbox.clone(),
-        built_in: Vec::new(),
+        meeting: Vec::new(),
         mode: RelayMode::Online,
     }
 }
@@ -36,7 +36,7 @@ pub fn relays(party: &Party) -> ContactRelays {
 /// As [`relays`], with the party's relay among the built-in ones, where words are offered.
 pub fn relays_with_words(party: &Party) -> ContactRelays {
     ContactRelays {
-        built_in: vec![party.epicbox.settings().endpoint.clone()],
+        meeting: vec![party.epicbox.settings().endpoint.clone()],
         ..relays(party)
     }
 }

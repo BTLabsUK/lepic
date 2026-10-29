@@ -558,7 +558,7 @@ fn a_pairing_works_when_the_invitee_uses_another_relay() {
     );
     let elsewhere = ContactRelays {
         epicbox: EpicboxTransport::new(settings, RelayNetwork::Floonet, world.relay.connector()),
-        built_in: vec![world.issuer.epicbox.settings().endpoint.clone()],
+        meeting: vec![world.issuer.epicbox.settings().endpoint.clone()],
         mode: RelayMode::Online,
     };
     let answered = world
@@ -1521,7 +1521,7 @@ fn words_relays(party: &Party) -> ContactRelays {
     let relay =
         |domain: &str| RelayEndpoint::new(Domain::parse(domain).unwrap(), Some(443), Security::Tls);
     ContactRelays {
-        built_in: vec![relay("blocked.test"), relay("other.test")],
+        meeting: vec![relay("blocked.test"), relay("other.test")],
         ..relays(party)
     }
 }

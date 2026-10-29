@@ -43,7 +43,12 @@ fn open_for_us(from: &str, str: &str, signature: &str) {
         panic!("a valid secret has a public key");
     };
     for network in [Network::Mainnet, Network::Floonet] {
-        let own = EpicboxAddress::new(own_key, network, Domain::default(), None);
+        let own = EpicboxAddress::new(
+            own_key,
+            network,
+            Domain::parse("relay.example.org").unwrap(),
+            None,
+        );
         if let Ok(message) = ReceivedMessage::open(from, str, signature, &own, &own_secret) {
             assert_eq!(message.sender.network(), network);
         }

@@ -48,6 +48,7 @@ impl World {
             node_api_secret: None,
             epicbox_domain: "epicbox.example".to_owned(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
         };
         self._dirs.push(dir);
         EpicWallet::create(

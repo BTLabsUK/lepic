@@ -21,12 +21,13 @@ use zeroize::Zeroizing;
 
 use crate::cli::{GlobalArgs, LogFormatArg, NetworkArg, OutputArg};
 use crate::secret::PASSWORD_ENV;
+use crate::settings_file::{self, Servers};
 
 /// Config files are a few lines; anything larger is not one.
 pub const MAX_CONFIG_LEN: u64 = 64 * 1024;
 
 const CONFIG_FILE: &str = "config.toml";
-const HOME_DIR: &str = ".lepic";
+pub(crate) const HOME_DIR: &str = ".lepic";
 
 /// Every config key, its variable, and what it sets.
 pub const SETTINGS: &[(&str, &str, &str)] = &[
@@ -70,6 +71,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "invoice_expiry_hours",
         "LEPIC_INVOICE_EXPIRY_HOURS",
         "hours an unpaid invoice is kept, 1 to 48",
+    ),
+    (
+        "settings_file",
+        "LEPIC_SETTINGS",
+        "settings.toml with the servers: [epicbox] default, [pairing] servers, [[tor.onions]]",
     ),
 ];
 
@@ -184,6 +190,22 @@ pub enum SettingsError {
     NoHome,
     #[error("data directory could not be resolved")]
     DataDir(#[source] std::io::Error),
+    #[error("settings file {} could not be read", path.display())]
+    SettingsRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("settings file {} is larger than {} bytes", path.display(), crate::settings_file::MAX_SETTINGS_LEN)]
+    SettingsTooLarge { path: PathBuf },
+    #[error("settings file {} is not valid", path.display())]
+    SettingsSyntax {
+        path: PathBuf,
+        #[source]
+        source: Box<toml::de::Error>,
+    },
+    #[error("settings file {} has no valid {key}", path.display())]
+    SettingsValue { path: PathBuf, key: &'static str },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +240,8 @@ pub struct Settings {
     pub node: NodeEndpoint,
     pub node_api_secret_file: Option<PathBuf>,
     pub relay: RelayEndpoint,
+    /// The servers of the settings file.
+    pub servers: Servers,
     pub relay_tor: RelayTor,
     /// Node requests go through the same tor as the relay (ADR 0022). Only with a tor named.
     pub node_over_tor: bool,
@@ -299,9 +323,8 @@ impl Settings {
                 }
             })?,
         };
-        let relay = lookup
-            .parse("epicbox_relay", parse_relay)?
-            .unwrap_or_default();
+        let servers = servers(args, env, &lookup)?;
+        let relay = relay(&lookup, &servers.default_epicbox_domain)?;
         let invoice_expiry = lookup
             .parse("invoice_expiry_hours", parse_expiry_hours)?
             .unwrap_or_default();
@@ -339,11 +362,37 @@ impl Settings {
             node,
             node_api_secret_file: lookup.path("node_api_secret_file")?,
             relay,
+            servers,
             relay_tor,
             node_over_tor,
             invoice_expiry,
         })
     }
+}
+
+/// The servers of the settings file a flag, its variable or the config file names, else of
+/// `~/.lepic/settings.toml`.
+fn servers(args: &GlobalArgs, env: &Env, lookup: &Lookup<'_>) -> Result<Servers, SettingsError> {
+    let named = match &args.settings {
+        Some(path) => Some(path.clone()),
+        None => lookup.path("settings_file")?,
+    };
+    match named {
+        Some(path) => settings_file::load(Some(&path), true),
+        None => settings_file::load(
+            env.home()
+                .map(|home| settings_file::default_path(&home))
+                .as_deref(),
+            false,
+        ),
+    }
+}
+
+/// `epicbox_relay`, else `default_domain` over TLS.
+fn relay(lookup: &Lookup<'_>, default_domain: &Domain) -> Result<RelayEndpoint, SettingsError> {
+    Ok(lookup
+        .parse("epicbox_relay", parse_relay)?
+        .unwrap_or_else(|| RelayEndpoint::new(default_domain.clone(), None, Security::Tls)))
 }
 
 const SECONDS_PER_HOUR: u64 = 60 * 60;

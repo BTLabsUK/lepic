@@ -74,9 +74,9 @@ fn uuid(slate_id: SlateId) -> Uuid {
 
 /// The key of the address text, as the store keys peers.
 fn key_of(address: &str, network: RelayNetwork) -> Option<String> {
-    EpicboxAddress::parse(address, network)
+    EpicboxAddress::parse_key(address, network)
         .ok()
-        .map(|address| address.key_text())
+        .map(|key| EpicboxAddress::key_text_of(&key, network))
 }
 
 fn counterparty_key(

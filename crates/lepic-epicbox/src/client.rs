@@ -440,7 +440,7 @@ mod tests {
         let address = EpicboxAddress::new(
             other,
             crate::address::Network::Mainnet,
-            crate::address::Domain::default(),
+            crate::address::Domain::parse("relay.example.org").unwrap(),
             None,
         );
         assert!(matches!(
@@ -455,7 +455,7 @@ mod tests {
         let address = EpicboxAddress::new(
             PublicKey::from_secret_key(&secret).unwrap(),
             crate::address::Network::Mainnet,
-            crate::address::Domain::default(),
+            crate::address::Domain::parse("relay.example.org").unwrap(),
             None,
         );
         let identity = Identity::new(secret, address).unwrap();

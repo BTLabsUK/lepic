@@ -1001,9 +1001,7 @@ fn same_epicbox_key(network: Network, delivery: &Delivery, allowed: Option<&str>
 
 /// The key of `address` when it is an Epicbox address on `network`.
 pub(crate) fn epicbox_key(network: Network, address: &str) -> Option<PublicKey> {
-    EpicboxAddress::parse(address, relay_network(network))
-        .ok()
-        .map(|address| *address.public_key())
+    EpicboxAddress::parse_key(address, relay_network(network)).ok()
 }
 
 /// The stored I2 of an invoice payment, as it was encoded for its first delivery. It was

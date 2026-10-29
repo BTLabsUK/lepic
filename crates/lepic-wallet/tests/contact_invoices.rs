@@ -437,7 +437,7 @@ fn the_outbox_retries_reaches_the_home_relay_from_another_relay_and_gets_stuck()
             RelayNetwork::Floonet,
             world.relay.connector(),
         ),
-        built_in: vec![world.payer.epicbox.settings().endpoint.clone()],
+        meeting: vec![world.payer.epicbox.settings().endpoint.clone()],
         mode: RelayMode::Online,
     };
     let report = world
@@ -593,7 +593,7 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
         )
         .unwrap();
     let built_in = ContactRelays {
-        built_in: vec![lepic_epicbox::RelayEndpoint::new(
+        meeting: vec![lepic_epicbox::RelayEndpoint::new(
             Domain::parse("relay2.test").unwrap(),
             Some(80),
             lepic_epicbox::Security::Plain,

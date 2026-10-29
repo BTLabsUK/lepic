@@ -9,7 +9,7 @@
 )]
 
 use lepic_crypto::{PublicKey, SecretKey};
-use lepic_epicbox::{AddressError, DEFAULT_DOMAIN, Domain, EpicboxAddress, Network};
+use lepic_epicbox::{AddressError, Domain, EpicboxAddress, Network};
 use proptest::prelude::*;
 
 const MAINNET_KEY: &str = "esYTimgooNuxKXdEEXJk3fbXoy2HWyyY2CaRXYU8Z8B7fSPyz6YL";
@@ -137,9 +137,12 @@ fn rejects_second_at_sign() {
 }
 
 #[test]
-fn applies_default_domain_without_at_sign() {
-    let address = mainnet(MAINNET_KEY).unwrap();
-    assert_eq!(address.domain().as_str(), DEFAULT_DOMAIN);
+fn applies_the_given_default_domain_without_at_sign() {
+    assert_eq!(mainnet(MAINNET_KEY), Err(AddressError::MissingDomain));
+    let relay = Domain::parse("relay.example.org").unwrap();
+    let address =
+        EpicboxAddress::parse_with_default(MAINNET_KEY, Network::Mainnet, &relay).unwrap();
+    assert_eq!(address.domain(), &relay);
     assert_eq!(address.port(), None);
     assert_eq!(address.key_text(), MAINNET_KEY);
 }
@@ -191,8 +194,8 @@ proptest! {
 
     #[test]
     fn key_text_parses_back_to_the_same_key(address in address()) {
-        let parsed = EpicboxAddress::parse(&address.key_text(), address.network()).unwrap();
-        prop_assert_eq!(parsed.public_key(), address.public_key());
+        let parsed = EpicboxAddress::parse_key(&address.key_text(), address.network()).unwrap();
+        prop_assert_eq!(&parsed, address.public_key());
     }
 
     #[test]

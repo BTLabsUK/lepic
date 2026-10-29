@@ -43,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2134089686;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1663732635;
 
 // Section: executor
 
@@ -4450,7 +4450,7 @@ fn wire__crate__api__wallet__EpicWallet_pairing_find_words_impl(
             let api_words = <Vec<String>>::sse_decode(&mut deserializer);
             let api_relay_mode =
                 <crate::api::types::ContactRelayMode>::sse_decode(&mut deserializer);
-            let api_meeting_relays = <Option<Vec<String>>>::sse_decode(&mut deserializer);
+            let api_meeting_relays = <Vec<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -4518,7 +4518,7 @@ fn wire__crate__api__wallet__EpicWallet_pairing_invite_impl(
             let api_offer_words = <bool>::sse_decode(&mut deserializer);
             let api_relay_mode =
                 <crate::api::types::ContactRelayMode>::sse_decode(&mut deserializer);
-            let api_meeting_relays = <Option<Vec<String>>>::sse_decode(&mut deserializer);
+            let api_meeting_relays = <Vec<String>>::sse_decode(&mut deserializer);
             let api_home_relay = <Option<String>>::sse_decode(&mut deserializer);
             let api_pairing_class =
                 <crate::api::types::PairingClass>::sse_decode(&mut deserializer);
@@ -9062,37 +9062,6 @@ fn wire__crate__api__testing__MockStockPeer_send_impl(
         },
     )
 }
-fn wire__crate__api__contact__built_in_pairing_relays_impl(
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "built_in_pairing_relays",
-            port: None,
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_chain = <crate::api::types::Chain>::sse_decode(&mut deserializer);
-            deserializer.end();
-            transform_result_sse::<_, ()>((move || {
-                let output_ok =
-                    Ok::<_, ()>(crate::api::contact::built_in_pairing_relays(api_chain))?;
-                std::result::Result::Ok(output_ok)
-            })())
-        },
-    )
-}
 fn wire__crate__api__wallet__decode_ur_slate_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -12159,6 +12128,7 @@ impl SseDecode for crate::api::types::WalletConfig {
         let mut var_nodeApiSecret = <Option<String>>::sse_decode(deserializer);
         let mut var_epicboxDomain = <String>::sse_decode(deserializer);
         let mut var_epicboxPort = <u16>::sse_decode(deserializer);
+        let mut var_onionRoutes = <Vec<crate::api::tor::OnionRoute>>::sse_decode(deserializer);
         return crate::api::types::WalletConfig {
             data_dir: var_dataDir,
             chain: var_chain,
@@ -12166,6 +12136,7 @@ impl SseDecode for crate::api::types::WalletConfig {
             node_api_secret: var_nodeApiSecret,
             epicbox_domain: var_epicboxDomain,
             epicbox_port: var_epicboxPort,
+            onion_routes: var_onionRoutes,
         };
     }
 }
@@ -13017,20 +12988,20 @@ fn pde_ffi_dispatcher_primary_impl(
         152 => {
             wire__crate__api__testing__MockStockPeer_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        154 => wire__crate__api__wallet__decode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
-        155 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
-        156 => wire__crate__api__wallet__encode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
-        157 => {
+        153 => wire__crate__api__wallet__decode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
+        154 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
+        155 => wire__crate__api__wallet__encode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
+        156 => {
             wire__crate__api__types__inbox_report_default_impl(port, ptr, rust_vec_len, data_len)
         }
-        158 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
-        159 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
-        160 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
-        161 => wire__crate__api__wallet__reset_password_impl(port, ptr, rust_vec_len, data_len),
-        166 => {
+        157 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
+        158 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
+        159 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
+        160 => wire__crate__api__wallet__reset_password_impl(port, ptr, rust_vec_len, data_len),
+        165 => {
             wire__crate__api__error__wallet_error_kind_code_impl(port, ptr, rust_vec_len, data_len)
         }
-        167 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
+        166 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -13129,12 +13100,11 @@ fn pde_ffi_dispatcher_sync_impl(
         148 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
         149 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
         150 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
-        153 => wire__crate__api__contact__built_in_pairing_relays_impl(ptr, rust_vec_len, data_len),
-        162 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
-        163 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
-        164 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
-        165 => wire__crate__api__wallet__verify_address_signature_impl(ptr, rust_vec_len, data_len),
-        168 => wire__crate__api__wallet__wallet_fingerprint_impl(ptr, rust_vec_len, data_len),
+        161 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
+        162 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
+        163 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
+        164 => wire__crate__api__wallet__verify_address_signature_impl(ptr, rust_vec_len, data_len),
+        167 => wire__crate__api__wallet__wallet_fingerprint_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -15363,6 +15333,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletConfig {
             self.node_api_secret.into_into_dart().into_dart(),
             self.epicbox_domain.into_into_dart().into_dart(),
             self.epicbox_port.into_into_dart().into_dart(),
+            self.onion_routes.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -17629,6 +17600,7 @@ impl SseEncode for crate::api::types::WalletConfig {
         <Option<String>>::sse_encode(self.node_api_secret, serializer);
         <String>::sse_encode(self.epicbox_domain, serializer);
         <u16>::sse_encode(self.epicbox_port, serializer);
+        <Vec<crate::api::tor::OnionRoute>>::sse_encode(self.onion_routes, serializer);
     }
 }
 

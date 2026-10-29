@@ -17,6 +17,7 @@ pub mod output;
 pub mod progress;
 pub mod secret;
 pub mod settings;
+pub mod settings_file;
 pub mod stores;
 pub mod vault;
 
