@@ -51,7 +51,8 @@ Header   version 6
 
 The node should be synced. A node that is behind shows old balances, and `wallet info` says so.
 
-For Epicbox, `lepic` uses the relay `wss://epicbox.epiccash.com` unless you set another.
+For Epicbox, `lepic` uses the relay that `[epicbox] default` of the settings file names
+(`wss://epicbox.epiccash.com` in the shipped file) unless you set another.
 
 ### Settings
 
@@ -63,7 +64,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `data_dir` | `LEPIC_DATA_DIR` | `--data-dir` | `~/.lepic/<network>` |
 | `node_url` | `LEPIC_NODE_URL` | | `http://127.0.0.1:3413`, floonet `:13413` |
 | `node_api_secret_file` | `LEPIC_NODE_API_SECRET_FILE` | | none |
-| `epicbox_relay` | `LEPIC_EPICBOX_RELAY` | | `wss://epicbox.epiccash.com` |
+| `epicbox_relay` | `LEPIC_EPICBOX_RELAY` | | `[epicbox] default` of the settings file, over `wss://` |
 | `epicbox_tor_socks` | `LEPIC_EPICBOX_TOR_SOCKS` | | none: the relay is reached directly |
 | `epicbox_tor_binary` | `LEPIC_EPICBOX_TOR_BINARY` | | none |
 | `epicbox_tor_lib_dir` | `LEPIC_EPICBOX_TOR_LIB_DIR` | | none |
@@ -72,6 +73,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24`, at most `48` |
+| `settings_file` | `LEPIC_SETTINGS` | `--settings` | `~/.lepic/settings.toml` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
 names. It holds `key = value` lines; values are bare words or double-quoted strings, `#` starts a
@@ -88,6 +90,25 @@ epicbox_relay = "wss://epicbox.epiccash.com"
 
 Without a node of your own, point `node_url` at any floonet node whose foreign API is served
 over `https://`, and leave `node_api_secret_file` out unless that node asks for one.
+
+### The settings file
+
+LEPIC itself knows no server: every address the CLI uses comes from the settings file,
+`settings.toml`, or from the settings above that override it. It has the layout of the Epic Cash
+wallet app's file of the same name, so a copy of the app's file works too; the CLI reads only
+these keys and ignores every other one:
+
+| Key | What it sets |
+|---|---|
+| `[epicbox] default` | the relay a wallet uses unless `epicbox_relay` names another, and the relay of an address written without `@relay` |
+| `[pairing] servers` | where pairing words are posted and looked for, each `host` or `host:port` over TLS, at most 16 |
+| `[[tor.onions]]` | `host`, `port`, `onion`, `onion_port`, `tls`: while the relay or node is reached through tor, `host:port` is dialled at its onion, still with TLS for `host`; routes with `tls = false` are skipped |
+
+Without `--settings`, `LEPIC_SETTINGS` or `settings_file`, the file is `~/.lepic/settings.toml`.
+When it does not exist, `lepic` writes it from the copy it ships (`crates/lepic-cli/settings.toml`)
+and never changes it after that; a file named explicitly must exist. A file that does not parse,
+or lacks `[epicbox] default`, is an error. The shipped file names mainnet servers; for floonet
+point `--settings` at a file with floonet servers.
 
 `node_url` is the API root, without `/v2/foreign`. Plain `http://` and `ws://` are accepted only
 for a loopback host, because the node secret and the relay traffic would otherwise cross the
