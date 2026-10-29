@@ -280,7 +280,7 @@ mod tests {
     use super::*;
 
     /// The node the test dialer knows an onion for, [`node_onion`].
-    const MAPPED_NODE: &str = "mapped-node.example";
+    const MAPPED_NODE: &str = "mappednode.example";
 
     fn node_onion() -> String {
         lepic_tor::OnionAddress::from_public_key(&[5; 32]).host()

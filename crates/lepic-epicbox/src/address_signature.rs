@@ -42,9 +42,14 @@ pub fn address_message_verifies(
     message: &[u8],
     signature_hex: &str,
 ) -> bool {
-    EcdsaSignature::from_der_hex(signature_hex).is_ok_and(|signature| {
-        verify_address_message(message, &signature, address.public_key()).is_ok()
-    })
+    key_message_verifies(address.public_key(), message, signature_hex)
+}
+
+/// [`address_message_verifies`] for the key alone, as
+/// [`EpicboxAddress::parse_key`] reads it from an address with or without its relay.
+pub fn key_message_verifies(key: &PublicKey, message: &[u8], signature_hex: &str) -> bool {
+    EcdsaSignature::from_der_hex(signature_hex)
+        .is_ok_and(|signature| verify_address_message(message, &signature, key).is_ok())
 }
 
 fn address_message_digest(message: &[u8]) -> Message {

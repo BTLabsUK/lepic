@@ -285,8 +285,8 @@ pub(crate) fn verify_address_signature(public_key: &str, message: &[u8], signatu
     }
     [RelayNetwork::Mainnet, RelayNetwork::Floonet]
         .into_iter()
-        .filter_map(|network| EpicboxAddress::parse(public_key, network).ok())
-        .any(|address| lepic_epicbox::address_message_verifies(&address, message, signature))
+        .filter_map(|network| EpicboxAddress::parse_key(public_key, network).ok())
+        .any(|key| lepic_epicbox::key_message_verifies(&key, message, signature))
 }
 
 /// Words separated by single spaces, lowercase, as the engine expects. Built in one buffer

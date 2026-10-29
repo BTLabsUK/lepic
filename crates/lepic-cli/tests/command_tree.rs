@@ -245,7 +245,7 @@ fn no_short_or_long_flag_has_two_meanings() {
 }
 
 #[test]
-fn global_options_are_exactly_the_planned_six() {
+fn global_options_are_exactly_the_planned_seven() {
     let root = Cli::command();
     let mut globals: Vec<&str> = root
         .get_arguments()
@@ -261,7 +261,8 @@ fn global_options_are_exactly_the_planned_six() {
             "log-format",
             "log-level",
             "network",
-            "output"
+            "output",
+            "settings"
         ]
     );
 }

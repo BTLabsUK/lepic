@@ -22,7 +22,7 @@ pub use address::{
     AddressError, DEFAULT_PORT, Domain, EpicboxAddress, MAX_ADDRESS_LEN, MAX_DOMAIN_LEN, Network,
 };
 pub use address_signature::{
-    address_message_verifies, sign_address_message, verify_address_message,
+    address_message_verifies, key_message_verifies, sign_address_message, verify_address_message,
 };
 pub use client::{
     Awaiting, Backoff, ClientError, ClientSettings, EpicboxClient, Identity, TRANSPORT_ID,

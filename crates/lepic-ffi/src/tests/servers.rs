@@ -588,9 +588,9 @@ async fn a_node_switched_to_while_over_tor_is_reached_through_tor() {
     let (socks, targets) = recording_socks().await;
     session.attach_node_socks(socks);
 
-    let onion = route_to_onion(session, "mapped-node.example", 4);
+    let onion = route_to_onion(session, "mappednode.example", 4);
     let mapped = WalletConfig {
-        node_url: "https://mapped-node.example".to_owned(),
+        node_url: "https://mappednode.example".to_owned(),
         ..config.clone()
     };
     switch(session, &mapped).await.unwrap();
@@ -630,9 +630,9 @@ async fn a_node_tip_asked_while_over_tor_goes_through_tor() {
     let (socks, targets) = recording_socks().await;
     wallet.session().attach_node_socks(socks);
 
-    let onion = route_to_onion(wallet.session(), "mapped-node.example", 4);
+    let onion = route_to_onion(wallet.session(), "mappednode.example", 4);
     let mapped = WalletConfig {
-        node_url: "https://mapped-node.example".to_owned(),
+        node_url: "https://mappednode.example".to_owned(),
         node_api_secret: Some("secret".to_owned()),
         ..config.clone()
     };
