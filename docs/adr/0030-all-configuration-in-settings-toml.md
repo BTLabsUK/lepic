@@ -13,22 +13,33 @@ about a service, not about the wallet.
 ## Decision
 
 - No hardcoded configuration. No host name, URL, IP address, onion address, port, service
-  endpoint or path, and no server-related timeout or interval is written in the code of the app,
-  LEPIC or lepic-flutter. All of them live in `settings.toml`.
-- The file is `settings.toml` in the wallet's data folder, never `epic-wallet.toml`. The app
-  ships a default and writes it on the first start. The user's values win; a newer default only
-  adds what is missing. On desktop it can be edited while the app runs.
-- The library crates take every such value from the caller and hold no default. The CLI ships its
-  own default file (`crates/lepic-cli/settings.toml`) and reads `--config` as before.
-- The Node and Epicbox server in use are shared by all wallets of a data folder and live in the
-  file.
-- The file's layout, the first-start and version merge, and the sync rules between app and file
-  are in `docs/settings-file.md` of wallet-for-epic. This ADR does not restate them.
-- Tests use example hosts (`*.example.invalid`, RFC 5737 addresses). A guard in the check script
-  fails the build when a host, URL or IPv4 literal appears in source. Loopback, the Android
-  emulator host and RFC 2606 / RFC 5737 names are allowed.
-- Hidden development networks (Floonet, Usernet) have their own settings files outside the
-  product.
+  endpoint or path, and no server-related timeout, interval or limit is written in the code of
+  the app, LEPIC or lepic-flutter.
+- Two files, in the wallet app and in the CLI alike:
+  - the user's `settings.toml` in the data folder, written on the first start from a shipped
+    `settings.default.toml`: the Node list, the Epicbox list (the first entry of each is the one
+    in use) and a few on/off switches. On desktop it can be edited while the app runs.
+  - the built-in, read-only configuration shipped with the program (`app-config.toml` in the
+    app, `lepic-config.toml` compiled into the CLI): operators, onions, service URLs, timeouts,
+    intervals, ports and limits. Changing it needs a new build.
+  The file is never `epic-wallet.toml`.
+- The library crates take every such value from the caller and hold no default. The servers come
+  as before; the tuning comes as `WalletConfig.tuning` (`NetTuning`: `node`, `epicbox`, `http`
+  and `tor` groups, units in the field names, every field required; a zero, or a minimum above
+  its maximum, is `InvalidArgument`). The settings types of `lepic-node`, `lepic-epicbox`,
+  `lepic-foreign` and `lepic-tor` have no `Default`; tests take the shipped values from one
+  `testing` helper per crate.
+- What stays in code, because both sides of a protocol must agree or because changing it is a
+  safety decision and not a setting: what an address or URL without a port means (443 for an
+  Epicbox address, 3415 for a peer's `http://` URL), the onion service port, wire-format and size
+  limits, crypto parameters, consensus values, the Epic node's API paths, the bounds against a
+  hostile relay or node, the release window of locked outputs, the contact-pairing windows and
+  the waits for the local tor process.
+- The app's layout, first start and sync rules are in `docs/settings-file.md` of wallet-for-epic;
+  the CLI's in `docs/cli.md`. This ADR does not restate them.
+- A guard in the check script fails the build when a host, URL, IPv4 literal, port or API path
+  appears in source. Loopback and RFC 2606 / RFC 5737 names are allowed. Tests use example hosts.
+- Hidden development networks (Floonet, Usernet) have their own files outside the product.
 
 ## Consequences
 
