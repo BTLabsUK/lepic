@@ -22,6 +22,8 @@ about a service, not about the wallet.
   own default file (`crates/lepic-cli/settings.toml`) and reads `--config` as before.
 - The Node and Epicbox server in use are shared by all wallets of a data folder and live in the
   file.
+- The file's layout, the first-start and version merge, and the sync rules between app and file
+  are in `docs/settings-file.md` of wallet-for-epic. This ADR does not restate them.
 - Tests use example hosts (`*.example.invalid`, RFC 5737 addresses). A guard in the check script
   fails the build when a host, URL or IPv4 literal appears in source. Loopback, the Android
   emulator host and RFC 2606 / RFC 5737 names are allowed.
