@@ -12,9 +12,7 @@ use std::path::PathBuf;
 
 use lepic_crypto::Commitment;
 use lepic_node::mock::MockNode;
-use lepic_node::{
-    CallPolicy, HttpSettings, HttpTransport, NodeApi, NodeClient, RetryPolicy, webpki_tls_config,
-};
+use lepic_node::{CallPolicy, HttpTransport, NodeApi, NodeClient, RetryPolicy, webpki_tls_config};
 use lepic_primitives::amount::Height;
 use serde_json::Value;
 use support::{Reply, TestServer};
@@ -128,7 +126,7 @@ async fn fixtures_replay_through_the_mock_and_over_http() {
         .await;
         let transport = HttpTransport::new(
             &server.url(),
-            &HttpSettings::default(),
+            &lepic_node::testing::http_settings(),
             webpki_tls_config().unwrap(),
         )
         .unwrap();
@@ -136,7 +134,7 @@ async fn fixtures_replay_through_the_mock_and_over_http() {
             transport,
             CallPolicy {
                 retry: RetryPolicy::NONE,
-                ..CallPolicy::default()
+                ..lepic_node::testing::call_policy()
             },
         );
         let over_http = replay(&client, &fixture).await;

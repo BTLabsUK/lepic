@@ -61,10 +61,10 @@ impl MockBackend {
         })
     }
 
-    pub(crate) fn policy() -> CallPolicy {
+    pub(crate) fn policy(tuning: &crate::tuning::Tuning) -> CallPolicy {
         CallPolicy {
             retry: RetryPolicy::NONE,
-            ..CallPolicy::default()
+            ..tuning.call_policy
         }
     }
 

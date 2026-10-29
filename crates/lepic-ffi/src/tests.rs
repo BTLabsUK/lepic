@@ -66,6 +66,7 @@ impl Fixture {
             epicbox_domain: String::new(),
             epicbox_port: 443,
             onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
         }
     }
 
@@ -725,9 +726,15 @@ fn the_node_api_secret_is_taken_out_of_the_config_before_the_client_is_built() {
     assert_eq!(config.node_api_secret, None);
     crate::node::NodeFactory::Http
         .client(
-            &config,
+            (
+                &config,
+                &crate::tuning::Tuning::check(&config.tuning).unwrap(),
+            ),
             &secret,
-            &std::sync::Arc::new(crate::node::RelayTor::direct(true)),
+            &std::sync::Arc::new(crate::node::RelayTor::direct(
+                true,
+                std::time::Duration::from_secs(75),
+            )),
             &std::sync::Arc::new(lepic_epicbox::tunnel::OnionRoutes::default()),
         )
         .unwrap();

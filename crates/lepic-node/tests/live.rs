@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 
 use lepic_crypto::Commitment;
 use lepic_node::{
-    CallPolicy, HttpSettings, HttpTransport, NodeApi, NodeClient, NodeError, RetryPolicy,
-    RpcTransport, webpki_tls_config,
+    CallPolicy, HttpTransport, NodeApi, NodeClient, NodeError, RetryPolicy, RpcTransport,
+    webpki_tls_config,
 };
 use lepic_primitives::amount::Height;
 use serde_json::{Value, json};
@@ -84,8 +84,12 @@ async fn floonet_reads() {
     let Some(url) = enabled() else {
         return;
     };
-    let transport =
-        HttpTransport::new(&url, &HttpSettings::default(), webpki_tls_config().unwrap()).unwrap();
+    let transport = HttpTransport::new(
+        &url,
+        &lepic_node::testing::http_settings(),
+        webpki_tls_config().unwrap(),
+    )
+    .unwrap();
     let exchanges = Arc::new(Mutex::new(Vec::new()));
     let client = NodeClient::new(
         Recorder {
@@ -94,7 +98,7 @@ async fn floonet_reads() {
         },
         CallPolicy {
             retry: RetryPolicy::NONE,
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     );
 

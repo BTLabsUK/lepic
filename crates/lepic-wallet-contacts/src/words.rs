@@ -181,11 +181,13 @@ where
                     network: contact_network(network),
                     found: None,
                 };
-                let drained = mailbox_client(relays, relay.clone(), None)
-                    .with_limits(DrainLimits {
-                        timeout: WORDS_DRAIN_TIMEOUT,
-                        ..DrainLimits::default()
-                    })
+                let client = mailbox_client(relays, relay.clone(), None);
+                let limits = DrainLimits {
+                    timeout: WORDS_DRAIN_TIMEOUT,
+                    ..client.limits()
+                };
+                let drained = client
+                    .with_limits(limits)
                     .drain_once(&identities, &mut finder)
                     .await;
                 (relay, drained, finder.found)

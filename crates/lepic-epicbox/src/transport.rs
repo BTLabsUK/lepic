@@ -223,7 +223,7 @@ mod tests {
     use crate::session::{RelayEndpoint, Security};
 
     fn transport() -> EpicboxTransport {
-        let settings = ClientSettings::new(RelayEndpoint::new(
+        let settings = crate::testing::client_settings(RelayEndpoint::new(
             Domain::parse("relay.test").unwrap(),
             None,
             Security::Plain,

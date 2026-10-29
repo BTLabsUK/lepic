@@ -768,7 +768,7 @@ fn http_wallet(harness: &Harness, runtime: &tokio::runtime::Runtime, url: &str) 
                 initial_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(2),
             },
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     );
     let base = harness.ports(harness.vault.clone());

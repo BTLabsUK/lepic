@@ -315,13 +315,13 @@ fn engine(
     let node = NodeClient::new(
         HttpTransport::new(
             node_url,
-            &HttpSettings::default(),
+            &lepic_node::testing::http_settings(),
             webpki_tls_config().unwrap(),
         )
         .unwrap(),
         CallPolicy {
             retry: RetryPolicy::NONE,
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     );
     let config = WalletConfig {

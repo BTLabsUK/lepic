@@ -151,13 +151,17 @@ fn transport_through(socks: SocketAddr, settings: OnionClientSettings) -> TorTra
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sends_an_s1_over_socks_and_holds_the_s2() {
     let listener = listen(
-        ListenSettings::new(Exposure::LocalOnly, 0),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
         Arc::new(Answering),
     )
     .await
     .unwrap();
     let socks = fake_socks(Behaviour::Forward(listener.local_addr())).await;
-    let transport = transport_through(socks.address, OnionClientSettings::default());
+    let transport = transport_through(socks.address, lepic_tor::testing::onion_client_settings());
     let to = Destination::new(format!("http://{}:3415/", onion()));
     transport.deliver(&to, &s1()).await.unwrap();
     let reply = transport
@@ -209,7 +213,8 @@ async fn tor_failure_replies_become_typed_errors() {
         (0x01, SocksReply::GeneralFailure, SendFailure::Broken),
     ] {
         let socks = fake_socks(Behaviour::Fail(code)).await;
-        let transport = transport_through(socks.address, OnionClientSettings::default());
+        let transport =
+            transport_through(socks.address, lepic_tor::testing::onion_client_settings());
         let error = transport
             .send(&onion().to_string(), &s1())
             .await
@@ -227,7 +232,7 @@ async fn a_connect_that_never_answers_times_out_after_one_retry() {
     let socks = fake_socks(Behaviour::Silent).await;
     let settings = OnionClientSettings {
         connect_timeout: Duration::from_millis(200),
-        ..OnionClientSettings::default()
+        ..lepic_tor::testing::onion_client_settings()
     };
     let transport = transport_through(socks.address, settings);
     let error = transport
@@ -244,7 +249,8 @@ async fn a_connect_that_never_answers_times_out_after_one_retry() {
 
 #[tokio::test]
 async fn refuses_to_send_without_tor() {
-    let transport = TorTransport::new(OnionClient::default());
+    let transport =
+        TorTransport::new(OnionClient::new(lepic_tor::testing::onion_client_settings()));
     let error = transport
         .send(&onion().to_string(), &s1())
         .await
@@ -265,7 +271,7 @@ async fn a_closed_socks_port_means_tor_is_off() {
     let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = closed.local_addr().unwrap();
     drop(closed);
-    let transport = transport_through(address, OnionClientSettings::default());
+    let transport = transport_through(address, lepic_tor::testing::onion_client_settings());
     let error = transport
         .send(&onion().to_string(), &s1())
         .await
@@ -280,7 +286,7 @@ async fn a_closed_socks_port_means_tor_is_off() {
 #[tokio::test]
 async fn refuses_an_invalid_onion_before_connecting() {
     let socks = fake_socks(Behaviour::Fail(0)).await;
-    let transport = transport_through(socks.address, OnionClientSettings::default());
+    let transport = transport_through(socks.address, lepic_tor::testing::onion_client_settings());
     let mut typo = onion().service_id().to_owned();
     typo.replace_range(0..1, if typo.starts_with('a') { "b" } else { "a" });
     let error = transport.send(&typo, &s1()).await.unwrap_err();
@@ -312,7 +318,7 @@ async fn something_that_is_not_a_wallet_is_not_epic() {
         }
     });
     let socks = fake_socks(Behaviour::Forward(web_address)).await;
-    let transport = transport_through(socks.address, OnionClientSettings::default());
+    let transport = transport_through(socks.address, lepic_tor::testing::onion_client_settings());
     let error = transport
         .send(&onion().to_string(), &s1())
         .await
@@ -334,17 +340,25 @@ async fn an_answer_for_another_slate_is_refused_and_not_held() {
     const OTHER_S1: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b01","amount":"1"}"#;
     const FORGED_S2: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"1"}"#;
     let honest = listen(
-        ListenSettings::new(Exposure::LocalOnly, 0),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
         Arc::new(Answering),
     )
     .await
     .unwrap();
     let socks = fake_socks(Behaviour::Forward(honest.local_addr())).await;
-    let transport = transport_through(socks.address, OnionClientSettings::default());
+    let transport = transport_through(socks.address, lepic_tor::testing::onion_client_settings());
     transport.send(&onion().to_string(), &s1()).await.unwrap();
 
     let other = listen(
-        ListenSettings::new(Exposure::LocalOnly, 0),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
         Arc::new(AnsweringWith(FORGED_S2)),
     )
     .await
@@ -378,7 +392,7 @@ async fn an_answer_for_another_slate_is_refused_and_not_held() {
 #[tokio::test]
 async fn a_slate_without_an_id_is_not_sent() {
     let socks = fake_socks(Behaviour::Fail(0)).await;
-    let transport = transport_through(socks.address, OnionClientSettings::default());
+    let transport = transport_through(socks.address, lepic_tor::testing::onion_client_settings());
     let error = transport
         .send(
             &onion().to_string(),
@@ -395,6 +409,7 @@ async fn a_slate_without_an_id_is_not_sent() {
 
 #[test]
 fn the_transport_hands_nothing_out_inbound() {
-    let transport = TorTransport::new(OnionClient::default());
+    let transport =
+        TorTransport::new(OnionClient::new(lepic_tor::testing::onion_client_settings()));
     assert!(Transport::inbound(&transport).is_none());
 }

@@ -60,7 +60,7 @@ fn client(server: &TestServer) -> NodeClient<HttpTransport> {
         &settings(),
         CallPolicy {
             retry: QUICK_RETRY,
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     )
 }
@@ -161,7 +161,7 @@ async fn reads_recorded_answers_and_sends_upstream_requests() {
             max_response_bytes: 1024 * 1024,
             ..settings()
         },
-        CallPolicy::default(),
+        lepic_node::testing::call_policy(),
     );
 
     let tip = client.get_tip().await.unwrap();
@@ -197,7 +197,7 @@ async fn sends_basic_auth_with_the_epic_user() {
         api_secret: Some(SecretString::from("secret")),
         ..settings()
     };
-    let client = client_with(&server.url(), &settings, CallPolicy::default());
+    let client = client_with(&server.url(), &settings, lepic_node::testing::call_policy());
     let (transaction, _) = valid_transaction();
     client
         .push_transaction(&transaction, Propagation::Stem)
@@ -679,7 +679,7 @@ async fn times_out_on_stalled_and_dripping_responses() {
     };
     let policy = CallPolicy {
         retry: RetryPolicy::NONE,
-        ..CallPolicy::default()
+        ..lepic_node::testing::call_policy()
     };
 
     let server = TestServer::start(|_| Reply::Stall).await;
@@ -769,7 +769,7 @@ async fn keep_alive_pair(
         },
         CallPolicy {
             retry: RetryPolicy::NONE,
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     );
     (server, client)
@@ -820,7 +820,7 @@ async fn reports_refused_connections() {
         &settings(),
         CallPolicy {
             retry: QUICK_RETRY,
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     )
     .get_tip()
@@ -963,7 +963,7 @@ async fn opens_connections_through_the_dialer_with_the_urls_host() {
         Arc::clone(&dialer) as Arc<dyn NodeDialer>,
     )
     .unwrap();
-    NodeClient::new(transport, CallPolicy::default())
+    NodeClient::new(transport, lepic_node::testing::call_policy())
         .get_tip()
         .await
         .unwrap();
@@ -992,7 +992,7 @@ async fn a_dialer_that_fails_is_a_connect_error_and_nothing_goes_around_it() {
         Arc::new(RefusingDialer),
     )
     .unwrap();
-    let error = NodeClient::new(transport, CallPolicy::default())
+    let error = NodeClient::new(transport, lepic_node::testing::call_policy())
         .get_tip()
         .await
         .unwrap_err();

@@ -420,8 +420,7 @@ impl MockStockPeer {
 #[cfg(feature = "mock")]
 mod mock_peer {
     use lepic_epicbox::{
-        ClientSettings, Domain, EpicboxAddress, EpicboxClient, Identity, Network, RelayEndpoint,
-        Security,
+        Domain, EpicboxAddress, EpicboxClient, Identity, Network, RelayEndpoint, Security,
     };
     use lepic_keychain::ExtendedPrivKey;
     use lepic_transport::transport::Inbound as _;
@@ -444,7 +443,11 @@ mod mock_peer {
         let address = EpicboxAddress::new(public, network, domain.clone(), Some(PORT));
         let identity =
             Identity::new(key.secret_key().clone(), address).map_err(|error| failed(&error))?;
-        let settings = ClientSettings::new(RelayEndpoint::new(domain, Some(PORT), Security::Tls));
+        let settings = lepic_epicbox::testing::client_settings(RelayEndpoint::new(
+            domain,
+            Some(PORT),
+            Security::Tls,
+        ));
         Ok(MockStockPeer {
             client: EpicboxClient::new(settings, identity, relay.relay.connector()),
             chain: relay.chain,

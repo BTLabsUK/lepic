@@ -33,6 +33,7 @@ use crate::api::tor::{
 /// More onion routes than any signed list holds.
 const MAX_ONION_ROUTES: usize = 256;
 use crate::api::types::SendOptions;
+use crate::tuning::Tuning;
 
 /// Where the tor events of a session go.
 pub(crate) type TorReport = Arc<dyn Fn(TorEvent) + Send + Sync>;
@@ -48,14 +49,17 @@ const TOR_EXPECTED_FILE: &str = "tor-expected";
 /// the start when the last session there expected one and the app did not stop it, so a
 /// connection made before the app calls [`Session::expect_tor`] never goes directly; else
 /// they go directly until tor is expected or started.
-pub(super) fn session_routes(data_dir: &std::path::Path) -> (RelayTor, RelayTor) {
+pub(super) fn session_routes(
+    data_dir: &std::path::Path,
+    connect_timeout: std::time::Duration,
+) -> (RelayTor, RelayTor) {
     let expected = !cfg!(target_os = "ios") && data_dir.join(TOR_EXPECTED_FILE).exists();
     let routes = if expected {
         RelayTor::new
     } else {
         RelayTor::direct
     };
-    (routes(true), routes(true))
+    (routes(true, connect_timeout), routes(true, connect_timeout))
 }
 
 /// `routes` after checking every one: a host name, an onion v3 host and two ports that are not
@@ -164,8 +168,8 @@ impl Tunnel for RelayTunnel {
     }
 }
 
-pub(super) fn tor_transport() -> TorTransport {
-    TorTransport::new(lepic_tor::OnionClient::default())
+pub(super) fn tor_transport(tuning: &Tuning) -> TorTransport {
+    TorTransport::new(lepic_tor::OnionClient::new(tuning.onion_client()))
 }
 
 const fn failure_kind(kind: FailureKind) -> TorFailureKind {
@@ -357,7 +361,8 @@ impl Session {
             }
         }
         let receiver = self.http_receiver(listener_report(&report), TRANSPORT_ID);
-        let listening = lepic_foreign::listen(lepic_tor::listen_settings(), receiver).await;
+        let listening =
+            lepic_foreign::listen(lepic_tor::listen_settings(self.tuning.listen), receiver).await;
         let listener = match listening {
             Ok(listener) => listener,
             Err(error) => {
@@ -373,7 +378,11 @@ impl Session {
                 return Ok(());
             }
         };
-        let mut settings = TorSettings::new(PathBuf::from(tor_binary), self.data_dir.join(TOR_DIR));
+        let mut settings = TorSettings::new(
+            PathBuf::from(tor_binary),
+            self.data_dir.join(TOR_DIR),
+            self.tuning.tor_timings(),
+        );
         settings.lib_dir = lib_dir.map(PathBuf::from);
         #[cfg(test)]
         if let Some(timings) = *lock(&self.tor_timings) {

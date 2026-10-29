@@ -10,6 +10,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The settings the app ships, for tests of this crate and the crates above it.
+testing = ["lepic-foreign/testing"]
+
 [dependencies]
 base64 = { workspace = true, features = ["alloc"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
@@ -31,6 +35,7 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+lepic-tor = { path = ".", features = ["testing"] }
 ed25519-dalek = { workspace = true, features = ["hazmat", "zeroize"] }
 hmac.workspace = true
 proptest = { workspace = true, features = ["std"] }

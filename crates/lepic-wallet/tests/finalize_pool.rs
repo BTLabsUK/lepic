@@ -110,7 +110,7 @@ impl Posting {
                 pool.clone(),
                 CallPolicy {
                     retry: RetryPolicy::NONE,
-                    ..CallPolicy::default()
+                    ..lepic_node::testing::call_policy()
                 },
             ),
             stores: shared.stores,

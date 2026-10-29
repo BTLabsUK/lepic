@@ -215,9 +215,10 @@ async fn reads_at_most_the_cap_from_one_mailbox() {
     }
     post_stored(&relay, CAROL, CONTACT_BOX, "invoice");
     let mut handler = Recorder::new(&relay);
-    let client = mailbox_client(&relay).with_limits(DrainLimits {
+    let client = mailbox_client(&relay);
+    let client = client.clone().with_limits(DrainLimits {
         messages_per_mailbox: 3,
-        ..DrainLimits::default()
+        ..client.limits()
     });
 
     let report = within(
@@ -240,9 +241,10 @@ async fn a_drain_that_runs_out_of_time_reports_the_mailboxes_it_did_not_finish()
     post_stored(&relay, CAROL, PAIRING_BOX, "reply");
     relay.set_unanswered(Unanswered::Subscribe, true);
     let mut handler = Recorder::new(&relay);
-    let client = mailbox_client(&relay).with_limits(DrainLimits {
+    let client = mailbox_client(&relay);
+    let client = client.clone().with_limits(DrainLimits {
         timeout: Duration::from_millis(300),
-        ..DrainLimits::default()
+        ..client.limits()
     });
 
     let report = within(

@@ -704,8 +704,12 @@ impl<H: Host> Run<'_, H> {
             counts: Arc::clone(&counts),
             transport: lepic_foreign::TRANSPORT_ID,
         });
-        let handle =
-            lepic_foreign::listen(ListenSettings::new(exposure, args.port), receiver).await?;
+        let port = args.port.unwrap_or(self.settings.tuning.listen_port);
+        let handle = lepic_foreign::listen(
+            ListenSettings::new(exposure, port, self.settings.tuning.listen),
+            receiver,
+        )
+        .await?;
         let port = handle.local_addr().port();
         if self.settings.output == OutputFormat::Human {
             self.show_line(&format!(
@@ -753,7 +757,11 @@ impl<H: Host> Run<'_, H> {
 
     fn start_tor(&self, binary: &TorBinaryArgs) -> Result<TorProcess, CliError> {
         let tor_binary = binary.tor_binary.clone().ok_or(CliError::TorBinaryNeeded)?;
-        let mut settings = TorSettings::new(tor_binary, self.settings.data_dir.join(TOR_DIR));
+        let mut settings = TorSettings::new(
+            tor_binary,
+            self.settings.data_dir.join(TOR_DIR),
+            self.settings.tuning.tor_timings(),
+        );
         settings.lib_dir.clone_from(&binary.lib_dir);
         Ok(TorProcess::start(settings))
     }
@@ -804,7 +812,11 @@ impl<H: Host> Run<'_, H> {
             counts: Arc::clone(&counts),
             transport: lepic_tor::TRANSPORT_ID,
         });
-        let handle = lepic_foreign::listen(lepic_tor::listen_settings(), receiver).await?;
+        let handle = lepic_foreign::listen(
+            lepic_tor::listen_settings(self.settings.tuning.listen),
+            receiver,
+        )
+        .await?;
         let tor = self.start_tor(&args.tor)?;
         let published = async {
             self.wait_for_tor(&tor).await?;
@@ -1158,17 +1170,17 @@ impl<H: Host> Run<'_, H> {
             what: "set up tls for http",
             source: std::io::Error::other(error),
         })?;
-        let http = lepic_foreign::HttpTransport::new(ForeignClient::new(
-            lepic_foreign::ClientSettings::default(),
-            tls,
-        ));
-        let relay = ClientSettings::new(self.settings.relay.clone());
+        let http =
+            lepic_foreign::HttpTransport::new(ForeignClient::new(self.settings.tuning.send, tls));
+        let relay = ClientSettings::new(self.settings.relay.clone(), self.settings.tuning.relay);
         let epicbox = EpicboxTransport::new(
             relay,
             relay_network(self.settings.network),
             self.host.relay_connector(self.settings)?,
         );
-        let tor = lepic_tor::TorTransport::new(lepic_tor::OnionClient::default());
+        let tor = lepic_tor::TorTransport::new(lepic_tor::OnionClient::new(
+            self.settings.tuning.onion_client(),
+        ));
         let mut transports = TransportRegistry::new();
         for transport in [
             Box::new(FileTransport::new()) as Box<dyn lepic_transport::transport::Transport>,

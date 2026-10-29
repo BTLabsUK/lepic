@@ -35,26 +35,16 @@ pub struct HttpSettings {
     pub max_response_bytes: usize,
     /// How long an idle connection is kept for the next request. It must stay below the idle
     /// keep-alive timeout of the node's server, by more than a round trip: a connection the
-    /// server closes just as a request goes out on it fails that request. BT Labs' nginx closes
-    /// idle connections after 15 s.
+    /// server closes just as a request goes out on it fails that request.
     pub pool_idle_timeout: Duration,
     /// The node's foreign API secret, when it requires one.
     pub api_secret: Option<SecretString>,
 }
 
-impl Default for HttpSettings {
-    // The cap leaves room for a full `get_unspent_outputs` page, the largest answer the wallet
-    // asks for, because every output in it carries a range proof.
-    fn default() -> Self {
-        Self {
-            connect_timeout: Duration::from_secs(10),
-            request_timeout: Duration::from_secs(30),
-            max_response_bytes: 8 * 1024 * 1024,
-            pool_idle_timeout: Duration::from_secs(10),
-            api_secret: None,
-        }
-    }
-}
+/// The largest node answer [`HttpTransport`] should take: room for a full
+/// `get_unspent_outputs` page, the largest answer the wallet asks for, because every output in
+/// it carries a range proof.
+pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 /// A rustls client configuration with the ring provider and the Mozilla roots from
 /// `webpki-roots`, built without touching any process-wide default.

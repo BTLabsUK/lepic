@@ -66,16 +66,6 @@ impl RetryPolicy {
     }
 }
 
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            max_attempts: 3,
-            initial_backoff: Duration::from_millis(500),
-            max_backoff: Duration::from_secs(4),
-        }
-    }
-}
-
 /// How the client spreads and repeats work. Transport limits (sizes, timeouts) live with the
 /// transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,16 +75,6 @@ pub struct CallPolicy {
     pub outputs_per_request: usize,
     /// `get_outputs` requests in flight at once.
     pub max_concurrent_requests: usize,
-}
-
-impl Default for CallPolicy {
-    fn default() -> Self {
-        Self {
-            retry: RetryPolicy::default(),
-            outputs_per_request: 500,
-            max_concurrent_requests: 4,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

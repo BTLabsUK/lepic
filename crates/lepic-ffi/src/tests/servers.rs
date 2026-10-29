@@ -85,6 +85,7 @@ impl World {
             epicbox_domain: relay.to_owned(),
             epicbox_port: 443,
             onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
         }
     }
 

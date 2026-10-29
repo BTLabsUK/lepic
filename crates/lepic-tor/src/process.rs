@@ -79,16 +79,27 @@ pub struct TorTimings {
     pub listener_check: Duration,
 }
 
-impl Default for TorTimings {
-    fn default() -> Self {
+/// The timings of tor's network work, which depend on the network it is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TorNetworkTimings {
+    pub stall: Duration,
+    pub bootstrap: Duration,
+    pub cold_stall: Duration,
+    pub cold_bootstrap: Duration,
+    pub publish: Duration,
+}
+
+impl TorTimings {
+    /// `network`, with this crate's waits for the local tor process.
+    pub const fn new(network: TorNetworkTimings) -> Self {
         Self {
             control_file: Duration::from_secs(30),
             command: Duration::from_secs(15),
-            stall: Duration::from_secs(60),
-            bootstrap: Duration::from_secs(120),
-            cold_stall: Duration::from_secs(120),
-            cold_bootstrap: Duration::from_secs(240),
-            publish: Duration::from_secs(180),
+            stall: network.stall,
+            bootstrap: network.bootstrap,
+            cold_stall: network.cold_stall,
+            cold_bootstrap: network.cold_bootstrap,
+            publish: network.publish,
             stop: Duration::from_secs(5),
             listener_check: Duration::from_secs(3),
         }
@@ -110,12 +121,12 @@ pub struct TorSettings {
 }
 
 impl TorSettings {
-    pub fn new(tor_binary: PathBuf, data_dir: PathBuf) -> Self {
+    pub fn new(tor_binary: PathBuf, data_dir: PathBuf, timings: TorTimings) -> Self {
         Self {
             tor_binary,
             lib_dir: None,
             data_dir,
-            timings: TorTimings::default(),
+            timings,
         }
     }
 }
@@ -1434,11 +1445,23 @@ mod tests {
         };
         for at in [3, 5] {
             let (position, event) = uploaded(at);
-            on_event(&mut progress, position, event, TorTimings::default(), now);
+            on_event(
+                &mut progress,
+                position,
+                event,
+                crate::testing::tor_timings(),
+                now,
+            );
             assert_eq!(progress.visible(), TorState::Publishing, "{at}");
         }
         let (position, event) = uploaded(6);
-        on_event(&mut progress, position, event, TorTimings::default(), now);
+        on_event(
+            &mut progress,
+            position,
+            event,
+            crate::testing::tor_timings(),
+            now,
+        );
         assert_eq!(progress.visible(), TorState::Ready { onion });
     }
 
@@ -1462,14 +1485,14 @@ mod tests {
         on_bootstrap(
             &mut progress,
             phase("conn_done"),
-            TorTimings::default(),
+            crate::testing::tor_timings(),
             past,
         );
         assert_eq!(progress.stall_deadline, past);
         on_bootstrap(
             &mut progress,
             phase("handshake"),
-            TorTimings::default(),
+            crate::testing::tor_timings(),
             past,
         );
         assert!(progress.stall_deadline > past + Duration::from_secs(30));
@@ -1479,7 +1502,7 @@ mod tests {
     #[test]
     fn a_first_start_without_a_cached_consensus_gets_longer_to_bootstrap() {
         let dir = tempfile::tempdir().unwrap();
-        let defaults = TorTimings::default();
+        let defaults = crate::testing::tor_timings();
         let cold = timings_for(defaults, dir.path());
         assert_eq!(cold.stall, defaults.cold_stall);
         assert_eq!(cold.bootstrap, defaults.cold_bootstrap);
@@ -1491,7 +1514,7 @@ mod tests {
     #[test]
     fn deadlines_that_passed_during_a_pause_move_by_the_pause() {
         let start = Instant::now();
-        let timings = TorTimings::default();
+        let timings = crate::testing::tor_timings();
         let mut progress = Progress {
             progress: 40,
             tag: "loading".into(),
@@ -1530,7 +1553,7 @@ mod tests {
     #[test]
     fn a_deadline_passed_during_a_slow_command_is_not_a_pause() {
         let start = Instant::now();
-        let timings = TorTimings::default();
+        let timings = crate::testing::tor_timings();
         let mut progress = Progress {
             progress: 40,
             tag: "loading".into(),

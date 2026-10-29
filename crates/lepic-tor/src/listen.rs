@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The listener the wallet's onion forwards to.
 
-use lepic_foreign::{Exposure, ListenSettings};
+use lepic_foreign::{Exposure, ListenLimits, ListenSettings};
 
-/// Settings for the listener behind the onion, on `127.0.0.1` at a free port. Tor connects
+/// Settings for the listener behind the onion, on `127.0.0.1` at a free port, within
+/// `limits`. Tor connects
 /// to it from `127.0.0.1` for every sender, so a limit per remote address would make all
 /// senders share it: the listener's whole connection cap is the limit per address instead,
 /// and tor limits each sender's circuit to
@@ -11,8 +12,8 @@ use lepic_foreign::{Exposure, ListenSettings};
 /// connection cap and the request and payment budgets still bound the work of all senders
 /// together.
 #[must_use]
-pub const fn listen_settings() -> ListenSettings {
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+pub const fn listen_settings(limits: ListenLimits) -> ListenSettings {
+    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0, limits);
     settings.max_connections_per_address = settings.max_connections;
     settings
 }
@@ -23,8 +24,9 @@ mod tests {
 
     #[test]
     fn every_sender_shares_only_the_whole_connection_cap() {
-        let settings = listen_settings();
-        let plain = ListenSettings::new(Exposure::LocalOnly, 0);
+        let limits = lepic_foreign::testing::listen_limits();
+        let settings = listen_settings(limits);
+        let plain = ListenSettings::new(Exposure::LocalOnly, 0, limits);
         assert_eq!(settings.exposure, Exposure::LocalOnly);
         assert_eq!(settings.port, 0);
         assert_eq!(settings.max_connections, plain.max_connections);

@@ -30,15 +30,6 @@ pub const MAX_DISCOVERY_LEN: usize = 4096;
 /// The largest discovery answer read, headers included.
 const MAX_RESPONSE_LEN: usize = 2 * MAX_DISCOVERY_LEN;
 
-/// How long discovery may take before the relay is reached through the exit instead.
-const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
-/// How long a relay whose discovery failed to connect is not asked again.
-const DISCOVERY_RETRY: Duration = Duration::from_secs(600);
-
-/// The least time a connection through the tunnel is given: a first circuit to an onion often
-/// needs most of a minute.
-pub const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
-
 /// Another way to reach hosts, such as tor's SOCKS proxy.
 pub trait Tunnel: Send + Sync {
     /// Whether relay connections go through the tunnel, now and as it changes. While it is
@@ -262,6 +253,7 @@ pub struct TunnelConnector {
     direct: TcpConnector,
     tunnel: Arc<dyn Tunnel>,
     routes: Arc<OnionRoutes>,
+    timings: TunnelTimings,
     /// Discovery outcomes of this connector, by relay; `None` when the relay named no onion.
     /// Only answers are kept: a discovery that could not reach the relay is tried again.
     discovered: Mutex<HashMap<RelayKey, Arc<OnceCell<Option<DialTarget>>>>>,
@@ -271,10 +263,22 @@ pub struct TunnelConnector {
 
 type RelayKey = (String, u16);
 
+/// The caller's timeouts for connections through a tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TunnelTimings {
+    /// The least a connection through the tunnel is given, whatever the client's own
+    /// connect timeout: room for a first circuit.
+    pub connect_timeout: Duration,
+    /// Asking a relay for its onion.
+    pub discovery_timeout: Duration,
+    /// How long a relay whose discovery could not reach it is not asked again.
+    pub discovery_retry: Duration,
+}
+
 impl TunnelConnector {
     /// With no onion routes.
-    pub fn new(tls: Arc<ClientConfig>, tunnel: Arc<dyn Tunnel>) -> Self {
-        Self::with_routes(tls, tunnel, Arc::default())
+    pub fn new(tls: Arc<ClientConfig>, tunnel: Arc<dyn Tunnel>, timings: TunnelTimings) -> Self {
+        Self::with_routes(tls, tunnel, Arc::default(), timings)
     }
 
     /// With `routes`, which the caller may replace while the connector is in use.
@@ -282,11 +286,13 @@ impl TunnelConnector {
         tls: Arc<ClientConfig>,
         tunnel: Arc<dyn Tunnel>,
         routes: Arc<OnionRoutes>,
+        timings: TunnelTimings,
     ) -> Self {
         Self {
             direct: TcpConnector::new(tls),
             tunnel,
             routes,
+            timings,
             discovered: Mutex::default(),
             retry_after: Mutex::default(),
         }
@@ -339,7 +345,9 @@ impl TunnelConnector {
                     Ok(target) => Ok(Some(target)),
                     Err(error @ (DiscoveryError::Io(_) | DiscoveryError::Timeout)) => {
                         debug!(error = %error, "epicbox relay could not be asked for its onion");
-                        if let Some(until) = Instant::now().checked_add(DISCOVERY_RETRY) {
+                        if let Some(until) =
+                            Instant::now().checked_add(self.timings.discovery_retry)
+                        {
                             self.retry_after.lock().await.insert(key.clone(), until);
                         }
                         Err(())
@@ -361,7 +369,7 @@ impl TunnelConnector {
 
     async fn discover(&self, endpoint: &RelayEndpoint) -> Result<DialTarget, DiscoveryError> {
         let site = RelayEndpoint::new(endpoint.domain().clone(), None, Security::Tls);
-        let response = tokio::time::timeout(DISCOVERY_TIMEOUT, async {
+        let response = tokio::time::timeout(self.timings.discovery_timeout, async {
             let stream = self
                 .tunnel
                 .open(site.domain().as_str(), DEFAULT_PORT)
@@ -441,7 +449,7 @@ impl Connector for TunnelConnector {
 
     fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
         if self.tunnelled(endpoint) {
-            configured.max(TUNNEL_CONNECT_TIMEOUT)
+            configured.max(self.timings.connect_timeout)
         } else {
             configured
         }
@@ -581,6 +589,7 @@ mod tests {
             tls(),
             Arc::clone(tunnel) as Arc<dyn Tunnel>,
             Arc::new(OnionRoutes::new(vec![route(MAPPED, &onion())])),
+            crate::testing::tunnel_timings(),
         )
     }
 
@@ -633,6 +642,7 @@ mod tests {
             tls(),
             Arc::clone(&tunnel) as Arc<dyn Tunnel>,
             Arc::clone(&routes),
+            crate::testing::tunnel_timings(),
         );
         let other = format!("{}.onion", "b".repeat(56));
         routes.replace(vec![OnionRoute {
@@ -693,7 +703,10 @@ mod tests {
         assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
         assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
         assert_eq!(asked(), 1);
-        tokio::time::advance(DISCOVERY_RETRY + Duration::from_secs(1)).await;
+        tokio::time::advance(
+            crate::testing::tunnel_timings().discovery_retry + Duration::from_secs(1),
+        )
+        .await;
         assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
         assert_eq!(asked(), 2);
     }
@@ -883,7 +896,7 @@ mod tests {
         let endpoint = relay("relay.example", 443);
         assert_eq!(
             connector.connect_timeout(&endpoint, Duration::from_secs(15)),
-            TUNNEL_CONNECT_TIMEOUT
+            crate::testing::tunnel_timings().connect_timeout
         );
         assert_eq!(
             connector.connect_timeout(&endpoint, Duration::from_secs(300)),

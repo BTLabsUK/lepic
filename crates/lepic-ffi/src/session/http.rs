@@ -6,9 +6,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
 use lepic_foreign::{
-    ClientSettings, Exposure, ForeignClient, ForeignUrl, HttpTransport, ListenError,
-    ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler, Refusal, TRANSPORT_ID, UrlError,
-    webpki_tls_config,
+    Exposure, ForeignClient, ForeignUrl, HttpTransport, ListenError, ListenSettings,
+    ListenerHandle, PlainHttp, ReceiveHandler, Refusal, TRANSPORT_ID, UrlError, webpki_tls_config,
 };
 use lepic_node::Propagation;
 use lepic_store::TxId;
@@ -25,6 +24,7 @@ use crate::api::http::{
     HttpResentTx, HttpSentTx,
 };
 use crate::api::types::SendOptions;
+use crate::tuning::Tuning;
 
 /// Where the HTTP listener's events go.
 pub(crate) type HttpReport = Arc<dyn Fn(HttpListenerEvent) + Send + Sync>;
@@ -42,13 +42,10 @@ pub(super) enum HttpListener {
     },
 }
 
-pub(super) fn http_transport() -> Result<HttpTransport, WalletError> {
+pub(super) fn http_transport(tuning: &Tuning) -> Result<HttpTransport, WalletError> {
     let tls = webpki_tls_config()
         .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
-    Ok(HttpTransport::new(ForeignClient::new(
-        ClientSettings::default(),
-        tls,
-    )))
+    Ok(HttpTransport::new(ForeignClient::new(tuning.send, tls)))
 }
 
 fn foreign_url(url: &str, allow_plain_http: bool) -> Result<ForeignUrl, WalletError> {
@@ -248,7 +245,7 @@ impl Session {
             *slot = HttpListener::Starting(generation);
         }
         let receiver = self.http_receiver(Arc::clone(&report), TRANSPORT_ID);
-        let settings = ListenSettings::new(self::exposure(exposure), port);
+        let settings = ListenSettings::new(self::exposure(exposure), port, self.tuning.listen);
         let listening = lepic_foreign::listen(settings, receiver).await;
         let handle = match listening {
             Ok(handle) => handle,

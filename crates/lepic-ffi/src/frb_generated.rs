@@ -10227,6 +10227,32 @@ impl SseDecode for crate::api::types::ContactView {
     }
 }
 
+impl SseDecode for crate::api::types::EpicboxTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_connectTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_responseTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_pingIntervalS = <u32>::sse_decode(deserializer);
+        let mut var_reconnectMinS = <u32>::sse_decode(deserializer);
+        let mut var_reconnectMaxS = <u32>::sse_decode(deserializer);
+        let mut var_drainTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_torConnectTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_onionDiscoveryTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_onionDiscoveryRetryS = <u32>::sse_decode(deserializer);
+        return crate::api::types::EpicboxTuning {
+            connect_timeout_s: var_connectTimeoutS,
+            response_timeout_s: var_responseTimeoutS,
+            ping_interval_s: var_pingIntervalS,
+            reconnect_min_s: var_reconnectMinS,
+            reconnect_max_s: var_reconnectMaxS,
+            drain_timeout_s: var_drainTimeoutS,
+            tor_connect_timeout_s: var_torConnectTimeoutS,
+            onion_discovery_timeout_s: var_onionDiscoveryTimeoutS,
+            onion_discovery_retry_s: var_onionDiscoveryRetryS,
+        };
+    }
+}
+
 impl SseDecode for crate::api::types::FailedPairing {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -10397,6 +10423,34 @@ impl SseDecode for crate::api::http::HttpSentTx {
             amount: var_amount,
             fee: var_fee,
             posted: var_posted,
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::HttpTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_headerTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_bodyTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_requestTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_answerTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_maxConnections = <u32>::sse_decode(deserializer);
+        let mut var_maxConnectionsPerAddress = <u32>::sse_decode(deserializer);
+        let mut var_requestsPerMinute = <u32>::sse_decode(deserializer);
+        let mut var_receivesPerMinute = <u32>::sse_decode(deserializer);
+        let mut var_sendConnectTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_sendRequestTimeoutS = <u32>::sse_decode(deserializer);
+        return crate::api::types::HttpTuning {
+            header_timeout_s: var_headerTimeoutS,
+            body_timeout_s: var_bodyTimeoutS,
+            request_timeout_s: var_requestTimeoutS,
+            answer_timeout_s: var_answerTimeoutS,
+            max_connections: var_maxConnections,
+            max_connections_per_address: var_maxConnectionsPerAddress,
+            requests_per_minute: var_requestsPerMinute,
+            receives_per_minute: var_receivesPerMinute,
+            send_connect_timeout_s: var_sendConnectTimeoutS,
+            send_request_timeout_s: var_sendRequestTimeoutS,
         };
     }
 }
@@ -10885,6 +10939,22 @@ impl SseDecode for crate::api::diagnostics::LogLevel {
     }
 }
 
+impl SseDecode for crate::api::types::NetTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_node = <crate::api::types::NodeTuning>::sse_decode(deserializer);
+        let mut var_epicbox = <crate::api::types::EpicboxTuning>::sse_decode(deserializer);
+        let mut var_http = <crate::api::types::HttpTuning>::sse_decode(deserializer);
+        let mut var_tor = <crate::api::types::TorTuning>::sse_decode(deserializer);
+        return crate::api::types::NetTuning {
+            node: var_node,
+            epicbox: var_epicbox,
+            http: var_http,
+            tor: var_tor,
+        };
+    }
+}
+
 impl SseDecode for crate::api::types::NodeTip {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -10897,6 +10967,30 @@ impl SseDecode for crate::api::types::NodeTip {
             node_version: var_nodeVersion,
             ready_for_txs: var_readyForTxs,
             tip_time_ms: var_tipTimeMs,
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::NodeTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_connectTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_requestTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_idleTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_retryAttempts = <u32>::sse_decode(deserializer);
+        let mut var_retryBackoffMinMs = <u32>::sse_decode(deserializer);
+        let mut var_retryBackoffMaxMs = <u32>::sse_decode(deserializer);
+        let mut var_outputsPerRequest = <u32>::sse_decode(deserializer);
+        let mut var_concurrentRequests = <u32>::sse_decode(deserializer);
+        return crate::api::types::NodeTuning {
+            connect_timeout_s: var_connectTimeoutS,
+            request_timeout_s: var_requestTimeoutS,
+            idle_timeout_s: var_idleTimeoutS,
+            retry_attempts: var_retryAttempts,
+            retry_backoff_min_ms: var_retryBackoffMinMs,
+            retry_backoff_max_ms: var_retryBackoffMaxMs,
+            outputs_per_request: var_outputsPerRequest,
+            concurrent_requests: var_concurrentRequests,
         };
     }
 }
@@ -11919,6 +12013,28 @@ impl SseDecode for crate::api::tor::TorStatusKind {
     }
 }
 
+impl SseDecode for crate::api::types::TorTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_bootstrapTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_coldBootstrapTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_stallTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_coldStallTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_publishTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_connectTimeoutS = <u32>::sse_decode(deserializer);
+        let mut var_requestTimeoutS = <u32>::sse_decode(deserializer);
+        return crate::api::types::TorTuning {
+            bootstrap_timeout_s: var_bootstrapTimeoutS,
+            cold_bootstrap_timeout_s: var_coldBootstrapTimeoutS,
+            stall_timeout_s: var_stallTimeoutS,
+            cold_stall_timeout_s: var_coldStallTimeoutS,
+            publish_timeout_s: var_publishTimeoutS,
+            connect_timeout_s: var_connectTimeoutS,
+            request_timeout_s: var_requestTimeoutS,
+        };
+    }
+}
+
 impl SseDecode for crate::api::types::TransactionDetails {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -12129,6 +12245,7 @@ impl SseDecode for crate::api::types::WalletConfig {
         let mut var_epicboxDomain = <String>::sse_decode(deserializer);
         let mut var_epicboxPort = <u16>::sse_decode(deserializer);
         let mut var_onionRoutes = <Vec<crate::api::tor::OnionRoute>>::sse_decode(deserializer);
+        let mut var_tuning = <crate::api::types::NetTuning>::sse_decode(deserializer);
         return crate::api::types::WalletConfig {
             data_dir: var_dataDir,
             chain: var_chain,
@@ -12137,6 +12254,7 @@ impl SseDecode for crate::api::types::WalletConfig {
             epicbox_domain: var_epicboxDomain,
             epicbox_port: var_epicboxPort,
             onion_routes: var_onionRoutes,
+            tuning: var_tuning,
         };
     }
 }
@@ -13438,6 +13556,34 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ContactView>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::EpicboxTuning {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.connect_timeout_s.into_into_dart().into_dart(),
+            self.response_timeout_s.into_into_dart().into_dart(),
+            self.ping_interval_s.into_into_dart().into_dart(),
+            self.reconnect_min_s.into_into_dart().into_dart(),
+            self.reconnect_max_s.into_into_dart().into_dart(),
+            self.drain_timeout_s.into_into_dart().into_dart(),
+            self.tor_connect_timeout_s.into_into_dart().into_dart(),
+            self.onion_discovery_timeout_s.into_into_dart().into_dart(),
+            self.onion_discovery_retry_s.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::EpicboxTuning
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::EpicboxTuning>
+    for crate::api::types::EpicboxTuning
+{
+    fn into_into_dart(self) -> crate::api::types::EpicboxTuning {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::FailedPairing {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -13697,6 +13843,34 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::http::HttpSentTx>
     for crate::api::http::HttpSentTx
 {
     fn into_into_dart(self) -> crate::api::http::HttpSentTx {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::HttpTuning {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.header_timeout_s.into_into_dart().into_dart(),
+            self.body_timeout_s.into_into_dart().into_dart(),
+            self.request_timeout_s.into_into_dart().into_dart(),
+            self.answer_timeout_s.into_into_dart().into_dart(),
+            self.max_connections.into_into_dart().into_dart(),
+            self.max_connections_per_address
+                .into_into_dart()
+                .into_dart(),
+            self.requests_per_minute.into_into_dart().into_dart(),
+            self.receives_per_minute.into_into_dart().into_dart(),
+            self.send_connect_timeout_s.into_into_dart().into_dart(),
+            self.send_request_timeout_s.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::HttpTuning {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::HttpTuning>
+    for crate::api::types::HttpTuning
+{
+    fn into_into_dart(self) -> crate::api::types::HttpTuning {
         self
     }
 }
@@ -14085,6 +14259,26 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::diagnostics::LogLevel>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::NetTuning {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.node.into_into_dart().into_dart(),
+            self.epicbox.into_into_dart().into_dart(),
+            self.http.into_into_dart().into_dart(),
+            self.tor.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::NetTuning {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::NetTuning>
+    for crate::api::types::NetTuning
+{
+    fn into_into_dart(self) -> crate::api::types::NetTuning {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::NodeTip {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -14099,6 +14293,30 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::NodeTip {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::NodeTip {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::types::NodeTip> for crate::api::types::NodeTip {
     fn into_into_dart(self) -> crate::api::types::NodeTip {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::NodeTuning {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.connect_timeout_s.into_into_dart().into_dart(),
+            self.request_timeout_s.into_into_dart().into_dart(),
+            self.idle_timeout_s.into_into_dart().into_dart(),
+            self.retry_attempts.into_into_dart().into_dart(),
+            self.retry_backoff_min_ms.into_into_dart().into_dart(),
+            self.retry_backoff_max_ms.into_into_dart().into_dart(),
+            self.outputs_per_request.into_into_dart().into_dart(),
+            self.concurrent_requests.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::NodeTuning {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::NodeTuning>
+    for crate::api::types::NodeTuning
+{
+    fn into_into_dart(self) -> crate::api::types::NodeTuning {
         self
     }
 }
@@ -15126,6 +15344,29 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::tor::TorStatusKind>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::TorTuning {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.bootstrap_timeout_s.into_into_dart().into_dart(),
+            self.cold_bootstrap_timeout_s.into_into_dart().into_dart(),
+            self.stall_timeout_s.into_into_dart().into_dart(),
+            self.cold_stall_timeout_s.into_into_dart().into_dart(),
+            self.publish_timeout_s.into_into_dart().into_dart(),
+            self.connect_timeout_s.into_into_dart().into_dart(),
+            self.request_timeout_s.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::TorTuning {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::TorTuning>
+    for crate::api::types::TorTuning
+{
+    fn into_into_dart(self) -> crate::api::types::TorTuning {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -15334,6 +15575,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletConfig {
             self.epicbox_domain.into_into_dart().into_dart(),
             self.epicbox_port.into_into_dart().into_dart(),
             self.onion_routes.into_into_dart().into_dart(),
+            self.tuning.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -15971,6 +16213,21 @@ impl SseEncode for crate::api::types::ContactView {
     }
 }
 
+impl SseEncode for crate::api::types::EpicboxTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.connect_timeout_s, serializer);
+        <u32>::sse_encode(self.response_timeout_s, serializer);
+        <u32>::sse_encode(self.ping_interval_s, serializer);
+        <u32>::sse_encode(self.reconnect_min_s, serializer);
+        <u32>::sse_encode(self.reconnect_max_s, serializer);
+        <u32>::sse_encode(self.drain_timeout_s, serializer);
+        <u32>::sse_encode(self.tor_connect_timeout_s, serializer);
+        <u32>::sse_encode(self.onion_discovery_timeout_s, serializer);
+        <u32>::sse_encode(self.onion_discovery_retry_s, serializer);
+    }
+}
+
 impl SseEncode for crate::api::types::FailedPairing {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -16113,6 +16370,22 @@ impl SseEncode for crate::api::http::HttpSentTx {
         <u64>::sse_encode(self.amount, serializer);
         <u64>::sse_encode(self.fee, serializer);
         <bool>::sse_encode(self.posted, serializer);
+    }
+}
+
+impl SseEncode for crate::api::types::HttpTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.header_timeout_s, serializer);
+        <u32>::sse_encode(self.body_timeout_s, serializer);
+        <u32>::sse_encode(self.request_timeout_s, serializer);
+        <u32>::sse_encode(self.answer_timeout_s, serializer);
+        <u32>::sse_encode(self.max_connections, serializer);
+        <u32>::sse_encode(self.max_connections_per_address, serializer);
+        <u32>::sse_encode(self.requests_per_minute, serializer);
+        <u32>::sse_encode(self.receives_per_minute, serializer);
+        <u32>::sse_encode(self.send_connect_timeout_s, serializer);
+        <u32>::sse_encode(self.send_request_timeout_s, serializer);
     }
 }
 
@@ -16525,6 +16798,16 @@ impl SseEncode for crate::api::diagnostics::LogLevel {
     }
 }
 
+impl SseEncode for crate::api::types::NetTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::types::NodeTuning>::sse_encode(self.node, serializer);
+        <crate::api::types::EpicboxTuning>::sse_encode(self.epicbox, serializer);
+        <crate::api::types::HttpTuning>::sse_encode(self.http, serializer);
+        <crate::api::types::TorTuning>::sse_encode(self.tor, serializer);
+    }
+}
+
 impl SseEncode for crate::api::types::NodeTip {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -16532,6 +16815,20 @@ impl SseEncode for crate::api::types::NodeTip {
         <String>::sse_encode(self.node_version, serializer);
         <Option<bool>>::sse_encode(self.ready_for_txs, serializer);
         <Option<i64>>::sse_encode(self.tip_time_ms, serializer);
+    }
+}
+
+impl SseEncode for crate::api::types::NodeTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.connect_timeout_s, serializer);
+        <u32>::sse_encode(self.request_timeout_s, serializer);
+        <u32>::sse_encode(self.idle_timeout_s, serializer);
+        <u32>::sse_encode(self.retry_attempts, serializer);
+        <u32>::sse_encode(self.retry_backoff_min_ms, serializer);
+        <u32>::sse_encode(self.retry_backoff_max_ms, serializer);
+        <u32>::sse_encode(self.outputs_per_request, serializer);
+        <u32>::sse_encode(self.concurrent_requests, serializer);
     }
 }
 
@@ -17399,6 +17696,19 @@ impl SseEncode for crate::api::tor::TorStatusKind {
     }
 }
 
+impl SseEncode for crate::api::types::TorTuning {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.bootstrap_timeout_s, serializer);
+        <u32>::sse_encode(self.cold_bootstrap_timeout_s, serializer);
+        <u32>::sse_encode(self.stall_timeout_s, serializer);
+        <u32>::sse_encode(self.cold_stall_timeout_s, serializer);
+        <u32>::sse_encode(self.publish_timeout_s, serializer);
+        <u32>::sse_encode(self.connect_timeout_s, serializer);
+        <u32>::sse_encode(self.request_timeout_s, serializer);
+    }
+}
+
 impl SseEncode for crate::api::types::TransactionDetails {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -17601,6 +17911,7 @@ impl SseEncode for crate::api::types::WalletConfig {
         <String>::sse_encode(self.epicbox_domain, serializer);
         <u16>::sse_encode(self.epicbox_port, serializer);
         <Vec<crate::api::tor::OnionRoute>>::sse_encode(self.onion_routes, serializer);
+        <crate::api::types::NetTuning>::sse_encode(self.tuning, serializer);
     }
 }
 

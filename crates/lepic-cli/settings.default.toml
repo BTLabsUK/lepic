@@ -1,0 +1,24 @@
+# LEPIC command-line wallet settings: the first-start copy of the CLI's settings.toml.
+#
+# The layout is the Epic Cash wallet app's user settings.toml. The CLI writes this file to
+# ~/.lepic/settings.toml once, when it finds none, and never changes it after that. It reads
+# [node] servers and [epicbox] servers and ignores every other key and section, so a copy of
+# the app's file works here too. Timeouts, ports and the servers' onions are not user settings:
+# they are in the CLI's built-in configuration (docs/cli.md).
+
+# The layout version of this file.
+version = 1
+
+[node]
+# The nodes the wallet knows; the first is the one in use on mainnet unless node_url in
+# config.toml (or LEPIC_NODE_URL) names another.
+servers = ["http://127.0.0.1:3413"]
+
+[epicbox]
+# The Epicbox servers the wallet knows, each "host" or "host:port", over TLS. The first is the
+# one in use unless epicbox_relay in config.toml (or LEPIC_EPICBOX_RELAY) names another.
+# Pairing words go to the first few of them. At most 16.
+servers = ["epicbox.epiccash.com", "epicbox.stackwallet.com", "epicbox.epicnet.us", "epicbox.btlabs.uk"]
+
+[online]
+# The app's online services. The CLI uses none of them.

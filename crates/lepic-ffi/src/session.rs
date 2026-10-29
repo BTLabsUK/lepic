@@ -69,6 +69,7 @@ use crate::api::types::{
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
 use crate::node::{BackendCache, BackendKey, Node, NodeBackend, NodeSecret, RelayTor, node_error};
+use crate::tuning::Tuning;
 use crate::vault_port::{
     AppVault, SharedStorage, VAULT_KEY, VAULT_NEXT_KEY, VaultBytes, decode, vault_error,
 };
@@ -220,6 +221,8 @@ pub(crate) struct Session {
     pub(crate) onion_routes: Arc<OnionRoutes>,
     /// The backend [`Session::node_tip_for`] asked last.
     node_tips: BackendCache<NodeBackend>,
+    /// The tuning of the config the session was opened with.
+    pub(crate) tuning: Tuning,
     #[cfg(all(test, feature = "tor"))]
     tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
     /// Makes the next listen fail before it subscribes.
@@ -325,7 +328,7 @@ fn relay_endpoint(config: &WalletConfig) -> Result<RelayEndpoint, WalletError> {
 
 fn epicbox_transport(
     runtime: &RuntimeInner,
-    config: &WalletConfig,
+    (config, tuning): (&WalletConfig, &Tuning),
     network: Network,
     relay_tor: &Arc<RelayTor>,
     onion_routes: &Arc<OnionRoutes>,
@@ -337,7 +340,7 @@ fn epicbox_transport(
     #[cfg(feature = "mock")]
     if let Some(relay) = &runtime.relay {
         return Ok(Some(EpicboxTransport::new(
-            ClientSettings::new(endpoint),
+            ClientSettings::new(endpoint, tuning.relay),
             relay_network(network),
             Arc::clone(relay),
         )));
@@ -350,6 +353,7 @@ fn epicbox_transport(
         tls,
         Arc::new(tor::RelayTunnel(Arc::clone(relay_tor))),
         Arc::clone(onion_routes),
+        tuning.tunnel,
     ));
     // No tor to go through: the relay is always reached directly.
     #[cfg(not(feature = "tor"))]
@@ -358,7 +362,7 @@ fn epicbox_transport(
         Arc::new(lepic_epicbox::TcpConnector::new(tls))
     };
     Ok(Some(EpicboxTransport::new(
-        ClientSettings::new(endpoint),
+        ClientSettings::new(endpoint, tuning.relay),
         relay_network(network),
         connector,
     )))
@@ -375,7 +379,10 @@ struct SessionTransports {
 
 /// Registers the file transport, `epicbox` when the wallet has one, the HTTP transport and,
 /// with the `tor` feature, the Tor transport.
-fn session_transports(epicbox: Option<&EpicboxSlot>) -> Result<SessionTransports, WalletError> {
+fn session_transports(
+    epicbox: Option<&EpicboxSlot>,
+    tuning: &Tuning,
+) -> Result<SessionTransports, WalletError> {
     let mut registry = TransportRegistry::new();
     let mut ids = vec![FILE];
     registry
@@ -387,13 +394,13 @@ fn session_transports(epicbox: Option<&EpicboxSlot>) -> Result<SessionTransports
             .map_err(|error| invalid(error.to_string()))?;
         ids.push(TRANSPORT_ID);
     }
-    let http = http::http_transport()?;
+    let http = http::http_transport(tuning)?;
     registry
         .register(Box::new(http.clone()))
         .map_err(|error| invalid(error.to_string()))?;
     ids.push(lepic_foreign::TRANSPORT_ID);
     #[cfg(feature = "tor")]
-    let tor = tor::tor_transport();
+    let tor = tor::tor_transport(tuning);
     #[cfg(feature = "tor")]
     {
         registry
@@ -451,14 +458,18 @@ impl Session {
         store: AppSecretStore,
     ) -> Result<Self, WalletError> {
         let network = config.chain.network();
+        let tuning = Tuning::check(&config.tuning)?;
         let data_dir = PathBuf::from(&config.data_dir);
         let claim = runtime.claim(&data_dir).await?;
         let data_dir = claim.dir.clone();
         let claim = ClaimHolder::new(claim);
         #[cfg(feature = "tor")]
-        let (node_tor, relay_tor) = tor::session_routes(&data_dir);
+        let (node_tor, relay_tor) = tor::session_routes(&data_dir, tuning.tor_connect_timeout());
         #[cfg(not(feature = "tor"))]
-        let (node_tor, relay_tor) = (RelayTor::new(true), RelayTor::new(true));
+        let (node_tor, relay_tor) = (
+            RelayTor::new(true, tuning.tor_connect_timeout()),
+            RelayTor::new(true, tuning.tor_connect_timeout()),
+        );
         let node_tor = Arc::new(node_tor);
         let relay_tor = Arc::new(relay_tor);
         #[cfg(feature = "tor")]
@@ -468,18 +479,25 @@ impl Session {
         // Without tor no connection goes to an onion.
         #[cfg(not(feature = "tor"))]
         let onion_routes = Arc::new(OnionRoutes::default());
-        let node = runtime
-            .nodes
-            .client(config, node_secret, &node_tor, &onion_routes)?;
-        let epicbox = epicbox_transport(runtime, config, network, &relay_tor, &onion_routes)?
-            .map(EpicboxSlot::new);
+        let node =
+            runtime
+                .nodes
+                .client((config, &tuning), node_secret, &node_tor, &onion_routes)?;
+        let epicbox = epicbox_transport(
+            runtime,
+            (config, &tuning),
+            network,
+            &relay_tor,
+            &onion_routes,
+        )?
+        .map(EpicboxSlot::new);
         let SessionTransports {
             registry,
             ids,
             http,
             #[cfg(feature = "tor")]
             tor,
-        } = session_transports(epicbox.as_ref())?;
+        } = session_transports(epicbox.as_ref(), &tuning)?;
         let vault = VaultBytes::default();
         let engine = engine(
             runtime,
@@ -516,6 +534,7 @@ impl Session {
             tor_expected: AtomicBool::new(false),
             onion_routes,
             node_tips: BackendCache::default(),
+            tuning,
             #[cfg(all(test, feature = "tor"))]
             tor_timings: Mutex::default(),
             #[cfg(test)]
@@ -2118,10 +2137,11 @@ pub(crate) async fn node_tip(
     config: &WalletConfig,
     node_secret: &NodeSecret,
 ) -> Result<NodeTip, WalletError> {
+    let tuning = Tuning::check(&config.tuning)?;
     let node = runtime.nodes.client(
-        config,
+        (config, &tuning),
         node_secret,
-        &Arc::new(RelayTor::direct(true)),
+        &Arc::new(RelayTor::direct(true, tuning.tor_connect_timeout())),
         &Arc::new(OnionRoutes::default()),
     )?;
     ask_node_tip(&node).await
@@ -2143,13 +2163,13 @@ impl Session {
             self.node_tips
                 .get_or_build(BackendKey::new(config, node_secret, over_tor), || {
                     self.runtime.nodes.backend(
-                        config,
+                        (config, &self.tuning),
                         node_secret,
                         &self.node_tor,
                         &self.onion_routes,
                     )
                 })?;
-        ask_node_tip(&self.runtime.nodes.client_over(backend)).await
+        ask_node_tip(&self.runtime.nodes.client_over(backend, &self.tuning)).await
     }
 }
 
@@ -2293,6 +2313,7 @@ mod tests {
             epicbox_domain: domain.to_owned(),
             epicbox_port: 3423,
             onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
         }
     }
 
@@ -2683,6 +2704,7 @@ mod tests {
                 epicbox_domain: "epicbox.example".to_owned(),
                 epicbox_port: 443,
                 onion_routes: Vec::new(),
+                tuning: crate::tuning::shipped(),
             };
             let secret = NodeSecret::take(&mut config);
             let session = Session::new(

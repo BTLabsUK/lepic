@@ -118,9 +118,7 @@ impl FakeTor {
 
     fn settings(&self, timings: TorTimings) -> TorSettings {
         let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-tor.sh");
-        let mut settings = TorSettings::new(binary, self.dir.path().join("tor"));
-        settings.timings = timings;
-        settings
+        TorSettings::new(binary, self.dir.path().join("tor"), timings)
     }
 
     fn commands(&self) -> Vec<String> {
@@ -473,6 +471,7 @@ async fn a_missing_binary_is_reported_as_missing() {
     let tor = TorProcess::start(TorSettings::new(
         dir.path().join("no-tor-here"),
         dir.path().join("tor"),
+        lepic_tor::testing::tor_timings(),
     ));
     assert_eq!(wait_for_failure(&tor).await, FailureKind::Missing);
 }

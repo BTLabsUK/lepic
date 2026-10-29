@@ -7,11 +7,15 @@ pub mod client;
 pub mod error;
 pub mod rpc;
 pub mod server;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod transport;
 pub mod url;
 
 pub use client::{ClientSettings, ForeignClient, webpki_tls_config};
 pub use error::{ClientError, ListenError, RpcError, UrlError};
-pub use server::{Exposure, ListenSettings, ListenerHandle, ReceiveHandler, Refusal, listen};
+pub use server::{
+    Exposure, ListenLimits, ListenSettings, ListenerHandle, ReceiveHandler, Refusal, listen,
+};
 pub use transport::{HttpPolicy, HttpTransport, TRANSPORT_ID};
 pub use url::{DEFAULT_LISTEN_PORT, ForeignUrl, PlainHttp, Scheme};

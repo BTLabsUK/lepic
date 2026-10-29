@@ -115,7 +115,7 @@ impl MockNode {
             self.clone(),
             CallPolicy {
                 retry: RetryPolicy::NONE,
-                ..CallPolicy::default()
+                ..crate::testing::call_policy()
             },
         )
     }

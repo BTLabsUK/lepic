@@ -15,6 +15,8 @@ pub mod mock_relay;
 mod prefilter;
 mod push;
 mod session;
+#[cfg(any(test, feature = "mock-relay"))]
+pub mod testing;
 pub mod transport;
 pub mod tunnel;
 
@@ -25,7 +27,8 @@ pub use address_signature::{
     address_message_verifies, key_message_verifies, sign_address_message, verify_address_message,
 };
 pub use client::{
-    Awaiting, Backoff, ClientError, ClientSettings, EpicboxClient, Identity, TRANSPORT_ID,
+    Awaiting, Backoff, ClientError, ClientSettings, ClientTimings, EpicboxClient, Identity,
+    TRANSPORT_ID,
 };
 pub use client_inbox::{
     ConnectionState, Disconnect, InboxCounters, Mode, RELAY_RETENTION, Rejection, RejectionReason,
@@ -43,9 +46,9 @@ pub use frame::{
 };
 pub use json::JsonProblem;
 pub use mailbox::{
-    DEFAULT_DRAIN_TIMEOUT, DrainLimits, DrainReport, Handled, MAX_MAILBOXES_PER_DRAIN,
-    MAX_MESSAGES_PER_MAILBOX, MailboxClient, MailboxContent, MailboxEnd, MailboxError,
-    MailboxHandler, MailboxMessage, MailboxReport,
+    DrainLimits, DrainReport, Handled, MAX_MAILBOXES_PER_DRAIN, MAX_MESSAGES_PER_MAILBOX,
+    MailboxClient, MailboxContent, MailboxEnd, MailboxError, MailboxHandler, MailboxMessage,
+    MailboxReport,
 };
 pub use prefilter::{Admission, Prefilter};
 pub use push::{MAX_PUSH_TOKEN_LEN, PushAction, PushError, PushRequest};

@@ -536,9 +536,9 @@ served at once and 30 payments a minute are taken.")]
 
 #[derive(Debug, Args)]
 pub struct HttpListenArgs {
-    /// Port to listen on; 0 lets the system pick one
-    #[arg(long, value_name = "PORT", default_value_t = 3415)]
-    pub port: u16,
+    /// Port to listen on, else the configured listen port; 0 lets the system pick one
+    #[arg(long, value_name = "PORT")]
+    pub port: Option<u16>,
     /// Listen on every network interface instead of this computer only
     #[arg(long)]
     pub internet: bool,

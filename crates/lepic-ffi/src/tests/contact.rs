@@ -66,6 +66,7 @@ impl World {
             epicbox_domain: epicbox_domain.to_owned(),
             epicbox_port: 443,
             onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
         };
         self.dirs.push(dir);
         config

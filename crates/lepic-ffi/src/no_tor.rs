@@ -29,14 +29,14 @@ pub(crate) struct RelayTor {
 }
 
 impl RelayTor {
-    pub(crate) fn new(_enabled: bool) -> Self {
+    pub(crate) fn new(_enabled: bool, _connect_timeout: std::time::Duration) -> Self {
         Self {
             active: watch::Sender::new(false),
         }
     }
 
-    pub(crate) fn direct(enabled: bool) -> Self {
-        Self::new(enabled)
+    pub(crate) fn direct(enabled: bool, connect_timeout: std::time::Duration) -> Self {
+        Self::new(enabled, connect_timeout)
     }
 
     /// Always `false`.
