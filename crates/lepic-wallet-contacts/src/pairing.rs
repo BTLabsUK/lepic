@@ -339,10 +339,10 @@ where
     /// sent.
     ///
     /// With `offer_words` the invite lasts 10 minutes and is also posted, sealed with five
-    /// pairing words, to a rendezvous mailbox on each built-in relay (RFC 0002 7.7), whatever
-    /// the home relay is; the reply still goes to the home relay. With no built-in relay for the
-    /// network this fails with [`ContactError::WordsUnavailable`]; Offline or Epicbox off fail
-    /// before anything is stored, and when no built-in relay takes the post this is
+    /// pairing words, to a rendezvous mailbox on each meeting relay (RFC 0002 7.7), whatever
+    /// the home relay is; the reply still goes to the home relay. With no meeting relay named
+    /// this fails with [`ContactError::WordsUnavailable`]; Offline or Epicbox off fail
+    /// before anything is stored, and when no meeting relay takes the post this is
     /// [`ContactError::Relay`], with the invite withdrawn.
     ///
     /// Fails with [`ContactError::Name`] for a name the card cannot carry, with
@@ -1242,7 +1242,7 @@ fn new_keys(
 }
 
 /// How long a new invite lasts. Words are posted, so offering them needs a relay reachable
-/// before anything is stored and a built-in relay to post to.
+/// before anything is stored and a meeting relay to post to.
 fn invite_lifetime(
     relays: &ContactRelays,
     request: &InviteRequest,
@@ -1253,7 +1253,7 @@ fn invite_lifetime(
     }
     if request.offer_words {
         super::relay::check_online(relays)?;
-        if relays.built_in.is_empty() {
+        if relays.meeting.is_empty() {
             return Err(ContactError::WordsUnavailable);
         }
     }

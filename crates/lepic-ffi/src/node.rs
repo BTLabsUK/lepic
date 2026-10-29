@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use lepic_epicbox::tunnel::OnionRoutes;
 use lepic_node::{
-    CallPolicy, DialFuture, HttpSettings, HttpTransport, NodeClient, NodeDialer, NodeError,
-    NodeStream, RpcTransport, is_loopback_host, webpki_tls_config,
+    CallPolicy, DialFuture, HttpTransport, NodeClient, NodeDialer, NodeError, NodeStream,
+    RpcTransport, is_loopback_host, webpki_tls_config,
 };
 use tokio::net::TcpStream;
 
@@ -17,6 +17,7 @@ use zeroize::Zeroizing;
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::WalletConfig;
+use crate::tuning::Tuning;
 // The wallet's tor as a way to the node, or a stand-in that never is in a build without Tor.
 #[cfg(not(feature = "tor"))]
 pub(crate) use crate::no_tor::{RelayTor, RelayTorError};
@@ -154,38 +155,32 @@ impl NodeFactory {
     /// A client for the node `config` names, authenticating with `secret`.
     pub(crate) fn client(
         &self,
-        config: &WalletConfig,
+        (config, tuning): (&WalletConfig, &Tuning),
         secret: &NodeSecret,
         tor: &Arc<RelayTor>,
         routes: &Arc<OnionRoutes>,
     ) -> Result<Node, WalletError> {
-        Ok(self.client_over(self.backend(config, secret, tor, routes)?))
+        Ok(self.client_over(self.backend((config, tuning), secret, tor, routes)?, tuning))
     }
 
     /// A client of its own over `backend`, which clones share: what the client has seen of the
     /// chain starts afresh, the connections do not.
-    pub(crate) fn client_over(&self, backend: NodeBackend) -> Node {
-        NodeClient::new(SwitchableBackend::new(backend), self.policy())
+    pub(crate) fn client_over(&self, backend: NodeBackend, tuning: &Tuning) -> Node {
+        NodeClient::new(SwitchableBackend::new(backend), self.policy(tuning))
     }
 
     /// The backend for the node `config` names: `InvalidArgument` for a URL that is not one
     /// of a node.
     pub(crate) fn backend(
         &self,
-        config: &WalletConfig,
+        (config, tuning): (&WalletConfig, &Tuning),
         secret: &NodeSecret,
         tor: &Arc<RelayTor>,
         routes: &Arc<OnionRoutes>,
     ) -> Result<NodeBackend, WalletError> {
         match self {
             Self::Http => {
-                let settings = HttpSettings {
-                    api_secret: secret.0.as_deref().map(Into::into),
-                    connect_timeout: Duration::from_secs(15),
-                    // Room for a first circuit to the node's onion.
-                    request_timeout: Duration::from_secs(90),
-                    ..HttpSettings::default()
-                };
+                let settings = tuning.node_http(secret.0.as_deref());
                 let tls = webpki_tls_config().map_err(|error| node_config_error(&error))?;
                 let dialer = Arc::new(TorNodeDialer {
                     tor: Arc::clone(tor),
@@ -201,11 +196,11 @@ impl NodeFactory {
         }
     }
 
-    fn policy(&self) -> CallPolicy {
+    fn policy(&self, tuning: &Tuning) -> CallPolicy {
         match self {
-            Self::Http => CallPolicy::default(),
+            Self::Http => tuning.call_policy,
             #[cfg(feature = "mock")]
-            Self::Mock(_) => crate::mock::MockBackend::policy(),
+            Self::Mock(_) => crate::mock::MockBackend::policy(tuning),
         }
     }
 }
@@ -279,12 +274,26 @@ mod tests {
 
     use super::*;
 
-    const NODE_ONION: &str = "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion";
+    fn shipped() -> Tuning {
+        Tuning::check(&crate::tuning::shipped()).unwrap()
+    }
+
+    /// The node the test dialer knows an onion for, [`node_onion`].
+    const MAPPED_NODE: &str = "mappednode.example";
+
+    fn node_onion() -> String {
+        lepic_tor::OnionAddress::from_public_key(&[5; 32]).host()
+    }
 
     fn dialer(tor: &Arc<RelayTor>) -> TorNodeDialer {
         TorNodeDialer {
             tor: Arc::clone(tor),
-            routes: Arc::new(OnionRoutes::default()),
+            routes: Arc::new(OnionRoutes::new(vec![lepic_epicbox::tunnel::OnionRoute {
+                domain: lepic_epicbox::Domain::parse(MAPPED_NODE).unwrap(),
+                port: 443,
+                onion: node_onion(),
+                onion_port: 443,
+            }])),
             connect_timeout: Duration::from_secs(5),
         }
     }
@@ -318,29 +327,30 @@ mod tests {
         (address, served)
     }
 
-    /// Manual: `LEPIC_TEST_TOR_SOCKS=127.0.0.1:19150 cargo test -p lepic-ffi
-    /// live_node_through_tor -- --ignored` with a tor listening there. Asks the BT Labs node
-    /// for its tip at its onion, with TLS for `node.btlabs.uk`.
+    /// Manual: `LEPIC_TEST_TOR_SOCKS=127.0.0.1:19150 LEPIC_TEST_NODE_URL=<https url> cargo
+    /// test -p lepic-ffi live_node_through_tor -- --ignored` with a tor listening there. Asks
+    /// the node for its tip through a Tor exit, with TLS for its name.
     #[tokio::test]
-    #[ignore = "needs a running tor and the public node"]
+    #[ignore = "needs a running tor and a public node"]
     async fn live_node_through_tor() {
         let socks: SocketAddr = std::env::var("LEPIC_TEST_TOR_SOCKS")
             .unwrap()
             .parse()
             .unwrap();
-        let tor = Arc::new(RelayTor::new(true));
+        let node_url = std::env::var("LEPIC_TEST_NODE_URL").unwrap();
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         tor.attach_socks(FixedSocks(socks));
         let http = HttpTransport::with_dialer(
-            "https://node.btlabs.uk",
-            &HttpSettings {
+            &node_url,
+            &lepic_node::HttpSettings {
                 request_timeout: Duration::from_secs(120),
-                ..HttpSettings::default()
+                ..shipped().node_http(None)
             },
             webpki_tls_config().unwrap(),
             Arc::new(dialer(&tor)),
         )
         .unwrap();
-        let tip = NodeClient::new(NodeBackend::Http(Box::new(http)), CallPolicy::default())
+        let tip = NodeClient::new(NodeBackend::Http(Box::new(http)), shipped().call_policy)
             .get_tip()
             .await
             .unwrap();
@@ -350,19 +360,19 @@ mod tests {
     #[tokio::test]
     async fn a_listed_node_is_asked_of_tor_as_its_onion_by_name() {
         let (socks, served) = socks_server().await;
-        let tor = Arc::new(RelayTor::new(true));
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         tor.attach_socks(FixedSocks(socks));
-        dialer(&tor).dial("node.btlabs.uk", 443).await.unwrap();
+        dialer(&tor).dial(MAPPED_NODE, 443).await.unwrap();
         assert_eq!(
             served.await.unwrap(),
-            lepic_tor::socks::encode_connect(NODE_ONION, 443).unwrap()
+            lepic_tor::socks::encode_connect(&node_onion(), 443).unwrap()
         );
     }
 
     #[tokio::test]
     async fn another_node_is_asked_of_tor_by_name_so_tor_resolves_it() {
         let (socks, served) = socks_server().await;
-        let tor = Arc::new(RelayTor::new(true));
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         tor.attach_socks(FixedSocks(socks));
         dialer(&tor).dial("node.example", 3413).await.unwrap();
         assert_eq!(
@@ -373,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_connection_waits_for_a_tor_that_is_expected_and_never_goes_direct() {
-        let tor = Arc::new(RelayTor::new(true));
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         tor.expect();
         let waiting = tokio::time::timeout(
             Duration::from_millis(200),
@@ -388,7 +398,7 @@ mod tests {
         let closed = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let socks = closed.local_addr().unwrap();
         drop(closed);
-        let tor = Arc::new(RelayTor::new(true));
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         tor.attach_socks(FixedSocks(socks));
         assert!(dialer(&tor).dial("node.example", 3413).await.is_err());
     }
@@ -397,7 +407,7 @@ mod tests {
     async fn a_loopback_node_stays_direct_while_tor_is_expected() {
         let node = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let port = node.local_addr().unwrap().port();
-        let tor = Arc::new(RelayTor::new(true));
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         tor.expect();
         dialer(&tor).dial("127.0.0.1", port).await.unwrap();
         node.accept().await.unwrap();
@@ -407,7 +417,7 @@ mod tests {
     async fn with_tor_off_or_the_setting_off_the_node_is_reached_directly() {
         let node = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let port = node.local_addr().unwrap().port();
-        let tor = Arc::new(RelayTor::direct(true));
+        let tor = Arc::new(RelayTor::direct(true, Duration::from_secs(75)));
         dialer(&tor).dial("127.0.0.1", port).await.unwrap();
         node.accept().await.unwrap();
 
@@ -424,6 +434,10 @@ mod refusal_tests {
     use super::*;
     use crate::api::types::WalletConfig;
 
+    fn shipped() -> Tuning {
+        Tuning::check(&crate::tuning::shipped()).unwrap()
+    }
+
     fn config(node_url: &str) -> WalletConfig {
         WalletConfig {
             data_dir: String::new(),
@@ -432,6 +446,8 @@ mod refusal_tests {
             node_api_secret: None,
             epicbox_domain: String::new(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
         }
     }
 
@@ -468,7 +484,7 @@ mod refusal_tests {
     #[tokio::test]
     async fn the_cached_backend_asks_the_same_node_again_on_its_open_connection() {
         let (url, accepted) = counting_node().await;
-        let tor = Arc::new(RelayTor::new(true));
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         let routes = Arc::new(OnionRoutes::default());
         let mut config = config(&url);
         let secret = NodeSecret::take(&mut config);
@@ -477,7 +493,7 @@ mod refusal_tests {
         for _ in 0..3 {
             let backend = cache
                 .get_or_build(BackendKey::new(&config, &secret, false), || {
-                    NodeFactory::Http.backend(&config, &secret, &tor, &routes)
+                    NodeFactory::Http.backend((&config, &shipped()), &secret, &tor, &routes)
                 })
                 .unwrap();
             backend.post("/v2/foreign", b"{}".to_vec()).await.unwrap();
@@ -514,29 +530,29 @@ mod refusal_tests {
 
     #[test]
     fn a_plain_http_node_is_refused_unless_it_is_loopback_or_an_onion() {
-        let tor = Arc::new(RelayTor::new(true));
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         let routes = Arc::new(OnionRoutes::default());
         let secret = |config: &mut WalletConfig| NodeSecret::take(config);
-        for url in ["http://node.btlabs.uk", "http://203.0.113.5:3413"] {
+        for url in ["http://node.example", "http://203.0.113.5:3413"] {
             let mut config = config(url);
             let secret = secret(&mut config);
             let error = NodeFactory::Http
-                .client(&config, &secret, &tor, &routes)
+                .client((&config, &shipped()), &secret, &tor, &routes)
                 .err()
                 .unwrap();
             assert_eq!(error.kind, WalletErrorKind::InvalidArgument, "{url}");
         }
         for url in [
-            "https://node.btlabs.uk",
-            "http://127.0.0.1:3413",
-            "http://localhost:3413",
-            "http://abc.onion:3413",
+            "https://node.example".to_owned(),
+            "http://127.0.0.1:3413".to_owned(),
+            "http://localhost:3413".to_owned(),
+            format!("http://{}.onion:3413", "a".repeat(56)),
         ] {
-            let mut config = config(url);
+            let mut config = config(&url);
             let secret = secret(&mut config);
             assert!(
                 NodeFactory::Http
-                    .client(&config, &secret, &tor, &routes)
+                    .client((&config, &shipped()), &secret, &tor, &routes)
                     .is_ok(),
                 "{url}"
             );

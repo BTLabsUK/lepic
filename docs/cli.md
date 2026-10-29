@@ -51,7 +51,8 @@ Header   version 6
 
 The node should be synced. A node that is behind shows old balances, and `wallet info` says so.
 
-For Epicbox, `lepic` uses the relay `wss://epicbox.epiccash.com` unless you set another.
+For Epicbox, `lepic` uses the first relay of `[epicbox] servers` in the settings file
+(`wss://epicbox.epiccash.com` in the shipped file) unless you set another.
 
 ### Settings
 
@@ -61,9 +62,9 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 |---|---|---|---|
 | `network` | `LEPIC_NETWORK` | `--network` | `mainnet` |
 | `data_dir` | `LEPIC_DATA_DIR` | `--data-dir` | `~/.lepic/<network>` |
-| `node_url` | `LEPIC_NODE_URL` | | `http://127.0.0.1:3413`, floonet `:13413` |
+| `node_url` | `LEPIC_NODE_URL` | | the first of `[node] servers` in the settings file (`http://127.0.0.1:3413` shipped); floonet `[floonet] node` of the built-in configuration (`http://127.0.0.1:13413`) |
 | `node_api_secret_file` | `LEPIC_NODE_API_SECRET_FILE` | | none |
-| `epicbox_relay` | `LEPIC_EPICBOX_RELAY` | | `wss://epicbox.epiccash.com` |
+| `epicbox_relay` | `LEPIC_EPICBOX_RELAY` | | the first of `[epicbox] servers` in the settings file, over `wss://` |
 | `epicbox_tor_socks` | `LEPIC_EPICBOX_TOR_SOCKS` | | none: the relay is reached directly |
 | `epicbox_tor_binary` | `LEPIC_EPICBOX_TOR_BINARY` | | none |
 | `epicbox_tor_lib_dir` | `LEPIC_EPICBOX_TOR_LIB_DIR` | | none |
@@ -72,6 +73,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24`, at most `48` |
+| `settings_file` | `LEPIC_SETTINGS` | `--settings` | `~/.lepic/settings.toml` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
 names. It holds `key = value` lines; values are bare words or double-quoted strings, `#` starts a
@@ -88,6 +90,41 @@ epicbox_relay = "wss://epicbox.epiccash.com"
 
 Without a node of your own, point `node_url` at any floonet node whose foreign API is served
 over `https://`, and leave `node_api_secret_file` out unless that node asks for one.
+
+### The settings file and the built-in configuration
+
+The rule is "All configuration in settings.toml (no hardcoded configuration)" (ADR 0030): no
+library crate holds a server address, port, timeout, retry or server limit, and the CLI's code
+holds none either. As in the Epic Cash wallet app, they live in two files:
+
+- **`settings.toml`, the user's file.** Which servers to use. Without `--settings`,
+  `LEPIC_SETTINGS` or `settings_file` it is `~/.lepic/settings.toml`; when that does not exist,
+  `lepic` writes it from the copy it ships (`crates/lepic-cli/settings.default.toml`) and never
+  changes it after that. A file named explicitly must exist. It has the layout of the app's user
+  file, so a copy of the app's file works too; `lepic` reads only these keys:
+
+  | Key | What it sets |
+  |---|---|
+  | `[node] servers` | the nodes known; the first is the mainnet node unless `node_url` names another |
+  | `[epicbox] servers` | the Epicbox servers known, each `host` or `host:port` over TLS, at most 16; the first is the relay unless `epicbox_relay` names another, and pairing words go to the first `pairing_servers` of them |
+
+  `[online]` and every other key and section are ignored.
+
+- **`lepic-config.toml`, the built-in configuration.** Shipped read-only with LEPIC: it is
+  compiled into the binary (`crates/lepic-cli/lepic-config.toml`), is not a user setting and
+  cannot be overridden. Every key is required and none may be zero; units are in the key names.
+
+  | Section | Keys |
+  |---|---|
+  | `[node]` | `connect_timeout_s`, `request_timeout_s`, `idle_timeout_s`, `retry_attempts`, `retry_backoff_min_ms`, `retry_backoff_max_ms`, `outputs_per_request`, `concurrent_requests` |
+  | `[floonet]` | `node`: the node of a floonet wallet that names none |
+  | `[epicbox]` | `address_default` (the server of an address written without `@server`), `pairing_servers`, `connect_timeout_s`, `response_timeout_s`, `ping_interval_s`, `reconnect_min_s`, `reconnect_max_s`, `drain_timeout_s`, `tor_connect_timeout_s`, `onion_discovery_timeout_s`, `onion_discovery_retry_s` |
+  | `[http]` | `listen_port` (of `http listen` without `--port`), `header_timeout_s`, `body_timeout_s`, `request_timeout_s`, `answer_timeout_s`, `max_connections`, `max_connections_per_address`, `requests_per_minute`, `receives_per_minute`, `send_connect_timeout_s`, `send_request_timeout_s` |
+  | `[tor]` | `bootstrap_timeout_s`, `cold_bootstrap_timeout_s`, `stall_timeout_s`, `cold_stall_timeout_s`, `publish_timeout_s`, `connect_timeout_s`, `request_timeout_s`, `onion_only_domains`, and `[[tor.onions]]` with `host`, `port`, `onion`, `onion_port`, `tls`: while the relay or node is reached through tor, `host:port` is dialled at its onion, still with TLS for `host`; routes with `tls = false` are skipped |
+
+Protocol values stay in code: what an address or URL without a port means (443 for an Epicbox
+address, 3415 for a peer's `http://` URL), the onion service port, wire-format and size limits,
+consensus values and the wallet's release window.
 
 `node_url` is the API root, without `/v2/foreign`. Plain `http://` and `ws://` are accepted only
 for a loopback host, because the node secret and the relay traffic would otherwise cross the

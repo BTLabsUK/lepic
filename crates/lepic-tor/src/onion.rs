@@ -284,10 +284,11 @@ mod tests {
             format!("{ONION}.onion:0"),
             format!("{ONION}.onion:"),
             format!("{}1", &ONION[..55]),
-            "esXXXXX@epicbox.stackwallet.com".to_owned(),
-            "expyuzz4wqqyqhjn.onion".to_owned(),
+            "esXXXXX@relay.example.invalid".to_owned(),
+            // An onion v2 host.
+            format!("{}.onion", "a".repeat(16)),
             format!("ftp://{ONION}.onion"),
-            format!("{ONION}.onion.evil.com"),
+            format!("{ONION}.onion.evil.example"),
             "a".repeat(MAX_INPUT_LEN + 1),
         ] {
             assert_eq!(

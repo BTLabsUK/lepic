@@ -120,7 +120,12 @@ mod tests {
     fn identity() -> Identity {
         let secret = SecretKey::from_array([1; 32]).unwrap();
         let public = PublicKey::from_secret_key(&secret).unwrap();
-        let address = EpicboxAddress::new(public, Network::Mainnet, Domain::default(), None);
+        let address = EpicboxAddress::new(
+            public,
+            Network::Mainnet,
+            Domain::parse("relay.example.org").unwrap(),
+            None,
+        );
         Identity::new(secret, address).unwrap()
     }
 

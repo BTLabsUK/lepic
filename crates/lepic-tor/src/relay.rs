@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -12,7 +13,7 @@ use tokio::sync::watch;
 
 use crate::onion::OnionAddress;
 use crate::process::{FixedSocks, SocksProxy, TorFailure, TorProcess};
-use crate::socks::{self, DEFAULT_CONNECT_TIMEOUT, SocksCredentials, SocksError};
+use crate::socks::{self, SocksCredentials, SocksError};
 
 /// Why no stream to the relay was opened through tor.
 #[derive(Debug, Error)]
@@ -50,27 +51,30 @@ pub struct RelayTor {
     active: watch::Sender<bool>,
     /// Counts changes of the source, for an open that waits for a pending tor.
     changes: watch::Sender<u64>,
+    /// Reaching a host through tor once tor is there.
+    connect_timeout: Duration,
 }
 
 impl RelayTor {
     /// Waiting for a tor while `enabled`: connections wait until one is attached, and never
     /// go directly until [`RelayTor::detach`] or [`RelayTor::set_enabled`] with `false`.
-    pub fn new(enabled: bool) -> Self {
-        Self::with_source(enabled, Some(Source::Pending))
+    pub fn new(enabled: bool, connect_timeout: Duration) -> Self {
+        Self::with_source(enabled, Some(Source::Pending), connect_timeout)
     }
 
     /// Detached from the start: connections go directly until a tor is expected or
     /// attached. For a host that knows no tor is wanted.
-    pub fn direct(enabled: bool) -> Self {
-        Self::with_source(enabled, None)
+    pub fn direct(enabled: bool, connect_timeout: Duration) -> Self {
+        Self::with_source(enabled, None, connect_timeout)
     }
 
-    fn with_source(enabled: bool, source: Option<Source>) -> Self {
+    fn with_source(enabled: bool, source: Option<Source>, connect_timeout: Duration) -> Self {
         let active = enabled && source.is_some();
         Self {
             inner: Mutex::new(Inner { enabled, source }),
             active: watch::Sender::new(active),
             changes: watch::Sender::new(0),
+            connect_timeout,
         }
     }
 
@@ -151,7 +155,7 @@ impl RelayTor {
             }
         };
         let credentials = SocksCredentials::random().map_err(RelayTorError::Socks)?;
-        socks::connect(proxy, host, port, &credentials, DEFAULT_CONNECT_TIMEOUT)
+        socks::connect(proxy, host, port, &credentials, self.connect_timeout)
             .await
             .map_err(RelayTorError::Socks)
     }
@@ -178,7 +182,7 @@ mod tests {
 
     #[test]
     fn it_is_active_only_with_the_setting_on_and_tor_not_detached() {
-        let relay = RelayTor::direct(true);
+        let relay = RelayTor::direct(true, crate::testing::CONNECT_TIMEOUT);
         let active = relay.active();
         assert!(!*active.borrow());
         relay.attach_socks(FixedSocks(SocketAddr::from((Ipv4Addr::LOCALHOST, 9050))));
@@ -193,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_tor_being_started_makes_connections_wait_for_it() {
-        let relay = Arc::new(RelayTor::new(true));
+        let relay = Arc::new(RelayTor::new(true, crate::testing::CONNECT_TIMEOUT));
         relay.expect();
         assert!(*relay.active().borrow(), "never direct while tor starts");
         let opening = tokio::spawn({
@@ -208,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn with_the_setting_on_it_waits_for_a_tor_until_one_is_attached_or_detached() {
-        let relay = Arc::new(RelayTor::new(true));
+        let relay = Arc::new(RelayTor::new(true, crate::testing::CONNECT_TIMEOUT));
         assert!(
             *relay.active().borrow(),
             "never direct before a tor is attached"
@@ -226,7 +230,7 @@ mod tests {
 
     #[test]
     fn with_the_setting_off_it_goes_directly_until_the_setting_is_on() {
-        let relay = RelayTor::new(false);
+        let relay = RelayTor::new(false, crate::testing::CONNECT_TIMEOUT);
         assert!(!*relay.active().borrow());
         relay.set_enabled(true);
         assert!(*relay.active().borrow(), "still waiting for a tor");
@@ -234,7 +238,7 @@ mod tests {
 
     #[tokio::test]
     async fn without_tor_or_with_the_setting_off_nothing_is_opened() {
-        let relay = RelayTor::direct(true);
+        let relay = RelayTor::direct(true, crate::testing::CONNECT_TIMEOUT);
         assert!(matches!(
             relay.open("relay.example", 443).await,
             Err(RelayTorError::Off)
@@ -269,7 +273,7 @@ mod tests {
                 .unwrap();
             connect
         });
-        let relay = RelayTor::new(true);
+        let relay = RelayTor::new(true, crate::testing::CONNECT_TIMEOUT);
         relay.attach_socks(FixedSocks(address));
         relay.open("relay.example", 443).await.unwrap();
         let connect = server.await.unwrap();
@@ -281,16 +285,22 @@ mod tests {
 
     #[test]
     fn only_a_v3_onion_host_is_an_onion() {
-        let onion = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
-        assert!(RelayTor::is_onion(onion));
+        let onion = crate::onion::OnionAddress::from_public_key(&[3; 32]).host();
+        assert!(RelayTor::is_onion(&onion));
+        let id = onion.strip_suffix(".onion").unwrap();
+        let other_checksum = format!(
+            "{}{}.onion",
+            &id[..55],
+            if id.ends_with('a') { 'b' } else { 'a' }
+        );
         for host in [
-            "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad",
-            "J2XF5RIZKOW5JTRDF6EDOTK5QAM4KOHAVIP23DQEUIH5BQ4YQISBZ5AD.onion",
-            "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ae.onion",
-            "http://j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion",
-            "relay.example",
+            id.to_owned(),
+            format!("{}.onion", id.to_ascii_uppercase()),
+            other_checksum,
+            format!("http://{onion}"),
+            "relay.example".to_owned(),
         ] {
-            assert!(!RelayTor::is_onion(host), "{host}");
+            assert!(!RelayTor::is_onion(&host), "{host}");
         }
     }
 }

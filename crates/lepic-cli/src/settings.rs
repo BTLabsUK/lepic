@@ -19,14 +19,16 @@ use lepic_wallet::epicbox_invoice::InvoiceExpiry;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::app_config::{AppConfig, Tuning};
 use crate::cli::{GlobalArgs, LogFormatArg, NetworkArg, OutputArg};
 use crate::secret::PASSWORD_ENV;
+use crate::settings_file::{self, Servers};
 
 /// Config files are a few lines; anything larger is not one.
 pub const MAX_CONFIG_LEN: u64 = 64 * 1024;
 
 const CONFIG_FILE: &str = "config.toml";
-const HOME_DIR: &str = ".lepic";
+pub(crate) const HOME_DIR: &str = ".lepic";
 
 /// Every config key, its variable, and what it sets.
 pub const SETTINGS: &[(&str, &str, &str)] = &[
@@ -70,6 +72,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "invoice_expiry_hours",
         "LEPIC_INVOICE_EXPIRY_HOURS",
         "hours an unpaid invoice is kept, 1 to 48",
+    ),
+    (
+        "settings_file",
+        "LEPIC_SETTINGS",
+        "settings.toml with the servers: [node] servers, [epicbox] servers",
     ),
 ];
 
@@ -184,6 +191,22 @@ pub enum SettingsError {
     NoHome,
     #[error("data directory could not be resolved")]
     DataDir(#[source] std::io::Error),
+    #[error("settings file {} could not be read", path.display())]
+    SettingsRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("settings file {} is larger than {} bytes", path.display(), crate::settings_file::MAX_SETTINGS_LEN)]
+    SettingsTooLarge { path: PathBuf },
+    #[error("settings file {} is not valid", path.display())]
+    SettingsSyntax {
+        path: PathBuf,
+        #[source]
+        source: Box<toml::de::Error>,
+    },
+    #[error("settings file {} has no valid {key}", path.display())]
+    SettingsValue { path: PathBuf, key: &'static str },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +241,10 @@ pub struct Settings {
     pub node: NodeEndpoint,
     pub node_api_secret_file: Option<PathBuf>,
     pub relay: RelayEndpoint,
+    /// The servers of the settings file and the built-in configuration.
+    pub servers: Servers,
+    /// The timeouts, retries and limits of the built-in configuration.
+    pub tuning: Tuning,
     pub relay_tor: RelayTor,
     /// Node requests go through the same tor as the relay (ADR 0022). Only with a tor named.
     pub node_over_tor: bool,
@@ -290,18 +317,10 @@ impl Settings {
                 .unwrap_or(OutputArg::Human),
         };
 
-        let node = match lookup.parse("node_url", |text| NodeEndpoint::parse(text).ok())? {
-            Some(node) => node,
-            None => NodeEndpoint::parse(default_node_url(network)).map_err(|_| {
-                SettingsError::InvalidValue {
-                    key: "node_url",
-                    origin: Origin::Default,
-                }
-            })?,
-        };
-        let relay = lookup
-            .parse("epicbox_relay", parse_relay)?
-            .unwrap_or_default();
+        let config = AppConfig::built_in()?;
+        let servers = servers(args, env, &lookup, &config)?;
+        let node = node(&lookup, network, &servers, &config)?;
+        let relay = relay(&lookup, &servers)?;
         let invoice_expiry = lookup
             .parse("invoice_expiry_hours", parse_expiry_hours)?
             .unwrap_or_default();
@@ -339,10 +358,66 @@ impl Settings {
             node,
             node_api_secret_file: lookup.path("node_api_secret_file")?,
             relay,
+            servers,
+            tuning: config.tuning,
             relay_tor,
             node_over_tor,
             invoice_expiry,
         })
+    }
+}
+
+/// The servers of the settings file a flag, its variable or the config file names, else of
+/// `~/.lepic/settings.toml`.
+fn servers(
+    args: &GlobalArgs,
+    env: &Env,
+    lookup: &Lookup<'_>,
+    config: &AppConfig,
+) -> Result<Servers, SettingsError> {
+    let named = match &args.settings {
+        Some(path) => Some(path.clone()),
+        None => lookup.path("settings_file")?,
+    };
+    match named {
+        Some(path) => settings_file::load(Some(&path), true, config),
+        None => settings_file::load(
+            env.home()
+                .map(|home| settings_file::default_path(&home))
+                .as_deref(),
+            false,
+            config,
+        ),
+    }
+}
+
+/// `node_url`, else the first node of the settings file on mainnet and the built-in floonet node.
+fn node(
+    lookup: &Lookup<'_>,
+    network: Network,
+    servers: &Servers,
+    config: &AppConfig,
+) -> Result<NodeEndpoint, SettingsError> {
+    if let Some(node) = lookup.parse("node_url", |text| NodeEndpoint::parse(text).ok())? {
+        return Ok(node);
+    }
+    match network {
+        Network::Mainnet => servers.node.clone().ok_or(SettingsError::InvalidValue {
+            key: "node_url",
+            origin: Origin::Default,
+        }),
+        Network::Floonet => Ok(config.floonet_node.clone()),
+    }
+}
+
+/// `epicbox_relay`, else the first Epicbox server of the settings file.
+fn relay(lookup: &Lookup<'_>, servers: &Servers) -> Result<RelayEndpoint, SettingsError> {
+    match lookup.parse("epicbox_relay", parse_relay)? {
+        Some(relay) => Ok(relay),
+        None => servers.epicbox.clone().ok_or(SettingsError::InvalidValue {
+            key: "epicbox_relay",
+            origin: Origin::Default,
+        }),
     }
 }
 
@@ -353,14 +428,6 @@ fn parse_expiry_hours(text: &str) -> Option<InvoiceExpiry> {
     let hours: u64 = text.parse().ok()?;
     let seconds = hours.checked_mul(SECONDS_PER_HOUR)?;
     InvoiceExpiry::new(std::time::Duration::from_secs(seconds)).ok()
-}
-
-/// The ports `epic-wallet`'s default node configuration listens on.
-fn default_node_url(network: Network) -> &'static str {
-    match network {
-        Network::Mainnet => "http://127.0.0.1:3413",
-        Network::Floonet => "http://127.0.0.1:13413",
-    }
 }
 
 /// At most one way through tor: a running tor's SOCKS address, or a tor binary to run.

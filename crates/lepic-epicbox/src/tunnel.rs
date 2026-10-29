@@ -21,23 +21,6 @@ use tracing::debug;
 use crate::address::{DEFAULT_PORT, Domain};
 use crate::session::{Connector, RelayEndpoint, RelayStream, Security, TcpConnector};
 
-/// Hosts whose onion is known in advance, relays and nodes: domain, port, onion host, onion
-/// port. The same on every network. A built-in entry wins over discovery.
-pub const ONION_ROUTES: &[(&str, u16, &str, u16)] = &[
-    (
-        "epicbox.btlabs.uk",
-        443,
-        "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion",
-        443,
-    ),
-    (
-        "node.btlabs.uk",
-        443,
-        "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion",
-        443,
-    ),
-];
-
 /// Where a relay may say which onion it is also reachable at.
 pub const DISCOVERY_PATH: &str = "/.well-known/epicbox.json";
 
@@ -46,15 +29,6 @@ pub const MAX_DISCOVERY_LEN: usize = 4096;
 
 /// The largest discovery answer read, headers included.
 const MAX_RESPONSE_LEN: usize = 2 * MAX_DISCOVERY_LEN;
-
-/// How long discovery may take before the relay is reached through the exit instead.
-const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
-/// How long a relay whose discovery failed to connect is not asked again.
-const DISCOVERY_RETRY: Duration = Duration::from_secs(600);
-
-/// The least time a connection through the tunnel is given: a first circuit to an onion often
-/// needs most of a minute.
-pub const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Another way to reach hosts, such as tor's SOCKS proxy.
 pub trait Tunnel: Send + Sync {
@@ -80,11 +54,6 @@ pub struct DialTarget {
     pub port: u16,
 }
 
-/// The built-in onion of `endpoint`, if it has one.
-pub fn built_in_route(endpoint: &RelayEndpoint) -> Option<DialTarget> {
-    OnionRoutes::default().route(endpoint)
-}
-
 /// A relay that is also an onion service: its domain and port, and the onion and port to dial
 /// instead. The onion must present the domain's certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,30 +65,18 @@ pub struct OnionRoute {
     pub onion_port: u16,
 }
 
-/// The relays known to be onion services: [`ONION_ROUTES`] until replaced, for example by a
-/// signed list the host app fetched. Shared by the connectors that use it.
-#[derive(Debug)]
+/// The hosts known to be onion services, relays and nodes, as the caller gave them: none
+/// until given, for example from the host app's settings or a signed list it fetched. Shared
+/// by the connectors that use it. A route wins over discovery.
+#[derive(Debug, Default)]
 pub struct OnionRoutes(RwLock<Vec<OnionRoute>>);
 
-impl Default for OnionRoutes {
-    fn default() -> Self {
-        let built_in = ONION_ROUTES
-            .iter()
-            .filter_map(|(domain, port, onion, onion_port)| {
-                Some(OnionRoute {
-                    domain: Domain::parse(domain).ok()?,
-                    port: *port,
-                    onion: (*onion).to_owned(),
-                    onion_port: *onion_port,
-                })
-            })
-            .collect();
-        Self(RwLock::new(built_in))
-    }
-}
-
 impl OnionRoutes {
-    /// Replaces every route, the built-in ones included. Connections made from now on use them.
+    pub fn new(routes: Vec<OnionRoute>) -> Self {
+        Self(RwLock::new(routes))
+    }
+
+    /// Replaces every route. Connections made from now on use them.
     pub fn replace(&self, routes: Vec<OnionRoute>) {
         *self.0.write().unwrap_or_else(PoisonError::into_inner) = routes;
     }
@@ -296,6 +253,7 @@ pub struct TunnelConnector {
     direct: TcpConnector,
     tunnel: Arc<dyn Tunnel>,
     routes: Arc<OnionRoutes>,
+    timings: TunnelTimings,
     /// Discovery outcomes of this connector, by relay; `None` when the relay named no onion.
     /// Only answers are kept: a discovery that could not reach the relay is tried again.
     discovered: Mutex<HashMap<RelayKey, Arc<OnceCell<Option<DialTarget>>>>>,
@@ -305,10 +263,22 @@ pub struct TunnelConnector {
 
 type RelayKey = (String, u16);
 
+/// The caller's timeouts for connections through a tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TunnelTimings {
+    /// The least a connection through the tunnel is given, whatever the client's own
+    /// connect timeout: room for a first circuit.
+    pub connect_timeout: Duration,
+    /// Asking a relay for its onion.
+    pub discovery_timeout: Duration,
+    /// How long a relay whose discovery could not reach it is not asked again.
+    pub discovery_retry: Duration,
+}
+
 impl TunnelConnector {
-    /// With the built-in onion routes.
-    pub fn new(tls: Arc<ClientConfig>, tunnel: Arc<dyn Tunnel>) -> Self {
-        Self::with_routes(tls, tunnel, Arc::default())
+    /// With no onion routes.
+    pub fn new(tls: Arc<ClientConfig>, tunnel: Arc<dyn Tunnel>, timings: TunnelTimings) -> Self {
+        Self::with_routes(tls, tunnel, Arc::default(), timings)
     }
 
     /// With `routes`, which the caller may replace while the connector is in use.
@@ -316,11 +286,13 @@ impl TunnelConnector {
         tls: Arc<ClientConfig>,
         tunnel: Arc<dyn Tunnel>,
         routes: Arc<OnionRoutes>,
+        timings: TunnelTimings,
     ) -> Self {
         Self {
             direct: TcpConnector::new(tls),
             tunnel,
             routes,
+            timings,
             discovered: Mutex::default(),
             retry_after: Mutex::default(),
         }
@@ -373,7 +345,9 @@ impl TunnelConnector {
                     Ok(target) => Ok(Some(target)),
                     Err(error @ (DiscoveryError::Io(_) | DiscoveryError::Timeout)) => {
                         debug!(error = %error, "epicbox relay could not be asked for its onion");
-                        if let Some(until) = Instant::now().checked_add(DISCOVERY_RETRY) {
+                        if let Some(until) =
+                            Instant::now().checked_add(self.timings.discovery_retry)
+                        {
                             self.retry_after.lock().await.insert(key.clone(), until);
                         }
                         Err(())
@@ -395,7 +369,7 @@ impl TunnelConnector {
 
     async fn discover(&self, endpoint: &RelayEndpoint) -> Result<DialTarget, DiscoveryError> {
         let site = RelayEndpoint::new(endpoint.domain().clone(), None, Security::Tls);
-        let response = tokio::time::timeout(DISCOVERY_TIMEOUT, async {
+        let response = tokio::time::timeout(self.timings.discovery_timeout, async {
             let stream = self
                 .tunnel
                 .open(site.domain().as_str(), DEFAULT_PORT)
@@ -475,7 +449,7 @@ impl Connector for TunnelConnector {
 
     fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
         if self.tunnelled(endpoint) {
-            configured.max(TUNNEL_CONNECT_TIMEOUT)
+            configured.max(self.timings.connect_timeout)
         } else {
             configured
         }
@@ -502,17 +476,19 @@ impl Connector for TunnelConnector {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_built_in_routes_name_the_relay_and_the_node_by_host_and_port() {
-        let routes = OnionRoutes::default();
-        let node = routes.route_to("Node.BTLabs.uk", 443).unwrap();
-        assert_eq!(
-            node.host,
-            "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion"
-        );
+    fn routes_start_empty_and_name_a_host_by_name_and_port() {
+        assert!(OnionRoutes::default().route_to(MAPPED, 443).is_none());
+        let node_onion = format!("{}.onion", "c".repeat(56));
+        let routes = OnionRoutes::new(vec![
+            route(MAPPED, &onion()),
+            route("node.example", &node_onion),
+        ]);
+        let node = routes.route_to("Node.Example", 443).unwrap();
+        assert_eq!(node.host, node_onion);
         assert_eq!(node.port, 443);
-        assert!(routes.route_to("epicbox.btlabs.uk", 443).is_some());
-        assert!(routes.route_to("node.btlabs.uk", 3413).is_none());
-        assert!(routes.route_to("node.example", 443).is_none());
+        assert!(routes.route_to(MAPPED, 443).is_some());
+        assert!(routes.route_to("node.example", 3413).is_none());
+        assert!(routes.route_to("other.example", 443).is_none());
     }
 
     use std::sync::Mutex as StdMutex;
@@ -524,7 +500,21 @@ mod tests {
 
     use super::*;
 
-    const ONION: &str = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+    /// The relay the test connectors know an onion for, [`onion`].
+    const MAPPED: &str = "mapped.example";
+
+    fn onion() -> String {
+        format!("{}.onion", "a".repeat(56))
+    }
+
+    fn route(domain: &str, onion: &str) -> OnionRoute {
+        OnionRoute {
+            domain: Domain::parse(domain).unwrap(),
+            port: 443,
+            onion: onion.to_owned(),
+            onion_port: 443,
+        }
+    }
     const REFUSED: &str = "tunnel refused";
 
     struct FakeTunnel {
@@ -595,7 +585,12 @@ mod tests {
     }
 
     fn connector(tunnel: &Arc<FakeTunnel>) -> TunnelConnector {
-        TunnelConnector::new(tls(), Arc::clone(tunnel) as Arc<dyn Tunnel>)
+        TunnelConnector::with_routes(
+            tls(),
+            Arc::clone(tunnel) as Arc<dyn Tunnel>,
+            Arc::new(OnionRoutes::new(vec![route(MAPPED, &onion())])),
+            crate::testing::tunnel_timings(),
+        )
     }
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -612,40 +607,42 @@ mod tests {
             ..FakeTunnel::new(true)
         });
         let connector = connector(&tunnel);
-        let endpoint = relay("epicbox.btlabs.uk", 443);
+        let endpoint = relay(MAPPED, 443);
         let connecting = tokio::spawn(async move { connector.connect(&endpoint).await.err() });
         let mut far = streams.recv().await.unwrap();
         let mut hello = vec![0u8; 4096];
         let read = far.read(&mut hello).await.unwrap();
         let hello = hello.get(..read).unwrap();
-        assert!(contains(hello, b"epicbox.btlabs.uk"), "server name");
-        assert!(!contains(hello, ONION.as_bytes()));
+        assert!(contains(hello, MAPPED.as_bytes()), "server name");
+        assert!(!contains(hello, onion().as_bytes()));
         drop(far);
         assert!(connecting.await.unwrap().is_some());
-        assert_eq!(tunnel.opened(), [(ONION.to_owned(), 443)]);
+        assert_eq!(tunnel.opened(), [(onion(), 443)]);
     }
 
     #[test]
-    fn only_the_mapped_port_has_a_built_in_onion() {
+    fn only_the_mapped_port_has_an_onion() {
+        let routes = OnionRoutes::new(vec![route(MAPPED, &onion())]);
         assert_eq!(
-            built_in_route(&relay("Epicbox.BTLabs.uk", 443)),
+            routes.route(&relay("Mapped.Example", 443)),
             Some(DialTarget {
-                host: ONION.to_owned(),
+                host: onion(),
                 port: 443
             })
         );
-        assert_eq!(built_in_route(&relay("epicbox.btlabs.uk", 3420)), None);
-        assert_eq!(built_in_route(&relay("epicbox.epiccash.com", 443)), None);
+        assert_eq!(routes.route(&relay(MAPPED, 3420)), None);
+        assert_eq!(routes.route(&relay("other.example", 443)), None);
     }
 
     #[tokio::test]
-    async fn replaced_routes_are_dialled_and_the_built_in_one_is_gone() {
+    async fn replaced_routes_are_dialled_and_the_old_one_is_gone() {
         let tunnel = Arc::new(FakeTunnel::new(true));
-        let routes = Arc::new(OnionRoutes::default());
+        let routes = Arc::new(OnionRoutes::new(vec![route(MAPPED, &onion())]));
         let connector = TunnelConnector::with_routes(
             tls(),
             Arc::clone(&tunnel) as Arc<dyn Tunnel>,
             Arc::clone(&routes),
+            crate::testing::tunnel_timings(),
         );
         let other = format!("{}.onion", "b".repeat(56));
         routes.replace(vec![OnionRoute {
@@ -654,25 +651,15 @@ mod tests {
             onion: other.clone(),
             onion_port: 8443,
         }]);
-        connector
-            .remember(&relay("epicbox.btlabs.uk", 443), None)
-            .await;
+        connector.remember(&relay(MAPPED, 443), None).await;
         assert!(
             connector
                 .connect(&relay("Relay.Example", 443))
                 .await
                 .is_err()
         );
-        assert!(
-            connector
-                .connect(&relay("epicbox.btlabs.uk", 443))
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            tunnel.opened(),
-            [(other, 8443), ("epicbox.btlabs.uk".to_owned(), 443)]
-        );
+        assert!(connector.connect(&relay(MAPPED, 443)).await.is_err());
+        assert_eq!(tunnel.opened(), [(other, 8443), (MAPPED.to_owned(), 443)]);
     }
 
     fn plain(endpoint: &RelayEndpoint) -> DialTarget {
@@ -716,7 +703,10 @@ mod tests {
         assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
         assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
         assert_eq!(asked(), 1);
-        tokio::time::advance(DISCOVERY_RETRY + Duration::from_secs(1)).await;
+        tokio::time::advance(
+            crate::testing::tunnel_timings().discovery_retry + Duration::from_secs(1),
+        )
+        .await;
         assert_eq!(connector.dial_target(&endpoint).await, plain(&endpoint));
         assert_eq!(asked(), 2);
     }
@@ -770,7 +760,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_built_in_onion_wins_over_a_given_one() {
+    async fn a_routed_onion_wins_over_a_given_one() {
         let tunnel = Arc::new(FakeTunnel::new(true));
         let connector = connector(&tunnel);
         let given = DialTarget {
@@ -778,9 +768,9 @@ mod tests {
             port: 443,
         };
         let _ = connector
-            .connect_to_onion(&relay("epicbox.btlabs.uk", 443), &given)
+            .connect_to_onion(&relay(MAPPED, 443), &given)
             .await;
-        assert_eq!(tunnel.opened(), [(ONION.to_owned(), 443)]);
+        assert_eq!(tunnel.opened(), [(onion(), 443)]);
     }
 
     #[tokio::test]
@@ -906,7 +896,7 @@ mod tests {
         let endpoint = relay("relay.example", 443);
         assert_eq!(
             connector.connect_timeout(&endpoint, Duration::from_secs(15)),
-            TUNNEL_CONNECT_TIMEOUT
+            crate::testing::tunnel_timings().connect_timeout
         );
         assert_eq!(
             connector.connect_timeout(&endpoint, Duration::from_secs(300)),
@@ -930,36 +920,36 @@ mod tests {
 
     fn parse(response: &[u8]) -> Result<DialTarget, DiscoveryError> {
         let is_onion = |host: &str| host.len() == 62 && host.ends_with(".onion");
-        parse_discovery(response, &relay("epicbox.btlabs.uk", 443), is_onion)
+        parse_discovery(response, &relay(MAPPED, 443), is_onion)
     }
 
     #[test]
     fn a_discovery_document_for_the_relay_gives_its_onion() {
-        let relay = "epicbox.btlabs.uk";
-        let found = parse(&answer(&document(relay, 443, ONION, relay))).unwrap();
+        let relay = MAPPED;
+        let found = parse(&answer(&document(relay, 443, &onion(), relay))).unwrap();
         assert_eq!(
             found,
             DialTarget {
-                host: ONION.to_owned(),
+                host: onion(),
                 port: 443
             }
         );
-        let upper = ONION.to_ascii_uppercase().replace(".ONION", ".onion");
+        let upper = onion().to_ascii_uppercase().replace(".ONION", ".onion");
         assert_eq!(
             parse(&answer(&document(relay, 443, &upper, relay)))
                 .unwrap()
                 .host,
-            ONION
+            onion()
         );
     }
 
     #[test]
     fn a_discovery_document_for_another_relay_is_refused() {
-        let relay = "epicbox.btlabs.uk";
+        let relay = MAPPED;
         for body in [
-            document("other.example", 443, ONION, relay),
-            document(relay, 443, ONION, "other.example"),
-            document(relay, 3420, ONION, relay),
+            document("other.example", 443, &onion(), relay),
+            document(relay, 443, &onion(), "other.example"),
+            document(relay, 3420, &onion(), relay),
         ] {
             assert!(
                 matches!(parse(&answer(&body)), Err(DiscoveryError::OtherRelay)),
@@ -970,15 +960,15 @@ mod tests {
 
     #[test]
     fn a_discovery_document_without_a_valid_onion_is_refused() {
-        let relay = "epicbox.btlabs.uk";
-        for onion in ["relay.example", "abc.onion", ""] {
+        let relay = MAPPED;
+        for onion in ["relay.example", &format!("{}.onion", "abc"), ""] {
             assert!(matches!(
                 parse(&answer(&document(relay, 443, onion, relay))),
                 Err(DiscoveryError::NotOnion)
             ));
         }
-        let zero_port =
-            document(relay, 443, ONION, relay).replace(r#""onion_port":443"#, r#""onion_port":0"#);
+        let zero_port = document(relay, 443, &onion(), relay)
+            .replace(r#""onion_port":443"#, r#""onion_port":0"#);
         assert!(matches!(
             parse(&answer(&zero_port)),
             Err(DiscoveryError::NotOnion)
@@ -987,8 +977,8 @@ mod tests {
 
     #[test]
     fn a_discovery_answer_that_is_not_a_plain_200_is_refused() {
-        let relay = "epicbox.btlabs.uk";
-        let body = document(relay, 443, ONION, relay);
+        let relay = MAPPED;
+        let body = document(relay, 443, &onion(), relay);
         let not_found = String::from_utf8(answer(&body))
             .unwrap()
             .replace("200 OK", "404 Not Found");
@@ -1017,8 +1007,8 @@ mod tests {
     #[tokio::test]
     async fn fetch_reads_an_answer_that_arrives_in_parts_on_a_kept_alive_connection() {
         let (mut near, mut far) = tokio::io::duplex(1024);
-        let relay = "epicbox.btlabs.uk";
-        let response = answer(&document(relay, 443, ONION, relay));
+        let relay = MAPPED;
+        let response = answer(&document(relay, 443, &onion(), relay));
         let expected = response.clone();
         let server = tokio::spawn(async move {
             let mut request = vec![0u8; 1024];
@@ -1036,7 +1026,7 @@ mod tests {
         assert_eq!(read, expected);
         let (request, _far) = server.await.unwrap();
         assert!(request.starts_with("GET /.well-known/epicbox.json HTTP/1.1\r\n"));
-        assert!(request.contains("\r\nHost: epicbox.btlabs.uk\r\n"));
+        assert!(request.contains(&format!("\r\nHost: {MAPPED}\r\n")));
     }
 
     #[tokio::test]

@@ -18,8 +18,7 @@ use lepic_foreign::{Exposure, ListenSettings, ReceiveHandler, Refusal, listen};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_tor::socks::{SocksCredentials, SocksReply};
 use lepic_tor::{
-    OnionClient, OnionClientSettings, SendFailure, SocksError, TorProcess, TorSendError,
-    TorSettings, TorTransport,
+    OnionClient, SendFailure, SocksError, TorProcess, TorSendError, TorSettings, TorTransport,
 };
 use lepic_transport::transport::BoxFuture;
 
@@ -42,13 +41,21 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
     }
     let binary = PathBuf::from(std::env::var("LEPIC_TOR_BINARY").unwrap());
     let dir = tempfile::tempdir().unwrap();
-    let mut settings = TorSettings::new(binary, dir.path().join("tor"));
+    let mut settings = TorSettings::new(
+        binary,
+        dir.path().join("tor"),
+        lepic_tor::testing::tor_timings(),
+    );
     settings.lib_dir = std::env::var_os("LEPIC_TOR_LIB_DIR").map(PathBuf::from);
 
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed).unwrap();
     let listener = listen(
-        ListenSettings::new(Exposure::LocalOnly, 0),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
         Arc::new(RefusesEverything),
     )
     .await
@@ -71,7 +78,7 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
     );
 
     // As TorTransport does: the first circuit to a fresh onion may need a second try.
-    let mut client_settings = OnionClientSettings::default();
+    let mut client_settings = lepic_tor::testing::onion_client_settings();
     if let Ok(seconds) = std::env::var("LEPIC_TOR_CONNECT_SECS") {
         client_settings.connect_timeout = Duration::from_secs(seconds.parse().unwrap());
     }
@@ -131,7 +138,7 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
 
 /// `check_version` at `onion` through `tor`, with more tries than [`TorTransport`] makes.
 async fn reach(tor: &TorProcess, onion: &lepic_tor::OnionAddress) -> f64 {
-    let client = OnionClient::new(OnionClientSettings::default());
+    let client = OnionClient::new(lepic_tor::testing::onion_client_settings());
     let asked = Instant::now();
     let mut last = None;
     for attempt in 1..=3 {
@@ -215,12 +222,17 @@ async fn survives_a_left_tor_a_pause_and_a_network_change() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let mut settings = TorSettings::new(binary, paths.dir.clone());
+    let mut settings =
+        TorSettings::new(binary, paths.dir.clone(), lepic_tor::testing::tor_timings());
     settings.lib_dir = lib_dir;
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed).unwrap();
     let listener = listen(
-        ListenSettings::new(Exposure::LocalOnly, 0),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
         Arc::new(RefusesEverything),
     )
     .await

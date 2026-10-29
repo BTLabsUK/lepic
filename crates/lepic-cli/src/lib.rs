@@ -8,6 +8,7 @@
 //! comes in through [`Host`] and [`Console`], so the CLI keeps no global state.
 
 pub mod amount;
+pub mod app_config;
 pub mod cli;
 mod commands;
 pub mod exit;
@@ -17,6 +18,7 @@ pub mod output;
 pub mod progress;
 pub mod secret;
 pub mod settings;
+pub mod settings_file;
 pub mod stores;
 pub mod vault;
 

@@ -96,12 +96,6 @@ impl RelayEndpoint {
     }
 }
 
-impl Default for RelayEndpoint {
-    fn default() -> Self {
-        Self::new(Domain::default(), None, Security::Tls)
-    }
-}
-
 /// A byte stream to a relay, before the websocket handshake.
 pub trait RelayStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
@@ -522,7 +516,7 @@ mod tests {
             "",
             "3",
             "3.0",
-            "3.0.0.0",
+            "3.0.0.1000",
             "3.0.x",
             "3..0",
             "+3.0.0",
@@ -542,10 +536,11 @@ mod tests {
 
     #[test]
     fn endpoint_defaults_port_by_security() {
-        let tls = RelayEndpoint::new(Domain::default(), None, Security::Tls);
-        let plain = RelayEndpoint::new(Domain::default(), None, Security::Plain);
-        assert_eq!(tls.url(), "wss://epicbox.epiccash.com:443");
-        assert_eq!(plain.url(), "ws://epicbox.epiccash.com:80");
+        let relay = Domain::parse("relay.example.org").unwrap();
+        let tls = RelayEndpoint::new(relay.clone(), None, Security::Tls);
+        let plain = RelayEndpoint::new(relay, None, Security::Plain);
+        assert_eq!(tls.url(), "wss://relay.example.org:443");
+        assert_eq!(plain.url(), "ws://relay.example.org:80");
         let custom = RelayEndpoint::new(
             Domain::parse("relay.local").unwrap(),
             Some(3423),

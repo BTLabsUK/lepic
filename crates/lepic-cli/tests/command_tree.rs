@@ -136,14 +136,14 @@ fn a_send_takes_an_http_address_with_its_options() {
     else {
         panic!("not an http listen");
     };
-    assert_eq!((args.port, args.internet), (3415, false));
+    assert_eq!((args.port, args.internet), (None, false));
     let cli =
         Cli::try_parse_from(["lepic", "http", "listen", "--port", "0", "--internet"]).unwrap();
     let lepic_cli::cli::Command::Http(lepic_cli::cli::HttpCommand::Listen(args)) = cli.command
     else {
         panic!("not an http listen");
     };
-    assert_eq!((args.port, args.internet), (0, true));
+    assert_eq!((args.port, args.internet), (Some(0), true));
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn no_short_or_long_flag_has_two_meanings() {
 }
 
 #[test]
-fn global_options_are_exactly_the_planned_six() {
+fn global_options_are_exactly_the_planned_seven() {
     let root = Cli::command();
     let mut globals: Vec<&str> = root
         .get_arguments()
@@ -261,7 +261,8 @@ fn global_options_are_exactly_the_planned_six() {
             "log-format",
             "log-level",
             "network",
-            "output"
+            "output",
+            "settings"
         ]
     );
 }

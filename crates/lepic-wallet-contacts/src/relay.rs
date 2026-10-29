@@ -22,7 +22,7 @@ pub(crate) fn host_text(endpoint: &RelayEndpoint) -> String {
 }
 
 /// The endpoint of the home relay `host`, `domain[:port]`. A relay the wallet knows, its own or
-/// a built-in one, is reached as the wallet reaches it; any other over TLS, which a relay on the
+/// a meeting relay, is reached as the wallet reaches it; any other over TLS, which a relay on the
 /// internet needs, and only by a name on a port other than 0: a contact never makes the wallet
 /// dial an address, its own device or its network.
 pub(crate) fn endpoint_for(
@@ -32,7 +32,7 @@ pub(crate) fn endpoint_for(
     let (domain, port) = parse_host(host)?;
     let ours = &relays.epicbox.settings().endpoint;
     let known = std::iter::once(ours)
-        .chain(relays.built_in.iter())
+        .chain(relays.meeting.iter())
         .find(|known| known.domain() == &domain && port.is_none_or(|port| port == known.port()));
     if let Some(known) = known {
         return Ok(known.clone());
@@ -124,7 +124,7 @@ pub(crate) fn endpoint_of_address(
 }
 
 /// A client for one-off drains and posts on `endpoint`, through the wallet's connector, dialing
-/// `onion` when relay traffic goes through tor and the relay has no built-in onion.
+/// `onion` when relay traffic goes through tor and the relay has no onion route.
 pub(crate) fn mailbox_client(
     relays: &ContactRelays,
     endpoint: RelayEndpoint,
@@ -174,10 +174,10 @@ mod tests {
             assert!(is_relay_name(&Domain::parse(host).unwrap()), "{host}");
         }
         for host in [
-            "10.0.0.1",
-            "192.168.1.1",
+            "192.0.2.1",
+            "198.51.100.1",
             "127.0.0.1",
-            "8.8.8.8",
+            "203.0.113.7",
             "1.2.3",
             "localhost",
             "LOCALHOST",

@@ -10,6 +10,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The settings the app ships, for tests of this crate and the crates above it.
+testing = []
+
 [dependencies]
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1"] }
@@ -26,5 +30,6 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 webpki-roots.workspace = true
 
 [dev-dependencies]
+lepic-foreign = { path = ".", features = ["testing"] }
 proptest = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

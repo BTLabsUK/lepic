@@ -36,9 +36,6 @@ pub const MAX_MESSAGES_PER_MAILBOX: usize = 32;
 /// Mailboxes in one drain (RFC 0002 10.3).
 pub const MAX_MAILBOXES_PER_DRAIN: usize = 50;
 
-/// The default bound of a whole drain. It leaves room for a first circuit through tor.
-pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(120);
-
 /// Subscribes re-signed after the relay refused one because its challenge changed meanwhile.
 const SUBSCRIBE_RETRIES: u32 = 2;
 
@@ -52,15 +49,6 @@ pub struct DrainLimits {
     pub messages_per_mailbox: usize,
     /// The whole drain. Mailboxes not reached by then are left for the next drain.
     pub timeout: Duration,
-}
-
-impl Default for DrainLimits {
-    fn default() -> Self {
-        Self {
-            messages_per_mailbox: MAX_MESSAGES_PER_MAILBOX,
-            timeout: DEFAULT_DRAIN_TIMEOUT,
-        }
-    }
 }
 
 /// A message the relay handed out for a mailbox.
@@ -225,10 +213,14 @@ impl MailboxClient {
     /// `connector` is the one the wallet's relay client uses, so a drain takes the same way:
     /// through tor when relay traffic goes through it.
     pub fn new(settings: ClientSettings, connector: Arc<dyn Connector>) -> Self {
+        let limits = DrainLimits {
+            messages_per_mailbox: MAX_MESSAGES_PER_MAILBOX,
+            timeout: settings.drain_timeout,
+        };
         Self {
             settings,
             connector,
-            limits: DrainLimits::default(),
+            limits,
         }
     }
 

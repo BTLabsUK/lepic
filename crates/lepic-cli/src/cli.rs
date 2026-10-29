@@ -65,6 +65,10 @@ pub struct GlobalArgs {
     /// Config file [env: LEPIC_CONFIG] [default: ~/.lepic/config.toml when it exists]
     #[arg(long, global = true, value_name = "FILE")]
     pub config: Option<PathBuf>,
+    /// Settings file with the servers [env: LEPIC_SETTINGS] [default: ~/.lepic/settings.toml,
+    /// written on first use]
+    #[arg(long, global = true, value_name = "FILE")]
+    pub settings: Option<PathBuf>,
     /// Log filter: a level or tracing directives [env: LEPIC_LOG_LEVEL] [default: warn]
     #[arg(long, global = true, value_name = "FILTER")]
     pub log_level: Option<String>,
@@ -532,9 +536,9 @@ served at once and 30 payments a minute are taken.")]
 
 #[derive(Debug, Args)]
 pub struct HttpListenArgs {
-    /// Port to listen on; 0 lets the system pick one
-    #[arg(long, value_name = "PORT", default_value_t = 3415)]
-    pub port: u16,
+    /// Port to listen on, else the configured listen port; 0 lets the system pick one
+    #[arg(long, value_name = "PORT")]
+    pub port: Option<u16>,
     /// Listen on every network interface instead of this computer only
     #[arg(long)]
     pub internet: bool,

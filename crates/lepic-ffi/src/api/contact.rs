@@ -27,7 +27,6 @@
 //! a foreground tick and on a push wake-up.
 
 use crate::api::error::WalletError;
-use crate::api::types::Chain;
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
     ContactPayloadView, ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry,
@@ -38,18 +37,6 @@ use crate::api::types::{
 };
 use crate::api::wallet::EpicWallet;
 
-/// The built-in meeting relays of `chain`, where pairing words go when a call names none:
-/// `domain` for a relay on port 443, `domain:port` for any other.
-#[flutter_rust_bridge::frb(sync)]
-pub fn built_in_pairing_relays(chain: Chain) -> Vec<String> {
-    crate::boundary::guard_or("built_in_pairing_relays", Vec::new(), || {
-        lepic_epicbox::built_in_relays(crate::session::relay_network(chain.network()))
-            .iter()
-            .map(lepic_wallet_contacts::meeting_host)
-            .collect()
-    })
-}
-
 impl EpicWallet {
     /// Makes an invite to pair, valid for `expiry`, whose messages go through this wallet's
     /// relay. The pending pairing is stored and listed by [`EpicWallet::pairings_pending`];
@@ -58,13 +45,12 @@ impl EpicWallet {
     ///
     /// With `offer_words` the invite lasts 10 minutes and is also posted under five pairing
     /// words, returned in `words`, for the other side to type, on every meeting relay whatever
-    /// relay the wallet uses: the `meeting_relays`, each `domain[:port]` over TLS, or with
-    /// `None` the built-in ones ([`built_in_pairing_relays`]). The other side must look on at
+    /// relay the wallet uses: the `meeting_relays`, each `domain[:port]` over TLS, which the
+    /// app takes from its settings; LEPIC has none of its own. The other side must look on at
     /// least one of them. That needs `Online` and fails with `ContactsOffline` or `EpicboxOff`
-    /// before anything is stored, with `PairingWordsUnavailable` when there is no meeting relay
-    /// (an empty list, or a network without built-in relays), and with `TransportFailed` when
-    /// no meeting relay takes the post, the invite then withdrawn. Without `offer_words`,
-    /// `meeting_relays` is ignored.
+    /// before anything is stored, with `PairingWordsUnavailable` when `meeting_relays` is
+    /// empty, and with `TransportFailed` when no meeting relay takes the post, the invite then
+    /// withdrawn. Without `offer_words`, `meeting_relays` is ignored and may be empty.
     ///
     /// The pairing's mailboxes live on `home_relay`, `domain[:port]` reached over TLS, or with
     /// `None` on the wallet's own Epicbox relay; the other side reaches them there whatever
@@ -85,7 +71,7 @@ impl EpicWallet {
         expiry: InviteExpiry,
         offer_words: bool,
         relay_mode: ContactRelayMode,
-        meeting_relays: Option<Vec<String>>,
+        meeting_relays: Vec<String>,
         home_relay: Option<String>,
         pairing_class: PairingClass,
     ) -> Result<PairingInvite, WalletError> {
@@ -120,21 +106,21 @@ impl EpicWallet {
     /// Finds the invite that five pairing words name, typed as names or emoji, on the
     /// meeting relays, and returns its link with its preview, for
     /// [`EpicWallet::pairing_accept`]. The meeting relays are `meeting_relays`, each
-    /// `domain[:port]` over TLS, or with `None` the built-in ones
-    /// ([`built_in_pairing_relays`]); all are asked at once, each for at most 20 seconds, and
+    /// `domain[:port]` over TLS, which the app takes from its settings; all are asked at once,
+    /// each for at most 20 seconds, and
     /// the first invite that opens wins. That copy is taken off its relay, so nobody else finds
     /// it; copies on other relays expire.
     ///
     /// Fails with `InvalidPairingWords` for words not in the table, `PairingWordsNotFound`
     /// when no relay holds the invite, `TransportFailed` when no meeting relay could be
-    /// reached, `PairingWordsUnavailable` when there is no meeting relay, `InvalidArgument`
+    /// reached, `PairingWordsUnavailable` when `meeting_relays` is empty, `InvalidArgument`
     /// for a meeting relay that is not `domain[:port]` or more than 16 of them, and
     /// `ContactsOffline` or `EpicboxOff`.
     pub async fn pairing_find_words(
         &self,
         words: Vec<String>,
         relay_mode: ContactRelayMode,
-        meeting_relays: Option<Vec<String>>,
+        meeting_relays: Vec<String>,
     ) -> Result<FoundInvite, WalletError> {
         self.run("pairing_find_words", |session| async move {
             session

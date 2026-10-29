@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! flutter_rust_bridge API over the LEPIC wallet engine for the app (ADR 0007, ADR 0023).
 //!
-//! `api` is what the app sees. The binding's own repository, gitlab.com/epic-cash-bt/lepic-flutter,
-//! generates `frb_generated.rs` here and the matching package there in one run, and records in
+//! `api` is what the app sees. The binding's own repository, `lepic-flutter`, generates
+//! `frb_generated.rs` here and the matching package there in one run, and records in
 //! `bridge.sha256` what it generated from; `cargo xtask repo-lint` fails when `api` or the
 //! generated module changes without a new run. Everything else is glue between the engine's ports
 //! and the app.
@@ -38,5 +38,6 @@ mod pin;
 mod session;
 #[cfg(test)]
 mod tests;
+mod tuning;
 mod ur_slate;
 mod vault_port;

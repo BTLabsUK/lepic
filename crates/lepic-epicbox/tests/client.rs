@@ -122,7 +122,7 @@ async fn sender_rejects_a_destination_on_another_network() {
     let floonet = lepic_epicbox::EpicboxAddress::new(
         *address(BOB).public_key(),
         Network::Floonet,
-        lepic_epicbox::Domain::default(),
+        lepic_epicbox::Domain::parse("relay.example.org").unwrap(),
         None,
     );
     let wire = WireSlate::text(MediaType::JSON, "{}".to_owned());

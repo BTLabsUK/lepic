@@ -84,6 +84,8 @@ impl World {
             node_api_secret: None,
             epicbox_domain: relay.to_owned(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
         }
     }
 
@@ -510,6 +512,21 @@ async fn recording_socks() -> (std::net::SocketAddr, Arc<Mutex<Vec<(String, u16)
 }
 
 /// Posts to the wallet's own address over its current relay; the post fails at the proxy.
+/// Routes `host:443` to a made-up onion, as the app's settings would, and returns the onion.
+#[cfg(feature = "tor")]
+fn route_to_onion(session: &Session, host: &str, seed: u8) -> String {
+    let onion = lepic_tor::OnionAddress::from_public_key(&[seed; 32]).host();
+    session
+        .set_onion_routes(vec![crate::api::tor::OnionRoute {
+            host: host.to_owned(),
+            port: 443,
+            onion: onion.clone(),
+            onion_port: 443,
+        }])
+        .unwrap();
+    onion
+}
+
 #[cfg(feature = "tor")]
 async fn post_once(session: &Session) {
     let to = Destination::new(address(session).to_string());
@@ -536,14 +553,14 @@ async fn a_relay_switched_to_while_over_tor_is_reached_through_tor() {
     session.attach_relay_socks(socks);
     assert!(session.relay_through_tor());
 
+    let onion = route_to_onion(session, "mapped.example", 3);
     let mapped = WalletConfig {
-        epicbox_domain: "epicbox.btlabs.uk".to_owned(),
+        epicbox_domain: "mapped.example".to_owned(),
         ..config.clone()
     };
     switch(session, &mapped).await.unwrap();
     post_once(session).await;
-    let onion = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
-    assert_eq!(*targets.lock().unwrap(), [(onion.to_owned(), 443)]);
+    assert_eq!(*targets.lock().unwrap(), [(onion, 443)]);
 
     let unmapped = WalletConfig {
         epicbox_domain: "two.example".to_owned(),
@@ -572,14 +589,14 @@ async fn a_node_switched_to_while_over_tor_is_reached_through_tor() {
     let (socks, targets) = recording_socks().await;
     session.attach_node_socks(socks);
 
+    let onion = route_to_onion(session, "mappednode.example", 4);
     let mapped = WalletConfig {
-        node_url: "https://node.btlabs.uk".to_owned(),
+        node_url: "https://mappednode.example".to_owned(),
         ..config.clone()
     };
     switch(session, &mapped).await.unwrap();
     assert!(session.node().get_tip().await.is_err());
-    let onion = "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion";
-    assert_eq!(targets.lock().unwrap()[0], (onion.to_owned(), 443));
+    assert_eq!(targets.lock().unwrap()[0], (onion, 443));
 
     let unmapped = WalletConfig {
         node_url: "https://other.example:3413".to_owned(),
@@ -614,8 +631,9 @@ async fn a_node_tip_asked_while_over_tor_goes_through_tor() {
     let (socks, targets) = recording_socks().await;
     wallet.session().attach_node_socks(socks);
 
+    let onion = route_to_onion(wallet.session(), "mappednode.example", 4);
     let mapped = WalletConfig {
-        node_url: "https://node.btlabs.uk".to_owned(),
+        node_url: "https://mappednode.example".to_owned(),
         node_api_secret: Some("secret".to_owned()),
         ..config.clone()
     };
@@ -623,8 +641,7 @@ async fn a_node_tip_asked_while_over_tor_goes_through_tor() {
         kind(wallet.node_tip_for(mapped).await),
         WalletErrorKind::NodeUnreachable
     );
-    let onion = "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion";
-    assert_eq!(targets.lock().unwrap()[0], (onion.to_owned(), 443));
+    assert_eq!(targets.lock().unwrap()[0], (onion, 443));
 
     targets.lock().unwrap().clear();
     let unmapped = WalletConfig {

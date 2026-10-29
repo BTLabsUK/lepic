@@ -45,7 +45,7 @@ pub const PATIENCE: Duration = Duration::from_secs(20);
 const CLIENT_TIMERS: Duration = Duration::from_secs(60);
 
 pub fn settings() -> ClientSettings {
-    let mut settings = ClientSettings::new(RelayEndpoint::new(
+    let mut settings = lepic_epicbox::testing::client_settings(RelayEndpoint::new(
         Domain::parse("relay.test").unwrap(),
         None,
         Security::Plain,

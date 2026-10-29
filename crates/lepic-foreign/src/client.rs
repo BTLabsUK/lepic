@@ -18,7 +18,7 @@ use rustls::ClientConfig;
 use tracing::debug;
 
 use crate::error::ClientError;
-use crate::rpc::{self, MAX_BODY_LEN, VersionInfo};
+use crate::rpc::{self, VersionInfo};
 use crate::url::ForeignUrl;
 
 /// Limits of [`ForeignClient`].
@@ -29,16 +29,6 @@ pub struct ClientSettings {
     /// the tip before it answers `receive_tx`, so this is longer than a node call.
     pub request_timeout: Duration,
     pub max_response_bytes: usize,
-}
-
-impl Default for ClientSettings {
-    fn default() -> Self {
-        Self {
-            connect_timeout: Duration::from_secs(10),
-            request_timeout: Duration::from_secs(60),
-            max_response_bytes: MAX_BODY_LEN,
-        }
-    }
 }
 
 /// A rustls client configuration with the ring provider and the Mozilla roots, built without

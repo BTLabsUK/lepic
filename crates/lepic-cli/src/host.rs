@@ -11,8 +11,7 @@ use lepic_epicbox::tunnel::{Tunnel, TunnelConnector};
 use lepic_epicbox::{Connector, RelayStream, TcpConnector};
 use lepic_keychain::KdfParams;
 use lepic_node::{
-    CallPolicy, DialFuture, HttpSettings, HttpTransport, NodeClient, NodeStream, RpcTransport,
-    is_loopback_host,
+    DialFuture, HttpTransport, NodeClient, NodeStream, RpcTransport, is_loopback_host,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -69,39 +68,35 @@ impl Host for ProcessHost {
             Some(path) => Some(read_api_secret(path)?),
             None => None,
         };
-        let http = HttpSettings {
-            api_secret,
-            ..HttpSettings::default()
-        };
+        let http = settings.tuning.node_http(api_secret);
         let tls = lepic_node::webpki_tls_config()?;
         let transport = match self.tor(settings).filter(|_| settings.node_over_tor) {
             Some(tor) => HttpTransport::with_dialer(
                 settings.node.as_str(),
-                &HttpSettings {
-                    request_timeout: NODE_TOR_REQUEST_TIMEOUT,
-                    ..http
-                },
+                &http,
                 tls,
                 Arc::new(CliNodeDialer {
                     tor,
-                    routes: OnionRoutes::default(),
+                    routes: OnionRoutes::new(settings.servers.onion_routes.clone()),
                 }),
             )?,
             None => HttpTransport::new(settings.node.as_str(), &http, tls)?,
         };
-        Ok(NodeClient::new(transport, CallPolicy::default()))
+        Ok(NodeClient::new(transport, settings.tuning.call_policy))
     }
 
     fn relay_connector(&self, settings: &Settings) -> Result<Arc<dyn Connector>, CliError> {
         let tls = lepic_node::webpki_tls_config()?;
         Ok(match self.tor(settings) {
             None => Arc::new(TcpConnector::new(tls)),
-            Some(tor) => Arc::new(TunnelConnector::new(
+            Some(tor) => Arc::new(TunnelConnector::with_routes(
                 tls,
                 Arc::new(RelayTunnel {
                     tor,
                     active: tokio::sync::watch::Sender::new(true),
                 }),
+                Arc::new(OnionRoutes::new(settings.servers.onion_routes.clone())),
+                settings.tuning.tunnel,
             )),
         })
     }
@@ -140,13 +135,10 @@ impl Host for ProcessHost {
 /// those of `tor listen`, which may run at the same time.
 const RELAY_TOR_DIR: &str = "tor-epicbox";
 
-/// Room for a first circuit to the node's onion.
-const NODE_TOR_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
-
 /// The tor the settings name. While there is one, the relay is never reached directly, nor the
 /// node when `node_over_tor` is set.
 fn cli_tor(settings: &Settings) -> Option<Arc<CliTor>> {
-    let relay = lepic_tor::RelayTor::new(true);
+    let relay = lepic_tor::RelayTor::new(true, settings.tuning.tor_connect);
     let start = match &settings.relay_tor {
         RelayTor::Off => return None,
         RelayTor::Socks(address) => {
@@ -154,8 +146,11 @@ fn cli_tor(settings: &Settings) -> Option<Arc<CliTor>> {
             None
         }
         RelayTor::Binary { binary, lib_dir } => {
-            let mut tor =
-                lepic_tor::TorSettings::new(binary.clone(), settings.data_dir.join(RELAY_TOR_DIR));
+            let mut tor = lepic_tor::TorSettings::new(
+                binary.clone(),
+                settings.data_dir.join(RELAY_TOR_DIR),
+                settings.tuning.tor_timings(),
+            );
             tor.lib_dir.clone_from(lib_dir);
             Some(tor)
         }

@@ -158,7 +158,7 @@ fn restore_record(
         peer_mailbox: peer_card.fields().mailbox.as_str().to_owned(),
         our_mailbox: ours.to_string(),
         home_relay,
-        // A built-in relay is dialled at its own onion; a document's onion is not trusted.
+        // A routed relay is dialled at its own onion; a document's onion is not trusted.
         onion: None,
         previous: None,
         backoff: Vec::new(),

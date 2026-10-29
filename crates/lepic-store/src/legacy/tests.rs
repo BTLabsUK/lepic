@@ -49,7 +49,7 @@ fn tx_v4() -> Value {
         "kernel_excess": COMMIT,
         "kernel_lookup_min_height": 1200,
         "payment_proof": null,
-        "public_addr": "esZ9vkLRuuGCqwsQZpw7MaDTGaQSXHU3y5pKJ8xTm3TZgnDtvBYX@epicbox.epiccash.com"
+        "public_addr": "esZ9vkLRuuGCqwsQZpw7MaDTGaQSXHU3y5pKJ8xTm3TZgnDtvBYX@relay.example.org"
     })
 }
 
@@ -161,7 +161,7 @@ fn parses_transaction_as_epic_wallet_4_writes_it() {
     );
     assert_eq!(tx.kernel_excess.unwrap()[..2], [0x08, 0xb7]);
     assert_eq!(tx.kernel_lookup_min_height, Some(Height::new(1200)));
-    assert!(tx.public_addr.unwrap().ends_with("@epicbox.epiccash.com"));
+    assert!(tx.public_addr.unwrap().ends_with("@relay.example.org"));
 }
 
 #[test]

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lepic_foreign::{
-    ClientError, ClientSettings, Exposure, ForeignClient, ForeignUrl, HttpTransport, ListenError,
-    ListenSettings, PlainHttp, ReceiveHandler, Refusal, RpcError, listen, webpki_tls_config,
+    ClientError, Exposure, ForeignClient, ForeignUrl, HttpTransport, ListenError, ListenSettings,
+    PlainHttp, ReceiveHandler, Refusal, RpcError, listen, webpki_tls_config,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::error::TransportError;
@@ -73,7 +73,10 @@ fn receive_tx_request(slate: &str) -> String {
 }
 
 fn client() -> ForeignClient {
-    ForeignClient::new(ClientSettings::default(), webpki_tls_config().unwrap())
+    ForeignClient::new(
+        lepic_foreign::testing::client_settings(),
+        webpki_tls_config().unwrap(),
+    )
 }
 
 fn url(port: u16) -> ForeignUrl {
@@ -95,9 +98,16 @@ async fn raw_exchange(port: u16, request: &[u8]) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sends_an_s1_and_gets_the_s2_back() {
     let wallet = handler(None);
-    let listener = listen(ListenSettings::new(Exposure::LocalOnly, 0), wallet.clone())
-        .await
-        .unwrap();
+    let listener = listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
+        wallet.clone(),
+    )
+    .await
+    .unwrap();
     assert!(listener.local_addr().ip().is_loopback());
     let port = listener.local_addr().port();
     let version = client().check_version(&url(port)).await.unwrap();
@@ -110,9 +120,16 @@ async fn sends_an_s1_and_gets_the_s2_back() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transport_holds_the_answer_for_its_slate() {
-    let listener = listen(ListenSettings::new(Exposure::LocalOnly, 0), handler(None))
-        .await
-        .unwrap();
+    let listener = listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
+        handler(None),
+    )
+    .await
+    .unwrap();
     let transport = HttpTransport::new(client());
     let to = Destination::new(url(listener.local_addr().port()).as_uri());
     transport.deliver(&to, &s1()).await.unwrap();
@@ -131,7 +148,11 @@ async fn transport_holds_the_answer_for_its_slate() {
 async fn transport_refuses_an_answer_for_another_slate() {
     let other = S2.replace("212b00", "212b01");
     let listener = listen(
-        ListenSettings::new(Exposure::LocalOnly, 0),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
         answering(None, other),
     )
     .await
@@ -167,7 +188,11 @@ fn transport_hands_nothing_out_inbound() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refusal_reaches_the_sender_as_refused() {
     let listener = listen(
-        ListenSettings::new(Exposure::LocalOnly, 0),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
         handler(Some(Refusal::Rejected)),
     )
     .await
@@ -182,7 +207,11 @@ async fn a_refusal_reaches_the_sender_as_refused() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn takes_only_so_many_payments_a_minute() {
     let wallet = handler(None);
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.receives_per_minute = 2;
     let listener = listen(settings, wallet.clone()).await.unwrap();
     let port = listener.local_addr().port();
@@ -198,7 +227,11 @@ async fn takes_only_so_many_payments_a_minute() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_slate_that_is_not_an_s1_does_not_spend_the_payment_budget() {
     let wallet = handler(None);
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.receives_per_minute = 1;
     let listener = listen(settings, wallet.clone()).await.unwrap();
     let port = listener.local_addr().port();
@@ -215,7 +248,11 @@ async fn a_slate_that_is_not_an_s1_does_not_spend_the_payment_budget() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn takes_only_so_many_requests_a_minute() {
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.requests_per_minute = 2;
     let listener = listen(settings, handler(None)).await.unwrap();
     let port = listener.local_addr().port();
@@ -233,7 +270,11 @@ async fn takes_only_so_many_requests_a_minute() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requests_that_are_not_payments_leave_room_for_payments() {
     let wallet = handler(None);
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.requests_per_minute = 2;
     settings.receives_per_minute = 2;
     let listener = listen(settings, wallet.clone()).await.unwrap();
@@ -254,7 +295,11 @@ async fn requests_that_are_not_payments_leave_room_for_payments() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_flood_of_junk_requests_leaves_room_for_payments() {
     let wallet = handler(None);
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.requests_per_minute = 3;
     settings.receives_per_minute = 2;
     let listener = listen(settings, wallet.clone()).await.unwrap();
@@ -276,7 +321,11 @@ async fn a_flood_of_junk_requests_leaves_room_for_payments() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn past_the_request_budget_only_so_many_payments_are_read() {
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.requests_per_minute = 1;
     settings.receives_per_minute = 1;
     let listener = listen(settings, handler(None)).await.unwrap();
@@ -293,7 +342,11 @@ async fn past_the_request_budget_only_so_many_payments_are_read() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_payment_refused_as_invalid_gives_its_budget_back() {
     let wallet = handler(None);
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.receives_per_minute = 1;
     let listener = listen(settings, wallet.clone()).await.unwrap();
     let port = listener.local_addr().port();
@@ -309,7 +362,11 @@ async fn a_payment_refused_as_invalid_gives_its_budget_back() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_so_many_refused_payments_give_their_budget_back() {
     let wallet = handler(None);
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.receives_per_minute = 2;
     let listener = listen(settings, wallet.clone()).await.unwrap();
     let port = listener.local_addr().port();
@@ -331,9 +388,16 @@ async fn only_so_many_refused_payments_give_their_budget_back() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serves_only_post_to_the_foreign_endpoint() {
-    let listener = listen(ListenSettings::new(Exposure::LocalOnly, 0), handler(None))
-        .await
-        .unwrap();
+    let listener = listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
+        handler(None),
+    )
+    .await
+    .unwrap();
     let port = listener.local_addr().port();
     let get = raw_exchange(port, b"GET /v2/foreign HTTP/1.1\r\nhost: x\r\n\r\n").await;
     assert!(get.starts_with("HTTP/1.1 405"), "{get}");
@@ -361,7 +425,11 @@ async fn serves_only_post_to_the_foreign_endpoint() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_slow_caller_is_dropped_after_the_header_timeout() {
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.header_timeout = std::time::Duration::from_millis(200);
     let listener = listen(settings, handler(None)).await.unwrap();
     let mut stream = TcpStream::connect(listener.local_addr()).await.unwrap();
@@ -380,7 +448,11 @@ async fn a_slow_caller_is_dropped_after_the_header_timeout() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_body_sent_too_slowly_is_answered_408() {
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.body_timeout = std::time::Duration::from_millis(200);
     let listener = listen(settings, handler(None)).await.unwrap();
     let mut stream = TcpStream::connect(listener.local_addr()).await.unwrap();
@@ -402,9 +474,16 @@ async fn a_body_sent_too_slowly_is_answered_408() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_oversized_chunked_body_is_answered_413() {
-    let listener = listen(ListenSettings::new(Exposure::LocalOnly, 0), handler(None))
-        .await
-        .unwrap();
+    let listener = listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
+        handler(None),
+    )
+    .await
+    .unwrap();
     let mut stream = TcpStream::connect(listener.local_addr()).await.unwrap();
     let length = lepic_foreign::rpc::MAX_BODY_LEN + 1;
     stream
@@ -445,7 +524,11 @@ async fn a_caller_that_never_takes_its_answer_is_dropped_and_frees_its_slot() {
         r#"{{"id":"0436430c-2b02-624c-2032-570501212b00","pad":"{}"}}"#,
         "x".repeat(4 * 1024 * 1024)
     );
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.max_connections = 1;
     settings.header_timeout = std::time::Duration::from_millis(300);
     settings.request_timeout = std::time::Duration::from_millis(300);
@@ -469,7 +552,11 @@ async fn a_caller_that_never_takes_its_answer_is_dropped_and_frees_its_slot() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn one_address_holds_only_its_share_of_the_connections() {
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.max_connections_per_address = 2;
     let listener = listen(settings, handler(None)).await.unwrap();
     let port = listener.local_addr().port();
@@ -495,12 +582,23 @@ async fn one_address_holds_only_its_share_of_the_connections() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_held_port_is_reported_as_in_use() {
-    let first = listen(ListenSettings::new(Exposure::LocalOnly, 0), handler(None))
-        .await
-        .unwrap();
+    let first = listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
+        handler(None),
+    )
+    .await
+    .unwrap();
     let port = first.local_addr().port();
     let second = listen(
-        ListenSettings::new(Exposure::LocalOnly, port),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            port,
+            lepic_foreign::testing::listen_limits(),
+        ),
         handler(None),
     )
     .await;
@@ -509,15 +607,26 @@ async fn a_held_port_is_reported_as_in_use() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stopped_listener_frees_its_port() {
-    let listener = listen(ListenSettings::new(Exposure::LocalOnly, 0), handler(None))
-        .await
-        .unwrap();
+    let listener = listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
+        handler(None),
+    )
+    .await
+    .unwrap();
     let port = listener.local_addr().port();
     listener.shutdown().await;
     let error = client().check_version(&url(port)).await.unwrap_err();
     assert!(matches!(error, ClientError::Unreachable(_)));
     let again = listen(
-        ListenSettings::new(Exposure::LocalOnly, port),
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            port,
+            lepic_foreign::testing::listen_limits(),
+        ),
         handler(None),
     )
     .await;

@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use lepic_foreign::{ClientSettings, ForeignClient, ForeignUrl, PlainHttp, webpki_tls_config};
+use lepic_foreign::{ForeignClient, ForeignUrl, PlainHttp, webpki_tls_config};
 use lepic_wallet::slate::{MediaType, WireSlate};
 use zeroize::Zeroizing;
 
@@ -57,6 +57,8 @@ async fn session_on(
         node_api_secret: None,
         epicbox_domain: String::new(),
         epicbox_port: 443,
+        onion_routes: Vec::new(),
+        tuning: crate::tuning::shipped(),
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     Arc::new(
@@ -206,7 +208,7 @@ async fn the_same_slate_posted_again_gets_the_same_answer() {
     let events = Events::default();
     let port = listen(&pair.bob, &events).await;
     let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
-    let client = ForeignClient::new(ClientSettings::default(), webpki_tls_config().unwrap());
+    let client = ForeignClient::new(shipped().send, webpki_tls_config().unwrap());
     let to = ForeignUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
     let wire = WireSlate::text(MediaType::JSON, slate.json);
 
@@ -269,8 +271,12 @@ async fn plain_http_to_another_computer_needs_consent() {
         .send_http(EPIC, 1, "http://203.0.113.7:3415", false, None)
         .await;
     assert_eq!(kind(refused), WalletErrorKind::PlainHttpNotAllowed);
-    for invalid in ["203.0.113.7:3415", "ftp://host", "http://abcdefgh.onion"] {
-        let refused = pair.alice.send_http(EPIC, 1, invalid, true, None).await;
+    for invalid in [
+        "203.0.113.7:3415".to_owned(),
+        "ftp://host".to_owned(),
+        format!("http://{}.onion", "abcdefgh"),
+    ] {
+        let refused = pair.alice.send_http(EPIC, 1, &invalid, true, None).await;
         assert_eq!(kind(refused), WalletErrorKind::HttpUrlInvalid, "{invalid}");
     }
     assert!(sends(&pair.alice).await.is_empty());
@@ -396,10 +402,9 @@ async fn a_payment_over_the_listener_rate_is_reported_refused_as_unavailable() {
     let pair = funded_pair().await;
     let events = Events::default();
     let port = listen(&pair.bob, &events).await;
-    let client = ForeignClient::new(ClientSettings::default(), webpki_tls_config().unwrap());
+    let client = ForeignClient::new(shipped().send, webpki_tls_config().unwrap());
     let to = ForeignUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
-    let budget = lepic_foreign::ListenSettings::new(lepic_foreign::Exposure::LocalOnly, 0)
-        .receives_per_minute;
+    let budget = shipped().listen.receives_per_minute;
     // Slates the wallet refuses as invalid leave the budget to real payments, as many a
     // minute as the budget.
     for n in 0..budget {
@@ -522,4 +527,8 @@ async fn lock_during_an_http_delivery_leaves_a_resendable_send_to_a_fresh_handle
     assert!(!reopened.transaction(sent.tx_id).await.unwrap().undelivered);
     assert_eq!(pair.chain.pushed_count(), 1);
     assert_eq!(events.last().kind, HttpListenerEventKind::Received);
+}
+
+fn shipped() -> crate::tuning::Tuning {
+    crate::tuning::Tuning::check(&crate::tuning::shipped()).unwrap()
 }

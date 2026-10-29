@@ -186,7 +186,7 @@ fn injected_failures_reach_the_client() {
                 initial_backoff: std::time::Duration::ZERO,
                 max_backoff: std::time::Duration::ZERO,
             },
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     );
     assert_eq!(block_on(retrying.get_tip()).unwrap(), chain.tip);

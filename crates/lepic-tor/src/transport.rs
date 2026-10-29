@@ -19,7 +19,7 @@ use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use lepic_foreign::HttpPolicy;
 use lepic_foreign::error::RpcError;
-use lepic_foreign::rpc::{self, MAX_BODY_LEN, VersionInfo};
+use lepic_foreign::rpc::{self, VersionInfo};
 use lepic_slate::codec::WireSlate;
 use lepic_transport::error::TransportError;
 use lepic_transport::policy::FormatPolicy;
@@ -32,7 +32,7 @@ use tracing::debug;
 
 use crate::onion::{OnionAddress, OnionError};
 use crate::process::SocksProxy;
-use crate::socks::{self, DEFAULT_CONNECT_TIMEOUT, SendFailure, SocksCredentials, SocksError};
+use crate::socks::{self, SendFailure, SocksCredentials, SocksError};
 
 /// The transport id of the Tor method, stored with its transactions.
 pub const TRANSPORT_ID: TransportId = TransportId::new("tor");
@@ -51,16 +51,6 @@ pub struct OnionClientSettings {
     /// From sending a request to the last byte of its answer.
     pub request_timeout: Duration,
     pub max_response_bytes: usize,
-}
-
-impl Default for OnionClientSettings {
-    fn default() -> Self {
-        Self {
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            request_timeout: Duration::from_secs(120),
-            max_response_bytes: MAX_BODY_LEN,
-        }
-    }
 }
 
 /// Why a slate could not be sent over Tor.
@@ -110,7 +100,7 @@ impl TorSendError {
 }
 
 /// Talks to other wallets' foreign APIs at their onions, through a SOCKS proxy.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct OnionClient {
     settings: OnionClientSettings,
 }
@@ -447,14 +437,6 @@ mod tests {
         );
         assert_eq!(TorSendError::NoCommonVersion.class(), SendFailure::TooOld);
         assert_eq!(TorSendError::Timeout.class(), SendFailure::Broken);
-    }
-
-    #[test]
-    fn reaching_an_onion_may_take_75_seconds() {
-        assert_eq!(
-            OnionClientSettings::default().connect_timeout,
-            Duration::from_secs(75)
-        );
     }
 
     #[test]

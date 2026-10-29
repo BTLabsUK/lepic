@@ -176,7 +176,7 @@ mod tests {
             "https:///path",
             "http://user:secret@example.org",
             "http://[::1",
-            "http://exa mple.org",
+            "http://exa mple.invalid",
         ] {
             assert_eq!(
                 NodeEndpoint::parse(url),

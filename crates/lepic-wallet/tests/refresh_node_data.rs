@@ -835,7 +835,7 @@ fn a_kernel_height_above_the_tip_changes_nothing_through_the_node_client() {
         },
         CallPolicy {
             retry: RetryPolicy::NONE,
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     );
     let wallet = Wallet::new(

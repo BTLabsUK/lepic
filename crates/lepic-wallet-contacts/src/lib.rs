@@ -155,20 +155,19 @@ pub enum RelayMode {
 #[derive(Clone)]
 pub struct ContactRelays {
     pub epicbox: EpicboxTransport,
-    /// The meeting relays: the built-in relays of the network unless
-    /// [`ContactRelays::with_meeting`] named others.
-    pub built_in: Vec<RelayEndpoint>,
+    /// The meeting relays, which the caller names with [`ContactRelays::with_meeting`]: the
+    /// only relays pairing words are posted to and looked for on. None until named.
+    pub meeting: Vec<RelayEndpoint>,
     pub mode: RelayMode,
 }
 
 impl ContactRelays {
-    /// The relays for `epicbox`, with the built-in relays of its network from
-    /// [`lepic_epicbox::built_in_relays`] as the meeting relays.
+    /// The relays for `epicbox`, with no meeting relays: enough for every call but pairing
+    /// words.
     pub fn new(epicbox: EpicboxTransport, mode: RelayMode) -> Self {
-        let built_in = lepic_epicbox::built_in_relays(epicbox.network());
         Self {
             epicbox,
-            built_in,
+            meeting: Vec::new(),
             mode,
         }
     }
@@ -176,7 +175,7 @@ impl ContactRelays {
     /// These relays with `meeting`, as [`meeting_relays`] parses them, as the meeting relays.
     #[must_use]
     pub fn with_meeting(mut self, meeting: Vec<RelayEndpoint>) -> Self {
-        self.built_in = meeting;
+        self.meeting = meeting;
         self
     }
 }
@@ -185,7 +184,7 @@ impl std::fmt::Debug for ContactRelays {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ContactRelays")
             .field("relay", &self.epicbox.settings().endpoint)
-            .field("built_in", &self.built_in)
+            .field("meeting", &self.meeting)
             .field("mode", &self.mode)
             .finish()
     }
@@ -265,7 +264,7 @@ pub enum ContactError {
     /// The relay could not be reached or broke off. Nothing that was not stored is lost.
     #[error("relay failed")]
     Relay(#[source] MailboxError),
-    /// The network has no built-in relay to offer pairing words on.
+    /// No meeting relay was named to offer pairing words on.
     #[error("pairing words are not available")]
     WordsUnavailable,
     /// Sealing is off for the contact, or its card says it cannot open sealed files.
@@ -299,7 +298,7 @@ pub enum ContactError {
     /// A key check is allowed once per pairing and per slot, within a day of the new pairing.
     #[error("no key check is allowed for these pairings now")]
     KeyCheckRefused,
-    /// No invite opened with these words on any built-in relay.
+    /// No invite opened with these words on any meeting relay.
     #[error("no invite found for these words")]
     WordsNotFound,
     #[error("pairing words are not valid")]

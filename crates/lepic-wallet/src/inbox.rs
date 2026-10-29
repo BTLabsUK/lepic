@@ -543,8 +543,10 @@ fn reply_is_permanent(hold: &Hold) -> bool {
 /// The key part of an Epicbox address text, which alone identifies a sender: the domain is not
 /// signed. Text that is not an address is compared whole.
 fn sender_key(address: &str, network: RelayNetwork) -> String {
-    EpicboxAddress::parse(address, network)
-        .map_or_else(|_| address.to_owned(), |address| address.key_text())
+    EpicboxAddress::parse_key(address, network).map_or_else(
+        |_| address.to_owned(),
+        |key| EpicboxAddress::key_text_of(&key, network),
+    )
 }
 
 /// The relay client's reconnect backoff also paces the retries of a held message.

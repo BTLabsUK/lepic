@@ -29,10 +29,104 @@ pub struct WalletConfig {
     pub node_url: String,
     /// Basic-auth secret for the node, when it needs one.
     pub node_api_secret: Option<String>,
-    /// Epicbox relay domain, such as `epicbox.epiccash.com`. Empty disables Epicbox. A loopback
+    /// Epicbox relay domain, such as `relay.example.org`. Empty disables Epicbox. A loopback
     /// host (`localhost` or `127.x.x.x`) is reached over a plain websocket, any other over TLS.
     pub epicbox_domain: String,
     pub epicbox_port: u16,
+    /// The hosts known to be onion services, from the app's settings, in effect from the
+    /// wallet's first connection. Read when a wallet is created, restored or opened, checked
+    /// as `EpicWallet::set_onion_routes` checks them (an invalid one fails the call with
+    /// `InvalidArgument`), and replaced later only by that call:
+    /// `set_servers` and `node_tip_for` ignore them. Empty leaves no route. Ignored in a build
+    /// without tor.
+    pub onion_routes: Vec<crate::api::tor::OnionRoute>,
+    /// Timeouts, retries and limits for the node, the relay, HTTP and tor, from the app's
+    /// configuration. Read when a wallet is created, restored or opened, and by `node_tip`;
+    /// `set_servers` and `node_tip_for` keep the open wallet's. A zero, or a minimum above its
+    /// maximum, fails the call with `InvalidArgument`.
+    pub tuning: NetTuning,
+}
+
+/// The app configuration's `[node]`, `[epicbox]`, `[http]` and `[tor]` tuning keys. Every
+/// field is required: LEPIC has no defaults of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetTuning {
+    pub node: NodeTuning,
+    pub epicbox: EpicboxTuning,
+    pub http: HttpTuning,
+    pub tor: TorTuning,
+}
+
+/// Requests to the node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeTuning {
+    pub connect_timeout_s: u32,
+    /// From sending a request to the last byte of its answer.
+    pub request_timeout_s: u32,
+    /// How long an idle connection is kept; below the node server's keep-alive timeout.
+    pub idle_timeout_s: u32,
+    /// Tries of a read, the first included.
+    pub retry_attempts: u32,
+    pub retry_backoff_min_ms: u32,
+    pub retry_backoff_max_ms: u32,
+    /// Outputs asked for in one request.
+    pub outputs_per_request: u32,
+    /// Output requests in flight at once.
+    pub concurrent_requests: u32,
+}
+
+/// The Epicbox relay connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EpicboxTuning {
+    /// The TCP, TLS and websocket handshakes together.
+    pub connect_timeout_s: u32,
+    /// Each relay answer.
+    pub response_timeout_s: u32,
+    /// Below the relay proxy's idle timeout.
+    pub ping_interval_s: u32,
+    pub reconnect_min_s: u32,
+    pub reconnect_max_s: u32,
+    /// One whole mailbox drain.
+    pub drain_timeout_s: u32,
+    /// The least a relay connection through tor is given.
+    pub tor_connect_timeout_s: u32,
+    /// Asking a relay for its onion through tor.
+    pub onion_discovery_timeout_s: u32,
+    /// How long a relay that could not be asked is not asked again.
+    pub onion_discovery_retry_s: u32,
+}
+
+/// The wallet's HTTP listener, which tor's onion forwards to too, and sends to other
+/// wallets' listeners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HttpTuning {
+    pub header_timeout_s: u32,
+    pub body_timeout_s: u32,
+    pub request_timeout_s: u32,
+    pub answer_timeout_s: u32,
+    pub max_connections: u32,
+    pub max_connections_per_address: u32,
+    pub requests_per_minute: u32,
+    pub receives_per_minute: u32,
+    pub send_connect_timeout_s: u32,
+    pub send_request_timeout_s: u32,
+}
+
+/// The wallet's tor. Ignored in a build without tor, but still checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TorTuning {
+    pub bootstrap_timeout_s: u32,
+    /// Bootstrap without a cached consensus.
+    pub cold_bootstrap_timeout_s: u32,
+    /// Bootstrap progress unchanged this long is a network failure.
+    pub stall_timeout_s: u32,
+    pub cold_stall_timeout_s: u32,
+    /// The onion's descriptor uploaded.
+    pub publish_timeout_s: u32,
+    /// Reaching a host or an onion through tor.
+    pub connect_timeout_s: u32,
+    /// One send to an onion, to the last byte of its answer.
+    pub request_timeout_s: u32,
 }
 
 impl std::fmt::Debug for WalletConfig {
@@ -47,6 +141,8 @@ impl std::fmt::Debug for WalletConfig {
             )
             .field("epicbox_domain", &self.epicbox_domain)
             .field("epicbox_port", &self.epicbox_port)
+            .field("onion_routes", &self.onion_routes)
+            .field("tuning", &self.tuning)
             .finish()
     }
 }
@@ -1440,6 +1536,8 @@ mod tests {
             node_api_secret: Some("node-secret-value".to_owned()),
             epicbox_domain: String::new(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
         };
         let printed = format!("{config:?}");
         assert!(!printed.contains("node-secret-value"));

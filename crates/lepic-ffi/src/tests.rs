@@ -65,6 +65,8 @@ impl Fixture {
             node_api_secret: None,
             epicbox_domain: String::new(),
             epicbox_port: 443,
+            onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
         }
     }
 
@@ -589,19 +591,19 @@ async fn a_build_without_tor_answers_every_tor_call_without_tor() {
     )
     .await
     .unwrap();
-    let onion = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+    let onion = format!("{}.onion", "a".repeat(56));
 
-    assert!(!crate::api::tor::validate_onion_address(onion.to_owned()));
+    assert!(!crate::api::tor::validate_onion_address(onion.clone()));
     assert_eq!(
         kind(wallet.onion_address().await),
         WalletErrorKind::Unsupported
     );
     assert_eq!(
-        kind(wallet.send_tor(1, 1, onion.to_owned(), None, None).await),
+        kind(wallet.send_tor(1, 1, onion.clone(), None, None).await),
         WalletErrorKind::Unsupported
     );
     assert_eq!(
-        kind(wallet.resend_tor(1, onion.to_owned()).await),
+        kind(wallet.resend_tor(1, onion.clone()).await),
         WalletErrorKind::Unsupported
     );
     assert_eq!(
@@ -724,9 +726,15 @@ fn the_node_api_secret_is_taken_out_of_the_config_before_the_client_is_built() {
     assert_eq!(config.node_api_secret, None);
     crate::node::NodeFactory::Http
         .client(
-            &config,
+            (
+                &config,
+                &crate::tuning::Tuning::check(&config.tuning).unwrap(),
+            ),
             &secret,
-            &std::sync::Arc::new(crate::node::RelayTor::direct(true)),
+            &std::sync::Arc::new(crate::node::RelayTor::direct(
+                true,
+                std::time::Duration::from_secs(75),
+            )),
             &std::sync::Arc::new(lepic_epicbox::tunnel::OnionRoutes::default()),
         )
         .unwrap();

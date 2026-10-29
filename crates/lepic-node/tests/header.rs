@@ -187,7 +187,7 @@ fn client(transport: FakeTransport) -> NodeClient<FakeTransport> {
         transport,
         CallPolicy {
             retry: RetryPolicy::NONE,
-            ..CallPolicy::default()
+            ..lepic_node::testing::call_policy()
         },
     )
 }

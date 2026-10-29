@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use lepic_foreign::{
-    ClientSettings, Exposure, ForeignClient, ForeignUrl, ListenSettings, ListenerHandle, PlainHttp,
-    ReceiveHandler, Refusal, listen, webpki_tls_config,
+    Exposure, ForeignClient, ForeignUrl, ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler,
+    Refusal, listen, webpki_tls_config,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::transport::BoxFuture;
@@ -46,7 +46,11 @@ async fn listener(receives_per_minute: u32) -> (ListenerHandle, Arc<Counting>, u
     let wallet = Arc::new(Counting {
         calls: AtomicUsize::new(0),
     });
-    let mut settings = ListenSettings::new(Exposure::LocalOnly, 0);
+    let mut settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
     settings.receives_per_minute = receives_per_minute;
     let handle = listen(settings, wallet.clone()).await.unwrap();
     let port = handle.local_addr().port();
@@ -76,7 +80,10 @@ async fn exchange(port: u16, request: &[u8]) -> String {
 
 /// The listener still takes an honest payment after whatever came before.
 async fn assert_still_serving(port: u16) {
-    let client = ForeignClient::new(ClientSettings::default(), webpki_tls_config().unwrap());
+    let client = ForeignClient::new(
+        lepic_foreign::testing::client_settings(),
+        webpki_tls_config().unwrap(),
+    );
     let url =
         ForeignUrl::parse(&format!("http://127.0.0.1:{port}"), PlainHttp::LoopbackOnly).unwrap();
     client.check_version(&url).await.unwrap();

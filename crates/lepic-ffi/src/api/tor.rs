@@ -312,9 +312,9 @@ impl EpicWallet {
     }
 
     /// Replaces the onion routes the wallet uses through tor, for example with the signed list
-    /// the app fetched; until then a built-in table holds `epicbox.btlabs.uk:443` and
-    /// `node.btlabs.uk:443`, for the relay and for the node client. Only TLS
-    /// hosts belong here: the connection still checks `host`'s certificate. Applies from the
+    /// the app fetched; until then the wallet uses the `onion_routes` of its `WalletConfig`,
+    /// for the relay and for the node client. LEPIC has none of its own. Only TLS hosts belong
+    /// here: the connection still checks `host`'s certificate. Applies from the
     /// next connection. An empty list leaves no route, so every host goes through a Tor exit.
     ///
     /// Fails with `InvalidArgument`, changing nothing, when a host is not a host name, an onion

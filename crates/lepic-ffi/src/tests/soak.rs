@@ -181,6 +181,8 @@ fn soak() {
         node_api_secret: None,
         epicbox_domain: relay_domain,
         epicbox_port: relay_port,
+        onion_routes: Vec::new(),
+        tuning: crate::tuning::shipped(),
     };
     let secret = NodeSecret::take(&mut config);
     let counters = Arc::new(Counters::default());

@@ -142,15 +142,6 @@ impl Backoff {
     }
 }
 
-impl Default for Backoff {
-    fn default() -> Self {
-        Self {
-            initial: Duration::from_secs(1),
-            max: Duration::from_secs(60),
-        }
-    }
-}
-
 /// How the client talks to its relay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSettings {
@@ -165,17 +156,30 @@ pub struct ClientSettings {
     /// connection that hears nothing for two intervals is treated as lost.
     pub ping_interval: Duration,
     pub backoff: Backoff,
+    /// The bound of a whole mailbox drain. Mailboxes not reached by then wait for the next one.
+    pub drain_timeout: Duration,
+}
+
+/// The caller's timeouts and reconnect backoff for a relay client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientTimings {
+    pub connect_timeout: Duration,
+    pub response_timeout: Duration,
+    pub ping_interval: Duration,
+    pub backoff: Backoff,
+    pub drain_timeout: Duration,
 }
 
 impl ClientSettings {
-    pub fn new(endpoint: RelayEndpoint) -> Self {
+    pub fn new(endpoint: RelayEndpoint, timings: ClientTimings) -> Self {
         Self {
             endpoint,
             wallet_version: concat!("lepic-", env!("CARGO_PKG_VERSION")).to_owned(),
-            connect_timeout: Duration::from_secs(15),
-            response_timeout: Duration::from_secs(15),
-            ping_interval: Duration::from_secs(25),
-            backoff: Backoff::default(),
+            connect_timeout: timings.connect_timeout,
+            response_timeout: timings.response_timeout,
+            ping_interval: timings.ping_interval,
+            backoff: timings.backoff,
+            drain_timeout: timings.drain_timeout,
         }
     }
 }
@@ -440,7 +444,7 @@ mod tests {
         let address = EpicboxAddress::new(
             other,
             crate::address::Network::Mainnet,
-            crate::address::Domain::default(),
+            crate::address::Domain::parse("relay.example.org").unwrap(),
             None,
         );
         assert!(matches!(
@@ -455,7 +459,7 @@ mod tests {
         let address = EpicboxAddress::new(
             PublicKey::from_secret_key(&secret).unwrap(),
             crate::address::Network::Mainnet,
-            crate::address::Domain::default(),
+            crate::address::Domain::parse("relay.example.org").unwrap(),
             None,
         );
         let identity = Identity::new(secret, address).unwrap();

@@ -25,7 +25,7 @@ fn address(byte: u8, port: Option<u16>) -> EpicboxAddress {
     EpicboxAddress::new(
         PublicKey::from_secret_key(&secret(byte)).unwrap(),
         Network::Mainnet,
-        Domain::default(),
+        Domain::parse("relay.example.org").unwrap(),
         port,
     )
 }

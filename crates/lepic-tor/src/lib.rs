@@ -8,6 +8,8 @@ pub mod onion;
 pub mod process;
 pub mod relay;
 pub mod socks;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod transport;
 
 pub use control::{ControlError, MAX_STREAMS_PER_CIRCUIT};
@@ -17,7 +19,8 @@ pub use onion::{
     public_key_of_seed,
 };
 pub use process::{
-    FailureKind, FixedSocks, SocksProxy, TorFailure, TorProcess, TorSettings, TorState, TorTimings,
+    FailureKind, FixedSocks, SocksProxy, TorFailure, TorNetworkTimings, TorProcess, TorSettings,
+    TorState, TorTimings,
 };
 pub use relay::{RelayTor, RelayTorError};
 pub use socks::{SendFailure, SocksError, SocksReply};

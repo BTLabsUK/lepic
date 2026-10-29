@@ -93,6 +93,8 @@ fn live_restore() {
         node_api_secret: None,
         epicbox_domain: String::new(),
         epicbox_port: 443,
+        onion_routes: Vec::new(),
+        tuning: crate::tuning::shipped(),
     };
     rt.block_on(async {
         // A throwaway seed made here, never anyone's wallet.

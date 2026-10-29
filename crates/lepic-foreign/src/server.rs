@@ -95,19 +95,32 @@ pub struct ListenSettings {
     pub receives_per_minute: u32,
 }
 
+/// The caller's limits of a listener, as [`ListenSettings`] describes each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListenLimits {
+    pub max_connections: usize,
+    pub max_connections_per_address: usize,
+    pub header_timeout: Duration,
+    pub body_timeout: Duration,
+    pub request_timeout: Duration,
+    pub answer_timeout: Duration,
+    pub requests_per_minute: u32,
+    pub receives_per_minute: u32,
+}
+
 impl ListenSettings {
-    pub const fn new(exposure: Exposure, port: u16) -> Self {
+    pub const fn new(exposure: Exposure, port: u16, limits: ListenLimits) -> Self {
         Self {
             exposure,
             port,
-            max_connections: 16,
-            max_connections_per_address: 4,
-            header_timeout: Duration::from_secs(10),
-            body_timeout: Duration::from_secs(15),
-            request_timeout: Duration::from_secs(60),
-            answer_timeout: Duration::from_secs(10),
-            requests_per_minute: 120,
-            receives_per_minute: 30,
+            max_connections: limits.max_connections,
+            max_connections_per_address: limits.max_connections_per_address,
+            header_timeout: limits.header_timeout,
+            body_timeout: limits.body_timeout,
+            request_timeout: limits.request_timeout,
+            answer_timeout: limits.answer_timeout,
+            requests_per_minute: limits.requests_per_minute,
+            receives_per_minute: limits.receives_per_minute,
         }
     }
 
