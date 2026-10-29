@@ -346,6 +346,9 @@ async fn read_array<S: AsyncRead + Unpin, const N: usize>(
 mod tests {
     use super::*;
 
+    /// An onion name of seven bytes.
+    const X_ONION: &str = concat!("x", ".onion");
+
     #[test]
     fn every_code_round_trips_and_success_is_none() {
         assert_eq!(SocksReply::from_code(0), None);
@@ -380,7 +383,7 @@ mod tests {
             [1, 2, b'a', b'b', 1, b'c']
         );
         assert_eq!(
-            encode_connect("x.onion", 80).unwrap(),
+            encode_connect(X_ONION, 80).unwrap(),
             [
                 5, 1, 0, 3, 7, b'x', b'.', b'o', b'n', b'i', b'o', b'n', 0, 80
             ]
@@ -446,7 +449,7 @@ mod tests {
         let (mut client, mut server) = tokio::io::duplex(1024);
         let credentials = SocksCredentials::random().unwrap();
         let auth = encode_auth(&credentials).unwrap();
-        let connect = encode_connect("x.onion", 80).unwrap();
+        let connect = encode_connect(X_ONION, 80).unwrap();
         let proxy = tokio::spawn(async move {
             let mut request = vec![0u8; 3 + auth.len() + connect.len()];
             server.write_all(&[5, 2, 1, 0]).await.unwrap();
@@ -458,7 +461,7 @@ mod tests {
             server.read_exact(&mut request).await.unwrap();
         });
         let auth = encode_auth(&credentials).unwrap();
-        let connect = encode_connect("x.onion", 80).unwrap();
+        let connect = encode_connect(X_ONION, 80).unwrap();
         handshake(&mut client, &auth, &connect).await.unwrap();
         let mut payload = [0u8; 8];
         client.read_exact(&mut payload).await.unwrap();

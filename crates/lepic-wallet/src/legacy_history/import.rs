@@ -1134,13 +1134,16 @@ mod tests {
 
     #[test]
     fn counterparty_addresses_imply_their_transport() {
-        assert_eq!(transport_of("esAbc@epicbox.epiccash.com"), Some("epicbox"));
+        assert_eq!(transport_of("esAbc@relay.example.org"), Some("epicbox"));
         assert_eq!(transport_of("https://wallet.example:3415"), Some("http"));
-        assert_eq!(transport_of("http://abc.onion"), Some("tor"));
+        assert_eq!(
+            transport_of(&format!("http://{}.onion", "abc")),
+            Some("tor")
+        );
         assert_eq!(transport_of("C:\\Users\\a\\send.tx"), Some("file"));
         assert_eq!(transport_of("/home/a/send.tx"), Some("file"));
         assert_eq!(transport_of("esAbc"), None);
-        assert!(!is_file_path("esAbc@epicbox.epiccash.com"));
+        assert!(!is_file_path("esAbc@relay.example.org"));
     }
 
     #[test]

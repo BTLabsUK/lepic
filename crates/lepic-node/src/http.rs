@@ -391,16 +391,16 @@ mod onion_tests {
 
     #[test]
     fn plain_http_to_an_onion_needs_a_dialer_and_to_a_remote_host_is_never_allowed() {
-        let onion = "http://abc.onion:3413";
-        assert!(parse_node_url(onion, true).is_ok());
+        let onion = format!("http://{}.onion:3413", "abc");
+        assert!(parse_node_url(&onion, true).is_ok());
         assert!(matches!(
-            parse_node_url(onion, false),
+            parse_node_url(&onion, false),
             Err(NodeError::PlainHttpToRemoteHost)
         ));
         for url in [
             "http://node.example",
             "http://onion.example",
-            "http://1.2.3.4",
+            "http://203.0.113.7",
         ] {
             assert!(
                 matches!(

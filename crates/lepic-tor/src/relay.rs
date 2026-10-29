@@ -281,16 +281,22 @@ mod tests {
 
     #[test]
     fn only_a_v3_onion_host_is_an_onion() {
-        let onion = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
-        assert!(RelayTor::is_onion(onion));
+        let onion = crate::onion::OnionAddress::from_public_key(&[3; 32]).host();
+        assert!(RelayTor::is_onion(&onion));
+        let id = onion.strip_suffix(".onion").unwrap();
+        let other_checksum = format!(
+            "{}{}.onion",
+            &id[..55],
+            if id.ends_with('a') { 'b' } else { 'a' }
+        );
         for host in [
-            "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad",
-            "J2XF5RIZKOW5JTRDF6EDOTK5QAM4KOHAVIP23DQEUIH5BQ4YQISBZ5AD.onion",
-            "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ae.onion",
-            "http://j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion",
-            "relay.example",
+            id.to_owned(),
+            format!("{}.onion", id.to_ascii_uppercase()),
+            other_checksum,
+            format!("http://{onion}"),
+            "relay.example".to_owned(),
         ] {
-            assert!(!RelayTor::is_onion(host), "{host}");
+            assert!(!RelayTor::is_onion(&host), "{host}");
         }
     }
 }

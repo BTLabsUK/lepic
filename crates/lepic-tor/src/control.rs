@@ -947,7 +947,7 @@ mod tests {
         };
         assert_eq!(warned.warning.as_deref(), Some("Connection refused"));
         assert_eq!(
-            parse_event("STATUS_GENERAL WARN CLOCK_SKEW SKEW=-7200 SOURCE=OR:1.2.3.4:443"),
+            parse_event("STATUS_GENERAL WARN CLOCK_SKEW SKEW=-7200 SOURCE=OR:203.0.113.7:443"),
             Event::ClockSkew {
                 skew_seconds: -7200
             }
@@ -1006,11 +1006,11 @@ mod tests {
             parse_control_file("PORT=[::1]:9051"),
             Some("[::1]:9051".parse().unwrap())
         );
-        assert_eq!(parse_control_file("PORT=10.0.0.1:1"), None);
+        assert_eq!(parse_control_file("PORT=192.0.2.1:1"), None);
         assert_eq!(parse_control_file("PORT=127.0.0.1:0"), None);
         assert_eq!(parse_control_file(""), None);
         assert_eq!(
-            parse_socks_listeners(r#""10.0.0.2:9050" "127.0.0.1:39111""#),
+            parse_socks_listeners(r#""192.0.2.2:9050" "127.0.0.1:39111""#),
             Some("127.0.0.1:39111".parse().unwrap())
         );
         assert_eq!(parse_socks_listeners(""), None);

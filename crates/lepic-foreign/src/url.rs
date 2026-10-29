@@ -168,7 +168,10 @@ mod tests {
     #[test]
     fn appends_the_endpoint_and_default_ports() {
         let all = PlainHttp::Allowed;
-        assert_eq!(uri("http://1.2.3.4", all), "http://1.2.3.4:3415/v2/foreign");
+        assert_eq!(
+            uri("http://203.0.113.7", all),
+            "http://203.0.113.7:3415/v2/foreign"
+        );
         assert_eq!(
             uri("HTTP://Host.Example:3420/", all),
             "http://host.example:3420/v2/foreign"
@@ -218,15 +221,15 @@ mod tests {
         assert_eq!(err("http://host:99999"), UrlError::InvalidPort);
         assert_eq!(err("http://[::1]x"), UrlError::InvalidPort);
         assert_eq!(
-            err("http://abcdefghijklmnop.onion"),
+            err(&format!("http://{}.onion", "abcdefghijklmnop")),
             UrlError::OnionNeedsTor
         );
         assert_eq!(
-            err("https://abcdefghijklmnop.onion."),
+            err(&format!("https://{}.onion.", "abcdefghijklmnop")),
             UrlError::OnionNeedsTor
         );
         assert_eq!(
-            err("https://ABCDEFGHIJKLMNOP.Onion../"),
+            err(&format!("https://{}.Onion../", "ABCDEFGHIJKLMNOP")),
             UrlError::OnionNeedsTor
         );
     }

@@ -1602,7 +1602,7 @@ mod tests {
             let address: SocketAddr = loopback.parse().unwrap();
             assert_eq!(FixedSocks(address).socks_address(), Some(address));
         }
-        for remote in ["10.0.0.2:9050", "0.0.0.0:9050", "[2001:db8::1]:9050"] {
+        for remote in ["192.0.2.2:9050", "0.0.0.0:9050", "[2001:db8::1]:9050"] {
             let address: SocketAddr = remote.parse().unwrap();
             assert_eq!(FixedSocks(address).socks_address(), None, "{remote}");
         }
