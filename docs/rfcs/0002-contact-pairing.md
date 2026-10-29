@@ -522,8 +522,8 @@ the invite names (7.2). Copies B does not open stay on their relays until the re
 each opens only with the words of its window, and the invite inside expires and pairs once.
 
 The built-in relays are a meeting list for words only, in this fixed order on every wallet:
-mainnet `epicbox.epiccash.com`, `epicbox.stackwallet.com`, `flooepicbox.btlabs.uk` (BT Labs'
-relay, which serves mainnet too); floonet `flooepicbox.btlabs.uk`. A wallet's own relay may be any
+mainnet `epicbox.epiccash.com`, `epicbox.stackwallet.com`, `epicbox.btlabs.uk` (BT Labs'
+relay, which serves mainnet too); floonet `epicbox.btlabs.uk`. A wallet's own relay may be any
 other. Words are not offered on a network with no built-in relay.
 
 B types them and derives `k` for the current window and the one before (an invite made near the

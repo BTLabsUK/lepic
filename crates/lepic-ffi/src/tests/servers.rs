@@ -537,7 +537,7 @@ async fn a_relay_switched_to_while_over_tor_is_reached_through_tor() {
     assert!(session.relay_through_tor());
 
     let mapped = WalletConfig {
-        epicbox_domain: "flooepicbox.btlabs.uk".to_owned(),
+        epicbox_domain: "epicbox.btlabs.uk".to_owned(),
         ..config.clone()
     };
     switch(session, &mapped).await.unwrap();

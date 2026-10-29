@@ -312,7 +312,7 @@ impl EpicWallet {
     }
 
     /// Replaces the onion routes the wallet uses through tor, for example with the signed list
-    /// the app fetched; until then a built-in table holds `flooepicbox.btlabs.uk:443` and
+    /// the app fetched; until then a built-in table holds `epicbox.btlabs.uk:443` and
     /// `node.btlabs.uk:443`, for the relay and for the node client. Only TLS
     /// hosts belong here: the connection still checks `host`'s certificate. Applies from the
     /// next connection. An empty list leaves no route, so every host goes through a Tor exit.

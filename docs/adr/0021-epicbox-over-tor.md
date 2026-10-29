@@ -11,7 +11,7 @@ wallet's IP address next to its Epicbox address. Wallets that run tor for direct
 (ADR 0018) can take that connection through tor as well. the owner decided on 2026-10-23 to do so,
 on by default.
 
-The BT Labs relay `flooepicbox.btlabs.uk` (port 443, mainnet and floonet) is also an onion
+The BT Labs relay `epicbox.btlabs.uk` (port 443, mainnet and floonet) is also an onion
 service that presents the same TLS certificate as the domain, and it describes itself at
 `/.well-known/epicbox.json`.
 
@@ -23,7 +23,7 @@ service that presents the same TLS certificate as the domain, and it describes i
   relay connection goes through it: to the relay's onion when one is known, else to
   `domain:port` through a Tor exit, with tor resolving the name. It never goes directly then.
   A loopback relay is always reached directly. `lepic-epicbox` does not depend on `lepic-tor`.
-- Known onions: a built-in table, today `flooepicbox.btlabs.uk:443` to
+- Known onions: a built-in table, today `epicbox.btlabs.uk:443` to
   `j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion:443`, the same on every
   network. For any other relay the connector fetches `https://<domain>/.well-known/epicbox.json`
   once per wallet session through tor (at most 4 KiB), and uses its onion only when `domain`,

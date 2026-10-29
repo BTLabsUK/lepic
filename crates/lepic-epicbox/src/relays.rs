@@ -10,9 +10,9 @@ use crate::session::{RelayEndpoint, Security};
 pub const BUILT_IN_RELAYS: &[(Network, &str, u16)] = &[
     (Network::Mainnet, "epicbox.epiccash.com", 443),
     (Network::Mainnet, "epicbox.stackwallet.com", 443),
-    // BT Labs' relay serves mainnet too; "floo" is only its name.
-    (Network::Mainnet, "flooepicbox.btlabs.uk", 443),
-    (Network::Floonet, "flooepicbox.btlabs.uk", 443),
+    // BT Labs' relay serves both networks under one name.
+    (Network::Mainnet, "epicbox.btlabs.uk", 443),
+    (Network::Floonet, "epicbox.btlabs.uk", 443),
 ];
 
 /// The built-in relays of `network`, over TLS, in the order they are tried.
@@ -47,7 +47,7 @@ mod tests {
         let floonet = built_in_relays(Network::Floonet);
         assert_eq!(mainnet.len() + floonet.len(), BUILT_IN_RELAYS.len());
         assert_eq!(mainnet[0].domain().as_str(), "epicbox.epiccash.com");
-        assert_eq!(floonet[0].domain().as_str(), "flooepicbox.btlabs.uk");
+        assert_eq!(floonet[0].domain().as_str(), "epicbox.btlabs.uk");
         assert!(is_built_in_relay(Network::Floonet, &floonet[0]));
         let names: Vec<&str> = mainnet
             .iter()
@@ -58,7 +58,7 @@ mod tests {
             [
                 "epicbox.epiccash.com",
                 "epicbox.stackwallet.com",
-                "flooepicbox.btlabs.uk"
+                "epicbox.btlabs.uk"
             ]
         );
         let other_port = RelayEndpoint::new(

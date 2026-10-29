@@ -27,7 +27,7 @@ use ContactRelayMode::{EpicboxOff, Offline, Online};
 const EPIC: u64 = 100_000_000;
 
 /// A built-in floonet relay, so pairing words are offered; the mock relay serves it.
-const RELAY: &str = "flooepicbox.btlabs.uk";
+const RELAY: &str = "epicbox.btlabs.uk";
 
 struct World {
     chain: MockChain,
@@ -310,7 +310,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
     assert_eq!(anna_view.sas, ben_view.sas);
     assert_eq!(
         anna_view.home_relay.as_deref(),
-        Some("flooepicbox.btlabs.uk:443")
+        Some("epicbox.btlabs.uk:443")
     );
     assert_eq!(anna_view.seal, SealState::On);
     assert_eq!(anna.contacts().await.unwrap(), vec![anna_view]);

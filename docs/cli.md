@@ -104,7 +104,7 @@ Set one of these to take the connection to the relay through tor (ADR 0021):
   files in `tor-epicbox/` inside the data directory; `epicbox_tor_lib_dir` names the directory of
   the libraries the Tor Expert Bundle ships, as `--lib-dir` does.
 
-The relay `flooepicbox.btlabs.uk` is then reached at its onion; any other relay at the onion its
+The relay `epicbox.btlabs.uk` is then reached at its onion; any other relay at the onion its
 `/.well-known/epicbox.json` names, else through the Tor network. TLS still checks the relay
 domain's certificate, and the wallet's address does not change. While one is set, the relay is
 never reached directly: a tor that is not ready makes the connection wait and, for

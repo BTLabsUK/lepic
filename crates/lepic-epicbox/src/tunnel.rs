@@ -25,7 +25,7 @@ use crate::session::{Connector, RelayEndpoint, RelayStream, Security, TcpConnect
 /// port. The same on every network. A built-in entry wins over discovery.
 pub const ONION_ROUTES: &[(&str, u16, &str, u16)] = &[
     (
-        "flooepicbox.btlabs.uk",
+        "epicbox.btlabs.uk",
         443,
         "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion",
         443,
@@ -510,7 +510,7 @@ mod tests {
             "5drwoknehnzducfsxsl45dazaw3cwcmpx3ycamynagmcpv6aalrbrtqd.onion"
         );
         assert_eq!(node.port, 443);
-        assert!(routes.route_to("flooepicbox.btlabs.uk", 443).is_some());
+        assert!(routes.route_to("epicbox.btlabs.uk", 443).is_some());
         assert!(routes.route_to("node.btlabs.uk", 3413).is_none());
         assert!(routes.route_to("node.example", 443).is_none());
     }
@@ -612,13 +612,13 @@ mod tests {
             ..FakeTunnel::new(true)
         });
         let connector = connector(&tunnel);
-        let endpoint = relay("flooepicbox.btlabs.uk", 443);
+        let endpoint = relay("epicbox.btlabs.uk", 443);
         let connecting = tokio::spawn(async move { connector.connect(&endpoint).await.err() });
         let mut far = streams.recv().await.unwrap();
         let mut hello = vec![0u8; 4096];
         let read = far.read(&mut hello).await.unwrap();
         let hello = hello.get(..read).unwrap();
-        assert!(contains(hello, b"flooepicbox.btlabs.uk"), "server name");
+        assert!(contains(hello, b"epicbox.btlabs.uk"), "server name");
         assert!(!contains(hello, ONION.as_bytes()));
         drop(far);
         assert!(connecting.await.unwrap().is_some());
@@ -628,13 +628,13 @@ mod tests {
     #[test]
     fn only_the_mapped_port_has_a_built_in_onion() {
         assert_eq!(
-            built_in_route(&relay("FlooEpicbox.BTLabs.uk", 443)),
+            built_in_route(&relay("Epicbox.BTLabs.uk", 443)),
             Some(DialTarget {
                 host: ONION.to_owned(),
                 port: 443
             })
         );
-        assert_eq!(built_in_route(&relay("flooepicbox.btlabs.uk", 3420)), None);
+        assert_eq!(built_in_route(&relay("epicbox.btlabs.uk", 3420)), None);
         assert_eq!(built_in_route(&relay("epicbox.epiccash.com", 443)), None);
     }
 
@@ -655,7 +655,7 @@ mod tests {
             onion_port: 8443,
         }]);
         connector
-            .remember(&relay("flooepicbox.btlabs.uk", 443), None)
+            .remember(&relay("epicbox.btlabs.uk", 443), None)
             .await;
         assert!(
             connector
@@ -665,13 +665,13 @@ mod tests {
         );
         assert!(
             connector
-                .connect(&relay("flooepicbox.btlabs.uk", 443))
+                .connect(&relay("epicbox.btlabs.uk", 443))
                 .await
                 .is_err()
         );
         assert_eq!(
             tunnel.opened(),
-            [(other, 8443), ("flooepicbox.btlabs.uk".to_owned(), 443)]
+            [(other, 8443), ("epicbox.btlabs.uk".to_owned(), 443)]
         );
     }
 
@@ -778,7 +778,7 @@ mod tests {
             port: 443,
         };
         let _ = connector
-            .connect_to_onion(&relay("flooepicbox.btlabs.uk", 443), &given)
+            .connect_to_onion(&relay("epicbox.btlabs.uk", 443), &given)
             .await;
         assert_eq!(tunnel.opened(), [(ONION.to_owned(), 443)]);
     }
@@ -930,12 +930,12 @@ mod tests {
 
     fn parse(response: &[u8]) -> Result<DialTarget, DiscoveryError> {
         let is_onion = |host: &str| host.len() == 62 && host.ends_with(".onion");
-        parse_discovery(response, &relay("flooepicbox.btlabs.uk", 443), is_onion)
+        parse_discovery(response, &relay("epicbox.btlabs.uk", 443), is_onion)
     }
 
     #[test]
     fn a_discovery_document_for_the_relay_gives_its_onion() {
-        let relay = "flooepicbox.btlabs.uk";
+        let relay = "epicbox.btlabs.uk";
         let found = parse(&answer(&document(relay, 443, ONION, relay))).unwrap();
         assert_eq!(
             found,
@@ -955,7 +955,7 @@ mod tests {
 
     #[test]
     fn a_discovery_document_for_another_relay_is_refused() {
-        let relay = "flooepicbox.btlabs.uk";
+        let relay = "epicbox.btlabs.uk";
         for body in [
             document("other.example", 443, ONION, relay),
             document(relay, 443, ONION, "other.example"),
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn a_discovery_document_without_a_valid_onion_is_refused() {
-        let relay = "flooepicbox.btlabs.uk";
+        let relay = "epicbox.btlabs.uk";
         for onion in ["relay.example", "abc.onion", ""] {
             assert!(matches!(
                 parse(&answer(&document(relay, 443, onion, relay))),
@@ -987,7 +987,7 @@ mod tests {
 
     #[test]
     fn a_discovery_answer_that_is_not_a_plain_200_is_refused() {
-        let relay = "flooepicbox.btlabs.uk";
+        let relay = "epicbox.btlabs.uk";
         let body = document(relay, 443, ONION, relay);
         let not_found = String::from_utf8(answer(&body))
             .unwrap()
@@ -1017,7 +1017,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_reads_an_answer_that_arrives_in_parts_on_a_kept_alive_connection() {
         let (mut near, mut far) = tokio::io::duplex(1024);
-        let relay = "flooepicbox.btlabs.uk";
+        let relay = "epicbox.btlabs.uk";
         let response = answer(&document(relay, 443, ONION, relay));
         let expected = response.clone();
         let server = tokio::spawn(async move {
@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!(read, expected);
         let (request, _far) = server.await.unwrap();
         assert!(request.starts_with("GET /.well-known/epicbox.json HTTP/1.1\r\n"));
-        assert!(request.contains("\r\nHost: flooepicbox.btlabs.uk\r\n"));
+        assert!(request.contains("\r\nHost: epicbox.btlabs.uk\r\n"));
     }
 
     #[tokio::test]

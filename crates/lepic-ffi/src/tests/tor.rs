@@ -605,7 +605,7 @@ async fn onion_routes_replace_the_built_in_table_only_when_every_one_is_valid() 
         |host: &str| RelayEndpoint::new(Domain::parse(host).unwrap(), None, Security::Tls);
     let built_in = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
     assert_eq!(
-        bob.onion_routes.route(&endpoint("flooepicbox.btlabs.uk")),
+        bob.onion_routes.route(&endpoint("epicbox.btlabs.uk")),
         Some(DialTarget {
             host: built_in.to_owned(),
             port: 443
@@ -635,7 +635,7 @@ async fn onion_routes_replace_the_built_in_table_only_when_every_one_is_valid() 
     }
     assert!(
         bob.onion_routes
-            .route(&endpoint("flooepicbox.btlabs.uk"))
+            .route(&endpoint("epicbox.btlabs.uk"))
             .is_some(),
         "a refused list changes nothing"
     );
@@ -651,7 +651,7 @@ async fn onion_routes_replace_the_built_in_table_only_when_every_one_is_valid() 
         })
     );
     assert_eq!(
-        bob.onion_routes.route(&endpoint("flooepicbox.btlabs.uk")),
+        bob.onion_routes.route(&endpoint("epicbox.btlabs.uk")),
         None
     );
 }
