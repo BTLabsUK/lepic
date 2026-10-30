@@ -184,6 +184,7 @@ fn soak() {
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
         offline: false,
+        tor_wanted: false,
     };
     let secret = NodeSecret::take(&mut config);
     let counters = Arc::new(Counters::default());

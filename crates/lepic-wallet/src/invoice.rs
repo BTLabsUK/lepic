@@ -114,6 +114,7 @@ pub const INVOICE_TTL_MARGIN_BLOCKS: u64 = crate::chain::SLATE_LEAD_BLOCKS;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum InvoiceField {
+    Id,
     Amount,
     Lock,
     Offset,
@@ -124,6 +125,7 @@ pub enum InvoiceField {
 impl std::fmt::Display for InvoiceField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::Id => "slate id",
             Self::Amount => "amount",
             Self::Lock => "lock height",
             Self::Offset => "offset",

@@ -124,6 +124,12 @@ impl EpicWallet {
     /// Plain `http` to any host but this device needs `allow_plain_http`, set only after the
     /// user agreed that the slate travels unencrypted.
     ///
+    /// While the wallet's tor runs or is expected (`WalletConfig::tor_wanted`,
+    /// [`EpicWallet::expect_tor`]), the connection goes through tor, which resolves the host,
+    /// and waits for a tor that is still starting within the request timeout; a host on this
+    /// device stays direct. A tor that fails fails the send: it never goes directly instead.
+    /// Otherwise the wallet is reached directly.
+    ///
     /// Fails, storing nothing, with `HttpUrlInvalid` or `PlainHttpNotAllowed` for the URL and
     /// the errors of [`EpicWallet::estimate_fee`]. Fails with `TransportFailed` when the other
     /// wallet could not be reached, refused, or answered with something else than a slate: the

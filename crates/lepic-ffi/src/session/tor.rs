@@ -12,8 +12,8 @@ use lepic_epicbox::tunnel::Tunnel;
 use lepic_foreign::ListenerHandle;
 use lepic_store::TxId;
 use lepic_tor::{
-    FailureKind, OnionAddress, RelayTor, SendFailure, SocksProxy, TRANSPORT_ID, TorProcess,
-    TorSendError, TorSettings, TorState, TorTransport,
+    FailureKind, OnionAddress, OnionTarget, RelayTor, SendFailure, SocksProxy, TRANSPORT_ID,
+    TorProcess, TorSendError, TorSettings, TorState, TorTransport,
 };
 use lepic_transport::transport::{BoxFuture, Destination};
 use lepic_wallet::OnionKey;
@@ -45,21 +45,28 @@ const TOR_DIR: &str = "tor";
 /// since: the next session waits for tor from its first connection.
 const TOR_EXPECTED_FILE: &str = "tor-expected";
 
-/// The relay connection and node requests of a session on `data_dir`. They wait for tor from
-/// the start when the last session there expected one and the app did not stop it, so a
-/// connection made before the app calls [`Session::expect_tor`] never goes directly; else
-/// they go directly until tor is expected or started.
+/// The node requests, relay connection and HTTP sends of a session on `data_dir`. They wait
+/// for tor from the start when the app opens the session with `tor_wanted`, or when the last
+/// session there expected one and the app did not stop it, so a connection made before the
+/// app calls [`Session::expect_tor`] never goes directly; else they go directly until tor is
+/// expected or started.
 pub(super) fn session_routes(
     data_dir: &std::path::Path,
+    tor_wanted: bool,
     connect_timeout: std::time::Duration,
-) -> (RelayTor, RelayTor) {
-    let expected = !cfg!(target_os = "ios") && data_dir.join(TOR_EXPECTED_FILE).exists();
+) -> (RelayTor, RelayTor, RelayTor) {
+    let expected =
+        !cfg!(target_os = "ios") && (tor_wanted || data_dir.join(TOR_EXPECTED_FILE).exists());
     let routes = if expected {
         RelayTor::new
     } else {
         RelayTor::direct
     };
-    (routes(true, connect_timeout), routes(true, connect_timeout))
+    (
+        routes(true, connect_timeout),
+        routes(true, connect_timeout),
+        routes(true, connect_timeout),
+    )
 }
 
 /// `routes` after checking every one: a host name, an onion v3 host and two ports that are not
@@ -389,7 +396,7 @@ impl Session {
         }
         let publish = listener
             .as_ref()
-            .map(|listener| (key, listener.local_addr().port()));
+            .map(|listener| (key, onion_target(listener)));
         let unclaimed = {
             let mut slot = lock(&self.tor_slot);
             if matches!(&*slot, TorSlot::Starting(started) if *started == generation) {
@@ -439,9 +446,20 @@ impl Session {
             return Ok(None);
         }
         let receiver = self.http_receiver(listener_report(report), TRANSPORT_ID);
-        lepic_foreign::listen(lepic_tor::listen_settings(self.tuning.listen), receiver)
-            .await
-            .map(Some)
+        let settings = lepic_tor::listen_settings(self.tuning.listen);
+        // A socket in tor's folder where the platform and the path allow (not Windows): no
+        // other program or app reaches it, where any can reach a loopback port.
+        #[cfg(unix)]
+        if let Some(path) = lepic_tor::onion_socket_path(&self.data_dir.join(TOR_DIR)) {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|source| lepic_foreign::ListenError::Bind { port: 0, source })?;
+            }
+            return lepic_foreign::listen_unix(&path, settings, receiver)
+                .await
+                .map(Some);
+        }
+        lepic_foreign::listen(settings, receiver).await.map(Some)
     }
 
     /// Stops tor, then its listener. `Stopped` is reported once both are down; until then the
@@ -731,20 +749,24 @@ impl Session {
         self.node_tor.enabled()
     }
 
-    /// The relay connection and node requests wait for a tor that is being started.
+    /// The relay connection, node requests and HTTP sends wait for a tor that is being
+    /// started.
     fn expect_routes(&self) {
         self.relay_tor.expect();
         self.node_tor.expect();
+        self.send_tor.expect();
     }
 
     fn attach_routes(&self, tor: &Arc<TorProcess>) {
         self.relay_tor.attach(Arc::clone(tor));
         self.node_tor.attach(Arc::clone(tor));
+        self.send_tor.attach(Arc::clone(tor));
     }
 
     fn detach_routes(&self) {
         self.relay_tor.detach();
         self.node_tor.detach();
+        self.send_tor.detach();
     }
 
     /// The app is about to start tor: until it does, relay connections wait for it instead of
@@ -776,6 +798,11 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn attach_node_socks(&self, socks: std::net::SocketAddr) {
         self.node_tor.attach_socks(lepic_tor::FixedSocks(socks));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn send_through_tor(&self) -> bool {
+        *self.send_tor.active().borrow()
     }
 
     #[cfg(test)]
@@ -813,7 +840,7 @@ async fn drive(
     session: Weak<Session>,
     generation: u64,
     tor: Arc<TorProcess>,
-    publish: Option<(OnionKey, u16)>,
+    publish: Option<(OnionKey, OnionTarget)>,
     report: TorReport,
     publish_failure: Arc<std::sync::Mutex<Option<TorFailureKind>>>,
 ) {
@@ -841,13 +868,13 @@ async fn drive(
         }
     };
     let publish = async {
-        let Some((key, port)) = publish else {
+        let Some((key, target)) = publish else {
             return;
         };
         if tor.wait_bootstrapped().await.is_err() {
             return;
         }
-        match tor.publish_onion(key.expose_seed(), port).await {
+        match tor.publish_onion_to(key.expose_seed(), target).await {
             Ok(_) => info!(transport = "tor", "onion published"),
             Err(failure) => {
                 // A failure that ended tor reaches the app through its state.
@@ -892,6 +919,15 @@ async fn shut_down(run: TorRun, down: watch::Sender<bool>) {
     info!(transport = "tor", "tor stopped");
     down.send_replace(true);
     report(TorEvent::of(TorEventKind::Stopped));
+}
+
+/// Where the onion forwards to: the listener's Unix socket, else its loopback port.
+fn onion_target(listener: &ListenerHandle) -> OnionTarget {
+    #[cfg(unix)]
+    if let Some(path) = listener.socket_path() {
+        return OnionTarget::Unix(path.to_owned());
+    }
+    OnionTarget::Port(listener.local_addr().port())
 }
 
 #[cfg(test)]

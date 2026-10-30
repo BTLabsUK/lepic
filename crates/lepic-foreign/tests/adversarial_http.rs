@@ -288,3 +288,39 @@ async fn paths_that_are_almost_the_endpoint_are_not_found() {
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
     assert_still_serving(port).await;
 }
+
+/// A listener on a Unix socket, as behind an onion: it serves a payment, keeps its limits,
+/// replaces a file left at its path, and removes the socket file when it stops.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_unix_socket_listener_serves_and_cleans_up() {
+    let path = std::env::temp_dir().join(format!("lepic-foreign-{}.sock", std::process::id()));
+    std::fs::write(&path, b"left by an earlier run").unwrap();
+    let wallet = Arc::new(Counting {
+        calls: AtomicUsize::new(0),
+    });
+    let settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
+    let handle = lepic_foreign::listen_unix(&path, settings, wallet.clone())
+        .await
+        .unwrap();
+    assert_eq!(handle.socket_path(), Some(path.as_path()));
+
+    let mut stream = tokio::net::UnixStream::connect(&path).await.unwrap();
+    stream
+        .write_all(post(&receive_tx(1)).as_bytes())
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut answer)).await;
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    assert!(answer.contains("participant_data"), "{answer}");
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+
+    handle.shutdown().await;
+    assert!(!path.exists(), "the socket file goes with the listener");
+}

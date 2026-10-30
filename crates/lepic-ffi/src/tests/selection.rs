@@ -21,6 +21,7 @@ const fn options(strategy: SelectionStrategy, change_outputs: u32) -> Option<Sen
         strategy,
         change_outputs,
         exclude_outputs: Vec::new(),
+        payment_proof_recipient: None,
     })
 }
 

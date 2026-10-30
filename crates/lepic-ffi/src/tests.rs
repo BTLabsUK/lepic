@@ -18,6 +18,8 @@ mod http;
 mod invoice;
 mod listener;
 mod live_restore;
+#[cfg(feature = "tor")]
+mod live_send_http_tor;
 mod node;
 mod offline;
 mod outputs;
@@ -69,6 +71,7 @@ impl Fixture {
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
             offline: false,
+            tor_wanted: false,
         }
     }
 
@@ -560,6 +563,7 @@ async fn send_tor_takes_the_send_options_of_the_other_sends() {
         strategy: crate::api::types::SelectionStrategy::All,
         change_outputs: 11,
         exclude_outputs: Vec::new(),
+        payment_proof_recipient: None,
     };
 
     let sent = wallet

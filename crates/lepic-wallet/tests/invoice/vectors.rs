@@ -28,7 +28,8 @@ use lepic_transport::error::FormatError;
 use lepic_transport::file::FilePolicy;
 use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
 use lepic_wallet::invoice::{
-    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, PayRequest, build_i1, build_i2, build_i3,
+    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, InvoiceError, InvoiceField, PayRequest,
+    build_i1, build_i2, build_i3,
 };
 use lepic_wallet::selection::{self, SelectionRequest, SelectionStrategy};
 use lepic_wallet::send::ChangeOutput;
@@ -422,4 +423,26 @@ fn each_g03_i1_paid_through_the_engine_yields_the_g03_i2_as_a_v3_file() {
             .unwrap();
         assert_eq!(stored.bytes, paid.reply.as_bytes(), "{case}");
     }
+}
+
+/// As for the send flow: an I2 under another slate id is not finalized.
+#[test]
+fn an_i2_under_another_slate_id_is_refused() {
+    let case = &invoice_cases()[0];
+    let (issued, _) = issue(case);
+    let mut parts = read_file(case, "i2").into_parts();
+    parts.id = SlateId::from_bytes([7; 16]);
+    let i2 = Slate::from_parts(parts).unwrap();
+
+    let error = build_i3(BASE_FEE, &issued, &i2).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::Mismatch {
+                field: InvoiceField::Id
+            }
+        ),
+        "{error:?}"
+    );
 }

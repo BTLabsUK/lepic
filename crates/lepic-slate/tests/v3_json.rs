@@ -1038,3 +1038,64 @@ fn snapshot_of_each_stage() {
         insta::assert_snapshot!(stage, pretty(&encode(&slate)));
     }
 }
+
+mod numeric_bounds {
+    use super::*;
+
+    /// Reads one number back from a decoded slate.
+    type Read = fn(&Slate) -> Option<u64>;
+
+    /// The slate's numbers a peer writes, and how to read each back from the decoded slate.
+    const FIELDS: [(&str, Read); 5] = [
+        ("amount", |slate| Some(slate.amount().value())),
+        ("fee", |slate| Some(slate.fee().value())),
+        ("height", |slate| Some(slate.height().value())),
+        ("lock_height", |slate| {
+            Some(slate.lock().lock_height().value())
+        }),
+        ("ttl_cutoff_height", |slate| {
+            slate.ttl_cutoff_height().map(Height::value)
+        }),
+    ];
+
+    /// Sets `name` to `number`; the fee also in the kernel, which must agree with it.
+    fn set_number(name: &'static str, number: &'static str) -> impl FnOnce(&mut Value) {
+        move |value| {
+            if name == "fee" {
+                set_fee(number)(value);
+            } else {
+                value[name] = json!(number);
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_every_number_one_past_u64_max() {
+        for (name, _) in FIELDS {
+            for stage in [S1, S2, I1] {
+                let decoded = decode_mutated(stage, set_number(name, "18446744073709551616"));
+                assert!(
+                    matches!(
+                        decoded,
+                        Err(DecodeError::Field {
+                            problem: FieldProblem::IntegerOutOfRange,
+                            ..
+                        })
+                    ),
+                    "{name} in {stage}: {decoded:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_number_at_u64_max_is_refused_or_kept_never_wrapped() {
+        for (name, read) in FIELDS {
+            for stage in [S1, S2, I1] {
+                if let Ok(slate) = decode_mutated(stage, set_number(name, "18446744073709551615")) {
+                    assert_eq!(read(&slate), Some(u64::MAX), "{name} in {stage}");
+                }
+            }
+        }
+    }
+}

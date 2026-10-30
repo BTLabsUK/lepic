@@ -172,7 +172,8 @@ A change is finished when a test shows it works and would have shown it broken.
   runs exactly them.
 - A fuzz crash becomes a regression test before it is fixed. The pull-request CI builds every fuzz
   target (`cargo xtask fuzz --build`); the scheduled CI runs each for a minute
-  (`cargo xtask fuzz --smoke`).
+  (`cargo xtask fuzz --smoke`). Without CI, a nightly local run does it
+  (`docs/fuzzing.md`).
 - Automated tests, CI and fuzzing never touch public nodes or relays. Opt-in live tests
   (`LEPIC_LIVE_TESTS=1`) may make a few ordinary wallet calls against public floonet services,
   within their rate limits, never mainnet.

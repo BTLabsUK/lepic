@@ -215,6 +215,10 @@ pub(crate) struct Session {
     /// The same for node requests; it follows the wallet's tor like `relay_tor`, with a
     /// setting of its own.
     node_tor: Arc<RelayTor>,
+    /// The same for HTTP sends to other wallets; it follows the wallet's tor like
+    /// `relay_tor`, with no setting: while tor runs or is expected they go through it.
+    #[cfg(feature = "tor")]
+    send_tor: Arc<RelayTor>,
     /// `expect_tor` was called and no start followed yet: a stop keeps the relay waiting.
     #[cfg(feature = "tor")]
     tor_expected: AtomicBool,
@@ -418,6 +422,7 @@ struct SessionTransports {
 fn session_transports(
     epicbox: Option<&EpicboxSlot>,
     tuning: &Tuning,
+    send_tor: &Arc<RelayTor>,
 ) -> Result<SessionTransports, WalletError> {
     let mut registry = TransportRegistry::new();
     let mut ids = vec![FILE];
@@ -430,7 +435,7 @@ fn session_transports(
             .map_err(|error| invalid(error.to_string()))?;
         ids.push(TRANSPORT_ID);
     }
-    let http = http::http_transport(tuning)?;
+    let http = http::http_transport(tuning, send_tor)?;
     registry
         .register(Box::new(http.clone()))
         .map_err(|error| invalid(error.to_string()))?;
@@ -501,14 +506,17 @@ impl Session {
         let data_dir = claim.dir.clone();
         let claim = ClaimHolder::new(claim);
         #[cfg(feature = "tor")]
-        let (node_tor, relay_tor) = tor::session_routes(&data_dir, tuning.tor_connect_timeout());
+        let (node_tor, relay_tor, send_tor) =
+            tor::session_routes(&data_dir, config.tor_wanted, tuning.tor_connect_timeout());
         #[cfg(not(feature = "tor"))]
-        let (node_tor, relay_tor) = (
+        let (node_tor, relay_tor, send_tor) = (
+            RelayTor::new(true, tuning.tor_connect_timeout()),
             RelayTor::new(true, tuning.tor_connect_timeout()),
             RelayTor::new(true, tuning.tor_connect_timeout()),
         );
         let node_tor = Arc::new(node_tor);
         let relay_tor = Arc::new(relay_tor);
+        let send_tor = Arc::new(send_tor);
         #[cfg(feature = "tor")]
         let onion_routes = Arc::new(OnionRoutes::new(tor::checked_onion_routes(
             config.onion_routes.clone(),
@@ -534,7 +542,7 @@ impl Session {
             http,
             #[cfg(feature = "tor")]
             tor,
-        } = session_transports(epicbox.as_ref(), &tuning)?;
+        } = session_transports(epicbox.as_ref(), &tuning, &send_tor)?;
         let vault = VaultBytes::default();
         let engine = engine(
             runtime,
@@ -568,6 +576,8 @@ impl Session {
             tor_starts: AtomicU64::new(0),
             relay_tor,
             node_tor,
+            #[cfg(feature = "tor")]
+            send_tor,
             #[cfg(feature = "tor")]
             tor_expected: AtomicBool::new(false),
             onion_routes,
@@ -1197,10 +1207,19 @@ impl Session {
             return Ok(request);
         };
         let (strategy, change_outputs, exclude_outputs) = selection_choice(&options)?;
+        let payment_proof_recipient = options
+            .payment_proof_recipient
+            .as_deref()
+            .map(lepic_wallet::slate::parse_proof_address)
+            .transpose()
+            .map_err(|_| {
+                invalid("payment proof recipient is not an ed25519 address of 64 hex characters")
+            })?;
         Ok(SendRequest {
             strategy,
             change_outputs,
             exclude_outputs,
+            payment_proof_recipient,
             ..request
         })
     }
@@ -2374,6 +2393,7 @@ mod tests {
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
             offline: false,
+            tor_wanted: false,
         }
     }
 
@@ -2766,6 +2786,7 @@ mod tests {
                 onion_routes: Vec::new(),
                 tuning: crate::tuning::shipped(),
                 offline: false,
+                tor_wanted: false,
             };
             let secret = NodeSecret::take(&mut config);
             let session = Session::new(

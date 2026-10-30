@@ -6,6 +6,9 @@
 //! LEPIC_LIVE_TESTS=1 LEPIC_TOR_BINARY=/path/to/tor LEPIC_TOR_LIB_DIR=/path/to/libs \
 //!     cargo test -p lepic-tor --test live -- --ignored --nocapture
 //! ```
+//!
+//! `LEPIC_LIVE_ONION_UNIX=1` puts the first test's listener on a Unix socket in tor's folder, as
+//! the wallet does where it can, instead of a loopback port.
 
 // Helpers outside #[test] functions unwrap too; a failure there is a test failure.
 #![allow(clippy::unwrap_used, clippy::panic)]
@@ -18,7 +21,8 @@ use lepic_foreign::{Exposure, ListenSettings, ReceiveHandler, Refusal, listen};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_tor::socks::{SocksCredentials, SocksReply};
 use lepic_tor::{
-    OnionClient, SendFailure, SocksError, TorProcess, TorSendError, TorSettings, TorTransport,
+    OnionClient, OnionTarget, SendFailure, SocksError, TorProcess, TorSendError, TorSettings,
+    TorTransport,
 };
 use lepic_transport::transport::BoxFuture;
 
@@ -50,16 +54,25 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
 
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed).unwrap();
-    let listener = listen(
-        ListenSettings::new(
-            Exposure::LocalOnly,
-            0,
-            lepic_foreign::testing::listen_limits(),
-        ),
-        Arc::new(RefusesEverything),
-    )
-    .await
-    .unwrap();
+    let listen_settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
+    let unix = std::env::var("LEPIC_LIVE_ONION_UNIX").as_deref() == Ok("1");
+    let (listener, target) = if unix {
+        let socket = lepic_tor::onion_socket_path(&dir.path().join("tor")).unwrap();
+        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let handle = unix_listen(&socket, listen_settings).await;
+        (handle, OnionTarget::Unix(socket))
+    } else {
+        let handle = listen(listen_settings, Arc::new(RefusesEverything))
+            .await
+            .unwrap();
+        let port = handle.local_addr().port();
+        (handle, OnionTarget::Port(port))
+    };
+    eprintln!("onion target: {target:?}");
 
     let started = Instant::now();
     let tor = TorProcess::start(settings);
@@ -68,10 +81,7 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
         "bootstrapped after {:.1} s",
         started.elapsed().as_secs_f64()
     );
-    let onion = tor
-        .publish_onion(&seed, listener.local_addr().port())
-        .await
-        .unwrap();
+    let onion = tor.publish_onion_to(&seed, target).await.unwrap();
     eprintln!(
         "onion published after {:.1} s",
         started.elapsed().as_secs_f64()
@@ -274,4 +284,19 @@ async fn survives_a_left_tor_a_pause_and_a_network_change() {
     );
     tor.stop().await;
     listener.shutdown().await;
+}
+
+#[cfg(unix)]
+async fn unix_listen(
+    path: &std::path::Path,
+    settings: ListenSettings,
+) -> lepic_foreign::ListenerHandle {
+    lepic_foreign::listen_unix(path, settings, Arc::new(RefusesEverything))
+        .await
+        .unwrap()
+}
+
+#[cfg(not(unix))]
+async fn unix_listen(_: &std::path::Path, _: ListenSettings) -> lepic_foreign::ListenerHandle {
+    panic!("no Unix sockets here")
 }

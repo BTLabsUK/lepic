@@ -5,8 +5,9 @@
 //! Records are redacted before they reach the disk, so neither the ring nor a bundle ever holds
 //! a value the redaction drops. Field values are kept only for the fields in [`KEPT_FIELDS`];
 //! every other field, including amounts and addresses, is written as `[redacted]`, and quoted
-//! input inside an `error` value is redacted the same way. Messages,
-//! targets and span names are kept, which is why messages must never interpolate values.
+//! input inside an `error` value is redacted the same way. Messages go through the same quote
+//! redaction, which covers a host app's lines (`dart` target) that quote what they reject.
+//! Targets and span names are kept, which is why messages must never interpolate values.
 
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -344,7 +345,7 @@ fn ring_line(record: &LogRecord, at: Timestamp, max_bytes: usize) -> String {
         push_escaped(&mut line, span);
     }
     line.push_str(": ");
-    push_escaped(&mut line, &record.message);
+    push_escaped(&mut line, &redact_quoted(&record.message));
     for (name, value) in &record.fields {
         line.push(' ');
         push_escaped(&mut line, name);
@@ -672,6 +673,24 @@ mod tests {
             assert_no_secrets(&[exported], &[ADDRESS.as_bytes()]),
             Ok(())
         );
+    }
+
+    #[test]
+    fn quoted_text_in_a_message_is_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let ring = Arc::new(open(dir.path(), 64 * 1024));
+        let dispatch = host_dispatch(ring.clone(), LogFilter::parse("trace").unwrap());
+        let message = format!("send to \"{ADDRESS}\" refused");
+        dispatcher::with_default(&dispatch, || {
+            tracing::warn!(target: "dart", tag = "send", "{message}");
+        });
+
+        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
+        assert!(
+            bundle.contains("send to \"[redacted]\" refused"),
+            "{bundle}"
+        );
+        assert!(!bundle.contains("esWWbPq4"));
     }
 
     #[test]

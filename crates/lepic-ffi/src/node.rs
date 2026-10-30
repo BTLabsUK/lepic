@@ -456,6 +456,7 @@ mod refusal_tests {
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
             offline: false,
+            tor_wanted: false,
         }
     }
 

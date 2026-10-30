@@ -50,6 +50,7 @@ lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 lepic-ffi = { path = ".", default-features = false, features = ["mock"] }
 serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
+tokio-rustls.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 
 [lints]

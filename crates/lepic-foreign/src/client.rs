@@ -17,6 +17,7 @@ use lepic_slate::codec::WireSlate;
 use rustls::ClientConfig;
 use tracing::debug;
 
+use crate::dial::{ForeignConnector, ForeignDialer};
 use crate::error::ClientError;
 use crate::rpc::{self, VersionInfo};
 use crate::url::ForeignUrl;
@@ -49,7 +50,7 @@ pub fn webpki_tls_config() -> Result<Arc<ClientConfig>, ClientError> {
 /// Talks to other wallets' foreign APIs. Cheap to clone; clones share the connection pool.
 #[derive(Clone)]
 pub struct ForeignClient {
-    client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    client: Client<HttpsConnector<ForeignConnector>, Full<Bytes>>,
     settings: ClientSettings,
 }
 
@@ -62,15 +63,40 @@ impl std::fmt::Debug for ForeignClient {
 impl ForeignClient {
     /// Construction does no I/O; requests need a Tokio runtime.
     pub fn new(settings: ClientSettings, tls: Arc<ClientConfig>) -> Self {
-        let mut http = HttpConnector::new();
-        http.enforce_http(false);
-        http.set_connect_timeout(Some(settings.connect_timeout));
-        http.set_nodelay(true);
+        Self::build(settings, tls, None)
+    }
+
+    /// As [`ForeignClient::new`], but every connection is opened by `dialer`, which the
+    /// connect timeout of `settings` does not bound. TLS and the `Host` header still use the
+    /// host of the wallet's URL, wherever the dialer connects.
+    pub fn with_dialer(
+        settings: ClientSettings,
+        tls: Arc<ClientConfig>,
+        dialer: Arc<dyn ForeignDialer>,
+    ) -> Self {
+        Self::build(settings, tls, Some(dialer))
+    }
+
+    fn build(
+        settings: ClientSettings,
+        tls: Arc<ClientConfig>,
+        dialer: Option<Arc<dyn ForeignDialer>>,
+    ) -> Self {
+        let route = dialer.map_or_else(
+            || {
+                let mut http = HttpConnector::new();
+                http.enforce_http(false);
+                http.set_connect_timeout(Some(settings.connect_timeout));
+                http.set_nodelay(true);
+                ForeignConnector::Direct(http)
+            },
+            ForeignConnector::Dialed,
+        );
         let connector = HttpsConnectorBuilder::new()
             .with_tls_config(Arc::unwrap_or_clone(tls))
             .https_or_http()
             .enable_http1()
-            .wrap_connector(http);
+            .wrap_connector(route);
         let client = Client::builder(TokioExecutor::new()).build(connector);
         Self { client, settings }
     }

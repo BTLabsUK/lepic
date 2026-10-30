@@ -96,6 +96,7 @@ fn live_restore() {
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
         offline: false,
+        tor_wanted: false,
     };
     rt.block_on(async {
         // A throwaway seed made here, never anyone's wallet.

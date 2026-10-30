@@ -13,7 +13,7 @@ use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
 use lepic_slate::error::{EncodeError, Unrepresentable};
-use lepic_slate::model::Slate;
+use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::origin::LegacyHeader;
 use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
@@ -22,7 +22,7 @@ use lepic_store::{AccountIndex, KeyId, OutputRecord, OutputStatus};
 use lepic_transport::error::FormatError;
 use lepic_transport::file::FilePolicy;
 use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
-use lepic_wallet::finalize::build_s3;
+use lepic_wallet::finalize::{FinalizeError, SlateField, build_s3};
 use lepic_wallet::send::{ChangeOutput, S1Plan, S1Randomness, build_s1};
 use serde_json::Value;
 
@@ -240,4 +240,29 @@ fn each_g03_s2_finalized_with_the_recorded_randomness_yields_the_g03_final_trans
         }
     }
     assert!(checked_v2 > 0 && checked_file > 0);
+}
+
+/// Found by the `slate_flow` fuzz target: an S2 under another slate id was finalized, and the
+/// S3 carried that id. The wallet looks the S1 up by the S2's id, so only a direct caller of
+/// `build_s3` could pair them; it is refused all the same.
+#[test]
+fn an_s2_under_another_slate_id_is_refused() {
+    let case = &standard_cases()[0];
+    let method = text(&vector(&format!("{case}_s3_v3"))["inputs"]["method"]).to_owned();
+    let (keychain, s1) = sender_s1(&vector(&format!("{case}_s1_{method}")));
+    let mut parts = decode(&vector(&format!("{case}_s2_{method}"))).into_parts();
+    parts.id = SlateId::from_bytes([7; 16]);
+    let s2 = Slate::from_parts(parts).unwrap();
+
+    let error = build_s3(&keychain, BASE_FEE, &s1, &s2).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            FinalizeError::Mismatch {
+                field: SlateField::Id
+            }
+        ),
+        "{error:?}"
+    );
 }
