@@ -75,4 +75,5 @@ pub mod slate {
     pub use lepic_slate::role::Role;
     pub use lepic_slate::stage::Stage;
     pub use lepic_slate::ur_slate;
+    pub use lepic_slate::validate::parse_proof_address;
 }

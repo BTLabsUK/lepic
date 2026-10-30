@@ -639,6 +639,12 @@ pub struct SendOptions {
     /// for example ones another wallet on the same phrase is spending. At most 500; an
     /// output this wallet does not hold is ignored.
     pub exclude_outputs: Vec<String>,
+    /// The receiver's payment proof address, 64 hex characters (the ed25519 key of its onion
+    /// address, as `epic-wallet` derives it). The receiver is asked to sign a payment proof,
+    /// and its answer is finalized only when that proof verifies for this address, so a
+    /// wallet holding another key cannot complete the payment. The slate then needs the V3
+    /// shape. `None` asks for no proof. Not a valid address: `InvalidArgument`.
+    pub payment_proof_recipient: Option<String>,
 }
 
 /// How far a slate has progressed: `S` stages are a send, `I` stages an invoice.
