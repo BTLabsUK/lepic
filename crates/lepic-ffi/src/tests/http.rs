@@ -59,6 +59,7 @@ async fn session_on(
         epicbox_port: 443,
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
+        offline: false,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     Arc::new(

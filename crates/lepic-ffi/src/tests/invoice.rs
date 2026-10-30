@@ -49,6 +49,7 @@ impl World {
             epicbox_port: 443,
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
+            offline: false,
         };
         EpicWallet::create(
             &self.runtime,

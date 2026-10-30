@@ -389,6 +389,44 @@ where
         }))
     }
 
+    /// The chain tip a payment stage acts on, with [`peer_height_limit`]. The node answers it
+    /// and [`Self::check_plausible_tip`] checks it. In an offline session
+    /// ([`crate::WalletConfig::offline`]) the node is not asked: the tip is the highest one a
+    /// refresh confirmed, and without one the stage fails with `node_error` of
+    /// [`lepic_node::NodeError::Offline`].
+    pub(crate) async fn stage_tip<E: From<WalletError>>(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        node_error: impl FnOnce(lepic_node::NodeError) -> E,
+    ) -> Result<(Height, Height), E> {
+        if !self.config().offline {
+            let tip = self
+                .ports()
+                .node
+                .get_tip()
+                .await
+                .map_err(node_error)?
+                .height;
+            let limit = self.check_plausible_tip(session, tip).await?;
+            return Ok((tip, limit));
+        }
+        let session = Arc::clone(session);
+        let (confirmed, limit) = self
+            .blocking(move |ports, config| {
+                let stored = session
+                    .store
+                    .read(|repos| Ok::<_, WalletError>(position(repos)?))?;
+                Ok((
+                    stored.confirmed_height(),
+                    peer_height_limit(config.network, ports.clock.now()),
+                ))
+            })
+            .await?;
+        let tip = confirmed.ok_or_else(|| node_error(lepic_node::NodeError::Offline))?;
+        debug!(height = tip.value(), "offline session uses the stored tip");
+        Ok((tip, limit))
+    }
+
     /// Refuses a tip a stage is about to act on when it is not plausible for what the wallet
     /// stored, with [`WalletError::Implausible`]. Returns [`peer_height_limit`], which bounds the
     /// heights a peer's slate may claim.

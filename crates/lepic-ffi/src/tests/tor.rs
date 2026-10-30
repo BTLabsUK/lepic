@@ -318,7 +318,7 @@ async fn start_tor(
     let events = Events::default();
     session.set_tor_timings(quick());
     session
-        .start_tor(fake_tor(), None, events.report())
+        .start_tor(fake_tor(), None, true, events.report())
         .await
         .unwrap();
     let ready = events.wait_for(TorEventKind::Ready).await;
@@ -432,7 +432,7 @@ async fn lock_stops_tor_and_then_its_listener() {
     assert_eq!(pair.bob.tor_status().kind, TorStatusKind::Off);
     let locked = pair
         .bob
-        .start_tor(fake_tor(), None, Events::default().report())
+        .start_tor(fake_tor(), None, true, Events::default().report())
         .await;
     assert_eq!(kind(locked), WalletErrorKind::Locked);
     assert_eq!(kind(pair.bob.onion_address()), WalletErrorKind::Locked);
@@ -509,7 +509,7 @@ async fn stop_tor_frees_the_slot_for_a_new_start_and_a_wallet_runs_one_tor() {
     let (events, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
     let second = Events::default();
     pair.bob
-        .start_tor(fake_tor(), None, second.report())
+        .start_tor(fake_tor(), None, true, second.report())
         .await
         .unwrap();
     assert!(second.kinds().is_empty());
@@ -541,13 +541,61 @@ async fn the_relay_goes_through_tor_while_it_runs_and_the_setting_is_on() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tor_started_without_publishing_adds_no_onion_and_runs_no_listener() {
+    let (pair, network) = tor_pair().await;
+    let bob = &pair.bob;
+    let onion = bob.onion_address().unwrap();
+    let commands = network.prepare(pair.dirs[1].path(), &onion).await;
+    let events = Events::default();
+    bob.set_tor_timings(quick());
+
+    bob.start_tor(fake_tor(), None, false, events.report())
+        .await
+        .unwrap();
+
+    let bootstrapped = events.wait_for(TorEventKind::Bootstrapped).await;
+    assert!(bootstrapped.socks_port.is_some());
+    assert_eq!(bob.tor_status().kind, TorStatusKind::Bootstrapped);
+    assert!(bob.relay_through_tor(), "tor still carries the relay");
+    assert!(!bob.tor_listener_runs());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(events.find(TorEventKind::Publishing).is_none());
+    assert!(events.find(TorEventKind::Ready).is_none());
+    assert_eq!(network.listener_port(&onion), None);
+    bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+    let commands = commands.lock().unwrap().clone();
+    assert!(
+        !commands.iter().any(|command| command.contains("ONION")),
+        "{commands:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tor_started_to_publish_runs_the_listener_behind_its_onion() {
+    let (pair, network) = tor_pair().await;
+    let (events, commands) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+
+    assert!(pair.bob.tor_listener_runs());
+    assert!(
+        commands
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command == "ADD_ONION")
+    );
+    pair.bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_relay_waits_for_a_tor_that_has_not_bootstrapped() {
     let (pair, _network) = tor_pair().await;
     let bob = &pair.bob;
     // No control port is served for this tor, so it stays starting.
     bob.set_tor_timings(quick());
     let events = Events::default();
-    bob.start_tor(fake_tor(), None, events.report())
+    bob.start_tor(fake_tor(), None, true, events.report())
         .await
         .unwrap();
     assert_eq!(bob.tor_status().kind, TorStatusKind::Starting);
@@ -683,6 +731,7 @@ async fn the_onion_routes_of_the_config_are_there_from_the_open_and_checked() {
                 epicbox_port: 443,
                 onion_routes: routes,
                 tuning: crate::tuning::shipped(),
+                offline: false,
             };
             let secret = crate::node::NodeSecret::take(&mut config);
             let session =
@@ -718,7 +767,7 @@ async fn a_start_right_after_a_stop_waits_for_the_stopped_tor_to_be_down() {
     pair.bob.stop_tor();
     let second = Events::default();
     pair.bob
-        .start_tor(fake_tor(), None, second.report())
+        .start_tor(fake_tor(), None, true, second.report())
         .await
         .unwrap();
 
@@ -840,6 +889,7 @@ async fn a_missing_tor_binary_is_reported_and_ends_the_stream() {
         .start_tor(
             missing.to_string_lossy().into_owned(),
             None,
+            true,
             events.report(),
         )
         .await
@@ -879,6 +929,7 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
         epicbox_port: 443,
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
+        offline: false,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let session = Session::new(
@@ -931,7 +982,7 @@ async fn live_a_payment_over_the_tor_network_is_finalized_and_posted() {
         async move {
             let events = Events::default();
             session
-                .start_tor(binary, lib_dir, events.report())
+                .start_tor(binary, lib_dir, true, events.report())
                 .await
                 .unwrap();
             events

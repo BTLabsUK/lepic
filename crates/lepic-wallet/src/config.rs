@@ -122,6 +122,11 @@ pub struct WalletConfig {
     /// The transaction methods this wallet offers. Each must be registered in the
     /// [`crate::Ports::transports`] registry.
     pub transports: Vec<TransportId>,
+    /// The session never asks the node. Payment stages use the highest tip a refresh
+    /// confirmed, unchecked, and finalizing stores the transaction `finalized` without a push.
+    /// The host builds the session's node and relay ports to refuse every call as well. Fixed
+    /// for the session: a change means opening the wallet again.
+    pub offline: bool,
 }
 
 #[cfg(test)]

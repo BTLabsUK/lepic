@@ -1177,6 +1177,18 @@ impl EpicWallet {
         .await
     }
 
+    /// The finished payment of `tx_id`: its stored S3, or the I3 of an invoice this wallet
+    /// issued, as legacy V3 slate JSON, which `epic-wallet post -i` reads. Save it as a file,
+    /// or show it with `encode_ur_slate`, for a device that posts it, such as from an offline
+    /// session. Reads only the wallet. Fails with `InvalidArgument` for an unknown transaction
+    /// or one that is not `finalized`, `posted` or `confirmed`.
+    pub async fn finished_payment(&self, tx_id: u32) -> Result<String, WalletError> {
+        self.run("finished_payment", |session| async move {
+            session.finished_payment(tx_id).await
+        })
+        .await
+    }
+
     /// Posts the stored final transaction of `tx_id` to the node again.
     pub async fn repost_transaction(&self, tx_id: u32) -> Result<(), WalletError> {
         self.run("repost_transaction", |session| async move {

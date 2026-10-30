@@ -68,6 +68,7 @@ async fn restored_from(
         epicbox_port: 443,
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
+        offline: false,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let restored = Session::new(
@@ -200,6 +201,7 @@ async fn a_restore_scan_reports_the_outputs_it_restored() {
         epicbox_port: 443,
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
+        offline: false,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let runtime = pair

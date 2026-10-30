@@ -25,6 +25,7 @@ mod estimate;
 pub mod event;
 pub mod extension;
 pub mod finalize;
+mod finished;
 pub mod inbox;
 pub mod invoice;
 pub mod legacy_history;

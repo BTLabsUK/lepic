@@ -19,6 +19,7 @@ mod invoice;
 mod listener;
 mod live_restore;
 mod node;
+mod offline;
 mod outputs;
 mod password;
 mod push;
@@ -67,6 +68,7 @@ impl Fixture {
             epicbox_port: 443,
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
+            offline: false,
         }
     }
 

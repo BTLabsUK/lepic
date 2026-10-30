@@ -1214,6 +1214,7 @@ impl<H: Host> Run<'_, H> {
                 lepic_foreign::TRANSPORT_ID,
                 lepic_tor::TRANSPORT_ID,
             ],
+            offline: false,
         };
         let wallet = Wallet::new(config, ports)?;
         lepic_wallet_contacts::install(&wallet);

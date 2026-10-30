@@ -914,6 +914,7 @@ impl Session {
         Ok(FinalizedTx {
             tx_id: finalized.tx_id.0,
             slate_id: finalized.slate.id().to_string(),
+            posted: !self.offline,
         })
     }
 

@@ -1028,14 +1028,7 @@ where
     ) -> Result<(TxId, Slate, WireSlate), InvoiceError> {
         let session = self.session()?;
         registered(&self.ports().transports, delivery.transport())?;
-        let tip = self
-            .ports()
-            .node
-            .get_tip()
-            .await
-            .map_err(InvoiceError::Node)?
-            .height;
-        self.check_plausible_tip(&session, tip).await?;
+        let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
         let reply_keys = self.reply_keys();
         self.blocking(move |ports, config| {
             let env = InvoiceEnvironment {
@@ -1126,14 +1119,7 @@ where
             });
         }
         check_messages(&i1)?;
-        let tip = self
-            .ports()
-            .node
-            .get_tip()
-            .await
-            .map_err(InvoiceError::Node)?
-            .height;
-        let limit = self.check_plausible_tip(&session, tip).await?;
+        let (tip, limit) = self.stage_tip(&session, InvoiceError::Node).await?;
         check_ttl_lag(&i1, tip)?;
         // The issuer would refuse to finalize a payment signed from here on, which would only
         // keep this wallet's inputs locked until the payment expires.
@@ -1223,14 +1209,7 @@ where
         if i2.stage() != Stage::I2 {
             return Err(InvoiceError::WrongStage { stage: i2.stage() });
         }
-        let tip = self
-            .ports()
-            .node
-            .get_tip()
-            .await
-            .map_err(InvoiceError::Node)?
-            .height;
-        self.check_plausible_tip(&session, tip).await?;
+        let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
         let stored = self
             .blocking(move |ports, _| {
                 let env = InvoiceEnvironment {
@@ -1253,7 +1232,8 @@ where
             }
             None => debug!("slate already finalized"),
         }
-        let pushed = stored.state != TxState::Posted;
+        // An offline session keeps the transaction `finalized`, for the app to post.
+        let pushed = stored.state != TxState::Posted && !self.config().offline;
         if pushed {
             self.push_invoice(stored.tx_id, &stored.finalized, propagation)
                 .await?;

@@ -91,7 +91,8 @@ impl Session {
     /// module docs. The data directory and chain must be the wallet's own. Fails with
     /// `InvalidArgument`, changing nothing, for a node URL or relay that is not one, for
     /// another directory or chain, and for a relay given to a wallet opened without one or
-    /// none given to a wallet opened with one; with `Locked` on a locked wallet.
+    /// none given to a wallet opened with one, or another `offline` than the wallet's; with
+    /// `Locked` on a locked wallet.
     pub(crate) async fn set_servers(
         &self,
         config: &WalletConfig,
@@ -104,6 +105,7 @@ impl Session {
         {
             return Err(invalid("servers are switched for the open wallet only"));
         }
+        self.ensure_same_offline(config)?;
         lepic_wallet::NodeEndpoint::parse(&config.node_url)
             .map_err(|_| invalid("node url is not an http or https url with a host"))?;
         let node = self.runtime.nodes.backend(

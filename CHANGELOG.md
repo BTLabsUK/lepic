@@ -15,6 +15,13 @@ Conventional Commit messages at release time.
   `[epicbox] servers`), and writes the shipped default to `~/.lepic/settings.toml` on first
   use. Timeouts, ports, limits, the default address server and the onions come from its
   built-in `lepic-config.toml`.
+- An offline session for cold wallets, ADR 0031: `WalletConfig::offline` makes the session's
+  node and relay ports refuse every call (`NodeError::Offline`, `lepic-ffi`'s
+  `WalletErrorKind::Offline`), the payment stages work on the last confirmed tip, and finalizing
+  stores the transaction without posting it (`FinalizedTx::posted` false).
+  `finished_payment` returns its final slate as legacy V3 JSON.
+- `lepic-ffi`'s `start_tor` takes `publish_onion`: false starts tor for its SOCKS routes only,
+  without publishing the wallet's onion or running the listener behind it.
 
 ### Changed
 

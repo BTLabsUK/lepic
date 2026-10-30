@@ -45,6 +45,14 @@ pub struct WalletConfig {
     /// `set_servers` and `node_tip_for` keep the open wallet's. A zero, or a minimum above its
     /// maximum, fails the call with `InvalidArgument`.
     pub tuning: NetTuning,
+    /// An offline session, for a cold wallet. Every call to the node or the Epicbox relay fails
+    /// at once with `Offline`, before any name lookup or connect. Sending, receiving and
+    /// finalizing by slate text or file, and their invoice stages, use the highest chain tip
+    /// the last refresh confirmed (with none, they fail with `Offline`); finalizing stores the
+    /// transaction `finalized` without posting it, with `FinalizedTx.posted` false. Read when a
+    /// wallet is created, restored or opened; changing it means opening the wallet again, and
+    /// `set_servers` and `node_tip_for` fail with `InvalidArgument` for another value.
+    pub offline: bool,
 }
 
 /// The app configuration's `[node]`, `[epicbox]`, `[http]` and `[tor]` tuning keys. Every
@@ -143,6 +151,7 @@ impl std::fmt::Debug for WalletConfig {
             .field("epicbox_port", &self.epicbox_port)
             .field("onion_routes", &self.onion_routes)
             .field("tuning", &self.tuning)
+            .field("offline", &self.offline)
             .finish()
     }
 }
@@ -208,11 +217,15 @@ pub struct SentTx {
     pub fee: u64,
 }
 
-/// A send that was finalized and accepted by the node.
+/// A send or issued invoice that was finalized and, unless the session is offline, accepted by
+/// the node.
 #[derive(Debug, Clone)]
 pub struct FinalizedTx {
     pub tx_id: u32,
     pub slate_id: String,
+    /// `false` in an offline session: the transaction is stored `finalized` and nothing went to
+    /// the node. `EpicWallet::finished_payment` gives its final slate to post elsewhere.
+    pub posted: bool,
 }
 
 /// An output of the wallet, from `EpicWallet::outputs`.
@@ -1538,6 +1551,7 @@ mod tests {
             epicbox_port: 443,
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
+            offline: false,
         };
         let printed = format!("{config:?}");
         assert!(!printed.contains("node-secret-value"));

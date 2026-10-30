@@ -224,14 +224,7 @@ where
         if let Some(received) = self.received_before(&slate).await? {
             return Ok(self.answered_again(received, transport));
         }
-        let tip = self
-            .ports()
-            .node
-            .get_tip()
-            .await
-            .map_err(ReceiveError::Node)?
-            .height;
-        let limit = self.check_plausible_tip(&session, tip).await?;
+        let (tip, limit) = self.stage_tip(&session, ReceiveError::Node).await?;
         check_ttl(&slate, tip)?;
         check_height(&slate, limit)?;
         let context = self.encode_context(&slate).await?;
