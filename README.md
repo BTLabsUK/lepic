@@ -14,6 +14,8 @@
 [Documentation](https://docs.btlabs.uk/developers/lepic/) ·
 [Flutter binding](https://gitlab.com/epic-cash-bt/lepic-flutter) · [Security](SECURITY.md)
 
+Source: [GitLab](https://gitlab.com/epic-cash-bt/lepic) · Mirror: [GitHub](https://github.com/BTLabsUK/lepic)
+
 </div>
 
 LEPIC (light Epic) is an Epic Cash wallet that runs as a library inside a mobile or desktop app, in
@@ -207,6 +209,7 @@ report one privately.
 - Developer guide: https://docs.btlabs.uk/developers/lepic/ (security model:
   https://docs.btlabs.uk/developers/security-model/)
 - Wiki: https://gitlab.com/epic-cash-bt/lepic/-/wikis/home
+- Source: https://gitlab.com/epic-cash-bt/lepic (read-only mirror: https://github.com/BTLabsUK/lepic)
 
 ## License
 

@@ -2,6 +2,10 @@
 
 LEPIC takes contributions under the rules set out on this page.
 
+The source lives on [GitLab](https://gitlab.com/epic-cash-bt/lepic): open issues and merge
+requests there. [github.com/BTLabsUK/lepic](https://github.com/BTLabsUK/lepic) is a read-only
+mirror.
+
 ## Before you start
 
 1. Read `README.md` and `docs/architecture.md` for goals, non-goals and the crate layout, and
