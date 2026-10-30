@@ -34,7 +34,7 @@ use lepic_transport::file::FILE;
 use lepic_transport::transport::Destination;
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::refresh::RefreshOutcome;
-use lepic_wallet::selection::{SelectionOptions, SelectionStrategy};
+use lepic_wallet::selection::{SelectionOptions, SelectionStrategy, SelfSendShape};
 use lepic_wallet::self_send::{SelfSendError, SelfSent};
 use lepic_wallet::send::{Delivery, SendRequest};
 use receive_harness::Receiver;
@@ -141,6 +141,7 @@ impl Wallet {
                     ..SelectionOptions::new(ACCOUNT)
                 },
                 vec![self.funding],
+                SelfSendShape::Consolidate,
                 Propagation::Fluff,
             ))
     }

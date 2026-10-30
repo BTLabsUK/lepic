@@ -560,11 +560,110 @@ fn spend_named(
     sender: &Sender,
     commitments: Vec<lepic_crypto::Commitment>,
 ) -> Result<lepic_wallet::self_send::SelfSent, SelfSendError> {
+    spend_named_into(sender, commitments, SelfSendShape::Consolidate)
+}
+
+fn spend_named_into(
+    sender: &Sender,
+    commitments: Vec<lepic_crypto::Commitment>,
+    shape: SelfSendShape,
+) -> Result<lepic_wallet::self_send::SelfSent, SelfSendError> {
     sender.harness.block_on(sender.wallet.spend_outputs_to_self(
         options(),
         commitments,
+        shape,
         Propagation::Fluff,
     ))
+}
+
+/// Names the sender's starting output and `count - 1` more, funded at `FUNDING + child`.
+fn fund_and_name(sender: &Sender, count: u32) -> Vec<lepic_crypto::Commitment> {
+    let mut named = vec![commitment_of(sender, FUNDING)];
+    for child in 1..count {
+        let value = FUNDING + u64::from(child);
+        sender.fund(child, value);
+        named.push(commitment_of(sender, value));
+    }
+    named
+}
+
+#[test]
+fn spending_named_outputs_into_as_many_outputs_keeps_the_number_of_coins() {
+    let base_fee = Network::Floonet.params().default_base_fee().value();
+    for coins in [1_u32, 3, 8] {
+        let sender = Sender::new();
+        let named = fund_and_name(&sender, coins);
+        let shape = if coins == 1 {
+            SelfSendShape::Consolidate
+        } else {
+            split(coins as usize)
+        };
+
+        let sent = spend_named_into(&sender, named, shape).unwrap();
+
+        let count = u64::from(coins);
+        // Weight 4 per output and one kernel, less one per input.
+        assert_eq!(
+            sent.selection.fee.value(),
+            (4 * count + 1 - count) * base_fee
+        );
+        let total: u64 = (0..coins).map(|child| FUNDING + u64::from(child)).sum();
+        assert_eq!(sent.selection.total.value(), total);
+        let left = total - sent.selection.fee.value();
+        let made: Vec<u64> = sender
+            .outputs()
+            .iter()
+            .filter(|output| output.status == Unconfirmed)
+            .map(|output| output.amount.value())
+            .collect();
+        assert_eq!(made.len(), coins as usize);
+        assert_eq!(made.iter().sum::<u64>(), left);
+        // Nearly equal: each is the share, and one of them also takes the remainder.
+        let share = left / count;
+        assert!(
+            made.iter()
+                .all(|value| *value == share || *value == share + left % count)
+        );
+        let pushed = sender.harness.node.pushed_transactions();
+        pushed[0].validate().unwrap();
+        assert_eq!(pushed[0].inputs().len(), coins as usize);
+        assert_eq!(pushed[0].outputs().len(), coins as usize);
+    }
+}
+
+#[test]
+fn spending_named_outputs_into_fewer_outputs_than_coins_splits_the_same_way() {
+    let sender = Sender::new();
+    let named = fund_and_name(&sender, 3);
+
+    let sent = spend_named_into(&sender, named, split(2)).unwrap();
+
+    assert_eq!(sent.selection.inputs.len(), 3);
+    assert_eq!(sent.selection.change.len(), 1);
+}
+
+#[test]
+fn spending_named_outputs_into_more_outputs_than_the_fee_leaves_stores_nothing() {
+    let sender = Sender::new();
+    let base_fee = Network::Floonet.params().default_base_fee().value();
+    // One coin into 10 pays (4 * 10 + 1 - 1) base fees, so nine base units over the fee cannot
+    // give each output one.
+    let value = 40 * base_fee + 9;
+    sender.fund(1, value);
+    let small = commitment_of(&sender, value);
+    let before = (sender.transactions(), sender.outputs());
+
+    let error = spend_named_into(&sender, vec![small], split(10)).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            SelfSendError::Send(SendError::Selection(SelectionError::NotEnoughFunds { .. }))
+        ),
+        "{error:?}"
+    );
+    assert_eq!((sender.transactions(), sender.outputs()), before);
+    assert!(sender.harness.node.pushed_transactions().is_empty());
 }
 
 #[test]
@@ -741,6 +840,7 @@ fn spending_named_outputs_refuses_young_unconfirmed_and_other_account_outputs() 
             .block_on(sender.wallet.spend_outputs_to_self(
                 options,
                 vec![funding, named],
+                SelfSendShape::Consolidate,
                 Propagation::Fluff,
             ))
             .unwrap_err()

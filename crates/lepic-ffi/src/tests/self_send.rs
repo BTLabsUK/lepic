@@ -98,3 +98,21 @@ async fn split_counts_outside_two_to_ten_are_refused() {
     }
     assert_eq!(pair.chain.pushed_count(), 0);
 }
+
+#[test]
+fn a_move_back_makes_one_to_ten_outputs() {
+    use crate::api::wallet::spend_back_shape;
+    use lepic_wallet::selection::SelfSendShape;
+
+    assert_eq!(spend_back_shape(1).unwrap(), SelfSendShape::Consolidate);
+    for outputs in 2..=10 {
+        assert!(matches!(
+            spend_back_shape(outputs),
+            Ok(SelfSendShape::Split(count)) if count.get() == outputs as usize
+        ));
+    }
+    for outputs in [0, 11, u32::MAX] {
+        let error = spend_back_shape(outputs).unwrap_err();
+        assert_eq!(error.kind, WalletErrorKind::InvalidArgument, "{outputs}");
+    }
+}

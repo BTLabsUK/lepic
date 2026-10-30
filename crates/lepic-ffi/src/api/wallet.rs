@@ -252,6 +252,20 @@ fn split_shape(outputs: u32) -> Result<SelfSendShape, WalletError> {
         })
 }
 
+/// The shape of a move-back into `outputs` outputs: one merges, 2..=10 split. Refused with
+/// `InvalidArgument` outside 1..=10.
+pub(crate) fn spend_back_shape(outputs: u32) -> Result<SelfSendShape, WalletError> {
+    if outputs == 1 {
+        return Ok(SelfSendShape::Consolidate);
+    }
+    split_shape(outputs).map_err(|_| {
+        WalletError::new(
+            WalletErrorKind::InvalidArgument,
+            format!("a spend makes from 1 to {} outputs", SplitCount::MAX),
+        )
+    })
+}
+
 /// `password` as the password of a new wallet: refused with `InvalidArgument` below
 /// [`Password::MIN_NEW_LEN`] characters.
 fn new_password(password: Zeroizing<String>) -> Result<Zeroizing<String>, WalletError> {
@@ -957,24 +971,30 @@ impl EpicWallet {
         .await
     }
 
-    /// Spends exactly the outputs `commitments` names, by `WalletOutput.commitment`, into one
-    /// output of this wallet, as [`EpicWallet::consolidate_outputs`] does, and locks nothing
-    /// else. Use it to make a cancelled payment final: once a payment is cancelled its inputs
+    /// Spends exactly the outputs `commitments` names, by `WalletOutput.commitment`, into
+    /// `outputs` outputs of this wallet, and locks nothing else. With `outputs` 1 it merges
+    /// them as [`EpicWallet::consolidate_outputs`] does; with 2 to 10 the value less the fee
+    /// is split into that many outputs of nearly equal value, the last one taking the
+    /// remainder, as [`EpicWallet::split_outputs`] does, so the wallet can keep its number of
+    /// coins. The fee grows with the outputs. Use it to make a cancelled payment final: once a payment is cancelled its inputs
     /// are spendable here, but the other wallet may still hold a signed copy that spends them,
     /// for example the issuer of an invoice that was paid, until they are spent elsewhere.
     ///
-    /// Fails with `InvalidArgument` when `commitments` is empty, or names an output that is
-    /// unknown, not unspent with `minimum_confirmations`, or named twice; with `NotEnoughFunds`
-    /// when the fee takes their whole value; and otherwise as
+    /// Fails with `InvalidArgument` when `outputs` is outside 1..=10, or `commitments` is empty,
+    /// or names an output that is unknown, not unspent with `minimum_confirmations`, or named
+    /// twice; with `NotEnoughFunds` when their value less the fee leaves less than one base
+    /// unit for each output; and otherwise as
     /// [`EpicWallet::consolidate_outputs`] does, storing nothing.
     pub async fn spend_outputs_to_self(
         &self,
         commitments: Vec<String>,
+        outputs: u32,
         minimum_confirmations: u64,
     ) -> Result<SelfSentTx, WalletError> {
+        let shape = spend_back_shape(outputs)?;
         self.run("spend_outputs_to_self", |session| async move {
             session
-                .spend_outputs_to_self(commitments, minimum_confirmations)
+                .spend_outputs_to_self(commitments, shape, minimum_confirmations)
                 .await
         })
         .await

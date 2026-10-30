@@ -35,7 +35,7 @@ use lepic_wallet::epicbox_invoice::{InvoiceExpiry, PeerInvoiceSupport};
 use lepic_wallet::event::BouncedInvoice;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, PayRequest};
-use lepic_wallet::selection::SelectionOptions;
+use lepic_wallet::selection::{SelectionOptions, SelfSendShape};
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
 use tokio::sync::broadcast::Receiver;
@@ -742,6 +742,7 @@ fn a_cancelled_payment_has_exactly_its_inputs_spent_to_the_payer_itself() {
                 ..SelectionOptions::new(ACCOUNT)
             },
             inputs.clone(),
+            SelfSendShape::Consolidate,
             Propagation::Fluff,
         ))
         .unwrap();

@@ -6937,6 +6937,7 @@ fn wire__crate__api__wallet__EpicWallet_spend_outputs_to_self_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
             >>::sse_decode(&mut deserializer);
             let api_commitments = <Vec<String>>::sse_decode(&mut deserializer);
+            let api_outputs = <u32>::sse_decode(&mut deserializer);
             let api_minimum_confirmations = <u64>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -6962,6 +6963,7 @@ fn wire__crate__api__wallet__EpicWallet_spend_outputs_to_self_impl(
                         let output_ok = crate::api::wallet::EpicWallet::spend_outputs_to_self(
                             &*api_that_guard,
                             api_commitments,
+                            api_outputs,
                             api_minimum_confirmations,
                         )
                         .await?;

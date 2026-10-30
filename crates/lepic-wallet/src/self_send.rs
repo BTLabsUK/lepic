@@ -107,26 +107,29 @@ where
         .await
     }
 
-    /// Spends exactly the outputs `commitments` names into one output of this wallet, as
-    /// [`Wallet::self_send`] does with [`SelfSendShape::Consolidate`], and posts it with
-    /// `propagation`. Nothing else is locked. A payment that was cancelled here, such as an
+    /// Spends exactly the outputs `commitments` names into the outputs `shape` asks for, as
+    /// [`Wallet::self_send`] does: [`SelfSendShape::Consolidate`] makes one, and
+    /// [`SelfSendShape::Split`] makes that many of nearly equal value, so the wallet can keep
+    /// its number of coins. It posts it with `propagation`. Nothing else is locked. A payment that was cancelled here, such as an
     /// invoice payment whose I2 the issuer still holds, can no longer be mined once its inputs
     /// are spent this way.
     ///
     /// Fails, storing nothing, with [`SelectionError::NoOutputsNamed`] or
     /// [`SelectionError::NamedOutputUnavailable`] when an output named is unknown, not unspent
     /// with `options.minimum_confirmations`, of another account or named twice, with
-    /// [`SelectionError::NotEnoughFunds`] when the fee takes their whole value, and otherwise as
+    /// [`SelectionError::NotEnoughFunds`] when their value less the fee leaves less than one
+    /// base unit for each output, and otherwise as
     /// [`Wallet::self_send`] does.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = Empty))]
     pub async fn spend_outputs_to_self(
         &self,
         options: SelectionOptions,
         commitments: Vec<Commitment>,
+        shape: SelfSendShape,
         propagation: Propagation,
     ) -> Result<SelfSent, SelfSendError> {
         self.self_send_chosen(options, propagation, move |outputs, request| {
-            selection::select_named(outputs, request, &commitments)
+            selection::select_named(outputs, request, &commitments, shape)
         })
         .await
     }

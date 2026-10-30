@@ -313,6 +313,16 @@ pub fn select_self_send(
         SelfSendShape::Consolidate => 1,
         SelfSendShape::Split(count) => count.get(),
     };
+    spread(eligible, parts, request)
+}
+
+/// A selection of `eligible` into `parts` outputs of nearly equal value, no more change than
+/// that: see [`select_self_send`] for how the value is divided.
+fn spread(
+    eligible: Vec<&OutputRecord>,
+    parts: usize,
+    request: &SelectionRequest,
+) -> Result<Selection, SelectionError> {
     let total = sum(&eligible)?;
     let weight = body(eligible.len(), parts)?.weight_as_block();
     if weight > MAX_TX_WEIGHT {
@@ -349,7 +359,8 @@ pub fn select_self_send(
 }
 
 /// The selection of a send to the wallet itself that spends exactly the outputs `named`, in
-/// one output of their value less the fee, with no change. Each must be an unspent output of
+/// the outputs `shape` asks for: one of their value less the fee for a consolidation, or `n`
+/// of nearly equal value for a split, divided as [`select_self_send`] does. Each must be an unspent output of
 /// the request's account that may be spent at the request's tip with its confirmations, named
 /// once. The request's amount, strategy, change outputs and output limit are ignored.
 ///
@@ -361,13 +372,15 @@ pub fn select_self_send(
 /// - [`SelectionError::NoOutputsNamed`] when `named` is empty.
 /// - [`SelectionError::NamedOutputUnavailable`] for the first output named that is unknown,
 ///   not unspent, of another account, not yet spendable, or named before.
-/// - [`SelectionError::NotEnoughFunds`] when their value does not pay the fee and one base unit.
+/// - [`SelectionError::NotEnoughFunds`] when their value does not pay the fee and one base unit
+///   into each output.
 /// - [`SelectionError::TooHeavy`] when the transaction would exceed the weight limit.
 /// - [`SelectionError::Arithmetic`] when a sum of values overflows.
 pub fn select_named(
     outputs: &[OutputRecord],
     request: &SelectionRequest,
     named: &[Commitment],
+    shape: SelfSendShape,
 ) -> Result<Selection, SelectionError> {
     if named.is_empty() {
         return Err(SelectionError::NoOutputsNamed);
@@ -391,30 +404,11 @@ pub fn select_named(
     }
     // Stable, so equal values keep the order they were named in.
     inputs.sort_by_key(|output| output.amount);
-    let weight = body(inputs.len(), 1)?.weight_as_block();
-    if weight > MAX_TX_WEIGHT {
-        return Err(SelectionError::TooHeavy {
-            inputs: inputs.len(),
-            outputs: 1,
-        });
-    }
-    let total = sum(&inputs)?;
-    let fee = tx_fee(inputs.len(), 1, request.base_fee)?;
-    let amount = total
-        .value()
-        .checked_sub(fee.value())
-        .filter(|left| *left > 0)
-        .ok_or(SelectionError::NotEnoughFunds {
-            available: total,
-            needed: fee.to_amount().checked_add(Amount::new(1))?,
-        })?;
-    Ok(Selection {
-        inputs: inputs.into_iter().cloned().collect(),
-        change: Vec::new(),
-        amount: Amount::new(amount),
-        fee,
-        total,
-    })
+    let parts = match shape {
+        SelfSendShape::Consolidate => 1,
+        SelfSendShape::Split(count) => count.get(),
+    };
+    spread(inputs, parts, request)
 }
 
 /// Whether `output` may be spent at `tip`, by `epic-wallet`'s `OutputData::eligible_to_spend`.

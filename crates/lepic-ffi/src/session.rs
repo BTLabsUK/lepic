@@ -1060,6 +1060,7 @@ impl Session {
     pub(crate) async fn spend_outputs_to_self(
         &self,
         commitments: Vec<String>,
+        shape: SelfSendShape,
         minimum_confirmations: u64,
     ) -> Result<SelfSentTx, WalletError> {
         // Matched against the stored outputs, so an unknown commitment is refused here and
@@ -1086,6 +1087,7 @@ impl Session {
             .spend_outputs_to_self(
                 Self::self_send_options(minimum_confirmations),
                 commitments,
+                shape,
                 Propagation::Fluff,
             )
             .await?;
