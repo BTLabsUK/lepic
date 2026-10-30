@@ -12415,6 +12415,8 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             68 => crate::api::error::WalletErrorKind::InputsSpentElsewhere,
             69 => crate::api::error::WalletErrorKind::WrongPairingClass,
             70 => crate::api::error::WalletErrorKind::Offline,
+            71 => crate::api::error::WalletErrorKind::InputsSpentByOwnTransaction,
+            72 => crate::api::error::WalletErrorKind::PeerInputsSpent,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -15763,6 +15765,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::InputsSpentElsewhere => 68.into_dart(),
             Self::WrongPairingClass => 69.into_dart(),
             Self::Offline => 70.into_dart(),
+            Self::InputsSpentByOwnTransaction => 71.into_dart(),
+            Self::PeerInputsSpent => 72.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -18078,6 +18082,8 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::InputsSpentElsewhere => 68,
                 crate::api::error::WalletErrorKind::WrongPairingClass => 69,
                 crate::api::error::WalletErrorKind::Offline => 70,
+                crate::api::error::WalletErrorKind::InputsSpentByOwnTransaction => 71,
+                crate::api::error::WalletErrorKind::PeerInputsSpent => 72,
                 _ => {
                     unimplemented!("");
                 }

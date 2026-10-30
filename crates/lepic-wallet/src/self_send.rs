@@ -89,7 +89,11 @@ where
     /// [`SelfSendError::Receive`] or [`SelfSendError::Finalize`] when the wallet's own slate
     /// does not check. Fails with [`FinalizeError::NotPosted`] when it was stored finalized but
     /// the node did not take it: the inputs stay locked until [`Wallet::post`] posts it again
-    /// or [`Wallet::cancel`] cancels the outgoing entry.
+    /// or [`Wallet::cancel`] cancels the outgoing entry. Fails with
+    /// [`FinalizeError::InputsSpentByOwnTransaction`] when the node refused it because another
+    /// send of this wallet that the chain holds spent its inputs, and with
+    /// [`FinalizeError::InputsSpentElsewhere`] when another wallet did: both entries are then
+    /// cancelled, as [`Wallet::post`] describes.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = Empty))]
     pub async fn self_send(
         &self,

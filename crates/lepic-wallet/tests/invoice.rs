@@ -1531,3 +1531,181 @@ fn a_payers_change_still_awaits_finalization() {
     let balance = flow.payer.wallet.balance(ACCOUNT).unwrap();
     assert_eq!(balance.awaiting_finalization, change[0].output.amount);
 }
+
+/// The payer's input of `flow`'s payment, put on chain unspent at height 1.
+fn payer_input_on_chain(flow: &Flow) -> lepic_crypto::Commitment {
+    let input = flow
+        .payer
+        .read(|repos| repos.outputs(ACCOUNT, Some(OutputStatus::Locked)))
+        .remove(0);
+    flow.node.update_chain(|chain| {
+        chain.outputs.push(ChainOutput {
+            commitment: input.id.commitment,
+            features: input.id.features,
+            proof: support::some_proof(),
+            height: Height::new(1),
+            mmr_index: 1,
+            spent: false,
+        });
+    });
+    input.id.commitment
+}
+
+fn payer_input_spent(flow: &Flow) {
+    flow.node.update_chain(|chain| {
+        for output in &mut chain.outputs {
+            output.spent = true;
+        }
+    });
+}
+
+fn tip_at(flow: &Flow, height: u64) {
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(height));
+}
+
+fn watched(flow: &Flow) -> bool {
+    flow.issuer
+        .read(|repos| repos.tx_watch(flow.tx_id))
+        .is_some()
+}
+
+/// The payer cancelled and spent the inputs of its payment elsewhere before the issuer posted
+/// it: the node refuses the post and the payment can never be mined.
+#[test]
+fn a_post_whose_payer_spent_the_inputs_elsewhere_ends_the_invoice_with_its_own_error() {
+    let flow = flow(None, request());
+    tip_at(&flow, TIP + 1);
+    flow.node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::PeerInputsSpent { tx_id, .. } if tx_id == flow.tx_id),
+        "{error:?}"
+    );
+    assert_eq!(flow.state(), TxState::Cancelled);
+    assert!(
+        flow.issuer
+            .read(|repos| repos.outputs_of_transaction(flow.tx_id))
+            .is_empty()
+    );
+    assert!(watched(&flow));
+    // A repost finds nothing to post.
+    let error = flow
+        .issuer
+        .block_on(flow.issuer.wallet.post(flow.tx_id, Propagation::Stem))
+        .unwrap_err();
+    assert!(
+        matches!(error, FinalizeError::NotPostable { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_pool_refusal_with_the_payers_inputs_on_chain_is_only_not_posted() {
+    let flow = flow(None, request());
+    payer_input_on_chain(&flow);
+    tip_at(&flow, TIP + 1);
+    flow.node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(matches!(error, InvoiceError::NotPosted { .. }), "{error:?}");
+    assert_eq!(flow.state(), TxState::Finalized);
+}
+
+/// A node still syncing, not yet past the invoice's height, may simply not have the payer's
+/// inputs: the refusal stays a failed post.
+#[test]
+fn a_pool_refusal_from_a_node_not_past_the_invoice_height_is_only_not_posted() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(matches!(error, InvoiceError::NotPosted { .. }), "{error:?}");
+    assert_eq!(flow.state(), TxState::Finalized);
+}
+
+/// The issuer posted the payment, the node dropped it and the payer spent its inputs elsewhere:
+/// a refresh ends the payment instead of leaving it waiting to confirm, and its kernel stays
+/// watched, so a late mining of it still confirms it.
+#[test]
+fn a_posted_invoice_whose_payer_spent_the_inputs_ends_at_a_refresh_and_stays_watched() {
+    let flow = flow(None, request());
+    payer_input_on_chain(&flow);
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+    assert_eq!(flow.state(), TxState::Posted);
+    tip_at(&flow, TIP + 1);
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Posted, "inputs unspent");
+
+    payer_input_spent(&flow);
+    let pushed = flow.node.pushed_transactions()[0].clone();
+    flow.node.update_chain(|chain| chain.pool.push(pushed));
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Posted, "kernel in the pool");
+
+    flow.node.update_chain(|chain| chain.pool.clear());
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Cancelled);
+    assert!(watched(&flow));
+    assert!(
+        flow.issuer
+            .read(|repos| repos.outputs_of_transaction(flow.tx_id))
+            .is_empty()
+    );
+
+    let kernel = *finalized.transaction.kernels().first().unwrap();
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 2);
+        chain.kernels.push(LocatedKernel {
+            kernel,
+            height: Height::new(TIP + 2),
+            mmr_index: 1,
+        });
+    });
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Confirmed);
+}
+
+/// An issued invoice whose post the node never took ends at its cutoff, from which it is no
+/// longer posted, unless the node holds its kernel; it stays watched.
+#[test]
+fn a_finalized_invoice_the_node_never_took_expires_at_its_cutoff() {
+    let flow = finalized_not_posted();
+    payer_input_on_chain(&flow);
+    tip_at(&flow, TIP + MARGIN_TTL - 1);
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Finalized);
+
+    tip_at(&flow, TIP + MARGIN_TTL);
+    let i3 = flow
+        .issuer
+        .read(|repos| repos.slate(flow.slate_id, SlateStage::Invoice3))
+        .unwrap();
+    let i3 = codecs()
+        .decode(&WireSlate::binary(MediaType::JSON, i3.bytes))
+        .unwrap();
+    let pooled = lepic_primitives::tx::Transaction::new(
+        i3.offset().clone(),
+        lepic_primitives::tx::TransactionBody::new(
+            i3.inputs().to_vec(),
+            i3.outputs().to_vec(),
+            vec![i3.kernel().unwrap()],
+        ),
+    );
+    flow.node.update_chain(|chain| chain.pool.push(pooled));
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Finalized, "kernel in the pool");
+
+    flow.node.update_chain(|chain| chain.pool.clear());
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+
+    assert_eq!(flow.state(), TxState::Expired);
+    assert!(watched(&flow));
+}

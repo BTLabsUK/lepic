@@ -22,7 +22,7 @@ own state (`lepic-wallet`'s `state` module).
 | outgoing `finalized` | `TxSentCreated`, with the transaction stored | false | finalizing S3 |
 | outgoing `posted` | `TxSentCreated`, or `TxSentMempool` once seen in the mempool | false | posting to the node |
 | outgoing `confirmed` | `TxSent` | true | a refresh finding one of its outputs on chain, or the kernel of a watched transaction (below) |
-| outgoing `cancelled` | `TxSentCancelled` | false | the owner's cancel, or the owner's release of a finalized or posted send the network never took |
+| outgoing `cancelled` | `TxSentCancelled` | false | the owner's cancel, or the owner's release of a finalized or posted send the network never took, or a post or refresh that finds an input of the finalized or posted send gone from the chain while neither the node's pool nor its chain holds its kernel |
 | outgoing `expired` | `TxSentCancelled` | false | a refresh at or past the TTL cutoff height, or the send's wallet-local cutoff when that is earlier, or 10 blocks past the cutoff for an invoice payment, once the node holds no kernel the peer could have completed |
 | incoming `received` | `TxReceived` | false | receiving S1 (S2 returned), or issuing an invoice (I1) |
 | incoming `finalized` | `TxReceived`, with the transaction stored | false | the invoice issuer finalizing I3 |
@@ -31,8 +31,8 @@ own state (`lepic-wallet`'s `state` module).
 | incoming `confirmed` | `TxReceivedMempool` | true | the same, for an invoice issuer whose posted transaction was seen in the mempool; the refresh rewrites only outgoing types |
 | incoming `confirmed` | `ConfirmedCoinbase` | true | a refresh confirming a coinbase output, or a restore finding one; no slate |
 | incoming `confirmed` | `TxReceived`, no slate id | true | a restore finding an output with no entry |
-| incoming `cancelled` | `TxReceivedCancelled` | false | the owner's cancel, or, for a payment received over Epicbox and answered with S2, the inbox making room at its cap of open receipts, which cancels as the owner's cancel does |
-| incoming `expired` | `TxReceivedCancelled` | false | a refresh at or past the TTL cutoff height, or, for a received payment with no TTL, 10,080 blocks after a refresh first saw it; in both cases once the node holds no kernel the sender could have completed |
+| incoming `cancelled` | `TxReceivedCancelled` | false | the owner's cancel, or, for a payment received over Epicbox and answered with S2, the inbox making room at its cap of open receipts, which cancels as the owner's cancel does, or, for an invoice this wallet finalized, a post or refresh that finds an input of the payer gone from the chain while neither the node's pool nor its chain holds its kernel |
+| incoming `expired` | `TxReceivedCancelled` | false | a refresh at or past the TTL cutoff height, or, for a received payment with no TTL, 10,080 blocks after a refresh first saw it; in both cases once the node holds no kernel the sender could have completed; for an invoice this wallet finalized or posted, a refresh at or past the earlier of its I3's and its I1's TTL cutoff, once the node holds no kernel of it |
 
 Upstream marks an expired transaction cancelled; LEPIC keeps `expired` apart so the user can tell the
 two causes apart. Both map to the same upstream type.
@@ -45,8 +45,8 @@ changes nothing. Any other transition not listed is rejected with a typed error.
 | From | To |
 |---|---|
 | `sent`, `received` | `finalized`, `confirmed`, `cancelled`, `expired` |
-| `finalized` | `posted`, `confirmed`, `cancelled` |
-| `posted` | `confirmed`, `cancelled` |
+| `finalized` | `posted`, `confirmed`, `cancelled`, `expired` |
+| `posted` | `confirmed`, `cancelled`, `expired` |
 | `cancelled`, `expired`, for a watched transaction only | `confirmed`, by a refresh that finds its kernel |
 | `confirmed`, `cancelled`, `expired` | none otherwise |
 
@@ -55,9 +55,12 @@ the transaction before this wallet records finalizing or posting it.
 
 Upstream cancels and expires any entry whose `tx_type` is still `TxSentCreated` or `TxReceived`,
 which includes a transaction it finalized or posted but has not yet seen in the mempool. LEPIC
-expires neither a finalized nor a posted transaction, because either may still be mined after the
-TTL cutoff. The owner may still cancel a finalized one, unless the node's chain or its transaction
-pool holds its kernel; a posted one ends only by confirmation. Upstream refuses to cancel an entry with `confirmed = true`, and so does LEPIC: `confirmed` is final.
+expires neither a finalized nor a posted send, because either may still be mined after the TTL
+cutoff; only an invoice it issued and finalized expires, at the cutoff from which it no longer posts
+it, and its kernel stays watched. The owner may still cancel a finalized one, unless the node's
+chain or its transaction pool holds its kernel. A posted one ends by confirmation, by the owner's
+release, or, like a finalized one, when an input it spends is gone from the chain and neither the
+node's pool nor its chain holds its kernel: it can never be mined, and its kernel stays watched. Upstream refuses to cancel an entry with `confirmed = true`, and so does LEPIC: `confirmed` is final.
 
 Upstream also refuses to cancel an entry whose type is neither `TxSentCreated` nor `TxReceived`, so
 a transaction the mempool has seen (`TxSentMempool`, `TxReceivedMempool`) cannot be cancelled there.

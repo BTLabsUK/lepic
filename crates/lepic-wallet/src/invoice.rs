@@ -68,7 +68,7 @@ use crate::account::{AccountError, next_output_key};
 use crate::codecs;
 use crate::error::WalletError;
 use crate::extension::ReplyKeys;
-use crate::finalize::{Finalized, FinalizedSlate, PushFailure};
+use crate::finalize::{Finalized, FinalizedSlate, PushFailure, SpentInputs};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::with_spend_confirmations;
 use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
@@ -246,6 +246,22 @@ pub enum InvoiceError {
     /// As [`crate::finalize::FinalizeError::InputsSpentElsewhere`].
     #[error("inputs of transaction {tx_id} were spent by another wallet")]
     InputsSpentElsewhere {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
+    /// As [`crate::finalize::FinalizeError::InputsSpentByOwnTransaction`].
+    #[error("inputs of transaction {tx_id} were spent by transaction {by} of this wallet")]
+    InputsSpentByOwnTransaction {
+        tx_id: TxId,
+        by: TxId,
+        #[source]
+        source: NodeError,
+    },
+    /// As [`crate::finalize::FinalizeError::PeerInputsSpent`]: the payer spent the inputs of
+    /// its payment elsewhere.
+    #[error("inputs the other party added to transaction {tx_id} were spent")]
+    PeerInputsSpent {
         tx_id: TxId,
         #[source]
         source: NodeError,
@@ -1181,7 +1197,10 @@ where
     /// [`InvoiceError::Expired`] once the tip reaches that cutoff itself; another I2 under the
     /// same slate id fails with [`InvoiceError::AlreadyFinalized`]. Fails with
     /// [`InvoiceError::NotPosted`] when the invoice was finalized and stored but the node
-    /// refused or could not be reached and does not hold its kernel. A node whose pool already
+    /// refused or could not be reached and does not hold its kernel, and with
+    /// [`InvoiceError::PeerInputsSpent`] when the node's pool refused it because the payer's
+    /// inputs are gone from the chain: the invoice is then cancelled, as
+    /// [`crate::Wallet::post`] describes. A node whose pool already
     /// holds the transaction, or whose chain holds its kernel, counts as having accepted it.
     /// Every other failure stores nothing.
     #[instrument(skip_all, fields(
@@ -1256,9 +1275,17 @@ where
         match self.push_final(finalized, tx_id, propagation).await {
             Ok(_) => Ok(()),
             Err(PushFailure::NotPosted(source)) => Err(InvoiceError::NotPosted { tx_id, source }),
-            Err(PushFailure::InputsSpent(source)) => {
-                self.end_spent_elsewhere(tx_id).await;
-                Err(InvoiceError::InputsSpentElsewhere { tx_id, source })
+            Err(PushFailure::Unminable { source, spent }) => {
+                self.end_unminable(tx_id, spent).await;
+                Err(match spent {
+                    SpentInputs::OtherWallet => {
+                        InvoiceError::InputsSpentElsewhere { tx_id, source }
+                    }
+                    SpentInputs::OwnTransaction(by) => {
+                        InvoiceError::InputsSpentByOwnTransaction { tx_id, by, source }
+                    }
+                    SpentInputs::Peer => InvoiceError::PeerInputsSpent { tx_id, source },
+                })
             }
             Err(PushFailure::Wallet(error)) => Err(InvoiceError::Wallet(error)),
         }

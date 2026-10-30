@@ -438,6 +438,8 @@ pub fn finalize_is_permanent(error: &FinalizeError) -> bool {
         | FinalizeError::NotPosted { .. } => false,
         // The send was cancelled: the same answer finds nothing to finalize.
         FinalizeError::InputsSpentElsewhere { .. }
+        | FinalizeError::InputsSpentByOwnTransaction { .. }
+        | FinalizeError::PeerInputsSpent { .. }
         | FinalizeError::Decode(_)
         | FinalizeError::WrongStage { .. }
         | FinalizeError::UnknownSlate { .. }
@@ -480,6 +482,8 @@ pub fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::Undelivered { .. }
         | InvoiceError::PaymentUndelivered { .. } => false,
         InvoiceError::InputsSpentElsewhere { .. }
+        | InvoiceError::InputsSpentByOwnTransaction { .. }
+        | InvoiceError::PeerInputsSpent { .. }
         | InvoiceError::Decode(_)
         | InvoiceError::WrongStage { .. }
         | InvoiceError::AmountMismatch { .. }

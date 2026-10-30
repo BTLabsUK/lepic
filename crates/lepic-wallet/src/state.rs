@@ -4,8 +4,8 @@
 //!
 //! ```text
 //! Sent ─────┬─> Finalized ─> Posted ─┬─> Confirmed
-//! Received ─┘      │                 └─> Cancelled
-//!   │              └─> Confirmed, Cancelled
+//! Received ─┘      │                 └─> Cancelled, Expired
+//!   │              └─> Confirmed, Cancelled, Expired
 //!   └─> Confirmed, Cancelled, Expired
 //! ```
 //!
@@ -76,10 +76,11 @@ pub const fn is_allowed(from: TxState, to: TxState) -> bool {
         | (Cancelled, Cancelled)
         | (Expired, Expired) => true,
         (Sent | Received, Finalized | Confirmed | Cancelled | Expired)
-        // A finalized or posted transaction may still be mined after its TTL, so only the
-        // owner's explicit cancel ends it before confirmation.
-        | (Finalized, Posted | Confirmed | Cancelled)
-        | (Posted, Confirmed | Cancelled) => true,
+        // A finalized or posted transaction may still be mined after its TTL. Only an invoice
+        // issuer's, which it no longer posts from its cutoff, expires, and its kernel stays
+        // watched.
+        | (Finalized, Posted | Confirmed | Cancelled | Expired)
+        | (Posted, Confirmed | Cancelled | Expired) => true,
         _ => false,
     }
 }

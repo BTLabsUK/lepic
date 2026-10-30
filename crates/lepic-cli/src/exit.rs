@@ -365,7 +365,10 @@ fn finalize_kind(error: &FinalizeError) -> ErrorKind {
         | FinalizeError::FeeBelowMinimum { .. }
         | FinalizeError::FeeOverflow
         | FinalizeError::InvalidTransaction(_)
-        | FinalizeError::NotPostable { .. } => ErrorKind::Rejected,
+        | FinalizeError::NotPostable { .. }
+        | FinalizeError::InputsSpentElsewhere { .. }
+        | FinalizeError::InputsSpentByOwnTransaction { .. }
+        | FinalizeError::PeerInputsSpent { .. } => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }
@@ -402,7 +405,10 @@ fn invoice_kind(error: &InvoiceError) -> ErrorKind {
         | InvoiceError::InvalidTransaction(_)
         | InvoiceError::Unrepresentable(_)
         | InvoiceError::AlreadyFinalized { .. }
-        | InvoiceError::NotFinalizable { .. } => ErrorKind::Rejected,
+        | InvoiceError::NotFinalizable { .. }
+        | InvoiceError::InputsSpentElsewhere { .. }
+        | InvoiceError::InputsSpentByOwnTransaction { .. }
+        | InvoiceError::PeerInputsSpent { .. } => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }
@@ -472,6 +478,31 @@ mod tests {
                 }
                 .into(),
                 ErrorKind::Incomplete,
+            ),
+            (
+                FinalizeError::InputsSpentByOwnTransaction {
+                    tx_id: lepic_store::TxId(3),
+                    by: lepic_store::TxId(2),
+                    source: NodeError::Timeout,
+                }
+                .into(),
+                ErrorKind::Rejected,
+            ),
+            (
+                FinalizeError::InputsSpentElsewhere {
+                    tx_id: lepic_store::TxId(3),
+                    source: NodeError::Timeout,
+                }
+                .into(),
+                ErrorKind::Rejected,
+            ),
+            (
+                InvoiceError::PeerInputsSpent {
+                    tx_id: lepic_store::TxId(3),
+                    source: NodeError::Timeout,
+                }
+                .into(),
+                ErrorKind::Rejected,
             ),
             (ReceiveError::FeeOverflow.into(), ErrorKind::Rejected),
             (

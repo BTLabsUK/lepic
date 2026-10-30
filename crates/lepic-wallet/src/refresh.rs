@@ -8,8 +8,9 @@
 //! `docs/compat/node-api.md` (refresh), the state mapping in `docs/compat/states.md`.
 //!
 //! A refresh runs in steps, each stored in its own store transaction: outputs, then kernel
-//! confirmations, then received payments another transaction superseded, then TTL expiry, then
-//! the kernel checks that make a send releasable
+//! confirmations, then received payments another transaction superseded, then finalized or
+//! posted transactions whose inputs were spent elsewhere, then TTL expiry, then the kernel checks
+//! that make a send releasable
 //! ([`crate::release`]). Every step re-reads what it changes inside its transaction,
 //! so dropping the future between steps, or a send running at the same time, leaves a
 //! consistent store that the next refresh completes.
@@ -38,13 +39,13 @@ use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::cancel::{drop_holdings, pool_kernels};
+use crate::cancel::{cancel_partner, drop_holdings, pool_kernels, self_send_partner};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
 use crate::event::{Balance, Event, SlateId, SupersededReceive};
 use crate::finalize::kernel_excess;
-use crate::invoice::payer_release_height;
+use crate::invoice::{earliest_cutoff, payer_release_height};
 use crate::lifecycle::Session;
 use crate::other_wallet;
 use crate::ports::{SecretVault, StoreOpener};
@@ -176,6 +177,26 @@ struct WaitingReceive {
     inputs_seen: bool,
 }
 
+/// A finalized or posted transaction: the inputs its final transaction spends, this wallet's
+/// and the other party's, and its kernel.
+#[derive(Debug, Clone)]
+struct PendingPost {
+    tx_id: TxId,
+    inputs: Vec<Commitment>,
+    kernel: KernelAt,
+}
+
+/// A pending post that can never be mined, as [`Wallet::end_spent_posts`] ends it.
+#[derive(Debug, Clone)]
+struct SpentPost {
+    tx_id: TxId,
+    /// The kernel to keep watching, from the floor it was looked up from.
+    watch: KernelAt,
+    /// Inputs this wallet held that another wallet spent; empty when no input of this wallet
+    /// is gone or a transaction of its own spent them.
+    lost: Vec<Commitment>,
+}
+
 /// An open transaction whose kernel can confirm it: one with no change output.
 #[derive(Debug, Clone, Copy)]
 struct KernelLookup {
@@ -197,7 +218,11 @@ where
     /// their TTL cutoff, or a send at or past its local cutoff
     /// ([`crate::send::SendRequest::local_ttl_blocks`]), or an invoice payment
     /// [`crate::invoice::INVOICE_TTL_MARGIN_BLOCKS`] past its cutoff, releasing their inputs. A
-    /// posted or finalized transaction is never expired, since it may still be mined. Last, it
+    /// posted or finalized transaction is never expired, since it may still be mined, except an
+    /// invoice this wallet issued, at the cutoff from which [`Wallet::post`] no longer posts it.
+    /// One that can never be mined, because an input it spends is gone from the chain while
+    /// neither the node's pool nor its chain holds its kernel, is cancelled. Either stays
+    /// watched as below. Last, it
     /// looks up the kernel of each finalized or posted send
     /// [`crate::release::RELEASE_AFTER_BLOCKS`] or more after it was finalized,
     /// counted at the highest confirmed tip: a kernel found confirms the send, a missing one
@@ -291,6 +316,8 @@ where
             .confirm_kernels(&session, &mut tip, now, &mut summary)
             .await?;
         self.end_superseded(&session, &found_outputs, &mut tip, now, &mut summary)
+            .await?;
+        self.end_spent_posts(&session, &tip, now, &mut summary)
             .await?;
 
         summary.height = tip.height;
@@ -526,6 +553,148 @@ where
         };
         self.store_receive_outcome(session, outcome, tip.height, now, summary)
             .await
+    }
+
+    /// Ends every finalized or posted transaction that can never be mined: one of the inputs
+    /// its final transaction spends, this wallet's or the other party's, is missing from the
+    /// node's UTXO set in two answers, once the tip is above the height its slate was made at,
+    /// and neither the node's pool nor its chain holds its kernel. Its inputs went into another
+    /// transaction: the other party's, after it cancelled; this wallet's own, such as a
+    /// cancelled payment mined before the move of its coins back to the wallet; or another
+    /// wallet's on the same recovery phrase. It ends as a superseded receive does: cancelled,
+    /// its unconfirmed outputs dropped and its kernel watched, so a refresh still confirms it
+    /// if it is mined after all, and a send to the wallet itself takes its other entry along.
+    /// Inputs of this wallet that no kernel of its own spent are recorded as another wallet's
+    /// spend, as a refused post records them. A transaction whose kernel is found is left to
+    /// the steps that confirm it. The node is asked only while such a transaction waits: once
+    /// for every input together, again for the ones missing, then for the pool and the kernels
+    /// of the transactions with an input gone.
+    async fn end_spent_posts(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        tip: &RefreshTip,
+        now: Timestamp,
+        summary: &mut RefreshSummary,
+    ) -> Result<(), RefreshError> {
+        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let posts = {
+            let session = Arc::clone(session);
+            self.blocking(move |_, _| Ok(session.store.read(|repos| pending_posts(repos, &codecs))))
+                .await??
+        };
+        if posts.is_empty() {
+            return Ok(());
+        }
+        let inputs: Vec<Commitment> = posts
+            .iter()
+            .flat_map(|post| post.inputs.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let gone = self.missing_twice(&inputs).await?;
+        // The inputs were confirmed at or below the height the slate was made at, so a node
+        // whose tip is not past it, one still syncing, may simply not have them.
+        let candidates: Vec<PendingPost> = posts
+            .into_iter()
+            .filter(|post| {
+                tip.height > post.kernel.1 && post.inputs.iter().any(|input| gone.contains(input))
+            })
+            .collect();
+        let Some(first) = candidates.first() else {
+            return Ok(());
+        };
+        let node = &self.ports().node;
+        let Some(pool) = unless_refused(first.tx_id, pool_kernels(node).await)? else {
+            return Ok(());
+        };
+        let mut spent = Vec::new();
+        for post in candidates {
+            let (excess, min_height) = post.kernel;
+            if pool.contains(&excess) {
+                debug!(tx_id = %post.tx_id, "kernel found in the node pool");
+                continue;
+            }
+            // Up to the node's own tip, so a block mined since the refresh read it counts.
+            let floor = chain::kernel_floor(min_height, tip.height);
+            let answer = node.get_kernel(&excess, Some(floor), None).await;
+            if !matches!(unless_refused(post.tx_id, answer)?, Some(None)) {
+                continue;
+            }
+            let Some(lost) = self.lost_inputs(session, &post, &gone, tip.height).await? else {
+                continue;
+            };
+            spent.push(SpentPost {
+                tx_id: post.tx_id,
+                watch: (excess, floor),
+                lost,
+            });
+        }
+        if spent.is_empty() {
+            return Ok(());
+        }
+        let session = Arc::clone(session);
+        let ended_at = tip.height;
+        let changes = self
+            .blocking(move |_, _| {
+                Ok(session.store.write(|repos| {
+                    let mut changes = Vec::new();
+                    for post in &spent {
+                        changes.extend(end_spent_post(repos, post, ended_at, now)?);
+                    }
+                    Ok::<_, RefreshError>(changes)
+                }))
+            })
+            .await??;
+        self.record_changes(summary, changes);
+        Ok(())
+    }
+
+    /// The inputs of `post` among `gone` that this wallet held and another wallet spent: none
+    /// when a transaction of its own spent them. `None` when the node refused the kernel
+    /// lookup, so the post is left for the next refresh.
+    async fn lost_inputs(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        post: &PendingPost,
+        gone: &BTreeSet<Commitment>,
+        tip: Height,
+    ) -> Result<Option<Vec<Commitment>>, RefreshError> {
+        let held = {
+            let session = Arc::clone(session);
+            let gone: Vec<Commitment> = post
+                .inputs
+                .iter()
+                .copied()
+                .filter(|input| gone.contains(input))
+                .collect();
+            self.blocking(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let mut held = Vec::new();
+                    for commitment in gone {
+                        if repos.output(commitment.as_bytes())?.is_some() {
+                            held.push(commitment);
+                        }
+                    }
+                    Ok::<_, StoreError>(held)
+                }))
+            })
+            .await??
+        };
+        if held.is_empty() {
+            return Ok(Some(held));
+        }
+        match self
+            .own_spender(session, post.tx_id, held.clone(), tip)
+            .await
+        {
+            Ok(Some(_)) => Ok(Some(Vec::new())),
+            Ok(None) => Ok(Some(held)),
+            Err(RefreshError::Node(error @ NodeError::Rejected { .. })) => {
+                warn!(tx_id = %post.tx_id, error = %ErrorChain(&error), "kernel lookup refused");
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Of `commitments`, those the node holds in neither of two answers: the second asks only
@@ -788,13 +957,13 @@ where
                 return Err(crate::AccountError::UnknownAccount(account).into());
             }
             let outputs = repos.outputs(account, None)?;
-            let unpaid = unpaid_invoices(repos, &outputs)?;
+            let apart = counted_apart(repos, &outputs)?;
             balance(
                 account,
                 &outputs,
                 balance_height(repos)?,
                 minimum_confirmations(repos)?,
-                &unpaid,
+                &apart,
             )
             .map_err(WalletError::Balance)
         })
@@ -849,7 +1018,7 @@ where
             let height = balance_height(repos)?;
             let minimum = minimum_confirmations(repos)?;
             let outputs = repos.outputs(account, None)?;
-            let unpaid = unpaid_invoices(repos, &outputs)?;
+            let apart = counted_apart(repos, &outputs)?;
             Ok(outputs
                 .into_iter()
                 .map(|output| OutputDetails {
@@ -858,7 +1027,7 @@ where
                     } else {
                         confirmations(&output, height)
                     },
-                    category: balance_category(&output, height, minimum, &unpaid),
+                    category: balance_category(&output, height, minimum, &apart),
                     output,
                 })
                 .collect())
@@ -923,7 +1092,7 @@ where
                     summary.expired_transactions = summary.expired_transactions.saturating_add(1);
                     info!(tx_id = %change.tx_id, "transaction expired");
                 }
-                // A refresh moves transactions only to these two states.
+                // The steps that end transactions otherwise log what they ended.
                 _ => {}
             }
             self.emit(change.into());
@@ -1298,7 +1467,9 @@ pub(crate) fn pending_kernel(
 /// [`Wallet::sweep_invoices`] offers it to the user to cancel instead. So is the incoming
 /// entry of a send to the wallet itself: the wallet finalized it, and it ends with the
 /// outgoing entry. Each comes with the kernel the peer may still complete it with, which is
-/// looked up before it ends.
+/// looked up before it ends. An invoice this wallet issued and finalized is the exception: it
+/// ends once its cutoff passes, the earlier of its I3's and the one it was issued with, from
+/// which [`Wallet::post`] no longer posts it; its kernel stays watched like any other.
 fn expiring(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -1306,6 +1477,12 @@ fn expiring(
 ) -> Result<Vec<(StoredTransaction, Option<KernelAt>)>, RefreshError> {
     let mut expiring = Vec::new();
     for stored in open_transactions(repos)? {
+        if let Some((cutoff, kernel)) = issued_post_cutoff(repos, codecs, &stored)? {
+            if tip >= cutoff {
+                expiring.push((stored, kernel));
+            }
+            continue;
+        }
         if matches!(stored.entry.state, TxState::Posted | TxState::Finalized)
             || epicbox_invoice_payment(repos, &stored)?.is_some()
             || stored.entry.transport.as_deref() == Some(SELF.as_str())
@@ -1329,6 +1506,35 @@ fn expiring(
         }
     }
     Ok(expiring)
+}
+
+/// The cutoff of an invoice this wallet issued and finalized, if it has one, and its kernel:
+/// for an incoming finalized or posted transaction with its I3 stored, the earlier of the I3's
+/// TTL cutoff and the one it was issued with, as [`Wallet::post`] counts it.
+fn issued_post_cutoff(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    stored: &StoredTransaction,
+) -> Result<Option<(Height, Option<KernelAt>)>, StoreError> {
+    let entry = &stored.entry;
+    let issued_post = entry.direction == TxDirection::Incoming
+        && matches!(entry.state, TxState::Finalized | TxState::Posted);
+    let Some(slate_id) = entry.slate_id.filter(|_| issued_post) else {
+        return Ok(None);
+    };
+    let Some(finalized) = stored_slate(repos, codecs, stored.id, slate_id, SlateStage::Invoice3)?
+    else {
+        return Ok(None);
+    };
+    let issued = stored_slate(repos, codecs, stored.id, slate_id, SlateStage::Invoice1)?;
+    let cutoff = earliest_cutoff(
+        finalized.ttl_cutoff_height(),
+        issued.and_then(|slate| slate.ttl_cutoff_height()),
+    );
+    let kernel = finalized
+        .kernel()
+        .map(|kernel| (kernel.excess, finalized.height()));
+    Ok(cutoff.map(|cutoff| (cutoff, kernel)))
 }
 
 /// Every incoming payment in state `received` that this wallet answered with an S2, other than
@@ -1374,6 +1580,105 @@ fn waiting_receives(
         });
     }
     Ok(waiting)
+}
+
+/// Every finalized or posted transaction with its final slate stored: the S3 a sender or a send
+/// to the wallet itself finalized, the I3 an invoice issuer finalized.
+fn pending_posts(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+) -> Result<Vec<PendingPost>, RefreshError> {
+    let mut posts = Vec::new();
+    for stored in open_transactions(repos)? {
+        let entry = &stored.entry;
+        let Some(slate_id) = entry
+            .slate_id
+            .filter(|_| matches!(entry.state, TxState::Finalized | TxState::Posted))
+        else {
+            continue;
+        };
+        let stage = match entry.direction {
+            TxDirection::Outgoing => SlateStage::Standard3,
+            TxDirection::Incoming => SlateStage::Invoice3,
+        };
+        let Some(slate) = stored_slate(repos, codecs, stored.id, slate_id, stage)? else {
+            continue;
+        };
+        let (Some(kernel), false) = (slate.kernel(), slate.inputs().is_empty()) else {
+            continue;
+        };
+        posts.push(PendingPost {
+            tx_id: stored.id,
+            inputs: slate
+                .inputs()
+                .iter()
+                .map(|input| input.commitment)
+                .collect(),
+            kernel: (kernel.excess, slate.height()),
+        });
+    }
+    Ok(posts)
+}
+
+/// Ends a pending post that can never be mined, if it is still finalized or posted, as
+/// [`supersede`] ends a receive, with its self-send partner, and records its `lost` inputs as
+/// another wallet's spend.
+fn end_spent_post(
+    repos: &mut dyn Repositories,
+    post: &SpentPost,
+    ended_at: Height,
+    now: Timestamp,
+) -> Result<Vec<StateChange>, RefreshError> {
+    let tx_id = post.tx_id;
+    let Some(entry) = repos.transaction(tx_id)? else {
+        return Ok(Vec::new());
+    };
+    if !matches!(entry.state, TxState::Finalized | TxState::Posted) {
+        return Ok(Vec::new());
+    }
+    let partner = self_send_partner(repos, &entry)?;
+    let (excess, floor) = post.watch;
+    let mut lost = Vec::new();
+    for commitment in &post.lost {
+        let Some(output) = repos.output(commitment.as_bytes())? else {
+            continue;
+        };
+        // Spent before its transaction releases what it holds, so the cancel does not make it
+        // spendable again.
+        let output = OutputRecord {
+            status: OutputStatus::Spent,
+            ..output
+        };
+        repos.put_output(&output)?;
+        lost.push(output);
+    }
+    record_watch(repos, tx_id, excess, floor, ended_at)?;
+    drop_holdings(repos, tx_id, &entry)?;
+    let mut changes: Vec<StateChange> = apply_transition(repos, tx_id, TxState::Cancelled, now)?
+        .into_iter()
+        .collect();
+    if let Some(partner) = partner {
+        changes.extend(cancel_partner(
+            repos,
+            &partner,
+            Some((excess, floor, ended_at)),
+            now,
+        )?);
+    }
+    if !lost.is_empty() && !crate::lifecycle::restore_scan_pending(repos)? {
+        other_wallet::mark_inputs_lost(repos, tx_id)?;
+        let highest = lost
+            .iter()
+            .map(|output| output.height)
+            .max()
+            .unwrap_or(ended_at);
+        let after = last_confirmed(repos)?
+            .unwrap_or(Height::ZERO)
+            .max(Height::new(highest.value().saturating_sub(1)));
+        changes.extend(other_wallet::record(repos, &lost, after, ended_at, now)?);
+    }
+    info!(tx_id = %tx_id, "transaction that can never be mined ended");
+    Ok(changes)
 }
 
 /// Ends a superseded received payment as a cancel does, if it still waits for its sender, and
@@ -1613,9 +1918,9 @@ fn account_balances(repos: &dyn Repositories) -> Result<Vec<Balance>, WalletErro
     let mut balances = Vec::new();
     for account in repos.accounts()? {
         let outputs = repos.outputs(account.index, None)?;
-        let unpaid = unpaid_invoices(repos, &outputs)?;
+        let apart = counted_apart(repos, &outputs)?;
         balances.push(
-            balance(account.index, &outputs, height, minimum, &unpaid)
+            balance(account.index, &outputs, height, minimum, &apart)
                 .map_err(WalletError::Balance)?,
         );
     }
@@ -1627,7 +1932,7 @@ fn balance(
     outputs: &[OutputRecord],
     height: Height,
     minimum_confirmations: u64,
-    unpaid: &BTreeSet<TxId>,
+    apart: &CountedApart,
 ) -> Result<Balance, ArithmeticError> {
     let mut balance = Balance {
         account,
@@ -1641,7 +1946,7 @@ fn balance(
         locked: Amount::ZERO,
     };
     for output in outputs {
-        let Some(category) = balance_category(output, height, minimum_confirmations, unpaid) else {
+        let Some(category) = balance_category(output, height, minimum_confirmations, apart) else {
             continue;
         };
         let slot = match category {
@@ -1666,7 +1971,9 @@ fn balance(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BalanceCategory {
     Spendable,
-    /// Unspent, with fewer confirmations than the wallet's [`Wallet::minimum_confirmations`].
+    /// Unspent, with fewer confirmations than the wallet's [`Wallet::minimum_confirmations`],
+    /// or an output a send to the wallet itself makes, from when the node took that send until
+    /// it is mined.
     AwaitingConfirmation,
     /// Not yet on chain: the change or the received output of a transaction in progress.
     AwaitingFinalization,
@@ -1679,6 +1986,62 @@ pub enum BalanceCategory {
     /// counts it as awaiting finalization. Once a payment is finalized it is
     /// [`BalanceCategory::AwaitingFinalization`].
     UnpaidInvoice,
+}
+
+/// The transactions among those of a set of outputs whose outputs count apart from their status.
+#[derive(Debug, Default)]
+struct CountedApart {
+    unpaid_invoices: BTreeSet<TxId>,
+    /// Both entries of every send to the wallet itself whose outgoing entry is posted.
+    posted_self_sends: BTreeSet<TxId>,
+}
+
+fn counted_apart(
+    repos: &dyn Repositories,
+    outputs: &[OutputRecord],
+) -> Result<CountedApart, WalletError> {
+    Ok(CountedApart {
+        unpaid_invoices: unpaid_invoices(repos, outputs)?,
+        posted_self_sends: posted_self_sends(repos, outputs)?,
+    })
+}
+
+/// The entries among those of `outputs` of a send to the wallet itself that the node took:
+/// both entries of one whose outgoing entry is posted. Until it is mined its coins are on their
+/// way back to the wallet, so they count once, as awaiting confirmation, and not also as the
+/// inputs locked for it.
+fn posted_self_sends(
+    repos: &dyn Repositories,
+    outputs: &[OutputRecord],
+) -> Result<BTreeSet<TxId>, WalletError> {
+    let mut checked = BTreeSet::new();
+    let mut posted = BTreeSet::new();
+    for output in outputs {
+        let (OutputStatus::Locked | OutputStatus::Unconfirmed, Some(tx_id)) =
+            (output.status, output.tx)
+        else {
+            continue;
+        };
+        if !checked.insert(tx_id) {
+            continue;
+        }
+        let Some(entry) = repos
+            .transaction(tx_id)?
+            .filter(|entry| entry.transport.as_deref() == Some(SELF.as_str()))
+        else {
+            continue;
+        };
+        let outgoing_state = match entry.direction {
+            TxDirection::Outgoing => Some(entry.state),
+            TxDirection::Incoming => {
+                self_send_partner(repos, &entry)?.map(|partner| partner.entry.state)
+            }
+        };
+        if outgoing_state == Some(TxState::Posted) {
+            posted.insert(tx_id);
+        }
+    }
+    Ok(posted)
 }
 
 /// The transactions among those of `outputs` that are invoices this wallet issued and nobody
@@ -1712,15 +2075,21 @@ fn unpaid_invoices(
 }
 
 /// The category `output` counts in at `height`, as upstream's `retrieve_info` sorts it; `None`
-/// for a spent output and an unconfirmed coinbase output, which count nowhere. The output of a
-/// transaction in `unpaid` is [`BalanceCategory::UnpaidInvoice`].
+/// for a spent output and an unconfirmed coinbase output, which count nowhere. The output of an
+/// unpaid invoice is [`BalanceCategory::UnpaidInvoice`]. A send to the wallet itself that the
+/// node took is counted by what it makes, as [`BalanceCategory::AwaitingConfirmation`], and the
+/// inputs it spends count nowhere, as once it is mined.
 fn balance_category(
     output: &OutputRecord,
     height: Height,
     minimum_confirmations: u64,
-    unpaid: &BTreeSet<TxId>,
+    apart: &CountedApart,
 ) -> Option<BalanceCategory> {
     let coinbase = output.id.features.is_coinbase();
+    let self_sent = output
+        .tx
+        .is_some_and(|tx| apart.posted_self_sends.contains(&tx));
+    let unpaid = &apart.unpaid_invoices;
     match output.status {
         OutputStatus::Unspent if coinbase && output.lock_height > height => {
             Some(BalanceCategory::Immature)
@@ -1736,7 +2105,11 @@ fn balance_category(
         {
             Some(BalanceCategory::UnpaidInvoice)
         }
+        OutputStatus::Unconfirmed if !coinbase && self_sent => {
+            Some(BalanceCategory::AwaitingConfirmation)
+        }
         OutputStatus::Unconfirmed if !coinbase => Some(BalanceCategory::AwaitingFinalization),
+        OutputStatus::Locked if self_sent => None,
         OutputStatus::Locked => Some(BalanceCategory::Locked),
         OutputStatus::Unconfirmed | OutputStatus::Spent => None,
     }
@@ -1748,7 +2121,8 @@ pub struct OutputDetails {
     pub output: OutputRecord,
     /// At the height [`Wallet::balance`] is computed at. Zero for an unconfirmed output.
     pub confirmations: u64,
-    /// Where it counts in [`Wallet::balance`]; `None` for a spent output.
+    /// Where it counts in [`Wallet::balance`]; `None` for a spent output and an input of a send
+    /// to the wallet itself that the node took.
     pub category: Option<BalanceCategory>,
 }
 

@@ -21,7 +21,7 @@ const ALL: [TxState; 7] = [
 ];
 
 /// The transitions `docs/compat/states.md` documents, besides staying in the same state.
-const ALLOWED: [(TxState, TxState); 13] = [
+const ALLOWED: [(TxState, TxState); 15] = [
     (Sent, Finalized),
     (Sent, Confirmed),
     (Sent, Cancelled),
@@ -33,8 +33,10 @@ const ALLOWED: [(TxState, TxState); 13] = [
     (Finalized, Posted),
     (Finalized, Confirmed),
     (Finalized, Cancelled),
+    (Finalized, Expired),
     (Posted, Confirmed),
     (Posted, Cancelled),
+    (Posted, Expired),
 ];
 
 fn created_at() -> Timestamp {

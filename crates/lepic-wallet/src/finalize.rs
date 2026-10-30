@@ -55,7 +55,9 @@ use crate::account;
 use crate::codecs;
 use crate::error::WalletError;
 use crate::invoice::earliest_cutoff;
+use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
+use crate::refresh::{KernelAt, RefreshError, final_kernel, stored_slate};
 use crate::release::record_finalized;
 use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version, epicbox_key};
 use crate::send_limit::effective_cutoff;
@@ -172,6 +174,28 @@ pub enum FinalizeError {
     /// cancelled, its other inputs released, and a refresh ran.
     #[error("inputs of transaction {tx_id} were spent by another wallet")]
     InputsSpentElsewhere {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
+    /// The node refused the transaction and no longer holds inputs of it that this wallet
+    /// held: `by`, another transaction of this wallet whose kernel the chain holds, spent them,
+    /// as when a cancelled payment was mined before the move of its coins back to the wallet.
+    /// The transaction was cancelled and stays watched, and a refresh ran, which confirms `by`
+    /// if it was cancelled too.
+    #[error("inputs of transaction {tx_id} were spent by transaction {by} of this wallet")]
+    InputsSpentByOwnTransaction {
+        tx_id: TxId,
+        by: TxId,
+        #[source]
+        source: NodeError,
+    },
+    /// The node refused the transaction and no longer holds inputs of it that the other party
+    /// added: the other party spent them elsewhere, as a payer does who cancelled the payment
+    /// and moved its coins, so the transaction can never be mined. It was cancelled and stays
+    /// watched, and a refresh ran.
+    #[error("inputs the other party added to transaction {tx_id} were spent")]
+    PeerInputsSpent {
         tx_id: TxId,
         #[source]
         source: NodeError,
@@ -696,9 +720,39 @@ pub(crate) fn finalize_own(
 pub(crate) enum PushFailure {
     /// The node refused or could not be reached, and does not hold the kernel.
     NotPosted(NodeError),
-    /// The node's pool refused it and inputs this wallet held are gone from the chain.
-    InputsSpent(NodeError),
+    /// The node's pool refused it and inputs of it are gone from the chain, so it can never be
+    /// mined.
+    Unminable {
+        source: NodeError,
+        spent: SpentInputs,
+    },
     Wallet(WalletError),
+}
+
+/// Whose inputs of a refused transaction are gone from the chain, and who spent them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpentInputs {
+    /// Inputs this wallet held, and no transaction of its own whose kernel the chain holds
+    /// spent them: another wallet on the same recovery phrase did.
+    OtherWallet,
+    /// Inputs this wallet held, spent by this other transaction of its own, whose kernel the
+    /// chain holds.
+    OwnTransaction(TxId),
+    /// Inputs the other party added.
+    Peer,
+}
+
+impl SpentInputs {
+    /// The error of a push to `tx_id` the node refused with `source` for this reason.
+    pub(crate) fn finalize_error(self, tx_id: TxId, source: NodeError) -> FinalizeError {
+        match self {
+            Self::OtherWallet => FinalizeError::InputsSpentElsewhere { tx_id, source },
+            Self::OwnTransaction(by) => {
+                FinalizeError::InputsSpentByOwnTransaction { tx_id, by, source }
+            }
+            Self::Peer => FinalizeError::PeerInputsSpent { tx_id, source },
+        }
+    }
 }
 
 /// What the node's pool API answers, as `Error::Internal("Failed to update pool: ...")`, for
@@ -783,6 +837,45 @@ fn postable(
         }
     };
     Ok((finalized, cutoff))
+}
+
+/// Every send of this wallet but `tx_id` whose final slate spends one of `gone`, with the
+/// kernel it completes to: a send finalized here from its S3, an invoice payment from its I2.
+/// Any state counts, since a cancelled one may still have been mined.
+fn own_spenders(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+    gone: &[Commitment],
+) -> Result<Vec<(TxId, KernelAt)>, StoreError> {
+    let mut spenders = Vec::new();
+    for account in repos.accounts()? {
+        for stored in repos.transactions(account.index)? {
+            let Some(slate_id) = stored
+                .entry
+                .slate_id
+                .filter(|_| stored.id != tx_id && stored.entry.direction == TxDirection::Outgoing)
+            else {
+                continue;
+            };
+            let spends = [SlateStage::Standard3, SlateStage::Invoice2]
+                .into_iter()
+                .find_map(|stage| {
+                    stored_slate(repos, codecs, stored.id, slate_id, stage).transpose()
+                })
+                .transpose()?
+                .is_some_and(|slate| {
+                    slate
+                        .inputs()
+                        .iter()
+                        .any(|input| gone.contains(&input.commitment))
+                });
+            if spends && let Some(kernel) = final_kernel(repos, codecs, stored.id, slate_id)? {
+                spenders.push((stored.id, kernel));
+            }
+        }
+    }
+    Ok(spenders)
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -895,7 +988,11 @@ where
     /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached, and with
     /// [`FinalizeError::InputsSpentElsewhere`] when the node's pool refuses it and two answers
     /// of the node agree that inputs this wallet held are no longer unspent: another wallet on
-    /// the phrase spent them. The transaction is then cancelled and a refresh runs. A send
+    /// the phrase spent them. When the chain holds the kernel of another send of this wallet
+    /// that spends one of them, it fails with [`FinalizeError::InputsSpentByOwnTransaction`]
+    /// instead, and when only inputs the other party added are gone, once the node's tip is
+    /// above the slate's height, with [`FinalizeError::PeerInputsSpent`]. In all three the
+    /// transaction is cancelled, its kernel stays watched, and a refresh runs. A send
     /// with a cutoff, the earlier of its slate's TTL cutoff and the local cutoff of
     /// [`crate::send::SendRequest::local_ttl_blocks`], has the node's tip asked for, and is
     /// refused with [`FinalizeError::Expired`] once the tip reaches it, also when it was posted
@@ -944,20 +1041,23 @@ where
         match self.push_final(finalized, tx_id, propagation).await {
             Ok(posted) => Ok(posted),
             Err(PushFailure::NotPosted(source)) => Err(FinalizeError::NotPosted { tx_id, source }),
-            Err(PushFailure::InputsSpent(source)) => {
-                self.end_spent_elsewhere(tx_id).await;
-                Err(FinalizeError::InputsSpentElsewhere { tx_id, source })
+            Err(PushFailure::Unminable { source, spent }) => {
+                self.end_unminable(tx_id, spent).await;
+                Err(spent.finalize_error(tx_id, source))
             }
             Err(PushFailure::Wallet(error)) => Err(FinalizeError::Wallet(error)),
         }
     }
 
-    /// Ends a transaction the node refused because another wallet spent its inputs: cancels it
-    /// as a user's cancel does, releasing the inputs still unspent, and refreshes, which marks
-    /// the spent ones spent and records the other wallet's spend. Both are best effort; what
+    /// Ends a transaction the node refused because inputs of it were `spent`: cancels it as a
+    /// user's cancel does, releasing the inputs still unspent and keeping its kernel watched,
+    /// and refreshes, which marks the spent ones spent. Only inputs another wallet spent are
+    /// recorded as that wallet's spend; a transaction of this wallet that spent them debits
+    /// them itself, and the refresh confirms it if it was cancelled. Both are best effort; what
     /// fails is logged and left to the next refresh.
-    pub(crate) async fn end_spent_elsewhere(&self, tx_id: TxId) {
+    pub(crate) async fn end_unminable(&self, tx_id: TxId, spent: SpentInputs) {
         match self.cancel(tx_id).await {
+            Ok(()) if spent != SpentInputs::OtherWallet => {}
             Ok(()) => {
                 let marked = match self.session() {
                     Ok(session) => {
@@ -975,52 +1075,112 @@ where
                 }
             }
             Err(error) => {
-                warn!(error = %crate::inbox::ErrorChain(&error), "send spent elsewhere not cancelled");
+                warn!(error = %crate::inbox::ErrorChain(&error), "refused transaction not cancelled");
             }
         }
         if let Err(error) = self.refresh().await {
-            warn!(error = %crate::inbox::ErrorChain(&error), "refresh after a send spent elsewhere failed");
+            warn!(error = %crate::inbox::ErrorChain(&error), "refresh after a refused transaction failed");
         }
     }
 
-    /// Whether inputs of `transaction` that this wallet holds are missing from the node's
-    /// UTXO set in two answers, as a refresh decides an output was spent.
-    async fn inputs_gone(&self, transaction: &lepic_primitives::tx::Transaction) -> bool {
-        let Ok(session) = self.session() else {
-            return false;
-        };
-        let inputs: Vec<Commitment> = transaction
+    /// Whose inputs of `finalized`, which `tx_id` posts, are missing from the node's UTXO set
+    /// in two answers, as a refresh decides an output was spent: first the inputs this wallet
+    /// holds, then the others, once the node's tip is above the height the slate was made at,
+    /// as a refresh requires before it ends a transaction for them. `None` when none are, or
+    /// the node or the store cannot tell; the refusal then stays a failed post.
+    async fn spent_inputs(&self, tx_id: TxId, finalized: &FinalizedSlate) -> Option<SpentInputs> {
+        let session = self.session().ok()?;
+        let inputs: Vec<Commitment> = finalized
+            .transaction
             .body()
             .inputs()
             .iter()
             .map(|input| input.commitment)
             .collect();
-        let ours = self
-            .blocking(move |_, _| {
+        let (ours, theirs) = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
                 Ok(session.store.read(|repos| {
-                    let mut ours = Vec::new();
+                    let mut held = (Vec::new(), Vec::new());
                     for commitment in inputs {
                         if repos.output(commitment.as_bytes())?.is_some() {
-                            ours.push(commitment);
+                            held.0.push(commitment);
+                        } else {
+                            held.1.push(commitment);
                         }
                     }
-                    Ok::<_, StoreError>(ours)
+                    Ok::<_, StoreError>(held)
                 }))
             })
-            .await;
-        let Ok(Ok(mut missing)) = ours else {
-            return false;
+            .await
+            .ok()?
+            .ok()?
         };
+        let gone = self.gone_twice(ours).await?;
+        let tip = self.ports().node.get_tip().await.ok()?.height;
+        if !gone.is_empty() {
+            return Some(
+                match self.own_spender(&session, tx_id, gone, tip).await.ok()? {
+                    Some(by) => SpentInputs::OwnTransaction(by),
+                    None => SpentInputs::OtherWallet,
+                },
+            );
+        }
+        // The other party's inputs may be younger than any this wallet saw, so a node that is
+        // still syncing may simply not have them.
+        if theirs.is_empty() || tip <= finalized.slate.height() {
+            return None;
+        }
+        let gone = self.gone_twice(theirs).await?;
+        (!gone.is_empty()).then_some(SpentInputs::Peer)
+    }
+
+    /// Of `commitments`, those the node's UTXO set misses in two answers; `None` when the node
+    /// cannot be asked.
+    async fn gone_twice(&self, mut missing: Vec<Commitment>) -> Option<Vec<Commitment>> {
         for _ in 0..2 {
             if missing.is_empty() {
-                return false;
+                break;
             }
-            let Ok(held) = self.ports().node.get_outputs(&missing).await else {
-                return false;
-            };
+            let held = self.ports().node.get_outputs(&missing).await.ok()?;
             missing.retain(|commitment| !held.iter().any(|found| found.commitment == *commitment));
         }
-        !missing.is_empty()
+        Some(missing)
+    }
+
+    /// Another send of this wallet than `tx_id`, of any state, that spends one of `gone` and
+    /// whose kernel the chain holds up to `tip`. Fails when the store or the node cannot tell.
+    pub(crate) async fn own_spender(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        tx_id: TxId,
+        gone: Vec<Commitment>,
+        tip: Height,
+    ) -> Result<Option<TxId>, RefreshError> {
+        let candidates = {
+            let session = Arc::clone(session);
+            self.blocking(move |_, config| {
+                let codecs =
+                    crate::refresh::legacy_codecs(config.network.params().default_base_fee());
+                Ok(session
+                    .store
+                    .read(|repos| own_spenders(repos, &codecs, tx_id, &gone)))
+            })
+            .await??
+        };
+        for (by, (excess, min_height)) in candidates {
+            let floor = crate::chain::kernel_floor(min_height, tip);
+            let kernel = self
+                .ports()
+                .node
+                .get_kernel(&excess, Some(floor), None)
+                .await?;
+            if let Some(kernel) = kernel {
+                debug!(height = %kernel.height, "spending transaction found on chain");
+                return Ok(Some(by));
+            }
+        }
+        Ok(None)
     }
 
     /// Hands the transaction to the node, then records the transaction as posted. A node whose
@@ -1067,9 +1227,18 @@ where
                     debug!(height = %height, "kernel found on chain");
                     Posted::AlreadyOnChain { height }
                 }
-                None if pool_refused(&source) && self.inputs_gone(&finalized.transaction).await => {
-                    info!("inputs spent by another wallet");
-                    return Err(PushFailure::InputsSpent(source));
+                None if pool_refused(&source) => {
+                    let Some(spent) = self.spent_inputs(tx_id, finalized).await else {
+                        return Err(PushFailure::NotPosted(source));
+                    };
+                    match spent {
+                        SpentInputs::OtherWallet => info!("inputs spent by another wallet"),
+                        SpentInputs::OwnTransaction(_) => {
+                            info!("inputs spent by another transaction of this wallet");
+                        }
+                        SpentInputs::Peer => info!("inputs of the other party spent"),
+                    }
+                    return Err(PushFailure::Unminable { source, spent });
                 }
                 None => return Err(PushFailure::NotPosted(source)),
             },

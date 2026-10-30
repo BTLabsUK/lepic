@@ -66,6 +66,15 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         CliError::Finalize(FinalizeError::NotPosted { tx_id, .. }) => {
             return Some(not_posted_hint(*tx_id));
         }
+        CliError::Finalize(FinalizeError::InputsSpentElsewhere { tx_id, .. }) => {
+            return Some(spent_elsewhere_hint(*tx_id));
+        }
+        CliError::Finalize(FinalizeError::InputsSpentByOwnTransaction { tx_id, by, .. }) => {
+            return Some(spent_by_own_hint(*tx_id, *by));
+        }
+        CliError::Finalize(FinalizeError::PeerInputsSpent { tx_id, .. }) => {
+            return Some(peer_inputs_spent_hint(*tx_id));
+        }
         CliError::Inbox(InboxError::Subscription(_) | InboxError::Transport(_)) => {
             return settings.map(|settings| {
                 format!(
@@ -116,6 +125,11 @@ fn invoice_hint(error: &InvoiceError) -> Option<String> {
                 .to_owned(),
         ),
         InvoiceError::NotPosted { tx_id, .. } => Some(not_posted_hint(*tx_id)),
+        InvoiceError::InputsSpentElsewhere { tx_id, .. } => Some(spent_elsewhere_hint(*tx_id)),
+        InvoiceError::InputsSpentByOwnTransaction { tx_id, by, .. } => {
+            Some(spent_by_own_hint(*tx_id, *by))
+        }
+        InvoiceError::PeerInputsSpent { tx_id, .. } => Some(peer_inputs_spent_hint(*tx_id)),
         InvoiceError::AmountMismatch { invoiced, approved } => Some(format!(
             "the invoice asks for {} EPIC and {} EPIC was approved; nothing was paid",
             format_amount(*invoiced),
@@ -129,6 +143,27 @@ fn not_posted_hint(tx_id: TxId) -> String {
     format!(
         "the transaction is stored, and the node neither took it nor holds its kernel; `lepic \
          tx post {tx_id}` sends it again"
+    )
+}
+
+fn spent_elsewhere_hint(tx_id: TxId) -> String {
+    format!(
+        "another wallet on the same recovery phrase spent the coins of transaction {tx_id}, so \
+         it was cancelled; `lepic tx list` shows that wallet's spend"
+    )
+}
+
+fn spent_by_own_hint(tx_id: TxId, by: TxId) -> String {
+    format!(
+        "transaction {by} of this wallet spent the same coins first, so transaction {tx_id} was \
+         cancelled; `lepic tx show {by}` shows the one that went through"
+    )
+}
+
+fn peer_inputs_spent_hint(tx_id: TxId) -> String {
+    format!(
+        "the other party spent the coins of this payment elsewhere, so it can never be mined; \
+         transaction {tx_id} was cancelled, and a refresh still confirms it if it is mined"
     )
 }
 
@@ -319,6 +354,23 @@ mod tests {
             text.starts_with("1.50000000 EPIC is spendable and 2.00800000 EPIC"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_post_whose_coins_were_spent_says_who_spent_them() {
+        let own = hint_for(&CliError::Finalize(
+            FinalizeError::InputsSpentByOwnTransaction {
+                tx_id: TxId(7),
+                by: TxId(5),
+                source: NodeError::Timeout,
+            },
+        ));
+        assert!(own.contains("lepic tx show 5"), "{own}");
+        let peer = hint_for(&CliError::Invoice(InvoiceError::PeerInputsSpent {
+            tx_id: TxId(7),
+            source: NodeError::Timeout,
+        }));
+        assert!(peer.contains("other party"), "{peer}");
     }
 
     #[test]

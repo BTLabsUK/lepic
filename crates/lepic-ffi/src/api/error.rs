@@ -201,6 +201,19 @@ pub enum WalletErrorKind {
     /// relay, or found no confirmed tip to work offline from. Nothing was sent; what was
     /// stored stays.
     Offline,
+    /// The node refused the transaction because inputs of it are no longer unspent, and
+    /// another transaction of this wallet whose kernel the chain holds spent them: a cancelled
+    /// payment that was mined before the move of its coins back to the wallet, or that move
+    /// mined before the payment's late post. The refused transaction was cancelled and stays
+    /// watched, and a refresh ran; the other transaction shows as confirmed. Nothing was lost
+    /// to another wallet.
+    InputsSpentByOwnTransaction,
+    /// The node refused the transaction because inputs the other party added are no longer
+    /// unspent: the other party spent them elsewhere, as a payer does who cancelled an
+    /// invoice payment and moved its coins, so the payment can never be mined. The
+    /// transaction was cancelled and stays watched, so a refresh still confirms it if it is
+    /// mined after all, and a refresh ran.
+    PeerInputsSpent,
 }
 
 impl WalletErrorKind {
@@ -278,6 +291,8 @@ impl WalletErrorKind {
             Self::InputsSpentElsewhere => 76,
             Self::WrongPairingClass => 77,
             Self::Offline => 78,
+            Self::InputsSpentByOwnTransaction => 79,
+            Self::PeerInputsSpent => 80,
         }
     }
 }
@@ -473,6 +488,8 @@ impl From<FinalizeError> for WalletError {
             E::Node(_) => WalletErrorKind::NodeUnreachable,
             E::NotPosted { .. } => WalletErrorKind::NotPosted,
             E::InputsSpentElsewhere { .. } => WalletErrorKind::InputsSpentElsewhere,
+            E::InputsSpentByOwnTransaction { .. } => WalletErrorKind::InputsSpentByOwnTransaction,
+            E::PeerInputsSpent { .. } => WalletErrorKind::PeerInputsSpent,
             E::NotFinalizable { .. } | E::NotPostable { .. } | E::UnknownTransport { .. } => {
                 WalletErrorKind::InvalidArgument
             }
@@ -558,6 +575,8 @@ impl From<InvoiceError> for WalletError {
             E::Undelivered { .. } | E::PaymentUndelivered { .. } => WalletErrorKind::NotDelivered,
             E::NotPosted { .. } => WalletErrorKind::NotPosted,
             E::InputsSpentElsewhere { .. } => WalletErrorKind::InputsSpentElsewhere,
+            E::InputsSpentByOwnTransaction { .. } => WalletErrorKind::InputsSpentByOwnTransaction,
+            E::PeerInputsSpent { .. } => WalletErrorKind::PeerInputsSpent,
             _ => WalletErrorKind::Other,
         };
         Self::chained(kind, &error)
@@ -723,6 +742,8 @@ mod tests {
             (K::InputsSpentElsewhere, 76),
             (K::WrongPairingClass, 77),
             (K::Offline, 78),
+            (K::InputsSpentByOwnTransaction, 79),
+            (K::PeerInputsSpent, 80),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -815,6 +836,76 @@ mod tests {
         }
         let receive = WalletError::from(ReceiveError::Wallet(E::RestoreScanRequired));
         assert_eq!(receive.kind, WalletErrorKind::RestoreScanRequired);
+    }
+
+    #[test]
+    fn refused_posts_whose_inputs_were_spent_say_by_whom() {
+        let tx_id = lepic_store::TxId(3);
+        let by = lepic_store::TxId(2);
+        let source = || lepic_node::NodeError::Timeout;
+        let finalize = [
+            (
+                FinalizeError::NotPosted {
+                    tx_id,
+                    source: source(),
+                },
+                WalletErrorKind::NotPosted,
+            ),
+            (
+                FinalizeError::InputsSpentElsewhere {
+                    tx_id,
+                    source: source(),
+                },
+                WalletErrorKind::InputsSpentElsewhere,
+            ),
+            (
+                FinalizeError::InputsSpentByOwnTransaction {
+                    tx_id,
+                    by,
+                    source: source(),
+                },
+                WalletErrorKind::InputsSpentByOwnTransaction,
+            ),
+            (
+                FinalizeError::PeerInputsSpent {
+                    tx_id,
+                    source: source(),
+                },
+                WalletErrorKind::PeerInputsSpent,
+            ),
+        ];
+        for (error, kind) in finalize {
+            assert_eq!(WalletError::from(error).kind, kind);
+        }
+        let invoice = [
+            (
+                InvoiceError::InputsSpentByOwnTransaction {
+                    tx_id,
+                    by,
+                    source: source(),
+                },
+                WalletErrorKind::InputsSpentByOwnTransaction,
+            ),
+            (
+                InvoiceError::PeerInputsSpent {
+                    tx_id,
+                    source: source(),
+                },
+                WalletErrorKind::PeerInputsSpent,
+            ),
+        ];
+        for (error, kind) in invoice {
+            assert_eq!(WalletError::from(error).kind, kind);
+        }
+        let self_send = SelfSendError::Finalize(FinalizeError::InputsSpentByOwnTransaction {
+            tx_id,
+            by,
+            source: source(),
+        });
+        assert_eq!(
+            WalletError::from(self_send).kind,
+            WalletErrorKind::InputsSpentByOwnTransaction
+        );
     }
 
     #[test]
