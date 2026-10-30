@@ -1105,11 +1105,13 @@ dependencies = [
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",
+ "lepic-store",
  "lepic-tor",
  "lepic-transport",
  "lepic-wallet",
  "libfuzzer-sys",
  "rand_core 0.10.1",
+ "serde_json",
  "x25519-dalek",
 ]
 

@@ -25,10 +25,12 @@ lepic-keychain = { path = "../crates/lepic-keychain" }
 lepic-node = { path = "../crates/lepic-node" }
 lepic-primitives = { path = "../crates/lepic-primitives" }
 lepic-slate = { path = "../crates/lepic-slate" }
+lepic-store = { path = "../crates/lepic-store", default-features = false }
 lepic-tor = { path = "../crates/lepic-tor" }
 lepic-transport = { path = "../crates/lepic-transport" }
 lepic-wallet = { path = "../crates/lepic-wallet" }
 rand_core = { version = "0.10.1", default-features = false }
+serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
 x25519-dalek = { version = "3.0.0", default-features = false }
 
 [lints.rust]
@@ -230,6 +232,13 @@ bench = false
 [[bin]]
 name = "relay_discovery"
 path = "fuzz_targets/relay_discovery.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "slate_flow"
+path = "fuzz_targets/slate_flow.rs"
 test = false
 doc = false
 bench = false
