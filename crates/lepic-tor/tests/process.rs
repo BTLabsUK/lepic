@@ -23,8 +23,8 @@ use ed25519_dalek::VerifyingKey;
 use ed25519_dalek::hazmat::ExpandedSecretKey;
 use hmac::{Hmac, KeyInit, Mac};
 use lepic_tor::{
-    FailureKind, OnionAddress, SocksProxy, TorProcess, TorSettings, TorState, TorTimings,
-    public_key_of_seed,
+    FailureKind, OnionAddress, OnionTarget, SocksProxy, TorProcess, TorSettings, TorState,
+    TorTimings, public_key_of_seed,
 };
 use sha2::Sha256;
 use tempfile::TempDir;
@@ -775,4 +775,42 @@ async fn a_port_that_does_not_know_the_left_cookie_is_not_halted() {
         *left.lock().unwrap(),
         ["AUTHCHALLENGE SAFECOOKIE".to_owned()]
     );
+}
+
+/// The onion's target as a Unix socket in tor's folder: `ADD_ONION` carries `unix:<path>`
+/// after checking the listener answers there, and the onion is the wallet's, as on a port.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publishes_the_onion_to_a_unix_socket() {
+    let fake = FakeTor::start(HONEST).await;
+    let socket = lepic_tor::onion_socket_path(&fake.dir.path().join("tor")).unwrap();
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let _listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.wait_bootstrapped().await.unwrap();
+
+    let onion = tor
+        .publish_onion_to(&SEED, OnionTarget::Unix(socket.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        onion,
+        OnionAddress::from_public_key(&public_key_of_seed(&SEED))
+    );
+    tor.stop().await;
+    let expected = format!("ADD_ONION {ADD_FLAGS} Port=80,unix:{}", socket.display());
+    assert!(fake.commands().contains(&expected), "{:?}", fake.commands());
+
+    // No listener at the socket: refused before tor is asked.
+    let fake = FakeTor::start(HONEST).await;
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.wait_bootstrapped().await.unwrap();
+    let missing = fake.dir.path().join("tor/none.sock");
+    let failure = tor
+        .publish_onion_to(&SEED, OnionTarget::Unix(missing))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.kind, FailureKind::Listener);
+    tor.stop().await;
+    assert!(fake.commands().iter().all(|c| !c.starts_with("ADD_ONION")));
 }

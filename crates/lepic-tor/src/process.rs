@@ -31,6 +31,7 @@ use zeroize::Zeroizing;
 use crate::control::{
     ControlConnection, ControlError, Event, HsDescAction, Position, parse_control_file, read_cookie,
 };
+use crate::listen::OnionTarget;
 use crate::onion::{OnionAddress, expanded_secret, public_key_of_seed};
 
 const TORRC: &str = "torrc";
@@ -238,7 +239,7 @@ enum Request {
     Publish {
         key: Box<Zeroizing<[u8; 64]>>,
         expected: OnionAddress,
-        listener_port: u16,
+        target: OnionTarget,
         reply: oneshot::Sender<Result<(), TorFailure>>,
     },
     Refresh {
@@ -342,20 +343,31 @@ impl TorProcess {
     }
 
     /// Adds the wallet's onion service, port 80 to `127.0.0.1:<listener_port>`, and waits for
-    /// its first descriptor upload. `seed` is the wallet's address secret key; it is expanded
-    /// in memory and never stored. A [`FailureKind::Listener`] or [`FailureKind::Keys`] error
-    /// leaves tor running for sending.
+    /// its first descriptor upload, as [`Self::publish_onion_to`] does.
     pub async fn publish_onion(
         &self,
         seed: &[u8; 32],
         listener_port: u16,
+    ) -> Result<OnionAddress, TorFailure> {
+        self.publish_onion_to(seed, OnionTarget::Port(listener_port))
+            .await
+    }
+
+    /// Adds the wallet's onion service, port 80 to `target`, and waits for its first
+    /// descriptor upload. `seed` is the wallet's address secret key; it is expanded in memory
+    /// and never stored. A [`FailureKind::Listener`] or [`FailureKind::Keys`] error leaves tor
+    /// running for sending.
+    pub async fn publish_onion_to(
+        &self,
+        seed: &[u8; 32],
+        target: OnionTarget,
     ) -> Result<OnionAddress, TorFailure> {
         let expected = OnionAddress::from_public_key(&public_key_of_seed(seed));
         let (reply, answer) = oneshot::channel();
         let request = Request::Publish {
             key: expanded_secret(seed),
             expected: expected.clone(),
-            listener_port,
+            target,
             reply,
         };
         let stopped = || TorFailure::new(FailureKind::Stopped, "tor stopped");
@@ -730,7 +742,7 @@ impl Session<'_> {
             Request::Publish {
                 key,
                 expected,
-                listener_port,
+                target,
                 reply,
             } => {
                 let result = add_onion(
@@ -738,7 +750,7 @@ impl Session<'_> {
                     self.progress,
                     &key,
                     expected,
-                    listener_port,
+                    &target,
                     self.timings,
                 )
                 .await;
@@ -969,10 +981,10 @@ async fn add_onion(
     progress: &mut Progress,
     key: &[u8; 64],
     expected: OnionAddress,
-    listener_port: u16,
+    target: &OnionTarget,
     timings: TorTimings,
 ) -> Result<(), TorFailure> {
-    if listener_port == 0 || !listener_answers(listener_port, timings.listener_check).await {
+    if !listener_answers(target, timings.listener_check).await {
         return Err(TorFailure::new(
             FailureKind::Listener,
             "the wallet listener does not answer",
@@ -984,7 +996,7 @@ async fn add_onion(
     }
     let added = running
         .control
-        .add_onion(key, listener_port)
+        .add_onion(key, target)
         .await
         .map_err(|error| TorFailure::new(FailureKind::Keys, format_args!("add onion: {error}")))?;
     if added.service_id != expected.service_id() {
@@ -1323,9 +1335,21 @@ fn elapsed_ms(since: Instant) -> u64 {
     u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-async fn listener_answers(port: u16, wait: Duration) -> bool {
-    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    matches!(timeout(wait, TcpStream::connect(address)).await, Ok(Ok(_)))
+async fn listener_answers(target: &OnionTarget, wait: Duration) -> bool {
+    match target {
+        OnionTarget::Port(0) => false,
+        OnionTarget::Port(port) => {
+            let address = SocketAddr::from((Ipv4Addr::LOCALHOST, *port));
+            matches!(timeout(wait, TcpStream::connect(address)).await, Ok(Ok(_)))
+        }
+        #[cfg(unix)]
+        OnionTarget::Unix(path) => matches!(
+            timeout(wait, tokio::net::UnixStream::connect(path)).await,
+            Ok(Ok(_))
+        ),
+        #[cfg(not(unix))]
+        OnionTarget::Unix(_) => false,
+    }
 }
 
 #[cfg(test)]
