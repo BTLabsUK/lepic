@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The SQLite [`WalletStore`].
 
+#[cfg(windows)]
+mod acl;
 mod repos;
 pub(crate) mod schema;
 mod v8;
@@ -49,10 +51,16 @@ impl SqliteStore {
         }
         restrict_to_owner(path)?;
         match open_checked(path, OpenFlags::SQLITE_OPEN_CREATE)? {
-            Some(conn) => Ok(Self {
-                conn: Mutex::new(conn),
-                key,
-            }),
+            Some(conn) => {
+                // SQLite has just made the `-wal` and `-shm` files; on Windows they took the
+                // folder's access list, not the database's.
+                #[cfg(windows)]
+                restrict_to_owner(path)?;
+                Ok(Self {
+                    conn: Mutex::new(conn),
+                    key,
+                })
+            }
             None => {
                 set_aside(path)?;
                 Err(StoreError::DamagedSetAside)
@@ -242,7 +250,38 @@ fn restrict_to_owner(path: &Path) -> Result<(), StoreError> {
     })
 }
 
-#[cfg(not(unix))]
+/// Creates the database file if missing and keeps it, and its `-wal` and `-shm` files, to the
+/// process's user and `SYSTEM` ([`acl`]). A file system without access lists (FAT, some network
+/// shares) cannot be restricted; the wallet still opens, with a warning, rather than being locked
+/// out of its own data.
+#[cfg(windows)]
+fn restrict_to_owner(path: &Path) -> Result<(), StoreError> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|source| StoreError::Io {
+            operation: "create the database file",
+            source,
+        })?;
+    for file in [
+        path.to_owned(),
+        with_suffix(path, "-wal"),
+        with_suffix(path, "-shm"),
+    ] {
+        if !file.exists() {
+            continue;
+        }
+        if let Err(error) = acl::restrict(&file) {
+            tracing::warn!(error = %error, "database not restricted to its owner");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
 fn restrict_to_owner(_: &Path) -> Result<(), StoreError> {
     Ok(())
 }
