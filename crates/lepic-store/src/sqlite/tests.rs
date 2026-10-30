@@ -587,10 +587,8 @@ fn opening_an_existing_database_restricts_it_to_its_owner_on_windows() {
     for file in [&path, &wal, &shm] {
         let list = access_list(file);
         assert!(!list.contains("(I)"), "{list}");
-        assert!(
-            list.contains("NT AUTHORITY\\SYSTEM:(F)") || list.contains("S-1-5-18:(F)"),
-            "{list}"
-        );
+        // Account names are in the system's language; SYSTEM keeps its name in each.
+        assert!(list.contains("\\SYSTEM:(F)"), "{list}");
         assert_eq!(
             list.matches(":(F)").count(),
             2,
