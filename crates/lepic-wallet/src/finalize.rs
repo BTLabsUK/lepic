@@ -213,7 +213,8 @@ pub struct Finalized {
     pub tx_id: TxId,
     pub slate: Slate,
     pub transaction: Transaction,
-    /// This call pushed the transaction to the node; `false` when it was posted before.
+    /// This call pushed the transaction to the node; `false` when it was posted before, and in
+    /// an offline session ([`crate::WalletConfig::offline`]), which leaves it `finalized`.
     pub pushed: bool,
 }
 
@@ -850,14 +851,7 @@ where
         if s2.stage() != Stage::S2 {
             return Err(FinalizeError::WrongStage { stage: s2.stage() });
         }
-        let tip = self
-            .ports()
-            .node
-            .get_tip()
-            .await
-            .map_err(FinalizeError::Node)?
-            .height;
-        self.check_plausible_tip(&session, tip).await?;
+        let (tip, _) = self.stage_tip(&session, FinalizeError::Node).await?;
         let stored = self
             .blocking(move |ports, _| {
                 let env = FinalizeEnvironment {
@@ -878,7 +872,8 @@ where
             }
             None => debug!("slate already finalized"),
         }
-        let pushed = stored.state == TxState::Finalized;
+        // An offline session keeps the transaction `finalized`, for the app to post.
+        let pushed = stored.state == TxState::Finalized && !self.config().offline;
         if pushed {
             self.push(stored.tx_id, &stored.finalized, propagation)
                 .await?;

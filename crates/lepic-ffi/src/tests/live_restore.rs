@@ -95,6 +95,7 @@ fn live_restore() {
         epicbox_port: 443,
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
+        offline: false,
     };
     rt.block_on(async {
         // A throwaway seed made here, never anyone's wallet.

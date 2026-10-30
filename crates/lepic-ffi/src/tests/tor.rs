@@ -683,6 +683,7 @@ async fn the_onion_routes_of_the_config_are_there_from_the_open_and_checked() {
                 epicbox_port: 443,
                 onion_routes: routes,
                 tuning: crate::tuning::shipped(),
+                offline: false,
             };
             let secret = crate::node::NodeSecret::take(&mut config);
             let session =
@@ -879,6 +880,7 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
         epicbox_port: 443,
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
+        offline: false,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let session = Session::new(

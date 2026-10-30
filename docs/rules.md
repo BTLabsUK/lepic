@@ -26,6 +26,12 @@ than two parties. Direct transactions (HTTP send, the HTTP listener's foreign AP
 (ADR 0017), and so is importing an `epic-wallet` wallet's transaction history, read-only and
 reconciled with the scan (ADR 0019); funds still come from the seed and the scan.
 
+## Minimal and unopinionated
+
+LEPIC is minimal and unopinionated: no app policy, no process-wide state, features live in the
+app. LEPIC adds only what a higher layer cannot do, such as a per-session flag the engine reads
+(ADR 0031), never a mode the app would otherwise decide.
+
 ## Hard rules
 
 - Reject, do not panic. Anything from the network, a file, a peer, a node or the host app becomes a

@@ -299,6 +299,7 @@ impl Party {
             data_dir: data_dir.clone(),
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
             transports: vec![TRANSPORT_ID],
+            offline: false,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         lepic_wallet_contacts::install(&wallet);

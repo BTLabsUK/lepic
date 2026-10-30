@@ -237,6 +237,7 @@ impl Receiver {
             data_dir: PathBuf::from(DATA_DIR),
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
             transports: vec![FILE, EPICBOX],
+            offline: false,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         runtime

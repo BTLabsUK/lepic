@@ -409,6 +409,7 @@ impl Harness {
             data_dir: self.data_dir.clone(),
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
             transports: vec![LOOPBACK],
+            offline: false,
         }
     }
 

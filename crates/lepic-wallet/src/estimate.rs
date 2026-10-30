@@ -76,14 +76,7 @@ where
         + 'static,
     ) -> Result<Selection, SendError> {
         let session = self.session()?;
-        let tip = self
-            .ports()
-            .node
-            .get_tip()
-            .await
-            .map_err(SendError::Node)?
-            .height;
-        self.check_plausible_tip(&session, tip).await?;
+        let (tip, _) = self.stage_tip(&session, SendError::Node).await?;
         let base_fee = self.config().network.params().default_base_fee();
         let selection = self
             .blocking(move |_, _| {

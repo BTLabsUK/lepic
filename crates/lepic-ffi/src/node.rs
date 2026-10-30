@@ -63,6 +63,8 @@ impl RpcTransport for SwitchableBackend {
 #[derive(Clone)]
 pub(crate) enum NodeBackend {
     Http(Box<HttpTransport>),
+    /// The node of an offline session: every request fails with [`NodeError::Offline`].
+    Offline,
     #[cfg(feature = "mock")]
     Mock(crate::mock::MockBackend),
 }
@@ -71,6 +73,7 @@ impl RpcTransport for NodeBackend {
     async fn post(&self, endpoint: &'static str, body: Vec<u8>) -> Result<Vec<u8>, NodeError> {
         match self {
             Self::Http(http) => http.post(endpoint, body).await,
+            Self::Offline => Err(NodeError::Offline),
             #[cfg(feature = "mock")]
             Self::Mock(mock) => mock.post(endpoint, body).await,
         }
@@ -79,6 +82,7 @@ impl RpcTransport for NodeBackend {
     fn node_label(&self) -> &str {
         match self {
             Self::Http(http) => http.node_label(),
+            Self::Offline => "offline",
             #[cfg(feature = "mock")]
             Self::Mock(mock) => mock.node_label(),
         }
@@ -170,7 +174,7 @@ impl NodeFactory {
     }
 
     /// The backend for the node `config` names: `InvalidArgument` for a URL that is not one
-    /// of a node.
+    /// of a node, and [`NodeBackend::Offline`] when `config` is offline.
     pub(crate) fn backend(
         &self,
         (config, tuning): (&WalletConfig, &Tuning),
@@ -178,6 +182,9 @@ impl NodeFactory {
         tor: &Arc<RelayTor>,
         routes: &Arc<OnionRoutes>,
     ) -> Result<NodeBackend, WalletError> {
+        if config.offline {
+            return Ok(NodeBackend::Offline);
+        }
         match self {
             Self::Http => {
                 let settings = tuning.node_http(secret.0.as_deref());
@@ -448,6 +455,7 @@ mod refusal_tests {
             epicbox_port: 443,
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
+            offline: false,
         }
     }
 

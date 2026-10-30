@@ -330,6 +330,7 @@ fn engine(
         data_dir: data_dir.to_path_buf(),
         node: NodeEndpoint::parse(node_url).unwrap(),
         transports: vec![FILE],
+        offline: false,
     };
     let ports = Ports {
         node,

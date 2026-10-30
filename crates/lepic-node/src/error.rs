@@ -65,6 +65,10 @@ pub enum NodeError {
     },
     #[error("node reported tip {reported}, implausibly far above tip {previous} seen before")]
     ImplausibleTip { previous: Height, reported: Height },
+    /// The caller's session is offline: the call was refused before any name lookup or
+    /// connect. Not transient.
+    #[error("node calls are off for this session")]
+    Offline,
 }
 
 impl NodeError {

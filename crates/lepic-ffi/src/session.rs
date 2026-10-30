@@ -24,7 +24,7 @@ use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, OutputStatus as EngineOutputStatus, TxId, TxState};
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{Destination, Exchange as _, Location, TransportId};
+use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location, TransportId};
 use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
 use lepic_wallet::event::{Balance, Connection, TransportState as EngineTransportState};
 use lepic_wallet::inbox::ListenHandle;
@@ -186,6 +186,8 @@ pub(crate) struct Session {
     engine: EngineWallet,
     network: Network,
     data_dir: PathBuf,
+    /// `WalletConfig::offline` as the session was opened: its node and relay ports refuse.
+    offline: bool,
     store: AppSecretStore,
     vault: VaultBytes,
     epicbox: Option<EpicboxSlot>,
@@ -337,6 +339,13 @@ fn epicbox_transport(
         return Ok(None);
     }
     let endpoint = relay_endpoint(config)?;
+    if config.offline {
+        return Ok(Some(EpicboxTransport::new(
+            ClientSettings::new(endpoint, tuning.relay),
+            relay_network(network),
+            Arc::new(OfflineRelay),
+        )));
+    }
     #[cfg(feature = "mock")]
     if let Some(relay) = &runtime.relay {
         return Ok(Some(EpicboxTransport::new(
@@ -366,6 +375,33 @@ fn epicbox_transport(
         relay_network(network),
         connector,
     )))
+}
+
+/// The refusal of an offline session's relay connector, inside the [`std::io::Error`] it
+/// returns.
+#[derive(Debug)]
+pub(crate) struct RelayOffline;
+
+impl std::fmt::Display for RelayOffline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("relay connections are off for this session")
+    }
+}
+
+impl std::error::Error for RelayOffline {}
+
+/// The relay connector of an offline session: every connection fails with [`RelayOffline`]
+/// before any name lookup.
+struct OfflineRelay;
+
+impl lepic_epicbox::Connector for OfflineRelay {
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, std::io::Result<Box<dyn lepic_epicbox::RelayStream>>> {
+        let _ = endpoint;
+        Box::pin(async { Err(std::io::Error::other(RelayOffline)) })
+    }
 }
 
 /// The transaction methods a session registers, and the ids its wallet offers them under.
@@ -434,6 +470,7 @@ fn engine(
         node: NodeEndpoint::parse(&config.node_url)
             .map_err(|_| invalid("node url is not an http or https url with a host"))?,
         transports: ids,
+        offline: config.offline,
     };
     let ports = Ports {
         node,
@@ -512,6 +549,7 @@ impl Session {
             engine,
             network,
             data_dir,
+            offline: config.offline,
             store,
             vault,
             epicbox,
@@ -1292,7 +1330,25 @@ impl Session {
         Ok(FinalizedTx {
             tx_id: finalized.tx_id.0,
             slate_id: finalized.slate.id().to_string(),
+            posted: !self.offline,
         })
+    }
+
+    /// The stored final slate of `tx_id` as slate text: see `EpicWallet::finished_payment`.
+    pub(crate) async fn finished_payment(&self, tx_id: u32) -> Result<String, WalletError> {
+        let wire = self.engine.finished_payment(TxId(tx_id)).await?;
+        String::from_utf8(wire.as_bytes().to_vec())
+            .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "slate is not text"))
+    }
+
+    /// Refuses `config` when it is not offline as the session is: the ports were built for
+    /// the session's value, and only opening the wallet again changes it.
+    pub(crate) fn ensure_same_offline(&self, config: &WalletConfig) -> Result<(), WalletError> {
+        if config.offline == self.offline {
+            Ok(())
+        } else {
+            Err(invalid("offline is changed by opening the wallet again"))
+        }
     }
 
     /// Whether `wire` reads as an I2. Anything else goes to the finalize of a send, which
@@ -2158,6 +2214,7 @@ impl Session {
         node_secret: &NodeSecret,
     ) -> Result<NodeTip, WalletError> {
         self.ensure_unlocked()?;
+        self.ensure_same_offline(config)?;
         let over_tor = *self.node_tor.active().borrow();
         let backend =
             self.node_tips
@@ -2314,6 +2371,7 @@ mod tests {
             epicbox_port: 3423,
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
+            offline: false,
         }
     }
 
@@ -2705,6 +2763,7 @@ mod tests {
                 epicbox_port: 443,
                 onion_routes: Vec::new(),
                 tuning: crate::tuning::shipped(),
+                offline: false,
             };
             let secret = NodeSecret::take(&mut config);
             let session = Session::new(

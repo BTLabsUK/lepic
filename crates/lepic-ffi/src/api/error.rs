@@ -197,6 +197,10 @@ pub enum WalletErrorKind {
     /// a contact or the other way round, words asked for a private pairing, a slate or invoice
     /// for a private pairing, or a payload for a contact. Nothing was stored or sent.
     WrongPairingClass,
+    /// The wallet was opened offline (`WalletConfig.offline`), so the call reached no node or
+    /// relay, or found no confirmed tip to work offline from. Nothing was sent; what was
+    /// stored stays.
+    Offline,
 }
 
 impl WalletErrorKind {
@@ -273,6 +277,7 @@ impl WalletErrorKind {
             Self::InvoiceNotForThisChain => 75,
             Self::InputsSpentElsewhere => 76,
             Self::WrongPairingClass => 77,
+            Self::Offline => 78,
         }
     }
 }
@@ -306,12 +311,32 @@ impl WalletError {
     }
 
     /// `error` and its sources as the message, each entry cleaned and bounded on its own.
+    /// A chain that holds a refusal of an offline session's node or relay port is `Offline`,
+    /// whatever `kind` the operation gives its other failures.
     pub(crate) fn chained(
         kind: WalletErrorKind,
         error: &(dyn std::error::Error + 'static),
     ) -> Self {
+        let kind = if refused_offline(error) {
+            WalletErrorKind::Offline
+        } else {
+            kind
+        };
         Self::new(kind, display_error_chain(error).join(": "))
     }
+}
+
+/// Whether `error` or one of its sources is the refusal of an offline session's port.
+fn refused_offline(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |error| error.source()).any(|error| {
+        matches!(
+            error.downcast_ref::<lepic_node::NodeError>(),
+            Some(lepic_node::NodeError::Offline)
+        ) || error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<crate::session::RelayOffline>)
+    })
 }
 
 impl From<lepic_wallet::WalletError> for WalletError {
@@ -697,6 +722,7 @@ mod tests {
             (K::InvoiceNotForThisChain, 75),
             (K::InputsSpentElsewhere, 76),
             (K::WrongPairingClass, 77),
+            (K::Offline, 78),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");

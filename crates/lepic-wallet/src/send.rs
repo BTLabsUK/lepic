@@ -1084,14 +1084,7 @@ where
     ) -> Result<SentSlate, SendError> {
         let session = self.session()?;
         transport(&self.ports().transports, &delivery)?;
-        let tip = self
-            .ports()
-            .node
-            .get_tip()
-            .await
-            .map_err(SendError::Node)?
-            .height;
-        self.check_plausible_tip(&session, tip).await?;
+        let (tip, _) = self.stage_tip(&session, SendError::Node).await?;
         let target = delivery.clone();
         let reply_keys = self.reply_keys();
         let stored = self
