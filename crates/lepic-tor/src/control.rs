@@ -27,6 +27,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::listen::{OnionTarget, usable_socket_path};
 use crate::onion::ONION_NAME_LEN;
 
 /// Longest reply line accepted, in bytes.
@@ -581,7 +582,8 @@ impl ControlConnection {
             .map(drop)
     }
 
-    /// `ADD_ONION` with the 64-byte expanded key, port 80 to `127.0.0.1:<target_port>`.
+    /// `ADD_ONION` with the 64-byte expanded key, port 80 to `127.0.0.1:<port>` or to
+    /// `unix:<path>` ([`OnionTarget`]).
     /// `DiscardPK` keeps tor from echoing the key; `MaxStreams` with `MaxStreamsCloseCircuit`
     /// closes a circuit that opens more than [`MAX_STREAMS_PER_CIRCUIT`] streams at once; the
     /// proof-of-work defence makes each new sender circuit cost a puzzle once the service is
@@ -589,11 +591,16 @@ impl ControlConnection {
     pub async fn add_onion(
         &self,
         expanded_key: &[u8; 64],
-        target_port: u16,
+        target: &OnionTarget,
     ) -> Result<AddedOnion, ControlError> {
-        if target_port == 0 {
-            return Err(ControlError::InvalidArgument);
-        }
+        let target = match target {
+            OnionTarget::Port(0) => return Err(ControlError::InvalidArgument),
+            OnionTarget::Port(port) => format!("127.0.0.1:{port}"),
+            OnionTarget::Unix(path) if usable_socket_path(path) => {
+                format!("unix:{}", path.display())
+            }
+            OnionTarget::Unix(_) => return Err(ControlError::InvalidArgument),
+        };
         // Straight into a buffer that is wiped: `encode_string` goes through a stack buffer
         // that is not.
         let mut encoded = Zeroizing::new([0u8; ENCODED_KEY_LEN]);
@@ -613,8 +620,8 @@ impl ControlConnection {
         line.push_str(&POW_QUEUE_RATE.to_string());
         line.push_str(" PoWQueueBurst=");
         line.push_str(&POW_QUEUE_BURST.to_string());
-        line.push_str(" Port=80,127.0.0.1:");
-        line.push_str(&target_port.to_string());
+        line.push_str(" Port=80,");
+        line.push_str(&target);
         let (added_at, reply) = self.positioned_command(&line).await?;
         reply
             .value("ServiceID")

@@ -17,6 +17,8 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -31,7 +33,10 @@ use lepic_slate::codec::WireSlate;
 use lepic_transport::transport::BoxFuture;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+#[cfg(unix)]
+use tokio::net::UnixListener;
 use tokio::sync::{Semaphore, watch};
 use tracing::{debug, info, warn};
 
@@ -165,14 +170,24 @@ pub trait ReceiveHandler: Send + Sync + 'static {
 #[derive(Debug)]
 pub struct ListenerHandle {
     local_addr: SocketAddr,
+    #[cfg(unix)]
+    socket: Option<PathBuf>,
     exposure: Exposure,
     shutdown: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl ListenerHandle {
+    /// The TCP address it listens on; `127.0.0.1:0` for a listener on a Unix socket
+    /// ([`listen_unix`]).
     pub const fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    /// The Unix socket it listens on, for a listener of [`listen_unix`].
+    #[cfg(unix)]
+    pub fn socket_path(&self) -> Option<&Path> {
+        self.socket.as_deref()
     }
 
     pub const fn exposure(&self) -> Exposure {
@@ -225,15 +240,11 @@ pub async fn listen(
         source,
     })?;
     let (shutdown, stopped) = watch::channel(false);
-    let state = Arc::new(Served {
-        handler,
-        settings,
-        requests: Mutex::new(Window::new()),
-        payments_only: Mutex::new(Window::new()),
-        receives: Mutex::new(Window::new()),
-        per_address: Mutex::new(HashMap::new()),
-    });
-    let task = tokio::spawn(accept_loop(listener, state, stopped));
+    let task = tokio::spawn(accept_loop(
+        Bound::Tcp(listener),
+        served(settings, handler),
+        stopped,
+    ));
     info!(
         port = local_addr.port(),
         exposure = settings.exposure.as_str(),
@@ -241,10 +252,106 @@ pub async fn listen(
     );
     Ok(ListenerHandle {
         local_addr,
+        #[cfg(unix)]
+        socket: None,
         exposure: settings.exposure,
         shutdown,
         task,
     })
+}
+
+/// Binds the listener on a Unix-domain socket at `path` and starts serving, with the limits of
+/// `settings` (its exposure and port are not used). For a listener only a local tor reaches: a
+/// socket in a folder of the wallet's own is out of other programs' and apps' reach, where any of
+/// them can connect to a loopback port. A file left at `path` by an earlier run is replaced; the
+/// socket file is removed when the listener stops. Every connection counts as one address, as
+/// every sender does behind an onion.
+#[cfg(unix)]
+pub async fn listen_unix(
+    path: &Path,
+    settings: ListenSettings,
+    handler: Arc<dyn ReceiveHandler>,
+) -> Result<ListenerHandle, ListenError> {
+    let bind_error = |source| ListenError::Bind { port: 0, source };
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(bind_error(error));
+        }
+        _ => {}
+    }
+    let listener = UnixListener::bind(path).map_err(bind_error)?;
+    let (shutdown, stopped) = watch::channel(false);
+    let task = tokio::spawn(accept_loop(
+        Bound::Unix(listener, path.to_owned()),
+        served(settings, handler),
+        stopped,
+    ));
+    info!(
+        exposure = settings.exposure.as_str(),
+        "foreign api listening on a unix socket"
+    );
+    Ok(ListenerHandle {
+        local_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        socket: Some(path.to_owned()),
+        exposure: settings.exposure,
+        shutdown,
+        task,
+    })
+}
+
+fn served(settings: ListenSettings, handler: Arc<dyn ReceiveHandler>) -> Arc<Served> {
+    Arc::new(Served {
+        handler,
+        settings,
+        requests: Mutex::new(Window::new()),
+        payments_only: Mutex::new(Window::new()),
+        receives: Mutex::new(Window::new()),
+        per_address: Mutex::new(HashMap::new()),
+    })
+}
+
+/// The socket a listener takes connections on.
+enum Bound {
+    Tcp(TcpListener),
+    #[cfg(unix)]
+    Unix(UnixListener, PathBuf),
+}
+
+/// One accepted connection.
+enum Accepted {
+    Tcp(tokio::net::TcpStream),
+    #[cfg(unix)]
+    Unix(tokio::net::UnixStream),
+}
+
+impl Bound {
+    /// The next connection and the address its per-address limit counts it under: a Unix
+    /// socket's callers all count as `127.0.0.1`.
+    async fn accept(&self) -> std::io::Result<(Accepted, IpAddr)> {
+        match self {
+            Self::Tcp(listener) => listener
+                .accept()
+                .await
+                .map(|(stream, remote)| (Accepted::Tcp(stream), remote.ip().to_canonical())),
+            #[cfg(unix)]
+            Self::Unix(listener, _) => listener
+                .accept()
+                .await
+                .map(|(stream, _)| (Accepted::Unix(stream), IpAddr::V4(Ipv4Addr::LOCALHOST))),
+        }
+    }
+
+    /// Closes the socket, and removes a Unix socket's file.
+    fn close(self) {
+        match self {
+            Self::Tcp(_) => {}
+            #[cfg(unix)]
+            Self::Unix(listener, path) => {
+                drop(listener);
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 }
 
 struct Served {
@@ -414,11 +521,7 @@ impl Window {
     }
 }
 
-async fn accept_loop(
-    listener: TcpListener,
-    state: Arc<Served>,
-    mut stopped: watch::Receiver<bool>,
-) {
+async fn accept_loop(listener: Bound, state: Arc<Served>, mut stopped: watch::Receiver<bool>) {
     let permits = Arc::new(Semaphore::new(state.settings.max_connections));
     loop {
         let accepted = tokio::select! {
@@ -439,34 +542,52 @@ async fn accept_loop(
             debug!("connection limit reached");
             continue;
         };
-        let Some(share) = state.admit(remote.ip().to_canonical()) else {
+        let Some(share) = state.admit(remote) else {
             debug!("connection limit of one address reached");
             continue;
         };
         let state = Arc::clone(&state);
-        let header_timeout = state.settings.header_timeout;
-        let deadline = state.settings.connection_deadline();
-        tokio::spawn(async move {
-            let service = service_fn(move |request| {
-                let state = Arc::clone(&state);
-                async move { Ok::<_, Infallible>(answer(&state, request).await) }
-            });
-            let connection = http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(header_timeout)
-                .keep_alive(false)
-                .serve_connection(TokioIo::new(stream), service);
-            // A caller that stops reading its answer would otherwise hold the slot forever.
-            match tokio::time::timeout(deadline, connection).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => debug!(%error, "connection ended"),
-                Err(_) => debug!("connection timed out"),
+        match stream {
+            Accepted::Tcp(stream) => {
+                tokio::spawn(serve_connection(stream, state, share, permit));
             }
-            drop(share);
-            drop(permit);
-        });
+            #[cfg(unix)]
+            Accepted::Unix(stream) => {
+                tokio::spawn(serve_connection(stream, state, share, permit));
+            }
+        }
     }
+    listener.close();
     info!("foreign api stopped");
+}
+
+async fn serve_connection<S>(
+    stream: S,
+    state: Arc<Served>,
+    share: AddressShare,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let header_timeout = state.settings.header_timeout;
+    let deadline = state.settings.connection_deadline();
+    let service = service_fn(move |request| {
+        let state = Arc::clone(&state);
+        async move { Ok::<_, Infallible>(answer(&state, request).await) }
+    });
+    let connection = http1::Builder::new()
+        .timer(TokioTimer::new())
+        .header_read_timeout(header_timeout)
+        .keep_alive(false)
+        .serve_connection(TokioIo::new(stream), service);
+    // A caller that stops reading its answer would otherwise hold the slot forever.
+    match tokio::time::timeout(deadline, connection).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => debug!(%error, "connection ended"),
+        Err(_) => debug!("connection timed out"),
+    }
+    drop(share);
+    drop(permit);
 }
 
 async fn answer(state: &Served, request: Request<Incoming>) -> Response<Full<Bytes>> {

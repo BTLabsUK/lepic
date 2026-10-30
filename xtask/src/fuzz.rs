@@ -67,6 +67,7 @@ const TARGETS: &[&str] = &[
     "tor_control_reply",
     "onion_parse",
     "relay_discovery",
+    "slate_flow",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -389,6 +390,7 @@ fn chain_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTree
             seeds.extend(NOTICE_SEEDS.iter().map(|notice| notice.as_bytes().to_vec()));
         }
         "vault_file" => seeds.extend(vault_seeds()),
+        "slate_flow" => seeds.extend(slate_flow_seeds()),
         "ur_slate_decode" => seeds.extend(ur_slate_seeds(root)?),
         "wallet_seed" => {
             for vector in read_area(vectors, "keys", "wallet_seed_")? {
@@ -716,6 +718,21 @@ fn ur_slate_seeds(root: &Path) -> Result<Vec<Vec<u8>>> {
         }
     }
     Ok(seeds)
+}
+
+/// The `slate_flow` seeds: each step with no edit (the honest slate) and with one edit of each
+/// kind, at a few places. The target builds its slates itself.
+fn slate_flow_seeds() -> Vec<Vec<u8>> {
+    let mut seeds = Vec::new();
+    for step in 0u8..4 {
+        seeds.push(vec![step]);
+        for kind in 0u8..7 {
+            for at in [0u8, 7, 31] {
+                seeds.push(vec![step, kind, at, 1]);
+            }
+        }
+    }
+    seeds
 }
 
 fn vault_seeds() -> Vec<Vec<u8>> {

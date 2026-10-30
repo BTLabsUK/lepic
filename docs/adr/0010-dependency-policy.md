@@ -52,7 +52,7 @@ workspace table:
 | Sealed envelopes | hpke 0.14 (X25519, HKDF-SHA256, ChaCha20-Poly1305 only), x25519-dalek 3.0 | RFC 0002 |
 | Ids and time | uuid 1.26, jiff 0.2 | |
 | Randomness | rand 0.10, rand_core 0.10, getrandom 0.4 | |
-| Curve | grin_secp256k1zkp from `EpicCash/rust-secp256k1-zkp` at `42fcb29d` | |
+| Curve | grin_secp256k1zkp from `EpicCash/rust-secp256k1-zkp` at `42fcb29d` | Its diff against upstream: `docs/compat/secp256k1-zkp-fork.md` |
 | Bindings | flutter_rust_bridge 2.13 | ADR 0007 |
 | Tests | proptest 1.11, insta 1.48, tempfile 3.27, libfuzzer-sys 0.4 | |
 

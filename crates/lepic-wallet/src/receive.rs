@@ -553,6 +553,33 @@ fn respond<D>(
     })
 }
 
+/// S1 to S2 on its own, as a receive builds it once the proposal is checked
+/// ([`ReceiveError::WrongStage`], a zero amount, a sender message that does not verify) and the
+/// output key `key_id` of the account `parent` is reserved; no store, node or TTL check. The
+/// entry point for fuzzing the receiver with adversarial S1s.
+pub fn build_s2(
+    keychain: &Keychain,
+    s1: &Slate,
+    key_id: Identifier,
+    parent: Identifier,
+    message: Option<&str>,
+    base_fee: Fee,
+    rng: &mut (impl CryptoRng + ?Sized),
+) -> Result<(Slate, Output), ReceiveError> {
+    check_proposal(s1)?;
+    build_response(
+        keychain,
+        s1,
+        &Contribution {
+            key_id,
+            parent,
+            message,
+            base_fee,
+        },
+        rng,
+    )
+}
+
 /// What the receiver puts into the slate, besides randomness.
 struct Contribution<'a> {
     key_id: Identifier,

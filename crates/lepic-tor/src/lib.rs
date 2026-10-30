@@ -13,7 +13,7 @@ pub mod testing;
 pub mod transport;
 
 pub use control::{ControlError, MAX_STREAMS_PER_CIRCUIT};
-pub use listen::listen_settings;
+pub use listen::{ONION_SOCKET, OnionTarget, listen_settings, onion_socket_path};
 pub use onion::{
     ONION_NAME_LEN, OnionAddress, OnionError, expanded_secret, onion_address, parse_onion,
     public_key_of_seed,

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hmac::{Hmac, KeyInit, Mac};
+use lepic_tor::OnionTarget;
 use sha2::Sha256;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -58,8 +59,42 @@ fn quick() -> lepic_tor::TorTimings {
     }
 }
 
-/// Onion service ids and the listener ports their wallets' tor forwards to.
-type Onions = Arc<Mutex<HashMap<String, u16>>>;
+/// Onion service ids and the listeners their wallets' tor forwards to.
+type Onions = Arc<Mutex<HashMap<String, OnionTarget>>>;
+
+/// A connection to a listener, on a loopback port or a Unix socket.
+trait Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Stream for T {}
+
+async fn connect(target: &OnionTarget) -> std::io::Result<Box<dyn Stream>> {
+    match target {
+        OnionTarget::Port(port) => Ok(Box::new(TcpStream::connect(("127.0.0.1", *port)).await?)),
+        #[cfg(unix)]
+        OnionTarget::Unix(path) => Ok(Box::new(tokio::net::UnixStream::connect(path).await?)),
+        #[cfg(not(unix))]
+        OnionTarget::Unix(_) => Err(std::io::ErrorKind::Unsupported.into()),
+    }
+}
+
+/// Whether the listener behind `target` takes connections.
+fn answers(target: &OnionTarget) -> bool {
+    match target {
+        OnionTarget::Port(port) => std::net::TcpStream::connect(("127.0.0.1", *port)).is_ok(),
+        #[cfg(unix)]
+        OnionTarget::Unix(path) => std::os::unix::net::UnixStream::connect(path).is_ok(),
+        #[cfg(not(unix))]
+        OnionTarget::Unix(_) => false,
+    }
+}
+
+/// Whether the listener behind `target` is gone: its port free again, its socket file gone.
+fn is_closed(target: &OnionTarget) -> bool {
+    match target {
+        OnionTarget::Port(port) => std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok(),
+        OnionTarget::Unix(path) => !path.exists(),
+    }
+}
 
 /// The fake Tor network: one SOCKS server for every wallet's tor.
 struct FakeNetwork {
@@ -106,12 +141,12 @@ impl FakeNetwork {
         commands
     }
 
-    fn listener_port(&self, onion: &str) -> Option<u16> {
+    fn listener(&self, onion: &str) -> Option<OnionTarget> {
         self.onions
             .lock()
             .unwrap()
             .get(onion.trim_end_matches(".onion"))
-            .copied()
+            .cloned()
     }
 }
 
@@ -142,7 +177,7 @@ async fn serve_socks(mut stream: TcpStream, onions: Onions) {
         .lock()
         .unwrap()
         .get(host.trim_end_matches(".onion"))
-        .copied();
+        .cloned();
     let Some(target) = target else {
         // Onion descriptor not found, as tor answers for a wallet that is not online.
         stream
@@ -155,7 +190,7 @@ async fn serve_socks(mut stream: TcpStream, onions: Onions) {
         .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
         .await
         .unwrap();
-    let mut upstream = TcpStream::connect(("127.0.0.1", target)).await.unwrap();
+    let mut upstream = connect(&target).await.unwrap();
     let _ = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
 }
 
@@ -228,12 +263,15 @@ async fn serve_control(
             "ADD_ONION" => {
                 let target = line
                     .split(' ')
-                    .find_map(|word| word.strip_prefix("Port=80,127.0.0.1:"))
+                    .find_map(|word| word.strip_prefix("Port=80,"))
                     .unwrap();
-                onions
-                    .lock()
-                    .unwrap()
-                    .insert(service_id.clone(), target.parse().unwrap());
+                let target = match target.strip_prefix("unix:") {
+                    Some(path) => OnionTarget::Unix(PathBuf::from(path)),
+                    None => OnionTarget::Port(
+                        target.strip_prefix("127.0.0.1:").unwrap().parse().unwrap(),
+                    ),
+                };
+                onions.lock().unwrap().insert(service_id.clone(), target);
                 format!(
                     "250-ServiceID={service_id}\r\n250 OK\r\n650 HS_DESC UPLOADED {service_id} UNKNOWN $AAAA~relay\r\n"
                 )
@@ -415,11 +453,8 @@ async fn lock_stops_tor_and_then_its_listener() {
     let (pair, network) = tor_pair().await;
     let (events, commands) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
     let onion = pair.bob.onion_address().unwrap();
-    let port = network.listener_port(&onion).unwrap();
-    assert!(
-        std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(),
-        "the listener behind the onion answers"
-    );
+    let target = network.listener(&onion).unwrap();
+    assert!(answers(&target), "the listener behind the onion answers");
 
     pair.bob.lock();
 
@@ -428,7 +463,7 @@ async fn lock_stops_tor_and_then_its_listener() {
     let commands = commands.lock().unwrap().clone();
     assert!(commands.contains(&format!("DEL_ONION {}", onion.trim_end_matches(".onion"))));
     assert_eq!(commands.last().map(String::as_str), Some("SIGNAL SHUTDOWN"));
-    std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    assert!(is_closed(&target), "the listener stopped");
     assert_eq!(pair.bob.tor_status().kind, TorStatusKind::Off);
     let locked = pair
         .bob
@@ -561,7 +596,7 @@ async fn a_tor_started_without_publishing_adds_no_onion_and_runs_no_listener() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(events.find(TorEventKind::Publishing).is_none());
     assert!(events.find(TorEventKind::Ready).is_none());
-    assert_eq!(network.listener_port(&onion), None);
+    assert_eq!(network.listener(&onion), None);
     bob.stop_tor();
     events.wait_for(TorEventKind::Stopped).await;
     let commands = commands.lock().unwrap().clone();
@@ -584,6 +619,17 @@ async fn a_tor_started_to_publish_runs_the_listener_behind_its_onion() {
             .iter()
             .any(|command| command == "ADD_ONION")
     );
+    // Where it can, the onion forwards to a socket in tor's folder, which no other program reaches.
+    let target = network
+        .listener(&pair.bob.onion_address().unwrap())
+        .unwrap();
+    #[cfg(unix)]
+    assert!(
+        matches!(&target, OnionTarget::Unix(path) if path.starts_with(pair.dirs[1].path())),
+        "{target:?}"
+    );
+    #[cfg(not(unix))]
+    assert!(matches!(target, OnionTarget::Port(_)), "{target:?}");
     pair.bob.stop_tor();
     events.wait_for(TorEventKind::Stopped).await;
 }
@@ -792,7 +838,7 @@ async fn tor_ending_after_it_bootstrapped_is_reported_and_frees_the_slot() {
     let (pair, network) = tor_pair().await;
     let (events, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
     let onion = pair.bob.onion_address().unwrap();
-    let port = network.listener_port(&onion).unwrap();
+    let target = network.listener(&onion).unwrap();
 
     // The fake tor exits as tor would on its own.
     std::fs::write(pair.dirs[1].path().join("stop-now"), b"").unwrap();
@@ -806,7 +852,7 @@ async fn tor_ending_after_it_bootstrapped_is_reported_and_frees_the_slot() {
         [TorEventKind::Failed, TorEventKind::Stopped]
     );
     assert!(eventually(|| pair.bob.tor_status().kind == TorStatusKind::Off).await);
-    std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    assert!(is_closed(&target), "the listener stopped");
     assert!(
         pair.bob.relay_through_tor(),
         "the relay waits for tor to be started again, never going directly"
@@ -836,11 +882,11 @@ async fn the_onion_answers_more_senders_at_once_than_one_address_may_hold() {
     start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
     start_tor(&network, &pair.alice, pair.dirs[0].path()).await;
     let bob_onion = pair.bob.onion_address().unwrap();
-    let port = network.listener_port(&bob_onion).unwrap();
-    // Tor connects every sender from 127.0.0.1: these stand for other senders mid-request.
+    let target = network.listener(&bob_onion).unwrap();
+    // Tor connects every sender alike: these stand for other senders mid-request.
     let mut held = Vec::new();
     for _ in 0..=lepic_tor::MAX_STREAMS_PER_CIRCUIT {
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut stream = connect(&target).await.unwrap();
         stream
             .write_all(b"POST /v2/foreign HTTP/1.1\r\n")
             .await

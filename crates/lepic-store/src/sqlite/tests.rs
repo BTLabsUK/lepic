@@ -544,6 +544,68 @@ fn opening_an_existing_database_restricts_it_to_its_owner() {
     }
 }
 
+/// The `icacls` listing of `path`.
+#[cfg(windows)]
+fn access_list(path: &std::path::Path) -> String {
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "icacls {}", path.display());
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A database made before the access list was set (inherited entries only, as earlier builds
+/// left it) is restricted at its next open, with its logs, and still opens and keeps its data.
+#[cfg(windows)]
+#[test]
+fn opening_an_existing_database_restricts_it_to_its_owner_on_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wallet.sqlite");
+    drop(SqliteStore::open(&path, key()).unwrap());
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE probe (x); INSERT INTO probe VALUES (7);")
+        .unwrap();
+    let wal = dir.path().join("wallet.sqlite-wal");
+    let shm = dir.path().join("wallet.sqlite-shm");
+    // Back to the folder's inherited entries, as an earlier build left every file.
+    for file in [&path, &wal, &shm] {
+        if !file.exists() {
+            std::fs::write(file, []).unwrap();
+        }
+        let reset = std::process::Command::new("icacls")
+            .arg(file)
+            .arg("/reset")
+            .output()
+            .unwrap();
+        assert!(reset.status.success());
+        assert!(access_list(file).contains("(I)"), "inherited entries only");
+    }
+
+    let store = SqliteStore::open(&path, key()).unwrap();
+    for file in [&path, &wal, &shm] {
+        let list = access_list(file);
+        assert!(!list.contains("(I)"), "{list}");
+        // Account names are in the system's language; SYSTEM keeps its name in each.
+        assert!(list.contains("\\SYSTEM:(F)"), "{list}");
+        assert_eq!(
+            list.matches(":(F)").count(),
+            2,
+            "the user and SYSTEM only: {list}"
+        );
+    }
+    drop(store);
+
+    let store = SqliteStore::open(&path, key()).unwrap();
+    drop(store);
+    let conn = Connection::open(&path).unwrap();
+    let kept: i64 = conn
+        .query_row("SELECT x FROM probe", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(kept, 7);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_database_path_that_cannot_be_created_is_an_io_error() {
