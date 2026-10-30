@@ -39,11 +39,16 @@ Upstream after the merge base, besides the two guards the fork took:
 - `5859195`, `49622b0`, `3f388db` return codes of pedersen, aggsig and range proof calls checked
   the same way.
 - `b4dd5ba` bulletproof, commitment and aggsig tests.
-- `ed7ffec` (PR #91) a scratch-space leak fixed.
-- `d5b4968` the C library moved to `0eefcedc1fec37d54e53bac4e535afa47d6774fa`.
+- `ed7ffec` (PR #91), `d5b4968`: the C library moved to
+  `0eefcedc1fec37d54e53bac4e535afa47d6774fa`, "fix scratch leak":
+  `secp256k1_bulletproof_rangeproof_verify_multi` freed no scratch frame when a proof failed.
 
 ## What it means for LEPIC
 
+- The scratch leak reaches LEPIC: every transaction whose range proof fails
+  `Transaction::validate` leaks 416 bytes. A peer can send such slates to a listener as often as
+  its rate limits allow. The `slate_flow` fuzz target finds it within minutes; run it with
+  leak detection off until the dependency moves (`docs/fuzzing.md`).
 - Only `lepic-crypto` depends on the library; every other crate goes through its types. The
   fuzz targets and the vector tests exercise the library through that crate.
 - Moving to upstream v0.8.0, or asking EpicCash to take the commits above, closes the gap. Either
