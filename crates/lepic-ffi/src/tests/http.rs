@@ -60,6 +60,7 @@ async fn session_on(
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
         offline: false,
+        tor_wanted: false,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     Arc::new(

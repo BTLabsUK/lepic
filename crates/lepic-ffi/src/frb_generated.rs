@@ -12311,6 +12311,7 @@ impl SseDecode for crate::api::types::WalletConfig {
         let mut var_onionRoutes = <Vec<crate::api::tor::OnionRoute>>::sse_decode(deserializer);
         let mut var_tuning = <crate::api::types::NetTuning>::sse_decode(deserializer);
         let mut var_offline = <bool>::sse_decode(deserializer);
+        let mut var_torWanted = <bool>::sse_decode(deserializer);
         return crate::api::types::WalletConfig {
             data_dir: var_dataDir,
             chain: var_chain,
@@ -12321,6 +12322,7 @@ impl SseDecode for crate::api::types::WalletConfig {
             onion_routes: var_onionRoutes,
             tuning: var_tuning,
             offline: var_offline,
+            tor_wanted: var_torWanted,
         };
     }
 }
@@ -15651,6 +15653,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletConfig {
             self.onion_routes.into_into_dart().into_dart(),
             self.tuning.into_into_dart().into_dart(),
             self.offline.into_into_dart().into_dart(),
+            self.tor_wanted.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -17990,6 +17993,7 @@ impl SseEncode for crate::api::types::WalletConfig {
         <Vec<crate::api::tor::OnionRoute>>::sse_encode(self.onion_routes, serializer);
         <crate::api::types::NetTuning>::sse_encode(self.tuning, serializer);
         <bool>::sse_encode(self.offline, serializer);
+        <bool>::sse_encode(self.tor_wanted, serializer);
     }
 }
 

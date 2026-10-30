@@ -50,6 +50,7 @@ impl World {
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
             offline: false,
+            tor_wanted: false,
         };
         EpicWallet::create(
             &self.runtime,

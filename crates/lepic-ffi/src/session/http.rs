@@ -2,19 +2,23 @@
 //! Direct transactions over HTTP (ADR 0017): sends answered in the same exchange, and the
 //! listener that answers payments sent to this wallet.
 
+use std::io;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use lepic_foreign::{
-    Exposure, ForeignClient, ForeignUrl, HttpTransport, ListenError, ListenSettings,
-    ListenerHandle, PlainHttp, ReceiveHandler, Refusal, TRANSPORT_ID, UrlError, webpki_tls_config,
+    Exposure, ForeignClient, ForeignDialFuture, ForeignDialer, ForeignStream, ForeignUrl,
+    HttpTransport, ListenError, ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler, Refusal,
+    TRANSPORT_ID, UrlError, webpki_tls_config,
 };
-use lepic_node::Propagation;
+use lepic_node::{Propagation, is_loopback_host};
 use lepic_store::TxId;
 use lepic_transport::transport::{BoxFuture, Destination, TransportId};
 use lepic_wallet::send::Delivery;
 use lepic_wallet::slate::WireSlate;
 use lepic_wallet::{ReceiveError, ReceiveRequest};
+use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
 use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
@@ -24,6 +28,7 @@ use crate::api::http::{
     HttpResentTx, HttpSentTx,
 };
 use crate::api::types::SendOptions;
+use crate::node::{RelayTor, RelayTorError};
 use crate::tuning::Tuning;
 
 /// Where the HTTP listener's events go.
@@ -42,10 +47,63 @@ pub(super) enum HttpListener {
     },
 }
 
-pub(super) fn http_transport(tuning: &Tuning) -> Result<HttpTransport, WalletError> {
+pub(super) fn http_transport(
+    tuning: &Tuning,
+    tor: &Arc<RelayTor>,
+) -> Result<HttpTransport, WalletError> {
     let tls = webpki_tls_config()
         .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
-    Ok(HttpTransport::new(ForeignClient::new(tuning.send, tls)))
+    let dialer = Arc::new(SendDialer {
+        tor: Arc::clone(tor),
+        connect_timeout: tuning.send.connect_timeout,
+    });
+    Ok(HttpTransport::new(ForeignClient::with_dialer(
+        tuning.send,
+        tls,
+        dialer,
+    )))
+}
+
+/// Opens connections to other wallets through the wallet's tor while it runs or is expected,
+/// and directly otherwise. Through tor the wallet's host is resolved by tor, never by the
+/// system. A loopback wallet stays direct. A tor that fails is an error: nothing goes around
+/// it.
+struct SendDialer {
+    tor: Arc<RelayTor>,
+    connect_timeout: Duration,
+}
+
+impl SendDialer {
+    async fn connect_directly(&self, host: &str, port: u16) -> io::Result<Box<dyn ForeignStream>> {
+        let stream = tokio::time::timeout(self.connect_timeout, TcpStream::connect((host, port)))
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+        stream.set_nodelay(true)?;
+        Ok(Box::new(stream))
+    }
+}
+
+impl ForeignDialer for SendDialer {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> ForeignDialFuture<'a> {
+        Box::pin(async move {
+            if is_loopback_host(host) {
+                return self.connect_directly(host, port).await;
+            }
+            match self.tor.open(host, port).await {
+                Ok(stream) => Ok(Box::new(stream) as Box<dyn ForeignStream>),
+                // An onion has no address to resolve without tor.
+                Err(RelayTorError::Off)
+                    if !host
+                        .rsplit('.')
+                        .next()
+                        .is_some_and(|label| label.eq_ignore_ascii_case("onion")) =>
+                {
+                    self.connect_directly(host, port).await
+                }
+                Err(error) => Err(io::Error::other(error)),
+            }
+        })
+    }
 }
 
 fn foreign_url(url: &str, allow_plain_http: bool) -> Result<ForeignUrl, WalletError> {
@@ -396,5 +454,135 @@ impl ReceiveHandler for HttpReceiver {
             refusal: Some(http_refusal(refusal)),
             ..HttpListenerEvent::of(HttpListenerEventKind::Refused)
         });
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "tor")]
+mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use lepic_tor::FixedSocks;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    fn dialer(tor: &Arc<RelayTor>) -> SendDialer {
+        SendDialer {
+            tor: Arc::clone(tor),
+            connect_timeout: Duration::from_secs(5),
+        }
+    }
+
+    /// A SOCKS5 server that accepts one connection and returns what it was asked to connect to.
+    async fn socks_server() -> (SocketAddr, tokio::task::JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let served = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut greeting = [0u8; 3];
+            stream.read_exact(&mut greeting).await.unwrap();
+            stream.write_all(&[5, 2]).await.unwrap();
+            let mut auth = [0u8; 2 + 32 + 1 + 32];
+            stream.read_exact(&mut auth).await.unwrap();
+            stream.write_all(&[1, 0]).await.unwrap();
+            let mut request = vec![0u8; 4];
+            stream.read_exact(&mut request).await.unwrap();
+            let mut name_len = [0u8; 1];
+            stream.read_exact(&mut name_len).await.unwrap();
+            let mut rest = vec![0u8; usize::from(name_len[0]) + 2];
+            stream.read_exact(&mut rest).await.unwrap();
+            request.extend_from_slice(&name_len);
+            request.extend(rest);
+            stream
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
+                .await
+                .unwrap();
+            request
+        });
+        (address, served)
+    }
+
+    #[tokio::test]
+    async fn a_wallet_is_asked_of_tor_by_name_so_tor_resolves_it() {
+        let (socks, served) = socks_server().await;
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
+        tor.attach_socks(FixedSocks(socks));
+        dialer(&tor).dial("wallet.example", 443).await.unwrap();
+        assert_eq!(
+            served.await.unwrap(),
+            lepic_tor::socks::encode_connect("wallet.example", 443).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_send_waits_for_a_tor_that_is_wanted_and_never_goes_direct() {
+        // Wanted from the open: no tor attached yet, nothing expected by the app.
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
+        let waiting = tokio::time::timeout(
+            Duration::from_millis(200),
+            dialer(&tor).dial("wallet.example", 443),
+        )
+        .await;
+        assert!(waiting.is_err(), "waits for tor");
+    }
+
+    #[tokio::test]
+    async fn a_tor_that_cannot_connect_is_an_error_and_not_a_direct_connection() {
+        let closed = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let socks = closed.local_addr().unwrap();
+        drop(closed);
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
+        tor.attach_socks(FixedSocks(socks));
+        assert!(dialer(&tor).dial("wallet.example", 443).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_wallet_on_this_device_stays_direct_while_tor_is_expected() {
+        let wallet = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = wallet.local_addr().unwrap().port();
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
+        tor.expect();
+        dialer(&tor).dial("127.0.0.1", port).await.unwrap();
+        wallet.accept().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn with_tor_not_wanted_a_wallet_is_reached_directly() {
+        let wallet = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = wallet.local_addr().unwrap().port();
+        let tor = Arc::new(RelayTor::direct(true, Duration::from_secs(75)));
+        // Not routed through tor: the dialer falls back to a direct connection only here.
+        assert!(matches!(
+            tor.open("wallet.example", 443).await,
+            Err(RelayTorError::Off)
+        ));
+        dialer(&tor).dial("127.0.0.1", port).await.unwrap();
+        wallet.accept().await.unwrap();
+    }
+
+    /// Manual: `LEPIC_TEST_TOR_SOCKS=127.0.0.1:19150 LEPIC_TEST_WALLET_URL=<https url> cargo
+    /// test -p lepic-ffi live_send_client_through_tor -- --ignored` with a tor listening there.
+    /// Asks the wallet's foreign API for its version through a Tor exit, with TLS for its name.
+    #[tokio::test]
+    #[ignore = "needs a running tor and a listening wallet"]
+    async fn live_send_client_through_tor() {
+        let socks: SocketAddr = std::env::var("LEPIC_TEST_TOR_SOCKS")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let url = std::env::var("LEPIC_TEST_WALLET_URL").unwrap();
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
+        tor.attach_socks(FixedSocks(socks));
+        let tuning = Tuning::check(&crate::tuning::shipped()).unwrap();
+        let client = ForeignClient::with_dialer(
+            tuning.send,
+            webpki_tls_config().unwrap(),
+            Arc::new(dialer(&tor)),
+        );
+        let url = ForeignUrl::parse(&url, PlainHttp::LoopbackOnly).unwrap();
+        let version = client.check_version(&url).await.unwrap();
+        println!("v2 {} v3 {}", version.v2, version.v3);
     }
 }

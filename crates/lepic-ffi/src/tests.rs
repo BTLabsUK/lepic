@@ -69,6 +69,7 @@ impl Fixture {
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
             offline: false,
+            tor_wanted: false,
         }
     }
 
