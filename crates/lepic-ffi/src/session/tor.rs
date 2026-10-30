@@ -45,21 +45,28 @@ const TOR_DIR: &str = "tor";
 /// since: the next session waits for tor from its first connection.
 const TOR_EXPECTED_FILE: &str = "tor-expected";
 
-/// The relay connection and node requests of a session on `data_dir`. They wait for tor from
-/// the start when the last session there expected one and the app did not stop it, so a
-/// connection made before the app calls [`Session::expect_tor`] never goes directly; else
-/// they go directly until tor is expected or started.
+/// The node requests, relay connection and HTTP sends of a session on `data_dir`. They wait
+/// for tor from the start when the app opens the session with `tor_wanted`, or when the last
+/// session there expected one and the app did not stop it, so a connection made before the
+/// app calls [`Session::expect_tor`] never goes directly; else they go directly until tor is
+/// expected or started.
 pub(super) fn session_routes(
     data_dir: &std::path::Path,
+    tor_wanted: bool,
     connect_timeout: std::time::Duration,
-) -> (RelayTor, RelayTor) {
-    let expected = !cfg!(target_os = "ios") && data_dir.join(TOR_EXPECTED_FILE).exists();
+) -> (RelayTor, RelayTor, RelayTor) {
+    let expected =
+        !cfg!(target_os = "ios") && (tor_wanted || data_dir.join(TOR_EXPECTED_FILE).exists());
     let routes = if expected {
         RelayTor::new
     } else {
         RelayTor::direct
     };
-    (routes(true, connect_timeout), routes(true, connect_timeout))
+    (
+        routes(true, connect_timeout),
+        routes(true, connect_timeout),
+        routes(true, connect_timeout),
+    )
 }
 
 /// `routes` after checking every one: a host name, an onion v3 host and two ports that are not
@@ -731,20 +738,24 @@ impl Session {
         self.node_tor.enabled()
     }
 
-    /// The relay connection and node requests wait for a tor that is being started.
+    /// The relay connection, node requests and HTTP sends wait for a tor that is being
+    /// started.
     fn expect_routes(&self) {
         self.relay_tor.expect();
         self.node_tor.expect();
+        self.send_tor.expect();
     }
 
     fn attach_routes(&self, tor: &Arc<TorProcess>) {
         self.relay_tor.attach(Arc::clone(tor));
         self.node_tor.attach(Arc::clone(tor));
+        self.send_tor.attach(Arc::clone(tor));
     }
 
     fn detach_routes(&self) {
         self.relay_tor.detach();
         self.node_tor.detach();
+        self.send_tor.detach();
     }
 
     /// The app is about to start tor: until it does, relay connections wait for it instead of
@@ -776,6 +787,11 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn attach_node_socks(&self, socks: std::net::SocketAddr) {
         self.node_tor.attach_socks(lepic_tor::FixedSocks(socks));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn send_through_tor(&self) -> bool {
+        *self.send_tor.active().borrow()
     }
 
     #[cfg(test)]

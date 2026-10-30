@@ -53,6 +53,13 @@ pub struct WalletConfig {
     /// wallet is created, restored or opened; changing it means opening the wallet again, and
     /// `set_servers` and `node_tip_for` fail with `InvalidArgument` for another value.
     pub offline: bool,
+    /// The app will start the wallet's tor for this session. Node requests, the Epicbox relay
+    /// connection and HTTP sends then wait for tor from the session's first connection, and
+    /// never go directly until `stop_tor` (or tor is never started and they time out), as
+    /// after `expect_tor`. With `false` they go directly until tor is expected or started,
+    /// unless the last session on `data_dir` expected tor and was not stopped. Read when a
+    /// wallet is created, restored or opened. Ignored on iOS and in a build without tor.
+    pub tor_wanted: bool,
 }
 
 /// The app configuration's `[node]`, `[epicbox]`, `[http]` and `[tor]` tuning keys. Every
@@ -632,6 +639,12 @@ pub struct SendOptions {
     /// for example ones another wallet on the same phrase is spending. At most 500; an
     /// output this wallet does not hold is ignored.
     pub exclude_outputs: Vec<String>,
+    /// The receiver's payment proof address, 64 hex characters (the ed25519 key of its onion
+    /// address, as `epic-wallet` derives it). The receiver is asked to sign a payment proof,
+    /// and its answer is finalized only when that proof verifies for this address, so a
+    /// wallet holding another key cannot complete the payment. The slate then needs the V3
+    /// shape. `None` asks for no proof. Not a valid address: `InvalidArgument`.
+    pub payment_proof_recipient: Option<String>,
 }
 
 /// How far a slate has progressed: `S` stages are a send, `I` stages an invoice.
@@ -1552,6 +1565,7 @@ mod tests {
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
             offline: false,
+            tor_wanted: false,
         };
         let printed = format!("{config:?}");
         assert!(!printed.contains("node-secret-value"));

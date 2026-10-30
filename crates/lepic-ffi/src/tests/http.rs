@@ -60,6 +60,7 @@ async fn session_on(
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
         offline: false,
+        tor_wanted: false,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     Arc::new(
@@ -532,4 +533,61 @@ async fn lock_during_an_http_delivery_leaves_a_resendable_send_to_a_fresh_handle
 
 fn shipped() -> crate::tuning::Tuning {
     crate::tuning::Tuning::check(&crate::tuning::shipped()).unwrap()
+}
+
+/// The payment proof address in an onion v3 address: its first 32 bytes, as hex.
+fn proof_address_of_onion(onion: &str) -> String {
+    const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz234567";
+    let bits: String = onion
+        .trim_end_matches(".onion")
+        .chars()
+        .map(|c| format!("{:05b}", ALPHABET.find(c).unwrap()))
+        .collect();
+    bits.as_bytes()
+        .chunks(8)
+        .take(32)
+        .map(|byte| {
+            let byte = u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 2).unwrap();
+            format!("{byte:02x}")
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_send_with_the_receivers_proof_address_is_finalized_and_another_is_refused() {
+    let pair = funded_pair().await;
+    let events = Events::default();
+    let port = listen(&pair.bob, &events).await;
+    let options = |address: String| {
+        Some(crate::api::types::SendOptions {
+            strategy: crate::api::types::SelectionStrategy::Smallest,
+            change_outputs: 1,
+            exclude_outputs: Vec::new(),
+            payment_proof_recipient: Some(address),
+        })
+    };
+    let bob = proof_address_of_onion(&pair.bob.onion_address().unwrap());
+    let alice = proof_address_of_onion(&pair.alice.onion_address().unwrap());
+
+    let sent = pair
+        .alice
+        .send_http_with(EPIC, 1, &url(port), false, None, options(bob))
+        .await
+        .unwrap();
+    assert!(sent.posted, "bob signed the proof for his own address");
+
+    // Bob's wallet answers a proof asked for another address with a signature that does not
+    // verify for it: the answer is never finalized.
+    let refused = pair
+        .alice
+        .send_http_with(EPIC, 1, &url(port), false, None, options(alice))
+        .await;
+    assert!(refused.is_err(), "a proof for another address is refused");
+    assert_eq!(pair.chain.pushed_count(), 1);
+
+    let invalid = pair
+        .alice
+        .send_http_with(EPIC, 1, &url(port), false, None, options("00".repeat(31)))
+        .await;
+    assert_eq!(kind(invalid), WalletErrorKind::InvalidArgument);
 }

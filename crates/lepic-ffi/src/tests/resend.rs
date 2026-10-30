@@ -51,6 +51,7 @@ impl World {
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
             offline: false,
+            tor_wanted: false,
         };
         self._dirs.push(dir);
         EpicWallet::create(

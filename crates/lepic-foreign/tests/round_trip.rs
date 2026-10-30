@@ -118,6 +118,55 @@ async fn sends_an_s1_and_gets_the_s2_back() {
     listener.shutdown().await;
 }
 
+/// Connects every stream to the listener on loopback and records the host and port asked for.
+struct ToListener {
+    port: u16,
+    asked: std::sync::Mutex<Vec<(String, u16)>>,
+}
+
+impl lepic_foreign::ForeignDialer for ToListener {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> lepic_foreign::ForeignDialFuture<'a> {
+        Box::pin(async move {
+            self.asked.lock().unwrap().push((host.to_owned(), port));
+            let stream = TcpStream::connect(("127.0.0.1", self.port)).await?;
+            Ok(Box::new(stream) as Box<dyn lepic_foreign::ForeignStream>)
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dialer_opens_every_connection_for_the_host_of_the_url() {
+    let wallet = handler(None);
+    let listener = listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
+        wallet.clone(),
+    )
+    .await
+    .unwrap();
+    let dialer = Arc::new(ToListener {
+        port: listener.local_addr().port(),
+        asked: std::sync::Mutex::default(),
+    });
+    let client = ForeignClient::with_dialer(
+        lepic_foreign::testing::client_settings(),
+        webpki_tls_config().unwrap(),
+        dialer.clone(),
+    );
+    // Nothing resolves this name: only the dialer can reach the wallet.
+    let url = ForeignUrl::parse("http://wallet.invalid:3415", PlainHttp::Allowed).unwrap();
+    let reply = client.receive_tx(&url, &s1()).await.unwrap();
+    assert_eq!(reply.as_text(), Some(S2));
+    assert_eq!(
+        dialer.asked.lock().unwrap().first(),
+        Some(&("wallet.invalid".to_owned(), 3415))
+    );
+    listener.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transport_holds_the_answer_for_its_slate() {
     let listener = listen(

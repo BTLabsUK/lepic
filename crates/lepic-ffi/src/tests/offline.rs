@@ -55,6 +55,7 @@ impl World {
             onion_routes: Vec::new(),
             tuning: crate::tuning::shipped(),
             offline: false,
+            tor_wanted: false,
         }
     }
 
@@ -93,6 +94,7 @@ async fn cold_wallet(world: &mut World) -> (EpicWallet, WalletConfig) {
     drop(online);
     let offline = WalletConfig {
         offline: true,
+        tor_wanted: false,
         ..config
     };
     (world.open(&offline, &store).await, offline)
@@ -174,6 +176,7 @@ async fn offline_changes_only_by_opening_the_wallet_again() {
     let (cold, offline) = cold_wallet(&mut world).await;
     let online = WalletConfig {
         offline: false,
+        tor_wanted: false,
         ..offline.clone()
     };
 

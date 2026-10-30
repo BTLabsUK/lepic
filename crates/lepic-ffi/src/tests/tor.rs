@@ -732,6 +732,7 @@ async fn the_onion_routes_of_the_config_are_there_from_the_open_and_checked() {
                 onion_routes: routes,
                 tuning: crate::tuning::shipped(),
                 offline: false,
+                tor_wanted: false,
             };
             let secret = crate::node::NodeSecret::take(&mut config);
             let session =
@@ -930,6 +931,7 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
         onion_routes: Vec::new(),
         tuning: crate::tuning::shipped(),
         offline: false,
+        tor_wanted: false,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let session = Session::new(
@@ -1103,6 +1105,47 @@ async fn the_status_and_the_events_carry_the_socks_port_once_tor_has_bootstrappe
     bob.stop_tor();
     events.wait_for(TorEventKind::Stopped).await;
     assert_eq!(bob.tor_status().socks_port, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_opened_with_tor_wanted_waits_for_tor_from_its_first_connection() {
+    let fixture = super::Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let session = |tor_wanted| {
+        let store = store.clone();
+        let fixture = &fixture;
+        async move {
+            let mut config = WalletConfig {
+                tor_wanted,
+                ..fixture.config()
+            };
+            let secret = crate::node::NodeSecret::take(&mut config);
+            Session::new(&fixture.runtime.inner, &config, &secret, store)
+                .await
+                .unwrap()
+        }
+    };
+    let plain = session(false).await;
+    assert!(!plain.relay_through_tor() && !plain.node_through_tor() && !plain.send_through_tor());
+    plain
+        .create(SeedOrigin::Generate, password())
+        .await
+        .unwrap();
+    plain.lock();
+    drop(plain);
+
+    let wanted = session(true).await;
+    assert!(
+        wanted.relay_through_tor() && wanted.node_through_tor() && wanted.send_through_tor(),
+        "waits for tor before the app starts one"
+    );
+    wanted.open(password()).await.unwrap();
+    assert!(wanted.send_through_tor());
+    wanted.stop_tor();
+    assert!(
+        !wanted.relay_through_tor() && !wanted.node_through_tor() && !wanted.send_through_tor(),
+        "a stop leads back to direct"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
