@@ -121,7 +121,8 @@ impl TorSlot {
 pub(super) struct TorRun {
     generation: u64,
     tor: Arc<TorProcess>,
-    listener: ListenerHandle,
+    /// The listener behind the onion; `None` when the onion is not published.
+    listener: Option<ListenerHandle>,
     report: TorReport,
     /// Forwards tor's states to `report` and publishes the onion.
     driver: JoinHandle<()>,
@@ -312,8 +313,8 @@ impl Session {
         Ok(lepic_tor::onion_address(key.public_key()))
     }
 
-    /// Starts tor and its listener unless tor runs or starts, and reports what they do to
-    /// `report`.
+    /// Starts tor and, with `publish_onion`, its listener behind the published onion, unless
+    /// tor runs or starts, and reports what they do to `report`.
     ///
     /// A start while the tor stopped last is still going down waits for it, as both use the
     /// same data directory; one that waits too long reports `Failed` and `Stopped`. iOS runs
@@ -323,6 +324,7 @@ impl Session {
         self: &Arc<Self>,
         tor_binary: String,
         lib_dir: Option<String>,
+        publish_onion: bool,
         report: TorReport,
     ) -> Result<(), WalletError> {
         let key = self.engine.onion_key()?;
@@ -360,10 +362,7 @@ impl Session {
                 return Ok(());
             }
         }
-        let receiver = self.http_receiver(listener_report(&report), TRANSPORT_ID);
-        let listening =
-            lepic_foreign::listen(lepic_tor::listen_settings(self.tuning.listen), receiver).await;
-        let listener = match listening {
+        let listener = match self.onion_listener(publish_onion, &report).await {
             Ok(listener) => listener,
             Err(error) => {
                 let mut slot = lock(&self.tor_slot);
@@ -388,7 +387,9 @@ impl Session {
         if let Some(timings) = *lock(&self.tor_timings) {
             settings.timings = timings;
         }
-        let port = listener.local_addr().port();
+        let publish = listener
+            .as_ref()
+            .map(|listener| (key, listener.local_addr().port()));
         let unclaimed = {
             let mut slot = lock(&self.tor_slot);
             if matches!(&*slot, TorSlot::Starting(started) if *started == generation) {
@@ -398,8 +399,7 @@ impl Session {
                     Arc::downgrade(self),
                     generation,
                     Arc::clone(&tor),
-                    key,
-                    port,
+                    publish,
                     Arc::clone(&report),
                     Arc::clone(&publish_failure),
                 ));
@@ -421,10 +421,27 @@ impl Session {
         };
         // Stopped or locked while the listener was binding.
         if let Some(listener) = unclaimed {
-            listener.shutdown().await;
+            if let Some(listener) = listener {
+                listener.shutdown().await;
+            }
             report(TorEvent::of(TorEventKind::Stopped));
         }
         Ok(())
+    }
+
+    /// The listener behind the onion, when it is published.
+    async fn onion_listener(
+        self: &Arc<Self>,
+        publish_onion: bool,
+        report: &TorReport,
+    ) -> Result<Option<ListenerHandle>, lepic_foreign::ListenError> {
+        if !publish_onion {
+            return Ok(None);
+        }
+        let receiver = self.http_receiver(listener_report(report), TRANSPORT_ID);
+        lepic_foreign::listen(lepic_tor::listen_settings(self.tuning.listen), receiver)
+            .await
+            .map(Some)
     }
 
     /// Stops tor, then its listener. `Stopped` is reported once both are down; until then the
@@ -775,6 +792,12 @@ impl Session {
     pub(crate) fn set_tor_timings(&self, timings: lepic_tor::TorTimings) {
         *lock(&self.tor_timings) = Some(timings);
     }
+
+    /// Whether the running tor has a listener behind its onion.
+    #[cfg(test)]
+    pub(crate) fn tor_listener_runs(&self) -> bool {
+        matches!(&*lock(&self.tor_slot), TorSlot::Running(run) if run.listener.is_some())
+    }
 }
 
 fn tor_not_running() -> WalletError {
@@ -784,14 +807,13 @@ fn tor_not_running() -> WalletError {
     )
 }
 
-/// Forwards tor's states to `report`, publishes the onion once tor has bootstrapped, and
-/// stops tor and its listener when tor ends on its own.
+/// Forwards tor's states to `report`, publishes the onion of `publish` to its listener port
+/// once tor has bootstrapped, and stops tor and its listener when tor ends on its own.
 async fn drive(
     session: Weak<Session>,
     generation: u64,
     tor: Arc<TorProcess>,
-    key: OnionKey,
-    port: u16,
+    publish: Option<(OnionKey, u16)>,
     report: TorReport,
     publish_failure: Arc<std::sync::Mutex<Option<TorFailureKind>>>,
 ) {
@@ -819,6 +841,9 @@ async fn drive(
         }
     };
     let publish = async {
+        let Some((key, port)) = publish else {
+            return;
+        };
         if tor.wait_bootstrapped().await.is_err() {
             return;
         }
@@ -861,7 +886,9 @@ async fn shut_down(run: TorRun, down: watch::Sender<bool>) {
     driver.abort();
     let _ = driver.await;
     stop_tor_process(tor).await;
-    listener.shutdown().await;
+    if let Some(listener) = listener {
+        listener.shutdown().await;
+    }
     info!(transport = "tor", "tor stopped");
     down.send_replace(true);
     report(TorEvent::of(TorEventKind::Stopped));

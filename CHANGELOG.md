@@ -20,6 +20,8 @@ Conventional Commit messages at release time.
   `WalletErrorKind::Offline`), the payment stages work on the last confirmed tip, and finalizing
   stores the transaction without posting it (`FinalizedTx::posted` false).
   `finished_payment` returns its final slate as legacy V3 JSON.
+- `lepic-ffi`'s `start_tor` takes `publish_onion`: false starts tor for its SOCKS routes only,
+  without publishing the wallet's onion or running the listener behind it.
 
 ### Changed
 

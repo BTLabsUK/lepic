@@ -31,6 +31,10 @@ LEPIC would do it, at the price of global state (ADR 0011) and app policy in the
   wallet's next online refresh confirms it from the kernel on chain.
 - `lepic-ffi` maps every refusal to one new `WalletErrorKind::Offline` (78) and reports
   `FinalizedTx::posted` false.
+- In the same spirit, the caller decides whether Link receiving over Tor runs: `start_tor` takes
+  `publish_onion`. When false, tor starts without `ADD_ONION` and without the wallet's listener
+  behind the onion, and only carries the node, relay and Tor-send connections through its
+  SOCKS port. `true` publishes as before. It is a per-call argument, not a mode.
 
 ## Consequences
 
@@ -43,7 +47,7 @@ LEPIC would do it, at the price of global state (ADR 0011) and app policy in the
 - HTTP and Tor sends and listeners are not ports of the session's node or relay; an offline app
   does not start them.
 - `lepic-ffi`'s `WalletConfig` and `FinalizedTx` gain a field, so code that builds either by
-  hand must set it.
+  hand must set it, and `start_tor` a required argument.
 
 ## Alternatives considered
 

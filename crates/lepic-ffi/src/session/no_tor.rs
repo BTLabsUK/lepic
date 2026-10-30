@@ -33,6 +33,7 @@ impl Session {
         self: &Arc<Self>,
         _tor_binary: String,
         _lib_dir: Option<String>,
+        _publish_onion: bool,
         _report: TorReport,
     ) -> Result<(), WalletError> {
         Err(tor_not_built())

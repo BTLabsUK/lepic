@@ -7196,6 +7196,7 @@ fn wire__crate__api__wallet__EpicWallet_start_tor_impl(
             >>::sse_decode(&mut deserializer);
             let api_tor_binary = <String>::sse_decode(&mut deserializer);
             let api_lib_dir = <Option<String>>::sse_decode(&mut deserializer);
+            let api_publish_onion = <bool>::sse_decode(&mut deserializer);
             let api_events = <StreamSink<
                 crate::api::tor::TorEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
@@ -7226,6 +7227,7 @@ fn wire__crate__api__wallet__EpicWallet_start_tor_impl(
                                 &*api_that_guard,
                                 api_tor_binary,
                                 api_lib_dir,
+                                api_publish_onion,
                                 api_events,
                             )
                             .await;

@@ -194,10 +194,15 @@ impl EpicWallet {
     /// app left running on the wallet's files, as after the app was killed, is halted first.
     /// The onion is the same on every start. On iOS nothing is started: the stream gets
     /// `Failed` with `Missing`, then `Stopped`.
+    ///
+    /// With `publish_onion` false the wallet's onion is not published and no listener runs
+    /// behind it: tor only carries the node, relay and Tor-send connections, and the stream
+    /// stops at `Bootstrapped`, never `Publishing` or `Ready`.
     pub async fn start_tor(
         &self,
         tor_binary: String,
         lib_dir: Option<String>,
+        publish_onion: bool,
         events: StreamSink<TorEvent>,
     ) {
         let sink = events.clone();
@@ -205,7 +210,9 @@ impl EpicWallet {
             .run_until_stopped("start_tor", |session| async move {
                 // A closed stream only means the app stopped listening.
                 let report = Arc::new(move |event| drop(sink.add(event)));
-                session.start_tor(tor_binary, lib_dir, report).await
+                session
+                    .start_tor(tor_binary, lib_dir, publish_onion, report)
+                    .await
             })
             .await;
         end_stream(&events, started);
