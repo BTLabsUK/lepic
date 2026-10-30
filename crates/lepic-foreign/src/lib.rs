@@ -4,6 +4,7 @@
 //! same way. Wire-compatible with `epic-wallet` `v4.1.0` `send -m http` and `listen -m http`.
 
 pub mod client;
+pub mod dial;
 pub mod error;
 pub mod rpc;
 pub mod server;
@@ -13,6 +14,7 @@ pub mod transport;
 pub mod url;
 
 pub use client::{ClientSettings, ForeignClient, webpki_tls_config};
+pub use dial::{ForeignDialFuture, ForeignDialer, ForeignStream};
 pub use error::{ClientError, ListenError, RpcError, UrlError};
 pub use server::{
     Exposure, ListenLimits, ListenSettings, ListenerHandle, ReceiveHandler, Refusal, listen,
