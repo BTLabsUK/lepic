@@ -14,6 +14,8 @@ pub mod url;
 
 pub use client::{ClientSettings, ForeignClient, webpki_tls_config};
 pub use error::{ClientError, ListenError, RpcError, UrlError};
+#[cfg(unix)]
+pub use server::listen_unix;
 pub use server::{
     Exposure, ListenLimits, ListenSettings, ListenerHandle, ReceiveHandler, Refusal, listen,
 };
