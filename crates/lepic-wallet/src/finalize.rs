@@ -66,6 +66,7 @@ use crate::wallet::Wallet;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SlateField {
+    Id,
     Amount,
     Fee,
     Height,
@@ -81,6 +82,7 @@ pub enum SlateField {
 impl std::fmt::Display for SlateField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::Id => "slate id",
             Self::Amount => "amount",
             Self::Fee => "fee",
             Self::Height => "height",
@@ -304,6 +306,9 @@ fn signing(error: CryptoError) -> FinalizeError {
 /// signature. Everything else is what the sender proposed.
 fn check_reply(s1: &Slate, s2: &Slate) -> Result<(), FinalizeError> {
     let mismatch = |field| Err(FinalizeError::Mismatch { field });
+    if s2.id() != s1.id() {
+        return mismatch(SlateField::Id);
+    }
     if s2.amount() != s1.amount() {
         return mismatch(SlateField::Amount);
     }

@@ -462,6 +462,9 @@ pub(crate) fn check_signed_payment(i1: &Slate, i2: &Slate) -> Result<(), Invoice
 /// optionally a TTL. Everything else is what the issuer proposed.
 fn check_payment(i1: &Slate, i2: &Slate) -> Result<(), InvoiceError> {
     let mismatch = |field| Err(InvoiceError::Mismatch { field });
+    if i2.id() != i1.id() {
+        return mismatch(InvoiceField::Id);
+    }
     if i2.amount() != i1.amount() {
         return mismatch(InvoiceField::Amount);
     }
