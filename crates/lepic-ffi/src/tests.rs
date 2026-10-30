@@ -18,6 +18,8 @@ mod http;
 mod invoice;
 mod listener;
 mod live_restore;
+#[cfg(feature = "tor")]
+mod live_send_http_tor;
 mod node;
 mod offline;
 mod outputs;

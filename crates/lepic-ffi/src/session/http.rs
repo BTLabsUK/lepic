@@ -585,4 +585,47 @@ mod tests {
         let version = client.check_version(&url).await.unwrap();
         println!("v2 {} v3 {}", version.v2, version.v3);
     }
+
+    /// Manual: `LEPIC_TEST_TOR_SOCKS=127.0.0.1:19150 LEPIC_TEST_GET_URLS=<https url>[,...]
+    /// cargo test -p lepic-ffi live_get_through_tor -- --ignored --nocapture` with a tor
+    /// listening there. GETs each URL over a stream the send dialer opens, which hands tor the
+    /// host name, with TLS for that name, and prints the status line and the body.
+    #[tokio::test]
+    #[ignore = "needs a running tor and the network"]
+    async fn live_get_through_tor() {
+        use tokio_rustls::TlsConnector;
+        use tokio_rustls::rustls::pki_types::ServerName;
+
+        let socks: SocketAddr = std::env::var("LEPIC_TEST_TOR_SOCKS")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
+        tor.attach_socks(FixedSocks(socks));
+        let tls = TlsConnector::from(webpki_tls_config().unwrap());
+        let dialer = SendDialer {
+            tor: Arc::clone(&tor),
+            connect_timeout: Duration::from_secs(60),
+        };
+        for url in std::env::var("LEPIC_TEST_GET_URLS").unwrap().split(',') {
+            let rest = url.strip_prefix("https://").unwrap();
+            let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+            let stream = dialer.dial(host, 443).await.unwrap();
+            let name = ServerName::try_from(host.to_owned()).unwrap();
+            let mut stream = tls.connect(name, stream).await.unwrap();
+            let request =
+                format!("GET /{path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut answer = Vec::new();
+            // A server may end TLS without close_notify; what arrived is enough.
+            let _ = stream.read_to_end(&mut answer).await;
+            let answer = String::from_utf8_lossy(&answer);
+            let status = answer.lines().next().unwrap_or_default();
+            let body = answer.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+            println!(
+                "{url}: {status}\n{}",
+                body.chars().take(400).collect::<String>()
+            );
+        }
+    }
 }
