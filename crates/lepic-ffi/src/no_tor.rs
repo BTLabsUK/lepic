@@ -60,6 +60,7 @@ impl RelayTor {
     }
 }
 
-/// Streams that would share a tor circuit; this build has no tor.
+/// Streams that would share a tor circuit; this build has no tor. Braced rather than a unit
+/// struct, so the callers' `StreamGroup::default()` reads the same in both builds.
 #[derive(Debug, Default)]
-pub(crate) struct StreamGroup;
+pub(crate) struct StreamGroup {}
