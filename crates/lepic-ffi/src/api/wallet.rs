@@ -640,6 +640,29 @@ impl EpicWallet {
         .await
     }
 
+    /// Checks `pin` against `sealed_password` of a wallet from [`EpicWallet::create_with_pin`],
+    /// for an app that asks for the PIN again before an action. The attempt is counted and
+    /// delayed as in [`EpicWallet::open_with_pin`]; nothing else is stored, and the sealed text
+    /// and the PIN key stay as they are. The password it opens is dropped at once.
+    ///
+    /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a store without the
+    /// PIN key `SecretStore`, and a locked wallet `Locked`, before any attempt is counted.
+    pub async fn check_pin(
+        &self,
+        pin: String,
+        sealed_password: String,
+    ) -> Result<(), WalletError> {
+        let pin = Zeroizing::new(pin);
+        self.run("check_pin", |session| async move {
+            // A locked wallet refuses before the attempt is counted.
+            session.ensure_unlocked()?;
+            pin::unlock(&session.runtime().pin, session.store(), pin, sealed_password)
+                .await
+                .map(drop)
+        })
+        .await
+    }
+
     /// Changes the PIN of a wallet from [`EpicWallet::create_with_pin`] and returns the new
     /// sealed text, for the same wallet password under `new_pin` and a new PIN key. `old_pin`
     /// must open `sealed_password`; that attempt is counted and delayed as in

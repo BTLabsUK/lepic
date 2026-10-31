@@ -172,6 +172,33 @@ async fn wrong_pins_are_counted_in_the_app_store_until_one_is_right() {
     assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
 }
 
+/// A PIN asked again before an action is counted like any other attempt and changes neither
+/// the sealed text nor the PIN key.
+#[tokio::test]
+async fn check_pin_counts_attempts_and_keeps_the_key() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let sealed = created.sealed_password.clone();
+    let wallet = created.wallet;
+    let key = store.read(PIN_KEY).await.unwrap();
+
+    let wrong = wallet.check_pin("000000".to_owned(), sealed.clone()).await;
+    assert_eq!(kind(wrong), WalletErrorKind::WrongPassword);
+    assert_eq!(
+        store.read(FAILURES_KEY).await.unwrap().as_deref(),
+        Some("1")
+    );
+
+    wallet.check_pin(PIN.to_owned(), sealed.clone()).await.unwrap();
+    assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
+    assert_eq!(store.read(PIN_KEY).await.unwrap(), key);
+    assert_eq!(store.read(PENDING_KEY).await.unwrap(), None);
+
+    drop(wallet);
+    assert!(fixture.open_with_pin(&store, PIN, &sealed).await.is_ok());
+}
+
 #[tokio::test]
 async fn delete_wallet_removes_the_pin_entries() {
     let fixture = Fixture::new();
