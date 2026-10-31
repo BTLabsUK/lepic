@@ -273,7 +273,9 @@ pub(crate) fn close_scanned(
 
 /// An output a scan found on chain again after a refresh took it for another wallet's spend,
 /// as when a reorganisation undid the block: it leaves the entry, whose debit drops by its
-/// value. An entry left with no spent output is deleted.
+/// value. An entry left with no spent output is deleted, unless a scan credited change to it:
+/// the change stays linked to it, so it becomes what the chain still shows, outputs received
+/// by another wallet.
 pub(crate) fn revived(
     repos: &mut dyn Repositories,
     output: &OutputRecord,
@@ -288,8 +290,18 @@ pub(crate) fn revived(
         };
         spend.spent.retain(|spent| *spent != commitment);
         if spend.spent.is_empty() {
-            repos.delete_transaction(tx_id)?;
-            info!(tx_id = %tx_id, "spend by another wallet undone");
+            let linked = repos.outputs_of_transaction(tx_id)?;
+            let Some(height) = linked.iter().map(|linked| linked.height).min() else {
+                repos.delete_transaction(tx_id)?;
+                info!(tx_id = %tx_id, "spend by another wallet undone");
+                return Ok(());
+            };
+            entry.direction = TxDirection::Incoming;
+            entry.amount_debited = Amount::ZERO;
+            repos.update_transaction(tx_id, &entry)?;
+            repos.set_confirmed_height(tx_id, height)?;
+            mark_received(repos, tx_id, height)?;
+            info!(tx_id = %tx_id, "spend by another wallet undone, its change kept as received");
         } else {
             entry.amount_debited = entry
                 .amount_debited
@@ -301,4 +313,129 @@ pub(crate) fn revived(
         return Ok(());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
+    use lepic_primitives::output::OutputIdentifier;
+    use lepic_primitives::params::Network;
+    use lepic_store::{CONTEXT_KEY_LEN, ContextKey, KeyId, MemoryStore, WalletStore};
+
+    use super::*;
+
+    const ACCOUNT: AccountIndex = AccountIndex(0);
+
+    fn store() -> MemoryStore {
+        let store = MemoryStore::new(ContextKey::from_bytes([1; CONTEXT_KEY_LEN]));
+        store
+            .write(|repos| crate::account::ensure_default_account(repos))
+            .unwrap();
+        store
+    }
+
+    fn output(child: u32, value: u64, status: OutputStatus, height: u64) -> OutputRecord {
+        let keychain =
+            Keychain::from_seed(&Seed::from_entropy(&[7; 32]).unwrap(), Network::Floonet).unwrap();
+        let key_id = Identifier::new(3, [0, 0, child, 0]).unwrap();
+        OutputRecord {
+            id: OutputIdentifier::new(
+                OutputFeatures::Plain,
+                keychain
+                    .commit(value, &key_id, SwitchCommitment::Regular)
+                    .unwrap(),
+            ),
+            key_id: KeyId(key_id.to_bytes()),
+            account: ACCOUNT,
+            amount: Amount::new(value),
+            status,
+            height: Height::new(height),
+            lock_height: Height::ZERO,
+            mmr_index: None,
+            tx: None,
+        }
+    }
+
+    /// Records `spent` as another wallet's spend over blocks 11 to 20 and returns the entry.
+    fn recorded(store: &MemoryStore, spent: &OutputRecord) -> TxId {
+        let now = Timestamp::from_second(1_790_000_000).unwrap();
+        store
+            .write(|repos| {
+                repos.put_output(spent)?;
+                let changes = record(
+                    repos,
+                    std::slice::from_ref(spent),
+                    Height::new(10),
+                    Height::new(20),
+                    now,
+                )?;
+                Ok::<_, StoreError>(changes[0].tx_id)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn an_undone_spend_with_credited_change_is_kept_as_received() {
+        let store = store();
+        let spent = output(0, 5_000, OutputStatus::Spent, 2);
+        let tx_id = recorded(&store, &spent);
+        let change = output(1, 3_000, OutputStatus::Unspent, 15);
+        store
+            .write(|repos| {
+                let taken = take_change(
+                    repos,
+                    ACCOUNT,
+                    &change.id.commitment,
+                    change.amount,
+                    change.height,
+                )?;
+                assert_eq!(taken, Some(tx_id));
+                // A scan stores the change linked to the entry it was credited to.
+                repos.put_output(&OutputRecord {
+                    tx: Some(tx_id),
+                    ..change.clone()
+                })
+            })
+            .unwrap();
+
+        store.write(|repos| revived(repos, &spent)).unwrap();
+
+        let entry = store
+            .read(|repos| repos.transaction(tx_id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.direction, TxDirection::Incoming);
+        assert_eq!(entry.amount_debited, Amount::ZERO);
+        assert_eq!(entry.amount_credited, Amount::new(3_000));
+        assert_eq!(
+            store.read(|repos| repos.other_wallet_spend(tx_id)).unwrap(),
+            Some(OtherWalletSpend {
+                after: Height::new(14),
+                to: Height::new(15),
+                ..OtherWalletSpend::default()
+            })
+        );
+        assert_eq!(
+            store.read(|repos| repos.confirmed_height(tx_id)).unwrap(),
+            Some(Height::new(15))
+        );
+        assert!(!store.read(|repos| is_unverified(repos, tx_id)).unwrap());
+        assert!(
+            store
+                .read(|repos| recently_spent(repos, Height::new(20)))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_undone_spend_with_no_linked_output_is_deleted() {
+        let store = store();
+        let spent = output(0, 5_000, OutputStatus::Spent, 2);
+        let tx_id = recorded(&store, &spent);
+
+        store.write(|repos| revived(repos, &spent)).unwrap();
+
+        assert_eq!(store.read(|repos| repos.transaction(tx_id)).unwrap(), None);
+    }
 }
