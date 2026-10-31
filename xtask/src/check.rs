@@ -6,7 +6,9 @@ use anyhow::{Context, Result, bail};
 use crate::{cargo, ci_lint, deps_check, lockfiles, repo_lint, vectors};
 
 const STEPS: &[(&str, &[&str])] = &[
-    ("fmt", &["fmt", "--all", "--check"]),
+    // Run from the workspace root, `cargo fmt` checks every member; `--all` would also check the
+    // path dependencies outside the workspace, the vendored secp256k1-zkp among them.
+    ("fmt", &["fmt", "--check"]),
     (
         "clippy",
         &[

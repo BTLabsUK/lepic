@@ -1,48 +1,53 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The secp256k1-zkp wrapper is the only git dependency, and it must resolve to the commit
-//! ADR 0009 records. cargo-deny allows the repository but cannot pin the commit.
+//! The secp256k1-zkp wrapper is built from the vendored copy of the commit ADR 0009 records, and
+//! the product workspace has no git dependency at all. cargo-deny denies unknown git sources but
+//! does not check where the wrapper comes from.
 
 use std::fmt;
 
-pub(crate) const SECP_REPOSITORY: &str = "https://github.com/EpicCash/rust-secp256k1-zkp";
-pub(crate) const SECP_COMMIT: &str = "42fcb29d4b635ea771d1984be0d11b0e64b15a93";
+const SECP_PATH: &str = "third_party/grin_secp256k1zkp";
 const SECP_PACKAGE: &str = "grin_secp256k1zkp";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Violation {
-    WrongGitSource { package: String, source: String },
+    GitSource { package: String, source: String },
+    SecpNotVendored { source: String },
     SecpMissing,
 }
 
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WrongGitSource { package, source } => write!(
+            Self::GitSource { package, source } => write!(
                 f,
-                "Cargo.lock resolves {package} from `{source}`; the only git source allowed is \
-                 {SECP_REPOSITORY} at {SECP_COMMIT}"
+                "Cargo.lock resolves {package} from `{source}`; the product workspace has no git \
+                 dependencies"
             ),
-            Self::SecpMissing => write!(
+            Self::SecpNotVendored { source } => write!(
                 f,
-                "Cargo.lock has no {SECP_PACKAGE} from {SECP_REPOSITORY} at {SECP_COMMIT}"
+                "Cargo.lock resolves {SECP_PACKAGE} from `{source}`; it must be the path package \
+                 {SECP_PATH}"
             ),
+            Self::SecpMissing => write!(f, "Cargo.lock has no {SECP_PACKAGE} from {SECP_PATH}"),
         }
     }
 }
 
 pub(crate) fn check(lockfile: &str) -> Vec<Violation> {
-    let expected = format!("git+{SECP_REPOSITORY}?rev={SECP_COMMIT}#{SECP_COMMIT}");
     let mut violations = Vec::new();
     let mut secp_found = false;
     for (name, source) in packages(lockfile) {
-        let Some(source) = source else { continue };
-        if !source.starts_with("git+") {
-            continue;
-        }
-        if source == expected {
+        let Some(source) = source else {
+            // Cargo writes no source for a path package.
             secp_found |= name == SECP_PACKAGE;
-        } else {
-            violations.push(Violation::WrongGitSource {
+            continue;
+        };
+        if name == SECP_PACKAGE {
+            violations.push(Violation::SecpNotVendored {
+                source: source.to_owned(),
+            });
+        } else if source.starts_with("git+") {
+            violations.push(Violation::GitSource {
                 package: name.to_owned(),
                 source: source.to_owned(),
             });
@@ -92,6 +97,10 @@ mod tests {
 
     use super::*;
 
+    /// The fork commit the vendored copy was taken from (`PATCHES.md` beside it).
+    const SECP_COMMIT: &str = "42fcb29d4b635ea771d1984be0d11b0e64b15a93";
+    const REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
     fn lock(entries: &[(&str, &str)]) -> String {
         let mut text = "version = 4\n".to_owned();
         for (name, source) in entries {
@@ -106,47 +115,45 @@ mod tests {
         text
     }
 
-    fn pinned() -> String {
-        format!("git+{SECP_REPOSITORY}?rev={SECP_COMMIT}#{SECP_COMMIT}")
-    }
-
     #[test]
-    fn accepts_the_wrapper_at_the_recorded_commit() {
+    fn accepts_the_vendored_wrapper() {
         let text = lock(&[
             ("lepic-crypto", ""),
-            (SECP_PACKAGE, &pinned()),
-            (
-                "zeroize",
-                "registry+https://github.com/rust-lang/crates.io-index",
-            ),
+            (SECP_PACKAGE, ""),
+            ("zeroize", REGISTRY),
         ]);
         assert_eq!(check(&text), []);
     }
 
     #[test]
-    fn rejects_the_wrapper_at_another_commit_and_other_git_sources() {
-        let other = "1111111111111111111111111111111111111111";
-        let moved = format!("git+{SECP_REPOSITORY}?rev={other}#{other}");
-        let branch = format!("git+{SECP_REPOSITORY}?branch=master#{SECP_COMMIT}");
+    fn rejects_the_wrapper_from_git_and_other_git_sources() {
+        let git = format!(
+            "git+https://github.com/EpicCash/rust-secp256k1-zkp?rev={SECP_COMMIT}#{SECP_COMMIT}"
+        );
         let text = lock(&[
-            (SECP_PACKAGE, &moved),
-            ("secp-sys", &branch),
+            (SECP_PACKAGE, &git),
             ("other", "git+https://example.org/other#abc"),
         ]);
         assert_eq!(
             check(&text),
             [
-                Violation::WrongGitSource {
-                    package: SECP_PACKAGE.to_owned(),
-                    source: moved
-                },
-                Violation::WrongGitSource {
-                    package: "secp-sys".to_owned(),
-                    source: branch
-                },
-                Violation::WrongGitSource {
+                Violation::SecpNotVendored { source: git },
+                Violation::GitSource {
                     package: "other".to_owned(),
                     source: "git+https://example.org/other#abc".to_owned()
+                },
+                Violation::SecpMissing,
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_the_wrapper_from_a_registry() {
+        assert_eq!(
+            check(&lock(&[(SECP_PACKAGE, REGISTRY)])),
+            [
+                Violation::SecpNotVendored {
+                    source: REGISTRY.to_owned()
                 },
                 Violation::SecpMissing,
             ]
@@ -162,16 +169,18 @@ mod tests {
     }
 
     #[test]
-    fn commit_matches_adr_0009_and_the_workspace_manifest() {
+    fn vendored_copy_matches_adr_0009_and_the_workspace_manifest() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let adr = fs::read_to_string(root.join("docs/adr/0009-conformance.md")).unwrap();
         assert!(adr.contains(SECP_COMMIT));
+        let patches = fs::read_to_string(root.join(SECP_PATH).join("PATCHES.md")).unwrap();
+        assert!(patches.contains(SECP_COMMIT));
         let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
         let declared = manifest
             .lines()
             .find(|line| line.starts_with(&format!("{SECP_PACKAGE} =")))
             .unwrap();
-        assert!(declared.contains(&format!("git = \"{SECP_REPOSITORY}\"")));
-        assert!(declared.contains(&format!("rev = \"{SECP_COMMIT}\"")));
+        assert!(declared.contains(&format!("path = \"{SECP_PATH}\"")));
+        assert!(!declared.contains("git ="));
     }
 }

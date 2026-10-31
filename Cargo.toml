@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*", "xtask"]
-exclude = ["conformance", "fuzz", "interop"]
+exclude = ["conformance", "fuzz", "interop", "third_party"]
 resolver = "3"
 
 [workspace.package]
@@ -28,7 +28,9 @@ lepic-telemetry = { path = "crates/lepic-telemetry" }
 
 # Every external crate is set once here with default features off; crates
 # enable what they use. Features listed here are policy, not convenience.
-grin_secp256k1zkp = { git = "https://github.com/EpicCash/rust-secp256k1-zkp", rev = "42fcb29d4b635ea771d1984be0d11b0e64b15a93", default-features = false, features = ["bullet-proof-sizing"] }
+# The secp256k1-zkp wrapper is a vendored copy with one upstream fix, recorded in
+# third_party/grin_secp256k1zkp/PATCHES.md (ADR 0010).
+grin_secp256k1zkp = { path = "third_party/grin_secp256k1zkp", default-features = false, features = ["bullet-proof-sizing"] }
 tokio = { version = "1.53.1", default-features = false }
 tokio-tungstenite = { version = "0.30.0", default-features = false }
 rustls = { version = "0.23.45", default-features = false, features = ["ring"] }

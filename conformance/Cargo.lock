@@ -1740,7 +1740,6 @@ checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
 [[package]]
 name = "grin_secp256k1zkp"
 version = "0.8.1"
-source = "git+https://github.com/EpicCash/rust-secp256k1-zkp?branch=master#1131a20920576413cd949e012a160561080324c1"
 dependencies = [
  "arrayvec 0.7.6",
  "cc",
@@ -1754,7 +1753,7 @@ dependencies = [
 [[package]]
 name = "grin_secp256k1zkp"
 version = "0.8.1"
-source = "git+https://github.com/EpicCash/rust-secp256k1-zkp?rev=42fcb29d4b635ea771d1984be0d11b0e64b15a93#42fcb29d4b635ea771d1984be0d11b0e64b15a93"
+source = "git+https://github.com/EpicCash/rust-secp256k1-zkp?branch=master#1131a20920576413cd949e012a160561080324c1"
 dependencies = [
  "arrayvec 0.7.6",
  "cc",
@@ -2362,7 +2361,7 @@ dependencies = [
 name = "lepic-crypto"
 version = "0.1.0"
 dependencies = [
- "grin_secp256k1zkp 0.8.1 (git+https://github.com/EpicCash/rust-secp256k1-zkp?rev=42fcb29d4b635ea771d1984be0d11b0e64b15a93)",
+ "grin_secp256k1zkp 0.8.1",
  "rand_core 0.10.1",
  "thiserror 2.0.21",
  "zeroize",

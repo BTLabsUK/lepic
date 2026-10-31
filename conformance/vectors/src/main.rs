@@ -325,22 +325,10 @@ mod tests {
     const NODE_COMMIT: &str = "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4";
     const WALLET_COMMIT: &str = "845b3fcf4df12ed0139929c62157015447a9d063";
     const SECP_COMMIT: &str = "1131a20920576413cd949e012a160561080324c1";
-    // The LEPIC crates the differential tests link bring the product workspace's own
-    // secp256k1-zkp pin, which may differ from the reference's. That copy is LEPIC's, not the
-    // reference's, so it is held to the product manifest instead of to ADR 0020.
-    const PRODUCT_MANIFEST: &str = include_str!("../../../Cargo.toml");
+    // The LEPIC crates the differential tests link bring the product workspace's vendored
+    // secp256k1-zkp, a path package with no source in the lockfile, so every git copy of it is the
+    // reference's.
     const SECP_REPO: &str = "https://github.com/EpicCash/rust-secp256k1-zkp";
-
-    /// The `rev` the product workspace pins secp256k1-zkp to.
-    fn product_secp_commit() -> Option<&'static str> {
-        PRODUCT_MANIFEST
-            .lines()
-            .find(|line| line.trim_start().starts_with("grin_secp256k1zkp"))?
-            .split("rev = \"")
-            .nth(1)?
-            .split('"')
-            .next()
-    }
 
     /// The source of the secp256k1-zkp copy that `epic_util`, the reference's crypto boundary,
     /// depends on.
@@ -404,13 +392,12 @@ mod tests {
 
     #[test]
     fn every_upstream_crate_resolves_to_a_single_pinned_commit() {
-        let product_secp = product_secp_commit().unwrap_or("missing from the product manifest");
         let pinned: [(&str, &[&str]); 3] = [
             ("https://github.com/EpicCash/epic?", &[NODE_COMMIT]),
             ("https://github.com/EpicCash/epic-wallet?", &[WALLET_COMMIT]),
             (
                 "https://github.com/EpicCash/rust-secp256k1-zkp?",
-                &[SECP_COMMIT, product_secp],
+                &[SECP_COMMIT],
             ),
         ];
         let sources = LOCKFILE

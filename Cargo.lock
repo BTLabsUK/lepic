@@ -783,7 +783,6 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 [[package]]
 name = "grin_secp256k1zkp"
 version = "0.8.1"
-source = "git+https://github.com/EpicCash/rust-secp256k1-zkp?rev=42fcb29d4b635ea771d1984be0d11b0e64b15a93#42fcb29d4b635ea771d1984be0d11b0e64b15a93"
 dependencies = [
  "arrayvec",
  "cc",
