@@ -3,8 +3,10 @@
 //!
 //! A switch takes the session's server gate for writing: the wallet calls running when it
 //! starts end first, and calls made after it wait until it is done (`tokio`'s lock is fair, so
-//! a stream of new calls cannot hold the switch off). A running listener moves to a new relay
-//! once no message is in hand, so no receive or acknowledgement is cut.
+//! a stream of new calls cannot hold the switch off). A running scan, which could hold the
+//! gate for minutes while every later call queues behind the switch, is cancelled. A running
+//! listener moves to a new relay once no message is in hand, so no receive or acknowledgement
+//! is cut.
 
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
@@ -23,6 +25,10 @@ use super::{Session, epicbox_transport, invalid, lock, relay_endpoint};
 use crate::api::error::WalletError;
 use crate::api::types::WalletConfig;
 use crate::node::NodeSecret;
+
+/// How often a switch waiting for the gate cancels the scan again, for a scan that took the
+/// gate just before the switch asked for it and claimed its cancel slot after.
+const SCAN_CANCEL_EVERY: Duration = Duration::from_secs(1);
 
 /// How long a listener moving to a new relay may take to settle the message in hand before
 /// it is abandoned; an abandoned message stays on the old relay.
@@ -88,17 +94,25 @@ impl Outbound for EpicboxSlot {
 
 impl Session {
     /// Moves the open wallet to the node and relay `config` names, as described in the
-    /// module docs. The data directory and chain must be the wallet's own. Fails with
-    /// `InvalidArgument`, changing nothing, for a node URL or relay that is not one, for
-    /// another directory or chain, and for a relay given to a wallet opened without one or
-    /// none given to a wallet opened with one, or another `offline` than the wallet's; with
-    /// `Locked` on a locked wallet.
+    /// module docs, cancelling a running scan. The data directory and chain must be the
+    /// wallet's own. Fails with `InvalidArgument`, changing nothing, for a node URL or relay
+    /// that is not one, for another directory or chain, and for a relay given to a wallet
+    /// opened without one or none given to a wallet opened with one, or another `offline` than
+    /// the wallet's; with `Locked` on a locked wallet.
     pub(crate) async fn set_servers(
         &self,
         config: &WalletConfig,
         node_secret: &NodeSecret,
     ) -> Result<(), WalletError> {
-        let _switch = self.servers.write().await;
+        let switch = self.servers.write();
+        tokio::pin!(switch);
+        // The pinned future keeps its place in the lock's queue across the timeouts.
+        let _switch = loop {
+            self.cancel_scan();
+            if let Ok(guard) = timeout(SCAN_CANCEL_EVERY, &mut switch).await {
+                break guard;
+            }
+        };
         self.ensure_unlocked()?;
         if config.chain.network() != self.network
             || !same_directory(&config.data_dir, &self.data_dir)

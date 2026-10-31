@@ -1339,11 +1339,11 @@ impl EpicWallet {
 
     /// Moves the open wallet to the node and Epicbox relay `config` names, keeping it unlocked.
     /// Calls running when it starts end first, and calls made while it waits or runs start
-    /// after it; a running scan is waited for too, so cancel it first to switch at once. A
-    /// running listener moves to a new relay once the message in hand is settled and
-    /// acknowledged, at most 30 seconds later, and its stream goes on without `Stopped`. A new
-    /// relay changes the wallet's Epicbox address to `<key>@<new relay>`; answers sent to the
-    /// old address stay on the old relay.
+    /// after it. A running scan is cancelled and ends with `Cancelled`, so the switch never
+    /// waits minutes for it; scan again after the switch. A running listener moves to a new
+    /// relay once the message in hand is settled and acknowledged, at most 30 seconds later,
+    /// and its stream goes on without `Stopped`. A new relay changes the wallet's Epicbox
+    /// address to `<key>@<new relay>`; answers sent to the old address stay on the old relay.
     ///
     /// `config.data_dir` and `config.chain` must be those the wallet was opened with: another
     /// chain is another wallet. Fails with `InvalidArgument`, keeping the servers in use, for
