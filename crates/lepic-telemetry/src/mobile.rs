@@ -101,6 +101,13 @@ const MARKERS: [&str; 9] = [
 const SEGMENTS: u64 = 4;
 const MIN_LIMIT_BYTES: u64 = 4 * 1024;
 const MAX_LINE_BYTES: u64 = 4 * 1024;
+/// How many times a line's length of one message or value the redaction reads, so a huge
+/// message costs no more than a few lines' worth of work.
+const REDACTED_INPUT_LINES: usize = 4;
+/// What is dropped from the end of an input cut short, after its redaction: a rule reads the
+/// words around what it takes out, so the text just before the cut may be a piece of a phrase,
+/// key or address that the rule would have caught whole.
+const CUT_MARGIN: usize = 512;
 
 /// The most bytes the ring keeps on disk, across all its files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -326,13 +333,13 @@ fn ring_line(record: &LogRecord, at: Timestamp, max_bytes: usize) -> String {
         push_escaped(&mut line, span);
     }
     line.push_str(": ");
-    push_escaped(&mut line, &redact_text(&record.message));
+    push_escaped(&mut line, &redact_bounded(&record.message, max_bytes));
     for (name, value) in &record.fields {
         line.push(' ');
         push_escaped(&mut line, name);
         line.push('=');
         if KEPT_FIELDS.contains(name) {
-            push_escaped(&mut line, &redact_text(value));
+            push_escaped(&mut line, &redact_bounded(value, max_bytes));
         } else {
             line.push_str(REDACTED);
         }
@@ -343,6 +350,23 @@ fn ring_line(record: &LogRecord, at: Timestamp, max_bytes: usize) -> String {
     }
     line.push('\n');
     line
+}
+
+/// `text` through [`redact_text`], of which only the first [`REDACTED_INPUT_LINES`] times
+/// `max_bytes` are read; a text cut there loses another [`CUT_MARGIN`] bytes at its end once
+/// redacted, so no piece of a value cut in two is written.
+fn redact_bounded(text: &str, max_bytes: usize) -> String {
+    let bound = max_bytes.saturating_mul(REDACTED_INPUT_LINES);
+    if text.len() <= bound {
+        return redact_text(text);
+    }
+    let cut = text
+        .get(..text.floor_char_boundary(bound))
+        .unwrap_or_default();
+    let mut redacted = redact_text(cut);
+    let kept = redacted.len().saturating_sub(CUT_MARGIN);
+    redacted.truncate(redacted.floor_char_boundary(kept));
+    redacted
 }
 
 /// `text` with everything the module documentation lists taken out. Whole slates, slatepacks
@@ -868,6 +892,10 @@ fn redact_urls(text: &str) -> Cow<'_, str> {
     }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
+    // A `://` inside the URL text the last one found runs to the same end, so that end, kept as
+    // the length of the text after it, is not looked for again: a long run of `://` stays
+    // linear.
+    let mut url_left: Option<usize> = None;
     while let Some((before, after)) = rest.split_once("://") {
         out.push_str(before);
         out.push_str("://");
@@ -880,11 +908,19 @@ fn redact_urls(text: &str) -> Cow<'_, str> {
         {
             continue;
         }
-        let len = after.find(ends_url).unwrap_or(after.len());
-        let url = after
-            .get(..len)
-            .unwrap_or_default()
-            .trim_end_matches(['.', ',', ':', ';', '!', '?']);
+        let url_len = match url_left {
+            Some(left) if after.len() >= left => after.len().saturating_sub(left),
+            _ => {
+                let len = after.find(ends_url).unwrap_or(after.len());
+                let url = after
+                    .get(..len)
+                    .unwrap_or_default()
+                    .trim_end_matches(['.', ',', ':', ';', '!', '?']);
+                url_left = Some(after.len().saturating_sub(url.len()));
+                url.len()
+            }
+        };
+        let url = after.get(..url_len).unwrap_or_default();
         if let Some(host) = url_host(url) {
             out.push_str(&host);
             rest = after.get(url.len()..).unwrap_or_default();
@@ -1691,6 +1727,35 @@ mod tests {
         assert!(lines[0].len() <= 4 * 1024, "{} bytes", lines[0].len());
         assert!(lines[0].ends_with('\n'));
         assert!(lines[1].ends_with(": record after\n"));
+    }
+
+    #[test]
+    fn huge_inputs_are_cut_before_redaction_without_leaving_a_piece() {
+        let bound = 4096_usize.saturating_mul(REDACTED_INPUT_LINES);
+        let hex_word = format!("{} ", "ab".repeat(32));
+        let mut message = hex_word.repeat(250);
+        message.push_str(&" ".repeat(bound.saturating_sub(20).saturating_sub(message.len())));
+        // The cut falls after the phrase's third word, too few for a phrase alone.
+        message.push_str(MNEMONIC);
+        message.push_str(&" tail".repeat(10_000));
+
+        let redacted = redact_bounded(&message, 4096);
+        assert!(redacted.starts_with("[hex] [hex] "), "{redacted}");
+        assert!(!redacted.contains("abandon"), "{redacted}");
+        assert!(!redacted.contains("tail"));
+        assert_eq!(redact_bounded("short pin 1234", 4096), "short pin [redacted]");
+    }
+
+    #[test]
+    fn a_run_of_hostless_urls_is_read_once() {
+        let run = "ab:///".repeat(100_000);
+        assert_eq!(redact_urls(&run), run);
+        let line = ring_line(&record(&run, vec![]), fixed_clock(), 4096);
+        assert!(line.len() <= 4096);
+        assert_eq!(
+            redact_urls("x ab:///ab://node.example/v2 y"),
+            "x ab:///ab://[host] y"
+        );
     }
 
     #[derive(Debug, Error)]

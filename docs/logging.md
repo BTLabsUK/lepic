@@ -84,6 +84,10 @@ last one before a report leaves the device. It runs before a record reaches the 
 | 32 or more hex digits | `[hex]` |
 | Base64 of 40 or more characters, any other run of 64 or more token characters that is not a URL | `[redacted]` |
 
+A line holds at most 4 KiB. The redaction reads at most four times that of each message or value;
+one cut there also loses the last 512 bytes of what its redaction gives, so no piece of a value cut
+in two is written.
+
 Targets, span names and field names are kept as they are, so they must never carry values.
 
 ## Never log
