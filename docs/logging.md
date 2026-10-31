@@ -70,9 +70,9 @@ last one before a report leaves the device. It runs before a record reaches the 
 | A slate (JSON with a slate key), from its first `{` on | `[slate]` |
 | An armoured slatepack | `[slatepack]` |
 | 8 or more recovery-phrase words in a row, any case and separators, one typo per 8 words | `[words]` |
-| The value after a key-like name: `password`, `pin`, `seed`, `mnemonic`, `phrase`, `token`, `secret`, `key`, `nonce`, `mask`, `blind`, `commit`, `excess`, `signature`, `slate`, `cookie`, `authorization`…, also inside longer names (`wallet_password`, `apiKey`) unless they end in `id`, `len`, `count` or similar | `[redacted]` |
+| The value after a key-like name: `password`, `pin`, `seed`, `mnemonic`, `phrase`, `token`, `secret`, `key`, `nonce`, `mask`, `blind`, `commit`, `excess`, `signature`, `slate`, `cookie`, `authorization`…, also inside longer names (`wallet_password`, `apiKey`) unless they end in `id`, `len`, `count` or similar; after `:` or `=` up to the end of the line or the next `,` or `;` | `[redacted]` |
 | `Bearer` and `Basic` credentials, `--password` arguments, 4 to 8 digits after `pin` | `[redacted]` |
-| A number before `EPIC`, an amount bucket such as `[<10 EPIC]`, a number after `amount`, `fee`, `balance`, `spendable` and the like | `[amount]` |
+| A number before `EPIC` or `nanoEPIC`, also glued to it (`1.5EPIC`), an amount bucket such as `[<10 EPIC]`, a number after `amount`, `fee`, `balance`, `spendable` and the like, a bare decimal number such as `1.5` (not `v4.1`, `1.5s` or `99.5%`) | `[amount]` |
 | A number after `port` | `[redacted]` |
 | Text quoted with `"` or `` ` `` | `[redacted]` |
 | A URL | its scheme and `[host]`, without user, port, path or query; on an onion address the address's fingerprint; on a loopback host that host and port |

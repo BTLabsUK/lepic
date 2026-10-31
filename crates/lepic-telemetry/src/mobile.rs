@@ -15,12 +15,15 @@
 //! - The value after a key-like name becomes `[redacted]`: `password`, `pin`, `seed`,
 //!   `mnemonic`, `phrase`, `token`, `secret`, `key`, `nonce`, `mask`, `blind`, `commit`,
 //!   `excess`, `signature`, `slate`, `cookie`, `authorization` and the like, also as part of a
-//!   longer name (`wallet_password`, `apiKey`) unless it ends in `id`, `len`, `count` or similar.
-//!   So do `Bearer` and `Basic` credentials, `--password` arguments and a 4 to 8 digit number
-//!   after `pin`.
-//! - Amounts become `[amount]`: a number before `EPIC`, an amount bucket such as `[<10 EPIC]`,
-//!   and a number after `amount`, `fee`, `balance`, `spendable` and the like. A number after
-//!   `port` becomes `[redacted]`.
+//!   longer name (`wallet_password`, `apiKey`) unless it ends in `id`, `len`, `count` or similar;
+//!   after a `:` or `=` up to the end of the line or the next `,` or `;`, as a secret may hold
+//!   spaces. So do `Bearer` and `Basic` credentials, `--password` arguments and a 4 to 8 digit
+//!   number after `pin`.
+//! - Amounts become `[amount]`: a number before `EPIC` or `nanoEPIC`, also glued to it
+//!   (`1.5EPIC`), an amount bucket such as `[<10 EPIC]`, a number after `amount`, `fee`,
+//!   `balance`, `spendable` and the like, and a bare decimal number such as `1.5`, though not
+//!   one glued to a letter, `.`, `:` or `%` (`v4.1`, `1.5s`, `99.5%`). A number after `port`
+//!   becomes `[redacted]`.
 //! - Text quoted with `"` or `` ` `` becomes `[redacted]`: decoder errors quote the input they
 //!   rejected.
 //! - A URL keeps only its scheme, `https://[host]`, losing its user, port, path and query; on
@@ -380,6 +383,7 @@ fn redact_text(text: &str) -> String {
     let text = redact_slatepacks(&text);
     let text = redact_phrases(&text);
     let text = redact_keyed(&text);
+    let text = redact_decimals(&text);
     let text = redact_quoted(&text);
     let text = redact_urls(&text);
     let text = redact_mailboxes(&text);
@@ -667,11 +671,16 @@ fn redact_keyed(text: &str) -> String {
         let (word, after) = from.split_at_checked(len).unwrap_or((from, ""));
         out.push_str(before);
         rest = after;
-        let amount = if word.eq_ignore_ascii_case("epic") {
-            cut_epic_amount(&mut out, after)
-        } else {
-            None
-        };
+        // The number of `1.5EPIC` or `1500nanoEPIC` is glued to the unit's word.
+        let amount = epic_unit_number(word).and_then(|glued| {
+            let kept = out.len();
+            out.push_str(glued);
+            let closed = cut_epic_amount(&mut out, after);
+            if closed.is_none() {
+                out.truncate(kept);
+            }
+            closed
+        });
         if let Some(closed) = amount {
             rest = after.get(closed..).unwrap_or_default();
             continue;
@@ -768,7 +777,7 @@ fn keyed_value(key: Key, flag: bool, after: &str) -> Option<(usize, usize, &'sta
         Key::Port => (number_len(value, true)?, REDACTED),
         Key::Pin if !separated && quote.is_none() => (pin_len(value)?, REDACTED),
         Key::Secret | Key::Pin if separated || flag || quote.is_some() => {
-            (secret_len(value, quote)?, REDACTED)
+            (secret_len(value, quote, separated)?, REDACTED)
         }
         Key::Secret | Key::Pin | Key::Scheme => return None,
     };
@@ -810,9 +819,15 @@ fn pin_len(value: &str) -> Option<usize> {
 }
 
 /// The length of the secret `value` starts with: up to `quote` when it was quoted, a whole
-/// `[…]`, `{…}` or `(…)`, or else up to a space or a delimiter. `None` when the value is no
-/// secret: empty, a marker, `***`, `none` or the like, or a credential scheme that comes next.
-fn secret_len(value: &str, quote: Option<char>) -> Option<usize> {
+/// `[…]`, `{…}` or `(…)`, after a `:` or `=` (`separated`) up to the end of the line or the
+/// next `,` or `;`, as a secret may hold spaces, or else up to a space or a delimiter. `None`
+/// when the value is no secret: empty, a marker, `***`, `none` or the like, or a credential
+/// scheme that comes next.
+fn secret_len(value: &str, quote: Option<char>, separated: bool) -> Option<usize> {
+    let word = value.find(ends_value).unwrap_or(value.len());
+    if quote.is_none() && in_set(AUTH_SCHEMES, value.get(..word)?) {
+        return None;
+    }
     let len = match (quote, value.chars().next()) {
         (Some(quote), _) => quoted_len(value, quote),
         (None, Some(open @ ('[' | '{' | '('))) => {
@@ -825,14 +840,19 @@ fn secret_len(value: &str, quote: Option<char>) -> Option<usize> {
                 .find(close)
                 .map_or(value.len(), |at| at.saturating_add(1))
         }
-        (None, _) => value.find(ends_value).unwrap_or(value.len()),
+        (None, _) if separated => {
+            let line = value
+                .find(['\r', '\n', ',', ';'])
+                .unwrap_or(value.len());
+            value.get(..line)?.trim_end().len()
+        }
+        (None, _) => word,
     };
     let secret = value.get(..len)?;
     let kept = secret.is_empty()
         || is_marker(value)
         || secret.bytes().all(|b| b == b'*')
-        || in_set(NOT_SECRETS, secret)
-        || (quote.is_none() && in_set(AUTH_SCHEMES, secret));
+        || in_set(NOT_SECRETS, secret);
     (!kept).then_some(len)
 }
 
@@ -860,6 +880,21 @@ fn is_marker(value: &str) -> bool {
         .is_some_and(|(inner, _)| MARKERS.contains(&inner.split(' ').next().unwrap_or(inner)))
 }
 
+/// The number glued to the front of a word that is the unit `EPIC` or `nanoEPIC`, in any case:
+/// `5` of `5EPIC`, `10k` of `10kEPIC`, empty for the unit alone; `None` for any other word.
+fn epic_unit_number(word: &str) -> Option<&str> {
+    let head = strip_suffix_ignore_case(word, "epic")?;
+    let head = strip_suffix_ignore_case(head, "nano").unwrap_or(head);
+    let digits = head.strip_suffix(['k', 'K']).unwrap_or(head);
+    digits.bytes().all(|b| b.is_ascii_digit()).then_some(head)
+}
+
+fn strip_suffix_ignore_case<'a>(word: &'a str, suffix: &str) -> Option<&'a str> {
+    let at = word.len().checked_sub(suffix.len())?;
+    let (head, tail) = word.split_at_checked(at)?;
+    tail.eq_ignore_ascii_case(suffix).then_some(head)
+}
+
 /// Replaces the number before an `EPIC` that follows `out`, and the brackets of an amount
 /// bucket such as `[<10 EPIC]`, by `[amount]`. Returns how much of `after`, the text after the
 /// `EPIC`, the bucket's `]` takes, or `None` when no number comes before the `EPIC`.
@@ -883,6 +918,62 @@ fn cut_epic_amount(out: &mut String, after: &str) -> Option<usize> {
     out.truncate(keep);
     out.push_str(AMOUNT);
     Some(closed)
+}
+
+/// Every bare decimal number, `1.5` or `1,000.25`, as `[amount]`: an amount written without
+/// its unit or a name before it. A number glued to a letter, `_`, `.`, `:`, `/`, `\`, `…` or
+/// `%` is kept, as in versions (`v4.1`, `4.1.0`), times (`12:34:56.7`), durations (`1.5s`),
+/// percentages and addresses; so are whole numbers such as heights.
+fn redact_decimals(text: &str) -> Cow<'_, str> {
+    if !text.contains('.') {
+        return Cow::Borrowed(text);
+    }
+    let split: Vec<(bool, &str)> =
+        pieces(text, |c| c.is_ascii_digit() || c == '.' || c == ',').collect();
+    let mut out = String::with_capacity(text.len());
+    for (index, &(is_run, piece)) in split.iter().enumerate() {
+        // A sign before the number is no glue: `-1.5`.
+        let before = index
+            .checked_sub(1)
+            .and_then(|previous| split.get(previous))
+            .and_then(|&(_, previous)| {
+                let unsigned = previous.strip_suffix(['-', '+']).unwrap_or(previous);
+                unsigned.chars().next_back()
+            });
+        let after = split
+            .get(index.saturating_add(1))
+            .and_then(|&(_, next)| next.chars().next());
+        let number = piece.trim_end_matches(['.', ',']);
+        let trailed = number.len() < piece.len();
+        let bare = is_run
+            && is_decimal(number)
+            && !before.is_some_and(glues_number)
+            && !after.is_some_and(|c| glues_number(c) || (trailed && c.is_alphanumeric()));
+        if bare {
+            out.push_str(AMOUNT);
+            out.push_str(piece.get(number.len()..).unwrap_or_default());
+        } else {
+            out.push_str(piece);
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Whether `number` is digits with one `.` and digits after it, `,` only between digits before.
+fn is_decimal(number: &str) -> bool {
+    let Some((whole, fraction)) = number.split_once('.') else {
+        return false;
+    };
+    !fraction.is_empty()
+        && fraction.bytes().all(|b| b.is_ascii_digit())
+        && whole
+            .split(',')
+            .all(|group| !group.is_empty() && group.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Characters next to a number that make it part of something other than an amount.
+fn glues_number(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '.' | ':' | '/' | '\\' | '…' | '%')
 }
 
 /// Every URL as its scheme and `[host]`, without its user, port, path, query or fragment. A URL
@@ -2048,8 +2139,8 @@ mod tests {
     #[test]
     fn values_after_key_like_names_are_removed() {
         assert_eq!(
-            redact_text("password=hunter2 pin: 1234"),
-            "password=[redacted] pin: [redacted]"
+            redact_text("password=hunter2, pin: 1234"),
+            "password=[redacted], pin: [redacted]"
         );
         assert_eq!(
             redact_text("PIN 123456 rejected, pin 12 too short"),
@@ -2074,9 +2165,9 @@ mod tests {
         );
         assert_eq!(
             redact_text(
-                "seed: [140, 1, 254] blinding_factor=08ab keychain_mask=f00d apiKey=xyz123"
+                "seed: [140, 1, 254] blinding_factor=08ab; keychain_mask=f00d; apiKey=xyz123"
             ),
-            "seed: [redacted] blinding_factor=[redacted] keychain_mask=[redacted] \
+            "seed: [redacted] blinding_factor=[redacted]; keychain_mask=[redacted]; \
              apiKey=[redacted]"
         );
         assert_eq!(
@@ -2085,6 +2176,38 @@ mod tests {
             )),
             "password: none, token=[redacted] mnemonic_len=24 slate_id: 0f3b2a1c…"
         );
+    }
+
+    #[test]
+    fn secrets_after_a_colon_or_equals_run_to_the_end_of_the_line() {
+        assert_eq!(
+            redact_text("password: correct horse battery\nnext line"),
+            "password: [redacted]\nnext line"
+        );
+        assert_eq!(
+            redact_text("token=abc def ghi, height=5; passphrase = one two; ok"),
+            "token=[redacted], height=5; passphrase = [redacted]; ok"
+        );
+        assert_eq!(redact_text("password: none, retry"), "password: none, retry");
+    }
+
+    #[test]
+    fn glued_units_and_bare_decimals_are_amounts() {
+        assert_eq!(
+            redact_text("sent 1.5EPIC and 1500nanoEPIC, 10kEPIC"),
+            "sent [amount] and [amount], [amount]"
+        );
+        assert_eq!(redact_text("got 2500 nanoEPIC"), "got [amount]");
+        assert_eq!(
+            redact_text("sent 1.5 to a contact, -0.25 back, 1,000.5."),
+            "sent [amount] to a contact, -[amount] back, [amount]."
+        );
+        for kept in [
+            "lepic v4.1 and 4.1.0 at 12:34:56.7 took 1.5s, 99.5% synced at height 1234",
+            "Epic Cash and lepic",
+        ] {
+            assert_eq!(redact_text(kept), kept);
+        }
     }
 
     #[test]
