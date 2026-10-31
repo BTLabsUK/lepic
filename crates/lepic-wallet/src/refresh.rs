@@ -1860,7 +1860,7 @@ pub(crate) fn stored_slate(
 
 /// A stored slate was validated when it was stored, so one that no longer decodes is skipped
 /// with a warning rather than blocking every later refresh.
-fn decode_stored(codecs: &CodecRegistry, tx_id: TxId, bytes: &[u8]) -> Option<Slate> {
+pub(crate) fn decode_stored(codecs: &CodecRegistry, tx_id: TxId, bytes: &[u8]) -> Option<Slate> {
     match codecs.decode(&WireSlate::binary(MediaType::JSON, bytes.to_vec())) {
         Ok(slate) => Some(slate),
         Err(error) => {

@@ -30,6 +30,7 @@ use lepic_store::{
 };
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
+use uuid::Uuid;
 
 use crate::cancel::{cancel_partner, drop_holdings, pool_holds, self_send_partner};
 use crate::chain;
@@ -405,13 +406,25 @@ pub(crate) fn release_check(
     codecs: &CodecRegistry,
     stored: &StoredTransaction,
 ) -> Result<Result<ReleaseCheck, ReleaseRefusal>, StoreError> {
+    release_check_with(repos, stored, |slate_id| {
+        final_kernel(repos, codecs, stored.id, slate_id)
+    })
+}
+
+/// [`release_check`] with the final kernel of the send's slate read by `final_kernel`, which
+/// runs only for a pending send.
+pub(crate) fn release_check_with(
+    repos: &dyn Repositories,
+    stored: &StoredTransaction,
+    final_kernel: impl FnOnce(Uuid) -> Result<Option<(Commitment, Height)>, StoreError>,
+) -> Result<Result<ReleaseCheck, ReleaseRefusal>, StoreError> {
     let entry = &stored.entry;
     let pending_send = entry.direction == TxDirection::Outgoing
         && matches!(entry.state, TxState::Finalized | TxState::Posted);
     let Some(slate_id) = entry.slate_id.filter(|_| pending_send) else {
         return Ok(Err(ReleaseRefusal::NotPendingSend { state: entry.state }));
     };
-    let Some((excess, min_height)) = final_kernel(repos, codecs, stored.id, slate_id)? else {
+    let Some((excess, min_height)) = final_kernel(slate_id)? else {
         return Ok(Err(ReleaseRefusal::KernelUnknown));
     };
     // Sends finalized before the height was stored count from the slate's creation, which is

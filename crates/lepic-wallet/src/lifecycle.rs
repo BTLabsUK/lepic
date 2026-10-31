@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 use crate::account::{ensure_default_account, place_key_counters};
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
+use crate::slate_cache::SlateCache;
 
 /// The secret name the seed is stored under in the wallet's secret storage.
 const SEED_SECRET: &str = "wallet/seed";
@@ -122,6 +123,8 @@ pub(crate) enum SeedSource {
 pub struct Session<D> {
     pub keychain: Keychain,
     pub store: D,
+    /// The stored slates the history read decoded, kept while the wallet is open.
+    pub(crate) slates: SlateCache,
 }
 
 /// Where a wallet lives and what it must match, for work on the blocking pool.
@@ -194,7 +197,11 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
         Ok::<_, WalletError>(())
     })?;
     debug!("wallet database prepared");
-    Ok(Session { keychain, store })
+    Ok(Session {
+        keychain,
+        store,
+        slates: SlateCache::default(),
+    })
 }
 
 /// Unlocks the secret storage, reads the seed and opens the database it belongs to.
@@ -223,7 +230,11 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
         Ok::<_, WalletError>(())
     })?;
     debug!("wallet database prepared");
-    Ok(Session { keychain, store })
+    Ok(Session {
+        keychain,
+        store,
+        slates: SlateCache::default(),
+    })
 }
 
 /// What [`check_phrase`] found the database to be.

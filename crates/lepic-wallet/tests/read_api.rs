@@ -380,6 +380,41 @@ fn transactions_are_listed_newest_first_with_counterparty_ttl_and_confirmation()
 }
 
 #[test]
+fn a_second_read_lists_the_same_rows_and_a_cancel_shows_in_the_next() {
+    let sender = Sender::new();
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(
+            request(Amount::new(AMOUNT), SelectionStrategy::Smallest),
+            to_peer(),
+        ))
+        .unwrap();
+    let list = || {
+        sender
+            .harness
+            .block_on(sender.wallet.transactions(ACCOUNT))
+            .unwrap()
+    };
+    let first = list();
+    assert_eq!(list(), first);
+    assert_eq!(first[0].transaction.entry.state, TxState::Sent);
+
+    sender
+        .harness
+        .block_on(sender.wallet.cancel(sent.tx_id))
+        .unwrap();
+    let cancelled = list();
+    assert_eq!(cancelled[0].transaction.id, sent.tx_id);
+    assert_eq!(cancelled[0].transaction.entry.state, TxState::Cancelled);
+    assert!(!cancelled[0].undelivered);
+    let single = sender
+        .harness
+        .block_on(sender.wallet.transaction_details(sent.tx_id))
+        .unwrap();
+    assert_eq!(single, cancelled[0]);
+}
+
+#[test]
 fn a_send_lists_its_change_in_its_details_also_once_another_send_spends_it() {
     let sender = Sender::new();
     let request = request(Amount::new(AMOUNT), SelectionStrategy::Smallest);

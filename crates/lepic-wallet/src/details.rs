@@ -24,9 +24,10 @@ use crate::error::WalletError;
 use crate::legacy_history::{self, TxOrigin};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
-use crate::refresh::{final_kernel, legacy_codecs, stored_slate, ttl_cutoff};
-use crate::release::release_check;
+use crate::refresh::legacy_codecs;
+use crate::release::release_check_with;
 use crate::scan::{ScanFound, found_output, scan_found};
+use crate::slate_cache::{SlateCache, Stages};
 use crate::wallet::Wallet;
 
 /// How long the host shows a sender's report that it posted a payment this wallet received,
@@ -208,7 +209,9 @@ where
                 let entry = repos
                     .transaction(tx_id)?
                     .ok_or(WalletError::UnknownTransaction(tx_id))?;
-                details(repos, &codecs, StoredTransaction { id: tx_id, entry }, now)
+                let stored = StoredTransaction { id: tx_id, entry };
+                let mut outbox = PendingOutbox::default();
+                details(repos, &codecs, &session.slates, &mut outbox, stored, now)
             })
         })
         .await
@@ -230,11 +233,15 @@ where
                 if repos.account(account)?.is_none() {
                     return Err(AccountError::UnknownAccount(account).into());
                 }
+                // Rows may need the pending outbox: it is read once for all of them.
+                let mut outbox = PendingOutbox::default();
                 repos
                     .transactions(account)?
                     .into_iter()
                     .rev()
-                    .map(|stored| details(repos, &codecs, stored, now))
+                    .map(|stored| {
+                        details(repos, &codecs, &session.slates, &mut outbox, stored, now)
+                    })
                     .collect()
             })
         })
@@ -242,19 +249,29 @@ where
     }
 }
 
+/// What the stored slates carry is decoded once per session by `slates`; the rest is read from
+/// the store on each call.
 fn details(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
+    slates: &SlateCache,
+    outbox: &mut PendingOutbox,
     transaction: StoredTransaction,
     now: Timestamp,
 ) -> Result<TransactionDetails, WalletError> {
     let tx_id = transaction.id;
-    let (kernel_excess, ttl_cutoff_height, messages, flow) = match transaction.entry.slate_id {
-        Some(slate_id) => (
-            final_kernel(repos, codecs, tx_id, slate_id)?.map(|(excess, _)| excess),
-            ttl_cutoff(repos, codecs, tx_id, slate_id)?,
-            messages(repos, codecs, tx_id, slate_id)?,
-            flow(repos, slate_id)?,
+    let stages = match transaction.entry.slate_id {
+        Some(slate_id) => Some(slates.stages(repos, codecs, tx_id, slate_id)?),
+        None => None,
+    };
+    let stages = stages.as_deref();
+    let final_kernel = stages.and_then(Stages::final_kernel);
+    let (kernel_excess, ttl_cutoff_height, messages, flow) = match stages {
+        Some(stages) => (
+            final_kernel.map(|(excess, _)| excess),
+            stages.first().and_then(|slate| slate.ttl_cutoff_height),
+            messages(stages),
+            flow(stages),
         ),
         None => (None, None, Vec::new(), TxFlow::Payment),
     };
@@ -296,10 +313,10 @@ fn details(
         TxOrigin::FoundByScan => scan_found(repos, tx_id)?,
         TxOrigin::Wallet | TxOrigin::Imported | TxOrigin::OtherWallet => None,
     };
-    let release = release_check(repos, codecs, &transaction)?.ok();
-    let undelivered = undelivered(repos, &transaction)?;
-    let output_commits = output_commits(repos, codecs, &transaction, flow)?;
-    let spent_commits = spent_commits(repos, codecs, &transaction, flow)?;
+    let release = release_check_with(repos, &transaction, |_| Ok(final_kernel))?.ok();
+    let undelivered = undelivered(repos, outbox, &transaction)?;
+    let output_commits = output_commits(repos, stages, &transaction, flow)?;
+    let spent_commits = spent_commits(repos, stages, &transaction, flow)?;
     let sender_reported_posted_at = sender_report(repos, &transaction, now)?;
     let sender_reported_cancelled_at = sender_cancel_report(repos, &transaction)?;
     let unverified =
@@ -333,10 +350,31 @@ fn details(
     })
 }
 
+/// The slate ids of the pending outbox entries, read for the first row that needs them.
+#[derive(Default)]
+struct PendingOutbox(Option<Vec<Uuid>>);
+
+impl PendingOutbox {
+    fn holds(&mut self, repos: &dyn Repositories, slate_id: Uuid) -> Result<bool, StoreError> {
+        let pending = match &mut self.0 {
+            Some(pending) => pending,
+            unread @ None => unread.insert(
+                repos
+                    .outbox(OutboxStatus::Pending)?
+                    .into_iter()
+                    .map(|stored| stored.entry.slate_id)
+                    .collect(),
+            ),
+        };
+        Ok(pending.contains(&slate_id))
+    }
+}
+
 /// A delivered slate leaves no pending outbox entry of its own behind, so a pending one means no
 /// attempt got through.
 fn undelivered(
     repos: &dyn Repositories,
+    outbox: &mut PendingOutbox,
     transaction: &StoredTransaction,
 ) -> Result<bool, StoreError> {
     let entry = &transaction.entry;
@@ -345,10 +383,7 @@ fn undelivered(
     else {
         return Ok(false);
     };
-    Ok(repos
-        .outbox(OutboxStatus::Pending)?
-        .iter()
-        .any(|stored| stored.entry.slate_id == slate_id))
+    outbox.holds(repos, slate_id)
 }
 
 /// A store link to a transaction does not say whether it created or spends the output, and
@@ -356,13 +391,13 @@ fn undelivered(
 /// the stage it builds. A self-send stores both parties' stages under one slate id.
 fn output_commits(
     repos: &dyn Repositories,
-    codecs: &CodecRegistry,
+    stages: Option<&Stages>,
     transaction: &StoredTransaction,
     flow: TxFlow,
 ) -> Result<Vec<Commitment>, StoreError> {
     let tx_id = transaction.id;
     let entry = &transaction.entry;
-    if let Some(slate_id) = entry.slate_id {
+    if let Some(stages) = stages {
         let (built, answered) = match (flow, entry.direction) {
             (TxFlow::Payment, TxDirection::Outgoing) => (SlateStage::Standard1, None),
             (TxFlow::Payment, TxDirection::Incoming) => {
@@ -373,25 +408,15 @@ fn output_commits(
                 (SlateStage::Invoice2, Some(SlateStage::Invoice1))
             }
         };
-        if let Some(slate) = stored_slate(repos, codecs, tx_id, slate_id, built)? {
-            let answered = match answered {
-                Some(stage) => stored_slate(repos, codecs, tx_id, slate_id, stage)?,
-                None => None,
-            };
+        if let Some(slate) = stages.decoded(built) {
+            let answered = answered.and_then(|stage| stages.decoded(stage));
             let theirs = |commitment: &Commitment| {
-                answered.as_ref().is_some_and(|slate| {
-                    slate
-                        .outputs()
-                        .iter()
-                        .any(|output| output.commitment == *commitment)
-                })
+                answered.is_some_and(|slate| slate.outputs.contains(commitment))
             };
             let mut commits = Vec::new();
-            for output in slate.outputs() {
-                if !theirs(&output.commitment)
-                    && repos.output(output.commitment.as_bytes())?.is_some()
-                {
-                    commits.push(output.commitment);
+            for &commitment in &slate.outputs {
+                if !theirs(&commitment) && repos.output(commitment.as_bytes())?.is_some() {
+                    commits.push(commitment);
                 }
             }
             return Ok(commits);
@@ -408,7 +433,7 @@ fn output_commits(
 
 fn spent_commits(
     repos: &dyn Repositories,
-    codecs: &CodecRegistry,
+    stages: Option<&Stages>,
     transaction: &StoredTransaction,
     flow: TxFlow,
 ) -> Result<Vec<Commitment>, StoreError> {
@@ -423,16 +448,13 @@ fn spent_commits(
         (TxFlow::Invoice, TxDirection::Outgoing) => SlateStage::Invoice2,
         _ => return Ok(Vec::new()),
     };
-    let Some(slate_id) = entry.slate_id else {
-        return Ok(Vec::new());
-    };
-    let Some(slate) = stored_slate(repos, codecs, tx_id, slate_id, built)? else {
+    let Some(slate) = stages.and_then(|stages| stages.decoded(built)) else {
         return Ok(Vec::new());
     };
     let mut commits = Vec::new();
-    for input in slate.inputs() {
-        if repos.output(input.commitment.as_bytes())?.is_some() {
-            commits.push(input.commitment);
+    for &commitment in &slate.inputs {
+        if repos.output(commitment.as_bytes())?.is_some() {
+            commits.push(commitment);
         }
     }
     Ok(commits)
@@ -440,33 +462,29 @@ fn spent_commits(
 
 /// A transaction stores stages of one flow only, so any stored invoice stage makes it an
 /// invoice.
-fn flow(repos: &dyn Repositories, slate_id: Uuid) -> Result<TxFlow, StoreError> {
-    for stage in [
+fn flow(stages: &Stages) -> TxFlow {
+    let invoice = [
         SlateStage::Invoice1,
         SlateStage::Invoice2,
         SlateStage::Invoice3,
-    ] {
-        if repos.slate(slate_id, stage)?.is_some() {
-            return Ok(TxFlow::Invoice);
-        }
+    ]
+    .into_iter()
+    .any(|stage| stages.has(stage));
+    if invoice {
+        TxFlow::Invoice
+    } else {
+        TxFlow::Payment
     }
-    Ok(TxFlow::Payment)
 }
 
 /// A later stage carries every message of an earlier one, since a party adds its own and keeps
 /// the other's. A message whose signature does not verify under its party's excess is left out.
-fn messages(
-    repos: &dyn Repositories,
-    codecs: &CodecRegistry,
-    tx_id: TxId,
-    slate_id: Uuid,
-) -> Result<Vec<SlateMessage>, StoreError> {
-    for stage in LATEST_FIRST {
-        if let Some(slate) = stored_slate(repos, codecs, tx_id, slate_id, stage)? {
-            return Ok(verified_messages(&slate));
-        }
-    }
-    Ok(Vec::new())
+fn messages(stages: &Stages) -> Vec<SlateMessage> {
+    LATEST_FIRST
+        .into_iter()
+        .find_map(|stage| stages.decoded(stage))
+        .map(|slate| slate.messages.clone())
+        .unwrap_or_default()
 }
 
 /// The messages of `slate` whose signatures verify, in the order the parties joined, each made
