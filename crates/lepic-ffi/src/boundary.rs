@@ -108,16 +108,24 @@ impl Boundary {
 /// starts and leaves when it ends, whether or not its Dart future is still awaited.
 #[derive(Default)]
 pub(crate) struct InFlight {
-    /// Each running call by id, with its abort handle once it has one.
-    tasks: std::sync::Mutex<std::collections::HashMap<u64, Option<tokio::task::AbortHandle>>>,
+    /// Each running call by id.
+    tasks: std::sync::Mutex<std::collections::HashMap<u64, Call>>,
     next: std::sync::atomic::AtomicU64,
 }
 
+/// Where a listed call is. Both [`InFlight::started`] and [`InFlight::abort_all`] change it
+/// under the list's lock, so whichever comes second ends the task: an abort that finds a call
+/// still `Starting` marks it `Aborted`, and its handle is aborted the moment it arrives.
+enum Call {
+    /// Spawned or about to be, its abort handle not given yet.
+    Starting,
+    Running(tokio::task::AbortHandle),
+    /// Ended by [`InFlight::abort_all`], or to be once its handle arrives.
+    Aborted,
+}
+
 impl InFlight {
-    fn lock(
-        &self,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<u64, Option<tokio::task::AbortHandle>>>
-    {
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u64, Call>> {
         self.tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -127,23 +135,41 @@ impl InFlight {
     /// list.
     fn starts(self: &Arc<Self>) -> Ends {
         let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.lock().insert(id, None);
+        self.lock().insert(id, Call::Starting);
         Ends {
             in_flight: Arc::clone(self),
             id,
         }
     }
 
-    /// Gives a listed call its abort handle. A call that already ended is not listed any more.
+    /// Gives a listed call its abort handle, or aborts the task at once when a lock came
+    /// between its spawn and now. A call that already ended is not listed any more.
     fn started(&self, id: u64, handle: tokio::task::AbortHandle) {
-        if let Some(slot) = self.lock().get_mut(&id) {
-            *slot = Some(handle);
+        // Aborted after the list's lock is let go, as `abort_all` does.
+        let aborted = match self.lock().get_mut(&id) {
+            Some(Call::Aborted) => Some(handle),
+            Some(call) => {
+                *call = Call::Running(handle);
+                None
+            }
+            None => None,
+        };
+        if let Some(handle) = aborted {
+            handle.abort();
         }
     }
 
-    /// Ends every listed call. Each fails for its caller with `Cancelled`.
+    /// Ends every listed call, also one whose task has no abort handle yet. Each fails for its
+    /// caller with `Cancelled`. Calls listed after it are not touched.
     pub(crate) fn abort_all(&self) {
-        let handles: Vec<_> = self.lock().values_mut().filter_map(Option::take).collect();
+        let handles: Vec<_> = self
+            .lock()
+            .values_mut()
+            .filter_map(|call| match std::mem::replace(call, Call::Aborted) {
+                Call::Running(handle) => Some(handle),
+                Call::Starting | Call::Aborted => None,
+            })
+            .collect();
         for handle in handles {
             handle.abort();
         }
@@ -256,7 +282,34 @@ fn panicked(operation: &'static str) -> WalletError {
 
 #[cfg(test)]
 mod tests {
-    use super::source_path;
+    use std::sync::Arc;
+
+    use super::{InFlight, source_path};
+
+    #[tokio::test]
+    async fn a_lock_between_spawn_and_started_still_ends_the_call() {
+        let in_flight = Arc::new(InFlight::default());
+        let ends = in_flight.starts();
+        let id = ends.id;
+        let task = tokio::spawn(async move {
+            let _ends = ends;
+            std::future::pending::<()>().await;
+        });
+
+        in_flight.abort_all();
+        in_flight.started(id, task.abort_handle());
+
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(in_flight.len(), 0);
+        // A call listed after the lock runs.
+        let ends = in_flight.starts();
+        let id = ends.id;
+        let task = tokio::spawn(async move {
+            let _ends = ends;
+        });
+        in_flight.started(id, task.abort_handle());
+        assert!(task.await.is_ok());
+    }
 
     #[test]
     fn panic_locations_leave_out_the_build_machine_directories() {
