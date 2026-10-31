@@ -366,15 +366,20 @@ fn slates_are_stored_once_per_stage<B: Backend>() {
             record: Record::Slate
         })
     ));
-    let (stages, one, missing) = read(store, |repos| {
+    let (stages, lengths, one, missing) = read(store, |repos| {
         Ok((
             repos.slates(SLATE_A)?,
+            repos.slate_stages(SLATE_A)?,
             repos.slate(SLATE_A, SlateStage::Standard2)?,
             repos.slate(SLATE_A, SlateStage::Standard3)?,
         ))
     })
     .unwrap();
     assert_eq!(stages, vec![s1, s2.clone()]);
+    assert_eq!(
+        lengths,
+        vec![(SlateStage::Standard1, 2), (SlateStage::Standard2, 2)]
+    );
     assert_eq!(one, Some(s2));
     assert_eq!(missing, None);
 }

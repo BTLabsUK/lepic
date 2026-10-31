@@ -916,6 +916,23 @@ impl SlateRepository for SqliteRepos<'_> {
             decode_slate,
         )
     }
+
+    fn slate_stages(&self, slate_id: Uuid) -> Result<Vec<(SlateStage, usize)>, StoreError> {
+        // Slates are stored as blobs, whose length SQLite reads without loading them.
+        self.collect(
+            "SELECT stage, length(bytes) FROM slates WHERE slate_id = ?1 ORDER BY stage",
+            [&slate_id.as_bytes()[..]],
+            |row| {
+                let record = Record::Slate;
+                let stage: String = row.get(0)?;
+                let length: i64 = row.get(1)?;
+                Ok((
+                    decode_code(&stage, SlateStage::from_code, record, "stage")?,
+                    usize::try_from(length).map_err(|_| corrupt(record, "bytes"))?,
+                ))
+            },
+        )
+    }
 }
 
 impl ContextRepository for SqliteRepos<'_> {

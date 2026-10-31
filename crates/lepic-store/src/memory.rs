@@ -525,6 +525,17 @@ impl SlateRepository for MemoryRepos<'_> {
             .map(|(_, slate)| slate.clone())
             .collect())
     }
+
+    fn slate_stages(&self, slate_id: Uuid) -> Result<Vec<(SlateStage, usize)>, StoreError> {
+        let id = slate_id.into_bytes();
+        Ok(self
+            .state
+            .slates
+            .range((id, "")..)
+            .take_while(|((other, _), _)| *other == id)
+            .map(|(_, slate)| (slate.stage, slate.bytes.len()))
+            .collect())
+    }
 }
 
 impl ContextRepository for MemoryRepos<'_> {

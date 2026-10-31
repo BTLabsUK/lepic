@@ -34,4 +34,14 @@ pub trait SlateRepository {
 
     /// Every stored stage of a slate, ordered by stage code.
     fn slates(&self, slate_id: Uuid) -> Result<Vec<StoredSlate>, StoreError>;
+
+    /// The stage and byte length of every stored stage of a slate, in the order of
+    /// [`SlateRepository::slates`]. A store overrides it to answer without reading the bytes.
+    fn slate_stages(&self, slate_id: Uuid) -> Result<Vec<(SlateStage, usize)>, StoreError> {
+        Ok(self
+            .slates(slate_id)?
+            .into_iter()
+            .map(|slate| (slate.stage, slate.bytes.len()))
+            .collect())
+    }
 }

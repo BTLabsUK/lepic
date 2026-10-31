@@ -27,8 +27,9 @@ pub(crate) struct SlateCache {
 }
 
 impl SlateCache {
-    /// The stages stored for `slate_id`, decoded. Reads the stored rows each time; decodes
-    /// them only when they are not the ones the kept entry was decoded from.
+    /// The stages stored for `slate_id`, decoded. Reads the stored stages and their lengths
+    /// each time; reads and decodes the rows only when they are not the ones the kept entry
+    /// was decoded from.
     pub(crate) fn stages(
         &self,
         repos: &dyn Repositories,
@@ -36,9 +37,7 @@ impl SlateCache {
         tx_id: TxId,
         slate_id: Uuid,
     ) -> Result<Arc<Stages>, StoreError> {
-        let rows = repos.slates(slate_id)?;
-        let stored: Vec<(SlateStage, usize)> =
-            rows.iter().map(|row| (row.stage, row.bytes.len())).collect();
+        let stored = repos.slate_stages(slate_id)?;
         if let Some(stages) = self
             .lock()
             .get(&slate_id)
@@ -46,6 +45,7 @@ impl SlateCache {
         {
             return Ok(Arc::clone(stages));
         }
+        let rows = repos.slates(slate_id)?;
         let stages = Arc::new(Stages::decode(codecs, tx_id, rows, stored));
         self.lock().insert(slate_id, Arc::clone(&stages));
         Ok(stages)
