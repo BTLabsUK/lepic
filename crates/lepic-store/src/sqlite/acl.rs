@@ -10,12 +10,17 @@
 
 use std::ffi::OsStr;
 use std::io;
+use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 
 /// `SYSTEM`: Windows itself, backup and the file indexer run as it.
 const SYSTEM_SID: &str = "S-1-5-18";
+
+/// The app is a window program without a console, so each tool would get a console window of its
+/// own, shown on the user's desktop while it runs; this keeps it to none.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub(super) fn restrict(path: &Path) -> io::Result<()> {
     let listed = icacls([path.as_os_str()])?;
@@ -79,6 +84,7 @@ fn run<'a>(tool: &str, args: impl IntoIterator<Item = &'a OsStr>) -> io::Result<
         .collect();
     let out = Command::new(program)
         .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()?;
