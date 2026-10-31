@@ -28,9 +28,9 @@ message. Use these field names and add new ones to this list in the same change:
 | `stage` | slate stage, for example `S1` |
 | `codec` | slate codec id |
 | `transport` | transport id: `epicbox`, `file` |
-| `relay` | Epicbox relay host of the wallet itself |
+| `relay` | Epicbox relay host of the wallet itself; the log ring redacts it |
 | `peer_relay` | a contact's or a meeting relay's host; the log ring redacts it |
-| `node` | node host |
+| `node` | node host; the log ring redacts it |
 | `msg_id` | relay message id |
 | `height` | block height |
 | `attempt` | retry number, starting at 1 |
@@ -51,6 +51,40 @@ message. Use these field names and add new ones to this list in the same change:
 | `trace` | Wire-level detail, always redacted. Off by default everywhere. |
 
 Log an error once, where it is handled, not at every layer it passes through.
+
+## The log ring
+
+On mobile, `LogRing` (`LepicRuntime::open_log_ring`) keeps records on the device for a problem
+report. The app attaches the ring's files to the report as they are, so the ring's redaction is the
+last one before a report leaves the device. It runs before a record reaches the disk:
+
+- Field values are kept for `wallet`, `account`, `tx_id`, `slate_id`, `stage`, `codec`,
+  `transport`, `msg_id`, `height`, `attempt`, `elapsed_ms`, `retry_in_ms`, `code`, `error` and
+  `tag`. Every other field, including `relay`, `peer_relay` and `node`, is written as
+  `name=[redacted]`.
+- Messages, LEPIC's own and the app's (`dart` target, through `LepicRuntime::log_message`), the
+  kept values and `error` texts all go through one text redaction:
+
+| What | Written as |
+|---|---|
+| A slate (JSON with a slate key), from its first `{` on | `[slate]` |
+| An armoured slatepack | `[slatepack]` |
+| 8 or more recovery-phrase words in a row, any case and separators, one typo per 8 words | `[words]` |
+| The value after a key-like name: `password`, `pin`, `seed`, `mnemonic`, `phrase`, `token`, `secret`, `key`, `nonce`, `mask`, `blind`, `commit`, `excess`, `signature`, `slate`, `cookie`, `authorization`…, also inside longer names (`wallet_password`, `apiKey`) unless they end in `id`, `len`, `count` or similar | `[redacted]` |
+| `Bearer` and `Basic` credentials, `--password` arguments, 4 to 8 digits after `pin` | `[redacted]` |
+| A number before `EPIC`, an amount bucket such as `[<10 EPIC]`, a number after `amount`, `fee`, `balance`, `spendable` and the like | `[amount]` |
+| A number after `port` | `[redacted]` |
+| Text quoted with `"` or `` ` `` | `[redacted]` |
+| A URL | its scheme and `[host]`, without user, port, path or query; on an onion address the address's fingerprint; on a loopback host that host and port |
+| An email address | `[email]` |
+| An IP address or a host name, with its port | `[ip]`, `[host]`; loopback and `localhost` are kept |
+| A home folder: `/home/<user>`, `/Users/<user>`, `C:\Users\<user>`, `/root`; a UNC host | `~`; `\\[host]\` |
+| An Epicbox, onion, slatepack or other base58 address or key | its first and last 4 characters: `esWW…K3oa@[host]`, `abcd…wxyz.onion`, `epic1qpzr…4khc` |
+| A UUID, such as a slate id | its first 8 characters: `0436430c…` |
+| 32 or more hex digits | `[hex]` |
+| Base64 of 40 or more characters, any other run of 64 or more token characters that is not a URL | `[redacted]` |
+
+Targets, span names and field names are kept as they are, so they must never carry values.
 
 ## Never log
 

@@ -1210,6 +1210,7 @@ dependencies = [
 name = "lepic-telemetry"
 version = "0.1.0"
 dependencies = [
+ "bip39",
  "jiff",
  "thiserror",
  "tracing",

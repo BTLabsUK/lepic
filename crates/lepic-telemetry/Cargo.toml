@@ -8,6 +8,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+bip39.workspace = true
 jiff = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["std"] }
