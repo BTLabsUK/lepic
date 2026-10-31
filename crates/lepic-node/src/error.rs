@@ -69,6 +69,11 @@ pub enum NodeError {
     /// connect. Not transient.
     #[error("node calls are off for this session")]
     Offline,
+    /// The session moves to another node: a request still waiting on the old one after the
+    /// switch's grace is cut off, so the switch does not wait for a node that does not
+    /// answer. Not transient: a retry would go to the old node again.
+    #[error("node request cut off: the wallet is moving to another node")]
+    Switched,
 }
 
 impl NodeError {

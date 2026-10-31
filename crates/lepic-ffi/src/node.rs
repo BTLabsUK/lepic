@@ -12,6 +12,7 @@ use lepic_node::{
     RpcTransport, Tip, is_loopback_host, webpki_tls_config,
 };
 use tokio::net::TcpStream;
+use tokio::sync::watch;
 
 use zeroize::Zeroizing;
 
@@ -28,29 +29,81 @@ pub(crate) type Node = NodeClient<SwitchableBackend>;
 
 /// The node a session talks to, which [`SwitchableBackend::replace`] changes while the
 /// session stays open. Clones share it. A request goes to the node set when it starts.
+///
+/// A switch first calls [`SwitchableBackend::cut_after`]: a request still waiting on the old
+/// node when the grace ends fails with [`NodeError::Switched`], and so does one that starts on
+/// it from then on (a read's retry). The switch waits for the calls in flight, so a node that
+/// does not answer would otherwise hold it for minutes of connect and request timeouts.
 #[derive(Clone)]
-pub(crate) struct SwitchableBackend(Arc<RwLock<NodeBackend>>);
+pub(crate) struct SwitchableBackend(Arc<RwLock<(NodeBackend, Cut)>>);
+
+/// When requests to one backend are cut off; `None` while they are not.
+type Cut = watch::Sender<Option<tokio::time::Instant>>;
 
 impl SwitchableBackend {
     pub(crate) fn new(backend: NodeBackend) -> Self {
-        Self(Arc::new(RwLock::new(backend)))
+        Self(Arc::new(RwLock::new((backend, watch::Sender::new(None)))))
     }
 
     pub(crate) fn replace(&self, backend: NodeBackend) {
-        *self.0.write().unwrap_or_else(PoisonError::into_inner) = backend;
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) =
+            (backend, watch::Sender::new(None));
     }
 
-    fn current(&self) -> NodeBackend {
+    /// Requests to the node in use end at the latest `grace` from now, unless
+    /// [`SwitchableBackend::keep`] comes first.
+    pub(crate) fn cut_after(&self, grace: Duration) {
+        let Some(deadline) = tokio::time::Instant::now().checked_add(grace) else {
+            return;
+        };
         self.0
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .1
+            .send_replace(Some(deadline));
+    }
+
+    /// The switch failed: the node in use stays, and its requests are no longer cut off.
+    pub(crate) fn keep(&self) {
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .1
+            .send_replace(None);
+    }
+
+    fn current(&self) -> (NodeBackend, watch::Receiver<Option<tokio::time::Instant>>) {
+        let current = self.0.read().unwrap_or_else(PoisonError::into_inner);
+        (current.0.clone(), current.1.subscribe())
+    }
+}
+
+/// Ends when the requests of `cut` are cut off: at its deadline, once one is set.
+async fn cut_off(mut cut: watch::Receiver<Option<tokio::time::Instant>>) {
+    loop {
+        let deadline = *cut.borrow_and_update();
+        match deadline {
+            Some(at) => tokio::select! {
+                () = tokio::time::sleep_until(at) => return,
+                changed = cut.changed() => if changed.is_err() { return std::future::pending().await },
+            },
+            None => {
+                if cut.changed().await.is_err() {
+                    return std::future::pending().await;
+                }
+            }
+        }
     }
 }
 
 impl RpcTransport for SwitchableBackend {
     async fn post(&self, endpoint: &'static str, body: Vec<u8>) -> Result<Vec<u8>, NodeError> {
-        self.current().post(endpoint, body).await
+        let (backend, cut) = self.current();
+        tokio::select! {
+            biased;
+            () = cut_off(cut) => Err(NodeError::Switched),
+            answer = backend.post(endpoint, body) => answer,
+        }
     }
 
     // The label is borrowed from the backend, which a switch may replace while it is

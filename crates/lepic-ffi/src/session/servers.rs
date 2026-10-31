@@ -34,6 +34,11 @@ const SCAN_CANCEL_EVERY: Duration = Duration::from_secs(1);
 /// it is abandoned; an abandoned message stays on the old relay.
 const LISTENER_GRACE: Duration = Duration::from_secs(30);
 
+/// How long a node request already on its way when a switch begins may still take before it
+/// is cut off: a node that answers answers within it, one that does not would hold the switch
+/// for its connect and request timeouts, retries included.
+const NODE_CUT_GRACE: Duration = Duration::from_secs(3);
+
 /// The Epicbox transport registered in the engine, whose relay a switch replaces. Clones share
 /// it; a delivery goes through the relay set when it starts.
 #[derive(Clone)]
@@ -104,15 +109,19 @@ impl Session {
         config: &WalletConfig,
         node_secret: &NodeSecret,
     ) -> Result<(), WalletError> {
-        let switch = self.servers.write();
-        tokio::pin!(switch);
-        // The pinned future keeps its place in the lock's queue across the timeouts.
-        let _switch = loop {
-            self.cancel_scan();
-            if let Ok(guard) = timeout(SCAN_CANCEL_EVERY, &mut switch).await {
-                break guard;
-            }
-        };
+        // A switch that would be refused is refused before anything waits or is cut off.
+        self.check_servers(config)?;
+        let transport = self.engine.ports().node.transport();
+        transport.cut_after(NODE_CUT_GRACE);
+        let switched = self.switch_servers(config, node_secret).await;
+        if switched.is_err() {
+            transport.keep();
+        }
+        switched
+    }
+
+    /// The checks of [`Session::set_servers`] that need no gate.
+    fn check_servers(&self, config: &WalletConfig) -> Result<(), WalletError> {
         self.ensure_unlocked()?;
         if config.chain.network() != self.network
             || !same_directory(&config.data_dir, &self.data_dir)
@@ -122,6 +131,25 @@ impl Session {
         self.ensure_same_offline(config)?;
         lepic_wallet::NodeEndpoint::parse(&config.node_url)
             .map_err(|_| invalid("node url is not an http or https url with a host"))?;
+        Ok(())
+    }
+
+    async fn switch_servers(
+        &self,
+        config: &WalletConfig,
+        node_secret: &NodeSecret,
+    ) -> Result<(), WalletError> {
+        let switch = self.servers.write();
+        tokio::pin!(switch);
+        // The pinned future keeps its place in the lock's queue across the timeouts.
+        let _switch = loop {
+            self.cancel_scan();
+            if let Ok(guard) = timeout(SCAN_CANCEL_EVERY, &mut switch).await {
+                break guard;
+            }
+        };
+        // Again under the gate: the wallet may have been locked meanwhile.
+        self.check_servers(config)?;
         let node = self.runtime.nodes.backend(
             (config, &self.tuning),
             node_secret,

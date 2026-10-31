@@ -189,6 +189,48 @@ async fn a_switch_waits_for_a_running_send_and_calls_after_it_wait_for_the_switc
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_switch_cuts_off_a_call_the_old_node_never_answers() {
+    let mut world = World::new();
+    let (wallet, config) = world.funded("").await;
+    let wallet = Arc::new(wallet);
+    let other = MockBackend::new(15).unwrap();
+    world.chain.backend().serve_at(OTHER_NODE, &other);
+
+    // The node in use stops answering, as one behind a filtered network does, while a call
+    // waits on it.
+    world.chain.set_node_stalled(true);
+    let waiting = tokio::spawn({
+        let wallet = Arc::clone(&wallet);
+        async move { wallet.summary(true).await }
+    });
+    assert!(eventually(|| world.chain.stalled_node_calls() > 0).await);
+
+    let moved = WalletConfig {
+        node_url: OTHER_NODE.to_owned(),
+        ..config
+    };
+    let switched = tokio::time::timeout(
+        // The grace (3 s) and some room; the old node would hold it for good.
+        Duration::from_secs(8),
+        wallet.set_servers(moved),
+    )
+    .await;
+    assert!(
+        matches!(switched, Ok(Ok(()))),
+        "the switch ends once the call on the old node is cut off: {switched:?}"
+    );
+    // Cut off, it ends: with an error, or with balances not checked against the node.
+    tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the call on the old node ends")
+        .unwrap()
+        .ok();
+    let session = wallet.session();
+    assert_eq!(session.node().get_tip().await.unwrap().height.value(), 15);
+    world.chain.set_node_stalled(false);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn after_a_node_switch_the_next_call_goes_to_the_new_node() {
     let mut world = World::new();
     let (wallet, config) = world.funded("").await;
