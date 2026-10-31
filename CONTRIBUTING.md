@@ -11,8 +11,8 @@ mirror.
 1. Read `README.md` and `docs/architecture.md` for goals, non-goals and the crate layout, and
    `docs/rules.md` for the hard rules and the rules for Rust code, compatibility, testing and
    security that every change follows.
-2. Open an issue or pick an open one.
-3. Read the ADRs and `docs/compat/` pages the task names.
+2. Find or open the issue for the change on GitLab.
+3. Read the ADRs and `docs/compat/` pages that bear on it.
 
 ## Making a change
 
