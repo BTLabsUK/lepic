@@ -154,9 +154,13 @@ impl LepicRuntime {
     /// subscribed. Replaces the ring opened before. `dir` should hold nothing else.
     ///
     /// Only the values of the fields in the LEPIC log vocabulary that say nothing about keys,
-    /// amounts or addresses are kept; every other value is written as `[redacted]`, as is text
-    /// quoted inside an `error` value. Messages are kept, including those of
-    /// [`LepicRuntime::log_message`].
+    /// amounts, addresses or hosts are kept; every other value, `relay` and `node` included, is
+    /// written as `[redacted]`. Messages, those of [`LepicRuntime::log_message`] included, the
+    /// kept values and `error` texts are redacted as text: slates, slatepacks, recovery phrases,
+    /// values after key-like names (`password`, `pin`, `seed`, `token`…), amounts, quoted text,
+    /// URLs, emails, IP addresses, host names, ports and home folders are taken out, addresses
+    /// keep only their first and last 4 characters and UUIDs their first 8. `docs/logging.md`
+    /// lists the rules.
     ///
     /// Fails with `InvalidArgument` when `max_bytes` is below 4 KiB or above 16 MiB, and `Io`
     /// when the directory cannot be created or read.
