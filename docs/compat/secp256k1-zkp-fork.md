@@ -1,10 +1,11 @@
 # The secp256k1-zkp fork
 
 LEPIC's curve library is `grin_secp256k1zkp` from `EpicCash/rust-secp256k1-zkp` at
-`42fcb29d4b635ea771d1984be0d11b0e64b15a93` (the workspace `Cargo.toml`, ADR 0010). It is a
-fork of `mimblewimble/rust-secp256k1-zkp` and is not vendored. This page records how the fork
-differs from upstream, so a review or a move to upstream starts from facts. It was compared on
-2026-10-30 against upstream `main` at `915edc3` (v0.8.0).
+`42fcb29d4b635ea771d1984be0d11b0e64b15a93`, vendored in `third_party/grin_secp256k1zkp` with one
+upstream C fix (ADR 0010, "The vendored copy" below). It is a fork of
+`mimblewimble/rust-secp256k1-zkp`. This page records how the fork differs from upstream, so a
+review or a move to upstream starts from facts. It was compared on 2026-10-30 against upstream
+`main` at `915edc3` (v0.8.0).
 
 ## Where it forks
 
@@ -45,15 +46,37 @@ Upstream after the merge base, besides the two guards the fork took:
 
 ## What it means for LEPIC
 
-- The scratch leak reaches LEPIC: every transaction whose range proof fails
-  `Transaction::validate` leaks 416 bytes. A peer can send such slates to a listener as often as
-  its rate limits allow. The `slate_flow` fuzz target finds it within minutes; run it with
-  leak detection off until the dependency moves (`docs/fuzzing.md`).
+- The scratch leak reached LEPIC: every transaction whose range proof failed
+  `Transaction::validate` leaked 416 bytes, and a peer could send such slates to a listener as
+  often as its rate limits allow. The `slate_flow` fuzz target found it within minutes. The
+  vendored copy below closes it.
 - Only `lepic-crypto` depends on the library; every other crate goes through its types. The
   fuzz targets and the vector tests exercise the library through that crate.
-- Moving to upstream v0.8.0, or asking EpicCash to take the commits above, closes the gap. Either
-  is a dependency change under ADR 0010: re-run the vectors (`cargo xtask vectors verify`) and the
-  fuzz targets, since the consensus results must not change.
+- The rest of the gap stays open until LEPIC moves to upstream v0.8.0 or EpicCash takes the
+  commits above. That move is a dependency change under ADR 0010: re-run the vectors
+  (`cargo xtask vectors verify`) and the fuzz targets, since the consensus results must not change.
+
+## The vendored copy
+
+`third_party/grin_secp256k1zkp` is the fork at 42fcb29 with its C library at b247e1ec, plus one
+patch: upstream `0eefced`'s two added lines in `src/modules/bulletproofs/rangeproof_impl.h`, which
+free the verifier's scratch frame before the two early `return 0;` after a bad proof point.
+`PATCHES.md` there lists the origin, what was left out (CI, fuzz, C tests, benchmarks, autotools)
+and the patch. The workspace takes it as a path dependency; `third_party` is excluded from the
+workspace, and `cargo xtask repo-lint` rejects any git source in the product lockfile.
+
+Why this and not upstream v0.8.0: the patch adds two lines and leaves every return value as it
+was, so no proof is accepted or rejected differently and consensus results cannot change. v0.8.0
+rewrites the Rust wrapper (FFI signatures, zero-initialization, hardened deserialization, checked
+return codes, other rand versions), which is a much larger change to review. Pushing a patched
+fork elsewhere would put the dependency outside this repository.
+
+To re-check: clone the fork at 42fcb29 with its submodule and diff each vendored file against
+it, as `PATCHES.md` shows. The only difference is the two lines.
+
+Unverified: the switch was made without building or testing. The next release candidate runs the
+full check on it: `cargo xtask vectors verify`, the fuzz targets (`slate_flow` with leak detection
+on), the full test suite, and the Android, iOS and Windows builds.
 
 To redo the comparison: clone upstream, fetch the pinned commit from the fork, and run
 `git merge-base`, `git log --no-merges <base>..<rev>` and `git diff --stat <base> <rev>`.

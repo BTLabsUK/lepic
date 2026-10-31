@@ -18,3 +18,10 @@ The BIP32 code also derives from the Rust Bitcoin Library by Andrew Poelstra,
 dedicated to the public domain under CC0.
 
 Ported files record their upstream origin in upstream.toml.
+
+third_party/grin_secp256k1zkp is a copy of the rust-secp256k1-zkp wrapper
+(https://github.com/EpicCash/rust-secp256k1-zkp), dedicated to the public
+domain under CC0, and of the libsecp256k1-zkp C library it builds
+(https://github.com/mimblewimble/secp256k1-zkp), Copyright (c) 2013 Pieter
+Wuille, licensed under the MIT License; its LICENSE, COPYING and PATCHES.md
+files give the terms and the one change made.

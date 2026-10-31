@@ -15,8 +15,10 @@ hands the receiver, the sender, the payer and the issuer a changed slate (`build
 `build_i2`, `build_i3`) and checks that what a builder accepts still has the agreed amount, fee and
 id. Its inputs are edit scripts, not slates, so its corpus says nothing on its own.
 
-Until the curve library takes upstream's scratch-leak fix (`docs/compat/secp256k1-zkp-fork.md`),
-`slate_flow` stops on that leak within minutes. To look past it, run the target directly in `fuzz/`:
+The vendored curve library carries upstream's scratch-leak fix (`docs/compat/secp256k1-zkp-fork.md`),
+so `slate_flow` should no longer stop on that leak. This is unverified until the next release
+candidate's fuzz run. If it still stops there, run the target directly in `fuzz/` with leak
+detection off and report it:
 `ASAN_OPTIONS=detect_leaks=0 cargo fuzz run slate_flow -- -detect_leaks=0 -max_total_time=600`.
 
 ## A scheduled run without CI
