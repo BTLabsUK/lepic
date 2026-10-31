@@ -107,6 +107,24 @@ fn key(prefix: &str, id: ContactId) -> String {
     format!("{prefix}{}", hex(&id.0))
 }
 
+/// Deletes the key check settings kept for the pairing `id`, which is being removed. The marks
+/// of a checked slot stay, as the slot stays used.
+pub(crate) fn delete_contact_settings(
+    repos: &mut dyn Repositories,
+    id: ContactId,
+) -> Result<(), StoreError> {
+    for prefix in [
+        SENT_PREFIX,
+        DONE_PREFIX,
+        FOUND_PREFIX,
+        FOLD_PREFIX,
+        CHANGED_PREFIX,
+    ] {
+        repos.delete_setting(&key(prefix, id))?;
+    }
+    Ok(())
+}
+
 fn slot_key(record: &ContactRecord, slot: u32) -> String {
     format!("{SLOT_PREFIX}{}.{slot}", record.account.0)
 }

@@ -299,6 +299,7 @@ where
                     super::invoices::drop_contact_invoices(repos, contact_id)?;
                     repos.delete_setting(&unpaired_key(contact_id))?;
                     repos.delete_setting(&super::collect::stamped_key(contact_id))?;
+                    super::keycheck::delete_contact_settings(repos, contact_id)?;
                     let record = repos.delete_contact(contact_id)?;
                     super::private::delete_secrets(repos, contact_id)?;
                     Ok::<_, StoreError>(pending || record)
