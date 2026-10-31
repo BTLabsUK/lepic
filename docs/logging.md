@@ -77,12 +77,12 @@ last one before a report leaves the device. It runs before a record reaches the 
 | Text quoted with `"` or `` ` `` | `[redacted]` |
 | A URL | its scheme and `[host]`, without user, port, path or query; on an onion address the address's fingerprint; on a loopback host that host and port |
 | An email address | `[email]` |
-| An IP address or a host name, with its port | `[ip]`, `[host]`; loopback and `localhost` are kept |
+| An IP address or a host name, with its port; a name of two lower-case labels only with a port or a known or two-letter top-level domain, so `state.balance` stays | `[ip]`, `[host]`; loopback and `localhost` are kept |
 | A home folder: `/home/<user>`, `/Users/<user>`, `C:\Users\<user>`, `/root`; a UNC host | `~`; `\\[host]\` |
 | An Epicbox, onion, slatepack or other base58 address or key | its first and last 4 characters: `esWW…K3oa@[host]`, `abcd…wxyz.onion`, `epic1qpzr…4khc` |
 | A UUID, such as a slate id | its first 8 characters: `0436430c…` |
 | 32 or more hex digits | `[hex]` |
-| Base64 of 40 or more characters, any other run of 64 or more token characters that is not a URL | `[redacted]` |
+| Base64 of 40 or more characters, any other run of 64 or more token characters that is not a URL or a path (`/…`, `~/…`) | `[redacted]` |
 
 A line holds at most 4 KiB. The redaction reads at most four times that of each message or value;
 one cut there also loses the last 512 bytes of what its redaction gives, so no piece of a value cut

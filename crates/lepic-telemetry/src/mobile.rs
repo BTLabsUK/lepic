@@ -26,8 +26,10 @@
 //! - A URL keeps only its scheme, `https://[host]`, losing its user, port, path and query; on
 //!   an onion address it keeps that address's fingerprint, on a loopback host that host and
 //!   port. An email address becomes `[email]`.
-//! - IP addresses and host names become `[ip]` and `[host]`, with the port after them. Loopback
-//!   addresses and `localhost`, path segments and file names such as `wallet.db` are kept.
+//! - IP addresses and host names become `[ip]` and `[host]`, with the port after them; a name
+//!   of two lower-case labels only with a port or a known or two-letter top-level domain, so
+//!   `state.balance` is kept. Loopback addresses and `localhost`, path segments and file names
+//!   such as `wallet.db` are kept.
 //! - Home folders (`/home/<user>`, `/Users/<user>`, `C:\Users\<user>`, `/root`) become `~`,
 //!   and the host of a UNC path `[host]`.
 //! - Addresses keep a fingerprint, their first and last 4 characters, so two can be told apart:
@@ -36,7 +38,7 @@
 //!   characters. A fingerprint the app wrote with 6 leading characters is cut to 4. A UUID, a
 //!   slate id, keeps its first 8 characters: `0436430c…`.
 //! - 32 or more hex digits become `[hex]`; base64 of 40 or more characters, and any other run of
-//!   64 or more token characters that is not a URL, `[redacted]`.
+//!   64 or more token characters that is not a URL or a path (`/…`, `~/…`), `[redacted]`.
 //!
 //! Targets, span names and field names are kept, which is why messages must never interpolate
 //! values.
@@ -1208,7 +1210,7 @@ fn host_marker(core: &str) -> Option<&'static str> {
         return (!is_loopback(host)).then_some(IP);
     }
     let onion_address = port.is_none() && onion_key(host).is_some();
-    (is_host_name(host) && !onion_address).then_some(HOST)
+    (is_host_name(host, port.is_some()) && !onion_address).then_some(HOST)
 }
 
 fn is_port(text: &str) -> bool {
@@ -1271,13 +1273,31 @@ const FILE_EXTENSIONS: &[&str] = &[
     "wal", "shm",
 ];
 
+/// Generic top-level domains a one-dot lower-case name needs, or a country's two letters, to be
+/// taken for a host without a port: `state.balance` and `session.refresh` are code, not hosts.
+const COMMON_TLDS: &[&str] = &[
+    "com", "net", "org", "info", "biz", "io", "app", "dev", "cash", "xyz", "online", "site",
+    "tech", "cloud", "host", "link", "pro", "top", "club", "space", "store", "shop", "live",
+    "network", "digital", "world", "blog", "email", "money", "finance", "exchange", "crypto",
+    "global", "example", "test", "invalid", "local", "localdomain", "lan", "home", "internal",
+    "arpa", "edu", "gov", "mil", "int", "mobi", "asia",
+];
+
 /// Whether `host` is a dotted host name: labels of letters, digits and `-`, the last of 2 to
-/// 24 letters and no file name extension, none in camel case like a type's member.
-fn is_host_name(host: &str) -> bool {
-    let Some((_, top)) = host.rsplit_once('.') else {
+/// 24 letters and no file name extension, none in camel case like a type's member. A name of
+/// two lower-case labels needs a `port` after it or a top-level domain of [`COMMON_TLDS`] or of
+/// two letters.
+fn is_host_name(host: &str, port: bool) -> bool {
+    let Some((first, top)) = host.rsplit_once('.') else {
         return false;
     };
-    (2..=24).contains(&top.len())
+    let code_like = !port
+        && !first.contains('.')
+        && !host.bytes().any(|b| b.is_ascii_uppercase())
+        && top.len() != 2
+        && !in_set(COMMON_TLDS, top);
+    !code_like
+        && (2..=24).contains(&top.len())
         && top.bytes().all(|b| b.is_ascii_alphabetic())
         && !in_set(FILE_EXTENSIONS, top)
         && host.split('.').all(|label| {
@@ -1424,11 +1444,11 @@ fn is_long_run_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '/' | '=' | ':' | '.' | '~')
 }
 
-/// A run of [`LONG_RUN`] or more token characters that is no URL, or a piece of one between
-/// `:`, `.` and `~` of [`MIN_BLOB_LEN`] or more with letters and digits, as `[redacted]`:
-/// tokens, keys and signatures in forms the rules before do not know.
+/// A run of [`LONG_RUN`] or more token characters that is no URL and no path, or a piece of one
+/// between `:`, `.` and `~` of [`MIN_BLOB_LEN`] or more with letters and digits, as
+/// `[redacted]`: tokens, keys and signatures in forms the rules before do not know.
 fn redact_long_run(run: &str, _before: Option<char>) -> Option<String> {
-    if run.len() >= LONG_RUN && !run.contains("//") {
+    if run.len() >= LONG_RUN && !run.contains("//") && !is_path(run) {
         return Some(REDACTED.to_owned());
     }
     let rewritten = rewrite_runs(
@@ -1437,6 +1457,16 @@ fn redact_long_run(run: &str, _before: Option<char>) -> Option<String> {
         |piece, _| is_blob(piece).then(|| REDACTED.to_owned()),
     );
     (rewritten != run).then_some(rewritten)
+}
+
+/// Whether `run` is a path, `/…` or `~/…`, also as a name's value, `dir=/…`. Its segments
+/// stay; only the blob rule reads its pieces.
+fn is_path(run: &str) -> bool {
+    let value = run
+        .split_once(['=', ':'])
+        .filter(|(name, _)| !name.is_empty() && name.bytes().all(|b| is_word_char(char::from(b))))
+        .map_or(run, |(_, value)| value);
+    value.starts_with('/') || value.starts_with("~/")
 }
 
 fn is_blob(piece: &str) -> bool {
@@ -1970,6 +2000,29 @@ mod tests {
         ] {
             assert_eq!(redact_text(kept), kept);
         }
+    }
+
+    #[test]
+    fn long_paths_and_dotted_code_names_are_kept() {
+        let path = "/data/user/0/co.btlabs.epic.wallet/app_flutter/lepic/wallets/default/wallet.db";
+        assert!(path.len() >= LONG_RUN);
+        for kept in [
+            format!("opened {path}"),
+            format!("dir={path} ready"),
+            "moved ~/Library/Application/Support/co.btlabs.epic.wallet/lepic/wallets/default/w1"
+                .to_owned(),
+            "state.balance and session.refresh changed".to_owned(),
+        ] {
+            assert_eq!(redact_text(&kept), kept);
+        }
+        assert_eq!(
+            redact_text("lookup of relay.example, epic.cash, node.de and state.refresh:3413"),
+            "lookup of [host], [host], [host] and [host]"
+        );
+        // Long runs that are no path, and blobs inside a path, still go.
+        assert_eq!(redact_text(&format!("a{}", "Zl0".repeat(30))), "[redacted]");
+        let blob = "k1Zq8vB3nR5tY7uW9xA2cD4eF6gH8jK0mN2pQ4rS6tU".repeat(2);
+        assert_eq!(redact_text(&format!("/{blob} done")), "[redacted] done");
     }
 
     #[test]
