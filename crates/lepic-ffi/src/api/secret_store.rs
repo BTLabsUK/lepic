@@ -1,7 +1,9 @@
 //! The storage the app provides for the wallet's sealed secrets, such as `flutter_secure_storage`
 //! over the Android Keystore and the iOS Keychain.
 
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use flutter_rust_bridge::DartFnFuture;
 use flutter_rust_bridge::frb;
@@ -27,6 +29,11 @@ impl std::fmt::Debug for SecretReply {
             .finish()
     }
 }
+
+/// How long a read or a delete may wait for the app's store, so a store call that never answers
+/// (a dismissed keystore prompt, an isolate torn down) fails the wallet call instead of hanging
+/// it.
+const STORE_TIMEOUT: Duration = Duration::from_secs(30);
 
 type ReadFn = dyn Fn(String) -> DartFnFuture<SecretReply> + Send + Sync;
 type WriteFn = dyn Fn(String, String) -> DartFnFuture<SecretReply> + Send + Sync;
@@ -87,7 +94,9 @@ impl AppSecretStore {
 
     pub(crate) async fn read(&self, key: &str) -> Result<Option<String>, WalletError> {
         match &self.backend {
-            Backend::Dart { read, .. } => checked(read(key.to_owned()).await).map(|r| r.value),
+            Backend::Dart { read, .. } => {
+                checked(bounded(read(key.to_owned())).await?).map(|r| r.value)
+            }
             #[cfg(feature = "mock")]
             Backend::Memory(map) => Ok(lock(map).get(key).cloned()),
         }
@@ -95,6 +104,8 @@ impl AppSecretStore {
 
     pub(crate) async fn write(&self, key: &str, value: String) -> Result<(), WalletError> {
         match &self.backend {
+            // Not bounded like a read: a write given up on may still land, so trusting the
+            // vault after it would take a read-back. A hung write is ended by a lock.
             Backend::Dart { write, .. } => checked(write(key.to_owned(), value).await).map(drop),
             #[cfg(feature = "mock")]
             Backend::Memory(map) => {
@@ -106,7 +117,9 @@ impl AppSecretStore {
 
     pub(crate) async fn delete(&self, key: &str) -> Result<(), WalletError> {
         match &self.backend {
-            Backend::Dart { delete, .. } => checked(delete(key.to_owned()).await).map(drop),
+            Backend::Dart { delete, .. } => {
+                checked(bounded(delete(key.to_owned())).await?).map(drop)
+            }
             #[cfg(feature = "mock")]
             Backend::Memory(map) => {
                 lock(map).remove(key);
@@ -114,6 +127,18 @@ impl AppSecretStore {
             }
         }
     }
+}
+
+/// The reply of a store call, or a `SecretStore` error once [`STORE_TIMEOUT`] has passed.
+async fn bounded(reply: impl Future<Output = SecretReply>) -> Result<SecretReply, WalletError> {
+    tokio::time::timeout(STORE_TIMEOUT, reply)
+        .await
+        .map_err(|_| {
+            WalletError::new(
+                WalletErrorKind::SecretStore,
+                "app secret store did not answer in time",
+            )
+        })
 }
 
 fn checked(reply: SecretReply) -> Result<SecretReply, WalletError> {
