@@ -189,7 +189,10 @@ async fn check_pin_counts_attempts_and_keeps_the_key() {
         Some("1")
     );
 
-    wallet.check_pin(PIN.to_owned(), sealed.clone()).await.unwrap();
+    wallet
+        .check_pin(PIN.to_owned(), sealed.clone())
+        .await
+        .unwrap();
     assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
     assert_eq!(store.read(PIN_KEY).await.unwrap(), key);
     assert_eq!(store.read(PENDING_KEY).await.unwrap(), None);
@@ -1080,7 +1083,11 @@ fn a_log_ring_that_cannot_open_keeps_its_path_out_of_the_error() {
     assert_eq!(error.kind, WalletErrorKind::Io);
     let home = fixture.dir.path().to_string_lossy().into_owned();
     assert!(!error.message.contains(&home), "{}", error.message);
-    assert!(error.message.starts_with("log ring directory could not be prepared"));
+    assert!(
+        error
+            .message
+            .starts_with("log ring directory could not be prepared")
+    );
 }
 
 #[test]
@@ -1273,7 +1280,12 @@ async fn check_password_counts_attempts() {
     .await
     .unwrap();
 
-    assert!(!wallet.check_password("wrong password".to_owned()).await.unwrap());
+    assert!(
+        !wallet
+            .check_password("wrong password".to_owned())
+            .await
+            .unwrap()
+    );
     assert_eq!(
         store.read(FAILURES_KEY).await.unwrap().as_deref(),
         Some("1")

@@ -842,9 +842,7 @@ fn secret_len(value: &str, quote: Option<char>, separated: bool) -> Option<usize
                 .map_or(value.len(), |at| at.saturating_add(1))
         }
         (None, _) if separated => {
-            let line = value
-                .find(['\r', '\n', ',', ';'])
-                .unwrap_or(value.len());
+            let line = value.find(['\r', '\n', ',', ';']).unwrap_or(value.len());
             value.get(..line)?.trim_end().len()
         }
         (None, _) => word,
@@ -1368,11 +1366,54 @@ const FILE_EXTENSIONS: &[&str] = &[
 /// Generic top-level domains a one-dot lower-case name needs, or a country's two letters, to be
 /// taken for a host without a port: `state.balance` and `session.refresh` are code, not hosts.
 const COMMON_TLDS: &[&str] = &[
-    "com", "net", "org", "info", "biz", "io", "app", "dev", "cash", "xyz", "online", "site",
-    "tech", "cloud", "host", "link", "pro", "top", "club", "space", "store", "shop", "live",
-    "network", "digital", "world", "blog", "email", "money", "finance", "exchange", "crypto",
-    "global", "example", "test", "invalid", "local", "localdomain", "lan", "home", "internal",
-    "arpa", "edu", "gov", "mil", "int", "mobi", "asia",
+    "com",
+    "net",
+    "org",
+    "info",
+    "biz",
+    "io",
+    "app",
+    "dev",
+    "cash",
+    "xyz",
+    "online",
+    "site",
+    "tech",
+    "cloud",
+    "host",
+    "link",
+    "pro",
+    "top",
+    "club",
+    "space",
+    "store",
+    "shop",
+    "live",
+    "network",
+    "digital",
+    "world",
+    "blog",
+    "email",
+    "money",
+    "finance",
+    "exchange",
+    "crypto",
+    "global",
+    "example",
+    "test",
+    "invalid",
+    "local",
+    "localdomain",
+    "lan",
+    "home",
+    "internal",
+    "arpa",
+    "edu",
+    "gov",
+    "mil",
+    "int",
+    "mobi",
+    "asia",
 ];
 
 /// Whether `host` is a dotted host name: labels of letters, digits and `-`, the last of 2 to
@@ -1865,7 +1906,10 @@ mod tests {
         assert!(redacted.starts_with("[hex] [hex] "), "{redacted}");
         assert!(!redacted.contains("abandon"), "{redacted}");
         assert!(!redacted.contains("tail"));
-        assert_eq!(redact_bounded("short pin 1234", 4096), "short pin [redacted]");
+        assert_eq!(
+            redact_bounded("short pin 1234", 4096),
+            "short pin [redacted]"
+        );
     }
 
     #[test]
@@ -2189,7 +2233,10 @@ mod tests {
             redact_text("token=abc def ghi, height=5; passphrase = one two; ok"),
             "token=[redacted], height=5; passphrase = [redacted]; ok"
         );
-        assert_eq!(redact_text("password: none, retry"), "password: none, retry");
+        assert_eq!(
+            redact_text("password: none, retry"),
+            "password: none, retry"
+        );
     }
 
     #[test]

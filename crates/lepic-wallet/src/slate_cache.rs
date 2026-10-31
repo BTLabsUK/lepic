@@ -108,7 +108,9 @@ impl Stages {
 
     /// The first stored stage that decodes, in stage code order.
     pub(crate) fn first(&self) -> Option<&Decoded> {
-        self.decoded.iter().find_map(|(_, decoded)| decoded.as_ref())
+        self.decoded
+            .iter()
+            .find_map(|(_, decoded)| decoded.as_ref())
     }
 
     /// The final kernel and the slate height, as [`crate::refresh::final_kernel`] reads them.
@@ -134,7 +136,11 @@ impl Decoded {
             height: slate.height(),
             ttl_cutoff_height: slate.ttl_cutoff_height(),
             messages: verified_messages(slate),
-            inputs: slate.inputs().iter().map(|input| input.commitment).collect(),
+            inputs: slate
+                .inputs()
+                .iter()
+                .map(|input| input.commitment)
+                .collect(),
             outputs: slate
                 .outputs()
                 .iter()

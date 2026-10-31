@@ -421,7 +421,11 @@ fn chain_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTree
             }
         }
         "contact_backup_import" => {
-            seeds.extend(CONTACT_BACKUP_SEEDS.iter().map(|json| json.as_bytes().to_vec()));
+            seeds.extend(
+                CONTACT_BACKUP_SEEDS
+                    .iter()
+                    .map(|json| json.as_bytes().to_vec()),
+            );
         }
         "slate_marker" => {
             for vector in read_area(vectors, "slates", "")? {
@@ -636,7 +640,10 @@ const ONION_SEED: &str = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5
 /// Rows as `epic-wallet` 3.3 and 4.0 store them, each after the byte that picks its parser in
 /// the `legacy_rows` target: an account, a transaction, an output and a derivation counter.
 const LEGACY_ROW_SEEDS: &[(u8, &str)] = &[
-    (0, r#"{"label":"default","path":"0200000000000000000000000000000000"}"#),
+    (
+        0,
+        r#"{"label":"default","path":"0200000000000000000000000000000000"}"#,
+    ),
     (
         1,
         r#"{"confirmation_height":1203,"parent_key_id":"0200000000000000000000000000000000","id":3,"tx_slate_id":"0436430c-2b02-624c-2032-570501212b00","tx_type":"TxSent","creation_ts":"2024-03-01T10:20:30.123456789Z","confirmation_ts":"2024-03-01T10:25:00Z","confirmed":true,"num_inputs":1,"num_outputs":1,"amount_credited":"99000000","amount_debited":"200000000","fee":"1000000","ttl_cutoff_height":null,"messages":{"messages":[{"id":"0","public_key":"02e3c1b1a4b6a2c1d5f0e9d8c7b6a5948372615049f8e7d6c5b4a39281706f5e4d","message":"for lunch","message_sig":null}]},"stored_tx":"0436430c-2b02-624c-2032-570501212b00.epictx","kernel_excess":"08b7e0d1f02a9c4e7d1b33c0a1f2e3d4c5b6a79881726354f0e1d2c3b4a5968778","kernel_lookup_min_height":1200,"payment_proof":null,"public_addr":null}"#,
@@ -649,7 +656,10 @@ const LEGACY_ROW_SEEDS: &[(u8, &str)] = &[
         2,
         r#"{"root_key_id":"0200000000000000000000000000000000","key_id":"0300000000000000000000000000000007","n_child":7,"commit":"08b7e0d1f02a9c4e7d1b33c0a1f2e3d4c5b6a79881726354f0e1d2c3b4a5968778","mmr_index":"4021","value":"100000000","status":"Unspent","height":"1203","lock_height":"0","is_coinbase":false,"tx_log_entry":3}"#,
     ),
-    (3, "[100, 58, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n12"),
+    (
+        3,
+        "[100, 58, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n12",
+    ),
 ];
 
 /// Contact backups as `export_contacts` writes them, for the `contact_backup_import` target.

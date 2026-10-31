@@ -176,7 +176,10 @@ impl RelayTor {
                     }
                 }
                 Source::Process(process) => {
-                    let proxy = process.wait_bootstrapped().await.map_err(RelayTorError::Tor)?;
+                    let proxy = process
+                        .wait_bootstrapped()
+                        .await
+                        .map_err(RelayTorError::Tor)?;
                     return Ok((proxy, tor));
                 }
                 Source::Fixed(socks) => {

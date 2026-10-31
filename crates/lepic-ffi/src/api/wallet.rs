@@ -672,18 +672,19 @@ impl EpicWallet {
     ///
     /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a store without the
     /// PIN key `SecretStore`, and a locked wallet `Locked`, before any attempt is counted.
-    pub async fn check_pin(
-        &self,
-        pin: String,
-        sealed_password: String,
-    ) -> Result<(), WalletError> {
+    pub async fn check_pin(&self, pin: String, sealed_password: String) -> Result<(), WalletError> {
         let pin = Zeroizing::new(pin);
         self.run("check_pin", |session| async move {
             // A locked wallet refuses before the attempt is counted.
             session.ensure_unlocked()?;
-            pin::unlock(&session.runtime().pin, session.store(), pin, sealed_password)
-                .await
-                .map(drop)
+            pin::unlock(
+                &session.runtime().pin,
+                session.store(),
+                pin,
+                sealed_password,
+            )
+            .await
+            .map(drop)
         })
         .await
     }

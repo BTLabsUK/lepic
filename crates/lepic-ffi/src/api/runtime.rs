@@ -214,7 +214,10 @@ const MAX_LOG_RING_BYTES: u64 = 16 * 1024 * 1024;
 fn log_ring_error(error: &LogRingError) -> WalletError {
     let message = match error {
         LogRingError::Directory { source, .. } => {
-            format!("log ring directory could not be prepared: {}", source.kind())
+            format!(
+                "log ring directory could not be prepared: {}",
+                source.kind()
+            )
         }
         _ => "log ring could not be opened".to_owned(),
     };

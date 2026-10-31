@@ -330,7 +330,11 @@ impl NodeDialer for TorNodeDialer {
                 Some(onion) => (onion.host, onion.port),
                 None => (host.to_owned(), port),
             };
-            match self.tor.open_in(&target_host, target_port, &self.streams).await {
+            match self
+                .tor
+                .open_in(&target_host, target_port, &self.streams)
+                .await
+            {
                 Ok(stream) => Ok(Box::new(stream) as Box<dyn NodeStream>),
                 // An onion has no address to resolve without tor.
                 Err(RelayTorError::Off) if !is_onion_host(host) => {
