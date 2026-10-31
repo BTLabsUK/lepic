@@ -24,7 +24,6 @@ mod node;
 mod offline;
 mod outputs;
 mod password;
-mod push;
 mod resend;
 mod scan;
 mod selection;
@@ -1067,13 +1066,9 @@ async fn a_pin_change_opens_both_pairs_until_it_is_confirmed() {
 }
 
 #[test]
-fn the_log_ring_keeps_redacted_records_for_the_support_bundle() {
+fn the_log_ring_keeps_redacted_records_in_its_files() {
     let fixture = Fixture::new();
     let runtime = &fixture.runtime;
-    assert_eq!(
-        kind(runtime.export_support_bundle()),
-        WalletErrorKind::InvalidArgument
-    );
     let dir = fixture.dir.path().join("logs");
     let dir_text = dir.to_string_lossy().into_owned();
     for max_bytes in [4 * 1024 - 1, 16 * 1024 * 1024 + 1] {
@@ -1088,14 +1083,17 @@ fn the_log_ring_keeps_redacted_records_for_the_support_bundle() {
         tracing::warn!(amount = 123_456_789_u64, tx_id = 7, "slate sent");
     });
 
-    let bundle = runtime.export_support_bundle().unwrap();
-    assert!(bundle.starts_with("lepic support bundle\n"));
-    assert!(bundle.contains(": screen opened tag=app\n"), "{bundle}");
+    // The segments, oldest (highest index) first.
+    let text: String = (0..4)
+        .rev()
+        .filter_map(|index| std::fs::read_to_string(dir.join(format!("lepic.{index}.log"))).ok())
+        .collect();
+    assert!(text.contains(": screen opened tag=app\n"), "{text}");
     assert!(
-        bundle.contains(": slate sent amount=[redacted] tx_id=7\n"),
-        "{bundle}"
+        text.contains(": slate sent amount=[redacted] tx_id=7\n"),
+        "{text}"
     );
-    assert!(!bundle.contains("123456789"));
+    assert!(!text.contains("123456789"));
 }
 
 /// A new PIN that is too short is refused before the old PIN is tried, so it costs no attempt

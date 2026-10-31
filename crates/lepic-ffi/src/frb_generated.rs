@@ -43,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1404896897;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 541554155;
 
 // Section: executor
 
@@ -5254,70 +5254,6 @@ fn wire__crate__api__wallet__EpicWallet_private_pairings_impl(
         },
     )
 }
-fn wire__crate__api__wallet__EpicWallet_push_signature_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "EpicWallet_push_signature",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_that = <RustOpaqueMoi<
-                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
-            >>::sse_decode(&mut deserializer);
-            let api_action = <String>::sse_decode(&mut deserializer);
-            let api_token = <String>::sse_decode(&mut deserializer);
-            let api_timestamp = <u64>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| async move {
-                transform_result_sse::<_, crate::api::error::WalletError>(
-                    (move || async move {
-                        let mut api_that_guard = None;
-                        let decode_indices_ =
-                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
-                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
-                                    &api_that, 0, false,
-                                )],
-                            );
-                        for i in decode_indices_ {
-                            match i {
-                                0 => {
-                                    api_that_guard =
-                                        Some(api_that.lockable_decode_async_ref().await)
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::api::wallet::EpicWallet::push_signature(
-                            &*api_that_guard,
-                            api_action,
-                            api_token,
-                            api_timestamp,
-                        )
-                        .await?;
-                        std::result::Result::Ok(output_ok)
-                    })()
-                    .await,
-                )
-            }
-        },
-    )
-}
 fn wire__crate__api__wallet__EpicWallet_receive_file_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -7782,56 +7718,6 @@ fn wire__crate__api__wallet__EpicWallet_transactions_impl(
                     })()
                     .await,
                 )
-            }
-        },
-    )
-}
-fn wire__crate__api__runtime__LepicRuntime_export_support_bundle_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "LepicRuntime_export_support_bundle",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_that = <RustOpaqueMoi<
-                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<LepicRuntime>,
-            >>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, crate::api::error::WalletError>((move || {
-                    let mut api_that_guard = None;
-                    let decode_indices_ =
-                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
-                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
-                                &api_that, 0, false,
-                            ),
-                        ]);
-                    for i in decode_indices_ {
-                        match i {
-                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
-                            _ => unreachable!(),
-                        }
-                    }
-                    let api_that_guard = api_that_guard.unwrap();
-                    let output_ok =
-                        crate::api::runtime::LepicRuntime::export_support_bundle(&*api_that_guard)?;
-                    std::result::Result::Ok(output_ok)
-                })())
             }
         },
     )
@@ -11685,18 +11571,6 @@ impl SseDecode for crate::api::wallet::PinWallet {
     }
 }
 
-impl SseDecode for crate::api::types::PushSignature {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_address = <String>::sse_decode(deserializer);
-        let mut var_signature = <String>::sse_decode(deserializer);
-        return crate::api::types::PushSignature {
-            address: var_address,
-            signature: var_signature,
-        };
-    }
-}
-
 impl SseDecode for crate::api::types::ReceivedSlate {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -12672,398 +12546,393 @@ fn pde_ffi_dispatcher_primary_impl(
         5 => {
             wire__crate__api__wallet__EpicWallet_change_pin_impl(port, ptr, rust_vec_len, data_len)
         }
-        6 => wire__crate__api__wallet__EpicWallet_confirm_pin_change_impl(
+        6 => wire__crate__api__wallet__EpicWallet_check_pin_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__wallet__EpicWallet_confirm_pin_change_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        7 => wire__crate__api__wallet__EpicWallet_consolidate_outputs_impl(
+        8 => wire__crate__api__wallet__EpicWallet_consolidate_outputs_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        8 => wire__crate__api__wallet__EpicWallet_contact_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__wallet__EpicWallet_contact_attach_impl(
+        9 => wire__crate__api__wallet__EpicWallet_contact_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__wallet__EpicWallet_contact_attach_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        10 => wire__crate__api__wallet__EpicWallet_contact_decline_invoice_impl(
+        11 => wire__crate__api__wallet__EpicWallet_contact_decline_invoice_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        11 => wire__crate__api__wallet__EpicWallet_contact_invoices_impl(
+        12 => wire__crate__api__wallet__EpicWallet_contact_invoices_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        12 => wire__crate__api__wallet__EpicWallet_contact_issue_invoice_impl(
+        13 => wire__crate__api__wallet__EpicWallet_contact_issue_invoice_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        13 => wire__crate__api__wallet__EpicWallet_contact_key_check_impl(
+        14 => wire__crate__api__wallet__EpicWallet_contact_key_check_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        14 => wire__crate__api__wallet__EpicWallet_contact_keys_resolve_impl(
+        15 => wire__crate__api__wallet__EpicWallet_contact_keys_resolve_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        15 => wire__crate__api__wallet__EpicWallet_contact_of_transaction_impl(
+        16 => wire__crate__api__wallet__EpicWallet_contact_of_transaction_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        16 => wire__crate__api__wallet__EpicWallet_contact_outbox_impl(
+        17 => wire__crate__api__wallet__EpicWallet_contact_outbox_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        17 => wire__crate__api__wallet__EpicWallet_contact_outbox_resend_impl(
+        18 => wire__crate__api__wallet__EpicWallet_contact_outbox_resend_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        18 => wire__crate__api__wallet__EpicWallet_contact_pay_invoice_impl(
+        19 => wire__crate__api__wallet__EpicWallet_contact_pay_invoice_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        19 => wire__crate__api__wallet__EpicWallet_contact_payloads_impl(
+        20 => wire__crate__api__wallet__EpicWallet_contact_payloads_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        20 => wire__crate__api__wallet__EpicWallet_contact_payloads_ack_impl(
+        21 => wire__crate__api__wallet__EpicWallet_contact_payloads_ack_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        21 => wire__crate__api__wallet__EpicWallet_contact_plain_fallback_impl(
+        22 => wire__crate__api__wallet__EpicWallet_contact_plain_fallback_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        22 => wire__crate__api__wallet__EpicWallet_contact_post_payload_impl(
+        23 => wire__crate__api__wallet__EpicWallet_contact_post_payload_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__wallet__EpicWallet_contact_post_slate_impl(
+        24 => wire__crate__api__wallet__EpicWallet_contact_post_slate_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => wire__crate__api__wallet__EpicWallet_contact_remove_impl(
+        25 => wire__crate__api__wallet__EpicWallet_contact_remove_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__wallet__EpicWallet_contact_seal_slate_impl(
+        26 => wire__crate__api__wallet__EpicWallet_contact_seal_slate_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__wallet__EpicWallet_contact_send_impl(
+        27 => wire__crate__api__wallet__EpicWallet_contact_send_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        27 => wire__crate__api__wallet__EpicWallet_contact_set_allow_invoices_impl(
+        28 => wire__crate__api__wallet__EpicWallet_contact_set_allow_invoices_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__wallet__EpicWallet_contact_set_label_impl(
+        29 => wire__crate__api__wallet__EpicWallet_contact_set_label_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => wire__crate__api__wallet__EpicWallet_contact_set_seal_impl(
+        30 => wire__crate__api__wallet__EpicWallet_contact_set_seal_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => wire__crate__api__wallet__EpicWallet_contact_unpair_impl(
+        31 => wire__crate__api__wallet__EpicWallet_contact_unpair_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        31 => wire__crate__api__wallet__EpicWallet_contacts_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__wallet__EpicWallet_contacts_collect_impl(
+        32 => wire__crate__api__wallet__EpicWallet_contacts_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__wallet__EpicWallet_contacts_collect_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        33 => wire__crate__api__wallet__EpicWallet_contacts_export_impl(
+        34 => wire__crate__api__wallet__EpicWallet_contacts_export_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        34 => wire__crate__api__wallet__EpicWallet_contacts_import_impl(
+        35 => wire__crate__api__wallet__EpicWallet_contacts_import_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        35 => wire__crate__api__wallet__EpicWallet_contacts_outbox_deliver_impl(
+        36 => wire__crate__api__wallet__EpicWallet_contacts_outbox_deliver_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        36 => wire__crate__api__wallet__EpicWallet_create_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__wallet__EpicWallet_create_send_slate_impl(
+        37 => wire__crate__api__wallet__EpicWallet_create_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__wallet__EpicWallet_create_send_slate_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        38 => wire__crate__api__wallet__EpicWallet_create_with_pin_impl(
+        39 => wire__crate__api__wallet__EpicWallet_create_with_pin_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        39 => wire__crate__api__wallet__EpicWallet_drain_epicbox_impl(
+        40 => wire__crate__api__wallet__EpicWallet_drain_epicbox_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__wallet__EpicWallet_epicbox_address_impl(
+        41 => wire__crate__api__wallet__EpicWallet_epicbox_address_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        42 => wire__crate__api__wallet__EpicWallet_estimate_consolidate_impl(
+        43 => wire__crate__api__wallet__EpicWallet_estimate_consolidate_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        43 => wire__crate__api__wallet__EpicWallet_estimate_fee_impl(
+        44 => wire__crate__api__wallet__EpicWallet_estimate_fee_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        44 => wire__crate__api__wallet__EpicWallet_estimate_max_impl(
+        45 => wire__crate__api__wallet__EpicWallet_estimate_max_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        45 => wire__crate__api__wallet__EpicWallet_estimate_split_impl(
+        46 => wire__crate__api__wallet__EpicWallet_estimate_split_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        46 => wire__crate__api__wallet__EpicWallet_events_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__wallet__EpicWallet_finalize_and_post_impl(
+        47 => wire__crate__api__wallet__EpicWallet_events_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__wallet__EpicWallet_finalize_and_post_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        49 => wire__crate__api__wallet__EpicWallet_finalize_file_impl(
+        50 => wire__crate__api__wallet__EpicWallet_finalize_file_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        50 => {
+        51 => {
             wire__crate__api__wallet__EpicWallet_fingerprint_impl(port, ptr, rust_vec_len, data_len)
         }
-        51 => wire__crate__api__wallet__EpicWallet_finished_payment_impl(
+        52 => wire__crate__api__wallet__EpicWallet_finished_payment_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        53 => wire__crate__api__wallet__EpicWallet_import_legacy_history_impl(
+        54 => wire__crate__api__wallet__EpicWallet_import_legacy_history_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        54 => wire__crate__api__wallet__EpicWallet_import_wallet_seed_impl(
+        55 => wire__crate__api__wallet__EpicWallet_import_wallet_seed_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        55 => wire__crate__api__wallet__EpicWallet_import_wallet_seed_with_pin_impl(
+        56 => wire__crate__api__wallet__EpicWallet_import_wallet_seed_with_pin_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        56 => wire__crate__api__wallet__EpicWallet_issue_invoice_file_impl(
+        57 => wire__crate__api__wallet__EpicWallet_issue_invoice_file_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        57 => wire__crate__api__wallet__EpicWallet_issue_invoice_slate_impl(
+        58 => wire__crate__api__wallet__EpicWallet_issue_invoice_slate_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        60 => wire__crate__api__wallet__EpicWallet_minimum_confirmations_impl(
+        61 => wire__crate__api__wallet__EpicWallet_minimum_confirmations_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        61 => wire__crate__api__wallet__EpicWallet_mnemonic_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__wallet__EpicWallet_mnemonic_with_pin_impl(
+        62 => wire__crate__api__wallet__EpicWallet_mnemonic_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__wallet__EpicWallet_mnemonic_with_pin_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        64 => wire__crate__api__wallet__EpicWallet_node_tip_for_impl(
+        65 => wire__crate__api__wallet__EpicWallet_node_tip_for_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        65 => wire__crate__api__wallet__EpicWallet_onion_address_impl(
+        66 => wire__crate__api__wallet__EpicWallet_onion_address_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        66 => wire__crate__api__wallet__EpicWallet_open_impl(port, ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__wallet__EpicWallet_open_app_data_impl(
+        67 => wire__crate__api__wallet__EpicWallet_open_impl(port, ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__wallet__EpicWallet_open_app_data_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        68 => wire__crate__api__wallet__EpicWallet_open_with_pin_impl(
+        69 => wire__crate__api__wallet__EpicWallet_open_with_pin_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        69 => wire__crate__api__wallet__EpicWallet_outputs_impl(port, ptr, rust_vec_len, data_len),
-        70 => wire__crate__api__wallet__EpicWallet_pairing_accept_impl(
+        70 => wire__crate__api__wallet__EpicWallet_outputs_impl(port, ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__wallet__EpicWallet_pairing_accept_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        71 => wire__crate__api__wallet__EpicWallet_pairing_cancel_impl(
+        72 => wire__crate__api__wallet__EpicWallet_pairing_cancel_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        72 => wire__crate__api__wallet__EpicWallet_pairing_enter_link_impl(
+        73 => wire__crate__api__wallet__EpicWallet_pairing_enter_link_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        73 => wire__crate__api__wallet__EpicWallet_pairing_find_words_impl(
+        74 => wire__crate__api__wallet__EpicWallet_pairing_find_words_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        74 => wire__crate__api__wallet__EpicWallet_pairing_invite_impl(
+        75 => wire__crate__api__wallet__EpicWallet_pairing_invite_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        75 => wire__crate__api__wallet__EpicWallet_pairing_preview_impl(
+        76 => wire__crate__api__wallet__EpicWallet_pairing_preview_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        76 => {
+        77 => {
             wire__crate__api__wallet__EpicWallet_pairing_sas_impl(port, ptr, rust_vec_len, data_len)
         }
-        77 => wire__crate__api__wallet__EpicWallet_pairing_scan_card_impl(
+        78 => wire__crate__api__wallet__EpicWallet_pairing_scan_card_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        78 => wire__crate__api__wallet__EpicWallet_pairing_show_card_impl(
+        79 => wire__crate__api__wallet__EpicWallet_pairing_show_card_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        79 => wire__crate__api__wallet__EpicWallet_pairings_for_app_contact_impl(
+        80 => wire__crate__api__wallet__EpicWallet_pairings_for_app_contact_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        80 => wire__crate__api__wallet__EpicWallet_pairings_pending_impl(
+        81 => wire__crate__api__wallet__EpicWallet_pairings_pending_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        81 => wire__crate__api__wallet__EpicWallet_pay_invoice_file_impl(
+        82 => wire__crate__api__wallet__EpicWallet_pay_invoice_file_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        82 => wire__crate__api__wallet__EpicWallet_pay_invoice_slate_impl(
+        83 => wire__crate__api__wallet__EpicWallet_pay_invoice_slate_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        83 => wire__crate__api__wallet__EpicWallet_private_pairings_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        84 => wire__crate__api__wallet__EpicWallet_push_signature_impl(
+        84 => wire__crate__api__wallet__EpicWallet_private_pairings_impl(
             port,
             ptr,
             rust_vec_len,
@@ -13225,45 +13094,36 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        126 => wire__crate__api__runtime__LepicRuntime_export_support_bundle_impl(
+        127 => wire__crate__api__runtime__LepicRuntime_logs_impl(port, ptr, rust_vec_len, data_len),
+        129 => wire__crate__api__runtime__LepicRuntime_open_log_ring_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        128 => wire__crate__api__runtime__LepicRuntime_logs_impl(port, ptr, rust_vec_len, data_len),
-        130 => wire__crate__api__runtime__LepicRuntime_open_log_ring_impl(
+        151 => wire__crate__api__testing__MockStockPeer_return_messages_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        152 => wire__crate__api__testing__MockStockPeer_return_messages_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        153 => {
+        152 => {
             wire__crate__api__testing__MockStockPeer_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        154 => wire__crate__api__wallet__decode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
-        155 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
-        156 => wire__crate__api__wallet__encode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
-        157 => {
+        153 => wire__crate__api__wallet__decode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
+        154 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
+        155 => wire__crate__api__wallet__encode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
+        156 => {
             wire__crate__api__types__inbox_report_default_impl(port, ptr, rust_vec_len, data_len)
         }
-        158 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
-        159 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
-        160 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
-        161 => wire__crate__api__wallet__reset_password_impl(port, ptr, rust_vec_len, data_len),
-        166 => {
+        157 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
+        158 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
+        159 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
+        160 => wire__crate__api__wallet__reset_password_impl(port, ptr, rust_vec_len, data_len),
+        165 => {
             wire__crate__api__error__wallet_error_kind_code_impl(port, ptr, rust_vec_len, data_len)
         }
-        167 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
-        169 => {
-            wire__crate__api__wallet__EpicWallet_check_pin_impl(port, ptr, rust_vec_len, data_len)
-        }
+        166 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -13278,20 +13138,20 @@ fn pde_ffi_dispatcher_sync_impl(
     match func_id {
         1 => wire__crate__api__secret_store__AppSecretStore_new_impl(ptr, rust_vec_len, data_len),
         2 => wire__crate__api__wallet__EpicWallet_cancel_scan_impl(ptr, rust_vec_len, data_len),
-        41 => {
+        42 => {
             wire__crate__api__wallet__EpicWallet_epicbox_over_tor_impl(ptr, rust_vec_len, data_len)
         }
-        47 => wire__crate__api__wallet__EpicWallet_expect_tor_impl(ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__wallet__EpicWallet_http_listener_status_impl(
+        48 => wire__crate__api__wallet__EpicWallet_expect_tor_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__wallet__EpicWallet_http_listener_status_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        58 => {
+        59 => {
             wire__crate__api__wallet__EpicWallet_listener_running_impl(ptr, rust_vec_len, data_len)
         }
-        59 => wire__crate__api__wallet__EpicWallet_lock_impl(ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__wallet__EpicWallet_node_over_tor_impl(ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__wallet__EpicWallet_lock_impl(ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__wallet__EpicWallet_node_over_tor_impl(ptr, rust_vec_len, data_len),
         106 => wire__crate__api__wallet__EpicWallet_set_epicbox_over_tor_impl(
             ptr,
             rust_vec_len,
@@ -13311,62 +13171,62 @@ fn pde_ffi_dispatcher_sync_impl(
         118 => wire__crate__api__wallet__EpicWallet_stop_listener_impl(ptr, rust_vec_len, data_len),
         119 => wire__crate__api__wallet__EpicWallet_stop_tor_impl(ptr, rust_vec_len, data_len),
         123 => wire__crate__api__wallet__EpicWallet_tor_status_impl(ptr, rust_vec_len, data_len),
-        127 => {
+        126 => {
             wire__crate__api__runtime__LepicRuntime_log_message_impl(ptr, rust_vec_len, data_len)
         }
-        129 => wire__crate__api__runtime__LepicRuntime_new_impl(ptr, rust_vec_len, data_len),
-        131 => wire__crate__api__runtime__LepicRuntime_stop_logs_impl(ptr, rust_vec_len, data_len),
-        132 => wire__crate__api__testing__MockChain_fund_impl(ptr, rust_vec_len, data_len),
-        133 => wire__crate__api__testing__MockChain_height_impl(ptr, rust_vec_len, data_len),
-        134 => wire__crate__api__testing__MockChain_lose_next_post_reply_impl(
+        128 => wire__crate__api__runtime__LepicRuntime_new_impl(ptr, rust_vec_len, data_len),
+        130 => wire__crate__api__runtime__LepicRuntime_stop_logs_impl(ptr, rust_vec_len, data_len),
+        131 => wire__crate__api__testing__MockChain_fund_impl(ptr, rust_vec_len, data_len),
+        132 => wire__crate__api__testing__MockChain_height_impl(ptr, rust_vec_len, data_len),
+        133 => wire__crate__api__testing__MockChain_lose_next_post_reply_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        135 => wire__crate__api__testing__MockChain_mine_pushed_impl(ptr, rust_vec_len, data_len),
-        136 => wire__crate__api__testing__MockChain_new_impl(ptr, rust_vec_len, data_len),
-        137 => wire__crate__api__testing__MockChain_panic_on_next_node_call_impl(
+        134 => wire__crate__api__testing__MockChain_mine_pushed_impl(ptr, rust_vec_len, data_len),
+        135 => wire__crate__api__testing__MockChain_new_impl(ptr, rust_vec_len, data_len),
+        136 => wire__crate__api__testing__MockChain_panic_on_next_node_call_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        138 => wire__crate__api__testing__MockChain_pool_pushed_impl(ptr, rust_vec_len, data_len),
-        139 => wire__crate__api__testing__MockChain_pushed_count_impl(ptr, rust_vec_len, data_len),
-        140 => wire__crate__api__testing__MockChain_runtime_impl(ptr, rust_vec_len, data_len),
-        141 => wire__crate__api__testing__MockChain_runtime_with_relay_impl(
+        137 => wire__crate__api__testing__MockChain_pool_pushed_impl(ptr, rust_vec_len, data_len),
+        138 => wire__crate__api__testing__MockChain_pushed_count_impl(ptr, rust_vec_len, data_len),
+        139 => wire__crate__api__testing__MockChain_runtime_impl(ptr, rust_vec_len, data_len),
+        140 => wire__crate__api__testing__MockChain_runtime_with_relay_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        142 => wire__crate__api__testing__MockChain_set_height_impl(ptr, rust_vec_len, data_len),
-        143 => wire__crate__api__testing__MockChain_set_node_ready_for_txs_impl(
+        141 => wire__crate__api__testing__MockChain_set_height_impl(ptr, rust_vec_len, data_len),
+        142 => wire__crate__api__testing__MockChain_set_node_ready_for_txs_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        144 => {
+        143 => {
             wire__crate__api__testing__MockChain_set_node_stalled_impl(ptr, rust_vec_len, data_len)
         }
-        145 => wire__crate__api__testing__MockChain_set_node_unreachable_impl(
+        144 => wire__crate__api__testing__MockChain_set_node_unreachable_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        146 => wire__crate__api__testing__MockChain_stalled_node_calls_impl(
+        145 => wire__crate__api__testing__MockChain_stalled_node_calls_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        147 => wire__crate__api__testing__MockRelay_new_impl(ptr, rust_vec_len, data_len),
-        148 => wire__crate__api__testing__MockRelay_pending_impl(ptr, rust_vec_len, data_len),
-        149 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
-        150 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
-        151 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
-        162 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
-        163 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
-        164 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
-        165 => wire__crate__api__wallet__verify_address_signature_impl(ptr, rust_vec_len, data_len),
-        168 => wire__crate__api__wallet__wallet_fingerprint_impl(ptr, rust_vec_len, data_len),
+        146 => wire__crate__api__testing__MockRelay_new_impl(ptr, rust_vec_len, data_len),
+        147 => wire__crate__api__testing__MockRelay_pending_impl(ptr, rust_vec_len, data_len),
+        148 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
+        149 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
+        150 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
+        161 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
+        162 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
+        163 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
+        164 => wire__crate__api__wallet__verify_address_signature_impl(ptr, rust_vec_len, data_len),
+        167 => wire__crate__api__wallet__wallet_fingerprint_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -14871,27 +14731,6 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::wallet::PinWallet>
     for crate::api::wallet::PinWallet
 {
     fn into_into_dart(self) -> crate::api::wallet::PinWallet {
-        self
-    }
-}
-// Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::types::PushSignature {
-    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [
-            self.address.into_into_dart().into_dart(),
-            self.signature.into_into_dart().into_dart(),
-        ]
-        .into_dart()
-    }
-}
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::types::PushSignature
-{
-}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::types::PushSignature>
-    for crate::api::types::PushSignature
-{
-    fn into_into_dart(self) -> crate::api::types::PushSignature {
         self
     }
 }
@@ -17467,14 +17306,6 @@ impl SseEncode for crate::api::wallet::PinWallet {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <EpicWallet>::sse_encode(self.wallet, serializer);
         <String>::sse_encode(self.sealed_password, serializer);
-    }
-}
-
-impl SseEncode for crate::api::types::PushSignature {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <String>::sse_encode(self.address, serializer);
-        <String>::sse_encode(self.signature, serializer);
     }
 }
 

@@ -9,7 +9,7 @@
 //! - [`HostLayer`] for the mobile binding: every record is handed to a
 //!   [`LogSink`] that the host app implements.
 //! - [`LogRing`], a [`LogSink`] that keeps redacted records on the device
-//!   within a size limit and exports them as a support bundle.
+//!   within a size limit, for the host to package into a support report.
 //!
 //! [`capture`] and [`assert_no_secrets`] let tests in any crate check what
 //! their code logs.

@@ -28,9 +28,9 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, LegacyImport, ListenerEvent, ListenerEventKind,
-    NodeTip, PushSignature, ReceivedSlate, RefreshProgress, ScanProgress, SelfSentTx, SendOptions,
-    SentTx, Slate, SlateInfo, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
-    WalletOutput, WalletSummary,
+    NodeTip, ReceivedSlate, RefreshProgress, ScanProgress, SelfSentTx, SendOptions, SentTx, Slate,
+    SlateInfo, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent, WalletOutput,
+    WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -1284,29 +1284,11 @@ impl EpicWallet {
     /// hex. Another wallet that holds the same recovery phrase makes the same signature, and
     /// [`verify_address_signature`] checks it against the key in [`EpicWallet::epicbox_address`],
     /// so two devices can prove they hold one wallet. The digest is tagged so that no text the
-    /// key signs for a relay or a push registration can ever equal it. Needs no relay. Fails
+    /// key signs for a relay can ever equal it. Needs no relay. Fails
     /// with `InvalidArgument` for a `message` over 64 KiB.
     pub async fn sign_with_address_key(&self, message: Vec<u8>) -> Result<String, WalletError> {
         self.run("sign_with_address_key", |session| async move {
             session.address_signature(&message)
-        })
-        .await
-    }
-
-    /// Signs a push registration for this wallet's Epicbox address, so a push service can tie
-    /// the FCM `token` to it. LEPIC builds the text itself, `epic-push-v1`, `action`, the
-    /// address key, `token` and `timestamp` (unix seconds) on five lines, and signs nothing
-    /// else. `action` is `register` or `unregister`; `token` is 1 to 4096 characters of
-    /// `[A-Za-z0-9_:.-]`. Fails with `InvalidArgument` for any other, and with `Unsupported`
-    /// when the configuration names no relay.
-    pub async fn push_signature(
-        &self,
-        action: String,
-        token: String,
-        timestamp: u64,
-    ) -> Result<PushSignature, WalletError> {
-        self.run("push_signature", |session| async move {
-            session.push_signature(&action, &token, timestamp)
         })
         .await
     }

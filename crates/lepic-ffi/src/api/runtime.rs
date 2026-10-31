@@ -177,20 +177,6 @@ impl LepicRuntime {
         })
     }
 
-    /// The redacted support bundle of the ring from [`LepicRuntime::open_log_ring`]: a short
-    /// header, then its records oldest first, one per line. Records logged meanwhile wait.
-    ///
-    /// Fails with `InvalidArgument` when no ring is open and `Io` when it cannot be read.
-    pub fn export_support_bundle(&self) -> Result<String, WalletError> {
-        self.inner.boundary.guard("export_support_bundle", || {
-            let ring = self.inner.logs.ring().ok_or_else(|| {
-                WalletError::new(WalletErrorKind::InvalidArgument, "no log ring is open")
-            })?;
-            ring.support_bundle()
-                .map_err(|error| log_ring_error(&error))
-        })
-    }
-
     /// Logs one line from the app under the target `dart.<tag>`, through the same stream.
     /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them, and `message` at
     /// most its first 1024 bytes, cut at a character boundary. Never pass secrets.
@@ -214,8 +200,8 @@ impl LepicRuntime {
     }
 }
 
-/// The largest log ring [`LepicRuntime::open_log_ring`] accepts, so one export stays a size a
-/// phone can hold twice, in Rust and in Dart.
+/// The largest log ring [`LepicRuntime::open_log_ring`] accepts, so a report of its files stays
+/// a size a phone can hold.
 const MAX_LOG_RING_BYTES: u64 = 16 * 1024 * 1024;
 
 fn log_ring_error(error: &LogRingError) -> WalletError {

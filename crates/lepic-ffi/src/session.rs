@@ -61,10 +61,10 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
     LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, OutputCategory, OutputStatus,
-    PushSignature, ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy,
-    SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, SlateStage, TransactionDetails,
-    TransportConnection, TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent,
-    WalletEventKind, WalletOutput, WalletSummary,
+    ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy, SelfSentTx, SendOptions,
+    SentTx, Slate, SlateMessage, SlateStage, TransactionDetails, TransportConnection,
+    TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput,
+    WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -1425,26 +1425,6 @@ impl Session {
             return Err(invalid("message too long to sign"));
         }
         Ok(self.engine.address_signature(message)?.to_der_hex())
-    }
-
-    /// Never logs the token, the text or the signature.
-    pub(crate) fn push_signature(
-        &self,
-        action: &str,
-        token: &str,
-        timestamp: u64,
-    ) -> Result<PushSignature, WalletError> {
-        let action =
-            lepic_epicbox::PushAction::parse(action).map_err(|e| invalid(e.to_string()))?;
-        let request = lepic_epicbox::PushRequest::new(action, token, timestamp)
-            .map_err(|e| invalid(e.to_string()))?;
-        let (address, signature) = self
-            .engine
-            .epicbox_push_signature(&self.epicbox()?, &request)?;
-        Ok(PushSignature {
-            address: address.to_string(),
-            signature: signature.to_der_hex(),
-        })
     }
 
     pub(crate) async fn send_epicbox(

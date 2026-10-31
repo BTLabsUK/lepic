@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Logs kept on the device for support: a size-bounded ring of redacted records in a directory
-//! the app owns, and the support bundle exported from it.
+//! the app owns. The host packages the ring's files into a report itself.
 //!
-//! Records are redacted before they reach the disk, so neither the ring nor a bundle ever holds
-//! a value the redaction drops. Field values are kept only for the fields in [`KEPT_FIELDS`];
+//! Records are redacted before they reach the disk, so the ring never holds a value the
+//! redaction drops. Field values are kept only for the fields in [`KEPT_FIELDS`];
 //! every other field, including amounts and addresses, is written as `[redacted]`, and quoted
 //! input inside an `error` value is redacted the same way. Messages go through the same quote
 //! redaction, which covers a host app's lines (`dart` target) that quote what they reject.
@@ -11,7 +11,7 @@
 
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufWriter, Read as _, Write as _};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -48,7 +48,6 @@ const REDACTED: &str = "[redacted]";
 const SEGMENTS: u64 = 4;
 const MIN_LIMIT_BYTES: u64 = 4 * 1024;
 const MAX_LINE_BYTES: u64 = 4 * 1024;
-const BUNDLE_FORMAT: u32 = 1;
 
 /// The most bytes the ring keeps on disk, across all its files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,17 +101,6 @@ pub enum LogRingError {
     #[error("log ring directory {directory} could not be prepared")]
     Directory {
         directory: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("support bundle could not be written to {path}")]
-    Export {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("support bundle could not be read from the log ring")]
-    Read {
         #[source]
         source: io::Error,
     },
@@ -175,67 +163,6 @@ impl LogRing {
     #[must_use]
     pub fn limit(&self) -> LogRingLimit {
         self.limit
-    }
-
-    /// Writes the support bundle to `path`, replacing any file there: a short header, then every
-    /// record in the ring, oldest first. Records logged while the export runs wait for it.
-    ///
-    /// # Errors
-    ///
-    /// [`LogRingError::Export`] when the bundle cannot be written or a segment cannot be read.
-    pub fn export_support_bundle(&self, path: &Path) -> Result<(), LogRingError> {
-        let _paused = self.active.lock().unwrap_or_else(PoisonError::into_inner);
-        let write = || {
-            let mut out = BufWriter::new(File::create(path)?);
-            self.write_bundle(&mut out)?;
-            out.into_inner()
-                .map_err(io::IntoInnerError::into_error)?
-                .sync_all()
-        };
-        write().map_err(|source| LogRingError::Export {
-            path: path.to_owned(),
-            source,
-        })
-    }
-
-    /// The support bundle of [`LogRing::export_support_bundle`] as text, for a host that sends
-    /// it on itself. It is at most the ring's limit plus a short header.
-    ///
-    /// # Errors
-    ///
-    /// [`LogRingError::Read`] when a segment cannot be read.
-    pub fn support_bundle(&self) -> Result<String, LogRingError> {
-        let _paused = self.active.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut out = Vec::new();
-        self.write_bundle(&mut out)
-            .map_err(|source| LogRingError::Read { source })?;
-        // Segments hold whole UTF-8 lines; only a file changed behind the ring's back is not.
-        Ok(String::from_utf8(out)
-            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()))
-    }
-
-    fn write_bundle(&self, out: &mut impl io::Write) -> io::Result<()> {
-        writeln!(out, "lepic support bundle")?;
-        writeln!(out, "format: {BUNDLE_FORMAT}")?;
-        writeln!(out, "version: {}", env!("CARGO_PKG_VERSION"))?;
-        writeln!(out, "exported_at: {:.3}", (self.clock)())?;
-        writeln!(out, "ring_limit_bytes: {}", self.limit.max_bytes())?;
-        writeln!(
-            out,
-            "redacted: values of fields other than {}",
-            KEPT_FIELDS.join(", ")
-        )?;
-        writeln!(out, "---")?;
-        for index in (0..SEGMENTS).rev() {
-            match File::open(segment_path(&self.dir, index)) {
-                Ok(segment) => {
-                    io::copy(&mut segment.take(self.limit.segment_bytes), out)?;
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(())
     }
 
     fn append(&self, active: &mut Active, line: &[u8]) -> io::Result<()> {
@@ -440,10 +367,13 @@ mod tests {
         }
     }
 
-    fn export(ring: &LogRing, dir: &Path) -> String {
-        let path = dir.join("bundle.txt");
-        ring.export_support_bundle(&path).unwrap();
-        fs::read_to_string(path).unwrap()
+    /// Every record in the ring at `dir`, oldest first: the highest segment index holds the
+    /// oldest records.
+    fn stored(dir: &Path) -> String {
+        (0..SEGMENTS)
+            .rev()
+            .filter_map(|index| fs::read_to_string(segment_path(dir, index)).ok())
+            .collect()
     }
 
     #[test]
@@ -466,7 +396,7 @@ mod tests {
             assert!(sizes.iter().sum::<u64>() <= max, "record {index}");
         }
 
-        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
+        let bundle = stored(dir.path());
         assert!(bundle.ends_with("height=2999\n"));
     }
 
@@ -487,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn bundle_text_matches_the_exported_file() {
+    fn stored_records_keep_no_redacted_value() {
         let dir = tempfile::tempdir().unwrap();
         let ring = open(dir.path(), 4 * 1024);
         for index in 0..60 {
@@ -497,8 +427,7 @@ mod tests {
             ));
         }
 
-        let text = ring.support_bundle().unwrap();
-        assert_eq!(text, export(&ring, tempfile::tempdir().unwrap().path()));
+        let text = stored(dir.path());
         assert!(text.ends_with(": record 59 amount=[redacted]\n"));
         assert!(!text.contains("1000000"));
     }
@@ -512,16 +441,14 @@ mod tests {
     }
 
     #[test]
-    fn bundle_lists_records_oldest_first_across_segments() {
+    fn segments_hold_records_oldest_first() {
         let dir = tempfile::tempdir().unwrap();
         let ring = open(dir.path(), 4 * 1024);
         for index in 0..60 {
             ring.record(record(&format!("record {index:02}"), vec![]));
         }
 
-        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
-        let (header, body) = bundle.split_once("---\n").unwrap();
-        assert!(header.starts_with("lepic support bundle\nformat: 1\n"));
+        let body = stored(dir.path());
         let numbers: Vec<u32> = body
             .lines()
             .map(|line| line.rsplit(' ').next().unwrap().parse().unwrap())
@@ -565,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn export_of_a_session_passes_assert_no_secrets() {
+    fn ring_of_a_session_passes_assert_no_secrets() {
         let dir = tempfile::tempdir().unwrap();
         let ring = Arc::new(open(dir.path(), 64 * 1024));
         let tee = Arc::new(Tee {
@@ -595,7 +522,7 @@ mod tests {
             "the session must log secrets for this test to show anything"
         );
 
-        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
+        let bundle = stored(dir.path());
         assert!(
             bundle.contains(": slate sent wallet=w1 seed=[redacted] slate_id=0436430c stage=S1\n")
         );
@@ -617,8 +544,7 @@ mod tests {
         ring.record(record(&"x".repeat(100_000), vec![]));
         ring.record(record("record after", vec![]));
 
-        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
-        let (_, body) = bundle.split_once("---\n").unwrap();
+        let body = stored(dir.path());
         let lines: Vec<&str> = body.split_inclusive('\n').collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("xxxx"));
@@ -655,7 +581,7 @@ mod tests {
             });
         }
 
-        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
+        let bundle = stored(dir.path());
         assert!(bundle.contains(
             "error=relay frame could not be decoded: invalid type: string \"[redacted]\", expected u64"
         ));
@@ -685,7 +611,7 @@ mod tests {
             tracing::warn!(target: "dart", tag = "send", "{message}");
         });
 
-        let bundle = export(&ring, tempfile::tempdir().unwrap().path());
+        let bundle = stored(dir.path());
         assert!(
             bundle.contains("send to \"[redacted]\" refused"),
             "{bundle}"

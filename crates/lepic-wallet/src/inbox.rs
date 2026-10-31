@@ -673,20 +673,6 @@ where
         Ok(self.attached_client(epicbox)?.address().clone())
     }
 
-    /// The payments address of `epicbox` and the signature of the push registration `request`
-    /// made with its key. Fails as [`Wallet::epicbox_attach`] does.
-    pub fn epicbox_push_signature(
-        &self,
-        epicbox: &EpicboxTransport,
-        request: &lepic_epicbox::PushRequest,
-    ) -> Result<(EpicboxAddress, lepic_crypto::EcdsaSignature), InboxError> {
-        let identity = self.identity_at(epicbox, ADDRESS_INDEX)?;
-        let signature = identity
-            .sign_push(request)
-            .map_err(|_| InboxError::Identity(ClientError::IdentityMismatch))?;
-        Ok((identity.address().clone(), signature))
-    }
-
     /// Signs `message` with the wallet's Epicbox address key, under a tag that keeps it apart
     /// from every text the key signs for a relay; [`lepic_epicbox::verify_address_message`]
     /// checks it against the key of [`Wallet::epicbox_attach`]'s address. Needs no relay.

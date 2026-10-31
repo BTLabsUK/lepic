@@ -89,24 +89,6 @@ async fn signature_fails_for_another_wallet_message_or_key_text() {
 }
 
 #[tokio::test]
-async fn push_signature_never_passes_as_an_address_signature() {
-    let mut fixture = Fixture::new();
-    let wallet = wallet(&mut fixture, None).await;
-    let address = wallet.epicbox_address().await.unwrap();
-    let key = key_of(&wallet).await;
-    let push = wallet
-        .push_signature("register".to_owned(), "abc".to_owned(), 1)
-        .await
-        .unwrap();
-    let text = format!("epic-push-v1\nregister\n{key}\nabc\n1");
-    assert!(!verify_address_signature(
-        address,
-        text.into_bytes(),
-        push.signature
-    ));
-}
-
-#[tokio::test]
 async fn signs_without_a_relay_and_refuses_an_oversized_message() {
     let fixture = Fixture::new();
     let wallet = EpicWallet::create(
