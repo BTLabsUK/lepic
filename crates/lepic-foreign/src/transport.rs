@@ -36,9 +36,8 @@ pub const TRANSPORT_ID: TransportId = TransportId::new("http");
 const MAX_HELD_REPLIES: usize = 64;
 
 /// The policy `epic-wallet` `v4.1.0` speaks over HTTP: V3 and V2 accepted, detected by shape
-/// with V3 tried first; a new slate in the V2 shape every listener since 3.0 takes, or in the
-/// V3 shape when it asks for a payment proof, which V2 cannot carry, as `epic-wallet` sends it
-/// to a listener that takes V3; a reply in the shape it answers.
+/// with V3 tried first; a new slate in the V2 shape every listener since 3.0 takes; a reply in
+/// the shape it answers.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HttpPolicy;
 
@@ -51,14 +50,9 @@ impl FormatPolicy for HttpPolicy {
         &Self::ACCEPTED
     }
 
-    fn for_new_slate(&self, slate: &Slate, _context: &EncodeContext) -> Encoding {
-        let codec = if slate.payment_proof().is_some() {
-            LEGACY_V3_JSON
-        } else {
-            LEGACY_V2_JSON
-        };
+    fn for_new_slate(&self, _slate: &Slate, _context: &EncodeContext) -> Encoding {
         Encoding {
-            codec,
+            codec: LEGACY_V2_JSON,
             legacy_header: None,
         }
     }
@@ -131,12 +125,7 @@ impl HttpTransport {
         let url = ForeignUrl::parse(to.as_str(), PlainHttp::Allowed)?;
         let slate_id = slate_id_of(wire).ok_or(ClientError::Rpc(RpcError::NotJson))?;
         let version = self.client.check_version(&url).await?;
-        let shared = if version_of(wire) == Some(3) {
-            version.v3
-        } else {
-            version.v2
-        };
-        if !shared {
+        if !version.v2 {
             return Err(ClientError::NoCommonVersion);
         }
         let reply = self.client.receive_tx(&url, wire).await?;
@@ -152,22 +141,6 @@ impl HttpTransport {
 #[derive(Deserialize)]
 struct IdOnly {
     id: String,
-}
-
-#[derive(Deserialize)]
-struct VersionOnly {
-    version_info: VersionInfoOnly,
-}
-
-#[derive(Deserialize)]
-struct VersionInfoOnly {
-    version: u64,
-}
-
-/// The `version_info.version` both legacy shapes carry, read without decoding the slate.
-fn version_of(wire: &WireSlate) -> Option<u64> {
-    let VersionOnly { version_info } = serde_json::from_str(wire.as_text()?).ok()?;
-    Some(version_info.version)
 }
 
 /// The `id` both legacy shapes carry at the top, read without decoding the slate.

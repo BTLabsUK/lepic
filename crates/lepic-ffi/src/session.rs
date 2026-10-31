@@ -1207,19 +1207,10 @@ impl Session {
             return Ok(request);
         };
         let (strategy, change_outputs, exclude_outputs) = selection_choice(&options)?;
-        let payment_proof_recipient = options
-            .payment_proof_recipient
-            .as_deref()
-            .map(lepic_wallet::slate::parse_proof_address)
-            .transpose()
-            .map_err(|_| {
-                invalid("payment proof recipient is not an ed25519 address of 64 hex characters")
-            })?;
         Ok(SendRequest {
             strategy,
             change_outputs,
             exclude_outputs,
-            payment_proof_recipient,
             ..request
         })
     }

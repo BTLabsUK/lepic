@@ -5,14 +5,14 @@
 //! ```text
 //! LEPIC_LIVE_TESTS=1 LEPIC_TEST_NODE_URL=https://<floonet node> \
 //! LEPIC_TOR_BINARY=<tor> [LEPIC_TOR_LIB_DIR=<dir>] LEPIC_TEST_LISTEN_PORT=<port> \
-//! LEPIC_TEST_WALLET_URL=http://<onion>[:port] [LEPIC_TEST_PROOF_ADDRESS=<64 hex>] \
+//! LEPIC_TEST_WALLET_URL=http://<onion>[:port] \
 //! cargo test -p lepic-ffi --lib tests::live_send_http_tor -- --ignored --nocapture
 //! ```
 //!
 //! The session opens with `tor_wanted`, so its node, its sends and everything else wait for
 //! its tor. It takes funds on a loopback HTTP listener at `LEPIC_TEST_LISTEN_PORT` (pay it
 //! from another floonet wallet when it says so), then pays 1 EPIC to `LEPIC_TEST_WALLET_URL`
-//! with `send_http`, asking for a payment proof for `LEPIC_TEST_PROOF_ADDRESS` when given.
+//! with `send_http`.
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,7 +25,7 @@ use crate::api::http::{HttpExposure, HttpListenerEvent};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::tor::{TorEvent, TorEventKind};
-use crate::api::types::{Chain, SelectionStrategy, SendOptions, WalletConfig};
+use crate::api::types::{Chain, WalletConfig};
 use crate::node::{NodeFactory, NodeSecret};
 use crate::pin::PinPolicy;
 use crate::session::{SeedOrigin, Session};
@@ -47,7 +47,6 @@ fn live_send_http_through_tor() {
     let lib_dir = std::env::var("LEPIC_TOR_LIB_DIR").ok();
     let port: u16 = env("LEPIC_TEST_LISTEN_PORT").parse().unwrap();
     let url = env("LEPIC_TEST_WALLET_URL");
-    let proof = std::env::var("LEPIC_TEST_PROOF_ADDRESS").ok();
 
     let runtime = LepicRuntime::start(
         LogLevel::Warn,
@@ -154,16 +153,10 @@ fn live_send_http_through_tor() {
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
 
-        let options = proof.map(|proof| SendOptions {
-            strategy: SelectionStrategy::Smallest,
-            change_outputs: 1,
-            exclude_outputs: Vec::new(),
-            payment_proof_recipient: Some(proof),
-        });
         let sending = Instant::now();
         // An onion just published may not be found by every directory yet.
         let mut sent = session
-            .send_http_with(EPIC, 1, &url, true, None, options)
+            .send_http_with(EPIC, 1, &url, true, None, None)
             .await
             .map(|sent| (sent.tx_id, sent.slate_id, sent.posted));
         for _ in 0..6 {

@@ -11855,12 +11855,10 @@ impl SseDecode for crate::api::types::SendOptions {
         let mut var_strategy = <crate::api::types::SelectionStrategy>::sse_decode(deserializer);
         let mut var_changeOutputs = <u32>::sse_decode(deserializer);
         let mut var_excludeOutputs = <Vec<String>>::sse_decode(deserializer);
-        let mut var_paymentProofRecipient = <Option<String>>::sse_decode(deserializer);
         return crate::api::types::SendOptions {
             strategy: var_strategy,
             change_outputs: var_changeOutputs,
             exclude_outputs: var_excludeOutputs,
-            payment_proof_recipient: var_paymentProofRecipient,
         };
     }
 }
@@ -15127,7 +15125,6 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::SendOptions {
             self.strategy.into_into_dart().into_dart(),
             self.change_outputs.into_into_dart().into_dart(),
             self.exclude_outputs.into_into_dart().into_dart(),
-            self.payment_proof_recipient.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -17580,7 +17577,6 @@ impl SseEncode for crate::api::types::SendOptions {
         <crate::api::types::SelectionStrategy>::sse_encode(self.strategy, serializer);
         <u32>::sse_encode(self.change_outputs, serializer);
         <Vec<String>>::sse_encode(self.exclude_outputs, serializer);
-        <Option<String>>::sse_encode(self.payment_proof_recipient, serializer);
     }
 }
 
