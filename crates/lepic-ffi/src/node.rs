@@ -4,12 +4,12 @@
 
 use std::io;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use lepic_epicbox::tunnel::OnionRoutes;
 use lepic_node::{
     CallPolicy, DialFuture, HttpTransport, NodeClient, NodeDialer, NodeError, NodeStream,
-    RpcTransport, is_loopback_host, webpki_tls_config,
+    RpcTransport, Tip, is_loopback_host, webpki_tls_config,
 };
 use tokio::net::TcpStream;
 
@@ -108,15 +108,19 @@ impl NodeSecret {
     }
 }
 
-/// The backend last built to ask a node other than the session's own, kept so a poll of the
-/// same node reuses its open connections instead of a new TLS handshake each time. A request
-/// for another URL, secret or tor mode replaces it, so a connection opened directly never
-/// carries a request meant for tor, or the other way round.
-pub(crate) struct BackendCache<T>(Mutex<Option<(BackendKey, T)>>);
+/// The backends last built to ask nodes other than the session's own, one per URL, secret and
+/// tor mode, kept so a poll of the same nodes (a Node list asks each one) reuses their open
+/// connections instead of a new TLS handshake each time. A connection opened directly never
+/// carries a request meant for tor, or the other way round. It keeps the [`BACKENDS_KEPT`]
+/// asked last.
+pub(crate) struct BackendCache<T>(Mutex<Vec<(BackendKey, T)>>);
+
+/// The most backends a [`BackendCache`] keeps: more than the nodes of a list.
+const BACKENDS_KEPT: usize = 8;
 
 impl<T> Default for BackendCache<T> {
     fn default() -> Self {
-        Self(Mutex::new(None))
+        Self(Mutex::new(Vec::new()))
     }
 }
 
@@ -143,15 +147,76 @@ impl<T: Clone> BackendCache<T> {
         key: BackendKey,
         build: impl FnOnce() -> Result<T, WalletError>,
     ) -> Result<T, WalletError> {
-        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((cached, backend)) = slot.as_ref()
-            && *cached == key
-        {
-            return Ok(backend.clone());
+        let mut kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(at) = kept.iter().position(|(cached, _)| *cached == key) {
+            // Asked last now, so it is dropped last.
+            let entry = kept.remove(at);
+            let backend = entry.1.clone();
+            kept.push(entry);
+            return Ok(backend);
         }
         let backend = build()?;
-        *slot = Some((key, backend.clone()));
+        if kept.len() >= BACKENDS_KEPT {
+            kept.remove(0);
+        }
+        kept.push((key, backend.clone()));
         Ok(backend)
+    }
+}
+
+/// What a node's earlier tip answers leave to reuse, kept with its backend: the version, which
+/// changes only when the node is upgraded, and the time of the tip block it reported last. A
+/// tip that failed drops both, since the node may have restarted.
+#[derive(Default)]
+pub(crate) struct TipMemo(Mutex<Option<Memo>>);
+
+struct Memo {
+    version: String,
+    asked: Instant,
+    tip: Option<(Tip, i64)>,
+}
+
+/// How long a node's version is reused before it is asked again.
+const VERSION_KEPT: Duration = Duration::from_secs(60 * 60);
+
+impl TipMemo {
+    fn memo(&self) -> std::sync::MutexGuard<'_, Option<Memo>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The version asked within [`VERSION_KEPT`].
+    pub(crate) fn version(&self) -> Option<String> {
+        self.memo()
+            .as_ref()
+            .filter(|memo| memo.asked.elapsed() < VERSION_KEPT)
+            .map(|memo| memo.version.clone())
+    }
+
+    pub(crate) fn keep_version(&self, version: &str) {
+        *self.memo() = Some(Memo {
+            version: version.to_owned(),
+            asked: Instant::now(),
+            tip: None,
+        });
+    }
+
+    /// When the block of `tip` was mined, if this node told it for the same block before.
+    pub(crate) fn tip_time_ms(&self, tip: &Tip) -> Option<i64> {
+        self.memo()
+            .as_ref()
+            .and_then(|memo| memo.tip)
+            .filter(|(known, _)| known == tip)
+            .map(|(_, time)| time)
+    }
+
+    pub(crate) fn keep_tip_time_ms(&self, tip: Tip, time: i64) {
+        if let Some(memo) = self.memo().as_mut() {
+            memo.tip = Some((tip, time));
+        }
+    }
+
+    pub(crate) fn forget(&self) {
+        *self.memo() = None;
     }
 }
 
@@ -516,7 +581,7 @@ mod refusal_tests {
     }
 
     #[test]
-    fn another_url_secret_or_tor_mode_builds_a_new_backend() {
+    fn each_url_secret_and_tor_mode_keeps_a_backend_of_its_own() {
         let cache = BackendCache::default();
         let builds = std::cell::Cell::new(0);
         let ask = |url: &str, secret: Option<&str>, over_tor: bool| {
@@ -538,7 +603,11 @@ mod refusal_tests {
         assert_eq!(ask("https://a.example", Some("secret"), false), 2);
         assert_eq!(ask("https://a.example", Some("secret"), true), 3);
         assert_eq!(ask("https://b.example", Some("secret"), true), 4);
-        assert_eq!(ask("https://a.example", None, false), 5);
+        assert_eq!(ask("https://a.example", None, false), 1);
+        for n in 0..BACKENDS_KEPT {
+            ask(&format!("https://n{n}.example"), None, false);
+        }
+        assert_eq!(ask("https://a.example", None, false), 13);
     }
 
     #[test]

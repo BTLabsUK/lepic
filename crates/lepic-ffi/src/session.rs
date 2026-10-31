@@ -68,7 +68,9 @@ use crate::api::types::{
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
-use crate::node::{BackendCache, BackendKey, Node, NodeBackend, NodeSecret, RelayTor, node_error};
+use crate::node::{
+    BackendCache, BackendKey, Node, NodeBackend, NodeSecret, RelayTor, TipMemo, node_error,
+};
 use crate::tuning::Tuning;
 use crate::vault_port::{
     AppVault, SharedStorage, VAULT_KEY, VAULT_NEXT_KEY, VaultBytes, decode, vault_error,
@@ -225,8 +227,8 @@ pub(crate) struct Session {
     /// Hosts reached at an onion through tor, with TLS for the host: the built-in table until
     /// the app sets its own. Shared by every connection of the session that goes through tor.
     pub(crate) onion_routes: Arc<OnionRoutes>,
-    /// The backend [`Session::node_tip_for`] asked last.
-    node_tips: BackendCache<NodeBackend>,
+    /// The backends [`Session::node_tip_for`] asked last, with what their answers left.
+    node_tips: BackendCache<(NodeBackend, Arc<TipMemo>)>,
     /// The tuning of the config the session was opened with.
     pub(crate) tuning: Tuning,
     #[cfg(all(test, feature = "tor"))]
@@ -2212,7 +2214,7 @@ pub(crate) async fn node_tip(
         &Arc::new(RelayTor::direct(true, tuning.tor_connect_timeout())),
         &Arc::new(OnionRoutes::default()),
     )?;
-    ask_node_tip(&node).await
+    ask_node_tip(&node, &TipMemo::default()).await
 }
 
 impl Session {
@@ -2228,43 +2230,73 @@ impl Session {
         self.ensure_unlocked()?;
         self.ensure_same_offline(config)?;
         let over_tor = *self.node_tor.active().borrow();
-        let backend =
+        let (backend, memo) =
             self.node_tips
                 .get_or_build(BackendKey::new(config, node_secret, over_tor), || {
-                    self.runtime.nodes.backend(
+                    let backend = self.runtime.nodes.backend(
                         (config, &self.tuning),
                         node_secret,
                         &self.node_tor,
                         &self.onion_routes,
-                    )
+                    )?;
+                    Ok((backend, Arc::default()))
                 })?;
-        ask_node_tip(&self.runtime.nodes.client_over(backend, &self.tuning)).await
+        ask_node_tip(
+            &self.runtime.nodes.client_over(backend, &self.tuning),
+            &memo,
+        )
+        .await
     }
 }
 
-async fn ask_node_tip(node: &Node) -> Result<NodeTip, WalletError> {
-    let tip = node.get_tip().await.map_err(|error| node_error(&error))?;
-    let version = node
-        .get_version()
-        .await
-        .map_err(|error| node_error(&error))?;
-    // Both are extras of the answer, asked for at once: a node that fails them still gives
-    // its tip.
-    let (ready_for_txs, header) = tokio::join!(node.ready_for_txs(), node.get_header(tip.height));
-    let ready_for_txs = ready_for_txs.unwrap_or_else(|error| {
+/// The node's tip with its version, readiness and tip time. The version, and the tip time of a
+/// block it told before, come from `memo` when it has them, so a poll of an unchanged node
+/// costs two requests instead of four.
+async fn ask_node_tip(node: &Node, memo: &TipMemo) -> Result<NodeTip, WalletError> {
+    let tip = match node.get_tip().await {
+        Ok(tip) => tip,
+        Err(error) => {
+            memo.forget();
+            return Err(node_error(&error));
+        }
+    };
+    let node_version = match memo.version() {
+        Some(version) => version,
+        None => {
+            let version = node
+                .get_version()
+                .await
+                .map_err(|error| node_error(&error))?
+                .node_version;
+            memo.keep_version(&version);
+            version
+        }
+    };
+    // Both are extras of the answer, asked one after the other on the same connection: a node
+    // that fails them still gives its tip.
+    let ready_for_txs = node.ready_for_txs().await.unwrap_or_else(|error| {
         debug!(error = %lepic_telemetry::ErrorChain(&error), "ready_for_txs unanswered");
         None
     });
-    let tip_time_ms = match header {
-        Ok(header) => header.map(|header| header.timestamp.as_millisecond()),
-        Err(error) => {
-            debug!(error = %lepic_telemetry::ErrorChain(&error), "tip header unanswered");
-            None
-        }
+    let tip_time_ms = match memo.tip_time_ms(&tip) {
+        Some(time) => Some(time),
+        None => match node.get_header(tip.height).await {
+            Ok(header) => {
+                let time = header.map(|header| header.timestamp.as_millisecond());
+                if let Some(time) = time {
+                    memo.keep_tip_time_ms(tip, time);
+                }
+                time
+            }
+            Err(error) => {
+                debug!(error = %lepic_telemetry::ErrorChain(&error), "tip header unanswered");
+                None
+            }
+        },
     };
     Ok(NodeTip {
         height: tip.height.value(),
-        node_version: version.node_version,
+        node_version,
         ready_for_txs,
         tip_time_ms,
     })
