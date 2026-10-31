@@ -51,7 +51,7 @@ use lepic_wallet::{
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use tokio::sync::broadcast;
-use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
@@ -906,7 +906,6 @@ impl Session {
     /// received and the change of its spends; a scan that fails is logged and the next refresh
     /// tries again.
     pub(crate) async fn refresh(&self) -> Result<WalletSummary, WalletError> {
-        let mut events = self.engine.subscribe();
         let refreshed = self.engine.refresh().await?;
         if matches!(refreshed, RefreshOutcome::Refreshed(_))
             && let Err(error) = self.engine.refresh_scan().await
@@ -915,31 +914,11 @@ impl Session {
         }
         match refreshed {
             RefreshOutcome::Refreshed(_) => {
-                let mut latest = None;
-                loop {
-                    match events.try_recv() {
-                        Ok(Event::Balance(balance)) if balance.account == DEFAULT_ACCOUNT => {
-                            latest = Some(balance);
-                        }
-                        Ok(_) | Err(TryRecvError::Lagged(_)) => {}
-                        Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                    }
-                }
-                // The update scan may have stored the change of a spend elsewhere since.
-                if latest.is_some()
-                    && let Ok(balance) = self.engine.balance(DEFAULT_ACCOUNT)
-                {
-                    latest = Some(balance);
-                }
-                match latest {
-                    Some(balance) => {
-                        *lock(&self.balance) = Some(balance);
-                        Ok(summary(&balance, true))
-                    }
-                    None => self.cached().ok_or_else(|| {
-                        WalletError::new(WalletErrorKind::Other, "refresh reported no balance")
-                    }),
-                }
+                // Read from the store after the update scan, which may have stored the change
+                // of a spend made elsewhere.
+                let balance = self.engine.balance(DEFAULT_ACCOUNT)?;
+                *lock(&self.balance) = Some(balance);
+                Ok(summary(&balance, true))
             }
             RefreshOutcome::NodeBehind { .. } => self.cached().ok_or_else(|| {
                 WalletError::new(
