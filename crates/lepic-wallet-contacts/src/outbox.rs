@@ -12,8 +12,8 @@ use lepic_epicbox::{EpicboxAddress, TRANSPORT_ID};
 use lepic_node::NodeApi;
 use lepic_slate::model::SlateId;
 use lepic_store::{
-    ContactId, ContactOutboxEntry, ContactOutboxId, ContactOutboxState, SlateStage, StoreError,
-    TxDirection, TxState, WalletStore,
+    ContactId, ContactOutboxEntry, ContactOutboxId, ContactOutboxState, Record, SlateStage,
+    StoreError, TxDirection, TxState, WalletStore,
 };
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
@@ -208,12 +208,25 @@ where
                 }
             };
             let session = std::sync::Arc::clone(&session);
-            self.contact_work(move |_, _| {
-                Ok(session
-                    .store
-                    .write(|repos| repos.update_contact_outbox(id, &entry))?)
-            })
-            .await?;
+            let updated = self
+                .contact_work(move |_, _| {
+                    Ok(session
+                        .store
+                        .write(|repos| repos.update_contact_outbox(id, &entry)))
+                })
+                .await?;
+            match updated {
+                Ok(()) => {}
+                // The contact was removed during the run, its outbox with it; the run goes on
+                // with the other contacts' entries.
+                Err(StoreError::NotFound {
+                    record: Record::Contact | Record::ContactOutbox,
+                }) => {
+                    debug!("outbox entry of a removed contact dropped");
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
             if let Some(news) = news {
                 self.wallet.emit(news);
             }
