@@ -68,6 +68,8 @@ const TARGETS: &[&str] = &[
     "onion_parse",
     "relay_discovery",
     "slate_flow",
+    "legacy_rows",
+    "contact_backup_import",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -413,6 +415,14 @@ fn chain_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTree
                 }
             }
         }
+        "legacy_rows" => {
+            for (kind, row) in LEGACY_ROW_SEEDS {
+                seeds.insert(prefixed(&[*kind], row.as_bytes()));
+            }
+        }
+        "contact_backup_import" => {
+            seeds.extend(CONTACT_BACKUP_SEEDS.iter().map(|json| json.as_bytes().to_vec()));
+        }
         "slate_marker" => {
             for vector in read_area(vectors, "slates", "")? {
                 for json in text_fields(&vector, "json") {
@@ -622,6 +632,31 @@ struct SerReadRule {
 
 /// A v3 onion host, for the seeds of the onion and discovery targets.
 const ONION_SEED: &str = "j2xf5rizkow5jtrdf6edotk5qam4kohavip23dqeuih5bq4yqisbz5ad.onion";
+
+/// Rows as `epic-wallet` 3.3 and 4.0 store them, each after the byte that picks its parser in
+/// the `legacy_rows` target: an account, a transaction, an output and a derivation counter.
+const LEGACY_ROW_SEEDS: &[(u8, &str)] = &[
+    (0, r#"{"label":"default","path":"0200000000000000000000000000000000"}"#),
+    (
+        1,
+        r#"{"confirmation_height":1203,"parent_key_id":"0200000000000000000000000000000000","id":3,"tx_slate_id":"0436430c-2b02-624c-2032-570501212b00","tx_type":"TxSent","creation_ts":"2024-03-01T10:20:30.123456789Z","confirmation_ts":"2024-03-01T10:25:00Z","confirmed":true,"num_inputs":1,"num_outputs":1,"amount_credited":"99000000","amount_debited":"200000000","fee":"1000000","ttl_cutoff_height":null,"messages":{"messages":[{"id":"0","public_key":"02e3c1b1a4b6a2c1d5f0e9d8c7b6a5948372615049f8e7d6c5b4a39281706f5e4d","message":"for lunch","message_sig":null}]},"stored_tx":"0436430c-2b02-624c-2032-570501212b00.epictx","kernel_excess":"08b7e0d1f02a9c4e7d1b33c0a1f2e3d4c5b6a79881726354f0e1d2c3b4a5968778","kernel_lookup_min_height":1200,"payment_proof":null,"public_addr":null}"#,
+    ),
+    (
+        1,
+        r#"{"parent_key_id":"0200000000000000000000000000000000","id":0,"tx_slate_id":null,"tx_type":"TxReceived","creation_ts":"2021-06-01T08:00:00.5+00:00","confirmation_ts":null,"confirmed":false,"num_inputs":0,"num_outputs":1,"amount_credited":500000000,"amount_debited":0,"fee":null,"ttl_cutoff_height":null,"messages":null,"stored_tx":null,"kernel_excess":null,"kernel_lookup_min_height":null,"payment_proof":null}"#,
+    ),
+    (
+        2,
+        r#"{"root_key_id":"0200000000000000000000000000000000","key_id":"0300000000000000000000000000000007","n_child":7,"commit":"08b7e0d1f02a9c4e7d1b33c0a1f2e3d4c5b6a79881726354f0e1d2c3b4a5968778","mmr_index":"4021","value":"100000000","status":"Unspent","height":"1203","lock_height":"0","is_coinbase":false,"tx_log_entry":3}"#,
+    ),
+    (3, "[100, 58, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n12"),
+];
+
+/// Contact backups as `export_contacts` writes them, for the `contact_backup_import` target.
+const CONTACT_BACKUP_SEEDS: &[&str] = &[
+    r#"{"version":1,"network":"floonet","contacts":[{"contact_id":"01010101010101010101010101010101","account":0,"slot":1,"box_salt":"02020202020202020202020202020202","sas":"0a0b0c0d","own_card":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","label":"Anna","state":"verified","verified_at":"2026-01-01T00:00:00Z","allow_invoices":true,"seal":"on","last_sealed_in":null,"app_contact":"book-1","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","peer":{"card":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"alternate":{"card":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"mailbox":{"peer_mailbox":"peer-mailbox","our_mailbox":"our-mailbox","home_relay":"home-relay","onion":null,"previous":{"relay":"old-relay","peer_mailbox":"old-peer","our_mailbox":"old-ours","until":"2026-02-01T00:00:00Z"}}}],"slot_counters":[{"account":0,"next_slot":2}]}"#,
+    r#"{"version":1,"network":"mainnet","contacts":[],"slot_counters":[]}"#,
+];
 
 /// Control-port exchanges as tor writes them: a reply per seed, with events between.
 const TOR_CONTROL_SEEDS: &[&str] = &[

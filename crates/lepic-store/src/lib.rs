@@ -11,6 +11,9 @@ mod contact_backup;
 mod context;
 mod encoding;
 mod error;
+#[cfg(feature = "sqlite")]
+#[doc(hidden)]
+pub mod fuzz;
 mod imported;
 mod invoice;
 #[cfg(feature = "sqlite")]

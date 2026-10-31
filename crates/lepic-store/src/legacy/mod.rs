@@ -32,6 +32,16 @@ use crate::output::{CommitmentBytes, KeyId};
 
 pub use self::locate::locate;
 
+/// Runs the parser for `kind` on one untrusted row, for [`crate::fuzz::legacy_row`].
+pub(crate) fn parse_row(kind: u8, key: &[u8], data: &[u8]) -> bool {
+    match kind {
+        0 => rows::parse_account(data).is_ok(),
+        1 => rows::parse_transaction(data).is_ok(),
+        2 => rows::parse_output(data).is_ok(),
+        _ => rows::parse_counter(key, data).is_ok(),
+    }
+}
+
 /// Bounds on what one import may read. Every count and size from the source is untrusted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LegacyLimits {
