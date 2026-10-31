@@ -496,7 +496,13 @@ async fn lock_during_an_http_delivery_leaves_a_resendable_send_to_a_fresh_handle
         }
     });
     assert!(eventually(|| handle.session().in_flight.len() == 1).await);
-    let stored = sends(&pair.alice).await;
+    // The task is listed before it stores the send: wait for the store too.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut stored = sends(&pair.alice).await;
+    while stored.is_empty() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        stored = sends(&pair.alice).await;
+    }
     let [sent] = stored.as_slice() else {
         panic!("{stored:?}");
     };
