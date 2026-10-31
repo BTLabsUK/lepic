@@ -1066,6 +1066,24 @@ async fn a_pin_change_opens_both_pairs_until_it_is_confirmed() {
 }
 
 #[test]
+fn a_log_ring_that_cannot_open_keeps_its_path_out_of_the_error() {
+    let fixture = Fixture::new();
+    let file = fixture.dir.path().join("taken");
+    std::fs::write(&file, "not a directory").unwrap();
+    let dir_text = file.join("logs").to_string_lossy().into_owned();
+
+    let error = fixture
+        .runtime
+        .open_log_ring(dir_text, 64 * 1024)
+        .unwrap_err();
+
+    assert_eq!(error.kind, WalletErrorKind::Io);
+    let home = fixture.dir.path().to_string_lossy().into_owned();
+    assert!(!error.message.contains(&home), "{}", error.message);
+    assert!(error.message.starts_with("log ring directory could not be prepared"));
+}
+
+#[test]
 fn the_log_ring_keeps_redacted_records_in_its_files() {
     let fixture = Fixture::new();
     let runtime = &fixture.runtime;

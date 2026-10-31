@@ -163,7 +163,8 @@ impl Default for LogRingLimit {
 pub enum LogRingError {
     #[error("log ring limit of {max_bytes} bytes is below the minimum of {min_bytes} bytes")]
     LimitTooSmall { max_bytes: u64, min_bytes: u64 },
-    #[error("log ring directory {directory} could not be prepared")]
+    /// The directory stays out of the text: it is in the user's home.
+    #[error("log ring directory could not be prepared")]
     Directory {
         directory: PathBuf,
         #[source]

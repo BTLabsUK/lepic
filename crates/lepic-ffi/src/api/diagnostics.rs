@@ -43,7 +43,8 @@ pub struct LogField {
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub level: LogLevel,
-    /// The Rust module, or `dart.<tag>` for lines from `LepicRuntime::log_message`.
+    /// The Rust module, or `dart` for lines from `LepicRuntime::log_message`, whose tag is
+    /// the `tag` field.
     pub target: String,
     pub message: String,
     /// Operation spans from the outermost inward, such as `send`.

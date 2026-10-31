@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use flutter_rust_bridge::frb;
 use lepic_keychain::KdfParams;
-use lepic_telemetry::{ErrorChain, LogFilter, LogRing, LogRingError, LogRingLimit, host_dispatch};
+use lepic_telemetry::{LogFilter, LogRing, LogRingError, LogRingLimit, host_dispatch};
 use rand::SeedableRng as _;
 use rand::rngs::StdRng;
 use tokio::runtime::Runtime;
@@ -181,9 +181,10 @@ impl LepicRuntime {
         })
     }
 
-    /// Logs one line from the app under the target `dart.<tag>`, through the same stream.
-    /// `tag` keeps only ASCII letters, digits and `_`, at most 32 of them, and `message` at
-    /// most its first 1024 bytes, cut at a character boundary. Never pass secrets.
+    /// Logs one line from the app under the target `dart`, with `tag` as its `tag` field,
+    /// through the same stream. `tag` keeps only ASCII letters, digits and `_`, at most 32 of
+    /// them, and `message` at most its first 1024 bytes, cut at a character boundary. Never
+    /// pass secrets.
     #[frb(sync)]
     pub fn log_message(&self, level: LogLevel, tag: String, message: String) {
         self.inner.boundary.guard_or("log_message", (), || {
@@ -208,8 +209,16 @@ impl LepicRuntime {
 /// a size a phone can hold.
 const MAX_LOG_RING_BYTES: u64 = 16 * 1024 * 1024;
 
+/// A fixed text for a ring that could not be opened: the error's own text and its source may
+/// name the directory, which is in the user's home, and the app logs this text.
 fn log_ring_error(error: &LogRingError) -> WalletError {
-    WalletError::new(WalletErrorKind::Io, ErrorChain(error).to_string())
+    let message = match error {
+        LogRingError::Directory { source, .. } => {
+            format!("log ring directory could not be prepared: {}", source.kind())
+        }
+        _ => "log ring could not be opened".to_owned(),
+    };
+    WalletError::new(WalletErrorKind::Io, message)
 }
 
 /// The longest app log message kept, in bytes, so one call cannot flood the log stream.
