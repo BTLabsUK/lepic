@@ -1256,6 +1256,39 @@ async fn wrong_passwords_are_counted_and_delayed_until_one_is_right() {
     assert!(waited.is_err(), "the attempt did not wait");
 }
 
+/// A password asked again before an action is counted like any other attempt and gives
+/// false when wrong, without an error.
+#[tokio::test]
+async fn check_password_counts_attempts() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let password = "correct horse";
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &store,
+        None,
+        password.to_owned(),
+    )
+    .await
+    .unwrap();
+
+    assert!(!wallet.check_password("wrong password".to_owned()).await.unwrap());
+    assert_eq!(
+        store.read(FAILURES_KEY).await.unwrap().as_deref(),
+        Some("1")
+    );
+
+    assert!(wallet.check_password(password.to_owned()).await.unwrap());
+    assert_eq!(store.read(FAILURES_KEY).await.unwrap(), None);
+
+    wallet.lock();
+    assert_eq!(
+        kind(wallet.check_password(password.to_owned()).await),
+        WalletErrorKind::Locked
+    );
+}
+
 /// An app store that works, except that writing the vault fails.
 fn store_refusing_the_vault() -> AppSecretStore {
     use crate::api::secret_store::SecretReply;

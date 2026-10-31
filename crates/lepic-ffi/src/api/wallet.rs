@@ -616,6 +616,29 @@ impl EpicWallet {
         .await
     }
 
+    /// Whether `password` opens the stored vault, for an app that asks for the password again
+    /// before an action. The attempt is counted and delayed as in [`EpicWallet::open`]; a wrong
+    /// password gives `false`. Nothing else is stored, and the recovery phrase is not read.
+    ///
+    /// A locked wallet gives `Locked`, before any attempt is counted.
+    pub async fn check_password(&self, password: String) -> Result<bool, WalletError> {
+        let password = Zeroizing::new(password);
+        self.run("check_password", |session| async move {
+            // A locked wallet refuses before the attempt is counted.
+            session.ensure_unlocked()?;
+            let checked = pin::password_attempt(&session.runtime().pin, session.store(), || {
+                session.check_password(password)
+            })
+            .await;
+            match checked {
+                Ok(()) => Ok(true),
+                Err(error) if error.kind == WalletErrorKind::WrongPassword => Ok(false),
+                Err(error) => Err(error),
+            }
+        })
+        .await
+    }
+
     /// [`EpicWallet::mnemonic`] for a wallet from [`EpicWallet::create_with_pin`]: `pin` opens
     /// `sealed_password`, which is then checked against the stored vault. PIN attempts are
     /// counted and delayed as in [`EpicWallet::open_with_pin`].
