@@ -139,30 +139,89 @@ impl RelayTor {
     /// A stream to `host:port` through tor, on a circuit of its own. Waits for a tor that is
     /// still being started or bootstrapping; the caller bounds the wait.
     pub async fn open(&self, host: &str, port: u16) -> Result<TcpStream, RelayTorError> {
-        let mut changes = self.changes.subscribe();
-        let proxy: SocketAddr = loop {
-            changes.borrow_and_update();
-            match self.source().ok_or(RelayTorError::Off)? {
-                Source::Pending => {
-                    if changes.changed().await.is_err() {
-                        return Err(RelayTorError::Off);
-                    }
-                }
-                Source::Process(tor) => {
-                    break tor.wait_bootstrapped().await.map_err(RelayTorError::Tor)?;
-                }
-                Source::Fixed(socks) => break socks.socks_address().ok_or(RelayTorError::Off)?,
-            }
-        };
+        let (proxy, _) = self.proxy().await?;
         let credentials = SocksCredentials::random().map_err(RelayTorError::Socks)?;
         socks::connect(proxy, host, port, &credentials, self.connect_timeout)
             .await
             .map_err(RelayTorError::Socks)
     }
 
+    /// A stream to `host:port` through tor that may share a circuit with the earlier streams
+    /// of `group`, as [`StreamGroup`] says. Waits as [`RelayTor::open`] does.
+    pub async fn open_in(
+        &self,
+        host: &str,
+        port: u16,
+        group: &StreamGroup,
+    ) -> Result<TcpStream, RelayTorError> {
+        let (proxy, tor) = self.proxy().await?;
+        let credentials = group.credentials(tor)?;
+        let stream = socks::connect(proxy, host, port, &credentials, self.connect_timeout).await;
+        if stream.is_err() {
+            group.forget();
+        }
+        stream.map_err(RelayTorError::Socks)
+    }
+
+    /// The SOCKS address of the tor streams go through now, with the count of source changes
+    /// it was read at.
+    async fn proxy(&self) -> Result<(SocketAddr, u64), RelayTorError> {
+        let mut changes = self.changes.subscribe();
+        loop {
+            let tor = *changes.borrow_and_update();
+            match self.source().ok_or(RelayTorError::Off)? {
+                Source::Pending => {
+                    if changes.changed().await.is_err() {
+                        return Err(RelayTorError::Off);
+                    }
+                }
+                Source::Process(process) => {
+                    let proxy = process.wait_bootstrapped().await.map_err(RelayTorError::Tor)?;
+                    return Ok((proxy, tor));
+                }
+                Source::Fixed(socks) => {
+                    return Ok((socks.socks_address().ok_or(RelayTorError::Off)?, tor));
+                }
+            }
+        }
+    }
+
     /// Whether `host` is a v3 onion host as tor is asked for it: `<56 characters>.onion`.
     pub fn is_onion(host: &str) -> bool {
         OnionAddress::parse(host).is_ok_and(|onion| onion.host() == host)
+    }
+}
+
+/// Streams that may share a tor circuit, such as those to one node: every stream opened with
+/// [`RelayTor::open_in`] and the same group uses the same SOCKS credentials, so tor keeps them
+/// on one circuit and renews it as circuits age, instead of building a circuit per stream. A
+/// change of tor (attached, detached, the setting) or a stream that failed gives the group
+/// new credentials. Groups never share credentials with each other or with
+/// [`RelayTor::open`].
+#[derive(Default)]
+pub struct StreamGroup(Mutex<Option<(u64, SocksCredentials)>>);
+
+impl StreamGroup {
+    fn credentials(&self, tor: u64) -> Result<SocksCredentials, RelayTorError> {
+        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, credentials)) = slot.as_ref()
+            && *at == tor
+        {
+            return Ok(credentials.clone());
+        }
+        let credentials = SocksCredentials::random().map_err(RelayTorError::Socks)?;
+        *slot = Some((tor, credentials.clone()));
+        Ok(credentials)
+    }
+
+    fn forget(&self) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+}
+
+impl std::fmt::Debug for StreamGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StreamGroup([redacted])")
     }
 }
 
@@ -281,6 +340,18 @@ mod tests {
             connect,
             socks::encode_connect("relay.example", 443).unwrap()
         );
+    }
+
+    #[test]
+    fn a_group_keeps_its_credentials_until_tor_changes_or_a_stream_fails() {
+        let group = StreamGroup::default();
+        let first = group.credentials(0).unwrap();
+        assert!(group.credentials(0).unwrap() == first);
+        assert!(StreamGroup::default().credentials(0).unwrap() != first);
+        let changed = group.credentials(1).unwrap();
+        assert!(changed != first);
+        group.forget();
+        assert!(group.credentials(1).unwrap() != changed);
     }
 
     #[test]

@@ -48,4 +48,18 @@ impl RelayTor {
     pub(crate) async fn open(&self, _host: &str, _port: u16) -> Result<TcpStream, RelayTorError> {
         Err(RelayTorError::Off)
     }
+
+    /// Always [`RelayTorError::Off`].
+    pub(crate) async fn open_in(
+        &self,
+        _host: &str,
+        _port: u16,
+        _group: &StreamGroup,
+    ) -> Result<TcpStream, RelayTorError> {
+        Err(RelayTorError::Off)
+    }
 }
+
+/// Streams that would share a tor circuit; this build has no tor.
+#[derive(Debug, Default)]
+pub(crate) struct StreamGroup;

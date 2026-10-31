@@ -20,9 +20,9 @@ use crate::api::types::WalletConfig;
 use crate::tuning::Tuning;
 // The wallet's tor as a way to the node, or a stand-in that never is in a build without Tor.
 #[cfg(not(feature = "tor"))]
-pub(crate) use crate::no_tor::{RelayTor, RelayTorError};
+pub(crate) use crate::no_tor::{RelayTor, RelayTorError, StreamGroup};
 #[cfg(feature = "tor")]
-pub(crate) use lepic_tor::{RelayTor, RelayTorError};
+pub(crate) use lepic_tor::{RelayTor, RelayTorError, StreamGroup};
 
 pub(crate) type Node = NodeClient<SwitchableBackend>;
 
@@ -193,6 +193,7 @@ impl NodeFactory {
                     tor: Arc::clone(tor),
                     routes: Arc::clone(routes),
                     connect_timeout: settings.connect_timeout,
+                    streams: StreamGroup::default(),
                 });
                 let http = HttpTransport::with_dialer(&config.node_url, &settings, tls, dialer)
                     .map_err(|error| node_config_error(&error))?;
@@ -220,6 +221,8 @@ struct TorNodeDialer {
     tor: Arc<RelayTor>,
     routes: Arc<OnionRoutes>,
     connect_timeout: Duration,
+    /// The connections of one backend share tor circuits: same node, same session.
+    streams: StreamGroup,
 }
 
 fn is_onion_host(host: &str) -> bool {
@@ -248,7 +251,7 @@ impl NodeDialer for TorNodeDialer {
                 Some(onion) => (onion.host, onion.port),
                 None => (host.to_owned(), port),
             };
-            match self.tor.open(&target_host, target_port).await {
+            match self.tor.open_in(&target_host, target_port, &self.streams).await {
                 Ok(stream) => Ok(Box::new(stream) as Box<dyn NodeStream>),
                 // An onion has no address to resolve without tor.
                 Err(RelayTorError::Off) if !is_onion_host(host) => {
@@ -302,6 +305,7 @@ mod tests {
                 onion_port: 443,
             }])),
             connect_timeout: Duration::from_secs(5),
+            streams: StreamGroup::default(),
         }
     }
 

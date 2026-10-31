@@ -23,7 +23,8 @@ TLS certificate as the domain.
   same tor as the relay's but with its own setting. While the setting is on and tor runs or is
   expected, a connection goes to the node's onion when the shared onion routes (ADR 0021) list
   it, else to `host:port` through a Tor exit, with tor resolving the name (SOCKS domain address
-  type, fresh credentials per connection). It never goes directly then: a connection made
+  type; the connections of one node backend share credentials, so one circuit, until tor
+  changes or a connection fails, then new ones). It never goes directly then: a connection made
   while tor starts waits for it, within the request timeout, and a tor that fails is a
   connection error. Tor off or the setting off: direct. A loopback node is always direct.
 - The built-in onion routes gain `node.btlabs.uk:443`.

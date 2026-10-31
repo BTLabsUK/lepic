@@ -22,6 +22,6 @@ pub use process::{
     FailureKind, FixedSocks, SocksProxy, TorFailure, TorNetworkTimings, TorProcess, TorSettings,
     TorState, TorTimings,
 };
-pub use relay::{RelayTor, RelayTorError};
+pub use relay::{RelayTor, RelayTorError, StreamGroup};
 pub use socks::{SendFailure, SocksError, SocksReply};
 pub use transport::{OnionClient, OnionClientSettings, TRANSPORT_ID, TorSendError, TorTransport};
