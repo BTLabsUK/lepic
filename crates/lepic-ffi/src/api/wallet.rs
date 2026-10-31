@@ -59,8 +59,8 @@ pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
 /// True when `signature`, hex as [`EpicWallet::sign_with_address_key`] returns it, is that
 /// call's signature of `message` by the wallet whose Epicbox address has the key `public_key`.
 /// `public_key` is written as in the address, with or without `@<relay>`, on either chain. A
-/// signature made for a relay, a push registration or any other text never passes. False for
-/// anything malformed and for a `message` over 64 KiB.
+/// signature made for a relay or any other text never passes. False for anything malformed and
+/// for a `message` over 64 KiB.
 #[frb(sync)]
 pub fn verify_address_signature(public_key: String, message: Vec<u8>, signature: String) -> bool {
     guard_or("verify_address_signature", false, || {

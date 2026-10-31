@@ -13,7 +13,6 @@ pub mod marker;
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
 mod prefilter;
-mod push;
 mod session;
 #[cfg(any(test, feature = "mock-relay"))]
 pub mod testing;
@@ -51,7 +50,6 @@ pub use mailbox::{
     MailboxReport,
 };
 pub use prefilter::{Admission, Prefilter};
-pub use push::{MAX_PUSH_TOKEN_LEN, PushAction, PushError, PushRequest};
 pub use session::{
     Connector, DEFAULT_PLAIN_PORT, EndpointError, ProtocolVersion, RelayEndpoint, RelayStream,
     Security, TcpConnector,
