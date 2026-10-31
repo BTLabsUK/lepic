@@ -347,14 +347,15 @@ fn store_reply<N, S: StoreOpener, V>(
         .policy();
     let codecs = reply_codecs(proposal.network, proposal.marked)?;
     let now = ports.clock.now();
-    let mut rng = ports.rng.lock();
     session.store.write(|repos| {
         if let Some(received) =
             redelivery::answer_again(&*repos, proposal.network, &proposal.slate)?
         {
             return Ok(Answer::Repeated(received));
         }
-        let response = respond(repos, session, proposal, request, &mut **rng)?;
+        // Store first, generator second, as everywhere: the reverse order deadlocks with a
+        // contact operation that draws inside its own store write.
+        let response = respond(repos, session, proposal, request, &mut **ports.rng.lock())?;
         let encoding = policy.for_reply(&response.slate, &proposal.context);
         let reply = encode_with(&codecs, encoding, &response.slate, &proposal.context)
             .map_err(ReceiveError::Encode)?;

@@ -157,8 +157,9 @@ where
         let stored = self
             .blocking(move |ports, _| {
                 let now = ports.clock.now();
-                let mut rng = ports.rng.lock();
-                let randomness = match S1Randomness::draw(&mut **rng) {
+                // The guard drops before the store write: store first, generator second.
+                let drawn = S1Randomness::draw(&mut **ports.rng.lock());
+                let randomness = match drawn {
                     Ok(randomness) => randomness,
                     Err(error) => return Ok(Err(SelfSendError::from(SendError::from(error)))),
                 };
@@ -210,7 +211,7 @@ where
                         &s1.slate,
                         SELF,
                         context,
-                        &mut **rng,
+                        &mut **ports.rng.lock(),
                         now,
                     )?;
                     let finalized = finalize_own(repos, &session.keychain, network, tip, now, &s2)?;

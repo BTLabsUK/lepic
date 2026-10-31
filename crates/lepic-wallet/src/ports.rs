@@ -33,6 +33,9 @@ impl SharedRng {
 
     /// Exclusive use of the generator until the guard is dropped. The guard is itself a
     /// [`CryptoRng`].
+    ///
+    /// Never call the store while holding it: take the store first and the generator inside
+    /// its transaction, or drop the guard before opening one. The reverse order deadlocks.
     pub fn lock(&self) -> MutexGuard<'_, Box<dyn CryptoRng + Send>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
