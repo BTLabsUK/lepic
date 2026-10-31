@@ -643,7 +643,9 @@ impl EpicWallet {
     /// Checks `pin` against `sealed_password` of a wallet from [`EpicWallet::create_with_pin`],
     /// for an app that asks for the PIN again before an action. The attempt is counted and
     /// delayed as in [`EpicWallet::open_with_pin`]; nothing else is stored, and the sealed text
-    /// and the PIN key stay as they are. The password it opens is dropped at once.
+    /// and the PIN key stay as they are. The password it opens is dropped at once and not
+    /// checked against the vault, as [`EpicWallet::change_pin`] does: pass this wallet's own
+    /// sealed text.
     ///
     /// A wrong PIN gives `WrongPassword`, damaged text `InvalidArgument`, a store without the
     /// PIN key `SecretStore`, and a locked wallet `Locked`, before any attempt is counted.

@@ -166,7 +166,8 @@ impl<T: Clone> BackendCache<T> {
 
 /// What a node's earlier tip answers leave to reuse, kept with its backend: the version, which
 /// changes only when the node is upgraded, and the time of the tip block it reported last. A
-/// tip that failed drops both, since the node may have restarted.
+/// tip that failed drops both, since the node may have restarted; so does a tip lower than the
+/// one before, a node that restarted on another chain state.
 #[derive(Default)]
 pub(crate) struct TipMemo(Mutex<Option<Memo>>);
 
@@ -176,8 +177,9 @@ struct Memo {
     tip: Option<(Tip, i64)>,
 }
 
-/// How long a node's version is reused before it is asked again.
-const VERSION_KEPT: Duration = Duration::from_secs(60 * 60);
+/// How long a node's version is reused before it is asked again: an upgraded node shows its new
+/// version within this, or at once when its restart failed a tip.
+const VERSION_KEPT: Duration = Duration::from_secs(10 * 60);
 
 impl TipMemo {
     fn memo(&self) -> std::sync::MutexGuard<'_, Option<Memo>> {
@@ -207,6 +209,18 @@ impl TipMemo {
             .and_then(|memo| memo.tip)
             .filter(|(known, _)| known == tip)
             .map(|(_, time)| time)
+    }
+
+    /// Forgets everything when `tip` is lower than the tip remembered.
+    pub(crate) fn saw(&self, tip: &Tip) {
+        let mut memo = self.memo();
+        if memo
+            .as_ref()
+            .and_then(|memo| memo.tip)
+            .is_some_and(|(known, _)| tip.height < known.height)
+        {
+            *memo = None;
+        }
     }
 
     pub(crate) fn keep_tip_time_ms(&self, tip: Tip, time: i64) {

@@ -2260,6 +2260,7 @@ async fn ask_node_tip(node: &Node, memo: &TipMemo) -> Result<NodeTip, WalletErro
             return Err(node_error(&error));
         }
     };
+    memo.saw(&tip);
     let node_version = match memo.version() {
         Some(version) => version,
         None => {
