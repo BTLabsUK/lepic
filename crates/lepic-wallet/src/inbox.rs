@@ -694,21 +694,17 @@ where
     }
 
     fn attached_client(&self, epicbox: &EpicboxTransport) -> Result<EpicboxClient, InboxError> {
-        Ok(epicbox.attach(self.identity_at(epicbox, ADDRESS_INDEX)?))
+        Ok(epicbox.attach(self.identity(epicbox)?))
     }
 
-    /// The wallet's Epicbox identity at address index `index` of the default account, at the
-    /// relay of `epicbox`.
-    pub(crate) fn identity_at(
-        &self,
-        epicbox: &EpicboxTransport,
-        index: u32,
-    ) -> Result<Identity, InboxError> {
+    /// The wallet's Epicbox identity (the default account's first address) at the relay of
+    /// `epicbox`.
+    fn identity(&self, epicbox: &EpicboxTransport) -> Result<Identity, InboxError> {
         let network = relay_network(self.config().network);
         if epicbox.network() != network {
             return Err(InboxError::NetworkMismatch);
         }
-        let secret = self.address_secret(index)?;
+        let secret = self.address_secret(ADDRESS_INDEX)?;
         let public = lepic_crypto::PublicKey::from_secret_key(&secret)
             .map_err(|_| InboxError::Identity(ClientError::IdentityMismatch))?;
         let endpoint = &epicbox.settings().endpoint;
