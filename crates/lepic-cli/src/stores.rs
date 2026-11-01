@@ -5,8 +5,10 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use lepic_store::{Repositories, SqliteStore, StoreError, StoreKey, StoreKeys, WalletStore};
-use lepic_wallet::{ENCRYPTED_DATABASE_FILE, EncryptedSqliteStores, SqliteStores, StoreOpener};
+use lepic_store::{
+    AtRestReport, Repositories, SqliteStore, StoreError, StoreKey, StoreKeys, WalletStore,
+};
+use lepic_wallet::{EncryptingSqliteStores, StoreOpener};
 
 /// A [`SqliteStore`] shared between the engine and the CLI.
 #[derive(Debug, Clone)]
@@ -31,11 +33,12 @@ impl WalletStore for SharedStore {
     }
 }
 
-/// Opens the database as [`EncryptedSqliteStores`] does when the data directory holds an
-/// encrypted one, [`ENCRYPTED_DATABASE_FILE`], and as [`SqliteStores`] does otherwise, and
+/// The product store, encrypted at rest ([`EncryptingSqliteStores`]): it moves a plain
+/// database of an earlier build into an encrypted one at its first open, as the app does, and
 /// remembers the last store it opened.
 #[derive(Debug, Default)]
 pub struct CliStores {
+    stores: EncryptingSqliteStores,
     opened: Mutex<Option<SharedStore>>,
 }
 
@@ -58,14 +61,8 @@ impl StoreOpener for CliStores {
         keys: StoreKeys,
         store_key: &StoreKey,
     ) -> Result<SharedStore, StoreError> {
-        let store = if is_encrypted(data_dir)? {
-            EncryptedSqliteStores.open(data_dir, keys, store_key)?
-        } else {
-            SqliteStores.open(data_dir, keys, store_key)?
-        };
-        let store = SharedStore(Arc::new(store));
-        *self.opened.lock().unwrap_or_else(PoisonError::into_inner) = Some(store.clone());
-        Ok(store)
+        self.open_reporting(data_dir, keys, store_key)
+            .map(|(store, _)| store)
     }
 
     fn open_existing(
@@ -75,24 +72,21 @@ impl StoreOpener for CliStores {
         store_key: &StoreKey,
     ) -> Result<Option<SharedStore>, StoreError> {
         // A check of a phrase, not an unlock: not recorded as the opened store.
-        let store = if is_encrypted(data_dir)? {
-            EncryptedSqliteStores.open_existing(data_dir, keys, store_key)?
-        } else {
-            SqliteStores.open_existing(data_dir, keys, store_key)?
-        };
-        Ok(store.map(|store| SharedStore(Arc::new(store))))
+        Ok(self
+            .stores
+            .open_existing(data_dir, keys, store_key)?
+            .map(|store| SharedStore(Arc::new(store))))
     }
-}
 
-/// Whether `data_dir` holds an encrypted database. The encrypted one wins when the plain one is
-/// there too, as it does for a data directory a wallet made before the encrypted database was
-/// copied in.
-fn is_encrypted(data_dir: &Path) -> Result<bool, StoreError> {
-    data_dir
-        .join(ENCRYPTED_DATABASE_FILE)
-        .try_exists()
-        .map_err(|source| StoreError::Io {
-            operation: "look for the encrypted database",
-            source,
-        })
+    fn open_reporting(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<(SharedStore, Option<AtRestReport>), StoreError> {
+        let (store, report) = self.stores.open_reporting(data_dir, keys, store_key)?;
+        let store = SharedStore(Arc::new(store));
+        *self.opened.lock().unwrap_or_else(PoisonError::into_inner) = Some(store.clone());
+        Ok((store, report))
+    }
 }

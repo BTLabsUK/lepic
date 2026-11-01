@@ -1651,14 +1651,28 @@ fn lock_data_dir(dir: &Path) -> Result<Option<std::fs::File>, CliError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(CliError::io("open the data directory lock")(error)),
     };
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(std::fs::TryLockError::WouldBlock) => Err(CliError::DataDirInUse),
-        Err(std::fs::TryLockError::Error(error)) => {
-            Err(CliError::io("lock the data directory")(error))
+    // While the holder copies a plain database into an encrypted one, the copy is waited for.
+    let started = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock)
+                if lepic_store::migration_in_progress(dir)
+                    && started.elapsed() < MIGRATION_WAIT =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return Err(CliError::DataDirInUse),
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(CliError::io("lock the data directory")(error));
+            }
         }
     }
 }
+
+/// How long a data directory whose holder copies its plain database into an encrypted one is
+/// waited for, as the mobile binding waits.
+const MIGRATION_WAIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 fn inbox_report(summary: InboxSummary, expired: Option<InvoiceSweep>) -> InboxReport {
     InboxReport {

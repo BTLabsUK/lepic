@@ -101,3 +101,48 @@ fn a_copied_encrypted_store_opens_in_a_wallet_restored_without_a_scan() {
         &made_transactions
     );
 }
+
+/// A data directory an earlier build left: a plain database under the phrase's keys.
+fn make_plain_database(data_dir: &Path, mnemonic: &str) {
+    let mut folder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+    folder.recursive(true).create(data_dir).unwrap();
+    let seed = Seed::from_mnemonic(mnemonic).unwrap();
+    drop(
+        lepic_wallet::SqliteStores
+            .open(
+                data_dir,
+                lepic_wallet::lifecycle::store_keys(&seed).unwrap(),
+                &lepic_wallet::store_key(&seed).unwrap(),
+            )
+            .unwrap(),
+    );
+    assert!(data_dir.join(lepic_wallet::DATABASE_FILE).exists());
+}
+
+#[test]
+fn the_cli_moves_a_plain_store_to_encryption_and_opens_it_again() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+
+    let instance = Instance::new("cli password");
+    make_plain_database(&instance.data_dir(), SENDER_MNEMONIC);
+    let restored = instance.restore(&host, SENDER_MNEMONIC);
+    assert_eq!(restored["scan"]["restored"], 1);
+    let dir = instance.data_dir();
+    assert!(!dir.join(lepic_wallet::DATABASE_FILE).exists());
+    assert!(dir.join("wallet.sqlite3.pre-encryption").exists());
+    let encrypted = fs::read(dir.join(ENCRYPTED_DATABASE_FILE)).unwrap();
+    assert!(!contains(&encrypted, b"SQLite format 3"));
+
+    let listed = instance.run(&host, &["tx", "list"]).ok().json();
+    assert_eq!(
+        listed["transactions"].as_array().unwrap().len(),
+        1,
+        "{listed}"
+    );
+    let info = instance.run(&host, &["wallet", "info"]).ok().json();
+    assert_eq!(info["accounts"][0]["spendable"], "10.00000000", "{info}");
+    assert!(!dir.join(lepic_wallet::DATABASE_FILE).exists());
+}
