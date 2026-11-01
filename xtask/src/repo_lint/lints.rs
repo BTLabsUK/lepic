@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Every workspace member inherits `[workspace.lints]`, which denies `unsafe_code`. The only
-//! relaxation allowed is the attribute on the module flutter_rust_bridge generates.
+//! relaxations allowed are the attribute on the module flutter_rust_bridge generates, and one
+//! `expect` in the store's cipher module around SQLite3MC's key call (ADR 0032).
 
 use std::fmt;
 
@@ -12,6 +13,9 @@ const GENERATED_MODULE_FILE: &str = "crates/lepic-ffi/src/frb_generated.rs";
 const GENERATED_MODULE_PARENT: &str = "crates/lepic-ffi/src/lib.rs";
 const GENERATED_MODULE_ITEM: &str = "mod frb_generated;";
 const RELAXING_LEVELS: &[&str] = &["allow", "expect", "warn"];
+/// The one hand-written file that may relax the lint, once, with `expect`: SQLite3MC's
+/// `sqlite3_key_v2` has no safe binding.
+const KEY_CALL_FILE: &str = "crates/lepic-store/src/sqlite/cipher.rs";
 
 pub(crate) struct Member {
     pub(crate) name: String,
@@ -44,7 +48,7 @@ impl fmt::Display for Violation {
             Self::UnsafeAllowed { file, line } => write!(
                 f,
                 "{file}:{line}: relaxes {UNSAFE_LINT}; only the generated module in \
-                 {GENERATED_MODULE_PARENT} may"
+                 {GENERATED_MODULE_PARENT} and one `expect` in {KEY_CALL_FILE} may"
             ),
         }
     }
@@ -109,16 +113,38 @@ fn member_violations(member: &Member) -> Vec<Violation> {
 /// Attributes in `source` that set `unsafe_code` to a level below deny.
 fn unsafe_allowances(source: &SourceFile) -> Vec<Violation> {
     let code = code_only(&source.text);
+    let mut key_call_allowed = source.path == KEY_CALL_FILE;
     word_offsets(&code, UNSAFE_LINT)
         .filter(|&offset| relaxes(&code, offset))
         .filter(|&offset| {
             !(source.path == GENERATED_MODULE_PARENT && on_generated_module(&code, offset))
+        })
+        .filter(|&offset| {
+            let allowed = key_call_allowed && is_outer_expect(&code, offset);
+            if allowed {
+                key_call_allowed = false;
+            }
+            !allowed
         })
         .map(|offset| Violation::UnsafeAllowed {
             file: source.path.clone(),
             line: line_of(&code, offset),
         })
         .collect()
+}
+
+/// Whether the lint name at `offset` is an argument of a plain outer `#[expect(...)]`.
+fn is_outer_expect(code: &str, offset: usize) -> bool {
+    code.get(..offset)
+        .and_then(|before| before.rfind('#').and_then(|hash| before.get(hash..)))
+        .is_some_and(|attribute| {
+            attribute
+                .strip_prefix("#[")
+                .map(str::trim_start)
+                .and_then(|rest| rest.strip_prefix("expect"))
+                .map(str::trim_start)
+                .is_some_and(|rest| rest.starts_with('('))
+        })
 }
 
 /// Whether the lint name at `offset` is an argument of an `allow`, `expect` or `warn` call inside
@@ -280,6 +306,38 @@ mod tests {
                 ("crates/lepic-ffi/src/pin.rs".to_owned(), 1),
                 ("crates/lepic-ffi/src/pin.rs".to_owned(), 3),
                 ("crates/lepic-cli/src/main.rs".to_owned(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn allows_one_expect_in_the_store_cipher_module_only() {
+        let one = "fn key() {\n    #[expect(\n        unsafe_code,\n        reason = \"x\"\n    )]\n    let c = unsafe { f() };\n}\n";
+        assert_eq!(check(ROOT, &[], &[source(KEY_CALL_FILE, one)]), []);
+        let two = format!("{one}#[expect(unsafe_code)]\nfn g() {{}}\n");
+        let allowing = "#[allow(unsafe_code)]\nfn g() {}\n";
+        let elsewhere = source("crates/lepic-store/src/sqlite/mod.rs", one);
+        let lines: Vec<(String, usize)> = check(
+            ROOT,
+            &[],
+            &[
+                source(KEY_CALL_FILE, &two),
+                source("crates/lepic-store/src/sqlite/cipher.rs", allowing),
+                elsewhere,
+            ],
+        )
+        .into_iter()
+        .map(|violation| match violation {
+            Violation::UnsafeAllowed { file, line } => (file, line),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+        assert_eq!(
+            lines,
+            [
+                (KEY_CALL_FILE.to_owned(), 8),
+                (KEY_CALL_FILE.to_owned(), 1),
+                ("crates/lepic-store/src/sqlite/mod.rs".to_owned(), 3),
             ]
         );
     }
