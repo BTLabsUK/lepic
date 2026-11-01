@@ -45,7 +45,8 @@ fn main() {
                .define("ENABLE_MODULE_SCHNORRSIG", Some("1"));
 
     // secp256k1-zkp
-    base_config.file("depend/secp256k1-zkp/contrib/lax_der_parsing.c")
-               .file("depend/secp256k1-zkp/src/secp256k1.c")
-               .compile("libsecp256k1.a");
+    base_config
+        .file("depend/secp256k1-zkp/contrib/lax_der_parsing.c")
+        .file("depend/secp256k1-zkp/src/secp256k1.c")
+        .compile("libsecp256k1.a");
 }

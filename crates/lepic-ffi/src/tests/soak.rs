@@ -185,6 +185,7 @@ fn soak() {
         tuning: crate::tuning::shipped(),
         offline: false,
         tor_wanted: false,
+        host_features: 0,
     };
     let secret = NodeSecret::take(&mut config);
     let counters = Arc::new(Counters::default());

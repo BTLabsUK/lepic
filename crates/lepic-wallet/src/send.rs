@@ -531,10 +531,13 @@ fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
 /// The codecs a new S1 goes out with over `transport`: over Epicbox the V2 shape carries the
 /// LEPIC marker, so a reply that keeps it proves the receiver runs LEPIC, and a stock receiver
 /// drops it.
-fn delivery_codecs(transport: TransportId, base_fee: Fee) -> CodecRegistry {
+fn delivery_codecs(transport: TransportId, base_fee: Fee, features: u32) -> CodecRegistry {
     let v2 = V2JsonCodec::new(base_fee);
     if transport == EPICBOX {
-        codecs_with(Box::new(MarkedV2JsonCodec::new(v2)), base_fee)
+        codecs_with(
+            Box::new(MarkedV2JsonCodec::new(v2).with_features(features)),
+            base_fee,
+        )
     } else {
         codecs_with(Box::new(v2), base_fee)
     }
@@ -586,7 +589,7 @@ fn encode_for_delivery(
             Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_reply_key(key)),
             Box::new(V2JsonCodec::new(base_fee)),
         ),
-        None => delivery_codecs(delivery.transport(), base_fee),
+        None => delivery_codecs(delivery.transport(), base_fee, env.features),
     };
     Ok(policy.encode_new_slate(&codecs, slate, context)?)
 }
@@ -611,6 +614,8 @@ struct SendEnvironment<'a> {
     network: Network,
     now: Timestamp,
     reply_keys: Option<&'a dyn ReplyKeys>,
+    /// What the marker of an Epicbox S1 claims.
+    features: u32,
 }
 
 impl SendEnvironment<'_> {
@@ -1095,6 +1100,7 @@ where
                     network: config.network,
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
+                    features: config.claimed_features(),
                 };
                 let randomness = S1Randomness::draw(&mut **ports.rng.lock());
                 Ok(randomness.map_err(SendError::from).and_then(|randomness| {
@@ -1156,6 +1162,7 @@ where
                     network: config.network,
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
+                    features: config.claimed_features(),
                 };
                 Ok(session
                     .store
@@ -1229,6 +1236,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use lepic_epicbox::marker::v3::{carries_lepic_marker, lepic_marker_features};
 
     fn key(byte: u8) -> SecretKey {
         SecretKey::from_array([byte; 32]).unwrap()
@@ -1312,5 +1321,38 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
         let drawn = S1Randomness::draw(&mut rng).unwrap();
         assert_eq!(drawn.slate_id.to_string().as_bytes()[14], b'4');
+    }
+
+    #[test]
+    fn only_an_epicbox_s1_carries_the_features_and_files_carry_no_marker() {
+        let base_fee = Network::Floonet.params().default_base_fee();
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/slates/send_epicbox_plain_s1_v2.json"
+        ))
+        .unwrap();
+        let json = vector["expected"]["json"].as_str().unwrap().to_owned();
+        let slate = V2JsonCodec::new(base_fee)
+            .decode(&WireSlate::text(lepic_slate::codec::MediaType::JSON, json))
+            .unwrap();
+        let context = EncodeContext {
+            block_header_version: 6,
+        };
+        let encode = |transport, features| {
+            delivery_codecs(transport, base_fee, features)
+                .encode(
+                    lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON,
+                    &slate,
+                    &context,
+                )
+                .unwrap()
+                .unwrap()
+        };
+        let epicbox = encode(EPICBOX, 0x21);
+        assert_eq!(lepic_marker_features(&epicbox), Some(0x21));
+        let file = encode(FILE, 0x21);
+        assert!(!carries_lepic_marker(&file));
+        assert!(!file.as_text().unwrap().contains("lepic"));
+        // The marker is a constant of the build: the same claim writes the same bytes.
+        assert_eq!(encode(EPICBOX, 0x21), epicbox);
     }
 }

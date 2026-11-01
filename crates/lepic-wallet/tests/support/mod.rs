@@ -410,6 +410,7 @@ impl Harness {
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
             transports: vec![LOOPBACK],
             offline: false,
+            host_features: 0,
         }
     }
 

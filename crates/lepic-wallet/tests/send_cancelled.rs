@@ -47,7 +47,8 @@ const PEER: u8 = 7;
 /// A key that has nothing to do with the payment.
 const STRANGER: u8 = 9;
 
-const MARKER: &str = ",\"lepic\":{\"version\":1}";
+/// The marker of a wallet whose host claims nothing: LEPIC's own feature bits.
+const MARKER: &str = ",\"lepic\":{\"version\":1,\"f\":1}";
 
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())

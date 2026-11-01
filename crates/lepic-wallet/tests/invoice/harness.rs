@@ -124,6 +124,7 @@ impl Party {
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
             transports: vec![FILE],
             offline: false,
+            host_features: 0,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         runtime

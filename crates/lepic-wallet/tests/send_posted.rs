@@ -25,7 +25,8 @@ mod world;
 use std::time::Duration;
 
 use lepic_crypto::Commitment;
-use lepic_epicbox::marker::v3::carries_lepic_marker;
+use lepic_epicbox::marker::features::LEPIC_FEATURES;
+use lepic_epicbox::marker::v3::{carries_lepic_marker, lepic_marker_features};
 use lepic_epicbox::{EpicboxAddress, EpicboxClient, TRANSPORT_ID};
 use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::Amount;
@@ -49,7 +50,8 @@ const SENDER: u8 = 7;
 /// A key that has nothing to do with the payment.
 const STRANGER: u8 = 9;
 
-const MARKER: &str = ",\"lepic\":{\"version\":1}";
+/// The marker of a wallet whose host claims nothing: LEPIC's own feature bits.
+const MARKER: &str = ",\"lepic\":{\"version\":1,\"f\":1}";
 
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
@@ -148,6 +150,7 @@ impl World {
         let sent = self.send_to(&World::address_of(SENDER));
         let s1 = self.only_message(&peer);
         assert!(carries_lepic_marker(&wire(&s1)));
+        assert_eq!(lepic_marker_features(&wire(&s1)), Some(LEPIC_FEATURES));
         self.post(SENDER, &self.receiver().address, &forward(s1), 1);
         assert_eq!(self.drain(self.receiver()).received, 1);
         let s2 = self.only_message(&peer);
@@ -591,6 +594,10 @@ fn a_marked_reply_from_another_key_proves_nothing() {
     let world = World::new();
     let receipt = world.receipt_through_sender(|s1| s1);
     assert!(carries_lepic_marker(&wire(&receipt.s2)));
+    assert_eq!(
+        lepic_marker_features(&wire(&receipt.s2)),
+        Some(LEPIC_FEATURES)
+    );
 
     world.post(STRANGER, &world.sender().address, &receipt.s2, 1);
     world.drain(world.sender());

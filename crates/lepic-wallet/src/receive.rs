@@ -229,6 +229,7 @@ where
         check_height(&slate, limit)?;
         let context = self.encode_context(&slate).await?;
         let marked = transport == EPICBOX && carries_lepic_marker(wire);
+        let features = self.config().claimed_features();
         debug!(height = tip.value(), "slate checked");
 
         let answer = self
@@ -243,6 +244,7 @@ where
                         context,
                         counterparty,
                         marked,
+                        features,
                     },
                     &request,
                 ))
@@ -318,6 +320,8 @@ struct Proposal {
     counterparty: Option<Destination>,
     /// The S1 came over Epicbox with the LEPIC marker, so its S2 carries the marker too.
     marked: bool,
+    /// What the marker of a marked S2 claims.
+    features: u32,
 }
 
 /// What storing a reply ended with: a new transaction and the account the funds go to, or the
@@ -345,7 +349,7 @@ fn store_reply<N, S: StoreOpener, V>(
         .get(transport)
         .ok_or(ReceiveError::UnknownTransport { transport })?
         .policy();
-    let codecs = reply_codecs(proposal.network, proposal.marked)?;
+    let codecs = reply_codecs(proposal.network, proposal.marked, proposal.features)?;
     let now = ports.clock.now();
     session.store.write(|repos| {
         if let Some(received) =
@@ -411,6 +415,7 @@ pub(crate) fn receive_own<D>(
         context,
         counterparty: None,
         marked: false,
+        features: 0,
     };
     let request = ReceiveRequest {
         account: Some(label),
@@ -438,14 +443,18 @@ pub fn legacy_codecs(network: Network) -> Result<CodecRegistry, ReceiveError> {
 
 /// The codecs an S2 is encoded with: the legacy ones, carrying the LEPIC marker when `marked`.
 /// Only a sender that marked its S1 gets a marked reply, so a stock sender never sees the key.
-fn reply_codecs(network: Network, marked: bool) -> Result<CodecRegistry, ReceiveError> {
+fn reply_codecs(
+    network: Network,
+    marked: bool,
+    features: u32,
+) -> Result<CodecRegistry, ReceiveError> {
     if !marked {
         return legacy_codecs(network);
     }
     let base_fee = network.params().default_base_fee();
     Ok(codecs::legacy_with(
-        Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))),
-        Box::new(MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee))),
+        Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_features(features)),
+        Box::new(MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee)).with_features(features)),
     ))
 }
 

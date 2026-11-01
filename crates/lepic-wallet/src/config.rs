@@ -127,11 +127,40 @@ pub struct WalletConfig {
     /// The host builds the session's node and relay ports to refuse every call as well. Fixed
     /// for the session: a change means opening the wallet again.
     pub offline: bool,
+    /// The feature bits the host app claims, a constant of its build, never a setting. Only
+    /// the host bits ([`lepic_epicbox::marker::features::HOST_FEATURES`]) are kept.
+    pub host_features: u32,
+}
+
+impl WalletConfig {
+    /// The feature bits this wallet claims to peers: LEPIC's own and the host's.
+    pub fn claimed_features(&self) -> u32 {
+        lepic_epicbox::marker::features::claimed(self.host_features)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_host_bits_of_the_host_features_are_claimed() {
+        use lepic_epicbox::marker::features::{DIRECTORY, LEPIC_FEATURES};
+        let config = |host_features| WalletConfig {
+            name: WalletName::new("w").unwrap(),
+            network: Network::Floonet,
+            data_dir: PathBuf::from("/w"),
+            node: NodeEndpoint::parse("http://127.0.0.1:1").unwrap(),
+            transports: Vec::new(),
+            offline: false,
+            host_features,
+        };
+        assert_eq!(config(0).claimed_features(), LEPIC_FEATURES);
+        assert_eq!(
+            config(DIRECTORY | 0b1110 | 1 << 31).claimed_features(),
+            LEPIC_FEATURES | DIRECTORY
+        );
+    }
 
     #[test]
     fn accepts_simple_wallet_names() {

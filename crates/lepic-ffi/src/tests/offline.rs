@@ -56,6 +56,7 @@ impl World {
             tuning: crate::tuning::shipped(),
             offline: false,
             tor_wanted: false,
+            host_features: 0,
         }
     }
 
@@ -95,6 +96,7 @@ async fn cold_wallet(world: &mut World) -> (EpicWallet, WalletConfig) {
     let offline = WalletConfig {
         offline: true,
         tor_wanted: false,
+        host_features: 0,
         ..config
     };
     (world.open(&offline, &store).await, offline)
@@ -177,6 +179,7 @@ async fn offline_changes_only_by_opening_the_wallet_again() {
     let online = WalletConfig {
         offline: false,
         tor_wanted: false,
+        host_features: 0,
         ..offline.clone()
     };
 

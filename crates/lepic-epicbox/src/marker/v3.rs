@@ -22,8 +22,7 @@ use lepic_slate::error::{DecodeError, EncodeError};
 use lepic_slate::model::Slate;
 use lepic_slate::validate::check_size;
 
-/// What follows the last key of the V3 object.
-const MARKER: &str = ",\"lepic\":{\"version\":1}";
+use super::{MarkerExtra, marker_text};
 
 /// The X25519 u-coordinates of small order, as libsodium's blacklist lists them (little-endian):
 /// 0, 1, the two points of order 8, and the three encodings of p-1, p and p+1. [`is_small_order`]
@@ -69,31 +68,29 @@ fn is_small_order(key: &[u8; 32]) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarkedV3JsonCodec {
     v3: V3JsonCodec,
-    reply_key: Option<[u8; 32]>,
+    extra: MarkerExtra,
 }
 
 impl MarkedV3JsonCodec {
     pub const fn new(v3: V3JsonCodec) -> Self {
         Self {
             v3,
-            reply_key: None,
+            extra: MarkerExtra::None,
         }
     }
 
-    /// The codec writing `reply_key`, an X25519 public key, into the marker.
+    /// The codec writing `reply_key`, an X25519 public key, into the marker, for a file or
+    /// paste slate. Such a marker never carries `f`.
     pub const fn with_reply_key(mut self, reply_key: [u8; 32]) -> Self {
-        self.reply_key = Some(reply_key);
+        self.extra = MarkerExtra::Reply(reply_key);
         self
     }
-}
 
-fn marker_text(reply_key: Option<&[u8; 32]>) -> String {
-    match reply_key {
-        None => MARKER.to_owned(),
-        Some(key) => {
-            let hex: String = key.iter().map(|byte| format!("{byte:02x}")).collect();
-            format!(",\"lepic\":{{\"version\":1,\"reply\":\"{hex}\"}}")
-        }
+    /// The codec writing `features` as the marker's `f`, for a slate sent over Epicbox only.
+    /// Such a marker never carries a reply key.
+    pub const fn with_features(mut self, features: u32) -> Self {
+        self.extra = MarkerExtra::Features(features);
+        self
     }
 }
 
@@ -117,7 +114,7 @@ impl Codec for MarkedV3JsonCodec {
         let marked = plain
             .as_text()
             .and_then(|text| text.strip_suffix('}'))
-            .map(|body| format!("{body}{}}}", marker_text(self.reply_key.as_ref())));
+            .map(|body| format!("{body}{}}}", marker_text(&self.extra)));
         Ok(marked.map_or(plain, |text| WireSlate::text(MediaType::JSON, text)))
     }
 }
@@ -144,6 +141,36 @@ pub fn carries_lepic_marker(wire: &WireSlate) -> bool {
     text.trim_start().starts_with('{')
         && serde_json::from_str::<Probe>(text)
             .is_ok_and(|probe| probe.lepic.is_some_and(|marker| marker.version >= 1))
+}
+
+/// The feature bits in the LEPIC marker of `wire`: its `f` when the marker counts for
+/// [`carries_lepic_marker`] and `f` is an integer that fits a `u32`, unknown bits kept. `None`
+/// for a marker without `f` (an older LEPIC, which claims only
+/// [`MARKER`](super::features::MARKER)), a malformed `f`, or no marker.
+pub fn lepic_marker_features(wire: &WireSlate) -> Option<u32> {
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        lepic: Option<Marker>,
+    }
+    #[derive(Deserialize)]
+    struct Marker {
+        version: u64,
+        #[serde(default)]
+        f: Option<u32>,
+    }
+    if check_size(wire).is_err() {
+        return None;
+    }
+    let text = wire.as_text()?;
+    if !text.trim_start().starts_with('{') {
+        return None;
+    }
+    let marker = serde_json::from_str::<Probe>(text).ok()?.lepic?;
+    if marker.version < 1 {
+        return None;
+    }
+    marker.f
 }
 
 /// The reply public key in the LEPIC marker of `wire`, if the marker has a `reply` of exactly 64
@@ -396,5 +423,66 @@ mod tests {
             lepic_marker_reply_key(&WireSlate::text(MediaType::JSON, "[1]".to_owned())),
             None
         );
+    }
+
+    #[test]
+    fn features_are_written_as_f_and_read_back() {
+        let slate = v3().decode(&vector_wire(VECTORS[0])).unwrap();
+        let plain = v3().encode(&slate, &CONTEXT).unwrap();
+        let body = text(&plain).strip_suffix('}').unwrap();
+        let wire = MarkedV3JsonCodec::new(v3())
+            .with_features(0x21)
+            .encode(&slate, &CONTEXT)
+            .unwrap();
+        assert_eq!(
+            text(&wire),
+            format!("{body},\"lepic\":{{\"version\":1,\"f\":33}}}}")
+        );
+        assert!(carries_lepic_marker(&wire));
+        assert_eq!(lepic_marker_features(&wire), Some(0x21));
+        assert_eq!(lepic_marker_reply_key(&wire), None);
+        assert_eq!(v3().decode(&wire).unwrap(), slate);
+    }
+
+    #[test]
+    fn a_reply_key_marker_never_carries_f() {
+        let slate = v3().decode(&vector_wire(VECTORS[0])).unwrap();
+        for codec in [
+            MarkedV3JsonCodec::new(v3()).with_reply_key(KEY),
+            MarkedV3JsonCodec::new(v3())
+                .with_features(7)
+                .with_reply_key(KEY),
+        ] {
+            let wire = codec.encode(&slate, &CONTEXT).unwrap();
+            assert_eq!(lepic_marker_features(&wire), None);
+            assert!(!text(&wire).contains("\"f\""));
+            assert_eq!(lepic_marker_reply_key(&wire), Some(KEY));
+        }
+    }
+
+    #[test]
+    fn only_a_u32_f_in_a_counted_marker_reads_as_features() {
+        let with = |marker: Value| {
+            let mut value: Value = serde_json::from_str(text(&vector_wire(VECTORS[0]))).unwrap();
+            value["lepic"] = marker;
+            let wire = WireSlate::text(MediaType::JSON, serde_json::to_string(&value).unwrap());
+            (carries_lepic_marker(&wire), lepic_marker_features(&wire))
+        };
+        assert_eq!(with(json!({"version": 1, "f": 0})), (true, Some(0)));
+        assert_eq!(
+            with(json!({"version": 1, "f": u32::MAX})),
+            (true, Some(u32::MAX))
+        );
+        assert_eq!(with(json!({"version": 2, "f": 5, "x": 1})), (true, Some(5)));
+        assert_eq!(with(json!({"version": 1})), (true, None));
+        assert_eq!(
+            with(json!({"version": 1, "f": u64::from(u32::MAX) + 1})),
+            (true, None)
+        );
+        assert_eq!(with(json!({"version": 1, "f": -1})), (true, None));
+        assert_eq!(with(json!({"version": 1, "f": "3"})), (true, None));
+        assert_eq!(with(json!({"version": 1, "f": 1.5})), (true, None));
+        assert_eq!(with(json!({"version": 0, "f": 3})), (false, None));
+        assert_eq!(lepic_marker_features(&vector_wire(VECTORS[0])), None);
     }
 }

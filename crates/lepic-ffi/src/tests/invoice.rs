@@ -51,6 +51,7 @@ impl World {
             tuning: crate::tuning::shipped(),
             offline: false,
             tor_wanted: false,
+            host_features: 0,
         };
         EpicWallet::create(
             &self.runtime,

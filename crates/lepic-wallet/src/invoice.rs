@@ -379,10 +379,14 @@ fn invoice_codecs(
     transport: TransportId,
     base_fee: Fee,
     reply_key: Option<[u8; 32]>,
+    features: u32,
 ) -> Result<CodecRegistry, InvoiceError> {
     let v3 = V3JsonCodec::new(base_fee);
     match reply_key {
-        _ if transport == EPICBOX => codecs_with(Box::new(MarkedV3JsonCodec::new(v3)), base_fee),
+        _ if transport == EPICBOX => codecs_with(
+            Box::new(MarkedV3JsonCodec::new(v3).with_features(features)),
+            base_fee,
+        ),
         Some(key) if transport == FILE => codecs_with(
             Box::new(MarkedV3JsonCodec::new(v3).with_reply_key(key)),
             base_fee,
@@ -576,6 +580,8 @@ struct InvoiceEnvironment<'a> {
     tip: Height,
     now: Timestamp,
     reply_keys: Option<&'a dyn ReplyKeys>,
+    /// What the marker of an Epicbox invoice stage claims.
+    features: u32,
 }
 
 impl InvoiceEnvironment<'_> {
@@ -639,7 +645,7 @@ fn issue_stored(
         )
     });
     let wire = encode_with(
-        &invoice_codecs(transport.id(), env.base_fee(), reply_key)?,
+        &invoice_codecs(transport.id(), env.base_fee(), reply_key, env.features)?,
         new_invoice_encoding(transport, &slate, &context),
         &slate,
         &context,
@@ -758,7 +764,7 @@ fn pay_stored(
     let context = encode_context(env.network, &slate);
     let encoding = policy.for_reply(&slate, &context);
     let reply = encode_with(
-        &invoice_codecs(transport, env.base_fee(), None)?,
+        &invoice_codecs(transport, env.base_fee(), None, env.features)?,
         encoding,
         &slate,
         &context,
@@ -1055,6 +1061,7 @@ where
                 tip,
                 now: ports.clock.now(),
                 reply_keys: reply_keys.as_deref(),
+                features: config.claimed_features(),
             };
             let issued =
                 registered(&ports.transports, delivery.transport()).and_then(|transport| {
@@ -1148,13 +1155,14 @@ where
         debug!(height = tip.value(), "slate checked");
 
         let paid = self
-            .blocking(move |ports, _| {
+            .blocking(move |ports, config| {
                 let env = InvoiceEnvironment {
                     keychain: &session.keychain,
                     network,
                     tip,
                     now: ports.clock.now(),
                     reply_keys: None,
+                    features: config.claimed_features(),
                 };
                 let paid = registered(&ports.transports, transport).and_then(|carrier| {
                     let randomness = I2Randomness::draw(&mut **ports.rng.lock())
@@ -1232,13 +1240,14 @@ where
         }
         let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
         let stored = self
-            .blocking(move |ports, _| {
+            .blocking(move |ports, config| {
                 let env = InvoiceEnvironment {
                     keychain: &session.keychain,
                     network,
                     tip,
                     now: ports.clock.now(),
                     reply_keys: None,
+                    features: config.claimed_features(),
                 };
                 Ok(session
                     .store

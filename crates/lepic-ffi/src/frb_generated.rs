@@ -12454,6 +12454,7 @@ impl SseDecode for crate::api::types::WalletConfig {
         let mut var_tuning = <crate::api::types::NetTuning>::sse_decode(deserializer);
         let mut var_offline = <bool>::sse_decode(deserializer);
         let mut var_torWanted = <bool>::sse_decode(deserializer);
+        let mut var_hostFeatures = <u32>::sse_decode(deserializer);
         return crate::api::types::WalletConfig {
             data_dir: var_dataDir,
             chain: var_chain,
@@ -12465,6 +12466,7 @@ impl SseDecode for crate::api::types::WalletConfig {
             tuning: var_tuning,
             offline: var_offline,
             tor_wanted: var_torWanted,
+            host_features: var_hostFeatures,
         };
     }
 }
@@ -15805,6 +15807,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletConfig {
             self.tuning.into_into_dart().into_dart(),
             self.offline.into_into_dart().into_dart(),
             self.tor_wanted.into_into_dart().into_dart(),
+            self.host_features.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -18153,6 +18156,7 @@ impl SseEncode for crate::api::types::WalletConfig {
         <crate::api::types::NetTuning>::sse_encode(self.tuning, serializer);
         <bool>::sse_encode(self.offline, serializer);
         <bool>::sse_encode(self.tor_wanted, serializer);
+        <u32>::sse_encode(self.host_features, serializer);
     }
 }
 

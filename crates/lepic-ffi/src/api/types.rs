@@ -60,6 +60,11 @@ pub struct WalletConfig {
     /// unless the last session on `data_dir` expected tor and was not stopped. Read when a
     /// wallet is created, restored or opened. Ignored on iOS and in a build without tor.
     pub tor_wanted: bool,
+    /// The feature bits the app claims to other LEPIC wallets: one constant of the app's
+    /// build, the same for every user, never a setting. LEPIC keeps only the host bits, 4
+    /// (linked-device forwarding) and 5 (directory), and ignores the rest. Read when a wallet
+    /// is created, restored or opened.
+    pub host_features: u32,
 }
 
 /// The app configuration's `[node]`, `[epicbox]`, `[http]` and `[tor]` tuning keys. Every
@@ -159,6 +164,7 @@ impl std::fmt::Debug for WalletConfig {
             .field("onion_routes", &self.onion_routes)
             .field("tuning", &self.tuning)
             .field("offline", &self.offline)
+            .field("host_features", &self.host_features)
             .finish()
     }
 }
@@ -1569,6 +1575,7 @@ mod tests {
             tuning: crate::tuning::shipped(),
             offline: false,
             tor_wanted: false,
+            host_features: 0,
         };
         let printed = format!("{config:?}");
         assert!(!printed.contains("node-secret-value"));

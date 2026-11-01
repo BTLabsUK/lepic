@@ -34,6 +34,8 @@ fn full_content(card_owner: &Side) -> Content {
         expires: Some(1_800_000_000),
         card: Some(card_owner.card("Alice", NET)),
         sent_at: Some(1_790_000_000),
+        address_proof: None,
+        features: None,
     }
 }
 
@@ -468,6 +470,57 @@ fn the_send_time_is_an_extension_covered_by_the_signature() {
 }
 
 #[test]
+fn features_and_proof_are_extensions_read_in_any_combination_and_signed() {
+    let (alice, bob) = (Side::new(1), Side::new(11));
+    let header = header([0; 8]);
+    let sent_at = field(0x80, &1_790_000_000u64.to_be_bytes());
+    let proof = field(0x81, &[0x5a; 32]);
+    let features = field(0x82, &0x8000_0025u32.to_be_bytes());
+    let all = [sent_at.clone(), proof.clone(), features.clone()].concat();
+    let inner = signed_with(&alice, &header, &bob.enc_pk(), &minimal(), &all);
+    let opened = open(&seal_raw(&bob.enc_pk(), &header, &inner), &bob.enc).unwrap();
+    assert_eq!(opened.content.sent_at, Some(1_790_000_000));
+    assert_eq!(opened.content.address_proof, Some([0x5a; 32]));
+    // Unknown bits are kept, never refused.
+    assert_eq!(opened.content.features, Some(0x8000_0025));
+
+    let mut changed = inner.clone();
+    let position = changed
+        .windows(4)
+        .position(|w| w == 0x8000_0025u32.to_be_bytes())
+        .unwrap();
+    changed[position + 3] ^= 1;
+    assert_eq!(
+        open(&seal_raw(&bob.enc_pk(), &header, &changed), &bob.enc).err(),
+        Some(DecodeError::BadSignature)
+    );
+
+    let only_features = signed_with(&alice, &header, &bob.enc_pk(), &minimal(), &features);
+    let opened = open(&seal_raw(&bob.enc_pk(), &header, &only_features), &bob.enc).unwrap();
+    assert_eq!(opened.content.features, Some(0x8000_0025));
+    assert_eq!(opened.content.address_proof, None);
+
+    // Any other length is an extension this reader does not know.
+    let odd = [field(0x81, &[1; 31]), field(0x82, &[1, 2])].concat();
+    let inner = signed_with(&alice, &header, &bob.enc_pk(), &minimal(), &odd);
+    let opened = open(&seal_raw(&bob.enc_pk(), &header, &inner), &bob.enc).unwrap();
+    assert_eq!(opened.content.address_proof, None);
+    assert_eq!(opened.content.features, None);
+}
+
+#[test]
+fn extensions_are_written_in_ascending_tag_order() {
+    let (alice, bob) = (Side::new(1), Side::new(11));
+    let mut content = Content::new(MessageType::ContactUpdate, vec![1]);
+    content.sent_at = Some(5);
+    content.address_proof = Some([7; 32]);
+    content.features = Some(9);
+    let envelope = seal_to(&bob, &content, Some(&alice), 3);
+    let opened = open(&envelope, &bob.enc).unwrap();
+    assert_eq!(opened.content, content);
+}
+
+#[test]
 fn a_bad_signature_or_weak_sender_key_is_refused() {
     let (alice, bob) = (Side::new(1), Side::new(11));
     let header = header([0; 8]);
@@ -628,6 +681,8 @@ proptest! {
         signed in any::<bool>(),
         with_card in any::<bool>(),
         sent_at in proptest::option::of(any::<u64>()),
+        address_proof in proptest::option::of(any::<[u8; 32]>()),
+        features in proptest::option::of(any::<u32>()),
         seed in any::<u8>(),
     ) {
         let (alice, bob) = (Side::new(1), Side::new(11));
@@ -640,6 +695,8 @@ proptest! {
             expires,
             card: with_card.then(|| alice.card("Alice", NET)),
             sent_at,
+            address_proof,
+            features,
         };
         let envelope = seal_to(&bob, &content, signed.then_some(&alice), seed);
         let armored = armor(&envelope);

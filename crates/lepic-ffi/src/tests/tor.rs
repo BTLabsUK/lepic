@@ -779,6 +779,7 @@ async fn the_onion_routes_of_the_config_are_there_from_the_open_and_checked() {
                 tuning: crate::tuning::shipped(),
                 offline: false,
                 tor_wanted: false,
+                host_features: 0,
             };
             let secret = crate::node::NodeSecret::take(&mut config);
             let session =
@@ -978,6 +979,7 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
         tuning: crate::tuning::shipped(),
         offline: false,
         tor_wanted: false,
+        host_features: 0,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let session = Session::new(

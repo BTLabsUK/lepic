@@ -48,6 +48,11 @@ const TAG_SENDER_KEY: u8 = 0x08;
 /// An extension, so readers that predate it skip it; signed like every field before 0xFF. A
 /// value that is not eight bytes is skipped like any extension this reader does not know.
 const TAG_SENT_AT: u8 = 0x80;
+/// The address proof of a pairing envelope, a 32-byte MAC; skipped when it has another length.
+const TAG_ADDRESS_PROOF: u8 = 0x81;
+/// The feature bits the sender claims, a big-endian `u32`, unknown bits kept; skipped when it
+/// is not four bytes.
+const TAG_FEATURES: u8 = 0x82;
 const TAG_SIGNATURE: u8 = 0xff;
 
 type SealKem = X25519HkdfSha256;
@@ -151,6 +156,10 @@ pub struct Content {
     /// Unix seconds when the sender sealed it, so a recipient can refuse an old envelope that
     /// arrives again; signed with the rest of a signed envelope.
     pub sent_at: Option<u64>,
+    /// The sender's address proof for this pairing, carried beside its card.
+    pub address_proof: Option<[u8; 32]>,
+    /// The feature bits the sender claims; a claim, never a reason to skip a check.
+    pub features: Option<u32>,
 }
 
 impl fmt::Debug for Content {
@@ -164,6 +173,8 @@ impl fmt::Debug for Content {
             .field("expires", &self.expires)
             .field("card", &self.card)
             .field("sent_at", &self.sent_at)
+            .field("address_proof", &self.address_proof.is_some())
+            .field("features", &self.features)
             .finish()
     }
 }
@@ -179,6 +190,8 @@ impl Content {
             expires: None,
             card: None,
             sent_at: None,
+            address_proof: None,
+            features: None,
         }
     }
 }
@@ -385,6 +398,18 @@ fn encode_content(
         content
             .sent_at
             .map(u64::to_be_bytes)
+            .as_ref()
+            .map(|bytes| &bytes[..]),
+    )?;
+    writer.optional(
+        TAG_ADDRESS_PROOF,
+        content.address_proof.as_ref().map(|proof| &proof[..]),
+    )?;
+    writer.optional(
+        TAG_FEATURES,
+        content
+            .features
+            .map(u32::to_be_bytes)
             .as_ref()
             .map(|bytes| &bytes[..]),
     )?;
@@ -608,6 +633,13 @@ pub fn decode_content(
         .extension(TAG_SENT_AT)
         .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
         .map(u64::from_be_bytes);
+    let address_proof = fields
+        .extension(TAG_ADDRESS_PROOF)
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok());
+    let features = fields
+        .extension(TAG_FEATURES)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_be_bytes);
 
     let sender = match (
         fields.optional_array::<32>(TAG_SENDER_KEY)?,
@@ -651,6 +683,8 @@ pub fn decode_content(
             expires,
             card,
             sent_at,
+            address_proof,
+            features,
         },
         sender,
     })

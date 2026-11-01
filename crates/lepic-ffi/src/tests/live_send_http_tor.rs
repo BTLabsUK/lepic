@@ -68,6 +68,7 @@ fn live_send_http_through_tor() {
         tuning: crate::tuning::shipped(),
         offline: false,
         tor_wanted: true,
+        host_features: 0,
     };
     let secret = NodeSecret::take(&mut config);
 
@@ -210,6 +211,7 @@ fn live_tor_wanted_without_tor_reaches_nothing() {
         tuning: crate::tuning::shipped(),
         offline: false,
         tor_wanted: true,
+        host_features: 0,
     };
     let secret = NodeSecret::take(&mut config);
     rt.block_on(async {

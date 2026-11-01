@@ -479,6 +479,7 @@ fn engine(
             .map_err(|_| invalid("node url is not an http or https url with a host"))?,
         transports: ids,
         offline: config.offline,
+        host_features: config.host_features,
     };
     let ports = Ports {
         node,
@@ -2400,6 +2401,7 @@ mod tests {
             tuning: crate::tuning::shipped(),
             offline: false,
             tor_wanted: false,
+            host_features: 0,
         }
     }
 
@@ -2793,6 +2795,7 @@ mod tests {
                 tuning: crate::tuning::shipped(),
                 offline: false,
                 tor_wanted: false,
+                host_features: 0,
             };
             let secret = NodeSecret::take(&mut config);
             let session = Session::new(

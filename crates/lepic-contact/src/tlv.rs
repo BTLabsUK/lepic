@@ -11,11 +11,14 @@ const FIRST_IGNORED_TAG: u8 = 0x80;
 /// Known tags of every format fit below this.
 const KNOWN_TAG_SLOTS: usize = 16;
 
+/// How many extensions a list keeps for its reader; any after them are skipped unread.
+const EXTENSION_SLOTS: usize = 8;
+
 /// The fields of one decoded list, borrowed from the input.
 pub(crate) struct Fields<'a> {
     values: [Option<&'a [u8]>; KNOWN_TAG_SLOTS],
-    /// The first extension field, from 0x80 up, that a reader may know.
-    extension: Option<(u8, &'a [u8])>,
+    /// The first extension fields, from 0x80 up, that a reader may know, in tag order.
+    extensions: [Option<(u8, &'a [u8])>; EXTENSION_SLOTS],
     signature: Option<&'a [u8]>,
     /// The encoded bytes before the signature field: what the signature covers.
     signed_prefix: &'a [u8],
@@ -32,7 +35,7 @@ impl<'a> Fields<'a> {
     ) -> Result<Self, DecodeError> {
         let mut values = [None; KNOWN_TAG_SLOTS];
         let mut signature_value = None;
-        let mut extension = None;
+        let mut extensions = [None; EXTENSION_SLOTS];
         let mut signed_prefix = bytes;
         let mut previous: Option<u8> = None;
         let mut rest = bytes;
@@ -58,8 +61,8 @@ impl<'a> Fields<'a> {
                     .get_mut(usize::from(tag))
                     .ok_or(Malformed::UnknownField { tag })?;
                 *slot = Some(value);
-            } else if extension.is_none() {
-                extension = Some((tag, value));
+            } else if let Some(slot) = extensions.iter_mut().find(|slot| slot.is_none()) {
+                *slot = Some((tag, value));
             }
             previous = Some(tag);
             rest = tail;
@@ -69,7 +72,7 @@ impl<'a> Fields<'a> {
         }
         Ok(Self {
             values,
-            extension,
+            extensions,
             signature: signature_value,
             signed_prefix,
         })
@@ -84,11 +87,14 @@ impl<'a> Fields<'a> {
             .ok_or_else(|| Malformed::MissingField { tag }.into())
     }
 
-    /// The value of extension `tag`, from 0x80 up, when it is the list's first extension.
+    /// The value of extension `tag`, from 0x80 up, when it is among the list's first
+    /// extensions.
     pub(crate) fn extension(&self, tag: u8) -> Option<&'a [u8]> {
-        self.extension
-            .filter(|(found, _)| *found == tag)
-            .map(|(_, value)| value)
+        self.extensions
+            .iter()
+            .flatten()
+            .find(|(found, _)| *found == tag)
+            .map(|(_, value)| *value)
     }
 
     /// The value of the signature field, when the list has one.
@@ -199,6 +205,15 @@ mod tests {
         let fields = parse(&[0x01, 0, 1, 7, 0x80, 0, 2, 1, 2, 0x81, 0, 0]).unwrap();
         assert_eq!(fields.get(0x01), Some(&[7][..]));
         assert_eq!(fields.get(0x02), None);
+    }
+
+    #[test]
+    fn reads_every_extension_not_only_the_first() {
+        let fields = parse(&[0x01, 0, 1, 7, 0x80, 0, 1, 1, 0x81, 0, 1, 2, 0x82, 0, 1, 3]).unwrap();
+        assert_eq!(fields.extension(0x80), Some(&[1][..]));
+        assert_eq!(fields.extension(0x81), Some(&[2][..]));
+        assert_eq!(fields.extension(0x82), Some(&[3][..]));
+        assert_eq!(fields.extension(0x83), None);
     }
 
     #[test]

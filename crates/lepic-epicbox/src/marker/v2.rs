@@ -15,17 +15,26 @@ use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError};
 use lepic_slate::model::Slate;
 
-/// What follows the last key of the V2 object.
-const MARKER: &str = ",\"lepic\":{\"version\":1}";
+use super::{MarkerExtra, marker_text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarkedV2JsonCodec {
     v2: V2JsonCodec,
+    extra: MarkerExtra,
 }
 
 impl MarkedV2JsonCodec {
     pub const fn new(v2: V2JsonCodec) -> Self {
-        Self { v2 }
+        Self {
+            v2,
+            extra: MarkerExtra::None,
+        }
+    }
+
+    /// The codec writing `features` as the marker's `f`, for a slate sent over Epicbox only.
+    pub const fn with_features(mut self, features: u32) -> Self {
+        self.extra = MarkerExtra::Features(features);
+        self
     }
 }
 
@@ -49,7 +58,7 @@ impl Codec for MarkedV2JsonCodec {
         let marked = plain
             .as_text()
             .and_then(|text| text.strip_suffix('}'))
-            .map(|body| format!("{body}{MARKER}}}"));
+            .map(|body| format!("{body}{}}}", marker_text(&self.extra)));
         Ok(marked.map_or(plain, |text| WireSlate::text(MediaType::JSON, text)))
     }
 }
@@ -139,5 +148,25 @@ mod tests {
             .encode(&slate, &CONTEXT)
             .unwrap();
         assert!(carries_lepic_marker(&marked));
+    }
+
+    #[test]
+    fn features_are_written_as_f_after_the_version() {
+        use crate::marker::v3::lepic_marker_features;
+        for vector in VECTORS {
+            let slate = v2().decode(&vector_wire(vector)).unwrap();
+            let plain = v2().encode(&slate, &CONTEXT).unwrap();
+            let marked = MarkedV2JsonCodec::new(v2())
+                .with_features(1)
+                .encode(&slate, &CONTEXT)
+                .unwrap();
+            let body = text(&plain).strip_suffix('}').unwrap();
+            assert_eq!(
+                text(&marked),
+                format!("{body},\"lepic\":{{\"version\":1,\"f\":1}}}}")
+            );
+            assert_eq!(lepic_marker_features(&marked), Some(1));
+            assert_eq!(v2().decode(&marked).unwrap(), slate);
+        }
     }
 }
