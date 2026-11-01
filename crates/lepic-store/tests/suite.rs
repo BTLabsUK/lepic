@@ -1754,6 +1754,39 @@ fn contact_backup_round_trips_without_secrets_and_flags_imports<B: Backend>() {
     .unwrap();
 }
 
+/// What is known of each peer key stays out of the contact backup: a restore relearns it.
+fn contact_backup_carries_nothing_known_of_peer_keys<B: Backend>() {
+    let source = B::create(context_key(1));
+    let compat = PeerCompat {
+        last_marked_at: Some(support::time(1)),
+        last_unmarked_at: Some(support::time(2)),
+        claimed: 0b11,
+        works: 0b1,
+        features_at: Some(support::time(1)),
+    };
+    write(source.store(), |repos| {
+        repos.put_contact(&contact(1, 1))?;
+        repos.put_contact_mailbox(&contact_mailbox(1))?;
+        repos.put_peer_compat(&peer_key(7), &compat)
+    })
+    .unwrap();
+    let json = read(source.store(), |repos| {
+        export_contacts(repos, Network::Floonet)
+    })
+    .unwrap();
+    assert!(!json.contains(&peer_key(7)));
+    assert!(!json.contains("marked") && !json.contains("claimed") && !json.contains("works"));
+
+    // The same keys, so a row that came along would be found.
+    let restored = B::create(context_key(1));
+    let summary = write(restored.store(), |repos| import(repos, &json)).unwrap();
+    assert_eq!(summary.imported, 1);
+    assert_eq!(
+        read(restored.store(), |repos| repos.peer_compat(&peer_key(7))).unwrap(),
+        None
+    );
+}
+
 fn contact_backup_rejects_unknown_versions_and_malformed_records<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
@@ -2450,6 +2483,7 @@ for_each_backend!(
     pending_pairings_stop_at_the_cap,
     contact_outbox_lists_due_entries_and_follows_a_home_relay_move,
     contact_backup_round_trips_without_secrets_and_flags_imports,
+    contact_backup_carries_nothing_known_of_peer_keys,
     slots_count_up_per_account_from_the_callers_start,
     slots_run_out_at_65536,
     twin_records_share_a_slot_but_not_a_peer_key,

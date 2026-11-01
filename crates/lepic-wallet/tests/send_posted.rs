@@ -725,3 +725,29 @@ fn a_report_dated_ahead_of_the_clock_is_not_shown() {
 
     assert_eq!(world.report_shown(receipt.tx_id), None);
 }
+
+/// The host forgets keys not heard from for 180 days; one heard from a day later stays, and a
+/// forgotten key is unknown again.
+#[test]
+fn forget_peers_drops_keys_older_than_the_limit() {
+    let world = World::new();
+    let day = jiff::SignedDuration::from_hours(24);
+    let now = world.sender().clock.now();
+    let old = World::address_of(SENDER);
+    let recent = World::address_of(STRANGER);
+    proven_at(world.sender(), &old.key_text(), now - day * 181);
+    proven_at(world.sender(), &recent.key_text(), now - day * 179);
+
+    let forgotten = world
+        .sender()
+        .wallet
+        .forget_peers(Duration::from_secs(180 * 24 * 60 * 60))
+        .unwrap();
+
+    assert_eq!(forgotten, 1);
+    assert_eq!(world.sender().peer_compat(&old.key_text()), None);
+    assert!(world.sender().peer_compat(&recent.key_text()).is_some());
+    let facts = world.sender().wallet.peer_compat(&old.to_string()).unwrap();
+    assert_eq!(facts.kind, PeerKind::Unknown);
+    assert!(!facts.notices);
+}

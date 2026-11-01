@@ -182,6 +182,8 @@ where
 #[cfg(test)]
 #[allow(clippy::arithmetic_side_effects)]
 mod tests {
+    use lepic_store::WalletStore;
+
     use super::*;
 
     const DAY: i64 = 24 * 60 * 60;
@@ -203,6 +205,77 @@ mod tests {
             }),
             now(),
         )
+    }
+
+    fn store() -> lepic_store::MemoryStore {
+        lepic_store::MemoryStore::new(lepic_store::StoreKeys::from_bytes([1; 32], [2; 32]))
+    }
+
+    fn stored(store: &lepic_store::MemoryStore) -> PeerCompat {
+        store
+            .read(|repos| repos.peer_compat("key"))
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_marker_without_bits_claims_and_works_bit_zero_only() {
+        let store = store();
+        store
+            .write(|repos| record_marked(repos, "key", now(), None))
+            .unwrap();
+        assert_eq!(
+            stored(&store),
+            PeerCompat {
+                last_marked_at: Some(now()),
+                claimed: MARKER_BIT,
+                works: MARKER_BIT,
+                ..PeerCompat::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_claim_keeps_its_bits_and_the_time_and_a_later_claim_without_a_bit_drops_it() {
+        let store = store();
+        store
+            .write(|repos| {
+                record_marked(repos, "key", at(90).unwrap(), Some(0b110))?;
+                let mut compat = repos.peer_compat("key")?.unwrap_or_default();
+                compat.works |= 0b100;
+                repos.put_peer_compat("key", &compat)
+            })
+            .unwrap();
+        let first = stored(&store);
+        assert_eq!(first.claimed, 0b111);
+        assert_eq!(first.works, 0b101);
+        assert_eq!(first.features_at, at(90));
+
+        store
+            .write(|repos| record_marked(repos, "key", now(), Some(0b010)))
+            .unwrap();
+        let later = stored(&store);
+        assert_eq!(later.claimed, 0b011);
+        assert_eq!(
+            later.works, MARKER_BIT,
+            "a bit no longer claimed stops working"
+        );
+        assert_eq!(later.features_at, Some(now()));
+    }
+
+    #[test]
+    fn an_unmarked_slate_keeps_the_bits_and_turns_the_key_epic() {
+        let store = store();
+        store
+            .write(|repos| {
+                record_marked(repos, "key", at(90).unwrap(), Some(0b10))?;
+                record_slate(repos, "key", now(), false)
+            })
+            .unwrap();
+        let compat = stored(&store);
+        assert_eq!((compat.claimed, compat.works), (0b11, MARKER_BIT));
+        assert_eq!(compat.last_unmarked_at, Some(now()));
+        assert_eq!(PeerFacts::derive(Some(compat), now()).kind, PeerKind::Epic);
     }
 
     #[test]
