@@ -180,6 +180,14 @@ impl Faults for DiskFullAt {
     }
 }
 
+struct HeldAt(Step);
+
+impl Faults for HeldAt {
+    fn at(&self, step: Step) -> Option<Fault> {
+        (step == self.0).then_some(Fault::Held)
+    }
+}
+
 /// The state every completed move ends in.
 fn assert_migrated(dir: &Path, original: &(Vec<u8>, Vec<u8>), store: &SqliteStore) {
     assert!(
@@ -309,6 +317,33 @@ fn a_crash_at_any_step_is_finished_by_the_next_open() {
         assert!(!report.rollback_set_aside, "{at:?}: taken for a rollback");
         assert_migrated(dir.path(), &original, &store);
     }
+}
+
+/// A plain database another program holds through every retry is not left under its name
+/// beside a session on the encrypted one: the open fails, and the next one sets it aside.
+#[test]
+fn a_plain_database_held_at_the_set_aside_fails_the_open_and_the_next_finishes() {
+    let dir = tempfile::tempdir().unwrap();
+    plain_database(dir.path(), 0);
+    let original = plain_bytes(dir.path(), DATABASE_FILE);
+    let held = open_wallet_dir_with(dir.path(), keys(), &key(), None, &HeldAt(Step::SetAside));
+    assert!(
+        matches!(held, Err(StoreError::Io { ref source, .. })
+            if source.kind() == std::io::ErrorKind::PermissionDenied),
+        "{:?}",
+        held.map(|_| ())
+    );
+    assert!(dir.path().join(ENCRYPTED_DATABASE_FILE).exists());
+    assert_eq!(
+        std::fs::read(dir.path().join(DATABASE_FILE)).unwrap(),
+        original.0,
+        "the plain file changed"
+    );
+
+    let (store, report) = open_wallet_dir(dir.path(), keys(), &key(), None).unwrap();
+    assert_eq!(report.state, AtRestState::Encrypted);
+    assert!(!report.rollback_set_aside, "taken for a rollback");
+    assert_migrated(dir.path(), &original, &store);
 }
 
 #[test]

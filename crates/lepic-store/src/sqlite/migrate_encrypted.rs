@@ -144,7 +144,7 @@ pub fn open_existing_wallet_dir(
                 supported: SCHEMA_VERSION,
             })
         }
-        Err(Failure::Failed(error) | Failure::Crashed(error)) => {
+        Err(Failure::Failed(error) | Failure::Crashed(error) | Failure::AfterSwitch(error)) => {
             tracing::warn!(error = %error, "plain wallet database checked in place");
             drop(remove_copy_files(dir));
             SqliteStore::open_existing(&plain, keys, AtRest::Plain)
@@ -196,7 +196,9 @@ pub(crate) fn open_wallet_dir_with(
             tracing::info!("wallet database encrypted at rest");
             Ok((store, report(AtRestState::MigratedNow)))
         }
-        Err(Failure::Crashed(error)) => Err(error),
+        // The encrypted database is complete; the next open finishes setting the plain one
+        // aside, and no session runs while it is still under its name.
+        Err(Failure::Crashed(error) | Failure::AfterSwitch(error)) => Err(error),
         Err(Failure::PlainDamaged | Failure::PlainTooNew(_)) => {
             remove_copy_files(dir)?;
             // Sets a damaged file aside, or refuses a newer schema, as every open does.
@@ -250,6 +252,9 @@ pub(crate) enum Fault {
     Crash,
     /// The disk is full.
     DiskFull,
+    /// Another program holds the plain database open without letting it be renamed, as an
+    /// indexer, antivirus or backup tool can on Windows, for as long as the open retries.
+    Held,
 }
 
 pub(crate) trait Faults {
@@ -271,6 +276,9 @@ enum Failure {
     PlainTooNew(u32),
     /// The copy failed before the switch; the plain file is as it was.
     Failed(StoreError),
+    /// The switch is done and the encrypted database complete, but the plain file could not
+    /// be set aside: this open fails and the next one finishes it.
+    AfterSwitch(StoreError),
     /// A test stopped the process.
     Crashed(StoreError),
 }
@@ -297,7 +305,7 @@ enum Purpose {
 
 fn step(faults: &dyn Faults, at: Step, copy: &Path) -> Result<(), Failure> {
     match faults.at(at) {
-        None => Ok(()),
+        None | Some(Fault::Held) => Ok(()),
         Some(Fault::Crash) => Err(Failure::Crashed(StoreError::Io {
             operation: "continue after a simulated crash",
             source: std::io::ErrorKind::Interrupted.into(),
@@ -483,16 +491,24 @@ fn copy_plain(
     cipher::write(&encrypted, store_key)?;
     step(faults, Step::KeyChecked, &copy)?;
 
-    // 6. The switch.
-    std::fs::rename(&copy, &encrypted).map_err(io("switch to the encrypted database"))?;
-    cipher::sync_folder(&encrypted).map_err(io("switch to the encrypted database"))?;
+    // 6. The switch. Once the rename is done, nothing falls back to the plain file: a failure
+    //    fails this open, and the next one opens the encrypted database.
+    rename_retrying(&copy, &encrypted, fs_rename)
+        .map_err(io("switch to the encrypted database"))?;
+    cipher::sync_folder(&encrypted)
+        .map_err(io("switch to the encrypted database"))
+        .map_err(Failure::AfterSwitch)?;
     step(faults, Step::Switched, &copy)?;
 
-    // 7. The plain database goes aside. A failure here is finished by the next open, which
-    //    knows it by the record.
-    if let Err(error) = set_aside_plain(dir, PRE_ENCRYPTION_SUFFIX) {
-        tracing::warn!(error = %error, "plain wallet database not yet set aside");
-    }
+    // 7. The plain database goes aside, retried while another program holds it. A failure
+    //    fails this open, so no session writes to the encrypted database while the plain one
+    //    is still under its name; the next open, which knows it by the record, finishes it.
+    let rename: Rename = if faults.at(Step::SetAside) == Some(Fault::Held) {
+        held_database_rename
+    } else {
+        fs_rename
+    };
+    set_aside_plain(dir, PRE_ENCRYPTION_SUFFIX, rename).map_err(Failure::AfterSwitch)?;
     step(faults, Step::SetAside, &copy)?;
     Ok(())
 }
@@ -717,14 +733,14 @@ fn settle_plain_beside(dir: &Path, store: &SqliteStore) -> Result<bool, StoreErr
         .and_then(|text| serde_json::from_str::<MigrationRecord>(&text).ok());
     let files = PlainFiles::of(&plain)?;
     if record.is_some_and(|record| files.is_recorded(&record)) {
-        set_aside_plain(dir, PRE_ENCRYPTION_SUFFIX)?;
+        set_aside_plain(dir, PRE_ENCRYPTION_SUFFIX, fs_rename)?;
         tracing::info!("plain wallet database set aside after the switch");
         return Ok(false);
     }
     // Before the file moves, so an interrupted open still requires the scan.
     store.write(|repos| repos.put_setting(ROLLBACK_SCAN_SETTING, "true"))?;
     let suffix = format!("{AFTER_ROLLBACK_SUFFIX}{}", unix_seconds(SystemTime::now()));
-    set_aside_plain(dir, &suffix)?;
+    set_aside_plain(dir, &suffix, fs_rename)?;
     tracing::warn!("plain wallet database of an older build set aside; a restore scan is required");
     Ok(true)
 }
@@ -732,15 +748,63 @@ fn settle_plain_beside(dir: &Path, store: &SqliteStore) -> Result<bool, StoreErr
 /// Moves `wallet.sqlite3` and its logs to a free `wallet.sqlite3<suffix>` name: the logs
 /// first, the database last, and `-shm` removed. An interruption leaves a set-aside log without
 /// its database, which [`finish_interrupted_set_aside`] recognises.
-fn set_aside_plain(dir: &Path, suffix: &str) -> Result<(), StoreError> {
+fn set_aside_plain(dir: &Path, suffix: &str, rename: Rename) -> Result<(), StoreError> {
     let plain = dir.join(DATABASE_FILE);
     let aside = free_name(&with_suffix(&plain, suffix))?;
+    move_plain(&plain, &aside, rename)
+}
+
+/// Moves the plain database at `plain` and its logs to `aside`, the logs first, each rename
+/// retried while another program holds the file.
+fn move_plain(plain: &Path, aside: &Path, rename: Rename) -> Result<(), StoreError> {
     for log in MOVED_LOGS {
-        rename_if_present(&with_suffix(&plain, log), &with_suffix(&aside, log))?;
+        let target = with_suffix(aside, log);
+        if !exists(&target)? {
+            rename_if_present(&with_suffix(plain, log), &target, rename)?;
+        }
     }
-    std::fs::rename(&plain, &aside).map_err(io("set the plain database aside"))?;
-    remove_if_present(&with_suffix(&plain, "-shm"))?;
-    cipher::sync_folder(&plain).map_err(io("set the plain database aside"))
+    rename_retrying(plain, aside, rename).map_err(io("set the plain database aside"))?;
+    remove_if_present(&with_suffix(plain, "-shm"))?;
+    cipher::sync_folder(plain).map_err(io("set the plain database aside"))
+}
+
+/// How a file is renamed: [`fs_rename`], or in tests one that fails.
+type Rename = fn(&Path, &Path) -> std::io::Result<()>;
+
+/// Waits between the attempts to rename a file another program holds: an indexer, antivirus or
+/// backup tool on Windows lets go within moments.
+const RENAME_BACKOFF: [Duration; 4] = [
+    Duration::from_millis(20),
+    Duration::from_millis(80),
+    Duration::from_millis(200),
+    Duration::from_millis(500),
+];
+
+/// `rename`, tried again after each wait of [`RENAME_BACKOFF`] unless the file is missing.
+fn rename_retrying(from: &Path, to: &Path, rename: Rename) -> std::io::Result<()> {
+    let mut waits = RENAME_BACKOFF.iter();
+    loop {
+        match rename(from, to) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => match waits.next() {
+                Some(wait) => std::thread::sleep(*wait),
+                None => return Err(error),
+            },
+            done => return done,
+        }
+    }
+}
+
+fn fs_rename(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::rename(from, to)
+}
+
+/// [`std::fs::rename`] while another program holds the plain database: its logs move, the
+/// database itself does not.
+fn held_database_rename(from: &Path, to: &Path) -> std::io::Result<()> {
+    if from.file_name().is_some_and(|name| name == DATABASE_FILE) {
+        return Err(std::io::ErrorKind::PermissionDenied.into());
+    }
+    std::fs::rename(from, to)
 }
 
 /// Completes a set-aside that stopped after moving the logs: a set-aside `-wal` or `-journal`
@@ -755,9 +819,7 @@ fn finish_interrupted_set_aside(dir: &Path) -> Result<bool, StoreError> {
             .iter()
             .any(|log| with_suffix(&aside, log).exists());
         if orphan_log && !exists(&aside)? {
-            std::fs::rename(&plain, &aside).map_err(io("set the plain database aside"))?;
-            remove_if_present(&with_suffix(&plain, "-shm"))?;
-            cipher::sync_folder(&plain).map_err(io("set the plain database aside"))?;
+            move_plain(&plain, &aside, fs_rename)?;
             return Ok(true);
         }
     }
@@ -891,8 +953,8 @@ fn remove_if_present(path: &Path) -> Result<bool, StoreError> {
     }
 }
 
-fn rename_if_present(from: &Path, to: &Path) -> Result<(), StoreError> {
-    match std::fs::rename(from, to) {
+fn rename_if_present(from: &Path, to: &Path, rename: Rename) -> Result<(), StoreError> {
+    match rename_retrying(from, to, rename) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(StoreError::Io {
             operation: "set the plain database aside",
             source: error,
