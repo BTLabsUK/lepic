@@ -8,9 +8,6 @@
 
 use std::sync::{Arc, PoisonError};
 
-use blake2::Blake2bMac;
-use blake2::digest::consts::U32;
-use blake2::digest::{FixedOutput, KeyInit, Update};
 use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};

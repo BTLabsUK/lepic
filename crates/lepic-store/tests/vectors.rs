@@ -5,7 +5,12 @@
 
 // Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
 // treat as test code.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 
 use jiff::Timestamp;
 use lepic_store::{ContextKey, PeerCompat, PeerTag, PeerTagKey, peer_vectors};

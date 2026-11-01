@@ -18,9 +18,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use blake2::Blake2bMac;
-use blake2::digest::consts::U32;
-use blake2::digest::{FixedOutput, KeyInit, Update};
 use jiff::Timestamp;
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::Connector;

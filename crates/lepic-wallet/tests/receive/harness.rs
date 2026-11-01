@@ -15,9 +15,6 @@ use std::sync::Arc;
 use crate::support::{
     FixedClock, TestStore, TestStores, TestVault, complete_restore_scan, fixed_time, password,
 };
-use blake2::Blake2bMac;
-use blake2::digest::consts::U32;
-use blake2::digest::{FixedOutput, KeyInit, Update};
 use lepic_keychain::{Identifier, Seed};
 use lepic_node::mock::{ChainState, MockNode};
 use lepic_node::{NodeClient, NodeVersion, Tip};

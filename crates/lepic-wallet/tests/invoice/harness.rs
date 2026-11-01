@@ -10,9 +10,6 @@ use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use blake2::Blake2bMac;
-use blake2::digest::consts::U32;
-use blake2::digest::{FixedOutput, KeyInit, Update};
 use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_node::mock::MockNode;
 use lepic_node::{NodeClient, Propagation};
@@ -22,7 +19,7 @@ use lepic_primitives::params::Network;
 use lepic_slate::codec::WireSlate;
 use lepic_store::{
     AccountIndex, KeyId, MemoryStore, OutputRecord, OutputStatus, Repositories, StoreError,
-    StoreKeys, WalletStore,
+    WalletStore,
 };
 use lepic_transport::file::{FILE, FilePolicy};
 use lepic_transport::loopback::LoopbackTransport;
