@@ -25,7 +25,7 @@ use crate::store::{Repositories, WalletStore};
 
 pub use self::migrate_encrypted::{
     DATABASE_FILE, ENCRYPTED_DATABASE_FILE, RetireSummary, migration_in_progress,
-    open_existing_wallet_dir, open_wallet_dir, retire_plain_store,
+    open_existing_wallet_dir, open_wallet_dir, remove_set_aside_plain, retire_plain_store,
 };
 use self::repos::SqliteRepos;
 pub use self::schema::SCHEMA_VERSION;

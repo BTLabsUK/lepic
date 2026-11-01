@@ -1497,6 +1497,7 @@ async fn an_open_reports_the_move_of_a_plain_database_to_encryption() {
         retired.deleted,
         vec!["wallet.sqlite3.pre-encryption".to_owned()]
     );
+    assert!(retired.kept.is_empty());
     drop(wallet);
 
     let wallet = fixture.open_with_pin(&store, PIN, &sealed).await.unwrap();

@@ -258,6 +258,16 @@ where
         Ok(self.session()?.at_rest.clone())
     }
 
+    /// The record the open database keeps of the plain database it was copied from
+    /// ([`lepic_store::MIGRATED_FROM_SETTING`]), for [`lepic_store::retire_plain_store`];
+    /// `None` when it was not copied from one. Fails with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub fn migrated_from(&self) -> Result<Option<String>, WalletError> {
+        self.session()?
+            .store
+            .read(|repos| Ok(repos.setting(lepic_store::MIGRATED_FROM_SETTING)?))
+    }
+
     /// The fingerprint of the wallet's seed that its database stores, as lowercase hex; equal
     /// to [`lifecycle::seed_fingerprint`] of its recovery phrase, on any network. It is no
     /// secret, but it identifies the wallet; it never proves a phrase. Fails with

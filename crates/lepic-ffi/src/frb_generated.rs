@@ -11996,8 +11996,10 @@ impl SseDecode for crate::api::at_rest::RetiredPlainStore {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_deleted = <Vec<String>>::sse_decode(deserializer);
+        let mut var_kept = <Vec<String>>::sse_decode(deserializer);
         return crate::api::at_rest::RetiredPlainStore {
             deleted: var_deleted,
+            kept: var_kept,
         };
     }
 }
@@ -15295,7 +15297,11 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::RefreshProgress>
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::at_rest::RetiredPlainStore {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [self.deleted.into_into_dart().into_dart()].into_dart()
+        [
+            self.deleted.into_into_dart().into_dart(),
+            self.kept.into_into_dart().into_dart(),
+        ]
+        .into_dart()
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
@@ -17977,6 +17983,7 @@ impl SseEncode for crate::api::at_rest::RetiredPlainStore {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<String>>::sse_encode(self.deleted, serializer);
+        <Vec<String>>::sse_encode(self.kept, serializer);
     }
 }
 

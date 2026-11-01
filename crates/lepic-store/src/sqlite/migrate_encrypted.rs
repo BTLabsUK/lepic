@@ -882,20 +882,28 @@ fn free_name(path: &Path) -> Result<PathBuf, StoreError> {
     })
 }
 
-/// What [`retire_plain_store`] deleted, by file name.
+/// What [`retire_plain_store`] deleted and kept, by file name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RetireSummary {
     pub deleted: Vec<String>,
+    /// Set-aside plain databases kept because the encrypted database does not record them as
+    /// its source, so they may hold history it does not.
+    pub kept: Vec<String>,
 }
 
-/// Deletes the plain databases set aside in `dir`: every `wallet.sqlite3.pre-encryption`, and
-/// every `wallet.sqlite3.after-rollback-<unix>` set aside more than `older_than` before `now`,
-/// each with its log files. Nothing else. Deletes nothing unless the encrypted database is
-/// there, so a set-aside file is never the last copy of a wallet's history. For the release
-/// after the one that encrypts, called by the app after a successful open of the encrypted
-/// store. Plain deletion: flash storage cannot be overwritten reliably.
+/// Deletes the plain databases set aside in `dir` that the open encrypted database no longer
+/// needs, each with its log files: the `wallet.sqlite3.pre-encryption` file it was copied from,
+/// known by its size and SHA-256 in `migrated_from`, the encrypted database's
+/// [`MIGRATED_FROM_SETTING`]; and every `wallet.sqlite3.after-rollback-<unix>` set aside more
+/// than `older_than` before `now`. A `.pre-encryption` file the record does not match, as when
+/// the encrypted database was rebuilt empty after damage, is kept and listed in
+/// [`RetireSummary::kept`]. Nothing else is deleted, and nothing unless the encrypted database
+/// is there. For the release after the one that encrypts, called by the app after a successful
+/// open of the encrypted store, under the directory's claim. Plain deletion: flash storage
+/// cannot be overwritten reliably.
 pub fn retire_plain_store(
     dir: &Path,
+    migrated_from: Option<&str>,
     older_than: Duration,
     now: SystemTime,
 ) -> Result<RetireSummary, StoreError> {
@@ -903,15 +911,28 @@ pub fn retire_plain_store(
     if !exists(&dir.join(ENCRYPTED_DATABASE_FILE))? {
         return Ok(summary);
     }
+    let record = migrated_from.and_then(|text| serde_json::from_str::<MigrationRecord>(text).ok());
     let cutoff = unix_seconds(now).saturating_sub(older_than.as_secs());
     for base in set_aside_bases(dir)? {
-        let Some(name) = base.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
+        let name = file_name(&base);
         let Some(rest) = name.strip_prefix(DATABASE_FILE) else {
             continue;
         };
+        // A log without its database belongs to a set-aside still in progress.
+        if !exists(&base)? {
+            continue;
+        }
         let retire = if rest.starts_with(PRE_ENCRYPTION_SUFFIX) {
+            let recorded = match &record {
+                Some(record) => digest(&base)?.is_some_and(|(bytes, sha256)| {
+                    bytes == record.bytes && sha256 == record.sha256
+                }),
+                None => false,
+            };
+            if !recorded {
+                summary.kept.push(name);
+                continue;
+            }
             true
         } else if let Some(stamp) = rest.strip_prefix(AFTER_ROLLBACK_SUFFIX) {
             let seconds = stamp.split('-').next().and_then(|text| text.parse().ok());
@@ -919,20 +940,41 @@ pub fn retire_plain_store(
         } else {
             false
         };
-        if !retire {
-            continue;
-        }
-        for suffix in ["", "-wal", "-shm", "-journal"] {
-            let path = with_suffix(&base, suffix);
-            if remove_if_present(&path)? {
-                summary.deleted.push(
-                    path.file_name()
-                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
-                );
-            }
+        if retire {
+            summary.deleted.extend(remove_with_logs(&base)?);
         }
     }
     Ok(summary)
+}
+
+/// Deletes every plain database set aside in `dir`, `.pre-encryption` and `.after-rollback-*`,
+/// with its log files, whatever the encrypted database holds: for the deletion of a wallet,
+/// which leaves no readable history behind. The deleted file names.
+pub fn remove_set_aside_plain(dir: &Path) -> Result<Vec<String>, StoreError> {
+    let mut deleted = Vec::new();
+    for base in set_aside_bases(dir)? {
+        deleted.extend(remove_with_logs(&base)?);
+    }
+    Ok(deleted)
+}
+
+/// Removes a database's log files, then the database: an interruption leaves the database
+/// without its logs, never a log a later open could take for a set-aside in progress. The
+/// names removed.
+fn remove_with_logs(base: &Path) -> Result<Vec<String>, StoreError> {
+    let mut removed = Vec::new();
+    for suffix in ["-wal", "-shm", "-journal", ""] {
+        let path = with_suffix(base, suffix);
+        if remove_if_present(&path)? {
+            removed.push(file_name(&path));
+        }
+    }
+    Ok(removed)
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }
 
 fn copy_files(dir: &Path) -> Vec<PathBuf> {

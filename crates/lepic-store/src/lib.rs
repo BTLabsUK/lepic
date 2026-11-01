@@ -78,7 +78,8 @@ pub use slate::{SlateRepository, SlateStage, StoredSlate};
 #[cfg(feature = "sqlite")]
 pub use sqlite::{
     DATABASE_FILE, ENCRYPTED_DATABASE_FILE, RetireSummary, SCHEMA_VERSION, SqliteStore,
-    migration_in_progress, open_existing_wallet_dir, open_wallet_dir, retire_plain_store,
+    migration_in_progress, open_existing_wallet_dir, open_wallet_dir, remove_set_aside_plain,
+    retire_plain_store,
 };
 pub use store::{Repositories, WalletStore};
 pub use transaction::{

@@ -84,10 +84,14 @@ impl From<lepic_store::MigrationProgress> for StoreMigrationProgress {
     }
 }
 
-/// [`EpicWallet::retire_plain_store`]: the file names deleted from the data directory.
+/// [`EpicWallet::retire_plain_store`]: the file names deleted from the data directory, and
+/// those kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetiredPlainStore {
     pub deleted: Vec<String>,
+    /// `wallet.sqlite3.pre-encryption` files kept because the encrypted database was not copied
+    /// from them (as one rebuilt empty after damage), so they may hold history it does not.
+    pub kept: Vec<String>,
 }
 
 impl LepicRuntime {
@@ -111,9 +115,10 @@ impl EpicWallet {
     }
 
     /// Deletes the plain copies of the database kept in the data directory after the move to
-    /// encryption: every `wallet.sqlite3.pre-encryption` file, and every
-    /// `wallet.sqlite3.after-rollback-<unix>` file older than `older_than_days`, each with its
-    /// log files. Nothing else. For the release after the one that encrypts; the app decides
+    /// encryption: the `wallet.sqlite3.pre-encryption` file the encrypted database was copied
+    /// from, which it records, and every `wallet.sqlite3.after-rollback-<unix>` file older than
+    /// `older_than_days`, each with its log files. A `.pre-encryption` file it does not record
+    /// is kept and listed in `kept`. Nothing else. For the release after the one that encrypts; the app decides
     /// when. Deletes nothing while the session runs on the plain database. Fails with `Locked`
     /// and `Io`.
     pub async fn retire_plain_store(

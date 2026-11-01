@@ -525,6 +525,23 @@ fn a_phrase_check_reads_a_plain_database_through_a_throwaway_copy() {
     assert_eq!(files(empty.path()).len(), 0);
 }
 
+/// The record of a plain database of `bytes`, as the copy stores it.
+fn record_of(bytes: &[u8]) -> String {
+    serde_json::to_string(&MigrationRecord {
+        schema: PLAIN_SCHEMA,
+        user_version: 0,
+        bytes: u64::try_from(bytes.len()).unwrap(),
+        sha256: Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+        wal_sha256: None,
+        rows: BTreeMap::new(),
+        at: 0,
+    })
+    .unwrap()
+}
+
 #[test]
 fn retire_deletes_only_the_set_aside_plain_files() {
     let dir = tempfile::tempdir().unwrap();
@@ -535,10 +552,11 @@ fn retire_deletes_only_the_set_aside_plain_files() {
     for name in [
         "wallet.sqlite3.pre-encryption".to_owned(),
         "wallet.sqlite3.pre-encryption-wal".to_owned(),
-        "wallet.sqlite3.pre-encryption-1".to_owned(),
         format!("wallet.sqlite3.after-rollback-{old}"),
         format!("wallet.sqlite3.after-rollback-{old}-wal"),
         format!("wallet.sqlite3.after-rollback-{recent}"),
+        // A log whose database is still being set aside.
+        format!("wallet.sqlite3.after-rollback-{}-wal", old - 1),
         "wallet.sqlite3.damaged-1".to_owned(),
         "wallet.sqlite3".to_owned(),
         "wallet.enc.sqlite3.check".to_owned(),
@@ -546,12 +564,27 @@ fn retire_deletes_only_the_set_aside_plain_files() {
     ] {
         std::fs::write(dir.path().join(name), b"x").unwrap();
     }
+    // Another plain database set aside, which the encrypted one was not copied from.
+    std::fs::write(dir.path().join("wallet.sqlite3.pre-encryption-1"), b"y").unwrap();
+    let record = record_of(b"x");
     // Without the encrypted database nothing goes.
-    let summary = retire_plain_store(dir.path(), Duration::from_secs(30 * day), now).unwrap();
+    let summary = retire_plain_store(
+        dir.path(),
+        Some(&record),
+        Duration::from_secs(30 * day),
+        now,
+    )
+    .unwrap();
     assert!(summary.deleted.is_empty());
 
     std::fs::write(dir.path().join(ENCRYPTED_DATABASE_FILE), b"x").unwrap();
-    let mut summary = retire_plain_store(dir.path(), Duration::from_secs(30 * day), now).unwrap();
+    let mut summary = retire_plain_store(
+        dir.path(),
+        Some(&record),
+        Duration::from_secs(30 * day),
+        now,
+    )
+    .unwrap();
     summary.deleted.sort();
     assert_eq!(
         summary.deleted,
@@ -559,9 +592,12 @@ fn retire_deletes_only_the_set_aside_plain_files() {
             format!("wallet.sqlite3.after-rollback-{old}"),
             format!("wallet.sqlite3.after-rollback-{old}-wal"),
             "wallet.sqlite3.pre-encryption".to_owned(),
-            "wallet.sqlite3.pre-encryption-1".to_owned(),
             "wallet.sqlite3.pre-encryption-wal".to_owned(),
         ]
+    );
+    assert_eq!(
+        summary.kept,
+        vec!["wallet.sqlite3.pre-encryption-1".to_owned()]
     );
     let left: Vec<String> = files(dir.path()).into_keys().collect();
     assert_eq!(
@@ -570,11 +606,68 @@ fn retire_deletes_only_the_set_aside_plain_files() {
             "wallet.enc.sqlite3".to_owned(),
             "wallet.enc.sqlite3.check".to_owned(),
             "wallet.sqlite3".to_owned(),
+            format!("wallet.sqlite3.after-rollback-{}-wal", old - 1),
             format!("wallet.sqlite3.after-rollback-{recent}"),
             "wallet.sqlite3.damaged-1".to_owned(),
+            "wallet.sqlite3.pre-encryption-1".to_owned(),
             "wfe_meta.json".to_owned(),
         ]
     );
+}
+
+/// An encrypted database rebuilt empty after damage does not hold the plain history: the
+/// `.pre-encryption` file it was not copied from is the last readable copy and stays.
+#[test]
+fn retire_keeps_a_plain_copy_the_encrypted_database_does_not_record() {
+    let dir = tempfile::tempdir().unwrap();
+    plain_database(dir.path(), 0);
+    let (store, _) = open_wallet_dir(dir.path(), keys(), &key(), None).unwrap();
+    let record = store
+        .read(|repos| repos.setting(MIGRATED_FROM_SETTING))
+        .unwrap();
+    assert!(record.is_some());
+    drop(store);
+    let aside = format!("{DATABASE_FILE}{PRE_ENCRYPTION_SUFFIX}");
+
+    for migrated_from in [None, Some(record_of(b"another database").as_str())] {
+        let summary =
+            retire_plain_store(dir.path(), migrated_from, Duration::ZERO, SystemTime::now())
+                .unwrap();
+        assert!(summary.deleted.is_empty(), "{summary:?}");
+        assert_eq!(summary.kept, vec![aside.clone()]);
+        assert!(dir.path().join(&aside).exists());
+    }
+
+    let summary = retire_plain_store(
+        dir.path(),
+        record.as_deref(),
+        Duration::ZERO,
+        SystemTime::now(),
+    )
+    .unwrap();
+    assert!(summary.deleted.contains(&aside), "{summary:?}");
+    assert!(summary.kept.is_empty());
+    assert!(!dir.path().join(&aside).exists());
+}
+
+/// The deletion of a wallet takes every set-aside plain database, recorded or not.
+#[test]
+fn remove_set_aside_plain_takes_every_plain_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in [
+        "wallet.sqlite3.pre-encryption",
+        "wallet.sqlite3.pre-encryption-wal",
+        "wallet.sqlite3.pre-encryption-1",
+        "wallet.sqlite3.after-rollback-5",
+        "wallet.enc.sqlite3",
+    ] {
+        std::fs::write(dir.path().join(name), b"x").unwrap();
+    }
+    let mut deleted = remove_set_aside_plain(dir.path()).unwrap();
+    deleted.sort();
+    assert_eq!(deleted.len(), 4, "{deleted:?}");
+    let left: Vec<String> = files(dir.path()).into_keys().collect();
+    assert_eq!(left, vec!["wallet.enc.sqlite3".to_owned()]);
 }
 
 #[test]

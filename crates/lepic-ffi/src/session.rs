@@ -1207,13 +1207,20 @@ impl Session {
         if self.store_at_rest()?.state == StoreAtRestState::FellBackToPlain {
             return Ok(RetiredPlainStore {
                 deleted: Vec::new(),
+                kept: Vec::new(),
             });
         }
+        let migrated_from = self.engine.migrated_from()?;
         let dir = self.data_dir.clone();
         let older_than =
             std::time::Duration::from_secs(u64::from(older_than_days).saturating_mul(86_400));
         let summary = tokio::task::spawn_blocking(move || {
-            lepic_store::retire_plain_store(&dir, older_than, std::time::SystemTime::now())
+            lepic_store::retire_plain_store(
+                &dir,
+                migrated_from.as_deref(),
+                older_than,
+                std::time::SystemTime::now(),
+            )
         })
         .await
         .map_err(|_| WalletError::new(WalletErrorKind::Panic, "retirement failed inside lepic"))?
@@ -1224,8 +1231,15 @@ impl Session {
                 "plain database copies deleted"
             );
         }
+        if !summary.kept.is_empty() {
+            info!(
+                files = summary.kept.len(),
+                "plain database copies kept: the encrypted database does not record them"
+            );
+        }
         Ok(RetiredPlainStore {
             deleted: summary.deleted,
+            kept: summary.kept,
         })
     }
 
@@ -2481,27 +2495,19 @@ async fn remove_database(data_dir: &Path) -> Result<(), WalletError> {
     Ok(())
 }
 
-/// Removes the plain copies of the database set aside by the move to encryption, before the
-/// encrypted database itself goes: [`lepic_store::retire_plain_store`] deletes them only while
-/// that is there. A deleted wallet leaves no readable history behind.
+/// Removes every plain copy of the database set aside by the move to encryption, whatever the
+/// encrypted database records. A deleted wallet leaves no readable history behind.
 async fn remove_set_aside_databases(data_dir: &Path) -> Result<(), WalletError> {
     let dir = data_dir.to_owned();
-    tokio::task::spawn_blocking(move || {
-        // Every after-rollback file is older than a minute from now.
-        let now = std::time::SystemTime::now();
-        let later = now
-            .checked_add(std::time::Duration::from_secs(60))
-            .unwrap_or(now);
-        lepic_store::retire_plain_store(&dir, std::time::Duration::ZERO, later)
-    })
-    .await
-    .map_err(|_| {
-        WalletError::new(
-            WalletErrorKind::Panic,
-            "database removal failed inside lepic",
-        )
-    })?
-    .map_err(|error| WalletError::new(WalletErrorKind::Io, error.to_string()))?;
+    tokio::task::spawn_blocking(move || lepic_store::remove_set_aside_plain(&dir))
+        .await
+        .map_err(|_| {
+            WalletError::new(
+                WalletErrorKind::Panic,
+                "database removal failed inside lepic",
+            )
+        })?
+        .map_err(|error| WalletError::new(WalletErrorKind::Io, error.to_string()))?;
     Ok(())
 }
 
