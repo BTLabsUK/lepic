@@ -203,10 +203,11 @@ depends on it arriving.
   - Sending. Every plain notice to a payments address (`posted`, `cancelled`, `withdrawn`,
     `declined`) needs the key LEPIC with a marked message in the last 30 days, and the
     exchange's own incoming slate marked: the S2 or I2 just finalized for `posted`, the send's
-    latest S2 for `cancelled` (the new column `tx_marks.answer_marked`), the I2 being answered
-    for `withdrawn`. A `withdrawn` at the cancel, before any payment came, and a `declined` go
-    only to a paired contact's mailbox, which only LEPIC reads. Sealed notices to mailboxes are
-    unchanged.
+    latest S2 for `cancelled` (the new column `tx_marks.answer_marked`), the parked I1 for
+    `declined`. For `withdrawn` the exchange is the I1 this wallet issued over Epicbox, which
+    always carries the marker, to an invoice address, which no stock wallet reads; an I2 that
+    answers it unmarked is recorded first and turns the key Epic. Sealed notices to mailboxes
+    are unchanged.
   - Twins. Two installs on one phrase, one LEPIC and one not, flip the key as either answers;
     each flip is right for the moment it describes. A notice the LEPIC twin acknowledges was
     still handed to the other socket first and counts toward its rounds; the per-exchange rule

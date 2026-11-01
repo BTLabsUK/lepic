@@ -285,7 +285,8 @@ ADR 0016 has the reasons; this is the format and who sends what.
   from the sender of an ordinary payment to its receiver, from the payments address, after the
   sender pushed it.
 - Sent to a payments address only when the exchange's own incoming slate came marked (the S2 or
-  I2 just finalized, the send's latest S2 for `cancelled`, the parked I1 for `declined`) and the
+  I2 just finalized, the send's latest S2 for `cancelled`, the parked I1 for `declined`; for
+  `withdrawn`, the marked I1 this wallet issued to an invoice address) and the
   key is LEPIC lately: its last marked message (a marked I1 parked, I2 finalized, which also
   counts for the key the invoice went to, S1 answered, S2 from the key its send went to, or an
   accepted notice) is newer than its last unmarked slate or bounced I1, and at most 30 days

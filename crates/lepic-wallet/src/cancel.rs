@@ -136,7 +136,7 @@ where
             for change in changes {
                 self.emit(change.into());
             }
-            let _ = self.notify_withdrawn(tx_id, false).await;
+            let _ = self.notify_withdrawn(tx_id).await;
             let _ = self.notify_cancelled(tx_id, true).await;
         }
         Ok(())

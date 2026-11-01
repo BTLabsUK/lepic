@@ -239,10 +239,8 @@ fn the_payer_receives_posted_with_the_kernel_excess() {
     assert_eq!(state, TxState::Sent);
 }
 
-/// No slate of this invoice came back from the payer, so nothing shows that a LEPIC wallet
-/// reads that address now: the withdrawal goes nowhere, and the parked invoice expires.
 #[test]
-fn an_unpaid_payer_is_not_sent_withdrawn_for_a_cancelled_invoice() {
+fn an_unpaid_payer_receives_withdrawn_for_a_cancelled_invoice() {
     let world = World::new();
     world.settle_one_invoice();
     let issued = world.issue(None);
@@ -255,13 +253,25 @@ fn an_unpaid_payer_is_not_sent_withdrawn_for_a_cancelled_invoice() {
         .unwrap();
     let summary = world.drain_payer_invoices();
 
-    assert_eq!(summary, InboxSummary::default());
-    assert!(notice_events(&mut payer_events).is_empty());
+    assert_eq!(
+        summary,
+        InboxSummary {
+            notices: 1,
+            ..InboxSummary::default()
+        }
+    );
+    assert_eq!(
+        notice_events(&mut payer_events),
+        vec![Event::InvoiceWithdrawn(WithdrawnInvoice {
+            slate_id: issued.slate_id,
+            tx_id: None,
+        })]
+    );
     assert!(
         world
             .payer
             .read(|repos| repos.pending_invoice(uuid(issued.slate_id)))
-            .is_some()
+            .is_none()
     );
 }
 
@@ -282,10 +292,6 @@ fn a_withdrawn_paid_invoice_raises_an_event_and_moves_nothing() {
     world
         .block_on(world.issuer.wallet.cancel(issued.tx_id))
         .unwrap();
-    // Nothing goes at the cancel: the payment has not reached the issuer yet. Its marked
-    // payment, once taken, is answered with the withdrawal.
-    assert_eq!(world.drain_payer_invoices().notices, 0);
-    assert_eq!(world.drain_issuer().rejected, 1);
     let summary = world.drain_payer_invoices();
 
     assert_eq!(summary.notices, 1);
@@ -671,10 +677,8 @@ fn a_decline_after_the_invoice_was_finalized_raises_no_event() {
     assert_eq!(state, TxState::Posted);
 }
 
-/// A notice is no slate of the exchange: a peer whose only message in it was a notice is not
-/// sent `withdrawn` at the cancel.
 #[test]
-fn a_peer_proven_only_by_its_notice_is_not_sent_withdrawn() {
+fn a_peer_proven_by_its_notice_is_sent_withdrawn() {
     let world = World::new();
     let peer = world.peer_client(9);
     let issued = world.issue_to(peer.address(), None);
@@ -691,7 +695,15 @@ fn a_peer_proven_only_by_its_notice_is_not_sent_withdrawn() {
         .block_on(world.issuer.wallet.cancel(issued.tx_id))
         .unwrap();
 
-    assert!(world.drain_peer(&peer).is_empty());
+    let received = world.drain_peer(&peer);
+    assert_eq!(received.len(), 1);
+    assert_eq!(
+        classify_text(&received[0]),
+        Payload::Notice(Notice {
+            slate_id: issued.slate_id,
+            kind: NoticeKind::Withdrawn,
+        })
+    );
 }
 
 #[test]

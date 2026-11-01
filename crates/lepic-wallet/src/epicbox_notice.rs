@@ -682,13 +682,9 @@ where
     }
 
     /// Tells the payer that the cancelled invoice `tx_id` is withdrawn, when it was one issued
-    /// over Epicbox, and records that it was told. Over Epicbox only in answer to a payment
-    /// that came `answer_marked`. Fails with why such a notice was not delivered.
-    pub(crate) async fn notify_withdrawn(
-        &self,
-        tx_id: TxId,
-        answer_marked: bool,
-    ) -> Result<(), Hold> {
+    /// over Epicbox, and records that it was told. Fails with why such a notice was not
+    /// delivered.
+    pub(crate) async fn notify_withdrawn(&self, tx_id: TxId) -> Result<(), Hold> {
         let target = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
@@ -710,7 +706,10 @@ where
             slate_id,
             kind: NoticeKind::Withdrawn,
         };
-        self.send_notice(None, &to, notice, answer_marked).await?;
+        // The exchange is the invoice this wallet issued over Epicbox, which carried the marker,
+        // to an address the payer derived for invoices, which no stock wallet reads; a payment
+        // answering it unmarked records its key first, so the rule on the key still holds.
+        self.send_notice(None, &to, notice, true).await?;
         let recorded = self
             .inbox_write(move |repos, _| {
                 let mut marks = repos.tx_marks(tx_id)?;
@@ -752,7 +751,7 @@ where
                 return Err(error.into());
             }
         }
-        self.notify_withdrawn(tx_id, true).await
+        self.notify_withdrawn(tx_id).await
     }
 
     /// Tells the receiver of the cancelled send `tx_id` that it is cancelled, when it is an
