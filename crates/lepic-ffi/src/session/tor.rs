@@ -917,8 +917,14 @@ async fn shut_down(run: TorRun, down: watch::Sender<bool>) {
         listener.shutdown().await;
     }
     info!(transport = "tor", "tor stopped");
-    down.send_replace(true);
-    report(TorEvent::of(TorEventKind::Stopped));
+    // `Stopped` is reported while the slot is still `Stopping`, and the slot is free as soon
+    // as it is: whoever reads `down` waits for the report, so a start waiting for this tor
+    // goes on only after the app has its `Stopped`, and an app that has it finds no tor in
+    // the slot. The report only hands the event on; it must not call into the session.
+    down.send_modify(|down| {
+        report(TorEvent::of(TorEventKind::Stopped));
+        *down = true;
+    });
 }
 
 /// Where the onion forwards to: the listener's Unix socket, else its loopback port.
