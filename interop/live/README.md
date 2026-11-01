@@ -43,7 +43,7 @@ The public node allows 20 reads and 2 writes per second. The proxy sends at most
 and one write (`push_transaction`, `finalize_block_template`, `submit_block`) every 2 seconds, for
 `lepic`, both `epic-wallet` wallets and the miner, and counts every request it sends upstream in
 `../.work/live/proxy/calls.json`, kept across restarts of the proxy. The miner leaves 2 seconds between its own requests. `run.sh`
-polls wallets every 15 seconds (`LIVE_POLL_INTERVAL`) and spaces its own GETs (tip, kernel lookups) at
+polls wallets every 15 seconds (`LIVE_POLL_INTERVAL`) and spaces its own foreign API reads (`get_tip`, `get_kernel`) at
 least 5 seconds apart. The run ends by printing one total of public node calls, the proxy's and its
 own, and the number of 429 answers. The proxy, the miner and `run.sh`
 retry a 429 answer

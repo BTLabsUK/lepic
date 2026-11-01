@@ -22,19 +22,24 @@ poll_until() {
     done
 }
 
-# GET on the public node's read-only v1 API. Calls are at least PUBLIC_MIN_GAP seconds apart and
-# each is recorded in PUBLIC_LOG (set by run.sh), which also carries the spacing across the
-# subshells that command substitution creates. A 429 answer is retried after a growing pause.
+# A read on the public node's foreign API, the one part of its API it serves without a secret.
+# Calls are at least PUBLIC_MIN_GAP seconds apart and each is recorded in PUBLIC_LOG (set by
+# run.sh), which also carries the spacing across the subshells that command substitution
+# creates. A 429 answer is retried after a growing pause. $1 is the method, $2 its params.
 PUBLIC_MIN_GAP=5
 
 public_get() {
-    local last wait attempt=1 pause=10 status
+    local last wait attempt=1 pause=10 status body
+    body="$(jq -cn --arg method "$1" --argjson params "${2:-[]}" \
+        '{jsonrpc: "2.0", id: 1, method: $method, params: $params}')"
     while :; do
         last="$(tail -n 1 "${PUBLIC_LOG}" 2>/dev/null | cut -d' ' -f1)"
         wait=$((${last:-0} + PUBLIC_MIN_GAP - $(date +%s)))
         if ((wait > 0)); then sleep "${wait}"; fi
-        echo "$(date +%s) GET $1" >>"${PUBLIC_LOG}"
-        status="$(curl -sS -m 20 -o "${PUBLIC_LOG}.body" -w '%{http_code}' "${LIVE_NODE_URL}$1" 2>>"${RUN_LOG}")" || status=000
+        echo "$(date +%s) POST $1" >>"${PUBLIC_LOG}"
+        status="$(curl -sS -m 20 -o "${PUBLIC_LOG}.body" -w '%{http_code}' \
+            -H 'Content-Type: application/json' -d "${body}" \
+            "${LIVE_NODE_URL}/v2/foreign" 2>>"${RUN_LOG}")" || status=000
         if [[ "${status}" == 429 && attempt -lt 6 ]]; then
             log "public node rate limited ${1}; retrying in ${pause}s"
             sleep "${pause}"
@@ -42,7 +47,7 @@ public_get() {
             attempt=$((attempt + 1))
             continue
         fi
-        [[ "${status}" == 200 ]] || { printf 'GET %s: HTTP %s\n' "$1" "${status}" >>"${RUN_LOG}"; return 1; }
+        [[ "${status}" == 200 ]] || { printf 'POST %s: HTTP %s\n' "$1" "${status}" >>"${RUN_LOG}"; return 1; }
         cat "${PUBLIC_LOG}.body"
         return 0
     done
@@ -50,10 +55,13 @@ public_get() {
 
 public_calls() { wc -l <"${PUBLIC_LOG}" 2>/dev/null || echo 0; }
 
-public_height() { public_get /v1/chain | jq -r .height; }
+public_height() { public_get get_tip | jq -r '.result.Ok.height'; }
 
 # Height of the block holding a kernel, as the public node reports it.
-public_kernel_height() { public_get "/v1/chain/kernels/$1" | jq -r '.height // empty'; }
+public_kernel_height() {
+    public_get get_kernel "$(jq -cn --arg excess "$1" '[$excess, null, null]')" |
+        jq -r '.result.Ok.height // empty'
+}
 
 public_has_kernel() { [[ -n "$(public_kernel_height "$1")" ]]; }
 
