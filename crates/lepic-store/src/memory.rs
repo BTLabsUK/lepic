@@ -49,6 +49,7 @@ struct State {
     transactions: BTreeMap<TxId, TransactionEntry>,
     confirmed_heights: BTreeMap<TxId, Height>,
     counterparties: BTreeMap<TxId, String>,
+    receive_listings: BTreeMap<TxId, crate::transaction::ReceiveListing>,
     slates: BTreeMap<SlateKey, StoredSlate>,
     contexts: BTreeMap<([u8; 16], ParticipantId), Vec<u8>>,
     inbox: BTreeMap<String, InboxEntry>,
@@ -403,6 +404,25 @@ impl TransactionRepository for MemoryRepos<'_> {
 
     fn counterparty(&self, id: TxId) -> Result<Option<String>, StoreError> {
         Ok(self.state.counterparties.get(&id).cloned())
+    }
+
+    fn set_receive_listing(
+        &mut self,
+        id: TxId,
+        listing: &crate::transaction::ReceiveListing,
+    ) -> Result<(), StoreError> {
+        if !self.state.transactions.contains_key(&id) {
+            return Err(StoreError::UnknownTransaction(id));
+        }
+        self.state.receive_listings.insert(id, *listing);
+        Ok(())
+    }
+
+    fn receive_listing(
+        &self,
+        id: TxId,
+    ) -> Result<Option<crate::transaction::ReceiveListing>, StoreError> {
+        Ok(self.state.receive_listings.get(&id).copied())
     }
 
     fn open_receipts(&self, transport: &str) -> Result<Vec<OpenReceipt>, StoreError> {

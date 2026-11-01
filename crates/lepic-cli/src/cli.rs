@@ -503,15 +503,31 @@ Payments of invoices you issued are finalized and posted as they arrive. Every f
 and once at the start, invoices left unpaid for invoice_expiry_hours are expired.")]
     Listen,
     /// Handle every pending slate once, then disconnect
-    Drain,
+    #[command(after_help = "\
+With --listing, the slates waiting at that listing address are handled instead, on a connection
+of their own: payments are answered from the listing address and recorded with the listing, a
+payment that asks for a payment proof is refused, and the wallet's own address is not touched.")]
+    Drain(ListingArgs),
     /// Show the relay, the address and the deliveries still pending
-    Status,
+    Status(ListingArgs),
     /// Show whether a peer is known to pay invoices
     #[command(after_help = "\
 What this wallet learned from the peer's own messages over Epicbox, matched on the key: lepic
 while its last payment or notice carried the LEPIC marker, no_invoices once a slate came
 without it or an invoice came back unpaid, unknown before either. Nothing is sent.")]
     Peer(PeerArgs),
+}
+
+/// A listing address of this wallet, for a directory.
+#[derive(Debug, Args)]
+pub struct ListingArgs {
+    /// The directory key of a listing, a compressed secp256k1 key in hex: act on that listing's
+    /// address instead of the wallet's own
+    #[arg(long, value_name = "DKEY")]
+    pub listing: Option<String>,
+    /// The generation of the listing, raised after each leave
+    #[arg(long, default_value_t = 0, requires = "listing")]
+    pub generation: u32,
 }
 
 #[derive(Debug, Args)]

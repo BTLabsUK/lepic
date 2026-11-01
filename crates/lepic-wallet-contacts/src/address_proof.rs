@@ -96,22 +96,31 @@ pub(crate) enum ProofError {
     Derivation,
 }
 
-/// The MAC key for the shared point of `secret` and `public`.
+/// The MAC over `binding` keyed for the shared point of `secret` and `public`.
 fn mac(
     secret: &SecretKey,
     public: &PublicKey,
     binding: &ProofBinding<'_>,
+) -> Result<Hmac<Sha256>, ProofError> {
+    mac_over(secret, public, &binding.info(), &binding.message())
+}
+
+fn mac_over(
+    secret: &SecretKey,
+    public: &PublicKey,
+    info: &[u8],
+    message: &[u8],
 ) -> Result<Hmac<Sha256>, ProofError> {
     let shared = public
         .shared_secret(secret)
         .map_err(|_| ProofError::Derivation)?;
     let hkdf = Hkdf::<Sha256>::new(Some(ADDRESS_PROOF_SALT), shared.expose_bytes());
     let mut key = Zeroizing::new([0u8; 32]);
-    hkdf.expand(&binding.info(), key.as_mut())
+    hkdf.expand(info, key.as_mut())
         .map_err(|_| ProofError::Derivation)?;
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key.as_ref())
         .map_err(|_| ProofError::Derivation)?;
-    mac.update(&binding.message());
+    mac.update(message);
     Ok(mac)
 }
 
@@ -355,7 +364,12 @@ pub(crate) fn queue_address_cards(
 #[cfg(test)]
 mod tests {
     // Tests may unwrap and panic (docs/rules.md).
-    #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::panic,
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects
+    )]
 
     use lepic_contact::{
         Capabilities, CardFields, ContactKind, ContactName, EncSecretKey, HintKey, SigningKey,
@@ -451,6 +465,66 @@ mod tests {
         fn checks(&self, binding: &ProofBinding<'_>, proof: &[u8; 32]) -> bool {
             proven(&self.verifier_box, Network::Floonet, binding, Some(proof)).is_some()
         }
+    }
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// `testdata/vectors/keys/address_proofs.json`, written by the conformance generator from
+    /// the construction with `ring` and the node's secp256k1: the tag of each step, made from
+    /// either side of the pairing.
+    #[test]
+    fn address_proofs_match_the_vector() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/keys/address_proofs.json"
+        ))
+        .unwrap();
+        let text = |value: &serde_json::Value| value.as_str().unwrap().to_owned();
+        let key =
+            |name: &str| SecretKey::from_bytes(&unhex(&text(&vector["inputs"][name]))).unwrap();
+        let (prover, verifier) = (key("prover_address_secret"), key("verifier_mailbox_secret"));
+        let inputs = vector["inputs"]["cases"].as_array().unwrap();
+        let expected = vector["expected"]["cases"].as_array().unwrap();
+        assert_eq!(inputs.len(), 3);
+        for (input, expected) in inputs.iter().zip(expected) {
+            let network = u8::try_from(input["network"].as_u64().unwrap()).unwrap();
+            let step = u8::try_from(input["step"].as_u64().unwrap()).unwrap();
+            let info = [b'm', b'a', b'c', network, step];
+            let invite = text(&input["invite"]);
+            let parts = [
+                unhex(&text(&input["prover_card_digest"])),
+                unhex(&text(&input["verifier_card_digest"])),
+                if invite.is_empty() {
+                    Vec::new()
+                } else {
+                    Sha256::digest(unhex(&invite)).to_vec()
+                },
+            ];
+            let mut message = [0u8; 96];
+            for (slot, part) in message.chunks_mut(32).zip(&parts) {
+                if part.len() == 32 {
+                    slot.copy_from_slice(part);
+                }
+            }
+            let tag = unhex(&text(&expected["tag"]));
+            for (secret, other) in [(&prover, &verifier), (&verifier, &prover)] {
+                let mac = mac_over(secret, &public(other), &info, &message).unwrap();
+                assert_eq!(mac.finalize().into_bytes().as_slice(), tag.as_slice());
+            }
+        }
+        // The step and network bytes are the ones this module writes.
+        assert_eq!(
+            [ProofStep::Reply, ProofStep::Confirm, ProofStep::Update].map(ProofStep::byte),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            [ContactNetwork::Mainnet, ContactNetwork::Floonet].map(ContactNetwork::byte),
+            [0, 1]
+        );
     }
 
     #[test]

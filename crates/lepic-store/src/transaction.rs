@@ -84,6 +84,15 @@ pub struct TransactionEntry {
     pub updated_at: Timestamp,
 }
 
+/// The listing a payment came in on: the directory key the listing is for and its generation.
+/// Absent for a payment to the payments address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReceiveListing {
+    /// A compressed secp256k1 key.
+    pub dkey: [u8; 33],
+    pub generation: u32,
+}
+
 /// A payment received over a transport and answered with S2, which the sender has not yet
 /// finalized: an incoming entry in state `received` with a stored S2.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +146,14 @@ pub trait TransactionRepository {
     /// `None` when no address was recorded, as for a file exchange or an entry stored before
     /// addresses were.
     fn counterparty(&self, id: TxId) -> Result<Option<String>, StoreError>;
+
+    /// Records the listing a received payment came in on. Updating the entry keeps it. Fails
+    /// with [`StoreError::UnknownTransaction`] when no entry has the id.
+    fn set_receive_listing(&mut self, id: TxId, listing: &ReceiveListing)
+    -> Result<(), StoreError>;
+
+    /// `None` for a payment to the payments address, and for every entry but a receive.
+    fn receive_listing(&self, id: TxId) -> Result<Option<ReceiveListing>, StoreError>;
 
     /// The open receipts that arrived over `transport`, oldest first. Issued invoices, which
     /// are incoming entries in state `received` too, have no S2 and are not listed.

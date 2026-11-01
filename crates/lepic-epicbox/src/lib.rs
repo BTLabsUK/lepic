@@ -23,7 +23,9 @@ pub use address::{
     AddressError, DEFAULT_PORT, Domain, EpicboxAddress, MAX_ADDRESS_LEN, MAX_DOMAIN_LEN, Network,
 };
 pub use address_signature::{
-    address_message_verifies, key_message_verifies, sign_address_message, verify_address_message,
+    MAX_SERVICE_DOMAIN_LEN, ServiceDomain, ServiceDomainError, address_message_verifies,
+    key_message_verifies, listing_message_verifies, listing_message_verifies_hex,
+    sign_address_message, sign_listing_message, verify_address_message,
 };
 pub use client::{
     Awaiting, Backoff, ClientError, ClientSettings, ClientTimings, EpicboxClient, Identity,

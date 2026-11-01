@@ -266,7 +266,8 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         | WalletError::OnChain(_)
         | WalletError::InPool(_)
         | WalletError::NotReleasable { .. }
-        | WalletError::ChangedDuringCancel(_) => ErrorKind::Rejected,
+        | WalletError::ChangedDuringCancel(_)
+        | WalletError::InvalidListing => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }

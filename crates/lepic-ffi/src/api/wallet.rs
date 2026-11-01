@@ -56,15 +56,20 @@ pub fn validate_epicbox_address(address: String, chain: Chain) -> bool {
     })
 }
 
-/// True when `signature`, hex as [`EpicWallet::sign_with_address_key`] returns it, is that
-/// call's signature of `message` by the wallet whose Epicbox address has the key `public_key`.
-/// `public_key` is written as in the address, with or without `@<relay>`, on either chain. A
-/// signature made for a relay or any other text never passes. False for anything malformed and
-/// for a `message` over 64 KiB.
+/// True when `signature`, DER hex as [`EpicWallet::sign_with_address_key_at`] returns it, is
+/// that call's signature of `message` for `domain` by the listing address whose key is
+/// `public_key`, written as in an Epicbox address, with or without `@<relay>`, on either chain.
+/// A signature for another domain, by another key, or made for a relay or any other use never
+/// passes. Needs no wallet. False for anything malformed and for a `message` over 64 KiB.
 #[frb(sync)]
-pub fn verify_address_signature(public_key: String, message: Vec<u8>, signature: String) -> bool {
-    guard_or("verify_address_signature", false, || {
-        session::verify_address_signature(&public_key, &message, &signature)
+pub fn verify_address_signature_at(
+    public_key: String,
+    domain: String,
+    message: Vec<u8>,
+    signature: String,
+) -> bool {
+    guard_or("verify_address_signature_at", false, || {
+        session::verify_address_signature_at(&public_key, &domain, &message, &signature)
     })
 }
 
@@ -1325,15 +1330,82 @@ impl EpicWallet {
         .await
     }
 
-    /// Signs `message` with this wallet's Epicbox address key and returns the DER signature in
-    /// hex. Another wallet that holds the same recovery phrase makes the same signature, and
-    /// [`verify_address_signature`] checks it against the key in [`EpicWallet::epicbox_address`],
-    /// so two devices can prove they hold one wallet. The digest is tagged so that no text the
-    /// key signs for a relay can ever equal it. Needs no relay. Fails
-    /// with `InvalidArgument` for a `message` over 64 KiB.
-    pub async fn sign_with_address_key(&self, message: Vec<u8>) -> Result<String, WalletError> {
-        self.run("sign_with_address_key", |session| async move {
-            session.address_signature(&message)
+    /// The Epicbox address `<key>@<relay>[:port]` of this wallet's listing with the directory
+    /// whose key is `dkey` (a compressed secp256k1 key, 66 hex digits), generation
+    /// `generation`, on the wallet's relay. Its key comes from the phrase alone, so every
+    /// install of the phrase and a restore give the same address; raise `generation` after a
+    /// leave for a new one. Needs no relay. Fails with `InvalidArgument` for another `dkey`
+    /// and with `Unsupported` when the configuration names no relay.
+    pub async fn epicbox_address_at(
+        &self,
+        dkey: String,
+        generation: u32,
+    ) -> Result<String, WalletError> {
+        self.run("epicbox_address_at", |session| async move {
+            session.epicbox_address_at(&dkey, generation)
+        })
+        .await
+    }
+
+    /// Takes what waits at the listing address of [`EpicWallet::epicbox_address_at`], on its
+    /// own relay connection, as [`EpicWallet::drain_epicbox`] does for the payments address,
+    /// which stays undisturbed. A payment is received, answered from the listing address, and
+    /// its transaction names the listing (`TransactionDetails.receive_listing`). One that asks
+    /// for a payment proof is refused (`ForeignProofAddress` in the log) and nothing is signed
+    /// for it. Later notices about such a payment go from nowhere else. Fails as
+    /// `epicbox_address_at` and `drain_epicbox` do.
+    pub async fn drain_epicbox_at(
+        &self,
+        dkey: String,
+        generation: u32,
+    ) -> Result<InboxReport, WalletError> {
+        self.run("drain_epicbox_at", |session| async move {
+            session.drain_epicbox_at(&dkey, generation).await
+        })
+        .await
+    }
+
+    /// Signs `message` for the app's `domain` with the key of the listing address of
+    /// [`EpicWallet::epicbox_address_at`], and returns the DER signature in hex, which
+    /// [`verify_address_signature_at`] checks. `domain` is lowercase `name/version`, such as
+    /// `epic-listing/1`, at most 64 bytes; domains starting with `lepic`, in any case, are
+    /// refused. The digest is tagged so that no other signature of the wallet can equal it.
+    /// Needs no relay. Fails with `InvalidArgument` for another `dkey` or `domain` and for a
+    /// `message` over 64 KiB.
+    pub async fn sign_with_address_key_at(
+        &self,
+        dkey: String,
+        generation: u32,
+        domain: String,
+        message: Vec<u8>,
+    ) -> Result<String, WalletError> {
+        self.run("sign_with_address_key_at", |session| async move {
+            session.sign_with_address_key_at(&dkey, generation, &domain, &message)
+        })
+        .await
+    }
+
+    /// Signs a device-link `transcript` with this wallet's device-link key, an Ed25519 key of
+    /// the phrase made for nothing else, under the tag `lepic/device-link/v1`, and returns the
+    /// 64-byte signature. Every install of the phrase holds the same key, so
+    /// [`EpicWallet::device_link_verify`] on the other device takes it. Needs no relay. Fails
+    /// with `InvalidArgument` for a `transcript` over 64 KiB.
+    pub async fn device_link_sign(&self, transcript: Vec<u8>) -> Result<Vec<u8>, WalletError> {
+        self.run("device_link_sign", |session| async move {
+            session.device_link_sign(&transcript)
+        })
+        .await
+    }
+
+    /// Whether `signature` is [`EpicWallet::device_link_sign`] of `transcript` by a wallet of
+    /// this wallet's phrase. False for anything malformed and a `transcript` over 64 KiB.
+    pub async fn device_link_verify(
+        &self,
+        transcript: Vec<u8>,
+        signature: Vec<u8>,
+    ) -> Result<bool, WalletError> {
+        self.run("device_link_verify", |session| async move {
+            session.device_link_verify(&transcript, &signature)
         })
         .await
     }

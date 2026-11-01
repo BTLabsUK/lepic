@@ -219,6 +219,10 @@ pub enum WalletErrorKind {
     /// A payments address was given, and the pairing proves none. Nothing changed; try again
     /// after the contact's card with a proof arrives.
     AddressProofMissing,
+    /// A payment asked for a payment proof that this wallet does not sign: one for another
+    /// key than its own, or any proof for a payment to a listing address. Nothing was signed
+    /// or stored.
+    ForeignProofAddress,
 }
 
 impl WalletErrorKind {
@@ -300,6 +304,8 @@ impl WalletErrorKind {
             Self::PeerInputsSpent => 80,
             Self::OtherAddress => 81,
             Self::AddressProofMissing => 82,
+            // 83 to 88 belong to the pairing kinds.
+            Self::ForeignProofAddress => 89,
         }
     }
 }
@@ -450,8 +456,8 @@ impl From<ReceiveError> for WalletError {
             | ReceiveError::AheadOfTip { .. }
             | ReceiveError::FeeBelowMinimum { .. }
             | ReceiveError::MessageSignature { .. }
-            | ReceiveError::ForeignProofAddress
             | ReceiveError::Slate(_) => WalletErrorKind::InvalidSlate,
+            ReceiveError::ForeignProofAddress => WalletErrorKind::ForeignProofAddress,
             ReceiveError::Expired { .. } => WalletErrorKind::PaymentExpired,
             ReceiveError::Node(_) => WalletErrorKind::NodeUnreachable,
             ReceiveError::UnknownTransport { .. } => WalletErrorKind::InvalidArgument,
@@ -755,6 +761,7 @@ mod tests {
             (K::PeerInputsSpent, 80),
             (K::OtherAddress, 81),
             (K::AddressProofMissing, 82),
+            (K::ForeignProofAddress, 89),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");

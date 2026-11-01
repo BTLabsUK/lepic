@@ -129,6 +129,8 @@ pub(crate) enum SeedSource {
 /// The unlocked state of a wallet: the root key and the database it opened.
 pub struct Session<D> {
     pub keychain: Keychain,
+    /// The seed, for the keys of the LEPIC namespace ([`crate::namespace`]).
+    pub(crate) seed: Seed,
     pub store: D,
     /// The stored slates the history read decoded, kept while the wallet is open.
     pub(crate) slates: SlateCache,
@@ -206,6 +208,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     debug!("wallet database prepared");
     Ok(Session {
         keychain,
+        seed: seed.clone(),
         store,
         slates: SlateCache::default(),
     })
@@ -239,6 +242,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     debug!("wallet database prepared");
     Ok(Session {
         keychain,
+        seed: seed.clone(),
         store,
         slates: SlateCache::default(),
     })

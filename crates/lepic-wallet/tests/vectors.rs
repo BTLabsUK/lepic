@@ -178,3 +178,114 @@ fn hex_bytes(text: &str) -> Vec<u8> {
         .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
         .collect()
 }
+
+fn keys_vector(name: &str) -> Value {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../testdata/vectors/keys/{name}.json"));
+    let vector: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(vector["area"], "keys");
+    assert_eq!(vector["name"], name);
+    vector
+}
+
+/// A wallet restored from the vector's seed, unlocked.
+fn restored(harness: &support::Harness, seed_hex: &str) -> support::TestWallet {
+    let phrase = lepic_keychain::Seed::from_entropy(&hex_bytes(seed_hex))
+        .unwrap()
+        .to_mnemonic()
+        .unwrap();
+    let wallet = harness.wallet();
+    harness
+        .block_on(wallet.restore(support::password("vector password"), &phrase))
+        .unwrap();
+    wallet
+}
+
+fn listing_of(case: &Value) -> lepic_wallet::namespace::Listing {
+    lepic_wallet::namespace::Listing::from_hex(
+        case["dkey"].as_str().unwrap(),
+        u32::try_from(case["generation"].as_u64().unwrap()).unwrap(),
+    )
+    .unwrap()
+}
+
+/// `testdata/vectors/keys/listing_keys_*.json`: every listing key of a wallet restored from the
+/// vector's seed is the keyed BLAKE2b the generator computed, for each directory and generation.
+#[test]
+fn listing_keys_are_the_vectors() {
+    for name in ["listing_keys_seed32", "listing_keys_seed16"] {
+        let vector = keys_vector(name);
+        let harness = support::Harness::new();
+        let wallet = restored(&harness, vector["inputs"]["seed"].as_str().unwrap());
+        let cases = vector["expected"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 6, "{name}");
+        for case in cases {
+            let key = wallet.address_key_at(&listing_of(case)).unwrap();
+            assert_eq!(
+                key.to_bytes().as_slice(),
+                hex_bytes(case["public_key"].as_str().unwrap()),
+                "{name}"
+            );
+        }
+    }
+}
+
+/// `testdata/vectors/keys/listing_signatures.json`: one listing key signs the same message
+/// under each app domain of the registry as the generator did, and each verifies only for its
+/// own domain.
+#[test]
+fn listing_signatures_are_the_vectors() {
+    let vector = keys_vector("listing_signatures");
+    let harness = support::Harness::new();
+    let wallet = restored(&harness, vector["inputs"]["seed"].as_str().unwrap());
+    let listing = listing_of(&vector["inputs"]);
+    let message = hex_bytes(vector["inputs"]["message"].as_str().unwrap());
+    let key = wallet.address_key_at(&listing).unwrap();
+    assert_eq!(
+        key.to_bytes().as_slice(),
+        hex_bytes(vector["expected"]["public_key"].as_str().unwrap())
+    );
+    let cases = vector["expected"]["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 5);
+    for case in cases {
+        let domain = lepic_epicbox::ServiceDomain::parse(case["domain"].as_str().unwrap()).unwrap();
+        let signature = wallet
+            .sign_with_address_key_at(&listing, &domain, &message)
+            .unwrap();
+        assert_eq!(
+            signature.to_der_hex(),
+            case["signature_der"].as_str().unwrap(),
+            "{}",
+            domain.as_str()
+        );
+        for other in cases {
+            let other_domain =
+                lepic_epicbox::ServiceDomain::parse(other["domain"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                lepic_epicbox::listing_message_verifies(&key, &other_domain, &message, &signature),
+                other_domain == domain
+            );
+        }
+    }
+}
+
+/// `testdata/vectors/keys/device_link_key_*.json`: the device-link signatures of a wallet
+/// restored from the vector's seed are the generator's, and verify on that wallet.
+#[test]
+fn device_link_signatures_are_the_vectors() {
+    for name in ["device_link_key_seed32", "device_link_key_seed16"] {
+        let vector = keys_vector(name);
+        let harness = support::Harness::new();
+        let wallet = restored(&harness, vector["inputs"]["seed"].as_str().unwrap());
+        for case in vector["expected"]["cases"].as_array().unwrap() {
+            let transcript = hex_bytes(case["transcript"].as_str().unwrap());
+            let signature = wallet.device_link_sign(&transcript).unwrap();
+            assert_eq!(
+                signature.as_slice(),
+                hex_bytes(case["signature"].as_str().unwrap()),
+                "{name}"
+            );
+            assert!(wallet.device_link_verify(&transcript, &signature).unwrap());
+        }
+    }
+}

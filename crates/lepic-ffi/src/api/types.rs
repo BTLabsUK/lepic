@@ -358,6 +358,14 @@ impl From<lepic_wallet::details::TxFlow> for TxFlow {
     }
 }
 
+/// A listing of this wallet with a directory: the directory's compressed secp256k1 key in hex
+/// (66 digits) and the listing's generation, raised after each leave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingRef {
+    pub dkey: String,
+    pub generation: u32,
+}
+
 /// One stored transaction of the default account. Times are milliseconds since the Unix epoch,
 /// by the device clock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,6 +392,9 @@ pub struct TransactionDetails {
     /// The other party's Epicbox address: where a send went or where a slate came from. `None`
     /// for files, slates passed in as text and restored outputs.
     pub counterparty: Option<String>,
+    /// For a payment received at a listing address (`EpicWallet::drain_epicbox_at`), that
+    /// listing. `None` for every other transaction.
+    pub receive_listing: Option<ListingRef>,
     /// The height from which the slate may no longer be completed. `None` when it sets none.
     pub ttl_cutoff_height: Option<u64>,
     /// For a finalized or posted send, the height from which a refresh that still finds its

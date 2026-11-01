@@ -31,6 +31,10 @@
 //! [`Event::AnsweredAgain`]; finalizing an S2 again changes nothing that is stored. A message
 //! whose relay id settled before is acknowledged without an answer or an event.
 
+mod listing;
+
+use listing::ListingRoute;
+
 use std::error::Error as StdError;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -673,20 +677,6 @@ where
         Ok(self.attached_client(epicbox)?.address().clone())
     }
 
-    /// Signs `message` with the wallet's Epicbox address key, under a tag that keeps it apart
-    /// from every text the key signs for a relay; [`lepic_epicbox::verify_address_message`]
-    /// checks it against the key of [`Wallet::epicbox_attach`]'s address. Needs no relay.
-    ///
-    /// Fails with [`WalletError::Locked`].
-    pub fn address_signature(
-        &self,
-        message: &[u8],
-    ) -> Result<lepic_crypto::EcdsaSignature, WalletError> {
-        let secret = self.address_secret(ADDRESS_INDEX)?;
-        lepic_epicbox::sign_address_message(message, &secret)
-            .map_err(|error| WalletError::Keychain(error.into()))
-    }
-
     fn address_secret(&self, index: u32) -> Result<lepic_crypto::SecretKey, WalletError> {
         let session = self.session()?;
         let parent = account::parent_key_id(ADDRESS_ACCOUNT)?;
@@ -796,7 +786,13 @@ where
     ) -> Result<InboxSummary, InboxError> {
         let consume = async {
             let consumed = self
-                .consume(subscription, listen, backoff, &PruneSchedule::default())
+                .consume(
+                    subscription,
+                    listen,
+                    backoff,
+                    &PruneSchedule::default(),
+                    None,
+                )
                 .await;
             // A failed connection explains a failed consume better than the consume does.
             subscription
@@ -851,6 +847,7 @@ where
         listen: Option<&ListenHandle>,
         backoff: Backoff,
         pruning: &PruneSchedule,
+        route: Option<&ListingRoute>,
     ) -> Result<InboxSummary, InboxError> {
         let mut summary = InboxSummary::default();
         loop {
@@ -890,7 +887,7 @@ where
                 }
             };
             match self
-                .settle(subscription, &item, listen, backoff, pruning)
+                .settle(subscription, &item, listen, backoff, pruning, route)
                 .await
             {
                 Some(handled) => summary.count(handled),
@@ -911,16 +908,20 @@ where
         listen: Option<&ListenHandle>,
         backoff: Backoff,
         pruning: &PruneSchedule,
+        route: Option<&ListingRoute>,
     ) -> Option<Handled> {
         let mut attempt: u32 = 0;
         let handled = loop {
             let try_number = attempt.saturating_add(1);
             let disposition = match listen {
-                None => self.handle(subscription, item, pruning, try_number).await,
+                None => {
+                    self.handle(subscription, item, pruning, try_number, route)
+                        .await
+                }
                 Some(handle) => tokio::select! {
                     biased;
                     () = handle.abandoned() => return None,
-                    disposition = self.handle(subscription, item, pruning, try_number) => disposition,
+                    disposition = self.handle(subscription, item, pruning, try_number, route) => disposition,
                 },
             };
             match (disposition, listen) {
@@ -997,6 +998,7 @@ where
         item: &Item,
         pruning: &PruneSchedule,
         attempt: u32,
+        route: Option<&ListingRoute>,
     ) -> Disposition {
         let msg_id = item.msg_id().map(str::to_owned);
         let outcome = match item {
@@ -1009,7 +1011,7 @@ where
                 Ok(Handled::Rejected)
             }
             Item::Envelope(envelope, _) => {
-                self.handle_envelope(subscription, msg_id.as_deref(), envelope, attempt)
+                self.handle_envelope(subscription, msg_id.as_deref(), envelope, attempt, route)
                     .await
             }
         };
@@ -1057,6 +1059,7 @@ where
         msg_id: Option<&str>,
         envelope: &Envelope,
         attempt: u32,
+        route: Option<&ListingRoute>,
     ) -> Result<Handled, Hold> {
         if let Some(msg_id) = msg_id.map(str::to_owned) {
             let previous = self
@@ -1070,7 +1073,14 @@ where
                 return Ok(Handled::Repeated);
             }
         }
-        match self.apply(msg_id, envelope, attempt).await {
+        let applied = match route {
+            None => self.apply(msg_id, envelope, attempt).await,
+            Some(route) => {
+                self.apply_at_listing(msg_id, envelope, attempt, route)
+                    .await
+            }
+        };
+        match applied {
             Ok(handled) => Ok(handled),
             Err(Settlement::Hold(hold)) => Err(hold),
             Err(Settlement::Requeue(answer)) => {
@@ -1124,7 +1134,7 @@ where
             .map_err(Refusal::Decode)?;
         match slate.stage() {
             Stage::S1 => {
-                self.answer(msg_id, attempt, envelope, &slate, reply_to)
+                self.answer(msg_id, attempt, envelope, &slate, reply_to, None)
                     .await
             }
             Stage::S2 => {
@@ -1459,6 +1469,7 @@ where
         envelope: &Envelope,
         proposal: &Slate,
         reply_to: &Destination,
+        route: Option<&ListingRoute>,
     ) -> Result<Handled, Settlement> {
         self.make_room_for(msg_id, attempt, proposal, reply_to)
             .await?;
@@ -1469,12 +1480,25 @@ where
                 envelope.wire(),
                 ReceiveRequest::default(),
                 Some(reply_to.clone()),
+                route.map(|route| route.listing),
             )
             .await
         {
             Ok(received) => {
                 self.record_sending_peer(reply_to, marked).await;
-                match self.reply(reply_to, &received.reply).await {
+                // A payment answers only from the address it came in on: the S1 of a listing
+                // payment that arrives again at the payments address, or the other way round,
+                // gets no answer from there.
+                let stored = self.receive_listing_of(received.tx_id).await?;
+                if stored != route.map(|route| route.listing) {
+                    debug!(tx_id = %received.tx_id, "answer withheld at another address");
+                    return Ok(Handled::Repeated);
+                }
+                let replied = match route {
+                    None => self.reply(reply_to, &received.reply).await,
+                    Some(route) => route.reply(reply_to, &received.reply).await,
+                };
+                match replied {
                     Ok(()) => {}
                     Err(hold)
                         if reply_is_permanent(&hold)

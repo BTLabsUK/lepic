@@ -540,6 +540,53 @@ impl TransactionRepository for SqliteRepos<'_> {
         Ok(address.flatten())
     }
 
+    fn set_receive_listing(
+        &mut self,
+        id: TxId,
+        listing: &crate::transaction::ReceiveListing,
+    ) -> Result<(), StoreError> {
+        let updated = self.conn.execute(
+            "UPDATE transactions SET receive_listing_dkey = ?2, receive_listing_gen = ?3 \
+             WHERE id = ?1",
+            params![
+                i64::from(id.0),
+                &listing.dkey[..],
+                i64::from(listing.generation)
+            ],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::UnknownTransaction(id));
+        }
+        Ok(())
+    }
+
+    fn receive_listing(
+        &self,
+        id: TxId,
+    ) -> Result<Option<crate::transaction::ReceiveListing>, StoreError> {
+        let row: Option<(Option<Vec<u8>>, Option<i64>)> = self
+            .conn
+            .query_row(
+                "SELECT receive_listing_dkey, receive_listing_gen FROM transactions WHERE id = ?1",
+                [i64::from(id.0)],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let bad = || StoreError::Corrupt {
+            record: crate::error::Record::Transaction,
+            field: "receive listing",
+        };
+        match row {
+            None | Some((None, None)) => Ok(None),
+            Some((Some(dkey), Some(generation))) => Ok(Some(crate::transaction::ReceiveListing {
+                dkey: <[u8; 33]>::try_from(dkey.as_slice()).map_err(|_| bad())?,
+                generation: u32::try_from(generation).map_err(|_| bad())?,
+            })),
+            // Both columns are written together; one without the other is damage.
+            Some(_) => Err(bad()),
+        }
+    }
+
     fn open_receipts(&self, transport: &str) -> Result<Vec<OpenReceipt>, StoreError> {
         self.collect(
             "SELECT t.id, t.counterparty FROM transactions t

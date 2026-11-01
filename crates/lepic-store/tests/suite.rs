@@ -736,6 +736,32 @@ fn counterparty_is_recorded_and_survives_updates<B: Backend>() {
     );
 }
 
+fn receive_listing_is_recorded_and_survives_updates<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let mut entry = transaction(DEFAULT, Some(SLATE_A));
+    let id = write(store, |repos| repos.insert_transaction(&entry)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.receive_listing(id)).unwrap(),
+        None
+    );
+    let listing = lepic_store::ReceiveListing {
+        dkey: [2; 33],
+        generation: u32::MAX,
+    };
+    write(store, |repos| repos.set_receive_listing(id, &listing)).unwrap();
+    entry.state = TxState::Confirmed;
+    write(store, |repos| repos.update_transaction(id, &entry)).unwrap();
+    assert_eq!(
+        read(store, |repos| repos.receive_listing(id)).unwrap(),
+        Some(listing)
+    );
+    assert!(matches!(
+        write(store, |repos| repos.set_receive_listing(TxId(9), &listing)),
+        Err(StoreError::UnknownTransaction(TxId(9)))
+    ));
+}
+
 fn open_receipts_lists_answered_incoming_payments_oldest_first<B: Backend>() {
     let backend = with_default_account::<B>();
     let store = backend.store();
@@ -2720,6 +2746,7 @@ for_each_backend!(
     fee_and_amount_extremes_round_trip,
     confirmed_height_is_recorded_and_survives_updates,
     counterparty_is_recorded_and_survives_updates,
+    receive_listing_is_recorded_and_survives_updates,
     open_receipts_lists_answered_incoming_payments_oldest_first,
     delete_transaction_removes_an_unlinked_entry_only,
     pending_invoices_round_trip_oldest_first,

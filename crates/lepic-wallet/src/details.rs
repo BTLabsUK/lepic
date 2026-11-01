@@ -53,6 +53,9 @@ pub struct TransactionDetails {
     /// for a file exchange, a slate the host passed in, a restored output, and a transaction
     /// stored before addresses were.
     pub counterparty: Option<Destination>,
+    /// For a payment received at a listing address ([`Wallet::drain_epicbox_at`]), that
+    /// listing. `None` for every other transaction.
+    pub receive_listing: Option<crate::namespace::Listing>,
     /// The height from which the slate may no longer be completed, as its stored stages carry
     /// it. `None` when the slate sets none or no stage is stored.
     pub ttl_cutoff_height: Option<Height>,
@@ -342,6 +345,10 @@ fn details(
         kernel_excess,
         confirmed_height: repos.confirmed_height(tx_id)?,
         counterparty: repos.counterparty(tx_id)?.map(Destination::new),
+        receive_listing: repos
+            .receive_listing(tx_id)?
+            .as_ref()
+            .and_then(crate::namespace::Listing::from_stored),
         ttl_cutoff_height,
         confirmed_at,
         messages,

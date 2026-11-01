@@ -61,11 +61,11 @@ use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
-    LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, OutputCategory, OutputStatus,
-    PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy, SelfSentTx,
-    SendOptions, SentTx, Slate, SlateMessage, SlateStage, TransactionDetails, TransportConnection,
-    TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput,
-    WalletSummary,
+    LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingRef, NodeTip, OutputCategory,
+    OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult,
+    SelectionStrategy, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, SlateStage,
+    TransactionDetails, TransportConnection, TransportState, TxOrigin, TxStatus, WalletConfig,
+    WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -287,18 +287,51 @@ pub(crate) fn relay_address(address: &str, network: Network) -> Option<EpicboxAd
     EpicboxAddress::parse(address, relay_network(network)).ok()
 }
 
-/// Longest message [`crate::api::wallet::EpicWallet::sign_with_address_key`] signs or
-/// [`crate::api::wallet::verify_address_signature`] checks.
+/// Longest message [`crate::api::wallet::EpicWallet::sign_with_address_key_at`] or
+/// [`crate::api::wallet::EpicWallet::device_link_sign`] signs, or a verify checks.
 pub(crate) const MAX_ADDRESS_SIGNED_LEN: usize = 64 * 1024;
 
-pub(crate) fn verify_address_signature(public_key: &str, message: &[u8], signature: &str) -> bool {
+/// Whether `signature` (DER hex) is the listing signature of `message` for `domain` by the key
+/// `public_key`, written as in an Epicbox address on either chain, with or without `@<relay>`.
+pub(crate) fn verify_address_signature_at(
+    public_key: &str,
+    domain: &str,
+    message: &[u8],
+    signature: &str,
+) -> bool {
     if message.len() > MAX_ADDRESS_SIGNED_LEN {
         return false;
     }
+    let Ok(domain) = lepic_epicbox::ServiceDomain::parse(domain) else {
+        return false;
+    };
     [RelayNetwork::Mainnet, RelayNetwork::Floonet]
         .into_iter()
         .filter_map(|network| EpicboxAddress::parse_key(public_key, network).ok())
-        .any(|key| lepic_epicbox::key_message_verifies(&key, message, signature))
+        .any(|key| lepic_epicbox::listing_message_verifies_hex(&key, &domain, message, signature))
+}
+
+/// The listing of the directory key `dkey`, 66 hex digits, and `generation`.
+fn listing(dkey: &str, generation: u32) -> Result<lepic_wallet::namespace::Listing, WalletError> {
+    lepic_wallet::namespace::Listing::from_hex(dkey, generation)
+        .map_err(|_| invalid("directory key is not a compressed secp256k1 key in hex"))
+}
+
+fn service_domain(domain: &str) -> Result<lepic_epicbox::ServiceDomain, WalletError> {
+    lepic_epicbox::ServiceDomain::parse(domain).map_err(|error| invalid(error.to_string()))
+}
+
+fn inbox_report(summary: &lepic_wallet::inbox::InboxSummary) -> InboxReport {
+    InboxReport {
+        received: summary.received,
+        finalized: summary.finalized,
+        repeated: summary.repeated,
+        rejected: summary.rejected,
+        held: summary.held,
+        notices: summary.notices,
+        bounced: summary.bounced,
+        dropped: summary.dropped,
+    }
 }
 
 /// Words separated by single spaces, lowercase, as the engine expects. Built in one buffer
@@ -1422,12 +1455,65 @@ impl Session {
         Ok(self.engine.epicbox_attach(&self.epicbox()?)?.to_string())
     }
 
+    pub(crate) fn epicbox_address_at(
+        &self,
+        dkey: &str,
+        generation: u32,
+    ) -> Result<String, WalletError> {
+        let listing = listing(dkey, generation)?;
+        Ok(self
+            .engine
+            .epicbox_address_at(&listing, &self.epicbox()?)?
+            .to_string())
+    }
+
+    pub(crate) async fn drain_epicbox_at(
+        &self,
+        dkey: &str,
+        generation: u32,
+    ) -> Result<InboxReport, WalletError> {
+        let listing = listing(dkey, generation)?;
+        let epicbox = self.epicbox()?;
+        let summary = self.engine.drain_epicbox_at(&listing, &epicbox).await?;
+        Ok(inbox_report(&summary))
+    }
+
     /// Never logs the message or the signature.
-    pub(crate) fn address_signature(&self, message: &[u8]) -> Result<String, WalletError> {
+    pub(crate) fn sign_with_address_key_at(
+        &self,
+        dkey: &str,
+        generation: u32,
+        domain: &str,
+        message: &[u8],
+    ) -> Result<String, WalletError> {
         if message.len() > MAX_ADDRESS_SIGNED_LEN {
             return Err(invalid("message too long to sign"));
         }
-        Ok(self.engine.address_signature(message)?.to_der_hex())
+        let listing = listing(dkey, generation)?;
+        let domain = service_domain(domain)?;
+        Ok(self
+            .engine
+            .sign_with_address_key_at(&listing, &domain, message)?
+            .to_der_hex())
+    }
+
+    /// Never logs the transcript or the signature.
+    pub(crate) fn device_link_sign(&self, transcript: &[u8]) -> Result<Vec<u8>, WalletError> {
+        if transcript.len() > MAX_ADDRESS_SIGNED_LEN {
+            return Err(invalid("transcript too long to sign"));
+        }
+        Ok(self.engine.device_link_sign(transcript)?.to_vec())
+    }
+
+    pub(crate) fn device_link_verify(
+        &self,
+        transcript: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, WalletError> {
+        if transcript.len() > MAX_ADDRESS_SIGNED_LEN {
+            return Ok(false);
+        }
+        Ok(self.engine.device_link_verify(transcript, signature)?)
     }
 
     pub(crate) async fn send_epicbox(
@@ -1486,16 +1572,7 @@ impl Session {
             return Ok(InboxReport::default());
         }
         let summary = self.engine.epicbox_drain(&epicbox).await?;
-        Ok(InboxReport {
-            received: summary.received,
-            finalized: summary.finalized,
-            repeated: summary.repeated,
-            rejected: summary.rejected,
-            held: summary.held,
-            notices: summary.notices,
-            bounced: summary.bounced,
-            dropped: summary.dropped,
-        })
+        Ok(inbox_report(&summary))
     }
 
     /// Starts listening unless a listener runs. Returns the handle to stop it with, or `None`
@@ -1747,6 +1824,10 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             .counterparty
             .as_ref()
             .map(|address| address.as_str().to_owned()),
+        receive_listing: details.receive_listing.map(|listing| ListingRef {
+            dkey: listing.dkey().to_hex(),
+            generation: listing.generation(),
+        }),
         ttl_cutoff_height: details.ttl_cutoff_height.map(Height::value),
         releasable_from: details.releasable_from.map(Height::value),
         releasable: details.releasable,
@@ -2489,6 +2570,7 @@ mod tests {
             kernel_excess: Some(excess),
             confirmed_height: Some(Height::new(321)),
             counterparty: Some(Destination::new(address.to_owned())),
+            receive_listing: None,
             ttl_cutoff_height: Some(Height::new(360)),
             confirmed_at: Some(confirmed),
             releasable_from: Some(Height::new(1_444)),
@@ -2534,6 +2616,7 @@ mod tests {
                 confirmed_height: Some(321),
                 kernel_excess: Some(excess.to_hex()),
                 counterparty: Some(address.to_owned()),
+                receive_listing: None,
                 ttl_cutoff_height: Some(360),
                 releasable_from: Some(1_444),
                 releasable: true,

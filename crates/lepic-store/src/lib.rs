@@ -74,8 +74,8 @@ pub use slate::{SlateRepository, SlateStage, StoredSlate};
 pub use sqlite::{SCHEMA_VERSION, SqliteStore};
 pub use store::{Repositories, WalletStore};
 pub use transaction::{
-    OpenReceipt, StoredTransaction, TransactionEntry, TransactionRepository, TxDirection, TxId,
-    TxState,
+    OpenReceipt, ReceiveListing, StoredTransaction, TransactionEntry, TransactionRepository,
+    TxDirection, TxId, TxState,
 };
 pub use tx_record::{
     FoundDuring, OtherWalletSpend, ScanFoundRecord, TxMarks, TxRecordRepository, TxWatch,

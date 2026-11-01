@@ -7,6 +7,7 @@
 //! Receive: the receiver's step of the standard flow, from the sender's S1 to the S2 reply, as
 //! `epic-wallet`'s `receive_tx` does it (`docs/compat/legacy-slates.md`, "Lifecycle").
 
+use crate::namespace::Listing;
 use ed25519_dalek::Signer;
 use lepic_crypto::aggsig::{
     calculate_partial_sig, create_secnonce, sign_single, verify_completed_sig,
@@ -119,7 +120,7 @@ pub enum ReceiveError {
         #[source]
         source: CryptoError,
     },
-    #[error("payment proof names a receiver address that is not this account's")]
+    #[error("payment proof asks for a signature this wallet does not make")]
     ForeignProofAddress,
     #[error("node request failed")]
     Node(#[source] NodeError),
@@ -189,7 +190,8 @@ where
         wire: &WireSlate,
         request: ReceiveRequest,
     ) -> Result<Received, ReceiveError> {
-        self.receive_from(transport, wire, request, None).await
+        self.receive_from(transport, wire, request, None, None)
+            .await
     }
 
     /// [`Wallet::receive`] of a slate that came from `counterparty`, which is stored with the
@@ -205,6 +207,7 @@ where
         wire: &WireSlate,
         request: ReceiveRequest,
         counterparty: Option<Destination>,
+        listing: Option<Listing>,
     ) -> Result<Received, ReceiveError> {
         let session = self.session()?;
         let network = self.config().network;
@@ -245,6 +248,7 @@ where
                         counterparty,
                         marked,
                         features,
+                        listing,
                     },
                     &request,
                 ))
@@ -322,6 +326,8 @@ struct Proposal {
     marked: bool,
     /// What the marker of a marked S2 claims.
     features: u32,
+    /// The listing the S1 came in on; `None` for the payments address.
+    listing: Option<Listing>,
 }
 
 /// What storing a reply ended with: a new transaction and the account the funds go to, or the
@@ -374,6 +380,9 @@ fn store_reply<N, S: StoreOpener, V>(
         if let Some(counterparty) = &proposal.counterparty {
             repos.set_counterparty(tx_id, counterparty.as_str())?;
         }
+        if let Some(listing) = proposal.listing {
+            repos.set_receive_listing(tx_id, &listing.to_stored())?;
+        }
         Ok(Answer::Stored {
             received: Received {
                 tx_id,
@@ -416,6 +425,7 @@ pub(crate) fn receive_own<D>(
         counterparty: None,
         marked: false,
         features: 0,
+        listing: None,
     };
     let request = ReceiveRequest {
         account: Some(label),
@@ -539,6 +549,11 @@ fn respond<D>(
     rng: &mut (impl CryptoRng + ?Sized),
 ) -> Result<Response, ReceiveError> {
     let slate = &proposal.slate;
+    // A payment to a listing never names the wallet's payments key: a proof it asks for would
+    // be signed by that key, so it is refused and nothing is signed.
+    if proposal.listing.is_some() && slate.payment_proof().is_some() {
+        return Err(ReceiveError::ForeignProofAddress);
+    }
     let label = request.account.as_deref().unwrap_or(DEFAULT_ACCOUNT_LABEL);
     let account = account::account_by_label(repos, label)?;
     let key_id = account::next_output_key(repos, account.index)?;

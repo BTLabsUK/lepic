@@ -30,6 +30,7 @@ pub mod inbox;
 pub mod invoice;
 pub mod legacy_history;
 pub mod lifecycle;
+pub mod namespace;
 pub mod notice;
 mod onion_key;
 mod other_wallet;

@@ -57,18 +57,19 @@ use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
-    ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, NodeCommand, PayArgs,
-    PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg, SendArgs, SpendArgs,
-    TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
+    ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, ListingArgs,
+    NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
+    SendArgs, SpendArgs, TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand,
+    WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
 use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, ExpiredReport, FinalizeReport,
     HttpListenReport, ImportHistoryReport, ImportedReport, InboxReport, InfoReport, InitReport,
-    InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport, InvoicePayReport, MessageReport,
-    NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport, ReceiveReport, Report,
-    ResendReport, RestoreReport, ScanReport, SendReport, TorAddressReport, TorListenReport,
+    InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport, InvoicePayReport, ListingReport,
+    MessageReport, NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport, ReceiveReport,
+    Report, ResendReport, RestoreReport, ScanReport, SendReport, TorAddressReport, TorListenReport,
     TxListReport, TxReport, TxStateReport, WalletScanReport,
 };
 use crate::progress::Progress;
@@ -331,7 +332,18 @@ impl<H: Host> Run<'_, H> {
         let opened = self.open().await?;
         let expiry = self.settings.invoice_expiry;
         let (summary, expired) = match command {
-            EpicboxCommand::Drain => {
+            EpicboxCommand::Drain(ListingArgs {
+                listing: Some(dkey),
+                generation,
+            }) => {
+                let listing = listing_of(&dkey, generation)?;
+                let summary = opened
+                    .wallet
+                    .drain_epicbox_at(&listing, &opened.epicbox)
+                    .await?;
+                (summary, None)
+            }
+            EpicboxCommand::Drain(ListingArgs { listing: None, .. }) => {
                 let events = opened.wallet.subscribe();
                 // A sweep that cancels an invoice sends its `withdrawn` notice from the
                 // payments address.
@@ -357,7 +369,21 @@ impl<H: Host> Run<'_, H> {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 (summary, expired)
             }
-            EpicboxCommand::Status => {
+            EpicboxCommand::Status(ListingArgs {
+                listing: Some(dkey),
+                generation,
+            }) => {
+                let listing = listing_of(&dkey, generation)?;
+                let address = opened
+                    .wallet
+                    .epicbox_address_at(&listing, &opened.epicbox)?;
+                return Ok(Report::EpicboxStatus(EpicboxStatusReport {
+                    relay: self.settings.relay.url(),
+                    address: address.to_string(),
+                    pending_deliveries: 0,
+                }));
+            }
+            EpicboxCommand::Status(ListingArgs { listing: None, .. }) => {
                 let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
                 let pending = opened
                     .store()?
@@ -1727,6 +1753,13 @@ fn parked_invoice_report(invoice: IncomingInvoice) -> ParkedInvoiceReport {
     }
 }
 
+/// The listing of the directory key `dkey`, 66 hex digits, and `generation`.
+fn listing_of(dkey: &str, generation: u32) -> Result<lepic_wallet::namespace::Listing, CliError> {
+    Ok(lepic_wallet::namespace::Listing::from_hex(
+        dkey, generation,
+    )?)
+}
+
 fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxReport, CliError> {
     let tx = &details.transaction;
     let stages = match tx.entry.slate_id {
@@ -1746,6 +1779,10 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
         sender_reported_cancelled_at: details
             .sender_reported_cancelled_at
             .map(|at| at.to_string()),
+        receive_listing: details.receive_listing.map(|listing| ListingReport {
+            dkey: listing.dkey().to_hex(),
+            generation: listing.generation(),
+        }),
         messages: Some(
             details
                 .messages
@@ -1838,6 +1875,7 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         imported: None,
         sender_reported_posted_at: None,
         sender_reported_cancelled_at: None,
+        receive_listing: None,
     }
 }
 

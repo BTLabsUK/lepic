@@ -597,6 +597,26 @@ where
         .flatten()
     }
 
+    /// Whether `slate_id` is a payment this wallet received at a listing. Anything unreadable
+    /// counts as one, so a notice is withheld rather than sent from the payments address.
+    async fn received_at_listing(&self, slate_id: SlateId) -> bool {
+        let Ok(session) = self.session() else {
+            return true;
+        };
+        self.blocking(move |_, _| {
+            Ok(session.store.read(|repos| {
+                match repos.transaction_by_slate(uuid(slate_id), TxDirection::Incoming)? {
+                    Some(stored) => Ok::<_, lepic_store::StoreError>(
+                        repos.receive_listing(stored.id)?.is_some(),
+                    ),
+                    None => Ok(false),
+                }
+            })?)
+        })
+        .await
+        .unwrap_or(true)
+    }
+
     /// Applies a notice the paired contact `contact_id` sent sealed and signed, for a slate
     /// exchanged with that contact only, and raises its event. Returns the payment to cancel
     /// for a `withdrawn` of an invoice this wallet paid.
@@ -865,6 +885,12 @@ where
         exchange_marked: bool,
     ) -> Result<(), Hold> {
         let slate_id = notice.slate_id;
+        // Every message about a payment to a listing goes from the listing or not at all; the
+        // payments address never speaks for it.
+        if self.received_at_listing(slate_id).await {
+            debug!(slate_id = %slate_id, "notice withheld for a payment to a listing");
+            return Err(Hold::Withheld);
+        }
         if let Some(contact_id) = self.contact_of_slate(slate_id).await {
             // Exchanges with a paired contact keep their notices in its mailbox, sealed.
             let Some(notices) = self.contact_notices() else {
