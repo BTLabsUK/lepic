@@ -53,6 +53,30 @@ const PROBES: &[Probe] = &[
         test: "restore_vectors_find_exactly_the_outputs_upstream_found",
     },
     Probe {
+        name: "restore_sqlite",
+        package: "lepic-wallet",
+        test_target: "vectors",
+        test: "restore_vectors_on_the_plain_sqlite_store",
+    },
+    Probe {
+        name: "restore_encrypted",
+        package: "lepic-wallet",
+        test_target: "vectors",
+        test: "restore_vectors_on_the_encrypted_sqlite_store",
+    },
+    Probe {
+        name: "store_plain",
+        package: "lepic-store",
+        test_target: "at_rest_probe",
+        test: "plain_store_workload_of_2000_transactions",
+    },
+    Probe {
+        name: "store_encrypted",
+        package: "lepic-store",
+        test_target: "at_rest_probe",
+        test: "encrypted_store_workload_of_2000_transactions",
+    },
+    Probe {
         name: "drain",
         package: "lepic-epicbox",
         test_target: "client",
