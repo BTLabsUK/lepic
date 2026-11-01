@@ -6,10 +6,13 @@ relay, the reference node `v4.1.0` on a test-mode chain and two `epic-wallet` `v
 covers both directions over Epicbox and slate files, a signed message each way over Epicbox
 (shown by `lepic tx show` and `epic-wallet txs`), invoices both ways, a failed delivery and
 `tx resend`, cancel, restore from the phrase, a restore with `--no-scan` that receives only after
-`wallet scan`, import of an `epic-wallet` `wallet.seed`, and the
-exit codes of common mistakes. Last, lepic invoices a second lepic wallet over Epicbox: the
-payer allows the service, parks the invoice from its invoice address and pays it once, the
-service finalizes, and the payer's drain shows the `posted` receipt. Then lepic sends to that wallet over
+`wallet scan`, import of an `epic-wallet` `wallet.seed`, the
+exit codes of common mistakes, and an `epic-wallet` payment to a lepic listing address, drained on
+its own and answered from the listing, whose transaction names the listing. Last, lepic pairs
+with a second lepic wallet by invite: both check the words, the payer allows the service's
+invoices, the service invoices it through the contact mailboxes, the payer pays once with the
+amount typed again, the service finalizes and posts, and the payer's `contact collect` shows
+that it was posted. Then lepic sends to that wallet over
 Epicbox while it listens: both slates carry the LEPIC marker, and the listener reports the
 payment as posted by its sender seconds after the sender's push, before it confirms; a stock
 `epic-wallet` receiver's unmarked answer is recorded as another wallet's and is sent no notice. A stock `epic-wallet`
