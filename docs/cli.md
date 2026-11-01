@@ -502,23 +502,26 @@ invoice, its transaction and the payer; `lepic tx cancel <ID>` withdraws it, and
 reaches that payer instead.
 
 Before invoicing a payer, `lepic epicbox peer <ADDRESS>` shows what the wallet learned from that
-payer's own messages, matched on the key: `lepic` once a payment or notice from it carried the
-LEPIC marker, `no_invoices` once it sent an invoice back, `unknown` before either. It reads
-only the wallet and sends nothing:
+payer's own messages over Epicbox, matched on the key: `lepic` while its last payment or notice
+carried the LEPIC marker, `no_invoices` once a slate from it came without the marker or it sent
+an invoice back, `unknown` before either. It reads only the wallet and sends nothing:
 
 ```
 $ lepic epicbox peer esABC...@epicbox.epiccash.com
 esABC...@epicbox.epiccash.com runs LEPIC: it pays invoices and is sent notices.
 ```
 
-Its JSON document has `address` and `capability`.
+Its JSON document has `address`, `capability`, `last_marked_at` and `last_unmarked_at` (RFC
+3339, or null) and `notices`, whether the peer is told of the end of an exchange that came marked
+(a marked message in the last 30 days).
 
 Two LEPIC wallets also tell each other what happened to an invoice, with short notices that
 never move funds. The payer's next `epicbox drain` hears that the service posted the payment. When the service cancels an invoice with `lepic tx cancel`, or it expires, the payer's
 drain deletes it if it was not paid yet, and names the payment if it was, so the payer can give
 up on it with `tx cancel`; nothing is cancelled for the payer. `invoice decline` tells the
-service, whose next drain or listen names the invoice to withdraw. Notices go only to a wallet
-that has shown it runs LEPIC, because `epic-wallet` cannot read them; they are counted as
+service, whose next drain or listen names the invoice to withdraw. Notices go only about an
+exchange whose slate came marked, to a wallet that has shown it runs LEPIC in the last 30 days,
+because `epic-wallet` cannot read them; they are counted as
 `notices` and, with human output, shown on stderr.
 
 Unpaid invoices expire after `invoice_expiry_hours`, 24 unless set, at most 48. Each `epicbox

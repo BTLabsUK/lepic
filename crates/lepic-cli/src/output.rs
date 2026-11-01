@@ -564,6 +564,12 @@ pub struct PeerReport {
     pub address: String,
     /// `unknown`, `lepic` or `no_invoices`.
     pub capability: &'static str,
+    /// When its last message with the LEPIC marker came, RFC 3339.
+    pub last_marked_at: Option<String>,
+    /// When its last slate without the marker, or an invoice it sent back, came, RFC 3339.
+    pub last_unmarked_at: Option<String>,
+    /// Whether it is told of the end of an exchange that came marked.
+    pub notices: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1190,8 +1196,8 @@ fn write_invoice_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             ),
             "no_invoices" => writeln!(
                 out,
-                "{} sent an invoice back unpaid: it does not pay invoices. Send it a slate file \
-                 instead.",
+                "{} answered without LEPIC last, or sent an invoice back: it does not pay \
+                 invoices and is sent no notices. Send it a slate file instead.",
                 r.address
             ),
             _ => writeln!(
@@ -1786,8 +1792,17 @@ mod tests {
                 Report::Peer(PeerReport {
                     address: text("a"),
                     capability: "unknown",
+                    last_marked_at: None,
+                    last_unmarked_at: None,
+                    notices: false,
                 }),
-                vec!["address", "capability"],
+                vec![
+                    "address",
+                    "capability",
+                    "last_marked_at",
+                    "last_unmarked_at",
+                    "notices",
+                ],
             ),
             (
                 Report::ContactInvite(ContactInviteReport {
@@ -2280,6 +2295,9 @@ mod tests {
             let report = Report::Peer(PeerReport {
                 address: text("esPeer@relay.example.org"),
                 capability,
+                last_marked_at: None,
+                last_unmarked_at: None,
+                notices: false,
             });
             render(&report, OutputFormat::Human).to_string()
         };
@@ -2294,8 +2312,8 @@ mod tests {
         );
         assert_eq!(
             line("no_invoices"),
-            "esPeer@relay.example.org sent an invoice back unpaid: it does not pay invoices. \
-             Send it a slate file instead.\n"
+            "esPeer@relay.example.org answered without LEPIC last, or sent an invoice back: it \
+             does not pay invoices and is sent no notices. Send it a slate file instead.\n"
         );
     }
 

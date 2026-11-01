@@ -375,9 +375,14 @@ impl<H: Host> Run<'_, H> {
                     PeerInvoiceSupport::Lepic => "lepic",
                     PeerInvoiceSupport::NoInvoices => "no_invoices",
                 };
+                let facts = opened.wallet.peer_compat(&args.address)?;
+                let stored = facts.stored.unwrap_or_default();
                 return Ok(Report::Peer(PeerReport {
                     address: args.address,
                     capability,
+                    last_marked_at: stored.last_marked_at.map(|time| time.to_string()),
+                    last_unmarked_at: stored.last_unmarked_at.map(|time| time.to_string()),
+                    notices: facts.notices,
                 }));
             }
         };

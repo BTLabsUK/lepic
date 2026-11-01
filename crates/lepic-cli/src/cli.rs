@@ -508,9 +508,9 @@ and once at the start, invoices left unpaid for invoice_expiry_hours are expired
     Status,
     /// Show whether a peer is known to pay invoices
     #[command(after_help = "\
-What this wallet learned from the peer's own messages, matched on the key: lepic once a
-payment or notice from it carried the LEPIC marker, no_invoices once it sent an invoice back
-unpaid, unknown before either. Nothing is sent.")]
+What this wallet learned from the peer's own messages over Epicbox, matched on the key: lepic
+while its last payment or notice carried the LEPIC marker, no_invoices once a slate came
+without it or an invoice came back unpaid, unknown before either. Nothing is sent.")]
     Peer(PeerArgs),
 }
 
