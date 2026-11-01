@@ -1019,6 +1019,16 @@ async fn the_backup_brings_the_pairings_back_on_another_install() {
     let (anna_side, _) = pair(&anna, &ben).await;
     let document = anna.contacts_export().await.unwrap();
     assert!(!document.contains("password"));
+    // Nothing learned about the contact's wallet goes in; its proven address does.
+    for field in ["peer_features", "peer_heard_at", "peer_verified_at"] {
+        assert!(!document.contains(field), "{document}");
+    }
+    let address = anna
+        .contact(anna_side.clone())
+        .await
+        .unwrap()
+        .payments_address;
+    assert!(address.is_some());
 
     let phrase = anna.mnemonic("password".to_owned()).await.unwrap();
     let restored = world.wallet_with(Some(phrase)).await;
@@ -1034,6 +1044,8 @@ async fn the_backup_brings_the_pairings_back_on_another_install() {
     let view = restored.contact(anna_side.clone()).await.unwrap();
     assert!(view.imported_from_backup);
     assert_eq!(view.sas, anna.contact(anna_side).await.unwrap().sas);
+    assert_eq!(view.payments_address, address);
+    assert_eq!(view.peer_features, 0);
     assert_eq!(
         restored
             .contacts_import(document)

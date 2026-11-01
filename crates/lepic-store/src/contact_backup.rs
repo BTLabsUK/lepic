@@ -7,11 +7,15 @@
 //! wallet from handing out a slot twice. Cards are kept as their bytes only: on import every card
 //! is decoded again by the caller's [`CardReader`] and its keys, seq, kind and name come from
 //! that decoding, never from the document. The `.wfeh` key is the same on both networks, so the
-//! document names its network and an import refuses the other one. It holds no secret: pairings in progress, outbox entries and relay
-//! backoff are not exported, and a contact still waiting for its reply is left out because
-//! nothing could finish it. Neither is a pairing that ended, or one whose contact was never
-//! heard from, so no build restores either as paired. A record restored from it is flagged [`ContactRecord::imported_from_backup`], because the
-//! pairing may also live on the device the backup came from (cases C-11).
+//! document names its network and an import refuses the other one. It holds no secret: pairings
+//! in progress, outbox entries and relay backoff are not exported, and a contact still waiting
+//! for its reply is left out because nothing could finish it. Neither is a pairing that ended,
+//! or one whose contact was never heard from, so no build restores either as paired. Nothing
+//! learned about the contact's wallet is kept either (the features it claims, when it was heard
+//! or said it verified): a restore learns it again. The contact's proven payments address is
+//! kept, so a restored record can still be attached to an address book entry. A record restored
+//! from it is flagged [`ContactRecord::imported_from_backup`], because the pairing may also live
+//! on the device the backup came from (cases C-11).
 
 use jiff::Timestamp;
 use lepic_primitives::params::Network;
@@ -80,12 +84,6 @@ struct Entry {
     payments_address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     payments_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    peer_features: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    peer_heard_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    peer_verified_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     peer_verdict: Option<String>,
 }
@@ -229,9 +227,9 @@ pub fn export_contacts_where<R: ContactRepository + ?Sized>(
         if facts.ended_reason.is_some() {
             continue;
         }
-        let Some(heard) = facts.peer_heard_at else {
+        if facts.peer_heard_at.is_none() {
             continue;
-        };
+        }
         let mailbox = repos.contact_mailbox(contact.contact_id)?;
         contacts.push(Entry {
             contact_id: to_hex(&contact.contact_id.0),
@@ -254,9 +252,6 @@ pub fn export_contacts_where<R: ContactRepository + ?Sized>(
             mailbox: mailbox.as_ref().map(mailbox_entry),
             payments_address: facts.payments_address.clone(),
             payments_key: facts.payments_key.as_ref().map(|key| to_hex(key)),
-            peer_features: Some(facts.peer_features),
-            peer_heard_at: Some(heard.to_string()),
-            peer_verified_at: facts.peer_verified_at.map(|time| time.to_string()),
             peer_verdict: facts.peer_verdict.as_ref().map(|verdict| to_hex(verdict)),
         });
     }
@@ -307,11 +302,10 @@ fn record_from(
     let facts = PairingFacts {
         payments_key: payments_key.filter(|_| payments_address.is_some()),
         payments_address,
-        peer_features: entry.peer_features.unwrap_or(0),
-        peer_heard_at: Some(
-            optional_time(entry.peer_heard_at.as_deref(), "peer heard at")?.unwrap_or(created_at),
-        ),
-        peer_verified_at: optional_time(entry.peer_verified_at.as_deref(), "peer verified at")?,
+        // What the contact claims and when it was heard or said it verified are not kept in a
+        // backup; a restored record counts as heard since it was made and learns the rest
+        // again from the contact.
+        peer_heard_at: Some(created_at),
         peer_verdict: entry
             .peer_verdict
             .as_deref()

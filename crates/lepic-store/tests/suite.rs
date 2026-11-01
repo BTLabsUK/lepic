@@ -1816,23 +1816,24 @@ fn contact_backup_leaves_out_ended_and_unheard_records<B: Backend>() {
     let clean = B::create(context_key(2));
     let summary = write(clean.store(), |repos| import(repos, &json)).unwrap();
     assert_eq!(summary.imported, 1);
+    // Nothing learned about the contact's wallet is in the backup: no features, no times it
+    // was heard or said it verified. Its proven address is.
+    for field in ["peer_features", "peer_heard_at", "peer_verified_at"] {
+        assert!(!json.contains(field), "{json}");
+    }
     let mut expected = proven.clone();
     expected.imported_from_backup = true;
+    expected.facts.peer_features = 0;
+    expected.facts.peer_verified_at = None;
+    expected.facts.peer_heard_at = Some(proven.created_at);
     assert_eq!(
         read(clean.store(), |repos| repos.contacts()).unwrap(),
         vec![expected]
     );
-    // A document of an earlier build carries none of the new fields: its records count as
-    // heard since they were made, claim no features and have no proven address.
+    // A document without the address and verdict restores none.
     let older = json
         .replace(r#","payments_address":"key@relay.example""#, "")
         .replace(&format!(r#","payments_key":"{}""#, "07".repeat(33)), "")
-        .replace(r#","peer_features":8"#, "")
-        .replace(&format!(r#","peer_heard_at":"{}""#, support::time(1)), "")
-        .replace(
-            &format!(r#","peer_verified_at":"{}""#, support::time(5)),
-            "",
-        )
         .replace(&format!(r#","peer_verdict":"{}""#, "06".repeat(32)), "");
     assert!(!older.contains("peer_"), "{older}");
     let restored = B::create(context_key(3));
@@ -1843,7 +1844,7 @@ fn contact_backup_leaves_out_ended_and_unheard_records<B: Backend>() {
     assert_eq!(
         facts,
         PairingFacts {
-            peer_heard_at: Some(support::time(1)),
+            peer_heard_at: Some(proven.created_at),
             ..PairingFacts::default()
         }
     );
