@@ -20,7 +20,7 @@ the client enables them only when the relay reports support.
 
 | Type | Fields |
 |---|---|
-| `ClientDetails` | `wallet_version`, `wallet_mode` (`"listener"` or `"send"`), `protocol_version` (`"3.0.0"`) |
+| `ClientDetails` | `wallet_version` (stock sends its package version; LEPIC sends `"4.1.0"`, as `epic-wallet` `v4.1.0` does), `wallet_mode` (`"listener"` or `"send"`), `protocol_version` (`"3.0.0"`) |
 | `Subscribe` | `address` (base58 key only, no domain), `ver` (`"3.0.0"`), `signature` (over the current challenge) |
 | `PostSlate` | `from` and `to` (`key@domain[:port]`), `str` (the encrypted message as a JSON string), `signature` (over `str`) |
 | `Made` | `address`, `signature` (over `epicboxmsgid`), `ver`, `epicboxmsgid` |

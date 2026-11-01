@@ -170,11 +170,16 @@ pub struct ClientTimings {
     pub drain_timeout: Duration,
 }
 
+/// The version the relay is told in `ClientDetails`: what `epic-wallet` `v4.1.0` sends, its own
+/// package version. The relay stores it and reads only the wallet mode, so a version of LEPIC's
+/// own would only tell the relay, and anyone watching it, which keys run LEPIC.
+pub const RELAY_WALLET_VERSION: &str = "4.1.0";
+
 impl ClientSettings {
     pub fn new(endpoint: RelayEndpoint, timings: ClientTimings) -> Self {
         Self {
             endpoint,
-            wallet_version: concat!("lepic-", env!("CARGO_PKG_VERSION")).to_owned(),
+            wallet_version: RELAY_WALLET_VERSION.to_owned(),
             connect_timeout: timings.connect_timeout,
             response_timeout: timings.response_timeout,
             ping_interval: timings.ping_interval,
@@ -400,6 +405,14 @@ impl CancelToken {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_relay_is_told_the_version_epic_wallet_sends() {
+        let relay = crate::address::Domain::parse("relay.example.org").unwrap();
+        let endpoint = RelayEndpoint::new(relay, None, crate::session::Security::Tls);
+        let settings = crate::testing::client_settings(endpoint);
+        assert_eq!(settings.wallet_version, "4.1.0");
+    }
 
     #[test]
     fn backoff_doubles_up_to_the_cap() {
