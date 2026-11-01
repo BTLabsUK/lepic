@@ -256,3 +256,7 @@ path = "fuzz_targets/contact_backup_import.rs"
 test = false
 doc = false
 bench = false
+
+# The same SQLite3 Multiple Ciphers build the workspace links (ADR 0032).
+[patch.crates-io]
+libsqlite3-sys = { path = "../third_party/libsqlite3-sys" }

@@ -123,3 +123,8 @@ lto = "fat"
 codegen-units = 1
 strip = true
 overflow-checks = true
+
+# rusqlite links SQLite3 Multiple Ciphers through this vendored libsqlite3-sys, so the wallet
+# database is encrypted at rest (ADR 0032, third_party/libsqlite3-sys/PATCHES.md).
+[patch.crates-io]
+libsqlite3-sys = { path = "third_party/libsqlite3-sys" }
