@@ -12,8 +12,9 @@ use lepic_keychain::vault::SecretName;
 use lepic_keychain::{Identifier, Keychain, SecretBytes, SecretStore, Seed, SwitchCommitment};
 use lepic_primitives::params::Network;
 use lepic_store::{
-    CONTEXT_KEY_LEN, ContextKey, PEER_TAG_KEY_LEN, PeerTagKey, Repositories, STORE_KEY_LEN,
-    StoreError, StoreKey, StoreKeys, WalletStore,
+    AtRestReport, AtRestState, CONTEXT_KEY_LEN, ContextKey, PEER_TAG_KEY_LEN, PeerTagKey,
+    ROLLBACK_SCAN_SETTING, Repositories, STORE_KEY_LEN, StoreError, StoreKey, StoreKeys,
+    WalletStore,
 };
 use rand_core::CryptoRng;
 use tracing::debug;
@@ -136,6 +137,8 @@ pub struct Session<D> {
     pub store: D,
     /// The stored slates the history read decoded, kept while the wallet is open.
     pub(crate) slates: SlateCache,
+    /// How the database was found on disk, for an opener that keeps it encrypted at rest.
+    pub(crate) at_rest: Option<AtRestReport>,
 }
 
 /// Where a wallet lives and what it must match, for work on the blocking pool.
@@ -182,7 +185,8 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     }
     let keychain = Keychain::from_seed(seed, target.network)?;
     let ours = SeedIdentity::of(seed, &keychain)?;
-    let store = stores.open(target.data_dir, store_keys(seed)?, &store_key(seed)?)?;
+    let (store, at_rest) =
+        stores.open_reporting(target.data_dir, store_keys(seed)?, &store_key(seed)?)?;
     let identity = store.read(|repos| stored_identity(repos, target.network, &ours))?;
     match (identity, source) {
         (StoredIdentity::Empty, _) | (StoredIdentity::Proven, SeedSource::Recovered) => {}
@@ -200,12 +204,13 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     put_seed(&mut vault, seed)?;
     debug!("secret storage created");
     let rebuilt = identity == StoredIdentity::Empty && source == SeedSource::Recovered;
-    store.write(|repos| {
+    let at_rest = store.write(|repos| {
         initialise(repos, target.network, &ours, key_start)?;
-        if rebuilt {
+        let at_rest = after_rollback(repos, at_rest)?;
+        if rebuilt || rolled_back(at_rest.as_ref()) {
             require_restore_scan(repos)?;
         }
-        Ok::<_, WalletError>(())
+        Ok::<_, WalletError>(at_rest)
     })?;
     debug!("wallet database prepared");
     Ok(Session {
@@ -213,6 +218,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
         seed: seed.clone(),
         store,
         slates: SlateCache::default(),
+        at_rest,
     })
 }
 
@@ -230,16 +236,19 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     let seed = Seed::from_entropy(stored.expose_bytes()).map_err(WalletError::StoredSeed)?;
     let keychain = Keychain::from_seed(&seed, target.network)?;
     let ours = SeedIdentity::of(&seed, &keychain)?;
-    let store = stores.open(target.data_dir, store_keys(&seed)?, &store_key(&seed)?)?;
+    let (store, at_rest) =
+        stores.open_reporting(target.data_dir, store_keys(&seed)?, &store_key(&seed)?)?;
     // A missing database is rebuilt empty: everything in it but history is recovered by a scan,
-    // which must run before new outputs are created.
-    store.write(|repos| {
+    // which must run before new outputs are created. So does one beside which an older build
+    // made outputs after a rollback.
+    let at_rest = store.write(|repos| {
         let identity = stored_identity(repos, target.network, &ours)?;
         initialise(repos, target.network, &ours, key_start)?;
-        if identity == StoredIdentity::Empty {
+        let at_rest = after_rollback(repos, at_rest)?;
+        if identity == StoredIdentity::Empty || rolled_back(at_rest.as_ref()) {
             require_restore_scan(repos)?;
         }
-        Ok::<_, WalletError>(())
+        Ok::<_, WalletError>(at_rest)
     })?;
     debug!("wallet database prepared");
     Ok(Session {
@@ -247,6 +256,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
         seed: seed.clone(),
         store,
         slates: SlateCache::default(),
+        at_rest,
     })
 }
 
@@ -294,9 +304,13 @@ pub(crate) fn check_seed<S: StoreOpener>(
 ) -> Result<PhraseCheck, WalletError> {
     let keychain = Keychain::from_seed(&seed, target.network)?;
     let ours = SeedIdentity::of(&seed, &keychain)?;
-    let Some(store) =
-        stores.open_existing(target.data_dir, store_keys(&seed)?, &store_key(&seed)?)?
-    else {
+    // An encrypted database that refuses the phrase's key is not the phrase's.
+    let opened = match stores.open_existing(target.data_dir, store_keys(&seed)?, &store_key(&seed)?)
+    {
+        Err(StoreError::WrongKey) => return Err(WalletError::ForeignDatabase),
+        opened => opened?,
+    };
+    let Some(store) = opened else {
         return Ok(PhraseCheck::Unused);
     };
     match store.read(|repos| stored_identity(repos, target.network, &ours))? {
@@ -443,6 +457,32 @@ fn initialise(
     repos.put_setting(SEED_CHECK_SETTING, &ours.check_text())?;
     place_key_counters(repos, key_start)?;
     ensure_default_account(repos)
+}
+
+/// Takes the store's mark of a plain database set aside after a rollback into `report`, and
+/// clears it: the restore scan it asks for is required in the same transaction.
+fn after_rollback(
+    repos: &mut dyn Repositories,
+    report: Option<AtRestReport>,
+) -> Result<Option<AtRestReport>, WalletError> {
+    if repos.setting(ROLLBACK_SCAN_SETTING)?.is_none() {
+        return Ok(report);
+    }
+    repos.delete_setting(ROLLBACK_SCAN_SETTING)?;
+    Ok(Some(match report {
+        Some(report) => AtRestReport {
+            rollback_set_aside: true,
+            ..report
+        },
+        None => AtRestReport {
+            state: AtRestState::Encrypted,
+            rollback_set_aside: true,
+        },
+    }))
+}
+
+fn rolled_back(report: Option<&AtRestReport>) -> bool {
+    report.is_some_and(|report| report.rollback_set_aside)
 }
 
 fn require_restore_scan(repos: &mut dyn Repositories) -> Result<(), WalletError> {

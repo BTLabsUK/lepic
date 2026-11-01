@@ -248,6 +248,16 @@ where
             .read(|repos| Ok(lifecycle::restore_scan_pending(repos)?))
     }
 
+    /// How the database was found on disk when the wallet was unlocked: encrypted, moved into
+    /// an encrypted database by this unlock, or still plain because that move failed (tried
+    /// again at the next unlock), and whether an older build's plain database was set aside.
+    /// `None` for an opener that does not keep the database encrypted at rest. Fails with
+    /// [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub fn store_at_rest(&self) -> Result<Option<lepic_store::AtRestReport>, WalletError> {
+        Ok(self.session()?.at_rest.clone())
+    }
+
     /// The fingerprint of the wallet's seed that its database stores, as lowercase hex; equal
     /// to [`lifecycle::seed_fingerprint`] of its recovery phrase, on any network. It is no
     /// secret, but it identifies the wallet; it never proves a phrase. Fails with

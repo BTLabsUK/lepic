@@ -9,8 +9,8 @@ use jiff::Timestamp;
 use lepic_keychain::SecretStore;
 use lepic_keychain::vault::BackendError;
 #[cfg(feature = "sqlite")]
-use lepic_store::{AtRest, SqliteStore};
-use lepic_store::{StoreError, StoreKey, StoreKeys, WalletStore};
+use lepic_store::{AtRest, MigrationObserver, SqliteStore};
+use lepic_store::{AtRestReport, StoreError, StoreKey, StoreKeys, WalletStore};
 use lepic_transport::registry::TransportRegistry;
 use rand_core::CryptoRng;
 use thiserror::Error;
@@ -73,21 +73,93 @@ pub trait StoreOpener: Send + Sync {
     ) -> Result<Option<Self::Store>, StoreError> {
         self.open(data_dir, keys, store_key).map(Some)
     }
+
+    /// [`StoreOpener::open`], and what the open found on disk, for openers that keep the
+    /// database encrypted at rest; the default reports nothing.
+    fn open_reporting(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<(Self::Store, Option<AtRestReport>), StoreError> {
+        self.open(data_dir, keys, store_key)
+            .map(|store| (store, None))
+    }
 }
 
 #[cfg(feature = "sqlite")]
-/// File name of the plain wallet database inside the data directory.
-pub const DATABASE_FILE: &str = "wallet.sqlite3";
+pub use lepic_store::{DATABASE_FILE, ENCRYPTED_DATABASE_FILE};
 
 #[cfg(feature = "sqlite")]
-/// File name of the encrypted wallet database inside the data directory. Its key check is
-/// beside it, with `.check` added to the name.
-pub const ENCRYPTED_DATABASE_FILE: &str = "wallet.enc.sqlite3";
+/// The product store: SQLite encrypted at rest under the store key in the configured data
+/// directory, which must exist, as [`lepic_store::open_wallet_dir`] opens it. A plain
+/// [`DATABASE_FILE`] of an earlier build is copied into [`ENCRYPTED_DATABASE_FILE`] at its
+/// first open and set aside; a copy that fails runs the session on the plain file and is tried
+/// again at the next open. A check of a phrase ([`StoreOpener::open_existing`]) creates and
+/// moves nothing. The observer, when given, hears the progress of a copy.
+#[derive(Clone, Default)]
+pub struct EncryptingSqliteStores {
+    observer: Option<Arc<MigrationObserver>>,
+}
 
 #[cfg(feature = "sqlite")]
-/// The product store: plain SQLite in [`DATABASE_FILE`] inside the configured data directory,
-/// which must exist. It ignores the store key.
-// TODO(N-02): the copy-then-switch move of this file to [`EncryptedSqliteStores`] replaces it.
+impl EncryptingSqliteStores {
+    /// The store, reporting the progress of a copy to `observer`.
+    pub fn with_observer(observer: Arc<MigrationObserver>) -> Self {
+        Self {
+            observer: Some(observer),
+        }
+    }
+}
+
+#[cfg(feature = "sqlite")]
+impl std::fmt::Debug for EncryptingSqliteStores {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptingSqliteStores")
+            .field("observer", &self.observer.is_some())
+            .finish()
+    }
+}
+
+#[cfg(feature = "sqlite")]
+impl StoreOpener for EncryptingSqliteStores {
+    type Store = SqliteStore;
+
+    fn open(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<SqliteStore, StoreError> {
+        self.open_reporting(data_dir, keys, store_key)
+            .map(|(store, _)| store)
+    }
+
+    fn open_existing(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<Option<SqliteStore>, StoreError> {
+        lepic_store::open_existing_wallet_dir(data_dir, keys, store_key)
+    }
+
+    fn open_reporting(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<(SqliteStore, Option<AtRestReport>), StoreError> {
+        let (store, report) =
+            lepic_store::open_wallet_dir(data_dir, keys, store_key, self.observer.as_deref())?;
+        Ok((store, Some(report)))
+    }
+}
+
+#[cfg(feature = "sqlite")]
+/// Plain SQLite in [`DATABASE_FILE`] inside the configured data directory, which must exist.
+/// It ignores the store key. For tests and tools that read the plain database of an earlier
+/// build; the product opens [`EncryptingSqliteStores`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SqliteStores;
 

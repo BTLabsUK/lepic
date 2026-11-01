@@ -251,7 +251,11 @@ fn store_key_vectors_open_their_database_and_check_file() {
         )
         .unwrap();
         let opened = EncryptedSqliteStores
-            .open(folder.path(), StoreKeys::from_bytes([0; 32], [0; 32]), &derived)
+            .open(
+                folder.path(),
+                StoreKeys::from_bytes([0; 32], [0; 32]),
+                &derived,
+            )
             .unwrap();
         assert_eq!(
             opened
@@ -266,8 +270,11 @@ fn store_key_vectors_open_their_database_and_check_file() {
             hex_bytes(vector["expected"]["check_file"].as_str().unwrap()),
             "{name}: an accepted check is kept"
         );
-        let refused =
-            EncryptedSqliteStores.open(folder.path(), StoreKeys::from_bytes([0; 32], [0; 32]), &other);
+        let refused = EncryptedSqliteStores.open(
+            folder.path(),
+            StoreKeys::from_bytes([0; 32], [0; 32]),
+            &other,
+        );
         assert!(matches!(refused, Err(StoreError::WrongKey)), "{name}");
         seen += 1;
     }

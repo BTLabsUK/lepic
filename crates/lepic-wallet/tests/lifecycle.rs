@@ -939,3 +939,183 @@ fn a_damaged_database_is_set_aside_and_the_next_open_rebuilds_it() {
     assert_eq!(reopened.accounts().unwrap().len(), 1);
     assert!(reopened.restore_scan_required().unwrap());
 }
+
+/// Ports on the real SQLite stores of `stores`, in the harness's other ports.
+fn sqlite_ports<S: StoreOpener>(
+    harness: &Harness,
+    stores: S,
+) -> lepic_wallet::Ports<lepic_node::NodeClient<lepic_node::mock::MockNode>, S, TestVault> {
+    let memory = harness.ports(harness.vault.clone());
+    lepic_wallet::Ports {
+        node: memory.node,
+        stores,
+        secrets: memory.secrets,
+        transports: memory.transports,
+        clock: memory.clock,
+        rng: memory.rng,
+        runtime: memory.runtime,
+    }
+}
+
+fn file_names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| !name.ends_with("-shm"))
+        .collect();
+    names.sort();
+    names
+}
+
+/// A wallet an earlier build made in a plain database, with a second account, closed.
+fn plain_wallet(harness: &Harness, dir: &std::path::Path) -> lepic_wallet::WalletConfig {
+    let mut config = harness.config(Network::Floonet);
+    config.data_dir = dir.to_owned();
+    let wallet = Wallet::new(config.clone(), sqlite_ports(harness, SqliteStores)).unwrap();
+    harness
+        .block_on(wallet.restore(password(PASSWORD), &vector_phrase()))
+        .unwrap();
+    wallet.create_account("savings").unwrap();
+    wallet.close();
+    assert!(dir.join(lepic_wallet::DATABASE_FILE).is_file());
+    config
+}
+
+#[test]
+fn an_open_moves_a_plain_wallet_into_the_encrypted_store() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let config = plain_wallet(&harness, dir.path());
+    let scan_before = {
+        let wallet = Wallet::new(config.clone(), sqlite_ports(&harness, SqliteStores)).unwrap();
+        harness.block_on(wallet.open(password(PASSWORD))).unwrap();
+        let required = wallet.restore_scan_required().unwrap();
+        wallet.close();
+        required
+    };
+
+    let wallet = Wallet::new(
+        config.clone(),
+        sqlite_ports(&harness, lepic_wallet::EncryptingSqliteStores::default()),
+    )
+    .unwrap();
+    harness.block_on(wallet.open(password(PASSWORD))).unwrap();
+    let report = wallet.store_at_rest().unwrap().unwrap();
+    assert_eq!(report.state, lepic_store::AtRestState::MigratedNow);
+    assert!(!report.rollback_set_aside);
+    assert_eq!(wallet.accounts().unwrap().len(), 2);
+    assert_eq!(wallet.restore_scan_required().unwrap(), scan_before);
+    wallet.close();
+    let names = file_names(dir.path());
+    assert!(
+        names.contains(&"wallet.enc.sqlite3".to_owned()),
+        "{names:?}"
+    );
+    assert!(names.contains(&"wallet.enc.sqlite3.check".to_owned()));
+    assert!(names.contains(&"wallet.sqlite3.pre-encryption".to_owned()));
+    assert!(!names.contains(&"wallet.sqlite3".to_owned()));
+
+    let again = Wallet::new(
+        config,
+        sqlite_ports(&harness, lepic_wallet::EncryptingSqliteStores::default()),
+    )
+    .unwrap();
+    harness.block_on(again.open(password(PASSWORD))).unwrap();
+    assert_eq!(
+        again.store_at_rest().unwrap().unwrap().state,
+        lepic_store::AtRestState::Encrypted
+    );
+    assert_eq!(again.accounts().unwrap().len(), 2);
+}
+
+/// An older build after a rollback finds no plain database, makes an empty one and uses it;
+/// back on this build the encrypted store opens with its history, the older build's file is set
+/// aside and a scan from genesis is required, so outputs it made are found.
+#[test]
+fn a_plain_database_made_after_a_rollback_is_set_aside_and_a_scan_required() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let config = plain_wallet(&harness, dir.path());
+    let encrypting = || lepic_wallet::EncryptingSqliteStores::default();
+    let wallet = Wallet::new(config.clone(), sqlite_ports(&harness, encrypting())).unwrap();
+    harness.block_on(wallet.open(password(PASSWORD))).unwrap();
+    wallet.close();
+
+    let older = Wallet::new(config.clone(), sqlite_ports(&harness, SqliteStores)).unwrap();
+    harness.block_on(older.open(password(PASSWORD))).unwrap();
+    assert_eq!(
+        older.accounts().unwrap().len(),
+        1,
+        "the older build starts empty"
+    );
+    older.close();
+
+    let back = Wallet::new(config.clone(), sqlite_ports(&harness, encrypting())).unwrap();
+    harness.block_on(back.open(password(PASSWORD))).unwrap();
+    let report = back.store_at_rest().unwrap().unwrap();
+    assert_eq!(report.state, lepic_store::AtRestState::Encrypted);
+    assert!(report.rollback_set_aside);
+    assert!(back.restore_scan_required().unwrap());
+    assert_eq!(back.accounts().unwrap().len(), 2);
+    back.close();
+    let names = file_names(dir.path());
+    assert!(!names.contains(&"wallet.sqlite3".to_owned()), "{names:?}");
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with("wallet.sqlite3.after-rollback-")),
+        "{names:?}"
+    );
+
+    // The scan is still required at the next open, and nothing more is set aside.
+    let next = Wallet::new(config, sqlite_ports(&harness, encrypting())).unwrap();
+    harness.block_on(next.open(password(PASSWORD))).unwrap();
+    assert!(!next.store_at_rest().unwrap().unwrap().rollback_set_aside);
+    assert!(next.restore_scan_required().unwrap());
+}
+
+#[test]
+fn check_phrase_reads_an_unmigrated_and_a_migrated_store() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let config = plain_wallet(&harness, dir.path());
+    let encrypting = lepic_wallet::EncryptingSqliteStores::default();
+    let before = file_names(dir.path());
+    let plain = std::fs::read(dir.path().join(lepic_wallet::DATABASE_FILE)).unwrap();
+
+    let checked =
+        lifecycle::check_phrase(&encrypting, dir.path(), Network::Floonet, &vector_phrase());
+    assert!(
+        matches!(checked, Ok(PhraseCheck::Matches(_))),
+        "{checked:?}"
+    );
+    assert_eq!(file_names(dir.path()), before, "a check moved files");
+    assert_eq!(
+        std::fs::read(dir.path().join(lepic_wallet::DATABASE_FILE)).unwrap(),
+        plain
+    );
+    let other = Seed::from_entropy(&[9; 32]).unwrap().to_mnemonic().unwrap();
+    let refused = lifecycle::check_phrase(&encrypting, dir.path(), Network::Floonet, &other);
+    assert!(
+        matches!(refused, Err(WalletError::ForeignDatabase)),
+        "{refused:?}"
+    );
+
+    let wallet = Wallet::new(config, sqlite_ports(&harness, encrypting.clone())).unwrap();
+    harness.block_on(wallet.open(password(PASSWORD))).unwrap();
+    wallet.close();
+    let migrated = file_names(dir.path());
+    let checked =
+        lifecycle::check_phrase(&encrypting, dir.path(), Network::Floonet, &vector_phrase());
+    assert!(
+        matches!(checked, Ok(PhraseCheck::Matches(_))),
+        "{checked:?}"
+    );
+    // A phrase of another seed gives another store key, which the key check refuses.
+    let refused = lifecycle::check_phrase(&encrypting, dir.path(), Network::Floonet, &other);
+    assert!(
+        matches!(refused, Err(WalletError::ForeignDatabase)),
+        "{refused:?}"
+    );
+    assert_eq!(file_names(dir.path()), migrated);
+}
