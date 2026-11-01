@@ -82,9 +82,9 @@ pub fn migration_in_progress(dir: &Path) -> bool {
 /// 2. Else with a plain `wallet.sqlite3`, copies it into a new encrypted database, checks the
 ///    copy (`quick_check`, schema and user version, rows of every table), switches to it by
 ///    rename and sets the plain one aside as `.pre-encryption`; the schema migrations then run
-///    on the encrypted database only. A copy that fails leaves the plain file as it was and
-///    opens it plain for this session ([`AtRestState::FellBackToPlain`]); the next open tries
-///    again. A damaged plain file is set aside as [`SqliteStore::open`] does, and one of a
+///    on the encrypted database only. A copy that fails leaves the plain file in place and
+///    opens it plain for this session ([`AtRestState::FellBackToPlain`]), which migrates its
+///    schema there, as an open before encryption did; the next open tries again. A damaged plain file is set aside as [`SqliteStore::open`] does, and one of a
 ///    newer schema refused, unchanged.
 /// 3. Else makes a new encrypted database.
 ///
@@ -103,7 +103,8 @@ pub fn open_wallet_dir(
 /// anything: the encrypted database as [`SqliteStore::open_existing`] opens it, or, without
 /// one, a throwaway encrypted copy of the plain database, migrated and removed when the store
 /// is dropped, so the plain file's schema stays as it is. `None` when there is neither. A copy
-/// that fails reads the plain file in place instead, as an open that falls back does.
+/// that fails reads the plain file in place instead, as an open that falls back does, which
+/// migrates its schema there.
 pub fn open_existing_wallet_dir(
     dir: &Path,
     keys: StoreKeys,

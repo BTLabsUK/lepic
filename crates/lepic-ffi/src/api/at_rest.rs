@@ -17,7 +17,8 @@ pub enum StoreAtRestState {
     /// switched to it. The plain file was kept aside until [`EpicWallet::retire_plain_store`].
     MigratedNow,
     /// The copy failed (for example the disk is full), so this session runs on the plain
-    /// database, which is unchanged in place. The next unlock tries again.
+    /// database in place, whose schema it migrates there to this version's, as an unlock before
+    /// encryption did. The next unlock tries the copy again.
     FellBackToPlain,
 }
 

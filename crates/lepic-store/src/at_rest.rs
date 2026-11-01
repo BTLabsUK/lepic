@@ -45,8 +45,9 @@ pub enum AtRestState {
     /// A plain database was copied into a new encrypted one by this open, which then switched
     /// to it; the plain file was set aside as `wallet.sqlite3.pre-encryption`.
     MigratedNow,
-    /// The copy of the plain database failed, so this session runs on the plain file, which
-    /// was left in place. The next open tries the copy again. `reason` names the failure,
+    /// The copy of the plain database failed, so this session runs on the plain file, left in
+    /// place, whose schema the open migrated there as an open before encryption did. The next
+    /// open tries the copy again. `reason` names the failure,
     /// without paths.
     FellBackToPlain { reason: String },
 }
