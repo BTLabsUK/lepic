@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "listing_signatures",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "dkey": "036930f46dd0b16d866d59d1054aa63298b357499cd1862ef16f3f55f1cafceb82",
+    "generation": 0,
+    "tag": "lepic/listing-signature/v1",
+    "message": "6c65706963206c697374696e67207369676e617475726520766563746f72",
+    "domains": [
+      "epic-listing/1",
+      "epic-listing-moved/1",
+      "epic-payreq/1",
+      "epic-unlist/1",
+      "epic-dir-hello/1"
+    ]
+  },
+  "expected": {
+    "public_key": "03f3ce5120c5882b68a765d716c245b848502bac129c364208a5e37a7dbd3b873d",
+    "cases": [
+      {
+        "domain": "epic-listing/1",
+        "digest": "894eb2007eeb6b9bd36c4a6a686dedb974bd0f5c661ddb4d67095c310bbd9c3f",
+        "signature_der": "3045022100e179276c29a12c400d191d4d996535fa849835037a233bbab5e54866fda044930220163e3aeeac022398a3f88c0918453079b67cd32ee5e92f69882cdf066bf4908e"
+      },
+      {
+        "domain": "epic-listing-moved/1",
+        "digest": "6ba5611b05fda4e91ae9f1fdfeecbb85a2c5c4d0c0fae52085070cbb420acc4a",
+        "signature_der": "3044022019d437f18064c3cc462ff04641d9bef2acad5d8984318f3c06488fcd3d643cb402201d1089afbea2ebf721b3dfa6600b85113c82897fa90305a9831cc74f097818d6"
+      },
+      {
+        "domain": "epic-payreq/1",
+        "digest": "5006bbd8aa4b48bcf64dc8f623b30cda5aa05b5fe9960c6b988f7f60a0d1a479",
+        "signature_der": "30440220009d36e3a286de86fbe44032084a6fcab822742f927fcf23d316b0bb723384060220207aa48d7c393b7d0e4095bd0099a78d9d437e4e9ba8be367e0f82fc76fbf83f"
+      },
+      {
+        "domain": "epic-unlist/1",
+        "digest": "696d00672646a168a05c89b6bc883404b1871c172d8170879bfe6ae71e69fc96",
+        "signature_der": "3045022100b6dbd58ed1f9eafc801bc28b82f41502838e564f06e47827161f84e0116be3c4022028e22f5ad6942c006f878e2a45e65f79d6007c032f2d19e562a887f18760e644"
+      },
+      {
+        "domain": "epic-dir-hello/1",
+        "digest": "e0ab3bb40384f0ba2039f8ebd31532b5744c03b9b4f1dcf2005ea97d0c786c39",
+        "signature_der": "304402200b6ecdb82fdb8e29fa58e683794174aa2951f881ef81e0d8c0e96855ee0998f80220276915a773f42f2dd8baeb60c81ee6f2b6728adfa1d07e7b82da48ff91b72c99"
+      }
+    ]
+  }
+}

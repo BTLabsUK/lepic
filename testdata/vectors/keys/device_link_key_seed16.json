@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "device_link_key_seed16",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "seed": "a55ac33c9669f00f123456789abcdef0",
+    "label": "lepic-wallet device link key v1",
+    "tag": "lepic/device-link/v1",
+    "transcripts": [
+      "",
+      "68656c6c6f207472616e736372697074"
+    ]
+  },
+  "expected": {
+    "ed25519_seed": "155132dcae9f8957fad0f30d34a74bdded139e5641b253d124f710a6079f6bb9",
+    "public_key": "c632fa8daf4641c1e0ea7a0fff2c8ce95f630bf55f56cd3207fd167bcb428890",
+    "cases": [
+      {
+        "transcript": "",
+        "signature": "b8ce29bcc888e5a8ad54fe91602a86e72962b680e0f3e01f20d08144a28f755c8563ad387d294f6ae487e1db9e4da71f570226e386398500b7f7926f0ca62807"
+      },
+      {
+        "transcript": "68656c6c6f207472616e736372697074",
+        "signature": "e2235af52caaafc16d36309ce9ef4205bb2de3e4ef266408e7a1a981773b14b9221deb3db48d2e8e367ba352323a5d59ded37c412144f000a45a0ad81b97b806"
+      }
+    ]
+  }
+}

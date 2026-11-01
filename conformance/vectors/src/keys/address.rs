@@ -49,7 +49,7 @@ struct Case {
 
 /// `address` is upstream's display form with the default domain and no port.
 #[derive(Serialize)]
-struct EpicboxForm {
+pub(super) struct EpicboxForm {
     network: &'static str,
     version_bytes: String,
     public_key: String,
@@ -143,7 +143,7 @@ fn with_address_branch(parent: KeyPath, index: u32) -> Result<[u32; 4], Error> {
     Ok(components)
 }
 
-fn epicbox_form(network: Network, public: PublicKey) -> Result<EpicboxForm, Error> {
+pub(super) fn epicbox_form(network: Network, public: PublicKey) -> Result<EpicboxForm, Error> {
     // Upstream picks the Epicbox version bytes from the process-wide chain type.
     let _chain_type = chain_type_guard();
     let previous = global::CHAIN_TYPE.read().clone();

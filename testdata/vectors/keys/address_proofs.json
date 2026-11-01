@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "address_proofs",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "salt": "lepic/addr-proof/1",
+    "prover_address_secret": "4141414141414141414141414141414141414141414141414141414141414141",
+    "verifier_mailbox_secret": "4242424242424242424242424242424242424242424242424242424242424242",
+    "cases": [
+      {
+        "network": 1,
+        "step": 1,
+        "prover_card_digest": "cb1814f19ca667ef226e0e8ce160dd291712a2e7eb928d065f73c92b32b43752",
+        "verifier_card_digest": "",
+        "invite": "696e76697465206279746573"
+      },
+      {
+        "network": 1,
+        "step": 2,
+        "prover_card_digest": "cb1814f19ca667ef226e0e8ce160dd291712a2e7eb928d065f73c92b32b43752",
+        "verifier_card_digest": "89a855bf53da94004894669c4aded5cec1a52c3dcb402f0886792fe601f866fa",
+        "invite": "696e76697465206279746573"
+      },
+      {
+        "network": 0,
+        "step": 3,
+        "prover_card_digest": "cb1814f19ca667ef226e0e8ce160dd291712a2e7eb928d065f73c92b32b43752",
+        "verifier_card_digest": "89a855bf53da94004894669c4aded5cec1a52c3dcb402f0886792fe601f866fa",
+        "invite": ""
+      }
+    ]
+  },
+  "expected": {
+    "cases": [
+      {
+        "prover_address_public": "02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619",
+        "verifier_mailbox_public": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "shared_x": "ca479bca7fd2470c49efa6f3cf0977b7a819a529c654800bc01e28d60ec696a8",
+        "key": "8c613295e10ca39b0456c823a2a5f454e1a01b01cd3f8cbd22eee40a8ebb65f0",
+        "tag": "078813f88ba3de00e2ad73cd31cf8fc07bd853cdae0b64115c964e0005650737"
+      },
+      {
+        "prover_address_public": "02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619",
+        "verifier_mailbox_public": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "shared_x": "ca479bca7fd2470c49efa6f3cf0977b7a819a529c654800bc01e28d60ec696a8",
+        "key": "473329c59cb9459e895e816590413d87353041a662ebd2af88dcff5ad9eba041",
+        "tag": "50f0560622ad011842a647f8983a17b0db6077edd101d07a293672e2328150a5"
+      },
+      {
+        "prover_address_public": "02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619",
+        "verifier_mailbox_public": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "shared_x": "ca479bca7fd2470c49efa6f3cf0977b7a819a529c654800bc01e28d60ec696a8",
+        "key": "ee5cf2ace157801142a253f5f9220cb0f4d2a3081cd7588fc5aee01788faf94b",
+        "tag": "6bb0a23d4a98b9864e0f02cb93e79fce24d8c720ad048e0916f1d2098001bb4f"
+      }
+    ]
+  }
+}

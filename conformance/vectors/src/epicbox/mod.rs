@@ -7,6 +7,7 @@
 //! upstream code before it is written.
 
 mod address;
+mod marker;
 mod message;
 mod signature;
 
@@ -53,6 +54,7 @@ pub(crate) fn generate(_pins: &Pins) -> Result<Vec<Rendered>, Error> {
     let mut vectors = address::generate(&wallet)?;
     vectors.extend(signature::generate(&wallet)?);
     vectors.extend(message::generate(&wallet)?);
+    vectors.extend(marker::generate(&wallet)?);
     Ok(vectors)
 }
 

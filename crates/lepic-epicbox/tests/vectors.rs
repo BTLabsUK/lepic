@@ -91,13 +91,52 @@ fn every_vector_has_a_replay() {
         .collect();
     for name in &names {
         assert!(
-            ["address_", "signature_", "message_"]
+            ["address_", "signature_", "message_", "marker_"]
                 .iter()
                 .any(|prefix| name.starts_with(prefix)),
             "{name} is not replayed"
         );
     }
-    assert_eq!(names.len(), 40);
+    assert_eq!(names.len(), 42);
+}
+
+/// `marker_s1_v2_features_*`: the marked V2 S1 over Epicbox with `f`, which `epic-wallet`'s
+/// listener decodes as the plain S1.
+#[test]
+fn marked_s1_with_features_is_written_as_the_vector() {
+    use lepic_epicbox::marker::v2::MarkedV2JsonCodec;
+    use lepic_epicbox::marker::v3::lepic_marker_features;
+    use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+    use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
+    let codec = V2JsonCodec::new(
+        lepic_primitives::params::Network::Floonet
+            .params()
+            .default_base_fee(),
+    );
+    for vector in vectors("marker_") {
+        let name = text(&vector["name"]);
+        let plain = WireSlate::text(
+            MediaType::JSON,
+            text(&vector["inputs"]["plain_s1"]).to_owned(),
+        );
+        let features = u32::try_from(vector["inputs"]["features"].as_u64().unwrap()).unwrap();
+        let slate = codec.decode(&plain).unwrap();
+        let marked = MarkedV2JsonCodec::new(codec)
+            .with_features(features)
+            .encode(
+                &slate,
+                &EncodeContext {
+                    block_header_version: 6,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            marked.as_text().unwrap(),
+            text(&vector["expected"]["json"]),
+            "{name}"
+        );
+        assert_eq!(lepic_marker_features(&marked), Some(features), "{name}");
+    }
 }
 
 #[test]

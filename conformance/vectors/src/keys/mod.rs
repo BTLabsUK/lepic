@@ -9,6 +9,7 @@ mod address;
 mod commitments;
 mod derivation;
 mod mnemonic;
+mod namespace;
 mod proofs;
 mod seed_file;
 
@@ -138,6 +139,7 @@ pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     vectors.extend(proofs::generate(&pins)?);
     vectors.extend(address::generate(&pins)?);
     vectors.extend(seed_file::generate(&pins)?);
+    vectors.extend(namespace::generate(&pins)?);
     Ok(vectors)
 }
 
