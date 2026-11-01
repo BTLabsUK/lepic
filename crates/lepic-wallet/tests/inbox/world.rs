@@ -124,6 +124,7 @@ impl Receiver {
             &self.harness.stores,
             &self.harness.data_dir,
             context_key(&seed),
+            &lepic_wallet::store_key(&seed).unwrap(),
         )
         .unwrap()
     }

@@ -9,8 +9,8 @@ use jiff::Timestamp;
 use lepic_keychain::SecretStore;
 use lepic_keychain::vault::BackendError;
 #[cfg(feature = "sqlite")]
-use lepic_store::SqliteStore;
-use lepic_store::{StoreError, StoreKeys, WalletStore};
+use lepic_store::{AtRest, SqliteStore};
+use lepic_store::{StoreError, StoreKey, StoreKeys, WalletStore};
 use lepic_transport::registry::TransportRegistry;
 use rand_core::CryptoRng;
 use thiserror::Error;
@@ -48,11 +48,19 @@ impl std::fmt::Debug for SharedRng {
 }
 
 /// Opens the wallet database. It can only be opened once the seed is known, because private
-/// transaction contexts are sealed under a key derived from it.
+/// transaction contexts are sealed under a key derived from it, and the whole file under
+/// another.
 pub trait StoreOpener: Send + Sync {
     type Store: WalletStore + 'static;
 
-    fn open(&self, data_dir: &Path, keys: StoreKeys) -> Result<Self::Store, StoreError>;
+    /// Opens or creates the database. `store_key` encrypts the file for openers that keep it
+    /// encrypted at rest; the others ignore it.
+    fn open(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<Self::Store, StoreError>;
 
     /// Opens the database only when one exists, and changes nothing when it is damaged:
     /// `None` when there is none, [`StoreError::Damaged`] for a damaged one, left where it
@@ -61,18 +69,25 @@ pub trait StoreOpener: Send + Sync {
         &self,
         data_dir: &Path,
         keys: StoreKeys,
+        store_key: &StoreKey,
     ) -> Result<Option<Self::Store>, StoreError> {
-        self.open(data_dir, keys).map(Some)
+        self.open(data_dir, keys, store_key).map(Some)
     }
 }
 
 #[cfg(feature = "sqlite")]
-/// File name of the wallet database inside the data directory.
+/// File name of the plain wallet database inside the data directory.
 pub const DATABASE_FILE: &str = "wallet.sqlite3";
 
 #[cfg(feature = "sqlite")]
-/// The product store: SQLite in [`DATABASE_FILE`] inside the configured data directory, which
-/// must exist.
+/// File name of the encrypted wallet database inside the data directory. Its key check is
+/// beside it, with `.check` added to the name.
+pub const ENCRYPTED_DATABASE_FILE: &str = "wallet.enc.sqlite3";
+
+#[cfg(feature = "sqlite")]
+/// The product store: plain SQLite in [`DATABASE_FILE`] inside the configured data directory,
+/// which must exist. It ignores the store key.
+// TODO(N-02): the copy-then-switch move of this file to [`EncryptedSqliteStores`] replaces it.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SqliteStores;
 
@@ -80,16 +95,61 @@ pub struct SqliteStores;
 impl StoreOpener for SqliteStores {
     type Store = SqliteStore;
 
-    fn open(&self, data_dir: &Path, keys: StoreKeys) -> Result<SqliteStore, StoreError> {
-        SqliteStore::open(&data_dir.join(DATABASE_FILE), keys)
+    fn open(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        _: &StoreKey,
+    ) -> Result<SqliteStore, StoreError> {
+        SqliteStore::open(&data_dir.join(DATABASE_FILE), keys, AtRest::Plain)
     }
 
     fn open_existing(
         &self,
         data_dir: &Path,
         keys: StoreKeys,
+        _: &StoreKey,
     ) -> Result<Option<SqliteStore>, StoreError> {
-        SqliteStore::open_existing(&data_dir.join(DATABASE_FILE), keys)
+        SqliteStore::open_existing(&data_dir.join(DATABASE_FILE), keys, AtRest::Plain)
+    }
+}
+
+#[cfg(feature = "sqlite")]
+/// SQLite in [`ENCRYPTED_DATABASE_FILE`] inside the configured data directory, which must
+/// exist, encrypted at rest under the store key ([`SqliteStore::open`] with
+/// [`AtRest::Encrypted`]). A key the file's check refuses fails with
+/// [`StoreError::WrongKey`] and changes nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EncryptedSqliteStores;
+
+#[cfg(feature = "sqlite")]
+impl StoreOpener for EncryptedSqliteStores {
+    type Store = SqliteStore;
+
+    fn open(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<SqliteStore, StoreError> {
+        SqliteStore::open(
+            &data_dir.join(ENCRYPTED_DATABASE_FILE),
+            keys,
+            AtRest::Encrypted(store_key),
+        )
+    }
+
+    fn open_existing(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<Option<SqliteStore>, StoreError> {
+        SqliteStore::open_existing(
+            &data_dir.join(ENCRYPTED_DATABASE_FILE),
+            keys,
+            AtRest::Encrypted(store_key),
+        )
     }
 }
 

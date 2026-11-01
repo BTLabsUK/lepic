@@ -147,8 +147,14 @@ impl Party {
 
     /// The wallet's database, opened with the key the engine seals contexts under.
     pub fn store(&self) -> MemoryStore {
-        let key = lepic_wallet::lifecycle::store_keys(&self.seed).unwrap();
-        lepic_wallet::StoreOpener::open(&self.stores, Path::new(DATA_DIR), key).unwrap()
+        let keys = lepic_wallet::lifecycle::store_keys(&self.seed).unwrap();
+        lepic_wallet::StoreOpener::open(
+            &self.stores,
+            Path::new(DATA_DIR),
+            keys,
+            &lepic_store::StoreKey::from_bytes([0; 32]),
+        )
+        .unwrap()
     }
 
     pub fn read<T>(&self, read: impl FnOnce(&dyn Repositories) -> Result<T, StoreError>) -> T {

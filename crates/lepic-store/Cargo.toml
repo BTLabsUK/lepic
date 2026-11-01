@@ -38,6 +38,14 @@ name = "legacy"
 required-features = ["sqlite"]
 
 [[test]]
+name = "at_rest_probe"
+required-features = ["sqlite"]
+
+[[test]]
+name = "encrypted"
+required-features = ["sqlite"]
+
+[[test]]
 name = "suite"
 required-features = ["sqlite"]
 

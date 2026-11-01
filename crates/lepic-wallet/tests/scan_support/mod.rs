@@ -259,6 +259,7 @@ pub fn store(harness: &Harness) -> TestStore {
         .open(
             &harness.data_dir,
             StoreKeys::from_bytes([0; CONTEXT_KEY_LEN], [0; CONTEXT_KEY_LEN]),
+            &lepic_store::StoreKey::from_bytes([0; 32]),
         )
         .unwrap()
 }

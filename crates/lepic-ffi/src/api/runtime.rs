@@ -443,10 +443,11 @@ impl lepic_wallet::StoreOpener for ClaimedStores {
     fn open(
         &self,
         data_dir: &Path,
-        key: lepic_store::StoreKeys,
+        keys: lepic_store::StoreKeys,
+        store_key: &lepic_store::StoreKey,
     ) -> Result<ClaimedStore, lepic_store::StoreError> {
         Ok(ClaimedStore::new(
-            lepic_wallet::SqliteStores.open(data_dir, key)?,
+            lepic_wallet::SqliteStores.open(data_dir, keys, store_key)?,
             &self.0,
         ))
     }

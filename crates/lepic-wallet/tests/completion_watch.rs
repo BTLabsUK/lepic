@@ -116,7 +116,11 @@ impl Side {
         let seed = Seed::from_mnemonic(mnemonic).unwrap();
         let store = harness
             .stores
-            .open(&harness.data_dir, context_key(&seed))
+            .open(
+                &harness.data_dir,
+                context_key(&seed),
+                &lepic_wallet::store_key(&seed).unwrap(),
+            )
             .unwrap();
         Self {
             harness,

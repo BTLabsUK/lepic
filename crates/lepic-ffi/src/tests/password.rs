@@ -613,6 +613,7 @@ fn database(fixture: &Fixture) -> lepic_store::SqliteStore {
     lepic_store::SqliteStore::open(
         &fixture.dir.path().join(lepic_wallet::DATABASE_FILE),
         lepic_store::StoreKeys::from_bytes([0; 32], [0; 32]),
+        lepic_store::AtRest::Plain,
     )
     .unwrap()
 }

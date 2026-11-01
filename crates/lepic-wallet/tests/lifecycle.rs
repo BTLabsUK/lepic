@@ -390,7 +390,11 @@ const FINGERPRINT: &str = "wallet.fingerprint";
 fn database(harness: &Harness) -> TestStore {
     harness
         .stores
-        .open(&harness.data_dir, StoreKeys::from_bytes([0; 32], [0; 32]))
+        .open(
+            &harness.data_dir,
+            StoreKeys::from_bytes([0; 32], [0; 32]),
+            &lepic_store::StoreKey::from_bytes([0; 32]),
+        )
         .unwrap()
 }
 

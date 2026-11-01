@@ -30,11 +30,11 @@ use lepic_wallet::event::{AnsweredSlate, ReceivedTransaction};
 use lepic_wallet::{Event, ReceiveError, WalletError};
 use receive_harness::*;
 use serde_json::Value;
-use support::both_stores;
+use support::every_store;
 use support::fixed_time;
 use uuid::Uuid;
 
-both_stores!(received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys);
+every_store!(received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys);
 fn received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys() {
     let case = "send_file_payment_proof";
     let (s1, transport) = delivered_s1(case);
@@ -93,7 +93,7 @@ fn received_slate_is_stored_with_its_output_and_reply_but_no_signing_keys() {
         .unwrap();
 }
 
-both_stores!(a_received_slate_announces_the_transaction_it_created);
+every_store!(a_received_slate_announces_the_transaction_it_created);
 fn a_received_slate_announces_the_transaction_it_created() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
@@ -116,7 +116,7 @@ fn a_received_slate_announces_the_transaction_it_created() {
     );
 }
 
-both_stores!(a_repeated_slate_announces_only_that_it_was_answered_again);
+every_store!(a_repeated_slate_announces_only_that_it_was_answered_again);
 fn a_repeated_slate_announces_only_that_it_was_answered_again() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
@@ -140,7 +140,7 @@ fn a_repeated_slate_announces_only_that_it_was_answered_again() {
     );
 }
 
-both_stores!(a_slate_missing_a_field_states_the_cause_once);
+every_store!(a_slate_missing_a_field_states_the_cause_once);
 fn a_slate_missing_a_field_states_the_cause_once() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
@@ -169,7 +169,7 @@ fn a_slate_missing_a_field_states_the_cause_once() {
     }
 }
 
-both_stores!(a_repeated_slate_is_answered_with_the_stored_reply_and_stores_nothing);
+every_store!(a_repeated_slate_is_answered_with_the_stored_reply_and_stores_nothing);
 fn a_repeated_slate_is_answered_with_the_stored_reply_and_stores_nothing() {
     // Over either method: the slate id, not the transport, identifies the payment.
     for case in ["send_file_plain", "send_epicbox_plain"] {
@@ -197,7 +197,7 @@ fn a_repeated_slate_is_answered_with_the_stored_reply_and_stores_nothing() {
     }
 }
 
-both_stores!(a_different_slate_under_a_received_id_is_refused);
+every_store!(a_different_slate_under_a_received_id_is_refused);
 fn a_different_slate_under_a_received_id_is_refused() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
@@ -229,7 +229,7 @@ fn a_different_slate_under_a_received_id_is_refused() {
     assert_eq!(receiver.transaction_count(), 1);
 }
 
-both_stores!(two_receives_of_one_slate_at_once_store_it_once);
+every_store!(two_receives_of_one_slate_at_once_store_it_once);
 fn two_receives_of_one_slate_at_once_store_it_once() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
@@ -258,7 +258,7 @@ fn two_receives_of_one_slate_at_once_store_it_once() {
     })));
 }
 
-both_stores!(an_expired_receive_is_not_answered_again);
+every_store!(an_expired_receive_is_not_answered_again);
 fn an_expired_receive_is_not_answered_again() {
     let case = "send_file_ttl";
     let (s1, transport) = delivered_s1(case);
@@ -289,7 +289,7 @@ fn an_expired_receive_is_not_answered_again() {
     assert_eq!(receiver.next_child(), next_child);
 }
 
-both_stores!(a_cancelled_receive_is_not_answered_again);
+every_store!(a_cancelled_receive_is_not_answered_again);
 fn a_cancelled_receive_is_not_answered_again() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
@@ -316,7 +316,7 @@ fn a_cancelled_receive_is_not_answered_again() {
     );
 }
 
-both_stores!(rejects_a_slate_whose_ttl_the_tip_has_reached);
+every_store!(rejects_a_slate_whose_ttl_the_tip_has_reached);
 fn rejects_a_slate_whose_ttl_the_tip_has_reached() {
     let case = "send_file_ttl";
     let (s1, transport) = delivered_s1(case);
@@ -351,7 +351,7 @@ fn s1_at_height(s1: &Value, height: u64) -> String {
     slate.to_string()
 }
 
-both_stores!(rejects_a_slate_created_far_above_the_tip_and_stores_nothing);
+every_store!(rejects_a_slate_created_far_above_the_tip_and_stores_nothing);
 fn rejects_a_slate_created_far_above_the_tip_and_stores_nothing() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let tip = slate_height(&s1);
@@ -373,7 +373,7 @@ fn rejects_a_slate_created_far_above_the_tip_and_stores_nothing() {
     assert_eq!(receiver.transaction_count(), 0);
 }
 
-both_stores!(receives_a_slate_created_above_a_lagging_node_tip);
+every_store!(receives_a_slate_created_above_a_lagging_node_tip);
 fn receives_a_slate_created_above_a_lagging_node_tip() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let tip = slate_height(&s1);
@@ -391,7 +391,7 @@ fn receives_a_slate_created_above_a_lagging_node_tip() {
     assert_eq!(receiver.transaction_count(), 1);
 }
 
-both_stores!(rejects_a_slate_that_pays_nothing);
+every_store!(rejects_a_slate_that_pays_nothing);
 fn rejects_a_slate_that_pays_nothing() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let mut slate: Value = serde_json::from_str(&json(&s1)).unwrap();
@@ -409,7 +409,7 @@ fn rejects_a_slate_that_pays_nothing() {
     assert_eq!(receiver.transaction_count(), 0);
 }
 
-both_stores!(a_restored_wallet_receives_only_after_its_restore_scan);
+every_store!(a_restored_wallet_receives_only_after_its_restore_scan);
 fn a_restored_wallet_receives_only_after_its_restore_scan() {
     let (s1, transport) = delivered_s1("send_file_plain");
     let receiver = Receiver::restored_without_scan(
@@ -431,7 +431,7 @@ fn a_restored_wallet_receives_only_after_its_restore_scan() {
     receiver.receive(transport, &json(&s1), None).unwrap();
 }
 
-both_stores!(rejects_malformed_participant_data);
+every_store!(rejects_malformed_participant_data);
 fn rejects_malformed_participant_data() {
     let receiver = Receiver::new(&receiver_mnemonic(&vector("send_file_plain_s2_v3")), 10);
     for name in [
@@ -452,7 +452,7 @@ fn rejects_malformed_participant_data() {
     assert_eq!(receiver.transaction_count(), 0);
 }
 
-both_stores!(rejects_a_sender_message_whose_signature_does_not_match);
+every_store!(rejects_a_sender_message_whose_signature_does_not_match);
 fn rejects_a_sender_message_whose_signature_does_not_match() {
     let case = "send_file_messages";
     let (s1, transport) = delivered_s1(case);
@@ -483,7 +483,7 @@ fn rejects_a_sender_message_whose_signature_does_not_match() {
     receiver.receive(transport, &original, None).unwrap();
 }
 
-both_stores!(rejects_a_payment_proof_for_another_receiver_address);
+every_store!(rejects_a_payment_proof_for_another_receiver_address);
 fn rejects_a_payment_proof_for_another_receiver_address() {
     let case = "send_file_payment_proof";
     let (s1, transport) = delivered_s1(case);
@@ -506,7 +506,7 @@ fn rejects_a_payment_proof_for_another_receiver_address() {
     assert_eq!(receiver.transaction_count(), 0);
 }
 
-both_stores!(rejects_slates_past_s1);
+every_store!(rejects_slates_past_s1);
 fn rejects_slates_past_s1() {
     let receiver = Receiver::new(&receiver_mnemonic(&vector("send_file_plain_s2_v3")), 10);
     for (name, stage) in [
@@ -525,7 +525,7 @@ fn rejects_slates_past_s1() {
     assert_eq!(receiver.transaction_count(), 0);
 }
 
-both_stores!(rejects_an_unknown_transport_and_a_locked_wallet);
+every_store!(rejects_an_unknown_transport_and_a_locked_wallet);
 fn rejects_an_unknown_transport_and_a_locked_wallet() {
     let (s1, _) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
@@ -547,7 +547,7 @@ fn rejects_an_unknown_transport_and_a_locked_wallet() {
     );
 }
 
-both_stores!(receiver_message_is_cut_to_256_bytes_and_signed);
+every_store!(receiver_message_is_cut_to_256_bytes_and_signed);
 fn receiver_message_is_cut_to_256_bytes_and_signed() {
     let case = "send_file_long_messages";
     let (s1, transport) = delivered_s1(case);
@@ -566,7 +566,7 @@ fn receiver_message_is_cut_to_256_bytes_and_signed() {
     assert!(long.starts_with(message.text()));
 }
 
-both_stores!(fee_error_text_carries_no_amounts);
+every_store!(fee_error_text_carries_no_amounts);
 fn fee_error_text_carries_no_amounts() {
     let text = ReceiveError::FeeBelowMinimum {
         fee: lepic_primitives::amount::Fee::new(123_456_789),

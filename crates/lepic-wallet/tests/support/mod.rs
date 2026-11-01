@@ -122,12 +122,17 @@ impl MemoryStores {
 impl StoreOpener for MemoryStores {
     type Store = MemoryStore;
 
-    fn open(&self, data_dir: &Path, key: StoreKeys) -> Result<MemoryStore, StoreError> {
+    fn open(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        _: &lepic_store::StoreKey,
+    ) -> Result<MemoryStore, StoreError> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         let store = stores
             .entry(data_dir.to_owned())
             .or_insert_with(|| MemoryStore::new(StoreKeys::from_bytes([0; 32], [0; 32])));
-        Ok(store.reopen(key))
+        Ok(store.reopen(keys))
     }
 }
 
@@ -136,6 +141,8 @@ impl StoreOpener for MemoryStores {
 pub enum StoreKind {
     Memory,
     Sqlite,
+    /// The SQLite store encrypted at rest under the wallet's store key.
+    EncryptedSqlite,
 }
 
 thread_local! {
@@ -171,6 +178,35 @@ macro_rules! both_stores {
             fn sqlite() {
                 crate::support::with_store_kind(crate::support::StoreKind::Sqlite, super::$name);
             }
+
+        }
+    )+};
+}
+
+/// As [`both_stores`], and a third time as `<name>::sqlite_encrypted` over the SQLite store
+/// encrypted at rest. For tests whose own reads of the database know the wallet's seed.
+// Test binaries that run on memory stores only never expand it.
+#[allow(unused_macros)]
+macro_rules! every_store {
+    ($($name:ident),+ $(,)?) => {$(
+        mod $name {
+            #[test]
+            fn memory() {
+                crate::support::with_store_kind(crate::support::StoreKind::Memory, super::$name);
+            }
+
+            #[test]
+            fn sqlite() {
+                crate::support::with_store_kind(crate::support::StoreKind::Sqlite, super::$name);
+            }
+
+            #[test]
+            fn sqlite_encrypted() {
+                crate::support::with_store_kind(
+                    crate::support::StoreKind::EncryptedSqlite,
+                    super::$name,
+                );
+            }
         }
     )+};
 }
@@ -178,6 +214,9 @@ macro_rules! both_stores {
 // Test binaries that run on memory stores only never call it.
 #[allow(unused_imports)]
 pub(crate) use both_stores;
+// Test binaries that do not use it never call it.
+#[allow(unused_imports)]
+pub(crate) use every_store;
 
 /// SQLite databases by data directory, each in its own directory under one temporary root.
 /// Clones share the root, so a second wallet handle on the same directory opens the same file.
@@ -208,6 +247,7 @@ impl SqliteDirs {
 pub enum TestStores {
     Memory(MemoryStores),
     Sqlite(SqliteDirs),
+    EncryptedSqlite(SqliteDirs),
 }
 
 impl Default for TestStores {
@@ -221,6 +261,7 @@ impl TestStores {
         match kind {
             StoreKind::Memory => Self::Memory(MemoryStores::default()),
             StoreKind::Sqlite => Self::Sqlite(SqliteDirs::new()),
+            StoreKind::EncryptedSqlite => Self::EncryptedSqlite(SqliteDirs::new()),
         }
     }
 
@@ -228,6 +269,7 @@ impl TestStores {
         match self {
             Self::Memory(_) => StoreKind::Memory,
             Self::Sqlite(_) => StoreKind::Sqlite,
+            Self::EncryptedSqlite(_) => StoreKind::EncryptedSqlite,
         }
     }
 
@@ -235,6 +277,10 @@ impl TestStores {
         match self {
             Self::Memory(stores) => stores.is_empty(data_dir),
             Self::Sqlite(dirs) => !dirs.dir(data_dir).join(DATABASE_FILE).exists(),
+            Self::EncryptedSqlite(dirs) => !dirs
+                .dir(data_dir)
+                .join(lepic_wallet::ENCRYPTED_DATABASE_FILE)
+                .exists(),
         }
     }
 }
@@ -242,11 +288,21 @@ impl TestStores {
 impl StoreOpener for TestStores {
     type Store = TestStore;
 
-    fn open(&self, data_dir: &Path, key: StoreKeys) -> Result<TestStore, StoreError> {
+    fn open(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &lepic_store::StoreKey,
+    ) -> Result<TestStore, StoreError> {
         match self {
-            Self::Memory(stores) => stores.open(data_dir, key).map(TestStore::Memory),
+            Self::Memory(stores) => stores
+                .open(data_dir, keys, store_key)
+                .map(TestStore::Memory),
             Self::Sqlite(dirs) => SqliteStores
-                .open(&dirs.dir(data_dir), key)
+                .open(&dirs.dir(data_dir), keys, store_key)
+                .map(TestStore::Sqlite),
+            Self::EncryptedSqlite(dirs) => lepic_wallet::EncryptedSqliteStores
+                .open(&dirs.dir(data_dir), keys, store_key)
                 .map(TestStore::Sqlite),
         }
     }
@@ -254,12 +310,18 @@ impl StoreOpener for TestStores {
     fn open_existing(
         &self,
         data_dir: &Path,
-        key: StoreKeys,
+        keys: StoreKeys,
+        store_key: &lepic_store::StoreKey,
     ) -> Result<Option<TestStore>, StoreError> {
         match self {
-            Self::Memory(stores) => Ok(stores.open_existing(data_dir, key)?.map(TestStore::Memory)),
+            Self::Memory(stores) => Ok(stores
+                .open_existing(data_dir, keys, store_key)?
+                .map(TestStore::Memory)),
             Self::Sqlite(dirs) => Ok(SqliteStores
-                .open_existing(&dirs.dir(data_dir), key)?
+                .open_existing(&dirs.dir(data_dir), keys, store_key)?
+                .map(TestStore::Sqlite)),
+            Self::EncryptedSqlite(dirs) => Ok(lepic_wallet::EncryptedSqliteStores
+                .open_existing(&dirs.dir(data_dir), keys, store_key)?
                 .map(TestStore::Sqlite)),
         }
     }

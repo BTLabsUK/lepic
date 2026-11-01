@@ -3,6 +3,7 @@
 
 #[cfg(windows)]
 mod acl;
+mod cipher;
 mod repos;
 pub(crate) mod schema;
 mod v12;
@@ -16,6 +17,7 @@ use std::time::{Duration, SystemTime};
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
 
+use crate::at_rest::AtRest;
 use crate::context::StoreKeys;
 use crate::error::StoreError;
 use crate::store::{Repositories, WalletStore};
@@ -38,21 +40,40 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
-    /// Opens or creates the database at `path` and migrates it to [`SCHEMA_VERSION`]. A
-    /// database written by a newer version is refused with [`StoreError::SchemaTooNew`] and left
-    /// unchanged.
+    /// Opens or creates the database at `path`, kept as `at_rest` says, and migrates it to
+    /// [`SCHEMA_VERSION`]. A database written by a newer version is refused with
+    /// [`StoreError::SchemaTooNew`] and left unchanged.
     ///
     /// A database that is not one, or fails SQLite's `quick_check`, is renamed with its log
     /// files to `<name>.damaged-<unix seconds>` and kept, and the open fails with
     /// [`StoreError::DamagedSetAside`]; opening again creates a new, empty database. Log files
     /// found without their database are set aside the same way before a new one is made.
-    pub fn open(path: &Path, keys: StoreKeys) -> Result<Self, StoreError> {
-        if !path.try_exists().map_err(io("look for the database"))? {
+    ///
+    /// An encrypted database keeps a key check in `<name>.check`, written when the database is
+    /// made and moved aside with it. A key the check refuses fails with
+    /// [`StoreError::WrongKey`] and nothing is touched. An encrypted file is set aside as damaged
+    /// only when its check proves the key; without a check, a file the key does not open is
+    /// refused with [`StoreError::WrongKey`] too, and one it opens gets a new check.
+    pub fn open(path: &Path, keys: StoreKeys, at_rest: AtRest<'_>) -> Result<Self, StoreError> {
+        let exists = path.try_exists().map_err(io("look for the database"))?;
+        let check = match at_rest {
+            AtRest::Encrypted(store_key) if exists => cipher::verify(path, store_key)?,
+            _ => cipher::Check::Unknown,
+        };
+        if check == cipher::Check::Differs {
+            return Err(StoreError::WrongKey);
+        }
+        if !exists {
             set_aside_logs_without_database(path)?;
         }
         restrict_to_owner(path)?;
-        match open_checked(path, OpenFlags::SQLITE_OPEN_CREATE, &keys)? {
+        match open_checked(path, OpenFlags::SQLITE_OPEN_CREATE, &keys, at_rest)? {
             Some(conn) => {
+                if let AtRest::Encrypted(store_key) = at_rest
+                    && check != cipher::Check::Matches
+                {
+                    cipher::write(path, store_key)?;
+                }
                 // SQLite has just made the `-wal` and `-shm` files; on Windows they took the
                 // folder's access list, not the database's.
                 #[cfg(windows)]
@@ -62,10 +83,15 @@ impl SqliteStore {
                     keys,
                 })
             }
-            None => {
-                set_aside(path)?;
-                Err(StoreError::DamagedSetAside)
-            }
+            None => match at_rest {
+                AtRest::Encrypted(_) if check != cipher::Check::Matches => {
+                    Err(StoreError::WrongKey)
+                }
+                _ => {
+                    set_aside(path)?;
+                    Err(StoreError::DamagedSetAside)
+                }
+            },
         }
     }
 
@@ -74,17 +100,34 @@ impl SqliteStore {
     /// [`StoreError::Damaged`] when the file is not one or fails `quick_check`, with it and its
     /// log files left where they are. For a caller that must leave a damaged wallet as it
     /// found it. It opens read-write, as recovery needs: a hot `-journal` may be rolled back
-    /// and a `-shm` file created, but no file is moved.
-    pub fn open_existing(path: &Path, keys: StoreKeys) -> Result<Option<Self>, StoreError> {
+    /// and a `-shm` file created, but no file is moved and no key check written. An encrypted
+    /// database fails with [`StoreError::WrongKey`] as [`SqliteStore::open`] says.
+    pub fn open_existing(
+        path: &Path,
+        keys: StoreKeys,
+        at_rest: AtRest<'_>,
+    ) -> Result<Option<Self>, StoreError> {
         if !path.try_exists().map_err(io("look for the database"))? {
             return Ok(None);
         }
-        match open_checked(path, OpenFlags::empty(), &keys)? {
+        let check = match at_rest {
+            AtRest::Encrypted(store_key) => cipher::verify(path, store_key)?,
+            AtRest::Plain => cipher::Check::Unknown,
+        };
+        if check == cipher::Check::Differs {
+            return Err(StoreError::WrongKey);
+        }
+        match open_checked(path, OpenFlags::empty(), &keys, at_rest)? {
             Some(conn) => Ok(Some(Self {
                 conn: Mutex::new(conn),
                 keys,
             })),
-            None => Err(StoreError::Damaged),
+            None => match at_rest {
+                AtRest::Encrypted(_) if check != cipher::Check::Matches => {
+                    Err(StoreError::WrongKey)
+                }
+                _ => Err(StoreError::Damaged),
+            },
         }
     }
 }
@@ -96,11 +139,15 @@ fn open_checked(
     path: &Path,
     create: OpenFlags,
     keys: &StoreKeys,
+    at_rest: AtRest<'_>,
 ) -> Result<Option<Connection>, StoreError> {
     let mut conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | create | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    if let AtRest::Encrypted(store_key) = at_rest {
+        cipher::set_key(&conn, store_key)?;
+    }
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
     let checked = configure(&conn).and_then(|()| {
         if passes_quick_check(&conn)? {
@@ -148,7 +195,7 @@ fn is_damage(error: &StoreError) -> bool {
 fn set_aside(path: &Path) -> Result<(), StoreError> {
     let aside = free_set_aside_name(path)?;
     rename_if_present(path, &aside)?;
-    for suffix in LOG_SUFFIXES {
+    for suffix in LOG_SUFFIXES.into_iter().chain([cipher::CHECK_SUFFIX]) {
         rename_if_present(&with_suffix(path, suffix), &with_suffix(&aside, suffix))?;
     }
     Ok(())
@@ -185,7 +232,7 @@ fn free_set_aside_name(path: &Path) -> Result<PathBuf, StoreError> {
         let mut taken = candidate
             .try_exists()
             .map_err(io("name the damaged database"))?;
-        for suffix in LOG_SUFFIXES {
+        for suffix in LOG_SUFFIXES.into_iter().chain([cipher::CHECK_SUFFIX]) {
             taken |= with_suffix(&candidate, suffix)
                 .try_exists()
                 .map_err(io("name the damaged database"))?;
@@ -293,6 +340,9 @@ fn restrict_to_owner(_: &Path) -> Result<(), StoreError> {
 
 fn configure(conn: &Connection) -> Result<(), StoreError> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
+    // SQLite3MC seals the database and its log, not temporary files. The build already keeps
+    // them in memory; this keeps it so for any build.
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
     let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
     if !mode.eq_ignore_ascii_case("wal") {
         return Err(StoreError::WalUnavailable);

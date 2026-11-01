@@ -126,6 +126,7 @@ impl World {
                     [0; lepic_store::CONTEXT_KEY_LEN],
                     [0; lepic_store::CONTEXT_KEY_LEN],
                 ),
+                &lepic_store::StoreKey::from_bytes([0; lepic_store::STORE_KEY_LEN]),
             )
             .unwrap()
     }

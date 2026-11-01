@@ -146,6 +146,7 @@ mod tests {
         let store = crate::SqliteStore::open(
             &dir.path().join("wallet.sqlite"),
             StoreKeys::from_bytes([1; 32], [1; 32]),
+            crate::AtRest::Plain,
         )
         .unwrap();
         prunes_inbox_entries_received_before_the_cutoff(&store);

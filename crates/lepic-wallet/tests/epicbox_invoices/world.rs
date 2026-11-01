@@ -155,7 +155,12 @@ pub struct CountingStores {
 impl StoreOpener for CountingStores {
     type Store = CountingStore;
 
-    fn open(&self, data_dir: &Path, key: StoreKeys) -> Result<CountingStore, StoreError> {
+    fn open(
+        &self,
+        data_dir: &Path,
+        key: StoreKeys,
+        _: &lepic_store::StoreKey,
+    ) -> Result<CountingStore, StoreError> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         let store = stores
             .entry(data_dir.to_owned())
@@ -323,7 +328,11 @@ impl Party {
     /// The wallet's database under its own context key.
     pub fn store(&self) -> MemoryStore {
         self.stores
-            .open(&self.data_dir, context_key(&self.seed))
+            .open(
+                &self.data_dir,
+                context_key(&self.seed),
+                &lepic_wallet::store_key(&self.seed).unwrap(),
+            )
             .unwrap()
             .inner
     }

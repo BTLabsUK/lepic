@@ -14,8 +14,8 @@ mod support;
 use std::fs;
 
 use lepic_store::{
-    OutputStatus, ParticipantId, PrivateContext, Record, SCHEMA_VERSION, SqliteStore, StoreError,
-    WalletStore,
+    AtRest, OutputStatus, ParticipantId, PrivateContext, Record, SCHEMA_VERSION, SqliteStore,
+    StoreError, WalletStore,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -52,14 +52,14 @@ fn database_uses_write_ahead_logging() {
 fn refuses_newer_schema_version_and_leaves_it_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let path = database_path(dir.path());
-    drop(SqliteStore::open(&path, context_key(1)).unwrap());
+    drop(SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap());
     let newer = SCHEMA_VERSION + 1;
     Connection::open(&path)
         .unwrap()
         .execute("UPDATE schema_version SET version = ?1", [newer])
         .unwrap();
 
-    let result = SqliteStore::open(&path, context_key(1));
+    let result = SqliteStore::open(&path, context_key(1), AtRest::Plain);
     assert!(matches!(
         result,
         Err(StoreError::SchemaTooNew { found, supported })
@@ -229,7 +229,7 @@ fn a_file_that_is_no_database_is_moved_aside_with_its_logs_and_reported() {
     fs::write(with_suffix("-wal"), b"log").unwrap();
     fs::write(with_suffix("-shm"), b"index").unwrap();
 
-    let result = SqliteStore::open(&path, context_key(1));
+    let result = SqliteStore::open(&path, context_key(1), AtRest::Plain);
     assert!(
         matches!(result, Err(StoreError::DamagedSetAside)),
         "{result:?}"
@@ -247,7 +247,7 @@ fn a_file_that_is_no_database_is_moved_aside_with_its_logs_and_reported() {
     assert!(std::path::Path::new(&shm).is_file());
     assert!(!path.exists());
 
-    let reopened = SqliteStore::open(&path, context_key(1)).unwrap();
+    let reopened = SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap();
     assert!(reopened.read(|repos| repos.accounts()).unwrap().is_empty());
 }
 
@@ -255,7 +255,7 @@ fn a_file_that_is_no_database_is_moved_aside_with_its_logs_and_reported() {
 fn a_database_that_fails_its_integrity_check_is_moved_aside() {
     let dir = tempfile::tempdir().unwrap();
     let path = database_path(dir.path());
-    let store = SqliteStore::open(&path, context_key(1)).unwrap();
+    let store = SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap();
     store
         .write(|repos| repos.put_account(&account(0, "default")))
         .unwrap();
@@ -268,13 +268,13 @@ fn a_database_that_fails_its_integrity_check_is_moved_aside() {
     }
     fs::write(&path, &bytes).unwrap();
 
-    let result = SqliteStore::open(&path, context_key(1));
+    let result = SqliteStore::open(&path, context_key(1), AtRest::Plain);
     assert!(
         matches!(result, Err(StoreError::DamagedSetAside)),
         "{result:?}"
     );
     assert_eq!(fs::read(set_aside(dir.path(), "")).unwrap(), bytes);
-    assert!(SqliteStore::open(&path, context_key(1)).is_ok());
+    assert!(SqliteStore::open(&path, context_key(1), AtRest::Plain).is_ok());
 }
 
 #[test]
@@ -282,14 +282,14 @@ fn open_existing_leaves_a_damaged_database_in_place_and_creates_none() {
     let dir = tempfile::tempdir().unwrap();
     let path = database_path(dir.path());
     assert!(
-        SqliteStore::open_existing(&path, context_key(1))
+        SqliteStore::open_existing(&path, context_key(1), AtRest::Plain)
             .unwrap()
             .is_none()
     );
     assert!(database_files(dir.path()).is_empty());
 
     fs::write(&path, [0x5a; 8192]).unwrap();
-    let result = SqliteStore::open_existing(&path, context_key(1));
+    let result = SqliteStore::open_existing(&path, context_key(1), AtRest::Plain);
     assert!(matches!(result, Err(StoreError::Damaged)), "{result:?}");
     assert_eq!(fs::read(&path).unwrap(), [0x5a; 8192]);
     assert!(
@@ -299,12 +299,12 @@ fn open_existing_leaves_a_damaged_database_in_place_and_creates_none() {
     );
 
     fs::remove_file(&path).unwrap();
-    let store = SqliteStore::open(&path, context_key(1)).unwrap();
+    let store = SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap();
     store
         .write(|repos| repos.put_account(&account(0, "default")))
         .unwrap();
     drop(store);
-    let existing = SqliteStore::open_existing(&path, context_key(1))
+    let existing = SqliteStore::open_existing(&path, context_key(1), AtRest::Plain)
         .unwrap()
         .unwrap();
     assert_eq!(existing.read(|repos| repos.accounts()).unwrap().len(), 1);
@@ -320,7 +320,7 @@ fn logs_without_their_database_are_moved_aside_before_a_new_one_is_made() {
     wal.push("-wal");
     fs::write(&wal, b"log").unwrap();
 
-    let store = SqliteStore::open(&path, context_key(1)).unwrap();
+    let store = SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap();
     assert!(store.read(|repos| repos.accounts()).unwrap().is_empty());
     assert_eq!(fs::read(set_aside(dir.path(), "-wal")).unwrap(), b"log");
 }
@@ -329,8 +329,8 @@ fn logs_without_their_database_are_moved_aside_before_a_new_one_is_made() {
 fn a_healthy_database_is_opened_in_place() {
     let dir = tempfile::tempdir().unwrap();
     let path = database_path(dir.path());
-    drop(SqliteStore::open(&path, context_key(1)).unwrap());
-    drop(SqliteStore::open(&path, context_key(1)).unwrap());
+    drop(SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap());
+    drop(SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap());
     assert!(
         database_files(dir.path())
             .iter()

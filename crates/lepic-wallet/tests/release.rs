@@ -148,7 +148,11 @@ impl Releasing {
         let seed = lepic_keychain::Seed::from_mnemonic(SENDER_MNEMONIC).unwrap();
         let store = harness
             .stores
-            .open(&harness.data_dir, context_key(&seed))
+            .open(
+                &harness.data_dir,
+                context_key(&seed),
+                &lepic_wallet::store_key(&seed).unwrap(),
+            )
             .unwrap();
         let keychain = lepic_keychain::Keychain::from_seed(&seed, Network::Floonet).unwrap();
         let funding = output(&keychain, 0, FUNDING, OutputFeatures::Coinbase);

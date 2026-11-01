@@ -664,7 +664,7 @@ fn every_older_schema_version_migrates_to_the_current_one() {
             assert_eq!(stored_version(&conn).unwrap(), case.from);
         }
 
-        let store = SqliteStore::open(&path, key()).unwrap();
+        let store = SqliteStore::open(&path, key(), crate::AtRest::Plain).unwrap();
         (case.check)(&store);
         drop(store);
 
@@ -690,7 +690,7 @@ fn a_new_database_and_its_log_are_readable_by_their_owner_only() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("wallet.sqlite");
     // Migrating the new file writes the schema, so the write-ahead log exists while it is open.
-    let _store = SqliteStore::open(&path, key()).unwrap();
+    let _store = SqliteStore::open(&path, key(), crate::AtRest::Plain).unwrap();
     assert_eq!(mode(&path), 0o600);
     assert_eq!(mode(&dir.path().join("wallet.sqlite-wal")), 0o600);
 }
@@ -701,7 +701,7 @@ fn opening_an_existing_database_restricts_it_to_its_owner() {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("wallet.sqlite");
-    drop(SqliteStore::open(&path, key()).unwrap());
+    drop(SqliteStore::open(&path, key(), crate::AtRest::Plain).unwrap());
     let wal = dir.path().join("wallet.sqlite-wal");
     let shm = dir.path().join("wallet.sqlite-shm");
     // Non-empty leftovers, as a run that was killed leaves them; SQLite itself re-modes empty ones.
@@ -711,7 +711,7 @@ fn opening_an_existing_database_restricts_it_to_its_owner() {
         }
         std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
-    let _store = SqliteStore::open(&path, key()).unwrap();
+    let _store = SqliteStore::open(&path, key(), crate::AtRest::Plain).unwrap();
     for file in [&path, &wal, &shm] {
         assert_eq!(mode(file), 0o600, "{}", file.display());
     }
@@ -735,7 +735,7 @@ fn access_list(path: &std::path::Path) -> String {
 fn opening_an_existing_database_restricts_it_to_its_owner_on_windows() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("wallet.sqlite");
-    drop(SqliteStore::open(&path, key()).unwrap());
+    drop(SqliteStore::open(&path, key(), crate::AtRest::Plain).unwrap());
     Connection::open(&path)
         .unwrap()
         .execute_batch("CREATE TABLE probe (x); INSERT INTO probe VALUES (7);")
@@ -756,7 +756,7 @@ fn opening_an_existing_database_restricts_it_to_its_owner_on_windows() {
         assert!(access_list(file).contains("(I)"), "inherited entries only");
     }
 
-    let store = SqliteStore::open(&path, key()).unwrap();
+    let store = SqliteStore::open(&path, key(), crate::AtRest::Plain).unwrap();
     for file in [&path, &wal, &shm] {
         let list = access_list(file);
         assert!(!list.contains("(I)"), "{list}");
@@ -770,7 +770,7 @@ fn opening_an_existing_database_restricts_it_to_its_owner_on_windows() {
     }
     drop(store);
 
-    let store = SqliteStore::open(&path, key()).unwrap();
+    let store = SqliteStore::open(&path, key(), crate::AtRest::Plain).unwrap();
     drop(store);
     let conn = Connection::open(&path).unwrap();
     let kept: i64 = conn
@@ -784,7 +784,9 @@ fn opening_an_existing_database_restricts_it_to_its_owner_on_windows() {
 fn a_database_path_that_cannot_be_created_is_an_io_error() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("missing").join("wallet.sqlite");
-    let error = SqliteStore::open(&path, key()).err().unwrap();
+    let error = SqliteStore::open(&path, key(), crate::AtRest::Plain)
+        .err()
+        .unwrap();
     assert!(
         matches!(
             &error,

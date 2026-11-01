@@ -56,11 +56,11 @@ pub use config::{ConfigError, NodeEndpoint, WalletConfig, WalletName};
 pub use error::WalletError;
 pub use event::{Event, SessionState};
 pub use finalize::{FinalizeError, Finalized};
-pub use lifecycle::{Password, RecoveryPhrase, WordCount};
+pub use lifecycle::{Password, RecoveryPhrase, WordCount, store_key};
 pub use onion_key::OnionKey;
 pub use ports::{Clock, Ports, SecretVault, SecretVaultError, SharedRng, StoreOpener};
 #[cfg(feature = "sqlite")]
-pub use ports::{DATABASE_FILE, SqliteStores};
+pub use ports::{DATABASE_FILE, ENCRYPTED_DATABASE_FILE, EncryptedSqliteStores, SqliteStores};
 pub use process::{crypto_context_is_randomized, randomize_crypto_context};
 pub use receive::{ReceiveError, ReceiveRequest, Received};
 pub use wallet::Wallet;

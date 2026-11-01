@@ -89,6 +89,10 @@ pub enum StoreError {
     /// The database file is damaged. An open that sets nothing aside left it where it is.
     #[error("database file is damaged")]
     Damaged,
+    /// The encrypted database is not this key's: its key check refuses the key, or it has no
+    /// check and does not open with it. Nothing was changed.
+    #[error("database does not open with this key")]
+    WrongKey,
     #[error("stored {record} has a malformed {field}")]
     Corrupt { record: Record, field: &'static str },
     #[error("{field} is outside the storable range")]

@@ -5,6 +5,7 @@
 //! implementation; [`MemoryStore`] behaves the same without a file, for tests of the layers above.
 
 mod account;
+mod at_rest;
 mod contact;
 #[cfg(feature = "sqlite")]
 mod contact_backup;
@@ -31,6 +32,7 @@ mod transaction;
 mod tx_record;
 
 pub use account::{AccountIndex, AccountRecord, AccountRepository};
+pub use at_rest::{AtRest, STORE_KEY_LEN, StoreKey};
 pub use contact::{
     BOX_SALT_LEN, CARD_KEY_LEN, CONTACT_ID_LEN, CONTACT_SLOT_COUNT, ContactCap, ContactId,
     ContactKind, ContactMailbox, ContactOutboxEntry, ContactOutboxId, ContactOutboxState,

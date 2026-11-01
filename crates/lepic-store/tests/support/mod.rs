@@ -61,7 +61,8 @@ impl Backend for SqliteBackend {
 
     fn create(key: StoreKeys) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let store = SqliteStore::open(&database_path(dir.path()), key).unwrap();
+        let store =
+            SqliteStore::open(&database_path(dir.path()), key, lepic_store::AtRest::Plain).unwrap();
         Self { dir, store }
     }
 
@@ -69,8 +70,8 @@ impl Backend for SqliteBackend {
         &self.store
     }
 
-    fn reopen(&self, key: StoreKeys) -> SqliteStore {
-        SqliteStore::open(&self.path(), key).unwrap()
+    fn reopen(&self, keys: StoreKeys) -> SqliteStore {
+        SqliteStore::open(&self.path(), keys, lepic_store::AtRest::Plain).unwrap()
     }
 }
 

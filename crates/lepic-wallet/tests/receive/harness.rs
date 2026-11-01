@@ -277,7 +277,11 @@ impl Receiver {
     /// The wallet's database, opened with the key the engine seals contexts under.
     pub fn store(&self) -> TestStore {
         let keys = lepic_wallet::lifecycle::store_keys(&self.seed).unwrap();
-        self.stores.open_for_test(Path::new(DATA_DIR), keys)
+        self.stores.open_for_test(
+            Path::new(DATA_DIR),
+            keys,
+            &lepic_wallet::store_key(&self.seed).unwrap(),
+        )
     }
 
     /// Moves the default account's key counter to `key_id`, the key the next output takes.
@@ -341,13 +345,23 @@ impl Receiver {
 }
 
 pub trait OpenForTest {
-    fn open_for_test(&self, data_dir: &Path, key: StoreKeys) -> TestStore;
+    fn open_for_test(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &lepic_store::StoreKey,
+    ) -> TestStore;
 }
 
 impl OpenForTest for TestStores {
-    fn open_for_test(&self, data_dir: &Path, key: StoreKeys) -> TestStore {
+    fn open_for_test(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &lepic_store::StoreKey,
+    ) -> TestStore {
         assert!(!self.is_empty(data_dir));
-        lepic_wallet::StoreOpener::open(self, data_dir, key).unwrap()
+        lepic_wallet::StoreOpener::open(self, data_dir, keys, store_key).unwrap()
     }
 }
 
