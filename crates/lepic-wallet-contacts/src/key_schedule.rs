@@ -379,7 +379,62 @@ fn first_valid_key<K>(
 
 #[cfg(test)]
 mod tests {
+    // Tests may do plain arithmetic (docs/rules.md).
+    #![allow(clippy::arithmetic_side_effects)]
+
     use super::*;
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// `testdata/vectors/keys/private_pairing_keys.json`, written by the conformance generator
+    /// from the description with `ring`, `blake2-rfc` and the node's secp256k1: the root of a
+    /// raw account key and the keys of three private slots.
+    #[test]
+    fn private_pairing_keys_match_the_vector() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/keys/private_pairing_keys.json"
+        ))
+        .unwrap();
+        let inputs = &vector["inputs"];
+        let expected = &vector["expected"];
+        assert_eq!(inputs["network"], 1);
+        assert_eq!(inputs["root_salt"].as_str().unwrap().as_bytes(), ROOT_SALT);
+        assert_eq!(
+            inputs["private_salt"].as_str().unwrap().as_bytes(),
+            PRIVATE_SALT
+        );
+        let raw: [u8; 32] = unhex(inputs["raw"].as_str().unwrap()).try_into().unwrap();
+        let secret: [u8; 32] = unhex(inputs["secret"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        let root = ContactRoot::from_raw(&raw, Network::Floonet).unwrap();
+        assert_eq!(hex(root.expose_bytes()), expected["root"]);
+        let cases = expected["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 3);
+        for case in cases {
+            let slot = u32::try_from(case["slot"].as_u64().unwrap()).unwrap();
+            assert!(slot >= PRIVATE_SLOT_BASE);
+            let keys = root.private_keys(slot, &secret).unwrap();
+            assert_eq!(hex(keys.expose_enc_secret()), case["enc_secret"]);
+            assert_eq!(hex(&keys.expose_signing_key().to_bytes()), case["sig_seed"]);
+            assert_eq!(hex(&keys.sig_public_key()), case["sig_public"]);
+            assert_eq!(hex(keys.expose_hint_key()), case["hint_key"]);
+            assert_eq!(
+                hex(keys.expose_box_secret().expose_bytes()),
+                case["box_secret"]
+            );
+            assert_eq!(hex(&keys.box_public_key().to_bytes()), case["box_public"]);
+        }
+    }
 
     #[test]
     fn private_keys_need_the_records_secret_and_differ_from_every_contact_key() {

@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "private_pairing_keys",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "raw": "0707070707070707070707070707070707070707070707070707070707070707",
+    "network": 1,
+    "root_salt": "epic-contact/1",
+    "private_salt": "epic-private/1 keys",
+    "secret": "0101010101010101010101010101010101010101010101010101010101010101",
+    "slots": [
+      65536,
+      65537,
+      4294967295
+    ]
+  },
+  "expected": {
+    "root": "b0f7c838c61097ad58dec9d8b41921c15ef4895d26d10824c0f091c5caca0249",
+    "cases": [
+      {
+        "slot": 65536,
+        "enc_secret": "c43e81c321ea099b8deaf351b8d4f7e8f08eb2103f19e9e2914389112ff7a8be",
+        "sig_seed": "49ddfff09e4e09d2c7a727770cd17f6d6347f557427f476579a7ed8a5c3104f2",
+        "sig_public": "64a6dac2d4eaedf69d467765a3ec62f4cdfb8e791dd4ee9d8b2341e34a556e80",
+        "hint_key": "e36057748d14a002380819014474991904492a94b721a1c5dfb689e085e15c9d",
+        "box_counter": 0,
+        "box_secret": "42861e6d20dccec0747734dba9c6fdfaa9adecd9aaa766129fd1f51f13faf811",
+        "box_public": "030da2e6da15aba2195ee0b9156c6f4cfc005246dfc6b9782d26a9feaa788eebe4"
+      },
+      {
+        "slot": 65537,
+        "enc_secret": "814aa5c30ecaa9623c68cbe7e8f2b38a04a2cecd6c00f5220b72707c8319cf59",
+        "sig_seed": "ed1c5387e39693d46b0224e10c8474dd418bf2b3604edd47d327cd58dd67e887",
+        "sig_public": "a965fd013a3fcf8a16ac6a21e29b69703ff66407c79d3a85ffd808a8ff1297e3",
+        "hint_key": "61622884c1b09c49bab0f0011b2f1196ba2d5d01856f8865d1047ccf034b7d43",
+        "box_counter": 0,
+        "box_secret": "0b96369c031b7800e34d0337a5bd2a353ba393310ee56cf06c3a4bd71265aefb",
+        "box_public": "025f43cec2c28d820487f32b44e2c98dcd6fac6c9325b90c823d8157e7b329c684"
+      },
+      {
+        "slot": 4294967295,
+        "enc_secret": "e00745dcb548b56e7395caff99cb64e82f78a1f2f37aa765ed0ccc7771d3543b",
+        "sig_seed": "4fbb43f742a9396c389ba5c79736cdad02d4c3aa29145b9177253ad29e41ecde",
+        "sig_public": "ef75041523460f864a2efff0d63615d7452321068b82e74173e5c6986c1a5df9",
+        "hint_key": "e2f1d0fb36a14e44e6669fb5132241fd9b3aded8b0377fd7e169ef2c89394f51",
+        "box_counter": 0,
+        "box_secret": "37789105430629514c7f1f43d18aaa28652f817f7f5303855166100f6953da26",
+        "box_public": "02b02834b7288b4750108bbe97eb2b7efba876021baa0929331b38b18e5422ee69"
+      }
+    ]
+  }
+}

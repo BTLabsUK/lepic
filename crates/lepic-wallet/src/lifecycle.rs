@@ -618,6 +618,9 @@ fn seed_mac(seed: &Seed) -> Result<Blake2bMac<U32>, WalletError> {
 
 #[cfg(test)]
 mod tests {
+    // Tests may do plain arithmetic (docs/rules.md).
+    #![allow(clippy::arithmetic_side_effects)]
+
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -668,6 +671,33 @@ mod tests {
             .collect();
         assert_eq!(fingerprint(&first).unwrap(), expected);
         assert_ne!(fingerprint(&first).unwrap(), fingerprint(&second).unwrap());
+    }
+
+    /// `testdata/vectors/keys/seed_check_seed{16,32}.json`, written by the conformance
+    /// generator with `blake2-rfc`: the seed check the store keeps for each seed.
+    #[test]
+    fn seed_checks_match_the_vectors() {
+        for text in [
+            include_str!("../../../testdata/vectors/keys/seed_check_seed16.json"),
+            include_str!("../../../testdata/vectors/keys/seed_check_seed32.json"),
+        ] {
+            let vector: serde_json::Value = serde_json::from_str(text).unwrap();
+            let seed_hex = vector["inputs"]["seed"].as_str().unwrap();
+            let entropy: Vec<u8> = (0..seed_hex.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(&seed_hex[at..at + 2], 16).unwrap())
+                .collect();
+            assert_eq!(
+                vector["inputs"]["domain"].as_str().unwrap().as_bytes(),
+                SEED_CHECK_DOMAIN
+            );
+            let seed = Seed::from_entropy(&entropy).unwrap();
+            let keychain = Keychain::from_seed(&seed, Network::Mainnet).unwrap();
+            let identity = SeedIdentity::of(&seed, &keychain).unwrap();
+            let check = vector["expected"]["check"].as_str().unwrap();
+            assert_eq!(identity.check_text(), check);
+            assert!(identity.check_matches(check));
+        }
     }
 
     /// `tests/lifecycle_logs.rs` recomputes the context key from this formula to check that it

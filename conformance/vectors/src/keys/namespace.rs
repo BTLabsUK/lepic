@@ -47,11 +47,11 @@ const DOMAINS: [&str; 5] = [
 const MESSAGE: &[u8] = b"lepic listing signature vector";
 const TRANSCRIPTS: [&[u8]; 2] = [b"", b"hello transcript"];
 
-fn secp() -> Secp256k1 {
+pub(super) fn secp() -> Secp256k1 {
     Secp256k1::with_caps(ContextFlag::Full)
 }
 
-fn sha256(parts: &[&[u8]]) -> [u8; 32] {
+pub(super) fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     let mut context = digest::Context::new(&digest::SHA256);
     for part in parts {
         context.update(part);
@@ -61,7 +61,7 @@ fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     out
 }
 
-fn keyed(seed: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+pub(super) fn keyed(seed: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let message = parts.concat();
     let mut out = [0u8; 32];
     out.copy_from_slice(blake2b(32, seed, &message).as_bytes());
@@ -316,7 +316,7 @@ struct ProofCase {
     tag: String,
 }
 
-struct OkmLen;
+pub(super) struct OkmLen;
 
 impl hkdf::KeyType for OkmLen {
     fn len(&self) -> usize {
@@ -339,7 +339,7 @@ fn shared_x(secp: &Secp256k1, secret: &SecretKey, public: &PublicKey) -> Result<
     Ok(x)
 }
 
-fn unhex(text: &str) -> Vec<u8> {
+pub(super) fn unhex(text: &str) -> Vec<u8> {
     (0..text.len())
         .step_by(2)
         .filter_map(|at| text.get(at..at + 2))

@@ -198,3 +198,72 @@ pub fn open_private_reply(
         PrivateSecret::from_bytes(*secret),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap, index and panic (docs/rules.md).
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::arithmetic_side_effects
+    )]
+
+    use super::*;
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// `testdata/vectors/keys/private_pairing_tags.json`, written by the conformance generator
+    /// from the description with `ring`: the reply key, the channel key, the words check and
+    /// the PSK id of a private pairing.
+    #[test]
+    fn private_pairing_tags_match_the_vector() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/keys/private_pairing_tags.json"
+        ))
+        .unwrap();
+        let inputs = &vector["inputs"];
+        let expected = &vector["expected"];
+        let bytes = |name: &str| unhex(inputs[name].as_str().unwrap());
+        let secret = |name: &str| PrivateSecret::from_bytes(bytes(name).try_into().unwrap());
+        let nonce = |name: &str| Nonce::from_bytes(bytes(name).try_into().unwrap());
+        assert_eq!(inputs["network"], 1);
+        let network = Network::Floonet;
+        let (link, joiner) = (secret("link"), secret("joiner"));
+        let invite = Invite::decode(&bytes("invite"), network).unwrap();
+        let card_a = ContactCard::decode(&bytes("card_a"), network).unwrap();
+        let card_b = ContactCard::decode(&bytes("card_b"), network).unwrap();
+        assert_eq!(inputs["reply_domain"], "epic-private/1 reply");
+        assert_eq!(inputs["channel_domain"], "epic-private/1 channel");
+        assert_eq!(inputs["sas_domain"], "epic-private/1 sas");
+
+        assert_eq!(
+            hex(ChannelKey::reply(&link).expose_bytes()),
+            expected["reply_key"]
+        );
+        assert_eq!(
+            hex(ChannelKey::channel(&link, &joiner, &invite, &card_b).expose_bytes()),
+            expected["channel_key"]
+        );
+        let sas = private_sas(
+            network,
+            &card_a,
+            &card_b,
+            &nonce("nonce_a"),
+            &nonce("nonce_b"),
+            &link,
+            &joiner,
+        );
+        assert_eq!(hex(sas.as_bytes()), expected["sas"]);
+        assert_eq!(PSK_ID, expected["psk_id"].as_str().unwrap().as_bytes());
+    }
+}

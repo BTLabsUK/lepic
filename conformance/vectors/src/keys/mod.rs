@@ -10,6 +10,7 @@ mod commitments;
 mod derivation;
 mod mnemonic;
 mod namespace;
+mod pairing_keys;
 mod proofs;
 mod seed_file;
 
@@ -140,6 +141,7 @@ pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     vectors.extend(address::generate(&pins)?);
     vectors.extend(seed_file::generate(&pins)?);
     vectors.extend(namespace::generate(&pins)?);
+    vectors.extend(pairing_keys::generate(&pins)?);
     Ok(vectors)
 }
 

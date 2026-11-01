@@ -627,10 +627,37 @@ pub(crate) fn queue_failed(error: &ContactError) {
 
 #[cfg(test)]
 mod tests {
-    // Tests may unwrap (docs/rules.md).
-    #![allow(clippy::unwrap_used)]
+    // Tests may unwrap and do plain arithmetic (docs/rules.md).
+    #![allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 
     use super::*;
+
+    /// `testdata/vectors/keys/pairing_verdicts.json`, written by the conformance generator with
+    /// `blake2-rfc`: the hash a verdict carries for each SAS.
+    #[test]
+    fn verdict_hashes_match_the_vector() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/keys/pairing_verdicts.json"
+        ))
+        .unwrap();
+        let unhex = |text: &str| -> Vec<u8> {
+            (0..text.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+                .collect()
+        };
+        assert_eq!(
+            vector["inputs"]["domain"].as_str().unwrap().as_bytes(),
+            VERDICT_DOMAIN
+        );
+        let sas = vector["inputs"]["sas"].as_array().unwrap();
+        let hashes = vector["expected"]["hashes"].as_array().unwrap();
+        assert_eq!(sas.len(), hashes.len());
+        for (sas, hash) in sas.iter().zip(hashes) {
+            let sas: [u8; 4] = unhex(sas.as_str().unwrap()).try_into().unwrap();
+            assert_eq!(verdict_hash(&sas).to_vec(), unhex(hash.as_str().unwrap()));
+        }
+    }
 
     #[test]
     fn status_notices_read_back_and_are_padded() {
