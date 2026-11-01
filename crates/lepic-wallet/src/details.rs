@@ -348,7 +348,8 @@ fn details(
         receive_listing: repos
             .receive_listing(tx_id)?
             .as_ref()
-            .and_then(crate::namespace::Listing::from_stored),
+            .map(crate::namespace::Listing::from_stored)
+            .transpose()?,
         ttl_cutoff_height,
         confirmed_at,
         messages,

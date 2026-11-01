@@ -183,7 +183,11 @@ where
             .blocking(move |_, _| Ok(session.store.read(|repos| repos.receive_listing(tx_id))?))
             .await
             .map_err(Hold::from)?;
-        Ok(stored.as_ref().and_then(Listing::from_stored))
+        stored
+            .as_ref()
+            .map(Listing::from_stored)
+            .transpose()
+            .map_err(Hold::from)
     }
 
     /// [`Self::apply`] for a message at a listing: S1 slates and notices only.

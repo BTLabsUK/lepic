@@ -70,10 +70,17 @@ impl Listing {
         }
     }
 
-    pub(crate) fn from_stored(stored: &lepic_store::ReceiveListing) -> Option<Self> {
+    /// The listing `stored` names; a stored directory key that is no curve point is damage,
+    /// reported as such rather than read as no listing.
+    pub(crate) fn from_stored(
+        stored: &lepic_store::ReceiveListing,
+    ) -> Result<Self, lepic_store::StoreError> {
         PublicKey::from_bytes(&stored.dkey)
-            .ok()
             .map(|dkey| Self::new(dkey, stored.generation))
+            .map_err(|_| lepic_store::StoreError::Corrupt {
+                record: lepic_store::Record::Transaction,
+                field: "receive listing",
+            })
     }
 }
 
@@ -150,6 +157,23 @@ mod tests {
 
     fn dkey(byte: u8) -> PublicKey {
         PublicKey::from_secret_key(&SecretKey::from_array([byte; 32]).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_stored_listing_reads_back_and_a_damaged_directory_key_is_reported() {
+        let listing = Listing::new(dkey(9), 3);
+        assert_eq!(Listing::from_stored(&listing.to_stored()).unwrap(), listing);
+        let damaged = lepic_store::ReceiveListing {
+            dkey: [0; 33],
+            generation: 3,
+        };
+        assert!(matches!(
+            Listing::from_stored(&damaged),
+            Err(lepic_store::StoreError::Corrupt {
+                field: "receive listing",
+                ..
+            })
+        ));
     }
 
     #[test]
