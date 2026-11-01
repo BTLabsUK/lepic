@@ -5,7 +5,8 @@
 use lepic_contact::{ContactKind, Sas};
 use lepic_node::NodeApi;
 use lepic_store::{
-    ContactId, ContactRecord, ContactState, PairingRole, SealMode, StoreError, WalletStore,
+    ContactId, ContactRecord, ContactState, PairingEndReason, PairingRole, SealMode, StoreError,
+    WalletStore,
 };
 use tracing::{info, instrument, warn};
 
@@ -24,9 +25,9 @@ fn kind(kind: lepic_store::ContactKind) -> ContactKind {
 pub(crate) fn view(
     record: &ContactRecord,
     home_relay: Option<String>,
-    removed_by_peer: bool,
     now: jiff::Timestamp,
 ) -> ContactView {
+    let facts = &record.facts;
     ContactView {
         contact_id: record.contact_id,
         account: record.account,
@@ -45,9 +46,18 @@ pub(crate) fn view(
         imported_from_backup: record.imported_from_backup,
         lapsed: super::sealed::lapsed(record, now),
         last_sealed_in: record.last_sealed_in,
-        removed_by_peer,
-        payments_address: record.facts.payments_address.clone(),
+        removed_by_peer: facts.ended_reason == Some(PairingEndReason::Unpaired),
         created_at: record.created_at,
+        status: super::status::status_of(record),
+        payments_address: facts.payments_address.clone(),
+        peer_heard_at: facts.peer_heard_at,
+        // Shown only while the accepted verdict judged this record's words.
+        peer_verified_at: facts
+            .peer_verified_at
+            .filter(|_| record.sas.as_ref().map(super::status::verdict_hash) == facts.peer_verdict),
+        peer_features: facts.peer_features,
+        ended_reason: facts.ended_reason,
+        ended_at: facts.ended_at,
     }
 }
 
@@ -65,25 +75,6 @@ fn check_attach_address(
         Some(proven) if proven != app_key => Err(ContactError::OtherAddress),
         Some(_) => Ok(()),
     }
-}
-
-const UNPAIRED_PREFIX: &str = "contact.unpaired.";
-
-/// The setting that marks a pairing the contact removed on its side, with when it said so.
-pub(crate) fn unpaired_key(contact_id: ContactId) -> String {
-    let hex: String = contact_id
-        .0
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    format!("{UNPAIRED_PREFIX}{hex}")
-}
-
-fn removed_by_peer(
-    repos: &dyn lepic_store::Repositories,
-    contact_id: ContactId,
-) -> Result<bool, StoreError> {
-    Ok(repos.setting(&unpaired_key(contact_id))?.is_some())
 }
 
 /// How long removing a pairing waits for the contact's relay to take the unpaired notice.
@@ -215,8 +206,7 @@ where
                     let home = repos
                         .contact_mailbox(record.contact_id)?
                         .map(|mailbox| mailbox.home_relay);
-                    let removed = removed_by_peer(repos, record.contact_id)?;
-                    views.push(view(&record, home, removed, now));
+                    views.push(view(&record, home, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -235,6 +225,10 @@ where
             session.store.read(|repos| {
                 let mut views = Vec::new();
                 for pending in repos.pending_pairings()? {
+                    // A cancelled invite is kept only to refuse late replies.
+                    if pending.cancelled_at.is_some() {
+                        continue;
+                    }
                     let Some(record) = repos.contact(pending.contact_id)?.filter(|record| {
                         record.peer.is_none() && !super::private::is_private(record)
                     }) else {
@@ -277,8 +271,7 @@ where
                     let home = repos
                         .contact_mailbox(record.contact_id)?
                         .map(|mailbox| mailbox.home_relay);
-                    let removed = removed_by_peer(repos, record.contact_id)?;
-                    views.push(view(&record, home, removed, now));
+                    views.push(view(&record, home, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -296,8 +289,7 @@ where
                 let home = repos
                     .contact_mailbox(contact_id)?
                     .map(|mailbox| mailbox.home_relay);
-                let removed = removed_by_peer(repos, contact_id)?;
-                Ok(view(&record, home, removed, now))
+                Ok(view(&record, home, now))
             })
         })
         .await
@@ -314,7 +306,6 @@ where
                 Ok(session.store.write(|repos| {
                     let pending = super::pairing::end_pending(repos, pairing_id_of(contact_id))?;
                     super::invoices::drop_contact_invoices(repos, contact_id)?;
-                    repos.delete_setting(&unpaired_key(contact_id))?;
                     repos.delete_setting(&super::collect::stamped_key(contact_id))?;
                     super::keycheck::delete_contact_settings(repos, contact_id)?;
                     let record = repos.delete_contact(contact_id)?;
@@ -377,7 +368,7 @@ where
                     }) else {
                         return Ok::<_, StoreError>(None);
                     };
-                    if removed_by_peer(repos, contact_id)? {
+                    if record.facts.ended_reason.is_some() {
                         return Ok(None);
                     }
                     Ok(repos
@@ -419,17 +410,22 @@ where
         Ok(true)
     }
 
-    /// The contact said it removed its pairing: the record is marked, once, and kept.
+    /// The contact said it removed its pairing: the record ends as unpaired, once, and is kept.
+    /// Ended is final: a pairing that ended before stays as it ended.
     pub(crate) async fn take_unpaired(&self, contact_id: ContactId) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         let first = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 Ok(session.store.write(|repos| {
-                    if repos.contact(contact_id)?.is_none() || removed_by_peer(repos, contact_id)? {
+                    let Some(mut record) = repos.contact(contact_id)? else {
                         return Ok::<_, StoreError>(false);
+                    };
+                    if !super::status::end_record(&mut record, PairingEndReason::Unpaired, now) {
+                        return Ok(false);
                     }
-                    repos.put_setting(&unpaired_key(contact_id), &now.as_second().to_string())?;
+                    super::invoices::drop_contact_invoices(repos, contact_id)?;
+                    repos.put_contact(&record)?;
                     Ok(true)
                 })?)
             })
@@ -477,7 +473,8 @@ where
     }
 
     /// Turns invoices from a contact on or off (RFC 0002 11.1). Only a verified contact may send
-    /// invoices: turning them on for another fails with [`ContactError::NotVerified`]. Turning
+    /// invoices: turning them on for another fails with [`ContactError::NotVerified`], and with
+    /// [`ContactError::Waiting`] or [`ContactError::Ended`] for a pairing that waits or ended. Turning
     /// them off deletes the contact's unpaid parked invoices and queues a sealed `declined` for
     /// each; a paid one finishes. Fails with [`ContactError::UnknownContact`].
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
@@ -487,6 +484,9 @@ where
         allow: bool,
     ) -> Result<(), ContactError> {
         self.update_contact(contact_id, move |record| {
+            if allow {
+                super::status::require_live(record)?;
+            }
             if allow && record.state != ContactState::Verified {
                 return Err(ContactError::NotVerified);
             }

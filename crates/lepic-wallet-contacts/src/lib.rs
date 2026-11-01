@@ -24,6 +24,7 @@ mod payload;
 mod private;
 mod relay;
 mod sealed;
+mod status;
 mod words;
 
 use std::sync::Arc;
@@ -51,6 +52,7 @@ pub use key_schedule::{
 pub use keycheck::{KEY_CHECK_WINDOW, KeyCheckStart, KeysDecision};
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{ContactKind, PairingClass, Purpose, Refusal, SasSymbol};
+pub use lepic_store::PairingEndReason;
 pub use lepic_store::PairingRole;
 pub use lepic_wallet::event::PairingFailure;
 pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, PendingPairingView};
@@ -62,6 +64,9 @@ pub use pairing::{
 pub use payload::{ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, PayloadId};
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
 pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
+pub use status::{
+    NEVER_FINISHED_AFTER, PairingStatus, STATUS_NOTICES, STATUS_RETRY_FOR, status_of,
+};
 pub use words::WORDS_INVITE_EXPIRY;
 
 /// The contact engine of one wallet: pairing, contact mailboxes, sealed slates, contact
@@ -220,13 +225,30 @@ pub struct ContactView {
     /// pairings, the one it uses is the one heard from last.
     pub last_sealed_in: Option<Timestamp>,
     /// The contact removed this pairing on its side and said so: nothing sent through it
-    /// arrives any more.
+    /// arrives any more. The same as `ended_reason` being [`PairingEndReason::Unpaired`].
     pub removed_by_peer: bool,
     /// The contact's payments address, `key@relay`, only when an address proof of this
     /// pairing verified; a later proof that fails keeps it. `None` for a contact that proved
     /// none.
     pub payments_address: Option<String>,
     pub created_at: Timestamp,
+    /// Where the pairing stands, derived from the record.
+    pub status: PairingStatus,
+    /// When the contact was first heard in this pairing.
+    pub peer_heard_at: Option<Timestamp>,
+    /// When the contact's match verdict for this pairing's words was accepted.
+    pub peer_verified_at: Option<Timestamp>,
+    /// The features the contact claimed in this pairing; 0 when none were received.
+    pub peer_features: u32,
+    pub ended_reason: Option<PairingEndReason>,
+    pub ended_at: Option<Timestamp>,
+}
+
+/// A pairing that ended in a collecting cycle; its record is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndedPairing {
+    pub contact_id: ContactId,
+    pub reason: PairingEndReason,
 }
 
 /// Why a pairing operation failed.
@@ -325,6 +347,12 @@ pub enum ContactError {
     /// Every private pairing slot of this store is used.
     #[error("no private pairing slot is left")]
     NoFreeSlot,
+    /// The pairing ended: nothing new goes through it.
+    #[error("the pairing ended")]
+    Ended,
+    /// The contact's wallet has not been heard in this pairing yet.
+    #[error("the pairing waits for the contact's wallet")]
+    Waiting,
 }
 
 impl From<StoreError> for ContactError {

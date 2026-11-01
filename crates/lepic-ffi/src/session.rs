@@ -2113,9 +2113,12 @@ fn contact_wallet_event(event: &Event) -> Option<WalletEvent> {
             pairing_failure: Some(contact::failure_reason(failed.reason)),
             ..WalletEvent::of(WalletEventKind::PairingFailed)
         },
-        Event::ContactUpdated(news) => {
-            contact::contact_event(WalletEventKind::ContactUpdated, news)
-        }
+        Event::ContactUpdated(update) => contact::contact_event(
+            WalletEventKind::ContactUpdated,
+            &lepic_wallet::event::ContactEvent {
+                contact_id: update.contact_id,
+            },
+        ),
         Event::HomeRelayUnreachable(unreachable) => WalletEvent {
             relay: Some(unreachable.relay.clone()),
             ..WalletEvent::of(WalletEventKind::HomeRelayUnreachable)

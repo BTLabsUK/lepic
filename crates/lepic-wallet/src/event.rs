@@ -110,8 +110,11 @@ pub enum Event {
     PairingConfirmed(ContactEvent),
     /// A pairing in progress ended without a record. The id names the record that was removed.
     PairingFailed(FailedPairing),
-    /// A contact sent a newer card: its addresses changed, its keys did not.
-    ContactUpdated(ContactEvent),
+    /// Something about a pairing changed that the contact caused, one event per change in the
+    /// order they happened: a newer card (same keys), the contact heard from for the first
+    /// time, its match verdict accepted, or the pairing ended by the contact or by never being
+    /// finished. Never raised for this side's own words check.
+    ContactUpdated(ContactUpdate),
     /// A home relay did not answer; collecting from it backs off (RFC 0002 8.4).
     HomeRelayUnreachable(UnreachableRelay),
     /// A key check proved the contact still holds the old keys: the old pairing keeps its keys
@@ -120,10 +123,9 @@ pub enum Event {
     /// A key check found no old keys, or went unanswered for a day: the new pairing shows
     /// keys-changed and the old one is untouched, until the user decides.
     ContactKeysChanged(ContactEvent),
-    /// The contact removed its pairing with this wallet and said so in a signed notice: its
-    /// mailbox is no longer read, so nothing sent through the pairing arrives. The record stays,
-    /// marked removed by the peer (`lepic_wallet_contacts::ContactView::removed_by_peer`), until the user removes it too.
-    /// Raised once per pairing.
+    /// The contact removed its pairing with this wallet and said so in a signed notice: nothing
+    /// sent through the pairing arrives any more. The record stays, ended as unpaired, until
+    /// the user removes it too. Raised once per pairing, with no [`Event::ContactUpdated`].
     ContactUnpaired(ContactEvent),
     /// A verified contact that may send invoices sent one; it is parked for the user to pay or
     /// decline. Nothing was paid.
@@ -187,6 +189,39 @@ pub struct OutboxNews {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContactEvent {
     pub contact_id: lepic_store::ContactId,
+}
+
+/// What changed about a pairing in an [`Event::ContactUpdated`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactChange {
+    /// A newer card with the same keys.
+    Card,
+    /// The proven payments address was set or changed.
+    Address,
+    /// The contact was heard from in this pairing for the first time.
+    Heard,
+    /// The contact's match verdict for this pairing's words was accepted.
+    PeerVerified,
+    /// The pairing ended; the update says why.
+    Ended,
+}
+
+/// A change to a pairing, and for [`ContactChange::Ended`] why it ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContactUpdate {
+    pub contact_id: lepic_store::ContactId,
+    pub change: ContactChange,
+    pub ended_reason: Option<lepic_store::PairingEndReason>,
+}
+
+impl ContactUpdate {
+    pub const fn of(contact_id: lepic_store::ContactId, change: ContactChange) -> Self {
+        Self {
+            contact_id,
+            change,
+            ended_reason: None,
+        }
+    }
 }
 
 /// A pairing that ended without a record, and why.

@@ -167,7 +167,7 @@ pub enum LinkOutcome {
 pub enum SasDecision {
     /// Both screens show the same entries: the contact becomes verified.
     Match,
-    /// The screens differ: the pairing is deleted on this side.
+    /// The screens differ: the pairing ends on both sides.
     Mismatch,
     /// Not checked: the contact stays paired, not verified.
     Skip,
@@ -640,6 +640,7 @@ where
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
                     record.updated_at = now;
+                    super::status::heard_now(&mut record, now);
                     repos.put_contact(&record)?;
                     repos.put_contact_mailbox(&ContactMailbox {
                         contact_id,
@@ -653,7 +654,7 @@ where
                     // A card QR is seen by anyone nearby: the first collect moves our mailbox.
                     repos.put_setting(&super::collect::in_person_key(contact_id), "1")?;
                     debug!(peer_relay = %peer_relay, "in-person pairing stored");
-                    Ok(super::manage::view(&record, Some(home), false, now))
+                    Ok(super::manage::view(&record, Some(home), now))
                 })
             })
             .await?;
@@ -663,18 +664,26 @@ where
         Ok(view)
     }
 
-    /// Records the user's SAS check (RFC 0002 7.5): a match makes the contact verified, a
-    /// mismatch deletes the pairing on this side, skipping leaves it paired. After a mismatch an
-    /// inviter posts a refusal to the invitee's confirm mailbox, best effort.
+    /// Records the user's SAS check (RFC 0002 7.5), also while the pairing waits for the
+    /// contact. A match makes the contact verified and counts as hearing it; a contact that
+    /// claims the status notices is told, with the hash of the SAS. A mismatch ends the
+    /// pairing on this side, kept as ended: its invoices and queued messages are dropped, its
+    /// mailbox is no longer collected so nothing more is finalized through it, and the contact
+    /// is told as for a match. After a mismatch an inviter also posts a refusal to the
+    /// invitee's confirm mailbox, best effort. Skipping leaves it paired.
     ///
-    /// Fails with [`ContactError::UnknownContact`] when no paired contact has that id.
+    /// Fails with [`ContactError::Ended`] for a pairing that ended, and with
+    /// [`ContactError::UnknownContact`] when no paired contact has that id.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    // Each decision's store work is short; split, the one transaction would read worse.
+    #[allow(clippy::too_many_lines)]
     pub async fn pairing_sas(
         &self,
         relays: &ContactRelays,
         contact_id: ContactId,
         decision: SasDecision,
     ) -> Result<(), ContactError> {
+        let network = self.wallet.config().network;
         let session = self.wallet.session()?;
         let tell = self
             .contact_work(move |ports, _| {
@@ -684,25 +693,59 @@ where
                         .contact(contact_id)?
                         .filter(|record| {
                             matches!(record.state, ContactState::Paired | ContactState::Verified)
+                                && record.peer.is_some()
                         })
                         .ok_or(ContactError::UnknownContact)?;
+                    if record.facts.ended_reason.is_some() {
+                        return Err(ContactError::Ended);
+                    }
+                    let verdict = record.sas.as_ref().map(super::status::verdict_hash);
+                    let queue =
+                        |repos: &mut dyn lepic_store::Repositories,
+                         record: &ContactRecord,
+                         message: super::status::StatusMessage| {
+                            if super::status::sends_status(record)
+                                && let Err(error) = super::status::queue_status(
+                                    repos,
+                                    &session.keychain,
+                                    network,
+                                    &ports.rng,
+                                    record,
+                                    &super::status::Tell::Status(message),
+                                    now,
+                                )
+                            {
+                                super::status::queue_failed(&error);
+                            }
+                        };
                     match decision {
                         SasDecision::Match => {
                             record.state = ContactState::Verified;
                             record.verified_at = Some(now);
                             record.updated_at = now;
+                            super::status::heard_now(&mut record, now);
                             repos.put_contact(&record)?;
+                            if let Some(hash) = verdict {
+                                queue(repos, &record, super::status::StatusMessage::Match(hash));
+                            }
                         }
                         SasDecision::Mismatch => {
                             let pending = repos.pending_pairing(pairing_id_of(contact_id))?;
                             end_pending(repos, pairing_id_of(contact_id))?;
                             super::invoices::drop_contact_invoices(repos, contact_id)?;
-                            repos.delete_contact(contact_id)?;
-                            super::private::delete_secrets(repos, contact_id)?;
+                            super::status::drop_contact_outbox(repos, contact_id)?;
                             let channel = class_of(repos, &record)?
                                 .private()
                                 .and_then(|secrets| secrets.channel.clone());
-                            super::private::delete_secrets(repos, contact_id)?;
+                            super::status::end_record(
+                                &mut record,
+                                lepic_store::PairingEndReason::Mismatch,
+                                now,
+                            );
+                            repos.put_contact(&record)?;
+                            if let Some(hash) = verdict {
+                                queue(repos, &record, super::status::StatusMessage::Mismatch(hash));
+                            }
                             let tell = pending
                                 .filter(|pending| pending.role == PairingRole::Inviter)
                                 .and_then(|pending| {
@@ -738,6 +781,112 @@ where
                 channel.as_ref(),
             )
             .await;
+        }
+        if relays.mode == super::RelayMode::Online
+            && let Err(error) = self.deliver_status(relays, false).await
+        {
+            warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing status not delivered");
+        }
+        Ok(())
+    }
+
+    /// Cancels a pairing in progress (RFC 0002 7.6). An invite of ours that no reply paired is
+    /// kept, hidden, until it expires, so a late reply is refused with
+    /// [`Refusal::CancelledByInviter`] and the replier learns it; its nonce is dropped, so
+    /// nothing can pair with it any more. At most [`lepic_store::MAX_CANCELLED_PAIRINGS`] are
+    /// kept, the oldest dropped. Any other pairing in progress, and our answer to an invite,
+    /// are removed as [`Wallet::contact_remove`] removes them. Returns whether anything was
+    /// cancelled.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn pairing_cancel(&self, contact_id: ContactId) -> Result<bool, ContactError> {
+        let session = self.wallet.session()?;
+        let kept = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                Ok(session.store.write(|repos| {
+                    let Some(mut pending) = repos.pending_pairing(pairing_id_of(contact_id))?
+                    else {
+                        return Ok::<_, StoreError>(false);
+                    };
+                    let unanswered = pending.role == PairingRole::Inviter
+                        && repos
+                            .contact(contact_id)?
+                            .is_some_and(|record| record.peer.is_none());
+                    if !unanswered || pending.cancelled_at.is_some() {
+                        return Ok(pending.cancelled_at.is_some());
+                    }
+                    let mut cancelled: Vec<_> = repos
+                        .pending_pairings()?
+                        .into_iter()
+                        .filter(|other| other.cancelled_at.is_some())
+                        .collect();
+                    cancelled.sort_by_key(|other| other.cancelled_at);
+                    let over = cancelled
+                        .len()
+                        .saturating_add(1)
+                        .saturating_sub(lepic_store::MAX_CANCELLED_PAIRINGS);
+                    for oldest in cancelled.into_iter().take(over) {
+                        end_pending(repos, oldest.pairing_id)?;
+                        repos.delete_contact(oldest.contact_id)?;
+                        super::private::delete_secrets(repos, oldest.contact_id)?;
+                    }
+                    pending.secrets.na = None;
+                    pending.cancelled_at = Some(now);
+                    repos.put_pending_pairing(&pending)?;
+                    Ok(true)
+                })?)
+            })
+            .await?;
+        if kept {
+            info!("pairing invite cancelled");
+            return Ok(true);
+        }
+        self.contact_remove(contact_id).await
+    }
+
+    /// Posts again the reply of each answer of ours still waiting for its confirm, in case the
+    /// first post never reached the inviter. A reply the inviter took already is recognised
+    /// there and changes nothing.
+    pub(crate) async fn repost_replies(&self, relays: &ContactRelays) -> Result<(), ContactError> {
+        let network = self.wallet.config().network;
+        let net = contact_network(network);
+        let session = self.wallet.session()?;
+        let waiting = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                Ok(session.store.read(|repos| {
+                    Ok::<_, StoreError>(
+                        repos
+                            .pending_pairings()?
+                            .into_iter()
+                            .filter(|pending| {
+                                pending.role == PairingRole::Invitee
+                                    && pending.cancelled_at.is_none()
+                                    && pending.expires_at > now
+                            })
+                            .filter_map(|pending| {
+                                Some((
+                                    pending.secrets.code?,
+                                    pending.peer_mailbox?,
+                                    pending.reply?,
+                                    pending.invite,
+                                ))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })?)
+            })
+            .await?;
+        for (code, to, reply, invite) in waiting {
+            let invite = Invite::decode(&invite, net).map_err(ContactError::StoredData)?;
+            let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
+            let (_, from) = pairing_mailbox(&code, network, &home)?;
+            let to = EpicboxAddress::parse(&to, relays.epicbox.network())
+                .map_err(|_| ContactError::RelayAddress)?;
+            let onion = invite.fields().onion.as_ref().map(RelayHost::as_str);
+            if let Err(error) = post_envelope(relays, &from, &to, onion, &reply).await {
+                debug!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing reply not posted again");
+            }
         }
         Ok(())
     }
@@ -1137,11 +1286,27 @@ where
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
                     record.updated_at = now;
+                    // The confirm itself is the inviter heard.
+                    super::status::heard_now(&mut record, now);
                     repos.put_contact(&record)?;
                     repos.put_contact_mailbox(&paired_mailbox(
                         contact_id, &peer, &own, home_text, onion,
                     ))?;
                     end_pending(repos, pairing_id)?;
+                    // An inviter that claims the status notices waits to hear that we finished.
+                    if super::status::sends_status(&record)
+                        && let Err(error) = super::status::queue_status(
+                            repos,
+                            &session.keychain,
+                            network,
+                            &ports.rng,
+                            &record,
+                            &super::status::Tell::Status(super::status::StatusMessage::Finished),
+                            now,
+                        )
+                    {
+                        super::status::queue_failed(&error);
+                    }
                     Ok(())
                 })
             })
@@ -1527,7 +1692,8 @@ fn store_answer(
         invite: invite.as_bytes().to_vec(),
         expect_address: None,
         expect_key: None,
-        reply: None,
+        // Posted again on each collect until the confirm or a refusal comes.
+        reply: Some(envelope.clone()),
         cancelled_at: None,
     })?;
     Ok((new.contact_id, envelope, reply_from, to))
@@ -1584,6 +1750,12 @@ fn decide_reply(
     let Some(mut pending) = repos.pending_pairing(pairing_id)? else {
         return Ok(Decision::Drop);
     };
+    if pending.cancelled_at.is_some() {
+        return Ok(Decision::Refuse(
+            Refusal::CancelledByInviter,
+            may_refuse(repos, pairing_id)?,
+        ));
+    }
     let Some(n_a) = pending.secrets.na else {
         return reply_taken_again(repos, pairing_id, contact_id, &peer);
     };
@@ -1639,6 +1811,11 @@ fn decide_reply(
     record.state = ContactState::Paired;
     record.sas = Some(*sas.as_bytes());
     record.updated_at = now;
+    // A contact that does not send the status notices is heard by its reply; one that does is
+    // heard when it says it finished, or by anything else it sends in the pairing.
+    if !super::status::sends_status(&record) {
+        super::status::heard_now(&mut record, now);
+    }
     repos.put_contact(&record)?;
     repos.put_contact_mailbox(&paired_mailbox(contact_id, &peer, &own, home_text, onion))?;
     // The code still finds the reply mailbox until the invite ends, to refuse

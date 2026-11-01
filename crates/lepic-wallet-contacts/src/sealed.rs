@@ -133,6 +133,7 @@ fn check_sealable(
     if !matches!(record.state, ContactState::Paired | ContactState::Verified) {
         return Err(ContactError::UnknownContact);
     }
+    super::status::require_live(record)?;
     if (channel == Channel::Text && record.seal == SealMode::Off)
         || !card
             .fields()
@@ -163,7 +164,8 @@ where
     /// [`Wallet::contact_plain_fallback`].
     ///
     /// Fails with [`ContactError::UnknownContact`] for a contact that is not paired or whose keys
-    /// changed, [`ContactError::SealOff`] when sealing is off for it or its card says it cannot
+    /// changed, [`ContactError::Waiting`] before the contact was heard in the pairing,
+    /// [`ContactError::Ended`] once it ended, [`ContactError::SealOff`] when sealing is off for it or its card says it cannot
     /// open sealed files, and [`ContactError::UnknownTransaction`] when the transaction has no
     /// slate to send.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name, tx_id = %tx_id))]

@@ -30,7 +30,9 @@ use super::{
     UPDATES_PER_HOUR,
 };
 use crate::ContactBook;
-use lepic_wallet::event::{ContactEvent, Event, FailedPairing, UnreachableRelay};
+use lepic_wallet::event::{
+    ContactChange, ContactEvent, ContactUpdate, Event, FailedPairing, UnreachableRelay,
+};
 use lepic_wallet::inbox::{ErrorChain, relay_network};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 
@@ -66,6 +68,9 @@ pub struct CollectReport {
     pub delivered: usize,
     /// Relays that did not answer, as `domain:port`; they back off.
     pub unreachable: Vec<String>,
+    /// Pairings that ended in this cycle; their records are kept. Each also raised
+    /// [`Event::ContactUpdated`] or [`Event::ContactUnpaired`].
+    pub ended: Vec<super::EndedPairing>,
 }
 
 /// Relays that keep failing wait this long before the next try, one step per failure.
@@ -259,6 +264,13 @@ fn end_late_pairing(
     last: bool,
 ) -> Result<Option<Option<FailedPairing>>, StoreError> {
     let contact_id = pending.contact_id;
+    // A cancelled invite was kept only to refuse late replies: it ends without a word.
+    if pending.cancelled_at.is_some() {
+        super::pairing::end_pending(repos, pending.pairing_id)?;
+        repos.delete_contact(contact_id)?;
+        super::private::delete_secrets(repos, contact_id)?;
+        return Ok(Some(None));
+    }
     let paired = repos
         .contact(contact_id)?
         .is_some_and(|record| record.peer.is_some());
@@ -329,6 +341,8 @@ where
     /// The turn the other contacts take across cycles is left as it was; everything else a
     /// cycle does runs as it always does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    // One cycle in its order: the steps share the report and the turn.
+    #[allow(clippy::too_many_lines)]
     pub async fn contacts_collect_only(
         &self,
         relays: &ContactRelays,
@@ -364,6 +378,9 @@ where
                 .or_default()
                 .push(mailbox);
         }
+        let ended_before = self.ended_since(&BTreeSet::new()).await?;
+        let ended_before: BTreeSet<ContactId> =
+            ended_before.iter().map(|ended| ended.contact_id).collect();
         let mut told = BTreeSet::new();
         for (host, mailboxes) in by_relay {
             let Some(first) = mailboxes.first() else {
@@ -380,6 +397,13 @@ where
                 .filter_map(|job| match job {
                     Job::Reply(pairing_id) | Job::Confirm(pairing_id) => Some(*pairing_id),
                     Job::Contact(..) => None,
+                })
+                .collect();
+            let contacts: Vec<ContactId> = jobs
+                .iter()
+                .filter_map(|job| match job {
+                    Job::Contact(contact_id, true) => Some(*contact_id),
+                    _ => None,
                 })
                 .collect();
             let started = self.wallet.ports().clock.now();
@@ -406,6 +430,10 @@ where
                         self.wallet.emit(Event::PairingFailed(failed));
                         report.failed.push(failed);
                     }
+                    // The wait for an unheard contact counts only after a drain that reached
+                    // its relay, so a wallet that cannot collect never ends a pairing.
+                    let mut ended = self.count_heard_wait(contacts, started).await?;
+                    report.ended.append(&mut ended);
                 }
                 Err(error @ (MailboxError::Unreachable(_) | MailboxError::Lost(_))) => {
                     warn!(peer_relay = %host, error = %ErrorChain(&error), "home relay not answering");
@@ -422,12 +450,50 @@ where
             }
         }
         debug!(count = report.mailboxes, "contact mailboxes collected");
+        for ended in self.ended_since(&ended_before).await? {
+            if !report.ended.contains(&ended) {
+                report.ended.push(ended);
+            }
+        }
+        if let Err(error) = self.repost_replies(relays).await {
+            warn!(error = %ErrorChain(&error), "pairing replies not posted again");
+        }
+        if let Err(error) = self.deliver_status(relays, explicit).await {
+            warn!(error = %ErrorChain(&error), "pairing status not delivered");
+        }
         // Already this run's turn: the outbox runs without taking it again.
         match self.deliver_outbox(relays, explicit).await {
             Ok(outbox) => report.delivered = outbox.delivered,
             Err(error) => warn!(error = %ErrorChain(&error), "contact outbox not run"),
         }
         Ok(report)
+    }
+
+    /// The ended pairings, leaving out those in `before`.
+    async fn ended_since(
+        &self,
+        before: &BTreeSet<ContactId>,
+    ) -> Result<Vec<super::EndedPairing>, ContactError> {
+        let session = self.wallet.session()?;
+        let before = before.clone();
+        self.contact_work(move |_, _| {
+            Ok(session.store.read(|repos| {
+                Ok::<_, StoreError>(
+                    repos
+                        .contacts()?
+                        .into_iter()
+                        .filter(|record| !before.contains(&record.contact_id))
+                        .filter_map(|record| {
+                            record.facts.ended_reason.map(|reason| super::EndedPairing {
+                                contact_id: record.contact_id,
+                                reason,
+                            })
+                        })
+                        .collect(),
+                )
+            })?)
+        })
+        .await
     }
 
     /// Ends pairings in progress that waited [`LATE_DRAIN_WAIT`] past their deadline (an
@@ -760,6 +826,15 @@ where
         {
             return Ok(Handled::Stored);
         }
+        // Ended is final: only answers to this wallet's own sends still settle.
+        let ended = record.facts.ended_reason.is_some();
+        if ended && opened.content.kind != MessageType::Slate {
+            debug!("message for an ended pairing dropped");
+            return Ok(Handled::Stored);
+        }
+        if !ended {
+            self.heard(contact_id).await?;
+        }
         let update = match opened.content.kind {
             MessageType::ContactUpdate => {
                 match lepic_contact::open_contact_update(&sealed, &enc_secret(&keys), &recorded) {
@@ -915,8 +990,10 @@ where
             .await?;
         if updated {
             info!("contact updated");
-            self.wallet
-                .emit(Event::ContactUpdated(ContactEvent { contact_id }));
+            self.wallet.emit(Event::ContactUpdated(ContactUpdate::of(
+                contact_id,
+                ContactChange::Card,
+            )));
         }
         Ok(())
     }
@@ -1153,6 +1230,11 @@ fn contact_mailboxes(
     let mut contacts = Vec::new();
     for record in repos.contacts()? {
         if record.peer.is_none() || !wanted(record.contact_id) {
+            continue;
+        }
+        // A pairing ended by this side's mismatch finalizes nothing: an answer waiting in its
+        // mailbox stays there, and the send it answers can still be cancelled.
+        if record.facts.ended_reason == Some(lepic_store::PairingEndReason::Mismatch) {
             continue;
         }
         let Some(mailbox) = repos.contact_mailbox(record.contact_id)? else {

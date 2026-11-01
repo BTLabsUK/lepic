@@ -644,7 +644,7 @@ impl Session {
                 "no such pairing in progress",
             ));
         }
-        self.engine.contact_book().contact_remove(id).await?;
+        self.engine.contact_book().pairing_cancel(id).await?;
         Ok(())
     }
 
@@ -1215,6 +1215,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // A test reads best as one table of cases.
     fn contact_events_carry_ids_and_labels_only() {
         let contact_id = ContactId([7; 16]);
         let id = contact_id.to_string();
@@ -1226,7 +1227,13 @@ mod tests {
                 Event::PairingConfirmed(news),
                 WalletEventKind::PairingConfirmed,
             ),
-            (Event::ContactUpdated(news), WalletEventKind::ContactUpdated),
+            (
+                Event::ContactUpdated(lepic_wallet::event::ContactUpdate::of(
+                    contact_id,
+                    lepic_wallet::event::ContactChange::Card,
+                )),
+                WalletEventKind::ContactUpdated,
+            ),
             (
                 Event::ContactKeysRestored(news),
                 WalletEventKind::ContactKeysRestored,

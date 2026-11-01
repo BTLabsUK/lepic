@@ -354,16 +354,12 @@ async fn the_words_check_verifies_or_removes_the_pairing() {
     carl.pairing_sas(carl_side.clone(), SasDecision::Mismatch, Offline)
         .await
         .unwrap();
-    assert_eq!(
-        kind(carl.contact(carl_side.clone()).await),
-        WalletErrorKind::ContactNotFound
-    );
-    assert_eq!(
-        kind(
-            carl.pairing_sas(carl_side, SasDecision::Match, Online)
-                .await
-        ),
-        WalletErrorKind::ContactNotFound
+    // A mismatch ends the pairing and keeps it; no later check changes it.
+    assert!(carl.contact(carl_side.clone()).await.is_ok());
+    assert!(
+        carl.pairing_sas(carl_side, SasDecision::Match, Online)
+            .await
+            .is_err()
     );
 }
 
@@ -616,7 +612,8 @@ async fn a_pending_invite_is_listed_until_cancelled() {
         kind(anna.pairing_cancel(invite.contact_id.clone()).await),
         WalletErrorKind::PairingNotFound
     );
-    assert!(!anna.contact_remove(invite.contact_id).await.unwrap());
+    // The cancelled invite is kept, hidden, to refuse a late reply; removing it ends that.
+    assert!(anna.contact_remove(invite.contact_id).await.unwrap());
     assert_eq!(
         kind(anna.pairing_cancel("not an id".to_owned()).await),
         WalletErrorKind::InvalidArgument

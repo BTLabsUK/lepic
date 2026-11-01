@@ -165,6 +165,58 @@ fn contact_sender_key(contact_id: ContactId) -> String {
     format!("contact:{}", hex(&contact_id.0))
 }
 
+/// `content` with our current card, sealed at `now` and signed to the contact of `record` of
+/// `class`.
+pub(crate) fn seal_to_record(
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    record: &ContactRecord,
+    class: &super::private::RecordClass,
+    content: Content,
+    now: Timestamp,
+    rng: &mut LockedRng<'_>,
+) -> Result<Vec<u8>, ContactError> {
+    let net = contact_network(network);
+    let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
+    let card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
+    let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
+    let keys = super::private::record_keys(keychain, network, record, class)?;
+    let content = Content {
+        sent_at: super::collect::send_time(now),
+        ..content
+    };
+    match class.private() {
+        None => seal(
+            net,
+            card.enc_key(),
+            card.hint_rule(),
+            &Content {
+                card: Some(own),
+                ..content
+            },
+            Some(&signing_key(&keys)),
+            rng,
+        ),
+        // A private pairing's card never changes through its channel.
+        Some(secrets) => {
+            let channel = secrets
+                .channel
+                .as_ref()
+                .ok_or(ContactError::UnknownContact)?;
+            lepic_contact::seal_psk(
+                net,
+                card.enc_key(),
+                card.hint_rule(),
+                &content,
+                Some(&signing_key(&keys)),
+                channel,
+                rng,
+            )
+        }
+    }
+    .map_err(ContactError::Encode)
+}
+
 impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,
@@ -177,7 +229,9 @@ where
     /// if it allows our invoices.
     ///
     /// Fails with [`ContactError::UnknownContact`] for a contact that is not paired or whose keys
-    /// changed, [`ContactError::DoesNotPayInvoices`] when its card says it does not pay invoices,
+    /// changed, [`ContactError::Waiting`] before the contact was heard in the pairing,
+    /// [`ContactError::Ended`] once it ended, [`ContactError::DoesNotPayInvoices`] when its card
+    /// says it does not pay invoices,
     /// and [`ContactError::Invoice`] as [`Wallet::issue_invoice`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_issue_invoice(
@@ -201,6 +255,7 @@ where
                     if super::private::is_private(&record) {
                         return Err(ContactError::WrongClass);
                     }
+                    super::status::require_live(&record)?;
                     let mailbox = repos
                         .contact_mailbox(contact_id)?
                         .ok_or(ContactError::UnknownContact)?;
@@ -435,10 +490,6 @@ where
         content: Content,
     ) -> Result<Vec<u8>, ContactError> {
         let network = self.wallet.config().network;
-        let net = contact_network(network);
-        let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
-        let card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
-        let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
         let session = self.wallet.session()?;
         let class = {
             let session = std::sync::Arc::clone(&session);
@@ -450,42 +501,17 @@ where
             })
             .await?
         };
-        let keys = super::private::record_keys(&session.keychain, network, record, &class)?;
-        let content = Content {
-            sent_at: super::collect::send_time(self.wallet.ports().clock.now()),
-            ..content
-        };
+        let now = self.wallet.ports().clock.now();
         let mut rng = LockedRng(&mut **self.wallet.ports().rng.lock());
-        match class.private() {
-            None => seal(
-                net,
-                card.enc_key(),
-                card.hint_rule(),
-                &Content {
-                    card: Some(own),
-                    ..content
-                },
-                Some(&signing_key(&keys)),
-                &mut rng,
-            ),
-            // A private pairing's card never changes through its channel.
-            Some(secrets) => {
-                let channel = secrets
-                    .channel
-                    .as_ref()
-                    .ok_or(ContactError::UnknownContact)?;
-                lepic_contact::seal_psk(
-                    net,
-                    card.enc_key(),
-                    card.hint_rule(),
-                    &content,
-                    Some(&signing_key(&keys)),
-                    channel,
-                    &mut rng,
-                )
-            }
-        }
-        .map_err(ContactError::Encode)
+        seal_to_record(
+            &session.keychain,
+            network,
+            record,
+            &class,
+            content,
+            now,
+            &mut rng,
+        )
     }
 
     /// Runs the outbox once when relays may be reached; a failure waits for the next run.
@@ -520,6 +546,10 @@ where
             debug!("undecodable slate from a contact dropped");
             return Ok(Handled::Stored);
         };
+        if record.facts.ended_reason.is_some() && matches!(slate.stage(), Stage::S1 | Stage::I1) {
+            debug!("new slate through an ended pairing dropped");
+            return Ok(Handled::Stored);
+        }
         match slate.stage() {
             Stage::I1 => {
                 if record.state != ContactState::Verified || !record.allow_invoices {
@@ -916,6 +946,10 @@ where
         };
         if lepic_wallet::notice::is_unpaired(text) {
             self.take_unpaired(record.contact_id).await?;
+            return Ok(Handled::Stored);
+        }
+        if let Some(message) = super::status::parse_status(text) {
+            self.take_status(record.contact_id, message).await?;
             return Ok(Handled::Stored);
         }
         // A private pairing takes no other notice.

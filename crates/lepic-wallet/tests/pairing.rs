@@ -30,11 +30,11 @@ use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{Domain, Network as RelayNetwork, RelayEndpoint, Security};
 use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
-use lepic_wallet::event::{ContactEvent, FailedPairing};
+use lepic_wallet::event::{ContactChange, ContactEvent, ContactUpdate, FailedPairing};
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry,
-    InviteRequest, KeyCheckStart, KeysDecision, LinkOutcome, PairingClass, PairingFailure,
-    RelayMode, SasDecision, WalletContacts,
+    InviteRequest, KeyCheckStart, KeysDecision, LinkOutcome, PairingClass, PairingEndReason,
+    PairingFailure, PairingStatus, RelayMode, SasDecision, WalletContacts,
 };
 use rand::SeedableRng;
 use world::{Party, World};
@@ -191,7 +191,7 @@ fn two_phones_pair_in_person_by_scanning_each_others_card() {
 }
 
 #[test]
-fn the_sas_check_verifies_or_deletes_and_only_verified_contacts_send_invoices() {
+fn the_sas_check_verifies_or_ends_and_only_verified_contacts_send_invoices() {
     let world = World::new();
     let (anna_side, ben_side) = world.pair_by_link();
     let wallet = &world.issuer.wallet;
@@ -251,12 +251,13 @@ fn the_sas_check_verifies_or_deletes_and_only_verified_contacts_send_invoices() 
             SasDecision::Mismatch,
         ))
         .unwrap();
-    assert!(
-        world
-            .block_on(world.payer.wallet.contact_book().contacts())
-            .unwrap()
-            .is_empty()
-    );
+    // A mismatch ends the pairing and keeps it, ended.
+    let ended = world
+        .block_on(world.payer.wallet.contact_book().contacts())
+        .unwrap();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].status, PairingStatus::Ended);
+    assert_eq!(ended[0].ended_reason, Some(PairingEndReason::Mismatch));
 }
 
 #[test]
@@ -1302,9 +1303,10 @@ fn only_a_proven_found_answer_completes_a_key_check() {
     world.collect(&world.issuer);
 
     let news = events(&mut issuer_events);
-    assert!(news.contains(&Event::ContactUpdated(ContactEvent {
-        contact_id: anna_side
-    })));
+    assert!(news.contains(&Event::ContactUpdated(ContactUpdate::of(
+        anna_side,
+        ContactChange::Card
+    ))));
     assert_eq!(key_news(&news), (vec![], vec![]));
     let old = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
     assert_eq!(old.peer.unwrap().seq, 2);

@@ -151,9 +151,12 @@ fn within_window(created: Timestamp, now: Timestamp) -> bool {
         .is_ok_and(|end| end > now)
 }
 
+/// Whether the record takes part in a key check: paired, not private, and never an ended
+/// pairing.
 fn paired(record: &ContactRecord) -> bool {
     matches!(record.state, ContactState::Paired | ContactState::Verified)
         && record.peer.is_some()
+        && record.facts.ended_reason.is_none()
         && !super::private::is_private(record)
 }
 
@@ -188,7 +191,8 @@ where
     /// old pairing, which nobody reads any more. Asked again for a check on its way, this
     /// returns [`KeyCheckStart::Sent`] and sends nothing.
     ///
-    /// Fails with [`ContactError::UnknownContact`] unless both are paired and differ, and with
+    /// Fails with [`ContactError::Ended`] when either pairing ended, with
+    /// [`ContactError::UnknownContact`] unless both are paired and differ, and with
     /// [`ContactError::KeyCheckRefused`] when the new pairing's check already ended.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_key_check(
@@ -204,6 +208,14 @@ where
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
+                    for id in [new, old] {
+                        if repos
+                            .contact(id)?
+                            .is_some_and(|record| record.facts.ended_reason.is_some())
+                        {
+                            return Err(ContactError::Ended);
+                        }
+                    }
                     let fresh = repos
                         .contact(new)?
                         .filter(paired)
