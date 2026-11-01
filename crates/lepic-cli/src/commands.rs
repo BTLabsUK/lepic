@@ -1934,6 +1934,30 @@ mod tests {
         dir
     }
 
+    /// A second opener waits for a holder that copies the plain database into an encrypted
+    /// one, and is refused at once by a holder that does not.
+    #[test]
+    fn a_second_opener_waits_only_while_a_copy_is_in_progress() {
+        let dir = with_mode(0o700);
+        let held = lock_data_dir(dir.path()).unwrap().unwrap();
+        assert!(matches!(
+            lock_data_dir(dir.path()),
+            Err(CliError::DataDirInUse)
+        ));
+
+        std::fs::write(dir.path().join("wallet.enc.sqlite3.tmp"), b"").unwrap();
+        assert!(lepic_store::migration_in_progress(dir.path()));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(held);
+        });
+        let started = std::time::Instant::now();
+        let second = lock_data_dir(dir.path()).unwrap();
+        assert!(second.is_some());
+        assert!(started.elapsed() >= std::time::Duration::from_millis(250));
+        release.join().unwrap();
+    }
+
     #[test]
     fn refuses_an_existing_data_directory_other_users_can_access() {
         for mode in [0o755, 0o750, 0o701] {
