@@ -107,6 +107,14 @@ only a C compiler, as LEPIC's other C (secp256k1-zkp) does.
 | `x86_64-linux-android` | `cargo ndk`, API 24, run on the API 36 emulator | builds; cipher and `encrypted` tests pass |
 | `aarch64-linux-android` | `cargo ndk`, API 24 | builds; not run (no arm64 device was attached) |
 
+The move of a plain database (`migrate_encrypted` tests), the engine's lifecycle tests and the
+FFI's open-path tests ran on the epicrig rig (Rust 1.99.0, MSVC) and on the API 36 x86_64
+emulator (`cargo ndk` test binaries run with `adb`) and pass on both. On Windows they found two
+faults since fixed: the copy was flushed through a read-only handle, which Windows refuses to
+flush, and the copy's URI was wrong for a data directory in the verbatim `\\?\` form that
+canonicalising gives. A Windows test holds the plain file without sharing deletion: the open
+after the switch fails, and the next one sets the file aside.
+
 Checked on each target that ran: a raw 32-byte key with the ChaCha20 scheme (`PRAGMA cipher` is
 `chacha20`); WAL mode; neither the file nor its WAL holds a written value or `SQLite format 3`;
 the wrong key reads as "not a database"; a plain database opens plain in the same build;
