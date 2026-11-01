@@ -278,16 +278,7 @@ impl Receiver {
 
     /// The wallet's database, opened with the key the engine seals contexts under.
     pub fn store(&self) -> TestStore {
-        let subkey = |domain: &[u8]| -> [u8; 32] {
-            let mut mac =
-                <Blake2bMac<U32> as KeyInit>::new_from_slice(self.seed.expose_bytes()).unwrap();
-            mac.update(domain);
-            mac.finalize_fixed().into()
-        };
-        let keys = StoreKeys::from_bytes(
-            subkey(b"lepic-wallet private context key v1"),
-            subkey(b"lepic-wallet peer tag v1"),
-        );
+        let keys = lepic_wallet::lifecycle::store_keys(&self.seed).unwrap();
         self.stores.open_for_test(Path::new(DATA_DIR), keys)
     }
 

@@ -239,18 +239,9 @@ pub fn pay_request() -> PayRequest {
     }
 }
 
-/// The keys `lifecycle::store_keys` derives from the seed: the context key, which
-/// `tests/lifecycle_logs.rs` also recomputes, and the peer tag key.
+/// The keys the engine opens the wallet's database with.
 fn context_key(seed: &Seed) -> StoreKeys {
-    let subkey = |domain: &[u8]| -> [u8; 32] {
-        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).unwrap();
-        mac.update(domain);
-        mac.finalize_fixed().into()
-    };
-    StoreKeys::from_bytes(
-        subkey(b"lepic-wallet private context key v1"),
-        subkey(b"lepic-wallet peer tag v1"),
-    )
+    lepic_wallet::lifecycle::store_keys(seed).unwrap()
 }
 
 pub struct Party {

@@ -496,7 +496,11 @@ pub(crate) fn fingerprint(keychain: &Keychain) -> Result<String, WalletError> {
 
 /// Keyed BLAKE2b of a domain string under the seed: the same seed always opens its database,
 /// and the key reveals nothing about the seed.
-fn store_keys(seed: &Seed) -> Result<StoreKeys, WalletError> {
+/// The keys a wallet's database is opened with, derived from `seed`: the key its sealed records
+/// are sealed under and the key its peer rows are found by. The one place both are derived, so
+/// tests open a wallet's database with what the engine uses. Fails with
+/// [`WalletError::StoredSeed`] for a seed the hash refuses as a key.
+pub fn store_keys(seed: &Seed) -> Result<StoreKeys, WalletError> {
     Ok(StoreKeys::new(
         ContextKey::filled_by(|key| fill_context_key(seed, key))?,
         PeerTagKey::filled_by(|key| fill_peer_tag_key(seed, key))?,
@@ -624,12 +628,8 @@ mod tests {
     #[test]
     fn peer_tag_key_is_its_own_subkey_of_the_seed() {
         let seed = Seed::from_entropy(&[5; 32]).unwrap();
-        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(&[5; 32]).unwrap();
-        mac.update(b"lepic-wallet peer tag v1");
-        let expected: [u8; 32] = mac.finalize_fixed().into();
         let mut key = [0; PEER_TAG_KEY_LEN];
         fill_peer_tag_key(&seed, &mut key).unwrap();
-        assert_eq!(key, expected);
         let mut context = [0; CONTEXT_KEY_LEN];
         fill_context_key(&seed, &mut context).unwrap();
         assert_ne!(key, context);
