@@ -82,6 +82,9 @@ pub struct InviteRequest {
     /// A contact, or a private pairing of two wallets of one owner, which carries only the host
     /// app's payloads and never offers words.
     pub class: PairingClass,
+    /// The payments address, `key@relay`, the reply must prove; a reply that proves none or
+    /// another key is refused with nothing stored.
+    pub expect_address: Option<String>,
 }
 
 /// A new invite, to show as a link or a QR code.
@@ -121,6 +124,9 @@ pub struct AcceptRequest {
     pub by_hand: bool,
     /// The class the user means to answer; an invite of the other class is refused.
     pub class: PairingClass,
+    /// The payments address, `key@relay`, the confirm must prove: the sender of a pairing
+    /// request.
+    pub expect_address: Option<String>,
 }
 
 /// An answered invite.
@@ -318,6 +324,8 @@ struct OpenedReply {
 /// What the store needs to decide on an opened reply.
 struct ReplyTaking {
     network: lepic_primitives::params::Network,
+    /// The reply was taken by hand with no relay to carry the invitee's finished notice.
+    heard_by_hand: bool,
     pairing_id: PairingId,
     contact_id: ContactId,
     peer: ContactCard,
@@ -487,6 +495,8 @@ where
             .then(|| Payments::of(&session.keychain, network, relays))
             .transpose()?;
         let features = self.wallet.config().claimed_features();
+        let expect_key = expected_key(request.expect_address.as_deref(), network)?;
+        let ours = payments.as_ref().map(Payments::key);
         let (contact_id, envelope, from, to) = self
             .contact_work(move |ports, _| {
                 let invite = invite_for_work;
@@ -499,9 +509,12 @@ where
                     payments: payments.as_ref(),
                     features,
                 };
-                session
-                    .store
-                    .write(|repos| store_answer(repos, &ports.rng, &at, &invite, &request))
+                session.store.write(|repos| {
+                    if let (Some(theirs), Some(ours)) = (expect_key, &ours) {
+                        free_to_answer(repos, ours, &theirs, at.now)?;
+                    }
+                    store_answer(repos, &ports.rng, &at, &invite, &request)
+                })
             })
             .await?;
         let reply_link = pairing_envelope_link(PairingLink::Reply, &envelope);
@@ -970,7 +983,11 @@ where
                         LinkOutcome::Confirm { contact_id, link }
                     }
                     Taken::Paired(contact_id) => LinkOutcome::Paired { contact_id },
-                    Taken::Failed(_) | Taken::Ignored => LinkOutcome::Ignored,
+                    Taken::Failed(failed) => match failed.and_then(|f| link_failure(f.reason)) {
+                        Some(error) => return Err(error),
+                        None => LinkOutcome::Ignored,
+                    },
+                    Taken::Ignored => LinkOutcome::Ignored,
                 },
             );
         }
@@ -986,7 +1003,12 @@ where
         {
             match self.take_confirm(pending.pairing_id, &envelope).await? {
                 Taken::Paired(contact_id) => return Ok(LinkOutcome::Paired { contact_id }),
-                Taken::Failed(_) => return Ok(LinkOutcome::Ignored),
+                Taken::Failed(failed) => {
+                    return match failed.and_then(|f| link_failure(f.reason)) {
+                        Some(error) => Err(error),
+                        None => Ok(LinkOutcome::Ignored),
+                    };
+                }
                 Taken::ConfirmLink(..) | Taken::Ignored => {}
             }
         }
@@ -1038,6 +1060,7 @@ where
         };
         let taking = ReplyTaking {
             network,
+            heard_by_hand: by_hand && relays.mode != super::RelayMode::Online,
             pairing_id,
             contact_id,
             peer: reply.card.clone(),
@@ -1069,6 +1092,10 @@ where
         };
         let (envelope, first) = match decision {
             Decision::Drop => return Ok(Taken::Ignored),
+            Decision::Unexpected(reason) => {
+                warn!("pairing reply from another wallet than expected dropped");
+                return Ok(self.pairing_failed(contact_id, reason));
+            }
             Decision::Known(tell) => {
                 warn!("pairing reply from a contact already paired refused");
                 if tell && !by_hand {
@@ -1273,6 +1300,19 @@ where
             return Ok(Taken::Ignored);
         };
         let proven = confirm_proven(network, &keys, &class, &confirm, &own, &invite, &extras);
+        let expected = match unexpected(pending.expect_key.as_ref(), proven.as_ref()) {
+            Ok(expected) => expected,
+            Err(reason) => {
+                self.contact_work(move |_, _| {
+                    session
+                        .store
+                        .write(|repos| drop_pairing(repos, pairing_id, contact_id))
+                })
+                .await?;
+                warn!("pairing confirm from another wallet than expected dropped");
+                return Ok(self.pairing_failed(contact_id, reason));
+            }
+        };
         let peer_features = extras.features.unwrap_or(0);
         let peer = confirm.card.clone();
         let fields = invite.fields();
@@ -1293,6 +1333,10 @@ where
                     record.updated_at = now;
                     // The confirm itself is the inviter heard.
                     super::status::heard_now(&mut record, now);
+                    if expected {
+                        record.state = ContactState::Verified;
+                        record.verified_at = Some(now);
+                    }
                     repos.put_contact(&record)?;
                     repos.put_contact_mailbox(&paired_mailbox(
                         contact_id, &peer, &own, home_text, onion,
@@ -1396,6 +1440,16 @@ where
         self.wallet
             .blocking(move |ports, config| Ok(work(ports, config)))
             .await?
+    }
+}
+
+/// The error a link entered by hand ends with when its pairing failed on the address it had to
+/// prove; any other failure is told by its event alone.
+fn link_failure(reason: PairingFailure) -> Option<ContactError> {
+    match reason {
+        PairingFailure::OtherAddress => Some(ContactError::OtherAddress),
+        PairingFailure::AddressProofMissing => Some(ContactError::AddressProofMissing),
+        _ => None,
     }
 }
 
@@ -1590,8 +1644,8 @@ fn store_invite(
         state: PairingState::PendingInvite,
         created_at: at.now,
         invite: invite.as_bytes().to_vec(),
-        expect_address: None,
-        expect_key: None,
+        expect_address: request.expect_address.clone(),
+        expect_key: expected_key(request.expect_address.as_deref(), network)?,
         reply: None,
         cancelled_at: None,
     })?;
@@ -1619,6 +1673,7 @@ fn store_answer(
         return Err(ContactError::AlreadyPaired);
     }
     let network = at.network;
+    super::requests::answer_request(repos, invite.id().as_bytes(), at.now)?;
     let mut rng = LockedRng(&mut **rng.lock());
     let (new, mut private) = new_record(repos, &mut rng, request.account, request.class)?;
     if let (Some(secrets), Some(link)) = (&mut private, &invite.fields().link) {
@@ -1695,8 +1750,8 @@ fn store_answer(
         state: PairingState::PendingReply,
         created_at: at.now,
         invite: invite.as_bytes().to_vec(),
-        expect_address: None,
-        expect_key: None,
+        expect_address: request.expect_address.clone(),
+        expect_key: expected_key(request.expect_address.as_deref(), network)?,
         // Posted again on each collect until the confirm or a refusal comes.
         reply: Some(envelope.clone()),
         cancelled_at: None,
@@ -1738,6 +1793,7 @@ fn decide_reply(
 ) -> Result<Decision, ContactError> {
     let ReplyTaking {
         network,
+        heard_by_hand,
         pairing_id,
         contact_id,
         peer,
@@ -1786,6 +1842,13 @@ fn decide_reply(
         }
         Err(error) => return Err(error),
     }
+    let expected = match unexpected(pending.expect_key.as_ref(), proven.as_ref()) {
+        Ok(expected) => expected,
+        Err(reason) => {
+            drop_pairing(repos, pairing_id, contact_id)?;
+            return Ok(Decision::Unexpected(reason));
+        }
+    };
     let n_a = Nonce::from_bytes(n_a);
     let body = ConfirmBody {
         nonce: n_a.clone(),
@@ -1820,8 +1883,13 @@ fn decide_reply(
     record.updated_at = now;
     // A contact that does not send the status notices is heard by its reply; one that does is
     // heard when it says it finished, or by anything else it sends in the pairing.
-    if !super::status::sends_status(&record) {
+    if !super::status::sends_status(&record) || heard_by_hand {
         super::status::heard_now(&mut record, now);
+    }
+    // The wallet behind the address the request went to answered: no words to check.
+    if expected {
+        record.state = ContactState::Verified;
+        record.verified_at = Some(now);
     }
     repos.put_contact(&record)?;
     repos.put_contact_mailbox(&paired_mailbox(contact_id, &peer, &own, home_text, onion))?;
@@ -1979,6 +2047,56 @@ fn confirm_sas(
     })
 }
 
+/// Checks that an answer to the request of the wallet with the key `theirs` may go ahead.
+/// Two crossed pairings, ours to them and theirs to us, keep the invite of the wallet with the
+/// lower key: when ours wins, this fails with [`ContactError::Crossed`]; when theirs does, our
+/// own request is withdrawn as a cancel withdraws it.
+fn free_to_answer(
+    repos: &mut dyn Repositories,
+    ours: &[u8; 33],
+    theirs: &[u8; 33],
+    now: Timestamp,
+) -> Result<(), ContactError> {
+    if let Some(own) = super::requests::own_request_to(repos, theirs)? {
+        if !super::requests::theirs_survives(ours, theirs) {
+            return Err(ContactError::Crossed);
+        }
+        if let Some(mut pending) = repos.pending_pairing(pairing_id_of(own))? {
+            pending.secrets.na = None;
+            pending.cancelled_at = Some(now);
+            repos.put_pending_pairing(&pending)?;
+        }
+    }
+    super::requests::check_free(repos, theirs, false)
+}
+
+/// The key of an address a pairing expects, as the store keeps it.
+fn expected_key(
+    address: Option<&str>,
+    network: lepic_primitives::params::Network,
+) -> Result<Option<[u8; 33]>, ContactError> {
+    address
+        .map(|address| super::requests::address_key(address, network))
+        .transpose()
+}
+
+/// Whether an answer proved the address its pairing expected: `Ok(true)` when it did,
+/// `Ok(false)` when nothing was expected, and the failure otherwise. Addresses are compared by
+/// key.
+fn unexpected(
+    expected: Option<&[u8; 33]>,
+    proven: Option<&ProvenAddress>,
+) -> Result<bool, PairingFailure> {
+    let Some(expected) = expected else {
+        return Ok(false);
+    };
+    match proven {
+        None => Err(PairingFailure::AddressProofMissing),
+        Some(proven) if &proven.key != expected => Err(PairingFailure::OtherAddress),
+        Some(_) => Ok(true),
+    }
+}
+
 /// Ends a pairing in progress with nothing stored: its pending pairing, its record and the
 /// record's secrets go together.
 fn drop_pairing(
@@ -2026,6 +2144,8 @@ enum Decision {
     Again(Vec<u8>),
     /// Paired now; the confirm to send.
     Confirm(Vec<u8>),
+    /// The reply did not prove the address the invite expected; the pairing is gone.
+    Unexpected(PairingFailure),
 }
 
 const CONFIRM_PREFIX: &str = "contact.confirm.";

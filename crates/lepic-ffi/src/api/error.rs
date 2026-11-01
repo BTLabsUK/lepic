@@ -219,6 +219,21 @@ pub enum WalletErrorKind {
     /// A payments address was given, and the pairing proves none. Nothing changed; try again
     /// after the contact's card with a proof arrives.
     AddressProofMissing,
+    /// `pairing_request_send` to a key that did not run LEPIC lately, answered unmarked since,
+    /// or never claimed pair requests. Nothing was sent; offer the invite instead.
+    PeerNotProven,
+    /// A request or answer toward a wallet that already has a pairing in progress here, one
+    /// waiting for it, or a live request from it. Show that pairing or request.
+    PairingInProgress,
+    /// This wallet's own pairing with the same wallet wins under the lower-key rule: keep
+    /// waiting for its answer. Nothing changed.
+    PairingCrossed,
+    /// The invite of a request this wallet dismissed. Ask for a new one.
+    InviteDismissed,
+    /// The pairing ended: nothing new goes through it. Offer to remove it.
+    PairingEnded,
+    /// The contact's wallet has not been heard in this pairing yet: no sealed send or invoice.
+    PairingWaiting,
     /// A payment asked for a payment proof that this wallet does not sign: one for another
     /// key than its own, or any proof for a payment to a listing address. Nothing was signed
     /// or stored.
@@ -304,6 +319,12 @@ impl WalletErrorKind {
             Self::PeerInputsSpent => 80,
             Self::OtherAddress => 81,
             Self::AddressProofMissing => 82,
+            Self::PeerNotProven => 83,
+            Self::PairingInProgress => 84,
+            Self::PairingCrossed => 85,
+            Self::InviteDismissed => 86,
+            Self::PairingEnded => 87,
+            Self::PairingWaiting => 88,
             // 83 to 88 belong to the pairing kinds.
             Self::ForeignProofAddress => 89,
         }
@@ -542,7 +563,8 @@ impl From<InboxError> for WalletError {
             InboxError::NetworkMismatch
             | InboxError::UnknownTransport { .. }
             | InboxError::Address(_)
-            | InboxError::InvoiceExpiry => WalletErrorKind::InvalidArgument,
+            | InboxError::InvoiceExpiry
+            | InboxError::NotHostFeature => WalletErrorKind::InvalidArgument,
             InboxError::Subscription(_) | InboxError::Transport(_) => {
                 WalletErrorKind::TransportFailed
             }
@@ -632,6 +654,13 @@ impl From<ContactError> for WalletError {
                 E::WrongClass => K::WrongPairingClass,
                 E::OtherAddress => K::OtherAddress,
                 E::AddressProofMissing => K::AddressProofMissing,
+                E::PeerNotProven => K::PeerNotProven,
+                E::PairingInProgress => K::PairingInProgress,
+                E::Crossed => K::PairingCrossed,
+                E::InviteDismissed => K::InviteDismissed,
+                E::Ended => K::PairingEnded,
+                E::Waiting => K::PairingWaiting,
+                E::Post(_) => K::TransportFailed,
                 _ => K::Other,
             },
         };
@@ -761,6 +790,12 @@ mod tests {
             (K::PeerInputsSpent, 80),
             (K::OtherAddress, 81),
             (K::AddressProofMissing, 82),
+            (K::PeerNotProven, 83),
+            (K::PairingInProgress, 84),
+            (K::PairingCrossed, 85),
+            (K::InviteDismissed, 86),
+            (K::PairingEnded, 87),
+            (K::PairingWaiting, 88),
             (K::ForeignProofAddress, 89),
         ];
         for (kind, code) in expected {
@@ -1089,6 +1124,12 @@ mod tests {
             (E::DoesNotPayInvoices, K::ContactRefusesInvoices),
             (E::OtherAddress, K::OtherAddress),
             (E::AddressProofMissing, K::AddressProofMissing),
+            (E::PeerNotProven, K::PeerNotProven),
+            (E::PairingInProgress, K::PairingInProgress),
+            (E::Crossed, K::PairingCrossed),
+            (E::InviteDismissed, K::InviteDismissed),
+            (E::Ended, K::PairingEnded),
+            (E::Waiting, K::PairingWaiting),
             (E::NetworkMismatch, K::InvalidArgument),
             (E::TooLarge { max: 1 }, K::InvalidArgument),
             (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),

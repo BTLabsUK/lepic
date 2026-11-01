@@ -385,6 +385,8 @@ pub enum Hold {
     UnknownSlate,
     #[error("answer for an unknown slate not requeued")]
     Requeue(#[source] ClientError),
+    #[error("pairing request not stored")]
+    PairRequest,
 }
 
 impl From<StoreError> for Hold {
@@ -1122,6 +1124,20 @@ where
             Payload::Slate => {}
             Payload::Notice(notice) => return Ok(self.take_notice(notice, reply_to).await?),
             Payload::Unknown => {
+                let invite = envelope
+                    .wire()
+                    .as_text()
+                    .and_then(notice::pair_request_invite);
+                if let (Some(invite), Some(hook)) = (invite, self.pair_requests()) {
+                    // Stored or dropped before the message is acknowledged.
+                    return match hook.take(self, reply_to.as_str(), invite).await {
+                        Ok(()) => Ok(Handled::Notice),
+                        Err(error) => {
+                            warn!(error = %error, "pairing request kept for later");
+                            Err(Hold::PairRequest.into())
+                        }
+                    };
+                }
                 debug!("notice of an unknown version or type ignored");
                 return Ok(Handled::Dropped);
             }

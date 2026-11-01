@@ -17,8 +17,8 @@ use crate::api::testing::MockChain;
 use crate::api::types::{
     Chain, CollectTrigger, ContactKind, ContactRelayMode, FailedPairing, InviteExpiry,
     KeysDecision, OutboxState, PairingClass, PairingFailureReason, PairingLinkOutcome,
-    PairingState, SasDecision, SealState, SlateMessage, SlatePurpose, SlateRole, SlateStage,
-    WalletConfig,
+    PairingState, PairingStatus, SasDecision, SealState, SlateMessage, SlatePurpose, SlateRole,
+    SlateStage, WalletConfig,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -117,6 +117,7 @@ async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
             meeting(),
             None,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -127,6 +128,7 @@ async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
             false,
             Online,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -181,6 +183,7 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
             meeting(),
             None,
             PairingClass::Private,
+            None,
         )
         .await
         .unwrap();
@@ -198,7 +201,8 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
                 "Desk".to_owned(),
                 false,
                 Online,
-                PairingClass::Contact
+                PairingClass::Contact,
+                None
             )
             .await
         ),
@@ -211,6 +215,7 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
             false,
             Online,
             PairingClass::Private,
+            None,
         )
         .await
         .unwrap();
@@ -283,6 +288,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
             meeting(),
             None,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -303,6 +309,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
             false,
             Online,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -360,10 +367,16 @@ async fn the_words_check_verifies_or_removes_the_pairing() {
         .unwrap();
     // A mismatch ends the pairing and keeps it; no later check changes it.
     assert!(carl.contact(carl_side.clone()).await.is_ok());
-    assert!(
-        carl.pairing_sas(carl_side, SasDecision::Match, Online)
-            .await
-            .is_err()
+    assert_eq!(
+        carl.contact(carl_side.clone()).await.unwrap().status,
+        PairingStatus::Ended
+    );
+    assert_eq!(
+        kind(
+            carl.pairing_sas(carl_side, SasDecision::Match, Online)
+                .await
+        ),
+        WalletErrorKind::PairingEnded
     );
 }
 
@@ -382,6 +395,7 @@ async fn a_pairing_by_hand_needs_no_relay() {
             meeting(),
             None,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -392,6 +406,7 @@ async fn a_pairing_by_hand_needs_no_relay() {
             true,
             Offline,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -476,6 +491,7 @@ async fn pairing_words_find_the_invite_once() {
             meeting(),
             None,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -512,6 +528,7 @@ async fn pairing_words_find_the_invite_once() {
         false,
         Online,
         PairingClass::Contact,
+        None,
     )
     .await
     .unwrap();
@@ -551,6 +568,7 @@ async fn words_are_offered_whatever_relay_the_wallet_uses() {
             meeting(),
             None,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -567,6 +585,7 @@ async fn words_are_offered_whatever_relay_the_wallet_uses() {
         false,
         Online,
         PairingClass::Contact,
+        None,
     )
     .await
     .unwrap();
@@ -593,6 +612,7 @@ async fn a_pending_invite_is_listed_until_cancelled() {
             meeting(),
             None,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -667,7 +687,8 @@ async fn the_relay_mode_and_bad_input_are_refused_before_anything_happens() {
                 Online,
                 meeting(),
                 None,
-                PairingClass::Contact
+                PairingClass::Contact,
+                None
             )
             .await
         ),
@@ -1040,6 +1061,7 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
             meeting(),
             None,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -1049,6 +1071,7 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
         false,
         Online,
         PairingClass::Contact,
+        None,
     )
     .await
     .unwrap();
@@ -1059,6 +1082,7 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
             false,
             Online,
             PairingClass::Contact,
+            None,
         )
         .await
         .unwrap();
@@ -1228,5 +1252,62 @@ async fn a_mailbox_send_the_contact_never_answers_is_cancelled_and_its_late_answ
     assert_eq!(
         anna.transaction(sent.tx_id).await.unwrap().status,
         crate::api::types::TxStatus::Cancelled
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pairing_v3_calls_keep_their_contract() {
+    let mut world = World::new();
+    let anna = world.wallet().await;
+    let ben = world.wallet().await;
+
+    let standing = anna
+        .pairing_standing_invite("Anna".to_owned())
+        .await
+        .unwrap();
+    let again = anna
+        .pairing_standing_invite("Anna".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(standing.link, again.link);
+    assert!(anna.pairings_pending().await.unwrap().is_empty());
+    assert_eq!(
+        kind(anna.pairing_standing_invite(String::new()).await),
+        WalletErrorKind::InvalidContactName
+    );
+
+    let ben_address = ben.epicbox_address().await.unwrap();
+    assert_eq!(
+        kind(
+            anna.pairing_request_send(ben_address, "Anna".to_owned(), Online)
+                .await
+        ),
+        WalletErrorKind::PeerNotProven
+    );
+    assert_eq!(
+        kind(
+            anna.pairing_request_send("not an address".to_owned(), "Anna".to_owned(), Online)
+                .await
+        ),
+        WalletErrorKind::InvalidArgument
+    );
+
+    assert!(ben.pairing_requests().await.unwrap().is_empty());
+    assert_eq!(
+        kind(ben.pairing_request_dismiss("00".to_owned()).await),
+        WalletErrorKind::InvalidArgument
+    );
+    assert_eq!(
+        kind(
+            ben.pairing_request_dismiss("0011223344556677".to_owned())
+                .await
+        ),
+        WalletErrorKind::PairingNotFound
+    );
+    assert_eq!(
+        anna.contacts_set_own_name("Anna B".to_owned())
+            .await
+            .unwrap(),
+        0
     );
 }

@@ -23,6 +23,7 @@ mod pairing;
 mod payload;
 mod private;
 mod relay;
+mod requests;
 mod sealed;
 mod status;
 mod words;
@@ -63,6 +64,7 @@ pub use pairing::{
 };
 pub use payload::{ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, PayloadId};
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
+pub use requests::{MAX_LIVE_REQUESTS, MAX_SETTLED_REQUESTS, PairRequestView, REQUEST_EXPIRY};
 pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
 pub use status::{
     NEVER_FINISHED_AFTER, PairingStatus, STATUS_NOTICES, STATUS_RETRY_FOR, status_of,
@@ -97,6 +99,7 @@ where
 {
     wallet.set_reply_keys(Arc::new(keys::ContactReplyKeys));
     wallet.set_contact_notices(Arc::new(SealedNotices));
+    requests::install_requests(wallet);
 }
 
 /// The engine's hook for notices about a contact's slates: sealed into the contact's mailbox.
@@ -350,6 +353,23 @@ pub enum ContactError {
     /// The pairing ended: nothing new goes through it.
     #[error("the pairing ended")]
     Ended,
+    /// The key did not run LEPIC lately, answered unmarked since, or never claimed pair
+    /// requests: nothing is sent to it.
+    #[error("the peer is not proven to take pairing requests")]
+    PeerNotProven,
+    /// A pairing with that wallet is in progress, waits for it, or a request from it waits.
+    #[error("a pairing with this wallet is in progress")]
+    PairingInProgress,
+    /// This wallet's own pairing with the same wallet wins under the lower-key rule: wait for
+    /// its answer.
+    #[error("a crossed pairing with this wallet wins")]
+    Crossed,
+    /// The invite of a request this wallet dismissed.
+    #[error("this pairing request was dismissed")]
+    InviteDismissed,
+    /// The request could not be posted; nothing was kept.
+    #[error("pairing request not posted")]
+    Post(#[source] lepic_transport::error::TransportError),
     /// The contact's wallet has not been heard in this pairing yet.
     #[error("the pairing waits for the contact's wallet")]
     Waiting,

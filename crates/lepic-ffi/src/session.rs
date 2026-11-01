@@ -1444,11 +1444,37 @@ impl Session {
         })
     }
 
+    pub(crate) fn peer_feature_result(
+        &self,
+        address: &str,
+        bit: u32,
+        worked: bool,
+    ) -> Result<(), WalletError> {
+        Ok(self.engine.peer_feature_result(address, bit, worked)?)
+    }
+
     pub(crate) fn forget_peers(&self, older_than_days: u32) -> Result<u32, WalletError> {
         let days = u64::from(older_than_days);
         let older_than = std::time::Duration::from_secs(days.saturating_mul(24 * 60 * 60));
         let forgotten = self.engine.forget_peers(older_than)?;
         Ok(u32::try_from(forgotten).unwrap_or(u32::MAX))
+    }
+
+    /// Applies a notice another install of this wallet passed on from its `NoticeUnmatched`.
+    pub(crate) async fn notice_apply_forwarded(
+        &self,
+        sender: &str,
+        notice: &str,
+    ) -> Result<bool, WalletError> {
+        if relay_address(sender, self.network).is_none() {
+            return Err(invalid("sender is not an Epicbox address of this network"));
+        }
+        let lepic_wallet::notice::Payload::Notice(notice) =
+            lepic_wallet::notice::classify_text(notice)
+        else {
+            return Err(invalid("not a notice"));
+        };
+        Ok(self.engine.notice_apply_forwarded(sender, notice).await?)
     }
 
     pub(crate) fn epicbox_address(&self) -> Result<String, WalletError> {
@@ -2079,6 +2105,13 @@ fn invoice_event(event: &Event) -> Option<WalletEvent> {
             slate_stage: Some(unknown.stage.as_str().to_owned()),
             ..WalletEvent::of(WalletEventKind::UnknownSlate)
         },
+        Event::NoticeUnmatched(unmatched) => WalletEvent {
+            slate_id: Some(unmatched.notice.slate_id.to_string()),
+            sender: Some(unmatched.sender.clone()),
+            notice_kind: Some(notice_kind(unmatched.notice.kind).to_owned()),
+            notice: unmatched.notice.encode().as_text().map(str::to_owned),
+            ..WalletEvent::of(WalletEventKind::NoticeUnmatched)
+        },
         Event::ReceiveSuperseded(superseded) => WalletEvent {
             tx_id: Some(superseded.tx_id.0),
             slate_id: Some(superseded.slate_id.to_string()),
@@ -2099,6 +2132,16 @@ fn invoice_event(event: &Event) -> Option<WalletEvent> {
     })
 }
 
+fn notice_kind(kind: lepic_wallet::notice::NoticeKind) -> &'static str {
+    use lepic_wallet::notice::NoticeKind;
+    match kind {
+        NoticeKind::Declined => "declined",
+        NoticeKind::Withdrawn => "withdrawn",
+        NoticeKind::Posted { .. } => "posted",
+        NoticeKind::Cancelled => "cancelled",
+    }
+}
+
 /// Events of the contact engine.
 fn contact_wallet_event(event: &Event) -> Option<WalletEvent> {
     Some(match event {
@@ -2113,12 +2156,18 @@ fn contact_wallet_event(event: &Event) -> Option<WalletEvent> {
             pairing_failure: Some(contact::failure_reason(failed.reason)),
             ..WalletEvent::of(WalletEventKind::PairingFailed)
         },
-        Event::ContactUpdated(update) => contact::contact_event(
-            WalletEventKind::ContactUpdated,
-            &lepic_wallet::event::ContactEvent {
-                contact_id: update.contact_id,
-            },
-        ),
+        Event::ContactUpdated(update) => contact::update_event(update),
+        Event::PairingRequested(request) => WalletEvent {
+            request_id: Some(
+                request
+                    .request_id
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            ),
+            sender: Some(request.sender.clone()),
+            ..WalletEvent::of(WalletEventKind::PairingRequested)
+        },
         Event::HomeRelayUnreachable(unreachable) => WalletEvent {
             relay: Some(unreachable.relay.clone()),
             ..WalletEvent::of(WalletEventKind::HomeRelayUnreachable)

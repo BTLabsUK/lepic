@@ -42,3 +42,17 @@ pub trait ContactNotices<N, S: StoreOpener, V>: Send + Sync {
         notice: Notice,
     ) -> BoxFuture<'a, Result<(), Box<dyn std::error::Error + Send + Sync>>>;
 }
+
+/// Takes a pairing request another wallet sent to this wallet's payments address. It is
+/// stored, or dropped by the contact engine's rules, before the relay message is acknowledged.
+/// Without a hook installed with [`crate::Wallet::set_pair_requests`] a request is ignored.
+pub trait PairRequests<N, S: StoreOpener, V>: Send + Sync {
+    /// Takes the request with `invite_link` from `sender`, the address the relay reported.
+    /// An error keeps the message on the relay for another try.
+    fn take<'a>(
+        &'a self,
+        wallet: &'a Wallet<N, S, V>,
+        sender: &'a str,
+        invite_link: String,
+    ) -> BoxFuture<'a, Result<(), Box<dyn std::error::Error + Send + Sync>>>;
+}

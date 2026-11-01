@@ -24,13 +24,15 @@ use tracing::{info, warn};
 use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
-    CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
-    ContactPayloadView, ContactRelayMode, ContactView, FailedPairing, FinalizedTx, FoundInvite,
-    InviteExpiry, InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView,
-    OutboxReport, OutboxState, PaidInvoice, PairingAnswer, PairingCard, PairingClass,
-    PairingFailureReason, PairingInvite, PairingLinkOutcome, PairingLinkResult, PairingState,
-    PendingPairingView, SasDecision, SasEntry, SealState, SealedAnswer, SealedSlateView,
-    SendOptions, SentTx, SlateMessage, SlatePurpose, SlateStage, WalletEvent, WalletEventKind,
+    CollectTrigger, ContactChange as FfiChange, ContactCollectReport, ContactImportSummary,
+    ContactInvoiceView, ContactKind, ContactPayloadView, ContactRelayMode, ContactView,
+    EndedPairing, FailedPairing, FinalizedTx, FoundInvite, InviteExpiry, InvitePreview,
+    IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport, OutboxState,
+    PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
+    PairingEndReason as FfiEndReason, PairingFailureReason, PairingInvite, PairingLinkOutcome,
+    PairingLinkResult, PairingState, PairingStatus as FfiStatus, PendingPairingView, SasDecision,
+    SasEntry, SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx, SlateMessage,
+    SlatePurpose, SlateStage, WalletEvent, WalletEventKind,
 };
 
 /// The longest sealed text taken from the app: a slate with its envelope and armor fits many
@@ -48,6 +50,19 @@ const MAX_RELAY_HOST: usize = 260;
 
 /// Pairing words a user types; more is never a pairing.
 const MAX_TYPED_WORDS: usize = 16;
+
+/// Refuses an address that is not an Epicbox address of `network`.
+fn check_address(
+    address: Option<&str>,
+    network: lepic_primitives::params::Network,
+) -> Result<(), WalletError> {
+    match address {
+        Some(address) if super::relay_address(address, network).is_none() => {
+            Err(invalid("not an Epicbox address of this network"))
+        }
+        _ => Ok(()),
+    }
+}
 
 pub(super) fn contact_id(text: &str) -> Result<ContactId, WalletError> {
     let text = text.trim();
@@ -145,6 +160,9 @@ pub(super) const fn failure_reason(failure: PairingFailure) -> PairingFailureRea
         PairingFailure::Expired => PairingFailureReason::Expired,
         PairingFailure::NotConfirmed => PairingFailureReason::NotConfirmed,
         PairingFailure::Refused(_) => PairingFailureReason::Refused,
+        PairingFailure::OtherAddress => PairingFailureReason::OtherAddress,
+        PairingFailure::AddressProofMissing => PairingFailureReason::AddressProofMissing,
+        PairingFailure::Crossed => PairingFailureReason::Crossed,
     }
 }
 
@@ -218,7 +236,64 @@ fn view(view: EngineContactView) -> ContactView {
         removed_by_peer: view.removed_by_peer,
         payments_address: view.payments_address,
         created_at_ms: ms(view.created_at),
+        status: match view.status {
+            lepic_wallet_contacts::PairingStatus::Waiting => FfiStatus::Waiting,
+            lepic_wallet_contacts::PairingStatus::Paired => FfiStatus::Paired,
+            lepic_wallet_contacts::PairingStatus::Verified => FfiStatus::Verified,
+            lepic_wallet_contacts::PairingStatus::KeysChanged => FfiStatus::KeysChanged,
+            lepic_wallet_contacts::PairingStatus::Ended => FfiStatus::Ended,
+        },
+        peer_heard_at_ms: view.peer_heard_at.map(ms),
+        peer_verified_at_ms: view.peer_verified_at.map(ms),
+        peer_features: view.peer_features,
+        ended_reason: view.ended_reason.map(end_reason),
+        ended_at_ms: view.ended_at.map(ms),
     }
+}
+
+pub(super) const fn end_reason(reason: lepic_store::PairingEndReason) -> FfiEndReason {
+    use lepic_store::PairingEndReason as R;
+    match reason {
+        R::Mismatch => FfiEndReason::Mismatch,
+        R::PeerMismatch => FfiEndReason::PeerMismatch,
+        R::Unpaired => FfiEndReason::Unpaired,
+        R::NeverFinished => FfiEndReason::NeverFinished,
+    }
+}
+
+/// The `ContactUpdated` event of `update`.
+pub(super) fn update_event(update: &lepic_wallet::event::ContactUpdate) -> WalletEvent {
+    use lepic_wallet::event::ContactChange as C;
+    WalletEvent {
+        contact_id: Some(update.contact_id.to_string()),
+        contact_change: Some(match update.change {
+            C::Card => FfiChange::Card,
+            C::Address => FfiChange::Address,
+            C::Heard => FfiChange::Heard,
+            C::PeerVerified => FfiChange::PeerVerified,
+            C::Ended => FfiChange::Ended,
+        }),
+        ended_reason: update.ended_reason.map(end_reason),
+        ..WalletEvent::of(WalletEventKind::ContactUpdated)
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// A request id: 16 lowercase hex characters.
+fn request_id(text: &str) -> Result<[u8; lepic_store::INVITE_ID_LEN], WalletError> {
+    let wrong = || invalid("request id is not 16 hex characters");
+    if text.len() != 16 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(wrong());
+    }
+    let mut id = [0u8; lepic_store::INVITE_ID_LEN];
+    for (slot, pair) in id.iter_mut().zip(text.as_bytes().chunks(2)) {
+        let pair = std::str::from_utf8(pair).map_err(|_| wrong())?;
+        *slot = u8::from_str_radix(pair, 16).map_err(|_| wrong())?;
+    }
+    Ok(id)
 }
 
 fn preview(preview: EnginePreview) -> InvitePreview {
@@ -342,8 +417,10 @@ impl Session {
         meeting: Vec<String>,
         home_relay: Option<String>,
         class: PairingClass,
+        expect_address: Option<String>,
     ) -> Result<PairingInvite, WalletError> {
         check_home_relay(home_relay.as_deref())?;
+        check_address(expect_address.as_deref(), self.network)?;
         let relays = if offer_words {
             self.meeting_relays(mode, &meeting)?
         } else {
@@ -366,6 +443,7 @@ impl Session {
                     offer_words,
                     home_relay,
                     class: engine_class(class),
+                    expect_address,
                 },
             )
             .await?;
@@ -415,8 +493,10 @@ impl Session {
         by_hand: bool,
         mode: ContactRelayMode,
         class: PairingClass,
+        expect_address: Option<String>,
     ) -> Result<PairingAnswer, WalletError> {
         bounded(&link, MAX_LINK_TEXT, "link")?;
+        check_address(expect_address.as_deref(), self.network)?;
         let relays = self.contact_relays(mode)?;
         let outcome = self
             .engine
@@ -429,6 +509,7 @@ impl Session {
                     name,
                     by_hand,
                     class: engine_class(class),
+                    expect_address,
                 },
             )
             .await?;
@@ -582,6 +663,14 @@ impl Session {
                 .collect(),
             delivered: count(report.delivered),
             unreachable: report.unreachable,
+            ended: report
+                .ended
+                .iter()
+                .map(|ended| EndedPairing {
+                    contact_id: ended.contact_id.to_string(),
+                    reason: end_reason(ended.reason),
+                })
+                .collect(),
         })
     }
 
@@ -631,8 +720,96 @@ impl Session {
                 expires_at_ms: ms(pending.expires_at),
                 created_at_ms: ms(pending.created_at),
                 home_relay: pending.home_relay,
+                expect_address: pending.expect_address,
             })
             .collect())
+    }
+
+    pub(crate) async fn pairing_standing_invite(
+        &self,
+        name: String,
+    ) -> Result<PairingInvite, WalletError> {
+        let relays = self.contact_relays(ContactRelayMode::Online)?;
+        let offer = self
+            .engine
+            .contact_book()
+            .pairing_standing_invite(&relays, DEFAULT_ACCOUNT, &name)
+            .await?;
+        Ok(PairingInvite {
+            contact_id: offer.contact_id.to_string(),
+            link: offer.link,
+            expires_at_ms: ms(offer.expires_at),
+            words: Vec::new(),
+        })
+    }
+
+    pub(crate) async fn pairing_request_send(
+        &self,
+        to_address: String,
+        name: String,
+        mode: ContactRelayMode,
+    ) -> Result<PendingPairingView, WalletError> {
+        bounded(&to_address, MAX_LINK_TEXT, "address")?;
+        if super::relay_address(&to_address, self.network).is_none() {
+            return Err(invalid("not an Epicbox address of this network"));
+        }
+        let relays = self.contact_relays(mode)?;
+        let offer = self
+            .engine
+            .contact_book()
+            .pairing_request_send(&relays, DEFAULT_ACCOUNT, &to_address, &name)
+            .await?;
+        let id = offer.contact_id.to_string();
+        self.pairings_pending()
+            .await?
+            .into_iter()
+            .find(|pending| pending.contact_id == id)
+            .ok_or_else(|| WalletError::new(WalletErrorKind::PairingNotFound, "request not kept"))
+    }
+
+    pub(crate) async fn pairing_requests(&self) -> Result<Vec<PairRequestView>, WalletError> {
+        Ok(self
+            .engine
+            .contact_book()
+            .pairing_requests()
+            .await?
+            .into_iter()
+            .map(|request| PairRequestView {
+                request_id: hex(&request.request_id),
+                from_address: request.from_address,
+                claimed_name: request.claimed_name,
+                kind: kind(request.kind),
+                received_at_ms: ms(request.received_at),
+                expires_at_ms: ms(request.expires_at),
+                invite_link: request.invite_link,
+            })
+            .collect())
+    }
+
+    pub(crate) async fn pairing_request_dismiss(
+        &self,
+        request_id: &str,
+    ) -> Result<(), WalletError> {
+        let id = self::request_id(request_id)?;
+        self.engine
+            .contact_book()
+            .pairing_request_dismiss(id)
+            .await
+            .map_err(|error| match error {
+                lepic_wallet_contacts::ContactError::UnknownPairing => {
+                    WalletError::new(WalletErrorKind::PairingNotFound, "no such pairing request")
+                }
+                other => other.into(),
+            })
+    }
+
+    pub(crate) async fn contacts_set_own_name(&self, name: String) -> Result<u32, WalletError> {
+        let relays = self.contact_relays(ContactRelayMode::Online)?;
+        Ok(self
+            .engine
+            .contact_book()
+            .contacts_set_own_name(&relays, &name)
+            .await?)
     }
 
     pub(crate) async fn pairing_cancel(&self, contact_id: &str) -> Result<(), WalletError> {

@@ -178,6 +178,11 @@ impl Payments {
         Ok(Self { secret, address })
     }
 
+    /// The payments key.
+    pub(crate) fn key(&self) -> [u8; 33] {
+        self.address.public_key().to_bytes()
+    }
+
     /// The card's tag 09 value.
     pub(crate) fn card_address(&self) -> Result<MailboxAddress, ContactError> {
         MailboxAddress::new(&self.address.to_string()).map_err(ContactError::Name)
@@ -274,6 +279,85 @@ pub(crate) fn proven_in_update(
     ))
 }
 
+/// What a card update is made with.
+pub(crate) struct CardUpdate<'a> {
+    pub(crate) keychain: &'a Keychain,
+    pub(crate) network: Network,
+    pub(crate) payments: &'a Payments,
+    pub(crate) features: u32,
+    pub(crate) now: Timestamp,
+}
+
+/// Gives the contact of `record` our card changed by `change`, with the next sequence number,
+/// the payments address and its proof, in a contact update queued for its mailbox. Returns
+/// whether one was queued: only a contact pairing that is paired and has not ended gets one.
+pub(crate) fn queue_card_update(
+    repos: &mut dyn Repositories,
+    rng: &lepic_wallet::SharedRng,
+    at: &CardUpdate<'_>,
+    mut record: ContactRecord,
+    change: impl FnOnce(&mut lepic_contact::CardFields),
+) -> Result<bool, ContactError> {
+    let paired = matches!(record.state, ContactState::Paired | ContactState::Verified);
+    if !paired || is_private(&record) || record.facts.ended_reason.is_some() {
+        return Ok(false);
+    }
+    let (Some(peer), Some(mailbox)) = (&record.peer, repos.contact_mailbox(record.contact_id)?)
+    else {
+        return Ok(false);
+    };
+    let net = contact_network(at.network);
+    let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
+    let peer_card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
+    let keys = contact_keys(
+        at.keychain,
+        at.network,
+        record.account,
+        record.slot,
+        record.box_salt,
+    )?;
+    let mut fields = own.fields().clone();
+    change(&mut fields);
+    fields.payments_address = Some(at.payments.card_address()?);
+    fields.seq = fields.seq.saturating_add(1);
+    let signer = signing_key(&keys);
+    let card = ContactCard::sign(net, fields, &signer).map_err(ContactError::Encode)?;
+    let address_proof = mailbox_key(&peer_card, at.network).and_then(|verifier| {
+        at.payments.prove(
+            &verifier,
+            &ProofBinding {
+                network: net,
+                step: ProofStep::Update,
+                prover_card: &card,
+                verifier_card: Some(&peer_card),
+                invite: None,
+            },
+        )
+    });
+    let extras = PairingExtras {
+        address_proof,
+        features: Some(at.features),
+    };
+    let envelope = seal_contact_update_with(
+        &peer_card,
+        &card,
+        &signer,
+        &extras,
+        &mut LockedRng(&mut **rng.lock()),
+    )
+    .map_err(ContactError::Encode)?;
+    record.own_card = card.as_bytes().to_vec();
+    record.updated_at = at.now;
+    repos.put_contact(&record)?;
+    repos.enqueue_contact_outbox(&update_entry(
+        record.contact_id,
+        &envelope,
+        mailbox.peer_mailbox.clone(),
+        at.now,
+    ))?;
+    Ok(true)
+}
+
 /// The settings key holding the payments address our contact cards were last given.
 const ADDRESS_CARDS_KEY: &str = "contact.address-cards";
 
@@ -294,68 +378,27 @@ pub(crate) fn queue_address_cards(
         return Ok(0);
     }
     let net = contact_network(network);
+    let card_address = payments.card_address()?;
     let mut queued = 0usize;
-    for mut record in repos.contacts()? {
-        let paired = matches!(record.state, ContactState::Paired | ContactState::Verified);
-        if !paired || is_private(&record) || record.facts.ended_reason.is_some() {
-            continue;
-        }
-        let (Some(peer), Some(mailbox)) = (&record.peer, repos.contact_mailbox(record.contact_id)?)
-        else {
+    for record in repos.contacts()? {
+        let Ok(own) = ContactCard::decode(&record.own_card, net) else {
             continue;
         };
-        let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
-        let card_address = payments.card_address()?;
         if own.fields().payments_address.as_ref() == Some(&card_address) {
             continue;
         }
-        let peer_card = ContactCard::decode(&peer.bytes, net).map_err(ContactError::StoredData)?;
-        let keys = contact_keys(
+        let at = CardUpdate {
             keychain,
             network,
-            record.account,
-            record.slot,
-            record.box_salt,
-        )?;
-        let mut fields = own.fields().clone();
-        fields.payments_address = Some(card_address);
-        fields.seq = fields.seq.saturating_add(1);
-        let signer = signing_key(&keys);
-        let card = ContactCard::sign(net, fields, &signer).map_err(ContactError::Encode)?;
-        let address_proof = mailbox_key(&peer_card, network).and_then(|verifier| {
-            payments.prove(
-                &verifier,
-                &ProofBinding {
-                    network: net,
-                    step: ProofStep::Update,
-                    prover_card: &card,
-                    verifier_card: Some(&peer_card),
-                    invite: None,
-                },
-            )
-        });
-        let extras = PairingExtras {
-            address_proof,
-            features: Some(features),
-        };
-        let envelope = seal_contact_update_with(
-            &peer_card,
-            &card,
-            &signer,
-            &extras,
-            &mut LockedRng(&mut **rng.lock()),
-        )
-        .map_err(ContactError::Encode)?;
-        record.own_card = card.as_bytes().to_vec();
-        record.updated_at = now;
-        repos.put_contact(&record)?;
-        repos.enqueue_contact_outbox(&update_entry(
-            record.contact_id,
-            &envelope,
-            mailbox.peer_mailbox.clone(),
+            payments,
+            features,
             now,
-        ))?;
-        queued = queued.saturating_add(1);
+        };
+        if queue_card_update(repos, rng, &at, record, |fields| {
+            fields.payments_address = Some(card_address.clone());
+        })? {
+            queued = queued.saturating_add(1);
+        }
     }
     repos.put_setting(ADDRESS_CARDS_KEY, &address)?;
     Ok(queued)

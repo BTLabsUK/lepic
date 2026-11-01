@@ -968,6 +968,94 @@ pub struct ContactView {
     /// contact that proved none.
     pub payments_address: Option<String>,
     pub created_at_ms: i64,
+    /// Where the pairing stands, derived: Ended, then KeysChanged, then Waiting until the
+    /// contact's wallet was heard, then Verified or Paired.
+    pub status: PairingStatus,
+    /// When the contact's wallet was first heard in this pairing ("Paired with Anna").
+    pub peer_heard_at_ms: Option<i64>,
+    /// "Anna confirmed too": set while the contact's accepted match verdict is for this
+    /// pairing's words.
+    pub peer_verified_at_ms: Option<i64>,
+    /// The feature bits the contact claimed in this pairing; 0 when none came.
+    pub peer_features: u32,
+    pub ended_reason: Option<PairingEndReason>,
+    pub ended_at_ms: Option<i64>,
+}
+
+/// Where a pairing stands; derived from its record, never stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingStatus {
+    /// Stored, but the contact's wallet has not been heard in it yet ("Waiting for Anna's
+    /// wallet"). No sealed send or invoice.
+    Waiting,
+    Paired,
+    Verified,
+    KeysChanged,
+    /// Ended: nothing new goes through; slates in flight settle unless it ended by this
+    /// side's mismatch. Remove deletes it.
+    Ended,
+}
+
+/// Why a pairing ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingEndReason {
+    /// This side's words check did not match.
+    Mismatch,
+    /// The contact reported that the words did not match.
+    PeerMismatch,
+    /// The contact removed the pairing.
+    Unpaired,
+    /// The contact's wallet was never heard during seven days of collecting.
+    NeverFinished,
+}
+
+/// What changed, for `ContactUpdated`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactChange {
+    /// Newer details, same keys.
+    Card,
+    /// `payments_address` was set or changed.
+    Address,
+    /// The contact's wallet was heard for the first time ("Paired with Anna").
+    Heard,
+    /// The contact's match verdict was accepted ("Anna confirmed too").
+    PeerVerified,
+    /// The pairing ended; `ended_reason` says why.
+    Ended,
+}
+
+/// A pairing request another wallet sent, from `EpicWallet::pairing_requests`. `invite_link`
+/// pairs with it; `Debug` leaves it out.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PairRequestView {
+    /// 16 lowercase hex characters: the request's invite id.
+    pub request_id: String,
+    /// `key@relay` as the relay authenticated the sender.
+    pub from_address: String,
+    /// The name the invite gives its maker, unverified.
+    pub claimed_name: String,
+    pub kind: ContactKind,
+    pub received_at_ms: i64,
+    pub expires_at_ms: i64,
+    /// `epiccash://pair/1/...`, for `pairing_accept` and for passing to a linked device.
+    pub invite_link: String,
+}
+
+impl std::fmt::Debug for PairRequestView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairRequestView")
+            .field("request_id", &self.request_id)
+            .field("received_at_ms", &self.received_at_ms)
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A pairing that ended in a collecting cycle; its record is kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndedPairing {
+    pub contact_id: String,
+    pub reason: PairingEndReason,
 }
 
 /// A new invite, from `EpicWallet::pairing_invite`. `link` lets anyone who sees it pair as
@@ -1107,6 +1195,8 @@ pub struct PendingPairingView {
     /// The relay where the pairing's mailboxes live, `domain:port`, as `HomeRelayUnreachable`
     /// names it.
     pub home_relay: String,
+    /// Inviter: where the pairing request went. Invitee: the request's sender.
+    pub expect_address: Option<String>,
 }
 
 /// What started a collecting cycle.
@@ -1136,6 +1226,8 @@ pub struct ContactCollectReport {
     pub delivered: u32,
     /// `domain:port` of the relays that did not answer; collecting from them backs off.
     pub unreachable: Vec<String>,
+    /// Pairings that ended in this cycle; their records are kept.
+    pub ended: Vec<EndedPairing>,
 }
 
 /// A pairing in progress that ended with nothing stored.
@@ -1290,6 +1382,13 @@ pub enum PairingFailureReason {
     NotConfirmed,
     /// The inviter refused the reply: the invite was used, expired or cancelled.
     Refused,
+    /// The answer came from another wallet than the one the request went to, or from the
+    /// request's sender: nothing was stored.
+    OtherAddress,
+    /// The answer to a request carried no address proof: nothing was stored.
+    AddressProofMissing,
+    /// Another pairing with the same wallet was in progress and won.
+    Crossed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1487,6 +1586,17 @@ pub enum WalletEventKind {
     /// `sender_reported_cancelled_at_ms` is set from now on; whether to cancel it here is the
     /// app's choice, and `EpicWallet::cancel` keeps its own checks.
     PaymentCancelled,
+    /// A notice arrived over Epicbox for a slate this wallet holds no transaction or invoice
+    /// of: `slate_id`, `notice_kind` (`posted`, `cancelled`, `declined` or `withdrawn`),
+    /// `sender` and `notice` are set. Another install on the same recovery phrase may hold
+    /// it: pass `sender` and `notice` over the device link to the other device, which calls
+    /// `EpicWallet::notice_apply_forwarded`. Nothing changed here, and nothing verified the
+    /// notice: never show it or act on it.
+    NoticeUnmatched,
+    /// Another wallet asked to pair through this wallet's payments address: `request_id` and
+    /// `sender` are set. Read it with `EpicWallet::pairing_requests`; dismiss a request from
+    /// anyone not in the address book with `EpicWallet::pairing_request_dismiss`.
+    PairingRequested,
 }
 
 /// How a key check from `EpicWallet::contact_key_check` stands.
@@ -1537,6 +1647,16 @@ pub struct WalletEvent {
     pub expires: Option<u64>,
     /// For `InvoiceFromContact`, the issuer's message as `ContactInvoiceView.message` gives it.
     pub message: Option<String>,
+    /// For `NoticeUnmatched`: what the notice says.
+    pub notice_kind: Option<String>,
+    /// For `NoticeUnmatched`: the notice, to pass on as it is.
+    pub notice: Option<String>,
+    /// For `PairingRequested`.
+    pub request_id: Option<String>,
+    /// For `ContactUpdated`: what changed.
+    pub contact_change: Option<ContactChange>,
+    /// For `ContactUpdated` with `Ended`.
+    pub ended_reason: Option<PairingEndReason>,
 }
 
 impl WalletEvent {
@@ -1567,6 +1687,11 @@ impl WalletEvent {
             reference: None,
             expires: None,
             message: None,
+            notice_kind: None,
+            notice: None,
+            request_id: None,
+            contact_change: None,
+            ended_reason: None,
         }
     }
 }

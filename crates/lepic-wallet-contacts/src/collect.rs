@@ -299,6 +299,10 @@ fn end_late_pairing(
     Ok(Some(Some(FailedPairing { contact_id, reason })))
 }
 
+pub(crate) fn unhex16_pub(text: &str) -> Option<[u8; 16]> {
+    unhex16(text)
+}
+
 fn unhex16(text: &str) -> Option<[u8; 16]> {
     if text.len() != 32 {
         return None;

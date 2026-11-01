@@ -98,6 +98,9 @@ fn failure_name(reason: PairingFailure) -> &'static str {
         PairingFailure::Refused(Refusal::AlreadyUsed) => "refused-already-used",
         PairingFailure::Refused(Refusal::Expired) => "refused-expired",
         PairingFailure::Refused(Refusal::CancelledByInviter) => "refused-cancelled",
+        PairingFailure::OtherAddress => "other-address",
+        PairingFailure::AddressProofMissing => "address-proof-missing",
+        PairingFailure::Crossed => "crossed",
     }
 }
 
@@ -300,6 +303,7 @@ async fn invite<N: lepic_node::NodeApi + 'static>(
                 offer_words: args.pairing_words,
                 home_relay: None,
                 class: PairingClass::Contact,
+                expect_address: None,
             },
         )
         .await?;
@@ -333,6 +337,7 @@ async fn accept<N: lepic_node::NodeApi + 'static>(
                 name: args.name.name,
                 by_hand: args.by_hand,
                 class: PairingClass::Contact,
+                expect_address: None,
             },
         )
         .await?;

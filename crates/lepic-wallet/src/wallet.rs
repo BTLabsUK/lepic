@@ -11,7 +11,7 @@ use crate::account::{self, Account, AccountLabel};
 use crate::config::{ConfigError, WalletConfig};
 use crate::error::WalletError;
 use crate::event::{EVENT_CAPACITY, Event, SessionState};
-use crate::extension::{ContactNotices, ReplyKeys};
+use crate::extension::{ContactNotices, PairRequests, ReplyKeys};
 use crate::lifecycle::{
     self, Password, PhraseCheck, RecoveryPhrase, SeedSource, Session, Target, WordCount,
     generate_seed, recovery_phrase,
@@ -33,6 +33,7 @@ pub struct Wallet<N, S: StoreOpener, V> {
     contacts: tokio::sync::Mutex<()>,
     reply_keys: OnceLock<Arc<dyn ReplyKeys>>,
     contact_notices: OnceLock<Arc<dyn ContactNotices<N, S, V>>>,
+    pair_requests: OnceLock<Arc<dyn PairRequests<N, S, V>>>,
     posting: tokio::sync::Mutex<()>,
 }
 
@@ -62,6 +63,7 @@ where
             contacts: tokio::sync::Mutex::new(()),
             reply_keys: OnceLock::new(),
             contact_notices: OnceLock::new(),
+            pair_requests: OnceLock::new(),
             posting: tokio::sync::Mutex::new(()),
         })
     }
@@ -92,6 +94,16 @@ where
 
     pub(crate) fn contact_notices(&self) -> Option<Arc<dyn ContactNotices<N, S, V>>> {
         self.contact_notices.get().cloned()
+    }
+
+    /// Installs the hook that takes pairing requests to the payments address. The first hook
+    /// installed stays; returns whether this one was.
+    pub fn set_pair_requests(&self, requests: Arc<dyn PairRequests<N, S, V>>) -> bool {
+        self.pair_requests.set(requests).is_ok()
+    }
+
+    pub(crate) fn pair_requests(&self) -> Option<Arc<dyn PairRequests<N, S, V>>> {
+        self.pair_requests.get().cloned()
     }
 
     /// Events from now on. See [`crate::event`] for what a slow subscriber misses.

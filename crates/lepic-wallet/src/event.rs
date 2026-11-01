@@ -110,6 +110,10 @@ pub enum Event {
     PairingConfirmed(ContactEvent),
     /// A pairing in progress ended without a record. The id names the record that was removed.
     PairingFailed(FailedPairing),
+    /// Another wallet asked to pair through this wallet's payments address, and the request
+    /// was stored for the user to answer or dismiss. Raised after it was stored and before
+    /// the relay message was acknowledged; not raised for one that was dropped.
+    PairingRequested(PairRequestNews),
     /// Something about a pairing changed that the contact caused, one event per change in the
     /// order they happened: a newer card (same keys), the contact heard from for the first
     /// time, its match verdict accepted, or the pairing ended by the contact or by never being
@@ -191,6 +195,14 @@ pub struct ContactEvent {
     pub contact_id: lepic_store::ContactId,
 }
 
+/// A pairing request that was stored: its id and the sender's address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairRequestNews {
+    pub request_id: [u8; lepic_store::INVITE_ID_LEN],
+    /// `key@relay` as the relay authenticated the sender.
+    pub sender: String,
+}
+
 /// What changed about a pairing in an [`Event::ContactUpdated`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContactChange {
@@ -245,6 +257,12 @@ pub enum PairingFailure {
     NotConfirmed,
     /// The inviter refused the reply: the invite was used, expired or cancelled. Advisory.
     Refused(lepic_contact::Refusal),
+    /// The answer proved another payments address than the one the pairing expected.
+    OtherAddress,
+    /// The pairing expected an address proof and the answer carried none.
+    AddressProofMissing,
+    /// Another pairing with the same wallet was in progress, and this one lost to it.
+    Crossed,
 }
 
 /// A home relay that did not answer, as `domain:port`.

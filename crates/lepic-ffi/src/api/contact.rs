@@ -31,9 +31,9 @@ use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
     ContactPayloadView, ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry,
     InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
-    PaidInvoice, PairingAnswer, PairingCard, PairingClass, PairingInvite, PairingLinkResult,
-    PendingPairingView, SasDecision, SealedAnswer, SealedSlateView, SendOptions, SentTx,
-    SlatePurpose,
+    PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass, PairingInvite,
+    PairingLinkResult, PendingPairingView, SasDecision, SealedAnswer, SealedSlateView, SendOptions,
+    SentTx, SlatePurpose,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -60,9 +60,15 @@ impl EpicWallet {
     /// ([`PairingClass`]): its invite must travel by QR or paste, so `offer_words` is refused
     /// with `WrongPairingClass`.
     ///
-    /// Fails with `InvalidArgument` for a meeting or home relay that is not `domain[:port]` or
-    /// for more than 16 meeting relays, with `InvalidContactName` for a `name` a card cannot
-    /// carry, and with `Io` when 64 pairings are pending.
+    /// With `expect_address` set, the reply must prove that Epicbox address, compared by key:
+    /// a reply without the proof fails `AddressProofMissing`, one proving another key
+    /// `OtherAddress`, with nothing stored, as `PairingFailed` in the collect or as the error
+    /// of `pairing_enter_link`. A reply that proves it completes the pairing Verified.
+    ///
+    /// Fails with `InvalidArgument` for a meeting or home relay that is not `domain[:port]`,
+    /// for more than 16 meeting relays or an `expect_address` that is not an Epicbox address of
+    /// this network, with `InvalidContactName` for a `name` a card cannot carry, and with `Io`
+    /// when 64 pairings are pending.
     #[allow(clippy::too_many_arguments)] // Mirrors the Dart call, one argument per choice.
     pub async fn pairing_invite(
         &self,
@@ -74,6 +80,7 @@ impl EpicWallet {
         meeting_relays: Vec<String>,
         home_relay: Option<String>,
         pairing_class: PairingClass,
+        expect_address: Option<String>,
     ) -> Result<PairingInvite, WalletError> {
         self.run("pairing_invite", |session| async move {
             session
@@ -86,8 +93,80 @@ impl EpicWallet {
                     meeting_relays,
                     home_relay,
                     pairing_class,
+                    expect_address,
                 )
                 .await
+        })
+        .await
+    }
+
+    /// The standing invite (one per wallet, seven days, the wallet's own relay), made anew when
+    /// there is none, when it was answered, when less than a day is left, when its relay is not
+    /// the wallet's relay now, or when `name` differs from the name it carries; on a name change
+    /// the old one is withdrawn. Sends nothing, so it works offline. The link is returned again
+    /// on every call; never store it.
+    ///
+    /// Fails with `InvalidContactName`, and `Io` when 64 pairings are pending.
+    pub async fn pairing_standing_invite(
+        &self,
+        name: String,
+    ) -> Result<PairingInvite, WalletError> {
+        self.run("pairing_standing_invite", |session| async move {
+            session.pairing_standing_invite(name).await
+        })
+        .await
+    }
+
+    /// Asks the wallet at `to_address` to pair: a new invite of its own, good for seven days,
+    /// which only that wallet can answer, posted to its payments address. The invite is kept
+    /// only when the post went through; answered, the pairing completes Verified.
+    ///
+    /// Fails with `PeerNotProven` unless that key ran LEPIC lately, answered nothing unmarked
+    /// since and claimed pair requests; `AlreadyPaired` for a live pairing with it;
+    /// `PairingInProgress` for a pairing in progress or waiting with it, or a live request from
+    /// it; `ContactsOffline`, `EpicboxOff`; `TransportFailed` when the post failed, with
+    /// nothing kept; and `InvalidArgument` for an address of another network.
+    pub async fn pairing_request_send(
+        &self,
+        to_address: String,
+        name: String,
+        relay_mode: ContactRelayMode,
+    ) -> Result<PendingPairingView, WalletError> {
+        self.run("pairing_request_send", |session| async move {
+            session
+                .pairing_request_send(to_address, name, relay_mode)
+                .await
+        })
+        .await
+    }
+
+    /// The live pairing requests other wallets sent, oldest first: not dismissed, answered or
+    /// expired. Answer one with [`EpicWallet::pairing_accept`], its `invite_link` and
+    /// `from_address` as `expect_address`.
+    pub async fn pairing_requests(&self) -> Result<Vec<PairRequestView>, WalletError> {
+        self.run("pairing_requests", |session| async move {
+            session.pairing_requests().await
+        })
+        .await
+    }
+
+    /// Hides a request. Its invite id is remembered until the invite expires, so a copy of it
+    /// is dropped; a newer request from the same wallet shows again. Fails with
+    /// `PairingNotFound` for no live request with that id.
+    pub async fn pairing_request_dismiss(&self, request_id: String) -> Result<(), WalletError> {
+        self.run("pairing_request_dismiss", |session| async move {
+            session.pairing_request_dismiss(&request_id).await
+        })
+        .await
+    }
+
+    /// Gives every contact pairing that has not ended this wallet's card again, naming it
+    /// `name`, as a contact update the next collect posts; private pairings are left alone.
+    /// Returns how many were queued. Call it with `pairing_standing_invite(name)` when the
+    /// user changes the name contacts see. Fails with `InvalidContactName`.
+    pub async fn contacts_set_own_name(&self, name: String) -> Result<u32, WalletError> {
+        self.run("contacts_set_own_name", |session| async move {
+            session.contacts_set_own_name(name).await
         })
         .await
     }
@@ -138,8 +217,15 @@ impl EpicWallet {
     /// `pairing_class` is the class the user means to answer, from the preview: an invite of the
     /// other class is refused with `WrongPairingClass` before anything is stored.
     ///
+    /// With `expect_address` set, from a pairing request's `from_address`, the confirmation
+    /// must prove that address, and the request is marked answered. If this wallet's own
+    /// request to the same wallet is out, the wallet with the lower key keeps its invite: when
+    /// ours wins this fails `PairingCrossed`, otherwise our request is withdrawn.
+    ///
     /// Fails as [`EpicWallet::pairing_preview`] does, with `AlreadyPaired` for an invite this
-    /// wallet made or answered already, and `InvalidContactName`.
+    /// wallet made or answered already or a live pairing with that address, `PairingInProgress`,
+    /// `PairingCrossed`, `InviteDismissed` for a request dismissed here, and
+    /// `InvalidContactName`.
     pub async fn pairing_accept(
         &self,
         link: String,
@@ -147,10 +233,18 @@ impl EpicWallet {
         by_hand: bool,
         relay_mode: ContactRelayMode,
         pairing_class: PairingClass,
+        expect_address: Option<String>,
     ) -> Result<PairingAnswer, WalletError> {
         self.run("pairing_accept", |session| async move {
             session
-                .pairing_accept(link, name, by_hand, relay_mode, pairing_class)
+                .pairing_accept(
+                    link,
+                    name,
+                    by_hand,
+                    relay_mode,
+                    pairing_class,
+                    expect_address,
+                )
                 .await
         })
         .await

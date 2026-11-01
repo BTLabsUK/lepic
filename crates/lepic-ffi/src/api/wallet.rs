@@ -1300,6 +1300,26 @@ impl EpicWallet {
         .await
     }
 
+    /// Applies a notice another install of this wallet received for a slate it does not hold,
+    /// passed on from its `NoticeUnmatched` event with its `sender` and `notice`. It is taken
+    /// under the rules of a notice received here: only from the recorded counterparty of its
+    /// slate, `posted` only with the kernel the payment implies, and once; it raises the same
+    /// events. Returns whether it was accepted; one for a slate this wallet does not hold
+    /// either is dropped and raises nothing.
+    ///
+    /// Fails with `InvalidArgument` for a `sender` that is not an Epicbox address of this
+    /// network or a `notice` that is not one.
+    pub async fn notice_apply_forwarded(
+        &self,
+        sender: String,
+        notice: String,
+    ) -> Result<bool, WalletError> {
+        self.run("notice_apply_forwarded", |session| async move {
+            session.notice_apply_forwarded(&sender, &notice).await
+        })
+        .await
+    }
+
     /// The wallet's Epicbox address, `<key>@<domain>[:port]`. Fails with `Unsupported` when
     /// the configuration names no relay.
     pub async fn epicbox_address(&self) -> Result<String, WalletError> {
@@ -1316,6 +1336,22 @@ impl EpicWallet {
     pub async fn peer_compat(&self, address: String) -> Result<PeerCompat, WalletError> {
         self.run("peer_compat", |session| async move {
             session.peer_compat(&address)
+        })
+        .await
+    }
+
+    /// Reports what the app learned of one of its own features with the wallet at `address`:
+    /// `bit` is one host bit (16, device forwarding, or 32, the directory); `worked` says
+    /// whether it worked. A bit the key never claimed does not start working. Sends nothing.
+    /// Fails with `InvalidArgument` for another bit or an address that does not parse.
+    pub async fn peer_feature_result(
+        &self,
+        address: String,
+        bit: u32,
+        worked: bool,
+    ) -> Result<(), WalletError> {
+        self.run("peer_feature_result", |session| async move {
+            session.peer_feature_result(&address, bit, worked)
         })
         .await
     }

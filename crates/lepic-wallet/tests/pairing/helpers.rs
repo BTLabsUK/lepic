@@ -50,6 +50,7 @@ pub fn invite_request(name: &str) -> InviteRequest {
         offer_words: false,
         home_relay: None,
         class: PairingClass::Contact,
+        expect_address: None,
     }
 }
 
@@ -60,6 +61,7 @@ pub fn accept(link: &str, name: &str, by_hand: bool) -> AcceptRequest {
         name: name.to_owned(),
         by_hand,
         class: PairingClass::Contact,
+        expect_address: None,
     }
 }
 

@@ -235,6 +235,47 @@ pub fn unpaired_notice_to(length: usize) -> String {
     pad_object(r#"{"lepic":1,"type":"unpaired"}"#, length)
 }
 
+const PAIR: &str = "pair";
+
+#[derive(Serialize)]
+struct WrittenPair<'a> {
+    lepic: u64,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    invite: &'a str,
+}
+
+#[derive(Deserialize)]
+struct ReadPair {
+    lepic: u64,
+    #[serde(rename = "type")]
+    kind: String,
+    invite: String,
+}
+
+/// A pairing request to a wallet's payments address: `{"lepic":1,"type":"pair","invite":…}`
+/// with an `epiccash://pair/1/…` invite, padded to `length` as every notice. A wallet that
+/// does not know it reads it as [`Payload::Unknown`] and ignores it.
+pub fn pair_request_to(invite_link: &str, length: usize) -> String {
+    let written = WrittenPair {
+        lepic: NOTICE_VERSION,
+        kind: PAIR,
+        invite: invite_link,
+    };
+    // A struct of strings and a number always serializes.
+    pad_object(&serde_json::to_string(&written).unwrap_or_default(), length)
+}
+
+/// The invite link of a pairing request of this notice version and at most
+/// [`MAX_NOTICE_LEN`] bytes; `None` for anything else.
+pub fn pair_request_invite(text: &str) -> Option<String> {
+    if text.len() > MAX_NOTICE_LEN || !text.trim_start().starts_with('{') {
+        return None;
+    }
+    let read: ReadPair = serde_json::from_str(text).ok()?;
+    (read.lepic == NOTICE_VERSION && read.kind == PAIR).then_some(read.invite)
+}
+
 /// Whether `text` is the notice [`unpaired_notice`] writes, of this notice version and at most
 /// [`MAX_NOTICE_LEN`] bytes.
 pub fn is_unpaired(text: &str) -> bool {
@@ -518,6 +559,31 @@ mod tests {
         );
         let longer = format!(r#"{{"a":"{}"}}"#, "x".repeat(NOTICE_LENGTHS[2]));
         assert_eq!(pad_object(&longer, NOTICE_LENGTHS[0]), longer);
+    }
+
+    #[test]
+    fn a_pair_request_reads_back_padded_and_is_unknown_to_older_readers() {
+        let link = "epiccash://pair/1/abc";
+        for length in NOTICE_LENGTHS {
+            let text = pair_request_to(link, length);
+            assert_eq!(text.len(), length);
+            assert_eq!(pair_request_invite(&text).as_deref(), Some(link));
+            assert_eq!(classify_text(&text), Payload::Unknown);
+        }
+        assert_eq!(
+            pair_request_invite(r#"{"lepic":2,"type":"pair","invite":"x"}"#),
+            None
+        );
+        assert_eq!(pair_request_invite(r#"{"lepic":1,"type":"pair"}"#), None);
+    }
+
+    #[test]
+    fn the_largest_invite_fits_a_notice() {
+        // An invite is at most 1 KiB, its link base64 of that and a prefix.
+        let link = format!("epiccash://pair/1/{}", "A".repeat(1400));
+        let text = pair_request_to(&link, NOTICE_LENGTHS[0]);
+        assert!(text.len() <= MAX_NOTICE_LEN);
+        assert_eq!(pair_request_invite(&text), Some(link));
     }
 
     proptest! {

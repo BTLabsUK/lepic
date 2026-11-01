@@ -81,7 +81,7 @@ fn check_attach_address(
 const UNPAIRED_POST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// An invite's home relay as records name one, `domain:port`, the port explicit.
-fn home_host(host: &str) -> String {
+pub(crate) fn home_host(host: &str) -> String {
     if host
         .rsplit_once(':')
         .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
@@ -116,6 +116,8 @@ pub struct PendingPairingView {
     pub created_at: jiff::Timestamp,
     /// The relay where the pairing's mailboxes live, `domain:port`.
     pub home_relay: String,
+    /// Inviter: where the pairing request went. Invitee: the request's sender.
+    pub expect_address: Option<String>,
 }
 
 /// Checks a record restored from a backup against this seed and rebuilds its mailbox from the
@@ -223,10 +225,12 @@ where
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             session.store.read(|repos| {
+                let standing = super::requests::standing_id(repos)?;
                 let mut views = Vec::new();
                 for pending in repos.pending_pairings()? {
-                    // A cancelled invite is kept only to refuse late replies.
-                    if pending.cancelled_at.is_some() {
+                    // A cancelled invite is kept only to refuse late replies, and the standing
+                    // invite shows only where the wallet shows its invite.
+                    if pending.cancelled_at.is_some() || Some(pending.contact_id) == standing {
                         continue;
                     }
                     let Some(record) = repos.contact(pending.contact_id)?.filter(|record| {
@@ -244,6 +248,7 @@ where
                         expires_at: pending.expires_at,
                         created_at: pending.created_at,
                         home_relay: home_host(invite.fields().home_relay.as_str()),
+                        expect_address: pending.expect_address,
                     });
                 }
                 views.sort_by_key(|view| view.created_at);
@@ -438,6 +443,60 @@ where
                 ));
         }
         Ok(())
+    }
+
+    /// Gives every contact pairing that has not ended our card again, naming us `name`, as a
+    /// contact update the next collect posts; private pairings are left alone. Returns how
+    /// many were queued.
+    ///
+    /// Fails with [`ContactError::Name`] for a name the card cannot carry.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn contacts_set_own_name(
+        &self,
+        relays: &ContactRelays,
+        name: &str,
+    ) -> Result<u32, ContactError> {
+        let name = lepic_contact::ContactName::new(name).map_err(ContactError::Name)?;
+        let network = self.wallet.config().network;
+        let features = self.wallet.config().claimed_features();
+        let session = self.wallet.session()?;
+        let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        let net = super::keys::contact_network(network);
+        let queued = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
+                    let at = super::address_proof::CardUpdate {
+                        keychain: &session.keychain,
+                        network,
+                        payments: &payments,
+                        features,
+                        now,
+                    };
+                    let mut queued = 0u32;
+                    for record in repos.contacts()? {
+                        let same = lepic_contact::ContactCard::decode(&record.own_card, net)
+                            .is_ok_and(|own| own.fields().name == name);
+                        if same {
+                            continue;
+                        }
+                        let name = name.clone();
+                        if super::address_proof::queue_card_update(
+                            repos,
+                            &ports.rng,
+                            &at,
+                            record,
+                            |fields| fields.name = name,
+                        )? {
+                            queued = queued.saturating_add(1);
+                        }
+                    }
+                    Ok::<_, ContactError>(queued)
+                })
+            })
+            .await?;
+        info!(count = queued, "own name given to contacts");
+        Ok(queued)
     }
 
     /// Sets the user's own name for a contact; an empty label clears it. A label follows the
