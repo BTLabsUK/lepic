@@ -498,7 +498,7 @@ fn copy_plain(
     cipher::sync_folder(&encrypted)
         .map_err(io("switch to the encrypted database"))
         .map_err(Failure::AfterSwitch)?;
-    step(faults, Step::Switched, &copy)?;
+    step(faults, Step::Switched, &copy).map_err(after_switch)?;
 
     // 7. The plain database goes aside, retried while another program holds it. A failure
     //    fails this open, so no session writes to the encrypted database while the plain one
@@ -509,8 +509,16 @@ fn copy_plain(
         fs_rename
     };
     set_aside_plain(dir, PRE_ENCRYPTION_SUFFIX, rename).map_err(Failure::AfterSwitch)?;
-    step(faults, Step::SetAside, &copy)?;
+    step(faults, Step::SetAside, &copy).map_err(after_switch)?;
     Ok(())
+}
+
+/// A failure after the switch, which must not fall back to the plain file.
+fn after_switch(failure: Failure) -> Failure {
+    match failure {
+        Failure::Failed(error) => Failure::AfterSwitch(error),
+        other => other,
+    }
 }
 
 struct PlainState {

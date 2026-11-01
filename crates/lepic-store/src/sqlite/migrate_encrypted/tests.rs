@@ -400,6 +400,29 @@ fn a_full_disk_keeps_the_plain_database_and_the_next_open_migrates() {
     }
 }
 
+/// An error after the rename to the encrypted database, as a folder flush that fails, fails the
+/// open: the session never falls back to the plain file once the encrypted one is in place.
+#[test]
+fn an_error_after_the_switch_never_falls_back_to_the_plain_database() {
+    for at in [Step::Switched, Step::SetAside] {
+        let dir = tempfile::tempdir().unwrap();
+        plain_database(dir.path(), 0);
+        let original = plain_bytes(dir.path(), DATABASE_FILE);
+        let failed = open_wallet_dir_with(dir.path(), keys(), &key(), None, &DiskFullAt(at));
+        assert!(
+            failed.is_err(),
+            "{at:?}: {:?}",
+            failed.map(|(_, report)| report)
+        );
+        assert!(dir.path().join(ENCRYPTED_DATABASE_FILE).exists(), "{at:?}");
+
+        let (store, report) = open_wallet_dir(dir.path(), keys(), &key(), None).unwrap();
+        assert_eq!(report.state, AtRestState::Encrypted, "{at:?}");
+        assert!(!report.rollback_set_aside, "{at:?}: taken for a rollback");
+        assert_migrated(dir.path(), &original, &store);
+    }
+}
+
 #[test]
 fn a_wrong_key_is_refused_and_nothing_moves() {
     let dir = tempfile::tempdir().unwrap();
