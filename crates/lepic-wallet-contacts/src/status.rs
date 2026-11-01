@@ -41,6 +41,11 @@ pub const STATUS_RETRY_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// Collecting time after which an inviter that never heard the contact ends the pairing.
 pub const NEVER_FINISHED_AFTER: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
+/// The most one gap between two collects adds to that collecting time. A wallet that collects
+/// in the foreground, or wakes in the background every quarter of an hour or so, counts its
+/// gaps in full; time the app was closed counts for at most this.
+pub const HEARD_WAIT_MAX_GAP: Duration = Duration::from_secs(60 * 60);
+
 /// Waits before the next try of a status notice, one step per failed try; the last repeats.
 const RETRY: [Duration; 4] = [
     Duration::from_secs(30),
@@ -459,7 +464,9 @@ where
                         if let Some(mark) = facts.heard_wait_mark {
                             let since = started.duration_since(mark);
                             if let Ok(since) = Duration::try_from(since) {
-                                facts.heard_wait = facts.heard_wait.saturating_add(since);
+                                facts.heard_wait = facts
+                                    .heard_wait
+                                    .saturating_add(since.min(HEARD_WAIT_MAX_GAP));
                             }
                         }
                         facts.heard_wait_mark = Some(started);

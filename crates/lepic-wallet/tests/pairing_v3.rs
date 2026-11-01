@@ -32,6 +32,7 @@ use lepic_wallet_contacts::{
 use world::{Party, World};
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+const HOUR: Duration = Duration::from_secs(60 * 60);
 
 /// Records `peer` as a fresh LEPIC wallet that claims every feature of this build, as one marked
 /// payment between the two leaves it.
@@ -387,9 +388,9 @@ fn an_inviter_never_heard_ends_after_seven_days_of_collecting() {
     anna.clock.advance(10 * DAY);
     world.collect(anna);
     assert_eq!(status(&world, anna, anna_side), PairingStatus::Waiting);
-    // Seven days counted between collects end it.
-    for _ in 0..7 {
-        anna.clock.advance(DAY);
+    // Seven days of collecting at least hourly end it.
+    for _ in 0..7 * 24 {
+        anna.clock.advance(HOUR);
         world.collect(anna);
     }
     let view = world
@@ -397,6 +398,27 @@ fn an_inviter_never_heard_ends_after_seven_days_of_collecting() {
         .unwrap();
     assert_eq!(view.status, PairingStatus::Ended);
     assert_eq!(view.ended_reason, Some(PairingEndReason::NeverFinished));
+}
+
+#[test]
+fn days_the_app_was_closed_do_not_count_as_collecting() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let link = world.invite(anna, "Anna");
+    world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_accept(&relays(ben), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    world.collect(anna);
+    let anna_side = world.only_contact(anna);
+    // The first collect after the reply sets the mark; the gap after it is the app closed.
+    world.collect(anna);
+    anna.clock.advance(8 * DAY);
+    world.collect(anna);
+    assert_eq!(status(&world, anna, anna_side), PairingStatus::Waiting);
 }
 
 #[test]
