@@ -332,6 +332,13 @@ impl Party {
         self.store().read(read).unwrap()
     }
 
+    pub fn write<T>(
+        &self,
+        write: impl FnOnce(&mut dyn Repositories) -> Result<T, StoreError>,
+    ) -> T {
+        self.store().write(write).unwrap()
+    }
+
     /// What the wallet keeps about the peer key `key`, if anything.
     pub fn peer_compat(&self, key: &str) -> Option<PeerCompat> {
         self.read(|repos| repos.peer_compat(key))

@@ -392,15 +392,21 @@ impl EpicWallet {
     /// Attaches a pairing to the app's address-book entry `app_contact`, an id the app
     /// chooses, or detaches it with `None`. Attaching a new pairing to an entry that has one
     /// already is when to offer [`EpicWallet::contact_key_check`]. The id is at most 256 bytes
-    /// with no control characters. Fails with `InvalidContactName` for another id and with
-    /// `ContactNotFound`.
+    /// with no control characters. `app_address` is the entry's Epicbox address, if it has
+    /// one; addresses are compared by key. Fails with `InvalidContactName` for another id, with
+    /// `InvalidArgument` for an address not of the wallet's network, with `OtherAddress` when
+    /// the pairing proves another address and `AddressProofMissing` when it proves none
+    /// (nothing changes in either case), and with `ContactNotFound`.
     pub async fn contact_attach(
         &self,
         contact_id: String,
         app_contact: Option<String>,
+        app_address: Option<String>,
     ) -> Result<(), WalletError> {
         self.run("contact_attach", |session| async move {
-            session.contact_attach(&contact_id, app_contact).await
+            session
+                .contact_attach(&contact_id, app_contact, app_address)
+                .await
         })
         .await
     }

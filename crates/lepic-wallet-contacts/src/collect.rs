@@ -354,6 +354,7 @@ where
         self.prune_outbox().await?;
         self.forget_old_envelopes().await?;
         self.move_in_person_mailboxes(relays).await?;
+        self.send_address_cards(relays).await?;
         let only = only.map(|ids| ids.iter().copied().collect::<BTreeSet<ContactId>>());
         let mailboxes = self.mailboxes_to_collect(relays, trigger, only).await?;
         let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();
@@ -769,7 +770,17 @@ where
             _ => opened.content.card.clone().map(|card| (card, None)),
         };
         if let Some((card, update)) = update {
-            self.refresh_card(contact_id, card, update).await?;
+            // Only a contact update carries the proof of the address its card names.
+            let extras = if update.is_some() {
+                lepic_contact::PairingExtras {
+                    address_proof: opened.content.address_proof,
+                    features: opened.content.features,
+                }
+            } else {
+                lepic_contact::PairingExtras::default()
+            };
+            self.refresh_card_with(contact_id, card, update, extras)
+                .await?;
         }
         self.mark_sealed_in(contact_id).await?;
         if current {
@@ -867,12 +878,32 @@ where
         card: ContactCard,
         update: Option<&ContactRelays>,
     ) -> Result<(), ContactError> {
+        self.refresh_card_with(
+            contact_id,
+            card,
+            update,
+            lepic_contact::PairingExtras::default(),
+        )
+        .await
+    }
+
+    /// [`Self::refresh_card`] with what the update carried beside the card: a proof that
+    /// verifies sets the contact's payments address to the one the card names; without one,
+    /// or with one that does not verify, the stored address stays.
+    async fn refresh_card_with(
+        &self,
+        contact_id: ContactId,
+        card: ContactCard,
+        update: Option<&ContactRelays>,
+        extras: lepic_contact::PairingExtras,
+    ) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         let network = self.wallet.config().network;
         let news = CardNews {
             contact_id,
             card,
             relays: update.cloned(),
+            extras,
         };
         let updated = self
             .contact_work(move |ports, _| {
@@ -975,6 +1006,36 @@ where
             .await?;
         if moved > 0 {
             info!(count = moved, "in-person mailboxes moved");
+        }
+        Ok(())
+    }
+
+    /// Gives every contact pairing our card with the payments address (tag 09) and its proof,
+    /// once for each payments address: after an upgrade from a build whose cards named none,
+    /// and after the wallet's relay changed. Queued in one write per contact.
+    async fn send_address_cards(&self, relays: &ContactRelays) -> Result<(), ContactError> {
+        let network = self.wallet.config().network;
+        let features = self.wallet.config().claimed_features();
+        let session = self.wallet.session()?;
+        let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        let sent = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
+                    super::address_proof::queue_address_cards(
+                        repos,
+                        &ports.rng,
+                        &session.keychain,
+                        network,
+                        &payments,
+                        features,
+                        now,
+                    )
+                })
+            })
+            .await?;
+        if sent > 0 {
+            info!(count = sent, "address cards queued");
         }
         Ok(())
     }
@@ -1181,6 +1242,7 @@ struct CardNews {
     contact_id: ContactId,
     card: ContactCard,
     relays: Option<ContactRelays>,
+    extras: lepic_contact::PairingExtras,
 }
 
 /// Stores the card of `news` as [`ContactBook::refresh_card`] describes, and returns whether the
@@ -1197,6 +1259,7 @@ fn store_card_news(
         contact_id,
         card,
         relays,
+        extras,
     } = news;
     let Some(mut record) = repos.contact(contact_id)? else {
         return Ok(false);
@@ -1208,6 +1271,19 @@ fn store_card_news(
         return Ok(false);
     }
     let service = peer.kind != lepic_store::ContactKind::Person;
+    if relays.is_some() && !super::private::is_private(&record) {
+        let proven = super::address_proof::proven_in_update(
+            keychain,
+            network,
+            &record,
+            &card,
+            extras.address_proof.as_ref(),
+        )?;
+        super::pairing::set_proven(&mut record, proven);
+        if let Some(features) = extras.features {
+            record.facts.peer_features = features;
+        }
+    }
     let Some(mut mailbox) = repos.contact_mailbox(contact_id)? else {
         return Ok(false);
     };
@@ -1330,7 +1406,7 @@ fn moved_own_card(
 }
 
 /// The outbox entry that carries a contact update `envelope` to the contact's `destination`.
-fn update_entry(
+pub(crate) fn update_entry(
     contact_id: ContactId,
     envelope: &[u8],
     destination: String,

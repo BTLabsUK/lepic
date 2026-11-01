@@ -32,6 +32,11 @@ const TAG_ONION: u8 = 0x0b;
 /// The link secret of a private pairing's invite: an extension, so a reader that predates
 /// private pairings skips it, and its reply, sealed without the key, does not open.
 const TAG_LINK_SECRET: u8 = 0x80;
+/// The inviter's mailbox key for the pairing (its card's tag 08 key, a compressed secp256k1
+/// key), which the invitee's address proof is made for. An extension older readers skip.
+const TAG_MAILBOX_KEY: u8 = 0x81;
+/// The length of a compressed secp256k1 public key.
+pub const MAILBOX_KEY_LEN: usize = 33;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteFields {
@@ -52,6 +57,9 @@ pub struct InviteFields {
     pub onion: Option<RelayHost>,
     /// Set exactly for a private pairing's invite ([`PairingClass::Private`]).
     pub link: Option<PrivateSecret>,
+    /// The inviter's mailbox key of the pairing, the key its card names in tag 08, for the
+    /// invitee's address proof. Its curve point is the reader's check.
+    pub mailbox_key: Option<[u8; MAILBOX_KEY_LEN]>,
 }
 
 /// An invite and its exact bytes, which hold the pairing code: wiped on drop, and `Debug` shows
@@ -110,6 +118,10 @@ impl Invite {
             TAG_LINK_SECRET,
             fields.link.as_ref().map(|link| &link.expose_bytes()[..]),
         )?;
+        writer.optional(
+            TAG_MAILBOX_KEY,
+            fields.mailbox_key.as_ref().map(|key| &key[..]),
+        )?;
         let bytes = writer.into_bytes();
         if bytes.len() > MAX_INVITE_LEN {
             return Err(EncodeError::Oversized {
@@ -163,6 +175,12 @@ impl Invite {
                     .map_err(|_| value(TAG_LINK_SECRET))
             })
             .transpose()?;
+        let mailbox_key = fields
+            .extension(TAG_MAILBOX_KEY)
+            .map(|bytes| {
+                <[u8; MAILBOX_KEY_LEN]>::try_from(bytes).map_err(|_| value(TAG_MAILBOX_KEY))
+            })
+            .transpose()?;
         // A private pairing's messages never go to a service's fixed inbox.
         if link.is_some() && service_inbox.is_some() {
             return Err(value(TAG_LINK_SECRET).into());
@@ -180,6 +198,7 @@ impl Invite {
                 service_inbox,
                 onion,
                 link,
+                mailbox_key,
             },
             bytes: bytes.to_vec(),
         })

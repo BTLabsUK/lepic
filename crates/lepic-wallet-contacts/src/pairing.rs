@@ -11,10 +11,11 @@ use lepic_contact::{
 };
 use lepic_contact::{
     Commitment, Confirm, ConfirmBody, ConfirmCode, ContactCard, ContactKind, Invite, InviteFields,
-    InviteId, Nonce, PairingCode, PairingLink, ReplyBody, Sas, SealedEnvelope,
-    pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_reply,
+    InviteId, Nonce, PairingCode, PairingExtras, PairingLink, ReplyBody, Sas, SealedEnvelope,
+    open_confirm_with, open_reply_with, pairing_envelope_from_link, pairing_envelope_link,
+    seal_confirm_with_extras, seal_reply_with,
 };
-use lepic_contact::{ContactName, Refusal, RelayHost, open_confirm, open_reply, seal_refusal};
+use lepic_contact::{ContactName, Refusal, RelayHost, seal_refusal};
 use lepic_epicbox::{EpicboxAddress, Identity, RelayEndpoint};
 use lepic_node::NodeApi;
 use lepic_store::{
@@ -24,6 +25,9 @@ use lepic_store::{
 };
 use tracing::{debug, info, instrument, warn};
 
+use super::address_proof::{
+    Payments, ProofBinding, ProofStep, ProvenAddress, invite_mailbox_key, mailbox_key, proven,
+};
 use super::keys::{
     CardDetails, box_identity, contact_keys, contact_network, enc_secret, our_card,
     pairing_mailbox, signing_key,
@@ -291,6 +295,10 @@ struct NewPairing<'a> {
     network: lepic_primitives::params::Network,
     home: &'a RelayEndpoint,
     now: Timestamp,
+    /// The wallet's payments identity, which a contact pairing's card names and proves.
+    payments: Option<&'a Payments>,
+    /// What the pairing's messages claim.
+    features: u32,
 }
 
 /// A reply that opened under one of this wallet's invites, with the pairing's keys.
@@ -299,6 +307,10 @@ struct OpenedReply {
     keys: crate::key_schedule::ContactKeys,
     invite: Invite,
     reply: ReplyBody,
+    /// What the reply carries beside its body.
+    extras: PairingExtras,
+    /// Our card of the pairing, which the invite committed to.
+    own: ContactCard,
     /// A private pairing's secrets, with the channel key the reply made.
     private: Option<PrivateSecrets>,
 }
@@ -316,6 +328,12 @@ struct ReplyTaking {
     home_text: String,
     signer: lepic_contact::SigningKey,
     private: Option<PrivateSecrets>,
+    /// The replier's payments address, when its proof verified.
+    proven: Option<ProvenAddress>,
+    /// What the reply claims.
+    peer_features: u32,
+    /// What our confirm carries beside its body.
+    confirm_extras: PairingExtras,
 }
 
 /// Where the answers to a reply go: the replier's confirm mailbox on the home relay.
@@ -361,6 +379,10 @@ where
         let offer_words = request.offer_words;
         let lifetime = invite_lifetime(relays, &request)?;
         let session = self.wallet.session()?;
+        let payments = (request.class == PairingClass::Contact)
+            .then(|| Payments::of(&session.keychain, network, relays))
+            .transpose()?;
+        let features = self.wallet.config().claimed_features();
         let mut offer = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -372,6 +394,8 @@ where
                     network,
                     home: &home,
                     now,
+                    payments: payments.as_ref(),
+                    features,
                 };
                 session
                     .store
@@ -458,6 +482,10 @@ where
         let invite_for_work = invite.clone();
         let home_for_work = home.clone();
         let by_hand = request.by_hand;
+        let payments = (invite.class() == PairingClass::Contact)
+            .then(|| Payments::of(&session.keychain, network, relays))
+            .transpose()?;
+        let features = self.wallet.config().claimed_features();
         let (contact_id, envelope, from, to) = self
             .contact_work(move |ports, _| {
                 let invite = invite_for_work;
@@ -467,6 +495,8 @@ where
                     network,
                     home: &home,
                     now: ports.clock.now(),
+                    payments: payments.as_ref(),
+                    features,
                 };
                 session
                     .store
@@ -537,6 +567,7 @@ where
                         kind: request.kind,
                         name: &request.name,
                         seq: 1,
+                        payments_address: None,
                     },
                 )?;
                 repos.put_contact(&pending_record(
@@ -833,6 +864,8 @@ where
             keys,
             invite,
             reply,
+            extras,
+            own,
             private,
         }) = self
             .open_pairing_reply(&session.keychain, pairing_id, envelope)
@@ -844,6 +877,15 @@ where
         let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
         let onion_text = invite.fields().onion.as_ref().map(RelayHost::as_str);
         let rc = *reply.confirm_code.expose_bytes();
+        let (proven, confirm_extras) = if private.is_some() {
+            (None, PairingExtras::default())
+        } else {
+            let payments = Payments::of(&session.keychain, network, relays)?;
+            let features = self.wallet.config().claimed_features();
+            reply_proofs(
+                network, &keys, &invite, &reply, &own, &extras, &payments, features,
+            )
+        };
         let taking = ReplyTaking {
             pairing_id,
             contact_id,
@@ -855,6 +897,9 @@ where
             home_text: host_text(&home),
             signer: signing_key(&keys),
             private,
+            proven,
+            peer_features: extras.features.unwrap_or(0),
+            confirm_extras,
         };
         let decision = self
             .contact_work(move |ports, _| {
@@ -963,9 +1008,9 @@ where
             _ => return Ok(None),
         };
         let invite = Invite::decode(&pending.invite, net).map_err(ContactError::StoredData)?;
-        let (reply, private) = match class.private() {
-            None => match open_reply(&sealed, &enc_secret(&keys)) {
-                Ok(reply) => (reply, None),
+        let ((reply, extras), private) = match class.private() {
+            None => match open_reply_with(&sealed, &enc_secret(&keys)) {
+                Ok((reply, extras)) => ((reply, extras), None),
                 Err(_) => {
                     debug!("pairing reply did not open");
                     return Ok(None);
@@ -981,7 +1026,7 @@ where
                         &reply.card,
                     ));
                     secrets.joiner = Some(joiner);
-                    (reply, Some(secrets))
+                    ((reply, PairingExtras::default()), Some(secrets))
                 }
                 Err(_) => {
                     debug!("pairing reply did not open");
@@ -993,11 +1038,14 @@ where
             debug!("pairing reply with another code dropped");
             return Ok(None);
         }
+        let own = ContactCard::decode(&record.own_card, net).map_err(ContactError::StoredData)?;
         Ok(Some(OpenedReply {
             contact_id: pending.contact_id,
             keys,
             invite,
             reply,
+            extras,
+            own,
             private,
         }))
     }
@@ -1038,9 +1086,9 @@ where
             return Ok(Taken::Ignored);
         }
         let keys = record_keys(&session.keychain, network, &record, &class)?;
-        let confirm = match open_pairing_confirm(envelope, net, &keys, &class) {
-            Some(Confirm::Accepted(body)) => body,
-            Some(Confirm::Refused(refusal)) => {
+        let (confirm, extras) = match open_pairing_confirm(envelope, net, &keys, &class) {
+            Some((Confirm::Accepted(body), extras)) => (body, extras),
+            Some((Confirm::Refused(refusal), _)) => {
                 // Advisory: only the inviter knows the confirm mailbox, and nothing of the
                 // refusal is kept but the end of this pairing.
                 let pairing_id = pending.pairing_id;
@@ -1071,6 +1119,8 @@ where
         let Some(sas) = confirm_sas(net, &class, &confirm, &own, &Nonce::from_bytes(n_b)) else {
             return Ok(Taken::Ignored);
         };
+        let proven = confirm_proven(network, &keys, &class, &confirm, &own, &invite, &extras);
+        let peer_features = extras.features.unwrap_or(0);
         let peer = confirm.card.clone();
         let fields = invite.fields();
         let home_text = fields.home_relay.as_str().to_owned();
@@ -1081,6 +1131,8 @@ where
                 session.store.write(|repos| {
                     refuse_known_card(repos, &peer, &own)?;
                     let mut record = record;
+                    record.facts.peer_features = peer_features;
+                    set_proven(&mut record, proven);
                     record.peer = Some(peer_card(&peer));
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
@@ -1273,11 +1325,17 @@ fn new_card(
     name: &str,
 ) -> Result<ContactCard, ContactError> {
     let mailbox = box_identity(keys, at.network, at.home)?;
+    let payments_address = at.payments.map(Payments::card_address).transpose()?;
     our_card(
         keys,
         at.network,
         mailbox.address(),
-        &CardDetails { kind, name, seq: 1 },
+        &CardDetails {
+            kind,
+            name,
+            seq: 1,
+            payments_address,
+        },
     )
 }
 
@@ -1328,6 +1386,7 @@ fn store_invite(
             service_inbox: None,
             onion: None,
             link: private.as_ref().map(|secrets| secrets.link.clone()),
+            mailbox_key: private.is_none().then(|| keys.box_public_key().to_bytes()),
         },
     )
     .map_err(ContactError::Encode)?;
@@ -1411,7 +1470,22 @@ fn store_answer(
         confirm_code: rc.clone(),
         card: card.clone(),
     };
-    let envelope = seal_answer(invite, &body, &card, &mut private, &mut rng)?;
+    let extras = PairingExtras {
+        address_proof: at.payments.and_then(|payments| {
+            payments.prove(
+                &invite_mailbox_key(invite)?,
+                &ProofBinding {
+                    network: invite.network(),
+                    step: ProofStep::Reply,
+                    prover_card: &card,
+                    verifier_card: None,
+                    invite: Some(invite.as_bytes()),
+                },
+            )
+        }),
+        features: Some(at.features),
+    };
+    let envelope = seal_answer(invite, &body, &card, &extras, &mut private, &mut rng)?;
     if let Some(secrets) = &private {
         super::private::put_secrets(repos, new.contact_id, secrets)?;
     }
@@ -1465,11 +1539,12 @@ fn seal_answer(
     invite: &Invite,
     body: &ReplyBody,
     card: &ContactCard,
+    extras: &PairingExtras,
     private: &mut Option<PrivateSecrets>,
     rng: &mut LockedRng<'_>,
 ) -> Result<Vec<u8>, ContactError> {
     match private {
-        None => seal_reply(invite, body, rng),
+        None => seal_reply_with(invite, body, extras, rng),
         Some(secrets) => {
             let joiner = PrivateSecret::random(rng);
             let sealed = seal_private_reply(invite, body, &joiner, rng);
@@ -1501,6 +1576,9 @@ fn decide_reply(
         home_text,
         signer,
         private,
+        proven,
+        peer_features,
+        confirm_extras,
     } = taking;
     // Read again inside the transaction: another reply may have paired since.
     let Some(mut pending) = repos.pending_pairing(pairing_id)? else {
@@ -1540,7 +1618,7 @@ fn decide_reply(
     let (sas, envelope) = match &private {
         None => (
             Sas::compute(net, &own, &peer, &n_a, &n_b),
-            seal_confirm(&peer, &body, &signer, &mut rng),
+            seal_confirm_with_extras(&peer, &body, &signer, &confirm_extras, &mut rng),
         ),
         Some(secrets) => {
             let (Some(joiner), Some(channel)) = (&secrets.joiner, &secrets.channel) else {
@@ -1555,6 +1633,8 @@ fn decide_reply(
     };
     drop(guard);
     let envelope = envelope.map_err(ContactError::Encode)?;
+    record.facts.peer_features = peer_features;
+    set_proven(&mut record, proven);
     record.peer = Some(peer_card(&peer));
     record.state = ContactState::Paired;
     record.sas = Some(*sas.as_bytes());
@@ -1597,15 +1677,100 @@ fn open_pairing_confirm(
     net: lepic_contact::Network,
     keys: &crate::key_schedule::ContactKeys,
     class: &RecordClass,
-) -> Option<Confirm> {
+) -> Option<(Confirm, PairingExtras)> {
     let sealed = SealedEnvelope::decode(envelope, net).ok()?;
     match class.private() {
-        None => open_confirm(&sealed, &enc_secret(keys)),
+        None => open_confirm_with(&sealed, &enc_secret(keys)),
         Some(secrets) => {
             open_private_confirm(&sealed, &enc_secret(keys), secrets.channel.as_ref()?)
+                .map(|confirm| (confirm, PairingExtras::default()))
         }
     }
     .ok()
+}
+
+/// The inviter's side of the address proofs of a reply: the replier's address, when the
+/// reply's proof verifies for our mailbox key, and what our confirm carries, with our proof made
+/// for the replier's mailbox key.
+#[allow(clippy::too_many_arguments)] // each is one input of the two proofs
+fn reply_proofs(
+    network: lepic_primitives::params::Network,
+    keys: &crate::key_schedule::ContactKeys,
+    invite: &Invite,
+    reply: &ReplyBody,
+    own: &ContactCard,
+    extras: &PairingExtras,
+    payments: &Payments,
+    features: u32,
+) -> (Option<ProvenAddress>, PairingExtras) {
+    let net = contact_network(network);
+    let proven = proven(
+        keys.expose_box_secret(),
+        network,
+        &ProofBinding {
+            network: net,
+            step: ProofStep::Reply,
+            prover_card: &reply.card,
+            verifier_card: None,
+            invite: Some(invite.as_bytes()),
+        },
+        extras.address_proof.as_ref(),
+    );
+    let address_proof = mailbox_key(&reply.card, network).and_then(|verifier| {
+        payments.prove(
+            &verifier,
+            &ProofBinding {
+                network: net,
+                step: ProofStep::Confirm,
+                prover_card: own,
+                verifier_card: Some(&reply.card),
+                invite: Some(invite.as_bytes()),
+            },
+        )
+    });
+    (
+        proven,
+        PairingExtras {
+            address_proof,
+            features: Some(features),
+        },
+    )
+}
+
+/// The inviter's address, when the confirm's proof verifies for our mailbox key over its card,
+/// our card and the invite. Private pairings prove none.
+fn confirm_proven(
+    network: lepic_primitives::params::Network,
+    keys: &crate::key_schedule::ContactKeys,
+    class: &RecordClass,
+    confirm: &ConfirmBody,
+    own: &ContactCard,
+    invite: &Invite,
+    extras: &PairingExtras,
+) -> Option<ProvenAddress> {
+    if !matches!(class, RecordClass::Contact) {
+        return None;
+    }
+    proven(
+        keys.expose_box_secret(),
+        network,
+        &ProofBinding {
+            network: contact_network(network),
+            step: ProofStep::Confirm,
+            prover_card: &confirm.card,
+            verifier_card: Some(own),
+            invite: Some(invite.as_bytes()),
+        },
+        extras.address_proof.as_ref(),
+    )
+}
+
+/// Records the payments address a pairing proved. Without a proof the stored one stays.
+pub(crate) fn set_proven(record: &mut ContactRecord, proven: Option<ProvenAddress>) {
+    if let Some(proven) = proven {
+        record.facts.payments_address = Some(proven.address);
+        record.facts.payments_key = Some(proven.key);
+    }
 }
 
 /// The SAS of an invitee's pairing; `None` for a private pairing without its joiner secret.

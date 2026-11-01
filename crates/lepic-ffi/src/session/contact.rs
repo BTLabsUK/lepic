@@ -216,6 +216,7 @@ fn view(view: EngineContactView) -> ContactView {
         lapsed: view.lapsed,
         last_sealed_in_ms: view.last_sealed_in.map(ms),
         removed_by_peer: view.removed_by_peer,
+        payments_address: view.payments_address,
         created_at_ms: ms(view.created_at),
     }
 }
@@ -709,12 +710,13 @@ impl Session {
         &self,
         contact_id: &str,
         app_contact: Option<String>,
+        app_address: Option<String>,
     ) -> Result<(), WalletError> {
         let id = self::contact_id(contact_id)?;
         Ok(self
             .engine
             .contact_book()
-            .contact_attach(id, app_contact)
+            .contact_attach(id, app_contact, app_address)
             .await?)
     }
 

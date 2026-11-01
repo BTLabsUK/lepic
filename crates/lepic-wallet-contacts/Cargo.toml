@@ -12,6 +12,7 @@ blake2 = { workspace = true, features = ["zeroize"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures-util = { workspace = true, features = ["alloc"] }
 hkdf.workspace = true
+hmac = { workspace = true, features = ["zeroize"] }
 jiff.workspace = true
 lepic-contact.workspace = true
 lepic-crypto.workspace = true

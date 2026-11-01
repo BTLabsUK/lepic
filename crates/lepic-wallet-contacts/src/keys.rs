@@ -89,6 +89,8 @@ pub(crate) struct CardDetails<'a> {
     pub kind: ContactKind,
     pub name: &'a str,
     pub seq: u32,
+    /// The wallet's payments address (tag 09), which the pairing's address proof covers.
+    pub payments_address: Option<MailboxAddress>,
 }
 
 /// Our signed card for the contact whose keys are `keys`, delivering to `mailbox`.
@@ -107,7 +109,7 @@ pub(crate) fn our_card(
         sig_key: signing.verifying_key(),
         hint_key: HintKey::from_bytes(*keys.expose_hint_key()),
         mailbox: MailboxAddress::new(&mailbox.to_string()).map_err(ContactError::Name)?,
-        payments_address: None,
+        payments_address: details.payments_address.clone(),
         home_onion: None,
         caps: Capabilities::OPENS_SEALED_FILES
             .with(Capabilities::PAYS_INVOICES)

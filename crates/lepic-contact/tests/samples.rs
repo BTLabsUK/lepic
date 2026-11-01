@@ -57,6 +57,7 @@ fn samples() {
             service_inbox: None,
             onion: None,
             link: None,
+            mailbox_key: None,
         },
     )
     .unwrap();

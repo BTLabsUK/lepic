@@ -952,6 +952,10 @@ pub struct ContactView {
     /// The contact removed this pairing on its side and said so: nothing sent through it
     /// arrives any more. Offer to remove it here too.
     pub removed_by_peer: bool,
+    /// The contact's payments address, `key@relay`, only when an address proof of this
+    /// pairing verified over a card naming it. A later proof that fails keeps it; `None` for a
+    /// contact that proved none.
+    pub payments_address: Option<String>,
     pub created_at_ms: i64,
 }
 

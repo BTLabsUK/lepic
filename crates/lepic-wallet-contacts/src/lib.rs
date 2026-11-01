@@ -11,6 +11,7 @@
 //! [`ContactBook`] with [`WalletContacts::contact_book`], and [`install`] gives the engine the reply key
 //! of file and paste slates. The engine keeps no contact code of its own.
 
+mod address_proof;
 mod collect;
 mod invoices;
 mod key_schedule;
@@ -221,6 +222,10 @@ pub struct ContactView {
     /// The contact removed this pairing on its side and said so: nothing sent through it
     /// arrives any more.
     pub removed_by_peer: bool,
+    /// The contact's payments address, `key@relay`, only when an address proof of this
+    /// pairing verified; a later proof that fails keeps it. `None` for a contact that proved
+    /// none.
+    pub payments_address: Option<String>,
     pub created_at: Timestamp,
 }
 
@@ -254,6 +259,12 @@ pub enum ContactError {
     /// The card or reply belongs to a contact this wallet holds already, or to this wallet.
     #[error("this contact is already paired")]
     AlreadyPaired,
+    /// The pairing proves another payments address than the one given.
+    #[error("the pairing proves another address")]
+    OtherAddress,
+    /// An address was given, and the pairing proves none.
+    #[error("the pairing proves no address")]
+    AddressProofMissing,
     #[error("no such contact")]
     UnknownContact,
     #[error("no such pairing in progress")]

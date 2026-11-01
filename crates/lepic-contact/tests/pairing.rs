@@ -40,6 +40,7 @@ fn invite_for(alice: &Side, card: &ContactCard, nonce: &Nonce) -> Invite {
             service_inbox: None,
             onion: None,
             link: None,
+            mailbox_key: None,
         },
     )
     .unwrap()
@@ -985,6 +986,7 @@ fn private_invite(alice: &Side, card: &ContactCard, nonce: &Nonce, link: [u8; 32
         NET,
         InviteFields {
             link: Some(PrivateSecret::from_bytes(link)),
+            mailbox_key: None,
             ..invite_for(alice, card, nonce).fields().clone()
         },
     )

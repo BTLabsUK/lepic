@@ -214,6 +214,11 @@ pub enum WalletErrorKind {
     /// transaction was cancelled and stays watched, so a refresh still confirms it if it is
     /// mined after all, and a refresh ran.
     PeerInputsSpent,
+    /// The pairing proves another payments address than the one given. Nothing changed.
+    OtherAddress,
+    /// A payments address was given, and the pairing proves none. Nothing changed; try again
+    /// after the contact's card with a proof arrives.
+    AddressProofMissing,
 }
 
 impl WalletErrorKind {
@@ -293,6 +298,8 @@ impl WalletErrorKind {
             Self::Offline => 78,
             Self::InputsSpentByOwnTransaction => 79,
             Self::PeerInputsSpent => 80,
+            Self::OtherAddress => 81,
+            Self::AddressProofMissing => 82,
         }
     }
 }
@@ -617,6 +624,8 @@ impl From<ContactError> for WalletError {
                 E::Words(_) => K::InvalidPairingWords,
                 E::DoesNotPayInvoices => K::ContactRefusesInvoices,
                 E::WrongClass => K::WrongPairingClass,
+                E::OtherAddress => K::OtherAddress,
+                E::AddressProofMissing => K::AddressProofMissing,
                 _ => K::Other,
             },
         };
@@ -744,6 +753,8 @@ mod tests {
             (K::Offline, 78),
             (K::InputsSpentByOwnTransaction, 79),
             (K::PeerInputsSpent, 80),
+            (K::OtherAddress, 81),
+            (K::AddressProofMissing, 82),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1069,6 +1080,8 @@ mod tests {
             (E::KeyCheckRefused, K::KeyCheckRefused),
             (E::WordsNotFound, K::PairingWordsNotFound),
             (E::DoesNotPayInvoices, K::ContactRefusesInvoices),
+            (E::OtherAddress, K::OtherAddress),
+            (E::AddressProofMissing, K::AddressProofMissing),
             (E::NetworkMismatch, K::InvalidArgument),
             (E::TooLarge { max: 1 }, K::InvalidArgument),
             (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),

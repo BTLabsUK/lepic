@@ -803,6 +803,7 @@ fn refreshed_card(
                     kind: own.fields().kind,
                     name: own.fields().name.as_str(),
                     seq: check_seq.saturating_add(1),
+                    payments_address: own.fields().payments_address.clone(),
                 },
             )?
         }

@@ -132,6 +132,28 @@ impl ReplyBody {
 
 const STATUS_ACCEPTED: u8 = 0x01;
 
+/// What a reply, confirm or contact update carries beside its body, as signed (or, for a
+/// reply, sealed) envelope extensions: the sender's address proof and the features it claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PairingExtras {
+    pub address_proof: Option<[u8; 32]>,
+    pub features: Option<u32>,
+}
+
+impl PairingExtras {
+    pub(crate) fn of(content: &Content) -> Self {
+        Self {
+            address_proof: content.address_proof,
+            features: content.features,
+        }
+    }
+
+    pub(crate) fn apply(&self, content: &mut Content) {
+        content.address_proof = self.address_proof;
+        content.features = self.features;
+    }
+}
+
 /// Why the inviter did not accept a reply (RFC 0002 7.3). A refusal is advisory: it carries no
 /// key or nonce of the inviter, and nothing is stored or trusted because of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,11 +244,22 @@ pub fn seal_reply<R: CryptoRng>(
     body: &ReplyBody,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
+    seal_reply_with(invite, body, &PairingExtras::default(), rng)
+}
+
+/// [`seal_reply`] with `extras` beside the body.
+pub fn seal_reply_with<R: CryptoRng>(
+    invite: &Invite,
+    body: &ReplyBody,
+    extras: &PairingExtras,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
     let network = invite.network();
     if body.card.network() != network {
         return Err(EncodeError::WrongNetwork);
     }
     let mut content = Content::new(MessageType::PairingReply, body.encode().to_vec());
+    extras.apply(&mut content);
     let sealed = seal(
         network,
         &invite.fields().enc_key,
@@ -244,7 +277,16 @@ pub fn open_reply(
     envelope: &SealedEnvelope<'_>,
     key: &EncSecretKey,
 ) -> Result<ReplyBody, DecodeError> {
+    open_reply_with(envelope, key).map(|(body, _)| body)
+}
+
+/// [`open_reply`], with what the reply carries beside its body.
+pub fn open_reply_with(
+    envelope: &SealedEnvelope<'_>,
+    key: &EncSecretKey,
+) -> Result<(ReplyBody, PairingExtras), DecodeError> {
     let opened = envelope.open(key)?;
+    let extras = PairingExtras::of(&opened.content);
     let signed = opened.sender.is_some();
     let body = Zeroizing::new(expect_type(opened, MessageType::PairingReply)?);
     if signed {
@@ -253,7 +295,7 @@ pub fn open_reply(
         }
         .into());
     }
-    ReplyBody::decode(&body, envelope.network())
+    Ok((ReplyBody::decode(&body, envelope.network())?, extras))
 }
 
 /// Seals the inviter's accepted confirm to the invitee's card, signed with the inviter's sig key
@@ -264,7 +306,18 @@ pub fn seal_confirm<R: CryptoRng>(
     signer: &SigningKey,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
-    seal_confirm_with(invitee, body, signer, None, rng)
+    seal_confirm_with(invitee, body, signer, None, &PairingExtras::default(), rng)
+}
+
+/// [`seal_confirm`] with `extras` beside the body, signed with it.
+pub fn seal_confirm_with_extras<R: CryptoRng>(
+    invitee: &ContactCard,
+    body: &ConfirmBody,
+    signer: &SigningKey,
+    extras: &PairingExtras,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    seal_confirm_with(invitee, body, signer, None, extras, rng)
 }
 
 /// [`seal_confirm`] for a private pairing, sealed under its channel key.
@@ -275,7 +328,14 @@ pub fn seal_private_confirm<R: CryptoRng>(
     channel: &ChannelKey,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
-    seal_confirm_with(invitee, body, signer, Some(channel), rng)
+    seal_confirm_with(
+        invitee,
+        body,
+        signer,
+        Some(channel),
+        &PairingExtras::default(),
+        rng,
+    )
 }
 
 fn seal_confirm_with<R: CryptoRng>(
@@ -283,6 +343,7 @@ fn seal_confirm_with<R: CryptoRng>(
     body: &ConfirmBody,
     signer: &SigningKey,
     channel: Option<&ChannelKey>,
+    extras: &PairingExtras,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
     let network = invitee.network();
@@ -292,7 +353,8 @@ fn seal_confirm_with<R: CryptoRng>(
     if signer.verifying_key() != *body.card.sig_key() {
         return Err(EncodeError::SigningKeyMismatch);
     }
-    let content = Content::new(MessageType::PairingConfirm, body.encode());
+    let mut content = Content::new(MessageType::PairingConfirm, body.encode());
+    extras.apply(&mut content);
     match channel {
         None => seal(
             network,
@@ -359,6 +421,16 @@ pub fn open_confirm(
     key: &EncSecretKey,
 ) -> Result<Confirm, DecodeError> {
     check_confirm(envelope, envelope.open(key)?)
+}
+
+/// [`open_confirm`], with what the confirm carries beside its body.
+pub fn open_confirm_with(
+    envelope: &SealedEnvelope<'_>,
+    key: &EncSecretKey,
+) -> Result<(Confirm, PairingExtras), DecodeError> {
+    let opened = envelope.open(key)?;
+    let extras = PairingExtras::of(&opened.content);
+    Ok((check_confirm(envelope, opened)?, extras))
 }
 
 /// [`open_confirm`] for a private pairing, with its channel key.

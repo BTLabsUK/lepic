@@ -46,7 +46,24 @@ pub(crate) fn view(
         lapsed: super::sealed::lapsed(record, now),
         last_sealed_in: record.last_sealed_in,
         removed_by_peer,
+        payments_address: record.facts.payments_address.clone(),
         created_at: record.created_at,
+    }
+}
+
+/// Whether a pairing may be attached to an address-book entry whose Epicbox address has the
+/// key `app_key`: the pairing must prove that key. Addresses are compared by key only.
+fn check_attach_address(
+    record: &ContactRecord,
+    app_key: Option<&[u8; 33]>,
+) -> Result<(), ContactError> {
+    let Some(app_key) = app_key else {
+        return Ok(());
+    };
+    match &record.facts.payments_key {
+        None => Err(ContactError::AddressProofMissing),
+        Some(proven) if proven != app_key => Err(ContactError::OtherAddress),
+        Some(_) => Ok(()),
     }
 }
 
@@ -488,13 +505,29 @@ where
 
     /// Attaches a pairing to the app's address-book contact `app_contact`, an id the host
     /// chooses of at most [`MAX_APP_CONTACT_LEN`] bytes with no control characters, or
-    /// detaches it with `None`. Fails with [`ContactError::Name`] for another id and
-    /// [`ContactError::UnknownContact`].
+    /// detaches it with `None`. `app_address` is the entry's Epicbox address, if it has one:
+    /// the pairing must then prove an address with the same key. Fails with
+    /// [`ContactError::Name`] for another id, [`ContactError::RelayAddress`] for an address
+    /// that is not one of the wallet's network, [`ContactError::OtherAddress`] when the pairing
+    /// proves another key, [`ContactError::AddressProofMissing`] when it proves none (nothing
+    /// changes in either case), and [`ContactError::UnknownContact`].
     pub async fn contact_attach(
         &self,
         contact_id: ContactId,
         app_contact: Option<String>,
+        app_address: Option<String>,
     ) -> Result<(), ContactError> {
+        let app_key = app_address
+            .as_deref()
+            .map(|address| {
+                lepic_epicbox::EpicboxAddress::parse(
+                    address,
+                    lepic_wallet::inbox::relay_network(self.wallet.config().network),
+                )
+                .map(|address| address.public_key().to_bytes())
+                .map_err(|_| ContactError::RelayAddress)
+            })
+            .transpose()?;
         if let Some(id) = &app_contact {
             if id.is_empty() || id.len() > MAX_APP_CONTACT_LEN {
                 return Err(ContactError::Name(lepic_contact::TextError::Length {
@@ -509,6 +542,9 @@ where
             }
         }
         self.update_contact(contact_id, move |record| {
+            if app_contact.is_some() {
+                check_attach_address(record, app_key.as_ref())?;
+            }
             record.app_contact = app_contact;
             Ok(())
         })

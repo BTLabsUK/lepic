@@ -2021,7 +2021,7 @@ fn every_contact_future_is_send() {
     );
     assert_send(wallet.contact_book().contact_set_seal(id, true));
     assert_send(wallet.contact_book().contact_set_allow_invoices(id, true));
-    assert_send(wallet.contact_book().contact_attach(id, None));
+    assert_send(wallet.contact_book().contact_attach(id, None, None));
     assert_send(wallet.contact_book().contacts_export());
     assert_send(wallet.contact_book().contacts_import(String::new()));
     assert_send(wallet.contact_book().contact_issue_invoice(
@@ -2476,27 +2476,27 @@ fn labels_and_address_book_ids_are_checked() {
         )
         .unwrap();
     assert!(matches!(
-        world.block_on(
-            wallet
-                .contact_book()
-                .contact_attach(anna_side, Some("a\u{7}b".to_owned()))
-        ),
+        world.block_on(wallet.contact_book().contact_attach(
+            anna_side,
+            Some("a\u{7}b".to_owned()),
+            None
+        )),
         Err(ContactError::Name(_))
     ));
     assert!(matches!(
-        world.block_on(
-            wallet
-                .contact_book()
-                .contact_attach(anna_side, Some("x".repeat(257)))
-        ),
+        world.block_on(wallet.contact_book().contact_attach(
+            anna_side,
+            Some("x".repeat(257)),
+            None
+        )),
         Err(ContactError::Name(_))
     ));
     world
-        .block_on(
-            wallet
-                .contact_book()
-                .contact_attach(anna_side, Some("contact-7".to_owned())),
-        )
+        .block_on(wallet.contact_book().contact_attach(
+            anna_side,
+            Some("contact-7".to_owned()),
+            None,
+        ))
         .unwrap();
 }
 
@@ -2607,13 +2607,11 @@ fn a_confirm_that_never_leaves_removes_only_its_own_pairing() {
     let world = World::new();
     let (old_side, _) = world.pair_by_link();
     world
-        .block_on(
-            world
-                .issuer
-                .wallet
-                .contact_book()
-                .contact_attach(old_side, Some("book-1".to_owned())),
-        )
+        .block_on(world.issuer.wallet.contact_book().contact_attach(
+            old_side,
+            Some("book-1".to_owned()),
+            None,
+        ))
         .unwrap();
     let old = world.issuer.read(|repos| repos.contact(old_side)).unwrap();
     let twin = world.payer_twin();
@@ -2638,13 +2636,11 @@ fn a_confirm_that_never_leaves_removes_only_its_own_pairing() {
     world.collect(&world.issuer);
     let fresh = world.only_new(&world.issuer, old_side);
     world
-        .block_on(
-            world
-                .issuer
-                .wallet
-                .contact_book()
-                .contact_attach(fresh, Some("book-1".to_owned())),
-        )
+        .block_on(world.issuer.wallet.contact_book().contact_attach(
+            fresh,
+            Some("book-1".to_owned()),
+            None,
+        ))
         .unwrap();
 
     world.issuer.clock.advance(2 * HOUR + 11 * MINUTE);
@@ -3062,4 +3058,218 @@ fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
         )),
         Err(ContactError::TooLarge { .. })
     ));
+}
+
+/// The key of an Epicbox address text.
+fn key_of(address: &str) -> [u8; 33] {
+    lepic_epicbox::EpicboxAddress::parse(address, RelayNetwork::Floonet)
+        .unwrap()
+        .public_key()
+        .to_bytes()
+}
+
+fn payments_address(world: &World, party: &Party, contact: ContactId) -> Option<String> {
+    world_view(world, party, contact).payments_address
+}
+
+fn world_view(
+    world: &World,
+    party: &Party,
+    contact: ContactId,
+) -> lepic_wallet_contacts::ContactView {
+    world
+        .block_on(party.wallet.contact_book().contact(contact))
+        .unwrap()
+}
+
+#[test]
+fn a_pairing_by_link_proves_both_payments_addresses() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+
+    let on_issuer = payments_address(&world, &world.issuer, anna_side).unwrap();
+    let on_payer = payments_address(&world, &world.payer, ben_side).unwrap();
+    assert_eq!(
+        key_of(&on_issuer),
+        world.payer.address.public_key().to_bytes()
+    );
+    assert_eq!(
+        key_of(&on_payer),
+        world.issuer.address.public_key().to_bytes()
+    );
+    // Both cards name the address, and the record keeps its key for lookups.
+    let record = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    assert_eq!(
+        record.facts.payments_key,
+        Some(world.payer.address.public_key().to_bytes())
+    );
+    let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
+    assert_eq!(
+        key_of(own.fields().payments_address.as_ref().unwrap().as_str()),
+        world.issuer.address.public_key().to_bytes()
+    );
+    // The invite carried the inviter's mailbox key, the one its card names.
+    let record = world.payer.read(|repos| repos.contact(ben_side)).unwrap();
+    let peer = ContactCard::decode(&record.peer.unwrap().bytes, ContactNetwork::Floonet).unwrap();
+    let link = world.invite(&world.issuer, "Anna");
+    let invite = Invite::from_link(&link, ContactNetwork::Floonet).unwrap();
+    assert!(invite.fields().mailbox_key.is_some());
+    assert_ne!(
+        invite.fields().mailbox_key,
+        Some(key_of(peer.fields().mailbox.as_str()))
+    );
+}
+
+#[test]
+fn attaching_to_an_entry_needs_the_proven_address() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    let book = world.issuer.wallet.contact_book();
+    let attach = |address: Option<String>| {
+        world.block_on(book.contact_attach(anna_side, Some("book-1".to_owned()), address))
+    };
+    assert!(matches!(
+        attach(Some(world.issuer.address.to_string())),
+        Err(ContactError::OtherAddress)
+    ));
+    assert_eq!(
+        world_view(&world, &world.issuer, anna_side).app_contact,
+        None
+    );
+    // The same key on another relay is the same address.
+    let same_key = format!("{}@elsewhere.test", world.payer.address.key_text());
+    attach(Some(same_key)).unwrap();
+    assert_eq!(
+        world_view(&world, &world.issuer, anna_side)
+            .app_contact
+            .as_deref(),
+        Some("book-1")
+    );
+    attach(None).unwrap();
+}
+
+#[test]
+fn a_pairing_without_a_proof_cannot_be_attached_to_an_entry_with_an_address() {
+    let world = World::new();
+    let (anna_side, _) = world.pair_by_link();
+    world.issuer.write(|repos| {
+        let mut record = repos.contact(anna_side)?.unwrap();
+        record.facts.payments_address = None;
+        record.facts.payments_key = None;
+        repos.put_contact(&record)
+    });
+    let result = world.block_on(world.issuer.wallet.contact_book().contact_attach(
+        anna_side,
+        Some("book-1".to_owned()),
+        Some(world.payer.address.to_string()),
+    ));
+    assert!(matches!(result, Err(ContactError::AddressProofMissing)));
+    assert_eq!(
+        world_view(&world, &world.issuer, anna_side).app_contact,
+        None
+    );
+}
+
+/// Posts the payer's card for its pairing with the issuer, seq `seq`, naming `address` in tag
+/// 09, as a contact update carrying `proof`.
+fn post_address_update(
+    world: &World,
+    ben_side: ContactId,
+    seq: u32,
+    address: &str,
+    proof: Option<[u8; 32]>,
+) {
+    let record = world.payer.read(|repos| repos.contact(ben_side)).unwrap();
+    let keys = contact_keys(&world.payer, ben_side);
+    let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
+    let signer = lepic_contact::SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+    let mut fields = own.fields().clone();
+    fields.seq = seq;
+    fields.payments_address = Some(lepic_contact::MailboxAddress::new(address).unwrap());
+    let card = ContactCard::sign(ContactNetwork::Floonet, fields, &signer).unwrap();
+    let peer = ContactCard::decode(&record.peer.unwrap().bytes, ContactNetwork::Floonet).unwrap();
+    let envelope = lepic_contact::seal_contact_update_with(
+        &peer,
+        &card,
+        &signer,
+        &lepic_contact::PairingExtras {
+            address_proof: proof,
+            features: Some(5),
+        },
+        &mut rand::rngs::StdRng::seed_from_u64(u64::from(seq)),
+    )
+    .unwrap();
+    post_sealed(world, &world.payer, ben_side, &envelope);
+}
+
+#[test]
+fn an_update_whose_proof_fails_keeps_the_proven_address() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    let proven = payments_address(&world, &world.issuer, anna_side).unwrap();
+    let stranger = format!("{}@relay.test:80", world.issuer.address.key_text());
+
+    post_address_update(&world, ben_side, 2, &stranger, Some([7; 32]));
+    world.collect(&world.issuer);
+    post_address_update(&world, ben_side, 3, &stranger, None);
+    world.collect(&world.issuer);
+
+    let record = world.issuer.read(|repos| repos.contact(anna_side)).unwrap();
+    // The cards were taken, the address was not.
+    assert_eq!(record.peer.unwrap().seq, 3);
+    assert_eq!(
+        payments_address(&world, &world.issuer, anna_side),
+        Some(proven)
+    );
+    assert_eq!(record.facts.peer_features, 5);
+}
+
+#[test]
+fn contacts_paired_before_addresses_get_one_card_update_with_the_proof() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    // As a build before address proofs left them: no address in our card, none proven.
+    let keys = contact_keys(&world.issuer, anna_side);
+    world.issuer.write(|repos| {
+        let mut record = repos.contact(anna_side)?.unwrap();
+        let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
+        let mut fields = own.fields().clone();
+        fields.payments_address = None;
+        let signer = lepic_contact::SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+        record.own_card = ContactCard::sign(ContactNetwork::Floonet, fields, &signer)
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        repos.put_contact(&record)?;
+        repos.delete_setting("contact.address-cards")
+    });
+    world.payer.write(|repos| {
+        let mut record = repos.contact(ben_side)?.unwrap();
+        record.facts.payments_address = None;
+        record.facts.payments_key = None;
+        repos.put_contact(&record)
+    });
+
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    let proven = payments_address(&world, &world.payer, ben_side).unwrap();
+    assert_eq!(
+        key_of(&proven),
+        world.issuer.address.public_key().to_bytes()
+    );
+
+    // Once per address: the next collect sends nothing more.
+    let seq = || {
+        world
+            .payer
+            .read(|repos| repos.contact(ben_side))
+            .unwrap()
+            .peer
+            .unwrap()
+            .seq
+    };
+    let after = seq();
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(seq(), after);
 }

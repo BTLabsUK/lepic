@@ -653,6 +653,7 @@ fn wire__crate__api__wallet__EpicWallet_contact_attach_impl(
             >>::sse_decode(&mut deserializer);
             let api_contact_id = <String>::sse_decode(&mut deserializer);
             let api_app_contact = <Option<String>>::sse_decode(&mut deserializer);
+            let api_app_address = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -678,6 +679,7 @@ fn wire__crate__api__wallet__EpicWallet_contact_attach_impl(
                             &*api_that_guard,
                             api_contact_id,
                             api_app_contact,
+                            api_app_address,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -10397,6 +10399,7 @@ impl SseDecode for crate::api::types::ContactView {
         let mut var_lapsed = <bool>::sse_decode(deserializer);
         let mut var_lastSealedInMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_removedByPeer = <bool>::sse_decode(deserializer);
+        let mut var_paymentsAddress = <Option<String>>::sse_decode(deserializer);
         let mut var_createdAtMs = <i64>::sse_decode(deserializer);
         return crate::api::types::ContactView {
             contact_id: var_contactId,
@@ -10414,6 +10417,7 @@ impl SseDecode for crate::api::types::ContactView {
             lapsed: var_lapsed,
             last_sealed_in_ms: var_lastSealedInMs,
             removed_by_peer: var_removedByPeer,
+            payments_address: var_paymentsAddress,
             created_at_ms: var_createdAtMs,
         };
     }
@@ -12563,6 +12567,8 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             70 => crate::api::error::WalletErrorKind::Offline,
             71 => crate::api::error::WalletErrorKind::InputsSpentByOwnTransaction,
             72 => crate::api::error::WalletErrorKind::PeerInputsSpent,
+            73 => crate::api::error::WalletErrorKind::OtherAddress,
+            74 => crate::api::error::WalletErrorKind::AddressProofMissing,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -13764,6 +13770,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ContactView {
             self.lapsed.into_into_dart().into_dart(),
             self.last_sealed_in_ms.into_into_dart().into_dart(),
             self.removed_by_peer.into_into_dart().into_dart(),
+            self.payments_address.into_into_dart().into_dart(),
             self.created_at_ms.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -15922,6 +15929,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::Offline => 70.into_dart(),
             Self::InputsSpentByOwnTransaction => 71.into_dart(),
             Self::PeerInputsSpent => 72.into_dart(),
+            Self::OtherAddress => 73.into_dart(),
+            Self::AddressProofMissing => 74.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -16444,6 +16453,7 @@ impl SseEncode for crate::api::types::ContactView {
         <bool>::sse_encode(self.lapsed, serializer);
         <Option<i64>>::sse_encode(self.last_sealed_in_ms, serializer);
         <bool>::sse_encode(self.removed_by_peer, serializer);
+        <Option<String>>::sse_encode(self.payments_address, serializer);
         <i64>::sse_encode(self.created_at_ms, serializer);
     }
 }
@@ -18247,6 +18257,8 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::Offline => 70,
                 crate::api::error::WalletErrorKind::InputsSpentByOwnTransaction => 71,
                 crate::api::error::WalletErrorKind::PeerInputsSpent => 72,
+                crate::api::error::WalletErrorKind::OtherAddress => 73,
+                crate::api::error::WalletErrorKind::AddressProofMissing => 74,
                 _ => {
                     unimplemented!("");
                 }

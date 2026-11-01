@@ -32,19 +32,20 @@ pub use error::{
     DecodeError, EncodeError, KeyError, Malformed, SasTableError, TextError, WordsError,
 };
 pub use hint::{Hint, HintRule};
-pub use invite::{INVITE_FORMAT, Invite, InviteFields, MAX_INVITE_LEN};
+pub use invite::{INVITE_FORMAT, Invite, InviteFields, MAILBOX_KEY_LEN, MAX_INVITE_LEN};
 pub use keycheck::{
     KeyCheck, KeyCheckAnswer, KeyCheckProof, accept_found, accept_restored, key_check_tag,
-    open_contact_update, open_key_check, open_key_check_answer, seal_contact_update, seal_found,
-    seal_key_check, seal_not_found, seal_restored,
+    open_contact_update, open_key_check, open_key_check_answer, seal_contact_update,
+    seal_contact_update_with, seal_found, seal_key_check, seal_not_found, seal_restored,
 };
 pub use keys::{EncPublicKey, EncSecretKey, HintKey};
 pub use network::Network;
 pub use pairing::{
     Commitment, Confirm, ConfirmBody, ConfirmCode, InviteId, MAX_PAIRING_ENVELOPE_LEN, Nonce,
-    PairingCode, PairingLink, Refusal, ReplyBody, open_confirm, open_private_confirm, open_reply,
-    pairing_envelope_from_link, pairing_envelope_link, seal_confirm, seal_private_confirm,
-    seal_private_refusal, seal_refusal, seal_reply,
+    PairingCode, PairingExtras, PairingLink, Refusal, ReplyBody, open_confirm, open_confirm_with,
+    open_private_confirm, open_reply, open_reply_with, pairing_envelope_from_link,
+    pairing_envelope_link, seal_confirm, seal_confirm_with_extras, seal_private_confirm,
+    seal_private_refusal, seal_refusal, seal_reply, seal_reply_with,
 };
 pub use private::{
     ChannelKey, PairingClass, PrivateSecret, SUITE_PSK, open_private_reply, private_sas,

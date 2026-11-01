@@ -17,6 +17,7 @@ use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::hash::sha256;
 use crate::keys::{EncSecretKey, HintKey};
 use crate::network::Network;
+use crate::pairing::PairingExtras;
 
 const TAG_DOMAIN: &[u8] = b"epic-pair/1 keycheck";
 const FOUND_DOMAIN: &[u8] = b"epic-pair/1 keycheck found";
@@ -367,17 +368,31 @@ pub fn seal_contact_update<R: CryptoRng>(
     signer: &SigningKey,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
+    seal_contact_update_with(recipient, card, signer, &PairingExtras::default(), rng)
+}
+
+/// [`seal_contact_update`] with `extras` beside the card, signed with it.
+pub fn seal_contact_update_with<R: CryptoRng>(
+    recipient: &ContactCard,
+    card: &ContactCard,
+    signer: &SigningKey,
+    extras: &PairingExtras,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
     if card.network() != recipient.network() {
         return Err(EncodeError::WrongNetwork);
     }
     if signer.verifying_key() != *card.sig_key() {
         return Err(EncodeError::SigningKeyMismatch);
     }
-    seal_signed(
-        recipient,
-        MessageType::ContactUpdate,
-        card.as_bytes().to_vec(),
-        signer,
+    let mut content = Content::new(MessageType::ContactUpdate, card.as_bytes().to_vec());
+    extras.apply(&mut content);
+    seal(
+        recipient.network(),
+        recipient.enc_key(),
+        recipient.hint_rule(),
+        &content,
+        Some(signer),
         rng,
     )
 }

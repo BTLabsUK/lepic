@@ -722,7 +722,7 @@ async fn a_contacts_settings_and_address_book_entry_are_kept() {
         ),
         WalletErrorKind::ContactNotVerified
     );
-    anna.contact_attach(anna_side.clone(), Some("book-7".to_owned()))
+    anna.contact_attach(anna_side.clone(), Some("book-7".to_owned()), None)
         .await
         .unwrap();
     let view = anna.contact(anna_side.clone()).await.unwrap();
@@ -755,7 +755,9 @@ async fn a_contacts_settings_and_address_book_entry_are_kept() {
             .unwrap()
             .allow_invoices
     );
-    anna.contact_attach(anna_side.clone(), None).await.unwrap();
+    anna.contact_attach(anna_side.clone(), None, None)
+        .await
+        .unwrap();
     assert!(
         anna.pairings_for_app_contact("book-7".to_owned())
             .await
