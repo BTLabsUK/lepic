@@ -48,7 +48,13 @@ const PEER: u8 = 7;
 const STRANGER: u8 = 9;
 
 /// The marker of a wallet whose host claims nothing: LEPIC's own feature bits.
-const MARKER: &str = ",\"lepic\":{\"version\":1,\"f\":5}";
+/// The marker this build writes on Epicbox slates, with the features it claims.
+fn marker() -> String {
+    format!(
+        ",\"lepic\":{{\"version\":1,\"f\":{}}}",
+        lepic_epicbox::marker::features::LEPIC_FEATURES
+    )
+}
 
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
@@ -79,8 +85,8 @@ fn is_cancelled_notice(text: &str, slate_id: SlateId) -> bool {
 
 /// `json` as a stock wallet writes it back: without the marker.
 fn unmarked(json: &str) -> String {
-    assert!(json.contains(MARKER), "no marker in {json}");
-    json.replace(MARKER, "")
+    assert!(json.contains(&marker()), "no marker in {json}");
+    json.replace(&marker(), "")
 }
 
 fn wire(json: &str) -> WireSlate {

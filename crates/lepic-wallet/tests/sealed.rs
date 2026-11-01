@@ -92,9 +92,9 @@ impl World {
 fn a_payment_goes_sealed_and_signed_both_ways_and_is_attributed() {
     let world = World::new();
     let (anna_side, ben_side) = world.pair_by_link();
-    // Paired, but nothing sealed from the contact opened yet.
+    // Paired; nothing sealed from the inviter opened on the invitee yet.
     let view = world
-        .block_on(world.issuer.wallet.contact_book().contact(anna_side))
+        .block_on(world.payer.wallet.contact_book().contact(ben_side))
         .unwrap();
     assert_eq!(view.last_sealed_in, None);
     let tx_id = world.payer_sends();

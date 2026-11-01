@@ -214,6 +214,28 @@ pub(crate) fn proven_key(
         .map(|key| lepic_epicbox::EpicboxAddress::key_text_of(&key, network))
 }
 
+/// Learns from a pairing that proved the contact's payments key: the address proof works with
+/// that key, and the features the pairing claimed are the key's claim.
+pub(crate) fn learn_from_pairing(
+    repos: &mut dyn Repositories,
+    record: &ContactRecord,
+    network: lepic_primitives::params::Network,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let Some(key) = proven_key(record, network) else {
+        return Ok(());
+    };
+    if record.facts.peer_features != 0 {
+        lepic_wallet::peer_compat::record_claim(repos, &key, now, record.facts.peer_features)?;
+    }
+    lepic_wallet::peer_compat::record_works(
+        repos,
+        &key,
+        lepic_epicbox::marker::features::ADDRESS_PROOF,
+        true,
+    )
+}
+
 /// Seals `tell` for the contact of `record` and queues it in the store's status outbox, due at
 /// once. Nothing is queued for a pairing with no peer card or mailbox.
 pub(crate) fn queue_status(

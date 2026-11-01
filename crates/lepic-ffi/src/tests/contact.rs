@@ -141,6 +141,10 @@ async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
         .await
         .unwrap();
     assert_eq!(collected.paired, 1);
+    // Anna hears that Ben finished.
+    anna.contacts_collect(CollectTrigger::Pull, Online, None)
+        .await
+        .unwrap();
     (invite.contact_id, answer.contact_id)
 }
 

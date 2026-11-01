@@ -103,6 +103,8 @@ impl World {
         assert!(answered.posted);
         assert_eq!(self.collect(&self.issuer).paired, 1);
         assert_eq!(self.collect(&self.payer).paired, 1);
+        // The inviter hears that the invitee finished.
+        self.collect(&self.issuer);
         let issuer_contact = self.only_contact(&self.issuer);
         assert_eq!(answered.contact_id, self.only_contact(&self.payer));
         (issuer_contact, answered.contact_id)
@@ -123,6 +125,8 @@ impl World {
             .unwrap();
         assert_eq!(self.collect(inviter).paired, 1);
         assert_eq!(self.collect(invitee).paired, 1);
+        // The inviter hears that the invitee finished.
+        self.collect(inviter);
         let ours = self
             .contact_ids(inviter)
             .into_iter()

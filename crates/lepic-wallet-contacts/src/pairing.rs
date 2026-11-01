@@ -317,6 +317,7 @@ struct OpenedReply {
 
 /// What the store needs to decide on an opened reply.
 struct ReplyTaking {
+    network: lepic_primitives::params::Network,
     pairing_id: PairingId,
     contact_id: ContactId,
     peer: ContactCard,
@@ -1036,6 +1037,7 @@ where
             )
         };
         let taking = ReplyTaking {
+            network,
             pairing_id,
             contact_id,
             peer: reply.card.clone(),
@@ -1215,6 +1217,8 @@ where
 
     /// The invitee's side of a confirm (RFC 0002 7.3): the revealed nonce and card must match
     /// the invite's commitment and enc key, or the pairing ends with nothing stored.
+    // The checks of a confirm run in their order; split, the order would be harder to see.
+    #[allow(clippy::too_many_lines)]
     pub(crate) async fn take_confirm(
         &self,
         pairing_id: PairingId,
@@ -1282,6 +1286,7 @@ where
                     let mut record = record;
                     record.facts.peer_features = peer_features;
                     set_proven(&mut record, proven);
+                    super::status::learn_from_pairing(repos, &record, network, now)?;
                     record.peer = Some(peer_card(&peer));
                     record.state = ContactState::Paired;
                     record.sas = Some(*sas.as_bytes());
@@ -1732,6 +1737,7 @@ fn decide_reply(
     taking: ReplyTaking,
 ) -> Result<Decision, ContactError> {
     let ReplyTaking {
+        network,
         pairing_id,
         contact_id,
         peer,
@@ -1807,6 +1813,7 @@ fn decide_reply(
     let envelope = envelope.map_err(ContactError::Encode)?;
     record.facts.peer_features = peer_features;
     set_proven(&mut record, proven);
+    super::status::learn_from_pairing(repos, &record, network, now)?;
     record.peer = Some(peer_card(&peer));
     record.state = ContactState::Paired;
     record.sas = Some(*sas.as_bytes());

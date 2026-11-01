@@ -62,6 +62,8 @@ impl World {
             .unwrap();
         assert_eq!(self.collect(&self.issuer).paired, 1);
         assert_eq!(self.collect(&self.payer).paired, 1);
+        // The inviter hears that the invitee finished.
+        self.collect(&self.issuer);
         let shop_side = self.only_contact(&self.issuer);
         let ben_side = answered.contact_id;
         self.block_on(self.payer.wallet.contact_book().pairing_sas(
@@ -77,6 +79,8 @@ impl World {
                 .contact_set_allow_invoices(ben_side, true),
         )
         .unwrap();
+        // The issuer takes the payer's verdict.
+        self.collect(&self.issuer);
         (shop_side, ben_side)
     }
 
@@ -179,6 +183,7 @@ fn invoices_from_unverified_contacts_strangers_and_plain_text_never_park() {
         .unwrap();
     world.collect(&world.issuer);
     world.collect(&world.payer);
+    world.collect(&world.issuer);
     let shop_side = world.only_contact(&world.issuer);
 
     // Paired but not verified, and invoices not allowed.

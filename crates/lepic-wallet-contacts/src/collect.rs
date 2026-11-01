@@ -984,15 +984,36 @@ where
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
-                    store_card_news(repos, &ports.rng, &session.keychain, network, news, now)
+                    let address = |repos: &dyn Repositories| {
+                        Ok::<_, StoreError>(
+                            repos
+                                .contact(contact_id)?
+                                .and_then(|record| record.facts.payments_address),
+                        )
+                    };
+                    let before = address(repos)?;
+                    let updated =
+                        store_card_news(repos, &ports.rng, &session.keychain, network, news, now)?;
+                    let moved = updated && address(repos)? != before;
+                    if moved && let Some(record) = repos.contact(contact_id)? {
+                        super::status::learn_from_pairing(repos, &record, network, now)?;
+                    }
+                    Ok::<_, ContactError>((updated, moved))
                 })
             })
             .await?;
+        let (updated, moved) = updated;
         if updated {
             info!("contact updated");
             self.wallet.emit(Event::ContactUpdated(ContactUpdate::of(
                 contact_id,
                 ContactChange::Card,
+            )));
+        }
+        if moved {
+            self.wallet.emit(Event::ContactUpdated(ContactUpdate::of(
+                contact_id,
+                ContactChange::Address,
             )));
         }
         Ok(())
