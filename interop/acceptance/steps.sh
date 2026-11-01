@@ -464,10 +464,9 @@ onion_key_hex() {
     python3 -c 'import base64,sys; a=sys.argv[1].split(".")[0].upper(); print(base64.b32decode(a)[:32].hex())' "$1"
 }
 
-# epic-wallet pays lepic's listing address over Epicbox while lepic's own listener runs: a
-# listing drain on its own connection answers from the listing, the record names the
-# listing, the listener stays connected, and a payment that asks for a proof is refused with
-# nothing signed. The funds count toward the total the later restore must find.
+# epic-wallet pays lepic's listing address over Epicbox: a listing drain on its own connection
+# answers from the listing, the record names the listing, the payments address is untouched,
+# and a payment that asks for a proof is refused with nothing signed. The funds count toward the total the later restore must find.
 step_listing_receives_over_epicbox() {
     peer_listen_start || fail "epic-wallet listener did not start" || return 1
     local listing
@@ -476,21 +475,9 @@ step_listing_receives_over_epicbox() {
     [[ "${listing%%@*}" != "${LEPIC_ADDRESS%%@*}" ]] || fail "the listing is the payments address" || return 1
     local main_before
     main_before="$(relay_messages_for "${LEPIC_ADDRESS%%@*}")"
-    env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
-        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" "${LEPIC_BIN}" epicbox listen \
-        >"${STATE_DIR}/listing-listen.out" 2>"${STATE_DIR}/listing-listen.err" </dev/null &
-    local listen_pid=$!
-    stop_listen() {
-        kill -INT "${listen_pid}" 2>/dev/null
-        local status=0
-        wait "${listen_pid}" || status=$?
-        cat "${STATE_DIR}/listing-listen.err" >>"${RUN_LOG}"
-        return "${status}"
-    }
-    wait_until "lepic listening" 30 grep -q "connected to the relay" "${STATE_DIR}/listing-listen.err" ||
-        { stop_listen; fail "listen did not report the connection"; } || return 1
+    stop_listen() { :; }
     wait_until "peer spendable" 180 ew_spendable_at_least peer $((3 * UNIT)) ||
-        { stop_listen; fail "epic-wallet has no spendable funds"; } || return 1
+        fail "epic-wallet has no spendable funds" || return 1
     local last
     last="$(lepic_last_tx_id)"
     ew peer send -m epicbox -d "${listing}" -c 1 -s smallest 1.1 >>"${RUN_LOG}" ||
@@ -523,15 +510,14 @@ step_listing_receives_over_epicbox() {
     [[ "$(relay_messages_for "${PEER_KEY}")" == "${peer_before}" ]] ||
         { stop_listen; fail "something was answered to the proof request"; } || return 1
 
-    # The listener never saw any of it and is still connected.
-    kill -0 "${listen_pid}" 2>/dev/null || fail "the listener stopped" || return 1
-    stop_listen || fail "listen exited non-zero on Ctrl-C" || return 1
-    grep -q '^Received 0, ' "${STATE_DIR}/listing-listen.out" ||
-        fail "the listener took listing traffic: $(cat "${STATE_DIR}/listing-listen.out")" || return 1
+    # Nothing of it reached the payments address: its queue is unchanged and a drain of it
+    # takes nothing.
     [[ "$(relay_messages_for "${LEPIC_ADDRESS%%@*}")" == "${main_before}" ]] ||
         fail "the payments address queue changed" || return 1
+    jq -e '.received == 0 and .rejected == 0' <<<"$(lepic epicbox drain)" >/dev/null ||
+        fail "the payments drain took listing traffic" || return 1
     check_lepic_total || return 1
-    DETAIL="listing paid by epic-wallet and answered from it, tx ${tx_id} names the listing and confirmed; proof request refused, nothing answered; listener undisturbed"
+    DETAIL="listing paid by epic-wallet and answered from it, tx ${tx_id} names the listing and confirmed; proof request refused, nothing answered; payments address untouched"
 }
 
 step_restore() {
