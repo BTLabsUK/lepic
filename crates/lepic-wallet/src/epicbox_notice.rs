@@ -34,7 +34,8 @@ use uuid::Uuid;
 use crate::details::POSTED_REPORT_WINDOW;
 use crate::epicbox_invoice::stored_codecs;
 use crate::event::{
-    CancelledPayment, DeclinedInvoice, Event, PostedInvoice, PostedPayment, WithdrawnInvoice,
+    CancelledPayment, DeclinedInvoice, Event, PostedInvoice, PostedPayment, UnmatchedNotice,
+    WithdrawnInvoice,
 };
 use crate::finalize::kernel_excess;
 use crate::inbox::{ErrorChain, Handled, Hold, relay_network};
@@ -46,6 +47,7 @@ use crate::refresh::{final_kernel, stored_slate};
 use crate::wallet::Wallet;
 
 /// What an accepted notice changed, for the event it raises.
+#[derive(Clone, Copy)]
 enum Effect {
     Posted {
         tx_id: TxId,
@@ -66,8 +68,11 @@ enum Effect {
     },
     /// Accepted, with nothing left to tell the host.
     Noted,
-    /// Not from the counterparty of the slate, or about nothing this wallet holds.
+    /// Not from the counterparty of the slate, or with another excess than its payment implies.
     Dropped,
+    /// About a slate of which this wallet holds no transaction and no invoice: another install
+    /// on the same recovery phrase may hold it.
+    Unheld,
 }
 
 fn uuid(slate_id: SlateId) -> Uuid {
@@ -179,12 +184,25 @@ fn apply_notice(
         NoticeKind::Withdrawn => withdraw(repos, slate_id, &from, network)?,
         NoticeKind::Cancelled => report_cancelled(repos, slate_id, &from, network, now)?,
     };
+    if matches!(effect, Effect::Dropped) && !holds_slate(repos, slate_id)? {
+        return Ok(Effect::Unheld);
+    }
     if let NoticeFrom::Epicbox(key) = from
         && !matches!(effect, Effect::Dropped)
     {
         record_marked(repos, &key, now, None)?;
     }
     Ok(effect)
+}
+
+/// Whether this wallet holds a transaction or a parked invoice of `slate_id`.
+fn holds_slate(repos: &dyn Repositories, slate_id: Uuid) -> Result<bool, StoreError> {
+    for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
+        if repos.transaction_by_slate(slate_id, direction)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(repos.pending_invoice(slate_id)?.is_some())
 }
 
 /// When the sender of the received payment `tx_id` reported that it posted it, while that
@@ -425,7 +443,9 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// Takes a notice that arrived from `reply_to`, and raises the event it calls for.
+    /// Takes a notice that arrived from `reply_to`, and raises the event it calls for. One about
+    /// a slate this wallet does not hold raises [`Event::NoticeUnmatched`], for the host to
+    /// forward to its other installs.
     pub(crate) async fn take_notice(
         &self,
         notice: Notice,
@@ -435,16 +455,62 @@ where
         let Some(key) = key_of(reply_to.as_str(), network) else {
             return Ok(Handled::Dropped);
         };
+        let effect = self.apply_epicbox_notice(notice, key).await?;
+        let slate_id = notice.slate_id;
+        if matches!(effect, Effect::Unheld) {
+            debug!(slate_id = %slate_id, "notice for a slate held elsewhere passed on");
+            self.emit(Event::NoticeUnmatched(UnmatchedNotice {
+                notice,
+                sender: reply_to.as_str().to_owned(),
+            }));
+            return Ok(Handled::Dropped);
+        }
+        Ok(self.report_notice(slate_id, effect))
+    }
+
+    /// Applies a notice another install of this wallet received over Epicbox from `sender`,
+    /// the address the relay reported, and passed on from its [`Event::NoticeUnmatched`]. It is
+    /// taken under exactly the rules of one received here: only from the recorded counterparty
+    /// of its slate, `posted` only with the kernel excess the payment implies, and once. Returns
+    /// whether it was accepted; one this wallet does not hold either, or from a `sender` that
+    /// is no address of the wallet's network, is dropped and never passed on again.
+    ///
+    /// Fails with [`crate::WalletError::Locked`] and as the store does.
+    pub async fn notice_apply_forwarded(
+        &self,
+        sender: &str,
+        notice: Notice,
+    ) -> Result<bool, crate::WalletError> {
+        let network = relay_network(self.config().network);
+        let Some(key) = key_of(sender, network) else {
+            return Ok(false);
+        };
+        let effect = self.apply_epicbox_notice(notice, key).await?;
+        if matches!(effect, Effect::Unheld) {
+            debug!(slate_id = %notice.slate_id, "passed-on notice for a slate not held dropped");
+            return Ok(false);
+        }
+        Ok(self.report_notice(notice.slate_id, effect) == Handled::Notice)
+    }
+
+    async fn apply_epicbox_notice(
+        &self,
+        notice: Notice,
+        key: String,
+    ) -> Result<Effect, crate::WalletError> {
+        let network = relay_network(self.config().network);
         let from = NoticeFrom::Epicbox(key);
         let codecs = stored_codecs(self.config().network);
-        let effect = self
-            .inbox_write(move |repos, now| apply_notice(repos, &codecs, network, notice, from, now))
-            .await?;
-        let slate_id = notice.slate_id;
+        self.inbox_write(move |repos, now| apply_notice(repos, &codecs, network, notice, from, now))
+            .await
+    }
+
+    /// Raises the event an applied notice calls for, and says how its message is settled.
+    fn report_notice(&self, slate_id: SlateId, effect: Effect) -> Handled {
         let event = match effect {
-            Effect::Dropped => {
+            Effect::Dropped | Effect::Unheld => {
                 debug!(slate_id = %slate_id, "notice dropped");
-                return Ok(Handled::Dropped);
+                return Handled::Dropped;
             }
             Effect::Noted => None,
             Effect::Posted { tx_id, excess } => Some(Event::InvoicePosted(PostedInvoice {
@@ -473,7 +539,7 @@ where
         if let Some(event) = event {
             self.emit(event);
         }
-        Ok(Handled::Notice)
+        Handled::Notice
     }
 
     /// Records what a payment of an invoice this wallet issued showed about its senders. A
@@ -633,7 +699,7 @@ where
             .await?;
         let slate_id = notice.slate_id;
         let (event, cancel) = match effect {
-            Effect::Dropped | Effect::Noted => (None, None),
+            Effect::Dropped | Effect::Unheld | Effect::Noted => (None, None),
             Effect::Posted { tx_id, excess } => (
                 Some(Event::InvoicePosted(PostedInvoice {
                     tx_id,

@@ -76,6 +76,13 @@ pub enum Event {
     /// sender: anyone who knows the payments address can raise this with any id, so the host
     /// must only inform the user, never act on it or treat the sender as trusted.
     UnknownSlate(UnknownSlate),
+    /// A notice arrived over Epicbox for a slate of which this wallet holds no transaction and
+    /// no invoice. Another install on the same recovery phrase may hold it: the host passes the
+    /// notice and its sender to it, which applies it with
+    /// [`crate::Wallet::notice_apply_forwarded`] under the rules of a notice it received
+    /// itself. Nothing changed here and the message was acknowledged. Nothing verified the
+    /// notice: the host must not show or act on it.
+    NoticeUnmatched(UnmatchedNotice),
     /// A received payment that waited for its sender can never be mined: the inputs of the
     /// sender's slate were spent by another transaction, and neither its kernel nor its output
     /// is on chain. Another install of the same wallet, on the same recovery phrase, most
@@ -327,6 +334,13 @@ pub struct UnknownSlate {
     /// [`Stage::S2`], the answer to a send, or [`Stage::I2`], the payment of an invoice.
     pub stage: Stage,
     /// The address the message came from, as the relay reported it.
+    pub sender: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmatchedNotice {
+    pub notice: crate::notice::Notice,
+    /// The address the notice came from, as the relay reported it.
     pub sender: String,
 }
 
