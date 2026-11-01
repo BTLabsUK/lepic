@@ -33,7 +33,8 @@ use lepic_primitives::params::Network;
 use lepic_primitives::tx::Transaction;
 use lepic_slate::codec::WireSlate;
 use lepic_store::{
-    OutputStatus, Repositories, SlateStage, StoreError, StoreKeys, TxId, TxState, WalletStore,
+    OutputStatus, Repositories, SlateStage, StoreError, StoreKey, StoreKeys, TxId, TxState,
+    WalletStore,
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::Destination;
@@ -204,9 +205,14 @@ struct CountedStore {
 impl StoreOpener for CountedStores {
     type Store = CountedStore;
 
-    fn open(&self, data_dir: &Path, keys: StoreKeys) -> Result<CountedStore, StoreError> {
+    fn open(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        store_key: &StoreKey,
+    ) -> Result<CountedStore, StoreError> {
         Ok(CountedStore {
-            inner: self.inner.open(data_dir, keys)?,
+            inner: self.inner.open(data_dir, keys, store_key)?,
             writes: self.writes.clone(),
         })
     }
@@ -215,10 +221,11 @@ impl StoreOpener for CountedStores {
         &self,
         data_dir: &Path,
         keys: StoreKeys,
+        store_key: &StoreKey,
     ) -> Result<Option<CountedStore>, StoreError> {
         Ok(self
             .inner
-            .open_existing(data_dir, keys)?
+            .open_existing(data_dir, keys, store_key)?
             .map(|inner| CountedStore {
                 inner,
                 writes: self.writes.clone(),
