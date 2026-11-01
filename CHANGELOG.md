@@ -9,6 +9,12 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- The wallet database moves to encryption at rest at its first open (ADR 0032): a plain
+  `wallet.sqlite3` is copied into `wallet.enc.sqlite3`, checked, switched to and kept aside as
+  `wallet.sqlite3.pre-encryption`; a failed copy runs the session on the plain file and is tried
+  again. `lepic-ffi` gains `EpicWallet::store_at_rest`, `EpicWallet::retire_plain_store`,
+  `LepicRuntime::store_migration_progress` and `WalletErrorKind::WrongKey` (code 90).
+
 - Repository setup: licence, architecture and build settings.
 - `lepic-cli` reads its servers from `settings.toml` (`--settings`, `LEPIC_SETTINGS`,
   `settings_file`), in the layout of the Epic Cash wallet app's user file (`[node] servers`,

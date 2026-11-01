@@ -56,12 +56,39 @@ only a C compiler, as LEPIC's other C (secp256k1-zkp) does.
   damaged (0005's rule, the check moving with it) only when its check proves the key; without
   a check, a file the key cannot open is `WrongKey` too. "Not a database" alone never sets an
   encrypted file aside.
-- **Interface.** `SqliteStore::open(path, key, at_rest: AtRest)` and `open_existing`, with
+- **Interface.** `SqliteStore::open(path, keys, at_rest: AtRest)` and `open_existing`, with
   `AtRest::Plain` or `AtRest::Encrypted(&StoreKey)`. `StoreOpener::open` and `open_existing` take
-  the store key; `SqliteStores` keeps the plain `wallet.sqlite3` and ignores it,
-  `EncryptedSqliteStores` opens `wallet.enc.sqlite3`. The app's opener stays on `SqliteStores`
-  until the copy-then-switch migration (task N-02, after schema v13) moves it; until then nothing
-  the app does changes. The CLI opens `wallet.enc.sqlite3` when the data directory has one.
+  the store key; `open_reporting` also returns an `AtRestReport` (encrypted, migrated now, or
+  fell back to plain, and whether an older build's plain file was set aside).
+  `EncryptingSqliteStores`, the product opener the app and the CLI use, opens a data directory
+  as `lepic_store::open_wallet_dir` does (below); `EncryptedSqliteStores` opens
+  `wallet.enc.sqlite3` only, and `SqliteStores` the plain `wallet.sqlite3`, for tests and tools.
+- **Migration.** Copy, check, switch, under the data directory's claim (`.lepic.lock`), in
+  `lepic-store/src/sqlite/migrate_encrypted.rs`. With `wallet.enc.sqlite3` present it opens.
+  Else with a plain `wallet.sqlite3` of any schema up to the current one: (1) remove a
+  `wallet.enc.sqlite3.tmp` left by an earlier run and make it again, empty and owner-only; (2)
+  open the plain file read-only and run `quick_check` (damaged: set aside as before; newer
+  schema: refused, unchanged); (3) `VACUUM INTO` the keyed `.tmp`; (4) flush it, open it with the
+  key and compare `quick_check`, schema version, `user_version` and the rows of every table with
+  the plain file, then store `store.migrated_from` (schema, size and SHA-256 of the plain file
+  and its log, row counts, time) in it and flush again; (5) write the key check; (6) rename
+  `.tmp` to `wallet.enc.sqlite3` and flush the folder: the switch; (7) move the plain file and
+  its log to `wallet.sqlite3.pre-encryption`, the log first, and remove its `-shm`. The schema
+  migrations run after the switch, on the encrypted file only; the plain file's bytes never
+  change. Before (6) an interruption leaves only the `.tmp`, and the next open starts over;
+  after it, a plain file beside the encrypted one whose bytes match the record is set aside as
+  (7) would, and a set-aside log without its database marks a step (7) cut short. A failure
+  before (6), such as a full disk, removes the `.tmp` and runs the session on the plain file,
+  reported as `FellBackToPlain`; the next open tries again. Any other plain file beside the
+  encrypted one is an older build's after a rollback: `store.rollback_scan_required` is stored,
+  then the file moves to `wallet.sqlite3.after-rollback-<unix>`, and the wallet turns the flag
+  into its restore-scan requirement in the open's transaction. A check of a phrase moves
+  nothing: without an encrypted file it reads a throwaway encrypted copy, removed after. A second
+  opener that finds the claim held while a `.tmp` exists waits up to ten minutes instead of two
+  seconds. `retire_plain_store` deletes the `pre-encryption` files and `after-rollback-*` older
+  than a given age, only while the encrypted database exists; the app calls it one release
+  later. A 10,000-transaction, 10,000-output store (3 MB) moves in about 0.7 s in a debug build
+  on Linux x86_64, schema migration included.
 - **Unsafe code.** The key call is the only hand-written `unsafe` in LEPIC: one block in
   `lepic-store/src/sqlite/cipher.rs` under `#[expect(unsafe_code)]`, which the repository lint
   allows there once and nowhere else.
