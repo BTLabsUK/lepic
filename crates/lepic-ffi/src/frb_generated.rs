@@ -12594,7 +12594,6 @@ impl SseDecode for crate::api::types::TransportConnection {
         return match inner {
             0 => crate::api::types::TransportConnection::Listener,
             1 => crate::api::types::TransportConnection::PaymentsDrain,
-            2 => crate::api::types::TransportConnection::InvoicesDrain,
             _ => unreachable!("Invalid variant for TransportConnection: {}", inner),
         };
     }
@@ -15984,7 +15983,6 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransportConnection {
         match self {
             Self::Listener => 0.into_dart(),
             Self::PaymentsDrain => 1.into_dart(),
-            Self::InvoicesDrain => 2.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -18347,7 +18345,6 @@ impl SseEncode for crate::api::types::TransportConnection {
             match self {
                 crate::api::types::TransportConnection::Listener => 0,
                 crate::api::types::TransportConnection::PaymentsDrain => 1,
-                crate::api::types::TransportConnection::InvoicesDrain => 2,
                 _ => {
                     unimplemented!("");
                 }

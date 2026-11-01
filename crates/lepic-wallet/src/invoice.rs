@@ -268,7 +268,7 @@ pub enum InvoiceError {
         #[source]
         source: NodeError,
     },
-    /// No invoice with the slate id waits on the invoice address to be paid or declined.
+    /// No invoice with the slate id waits to be paid or declined.
     #[error("invoice {slate_id} is not waiting to be paid")]
     NotParked { slate_id: SlateId },
     /// The payment is stored and its inputs locked; [`crate::Wallet::resend`] delivers the
@@ -988,7 +988,7 @@ where
     /// wallet's output, stores the output, the private context, the transaction (incoming,
     /// `received`) and the I1, then delivers it as `delivery` says, encoded with that
     /// transport's rule for a new slate. Over Epicbox the I1 goes out as V3 with the LEPIC
-    /// marker, for the payer's invoice address.
+    /// marker.
     ///
     /// Asks the node for its tip. Fails, with nothing stored, with [`InvoiceError::Wallet`]
     /// carrying [`WalletError::Locked`], an unknown account or

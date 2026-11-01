@@ -105,8 +105,8 @@ const V3: &str = "
 ALTER TABLE transactions ADD COLUMN counterparty TEXT;
 ";
 
-/// Invoices received on the invoice address, the senders it accepts, what each peer is proven to
-/// support, and the index of the invoice address.
+/// Invoices received, the senders the retired invoice address accepted, what each peer is proven
+/// to support, and the index of that address.
 const V4: &str = "
 CREATE TABLE pending_invoices (
     slate_id BLOB PRIMARY KEY,

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Every limit the client puts on a relay that goes quiet. Each test ends on the
 //! `ClientError::Timeout` the limit produces, within twice the limit, on paused time. The suite
-//! runs for the payments address at index 0 and for an invoice address, a second identity with
-//! a prefilter beside it, so both reach every limit.
+//! runs for the payments address at index 0 and for a second identity with a prefilter beside
+//! it, so both reach every limit.
 
 #![allow(clippy::unwrap_used, clippy::panic, clippy::arithmetic_side_effects)]
 
@@ -56,8 +56,8 @@ fn assert_ended_within(started: Instant, limit: Duration) {
     );
 }
 
-/// Bob's invoice address, a second identity beside his payments address.
-const BOB_INVOICES: u8 = 4;
+/// Bob's second identity beside his payments address.
+const BOB_SECOND: u8 = 4;
 
 fn identity(byte: u8) -> Identity {
     Identity::new(secret(byte), address(byte)).unwrap()
@@ -81,7 +81,7 @@ fn invoice_client(relay: &MockRelay) -> EpicboxClient {
         }
     };
     transport
-        .client_for(identity(BOB_INVOICES))
+        .client_for(identity(BOB_SECOND))
         .with_prefilter(Arc::new(prefilter))
 }
 
@@ -291,15 +291,15 @@ macro_rules! timeout_suite {
 }
 
 timeout_suite!(index_0, BOB, payments_client);
-timeout_suite!(invoice, BOB_INVOICES, invoice_client);
+timeout_suite!(invoice, BOB_SECOND, invoice_client);
 
 #[tokio::test(start_paused = true)]
 async fn drain_ends_when_the_acknowledgement_of_a_dropped_message_is_not_answered() {
     let relay = MockRelay::new(Network::Mainnet);
     relay.store(
         &address(CAROL),
-        &address(BOB_INVOICES),
-        &sealed(CAROL, BOB_INVOICES, "junk"),
+        &address(BOB_SECOND),
+        &sealed(CAROL, BOB_SECOND, "junk"),
     );
     relay.set_unanswered(Unanswered::Made, true);
     let started = Instant::now();
@@ -312,5 +312,5 @@ async fn drain_ends_when_the_acknowledgement_of_a_dropped_message_is_not_answere
         (counters.seen, counters.dropped, counters.opened),
         (1, 1, 0)
     );
-    assert_eq!(relay.pending(&address(BOB_INVOICES)), 1);
+    assert_eq!(relay.pending(&address(BOB_SECOND)), 1);
 }

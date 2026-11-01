@@ -1356,8 +1356,6 @@ pub enum TransportConnection {
     Listener,
     /// A one-time drain of the payments address.
     PaymentsDrain,
-    /// Retired with the invoice address; never reported.
-    InvoicesDrain,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

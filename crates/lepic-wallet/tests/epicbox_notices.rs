@@ -733,8 +733,7 @@ fn a_notice_from_another_key_is_dropped() {
     let key = World::address_of(8).key_text();
     assert_eq!(world.issuer_capability(&key), None);
 
-    // On the payer's invoice address, an allowed sender that did not issue the invoice
-    // cannot withdraw it.
+    // A sender that did not issue the invoice cannot withdraw it.
     let parked = world.issue(None);
     let mut payer_events = world.payer.wallet.subscribe();
     world.post(

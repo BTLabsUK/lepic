@@ -469,25 +469,26 @@ Epicbox, so the user answers once and never has to come back to finalize.
 
 ### Over Epicbox
 
-A payer parks invoices only from contacts it paired with (RFC 0002); the invoice address and its
-allowlist of earlier builds are gone. The service issues an invoice to an Epicbox address:
+A LEPIC payer takes invoices over Epicbox only from a paired contact it allowed to send them
+(RFC 0002; see [Contacts](#contacts)); the invoice address and its allowlist of earlier builds
+are gone. Pair with the payer, and once it ran `contact allow-invoices <ID> on`, invoice it:
 
 ```
-$ lepic invoice issue 0.8 --to esABC...@epicbox.epiccash.com -m "order 42"
-Transaction 5 asks for 0.80000000 EPIC; the invoice went by epicbox to esABC...@epicbox.epiccash.com.
+$ lepic contact invoice 3f1c... 0.8 --reference order-42
 ```
 
-The payer looks at a parked invoice and pays or declines it. Nothing is paid until the payer runs
-`invoice pay` and types the amount again:
+The invoice reaches the payer's contact mailbox at its next `contact collect`. Nothing is paid
+until the payer pays it and types the amount again:
 
 ```
-$ lepic invoice list
-2f4a6c1e-5b3d-4e8f-9a0b-1c2d3e4f5a6b  0.80000000 EPIC from esShop...@epicbox.epiccash.com
-    received 2026-10-05 09:12:40, expires 2026-10-06 09:12:40 (UTC)
-    message: order 42
-$ lepic invoice pay 2f4a6c1e-5b3d-4e8f-9a0b-1c2d3e4f5a6b 0.8
-Transaction 4 pays 0.80000000 EPIC (fee 0.00800000); the payment went by epicbox to esShop...@epicbox.epiccash.com.
+$ lepic contact invoices
+$ lepic contact pay-invoice 2f4a6c1e-5b3d-4e8f-9a0b-1c2d3e4f5a6b 0.8
 ```
+
+The payment goes back sealed through the mailboxes; the service's `contact collect` finalizes and
+posts it, and the payer's next `contact collect` shows that it was posted. `lepic invoice issue
+--to <ADDRESS>` still sends an invoice to an Epicbox address, the payer's payments address, where
+only a wallet that pays such invoices pays it.
 
 `lepic invoice decline <SLATE_ID>` declines a parked invoice instead; it is never paid. The
 payment carries a TTL of 1440 blocks, about a day, unless `--ttl-blocks` says otherwise, and

@@ -304,7 +304,7 @@ pub struct InvoiceIssueReport {
     pub slate_id: String,
     pub amount: String,
     pub transport: String,
-    /// The payer's invoice address or the file path the invoice went to.
+    /// The payer's Epicbox address or the file path the invoice went to.
     pub destination: String,
     /// The invoice slate file to give the payer; only for `--to-file`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -356,11 +356,11 @@ pub struct InboxReport {
     pub repeated: u32,
     pub rejected: u32,
     pub held: u32,
-    /// Invoices stored on the invoice address for the user to pay or decline.
+    /// Invoices stored for the user to pay or decline.
     pub parked: u32,
     /// Invoices this wallet issued that came back unpaid from a payer that does not pay them.
     pub bounced: u32,
-    /// Messages on the invoice address acknowledged and forgotten unread.
+    /// Messages acknowledged and forgotten unread, such as notices of no known exchange.
     pub dropped: u32,
     /// Notices about invoices accepted from the other party: posted, declined or withdrawn.
     pub notices: u32,

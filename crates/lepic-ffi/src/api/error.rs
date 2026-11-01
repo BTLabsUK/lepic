@@ -72,8 +72,8 @@ pub enum WalletErrorKind {
     /// The transaction is not a finalized or posted send, or no refresh has yet missed its
     /// kernel at `TransactionDetails.releasable_from` or above. The message says which.
     NotReleasable,
-    /// No invoice with that slate id waits on the invoice address to be paid or declined: it
-    /// was paid, declined, deleted by a sweep, or never arrived.
+    /// No invoice with that slate id waits to be paid or declined: it was paid, declined,
+    /// deleted by a sweep, or never arrived.
     InvoiceNotFound,
     /// The invoice asks for another amount than the one the user typed. Nothing was paid.
     AmountMismatch,

@@ -115,8 +115,8 @@ fn invoice_hint(error: &InvoiceError) -> Option<String> {
         )),
         InvoiceError::PaymentUndelivered { tx_id, .. } => Some(format!(
             "the payment is stored and its inputs stay locked; deliver it again with `lepic tx \
-             resend {tx_id} --to <ADDRESS>`, the sender's address `lepic epicbox allow list` \
-             shows, or give up with `lepic tx cancel {tx_id}`"
+             resend {tx_id} --to <ADDRESS>`, the invoice sender's address that `lepic tx show \
+             {tx_id}` names, or give up with `lepic tx cancel {tx_id}`"
         )),
         InvoiceError::NotParked { .. } => Some(
             "`lepic invoice list` shows the invoices waiting to be paid; a request from a paired \
@@ -411,7 +411,7 @@ mod tests {
             text.contains("`lepic tx resend 6 --to <ADDRESS>`"),
             "{text}"
         );
-        assert!(text.contains("`lepic epicbox allow list`"), "{text}");
+        assert!(text.contains("`lepic tx show 6`"), "{text}");
     }
 
     #[test]

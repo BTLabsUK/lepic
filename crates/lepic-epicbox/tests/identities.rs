@@ -21,8 +21,8 @@ use lepic_transport::transport::{Envelope, Inbound};
 
 const LONG: Duration = Duration::from_secs(5);
 
-/// Bob's second address, as an invoice address beside his payments address.
-const BOB_INVOICES: u8 = 4;
+/// Bob's second address beside his payments address, as a listing address is.
+const BOB_SECOND: u8 = 4;
 
 fn key(byte: u8) -> PublicKey {
     *address(byte).public_key()
@@ -217,7 +217,7 @@ async fn without_a_prefilter_every_message_is_opened() {
 async fn two_identities_listen_at_once_each_on_its_own_connection() {
     let relay = MockRelay::new(Network::Mainnet);
     let payments = client(&relay, BOB).listen().unwrap();
-    let invoices = filtered(&relay, BOB_INVOICES, Allowlist::new(ALICE))
+    let invoices = filtered(&relay, BOB_SECOND, Allowlist::new(ALICE))
         .listen()
         .unwrap();
     within(
@@ -233,13 +233,13 @@ async fn two_identities_listen_at_once_each_on_its_own_connection() {
     );
     relay.store(
         &address(CAROL),
-        &address(BOB_INVOICES),
-        &sealed(CAROL, BOB_INVOICES, "junk"),
+        &address(BOB_SECOND),
+        &sealed(CAROL, BOB_SECOND, "junk"),
     );
     relay.store(
         &address(ALICE),
-        &address(BOB_INVOICES),
-        &sealed(ALICE, BOB_INVOICES, "invoice"),
+        &address(BOB_SECOND),
+        &sealed(ALICE, BOB_SECOND, "invoice"),
     );
 
     let payment = arrival(&payments).await;
@@ -254,7 +254,7 @@ async fn two_identities_listen_at_once_each_on_its_own_connection() {
         .unwrap();
 
     assert_eq!(relay.pending(&address(BOB)), 0);
-    assert_eq!(relay.pending(&address(BOB_INVOICES)), 0);
+    assert_eq!(relay.pending(&address(BOB_SECOND)), 0);
     assert_eq!(payments.counters(), counters(1, 0, 1));
     assert_eq!(invoices.counters(), counters(2, 1, 1));
     assert_eq!(relay.connections(), 2);

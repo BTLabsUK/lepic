@@ -395,8 +395,8 @@ fn cancellation_target(
 /// Whether `payment` of the cancelled invoice `tx_id` is to be answered with a `withdrawn`: it
 /// pays the I1 this wallet issued under its slate id with a payer signature that verifies, and
 /// the payer of that slate was not told before. Once per slate, so repeating a payment sends
-/// nothing more. The sender key is not compared: a payer pays from its payments address, not
-/// from the invoice address the invoice went to.
+/// nothing more. The sender key is not compared: a payer pays from its payments address, which
+/// need not be the address the invoice went to.
 fn withdrawn_answer_due(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,

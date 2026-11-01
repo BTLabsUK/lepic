@@ -432,13 +432,14 @@ pub struct ListArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum InvoiceCommand {
-    /// Ask a payer for an amount, at their invoice address or through a slate file
+    /// Ask a payer for an amount over Epicbox or through a slate file
     #[command(after_help = "\
-Over Epicbox the invoice goes to the payer's invoice address, which `lepic epicbox
-invoice-address` prints on their side; it arrives only once the payer allows your address with
-`lepic epicbox allow add`. Their payment comes back to your address, and `lepic epicbox listen`
-or `lepic epicbox drain` finalizes and posts it. An invoice left unpaid for
-invoice_expiry_hours is cancelled by the next listen or drain.")]
+Over Epicbox a LEPIC payer takes invoices only from a paired contact that it allowed to send
+them: invoice such a contact with `lepic contact invoice`. An invoice sent here to an Epicbox
+address goes to the payer's payments address, where other wallets send it back unpaid. A
+payment comes back to your address, and `lepic epicbox listen` or `lepic epicbox drain`
+finalizes and posts it. An invoice left unpaid for invoice_expiry_hours is cancelled by the
+next listen or drain.")]
     Issue(IssueArgs),
     /// Pay a parked invoice, or an invoice slate file
     #[command(after_help = "\

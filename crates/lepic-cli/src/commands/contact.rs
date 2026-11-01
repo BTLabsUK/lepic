@@ -227,7 +227,12 @@ impl<H: Host> Run<'_, H> {
             }
             ContactCommand::Accept(args) => accept(&opened, &relays, args).await?,
             ContactCommand::Enter(args) => enter(&opened, &relays, args).await?,
-            ContactCommand::Collect => collect(&opened, &relays).await?,
+            ContactCommand::Collect => {
+                let events = wallet.subscribe();
+                let report = collect(&opened, &relays).await?;
+                self.show_invoice_events(events);
+                report
+            }
             ContactCommand::Sas(args) => sas(&opened, &relays, args).await?,
             ContactCommand::ShowCard(args) => show_card(&opened, &relays, args).await?,
             ContactCommand::ScanCard(args) => {
