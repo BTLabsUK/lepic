@@ -223,7 +223,9 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 > **Amended by ADR 0034.** Extension `82` is the sender's feature word: a `u32`, big-endian, in a
 > reply, a confirm and a contact update. Bits this reader does not know are kept and never
 > refused (unlike card caps), and a bit never changes what is checked. Extension `81` carries the
-> address proof of 6.1. TODO(B: tag `81` layout, MAC input and error names after B lands).
+> address proof of 6.1: extension `81` is the 32-byte MAC in a reply, a confirm and a contact
+> update; a value of another length is skipped like any unknown extension. Both extensions are
+> signed like every field before tag `FF`. The MAC input and the errors are in 6.1.
 
 Signing input: `"epic-seal/1 sig" || header (16 bytes) || recipient X25519 public key || every
 inner field before tag FF, exactly as encoded`. The recipient key binds the signature to this
@@ -338,7 +340,22 @@ at most 96 KiB.
 > address with the relay it is read from. The wallet shows it as the contact's address only when the
 > card carries a proof that verifies (extension `81` of the envelope that delivers the card): a
 > designated-verifier MAC from the owner's index-0 key, not a signature, so the contact cannot show
-> it to anyone else as a statement. A bad proof on an update keeps the stored address. TODO(B: exact encoding, and whether a card with a failed proof is kept for its other fields).
+> it to anyone else as a statement. A bad proof on an update keeps the stored address; the card is still taken for its other
+> fields.
+>
+> The MAC is `HMAC-SHA256(K, H(prover card) || H(verifier card) || H(invite))` with
+> `K = HKDF-SHA256(salt = "lepic/addr-proof/1", ikm = x(ECDH(prover's payments key, verifier's
+> mailbox key of this pairing)), info = "mac" || net || step)`, where `net` is `00` mainnet or `01`
+> floonet and `step` is `01` for the invitee's reply, `02` for the inviter's confirm and `03` for a
+> contact update. Where a step has no such hash the slot is 32 zero bytes: the verifier's card in a
+> reply (the invite commits to it), the invite in an update. In an update the verifier slot holds
+> the verifier's card signing key instead of its card hash, so that a card rewritten on either side
+> does not void a proof in flight. The verifier's key is its own mailbox key of this pairing; for
+> the inviter it is the key of its card's tag `08`, which the invite repeats. The verifier can
+> compute the same MAC, so the proof convinces nobody else. A reply or confirm for a pairing that
+> expects a payments address fails with `AddressProofMissing` (kind 82) when the proof is absent or
+> does not verify, and with `OtherAddress` (kind 81) when the card names another address; nothing is
+> stored. Vector: `testdata/vectors/keys/address_proofs.json`.
 
 The sig key (tag 06) must not be of small order. Address texts (tags 08, 09, 0A here, and 09, 0A, 0B of the invite) are printable ASCII, `!` to
 `~`, with domains in punycode. Same TLV rules as 3.3. A card from a contact replaces the stored one only when its signature
@@ -373,11 +390,21 @@ optional field), a version 11 to 13 QR code at medium error correction. In-perso
 | `0B` | onion | optional onion domain of the home relay, used when Tor is on |
 
 > **Amended by ADR 0034 (pairing v3).** The invite carries one more extension: the inviter's
-> mailbox key (card tag `08`), the key the reply's address proof is computed against.
+> mailbox key (card tag `08`), the key the reply's address proof is computed against, as extension
+> `81`: 33 bytes, a compressed secp256k1 key; a value of another length is a malformed invite.
 > A person's standing invite lasts 7 days, its id is kept in LEPIC settings, and it is replaced
 > when the name the invite shows changes. A pair request sent to a payments address carries its
 > own invite and goes only to a key that is fresh and claims the pair-request bit (0034).
-> TODO(B: extension tag; C: the settings key, the request's notice shape, the failure kinds).
+> The settings key is `pairing.standing`; the standing invite is made anew after it was answered,
+> with under a day left, on a relay change and on a rename. The request is the plain notice
+> `{"lepic":1,"type":"pair","invite":"epiccash://pair/1/..."}`, padded like every notice, posted to
+> the payments address; a failed post takes the invite back. The receiver keeps at most 20 live
+> and 100 settled requests, one per sender key, a newer one replacing the older, stored before the
+> relay message is acknowledged. A request from a key that has a live pairing, or for an invite that
+> was dismissed or answered, is ignored. The failures are `PeerNotProven` (kind 83, the key is not
+> fresh or did not claim bit 1), `PairingInProgress` (84), `PairingCrossed` (85, two requests
+> crossed; the one with the lower key keeps its invite), `InviteDismissed` (86) and
+> `ForeignProofAddress` (89, a listing receive refuses a payment-proof request).
 
 The home relay is the service's own relay for a service, and the relay A's wallet uses at invite
 time for a person. B accepts it as given; B's own relay does not matter.
@@ -505,11 +532,29 @@ the way; "Skip" → `paired` (shown as "Paired, not verified", trust on first us
 | label | The user's own name for the contact, empty until the user sets one; the app shows the claimed name as "calls itself" meanwhile |
 
 > **Amended by ADR 0034 (pairing v3).** The record gains columns, not states, so older backups
-> import: `peer_heard_at`, `peer_features` (the peer's feature word, 3.3), and `ended_reason`
-> (mismatch, cancelled, unpaired, expired, not heard). An ended pairing is final and never counts
-> as paired. Verdicts (the SAS outcome, carrying the hash of the SAS) count as heard; the outbox
-> keeps pairing notices for 7 days; a pairing ended by mismatch answers nothing. TODO(C: column
-> names, the verdict notice shape, the cancel and expiry rules once C lands).
+> import (schema 13): `peer_heard_at`, `peer_verified_at`, `peer_verdict`, `peer_features` (the
+> peer's feature word, 3.3), `payments_address`, `payments_key`, `ended_reason` (`mismatch`,
+> `peer-mismatch`, `unpaired`, `never-finished`), `ended_at`, and `heard_wait` with
+> `heard_wait_mark` for the timer below. The status is derived, never stored: Ended, then keys
+> changed, then Waiting (`peer_heard_at` empty), then Verified or Paired. An ended pairing is final
+> and never counts as paired; it takes only slates already in flight, never a new S1 or invoice.
+>
+> Notices of the outcome travel in the pairing's mailbox, sealed and signed like any contact
+> message, padded like every notice, and only to a contact whose feature word has bit 3:
+> `{"lepic":1,"type":"pair-finished"}` when the wallet finished its side,
+> `{"lepic":1,"type":"pair-match","sas":"<hex>"}` and `"pair-mismatch"` for the words check,
+> and `{"lepic":1,"type":"unpaired"}` for the removal. `sas` is the 64 hex digits of the unkeyed
+> BLAKE2b-256 of `"lepic-wallet pairing verdict v1"` followed by the 4-byte short authentication
+> string, never the string. A verdict counts as heard; one for another string is ignored, a repeated
+> match changes nothing, and a mismatch ends the pairing on both sides (`mismatch` for the side
+> that found it, `peer-mismatch` for the other) and drops its invoices. A notice with another
+> version or an unknown type is ignored. The outbox keeps these notices 7 days (tries after 30
+> seconds, 2, 10 and then every 30 minutes) and then drops them without an event.
+>
+> An inviter that has not heard the contact ends the pairing as `never-finished` after seven days
+> of collecting and tells the contact `unpaired`. Only time the wallet could collect counts: each
+> gap between two collects that is added to `heard_wait` is capped, so an app that was closed for a
+> week does not end the pairing on its first collect.
 
 Removing a contact deletes its record and any pending pairing for it. The record's slot stays
 used (2.2). Before the record goes, the wallet tells the contact, best effort and once: a notice
@@ -838,8 +883,14 @@ goes on as paired or verified). The cases file, C-12, has the details.
 
 > **Amended by ADR 0034 (pairing v3).** Ended is a final state beside `paired`: a cancelled or
 > expired pairing keeps its row until it expires, so drains can answer `CancelledByInviter`, and the
-> `(deleted)` exits above become Ended where this paragraph says so. TODO(C: the exits and their
-> reasons once C lands).
+> `(deleted)` exits above become Ended where this paragraph says so. The ended reasons are
+> `mismatch`, `peer-mismatch`, `unpaired` and `never-finished`, and a pairing the inviter cancelled
+> before any reply keeps its pending row until the invite expires, with `cancelled_at` set; a reply
+> to it is refused with `CancelledByInviter`. A pending pairing also stores `expect_address` and
+> `expect_key` (the payments address a pair request went to, which the answer must prove) and the
+> invitee's `reply`, posted again on every collect until the inviter answers. A drain of an ended
+> pairing's mailbox is skipped. Using an ended pairing fails with `PairingEnded` (kind 87), one
+> that still waits with `PairingWaiting` (88).
 
 #### 10.3 Limits
 
@@ -1151,7 +1202,7 @@ the app.
 - Amended by ADR 0034: the relay is told `4.1.0` like stock; writers pad every notice and the pair
   request to the size buckets of 0034, with no exception for older LEPIC peers; a release with the
   512-byte reader acknowledges and drops them. The marker may carry the feature word on Epicbox
-  slates only. TODO(B, C: confirm after they land).
+  slates only. Notice size buckets are 2,452, 2,551 and 2,650 bytes; readers accept up to 8 KiB.
 
 - The legacy codecs are not changed. The marked V3 codec writes one more key.
 - Wire, store and API effects are breaking for the binding (allowlist calls removed, new calls),

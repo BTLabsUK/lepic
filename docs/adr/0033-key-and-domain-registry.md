@@ -33,10 +33,11 @@ Every new key that is not a funds key is
 `BLAKE2b-256(key = seed, msg = "lepic-wallet <purpose> v<n>" ‖ context)`, the construction of the
 context key and the seed check. `seed` is the BIP39 entropy. No new BIP32 branch is used. A
 32-byte result is an Ed25519 or X25519 secret directly; a secp256k1 key takes the first counter
-value that makes a valid key, as `first_valid_key` does (TODO(B): the listing key's counter encoding).
+value that makes a valid key, as `first_valid_key` does. The listing key's counter is one byte, tried from 0 up.
 Each key has one function and one label constant in the crate that owns it, so a path or label is
 changed in one edit and nothing else spells it. The wallet derives its subkeys in
-`lepic_wallet::store_keys` (context key and peer tag key) and `lepic_wallet::store_key` (database key, 0032).
+`lepic_wallet::store_keys` (context key and peer tag key), `lepic_wallet::store_key` (database key,
+0032) and `lepic_wallet::namespace` (listing keys and the device-link key).
 
 Listing keys take `(dkey, gen)`: the directory key (33 bytes) and a generation (u32 big-endian,
 raised when a listing is left). Nothing is derived on `m/<a>/1/0x8000_0000` or above. A receive on
@@ -44,11 +45,12 @@ a listing address never signs with index 0 and refuses a payment-proof request.
 
 ### Rules
 
-1. One key per purpose. A key that signs never encrypts or does ECDH. Index 0 of `m/<a>/1` is the
-   one recorded exception, below.
+1. One key per purpose. A key that signs never encrypts or does ECDH. Index 0 of `m/<a>/1` and a
+   listing key are the two recorded exceptions, below.
 2. Every signature LEPIC defines is over a tagged digest or a domain-prefixed message. A new tag is versioned and
    distinct. LEPIC's own tags start `lepic/`; the domains an app passes to the listing signer never
-   do, and the signer refuses any domain that starts with `lepic`, in any case.
+   do, and the signer refuses any domain that starts with `lepic`, in any case. Shipped `epic-`
+   tags are not renamed.
 3. New tags are prefix-free among the tags used with one key or one primitive. Shipped tags that
    share a prefix (`epic-seal/1` and `epic-seal/1 sig`, `epic-pair/1 keycheck` and
    `epic-pair/1 keycheck found`, the `epic-private/1` family) stay apart by the primitive or the
@@ -71,8 +73,22 @@ Epicbox ECDH, the Ed25519 receiver and sender payment-proof key, and the onion s
 mailbox, so it cannot move. LEPIC adds one use: an ECDH with a contact's mailbox key whose
 output feeds only HKDF under `lepic/addr-proof/1` to make a MAC (0034). LEPIC makes no signature
 of its own with this key: the device-link hello and the listing signer have keys of their own.
-`lepic/address-signature/v1` is the shipped signature that did, and is retired with
-`sign_with_address_key`.
+`lepic/address-signature/v1` is the shipped signature that did. The binding no longer exposes it
+(`sign_with_address_key` and `verify_address_signature` are gone), the tag is retired-reserved, and
+no LEPIC code signs under it.
+
+### Recorded exception: the listing key
+
+A listing key is the Epicbox identity of one directory listing. It answers the relay's challenge
+(ECDSA over text), does the Epicbox ECDH that opens messages to the listing address, and signs
+the listing's messages under the listing tag (below). A payer sends to the address of the key that
+signs the listing card, so the signer and the address cannot be two keys without a card that
+carries both. The three uses stay apart by their inputs: the relay challenge is hashed as UTF-8
+text, the listing signature is over a digest whose preimage holds a byte UTF-8 never uses, so no
+text hashes to it; and the ECDH output goes only into Epicbox's own key derivation, never to a
+signature or a MAC. A listing key is not reachable from the phrase by any stock wallet and no
+other LEPIC key uses it. If this ever needs to change, the answer is a separate signing label and
+a card that names both keys, as a new row.
 
 ### The table
 
@@ -98,12 +114,12 @@ used again and never reused.
 | Label | Type | Purpose | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
 | `lepic-wallet private context key v1` | 32-byte XChaCha20-Poly1305 key | Seals stored records: transaction contexts, pending invoices, pairing records and peer rows (associated-data domains under "Store domains") | `lepic-wallet` | ≤ 26.10.24-r2 | live | `store/peer_compat.json` |
-| `lepic-wallet seed check v1` | 32-byte check value, not a key | Proves a phrase belongs to a database (setting `wallet.seed_check`) | `lepic-wallet` | ≤ 26.10.24-r2 | live | TODO(vector) |
+| `lepic-wallet seed check v1` | 32-byte check value, not a key | Proves a phrase belongs to a database (setting `wallet.seed_check`) | `lepic-wallet` | ≤ 26.10.24-r2 | live | none yet |
 | `lepic-wallet peer tag v1` | 32-byte BLAKE2b key | Keyed hash of an Epicbox key under which its compat row is stored | `lepic-wallet` | 26.10.25 | live | `store/peer_compat.json` |
 | `lepic-wallet store key v1` | 32-byte raw key | Page encryption of the wallet database (0032) | `lepic-wallet` | 26.10.25 | live | `store_key/store_key_seed_*` |
 | `lepic-wallet store check v1` ‖ salt(16) | BLAKE2b-128 keyed by the store key | The `.check` file that proves the store key before the database opens (0032) | `lepic-wallet` | 26.10.25 | live | `store_key/store_key_seed_*` |
-| `lepic-wallet listing key v1` ‖ dkey(33) ‖ gen(u32 BE) ‖ ctr | secp256k1 (counter until valid) | Address and signing key of one directory listing | TODO(B: owner crate) | 26.10.25 | live | TODO(B: `keys/` vector) |
-| `lepic-wallet device link key v1` | Ed25519 | Signs the hello of a linked device; both devices on one phrase hold it, so a valid signature proves the same phrase | TODO(B: owner crate) | 26.10.25 | live | TODO(B: `keys/` vector) |
+| `lepic-wallet listing key v1` ‖ dkey(33) ‖ gen(u32 BE) ‖ ctr | secp256k1 (counter until valid) | Address, ECDH and signing key of one directory listing (exception above) | `lepic-wallet::namespace` | 26.10.25 | live | `keys/listing_keys_seed32`, `keys/listing_keys_seed16` |
+| `lepic-wallet device link key v1` | Ed25519 | Signs the hello of a linked device; both devices on one phrase hold it, so a valid signature proves the same phrase. The 32 bytes are the Ed25519 seed; the context is empty | `lepic-wallet::namespace` | 26.10.25 | live | `keys/device_link_key_seed32`, `keys/device_link_key_seed16` |
 
 #### HKDF and codes
 
@@ -115,10 +131,10 @@ used again and never reused.
 | Expand(root, `hint` ‖ slot) | 32-byte key | Hint key of one contact | same | 26.10.20 | live | same |
 | Expand(root, `box` ‖ slot ‖ box_salt ‖ ctr) | secp256k1 | Epicbox mailbox key of one contact | same | 26.10.20 | live | same |
 | Expand(root, `reply` ‖ slate_id) | X25519 | One-time reply key | same | 26.10.20 | live | `pairing/reply_keys.json` |
-| HKDF-SHA256, salt `epic-private/1 keys` ‖ random secret, ikm = root; info `private enc`, `private sig`, `private hint`, `private box` ‖ slot (‖ ctr) | X25519, Ed25519, 32-byte, secp256k1 | Private pairing (linked device) keys, slots from 65,536 | same | ≤ 26.10.24-r2 | live | TODO(vector) |
+| HKDF-SHA256, salt `epic-private/1 keys` ‖ random secret, ikm = root; info `private enc`, `private sig`, `private hint`, `private box` ‖ slot (‖ ctr) | X25519, Ed25519, 32-byte, secp256k1 | Private pairing (linked device) keys, slots from 65,536 | same | ≤ 26.10.24-r2 | live | none yet |
 | HKDF-SHA256, salt `epic-pair/1 mailbox`, ikm = invite code, info `box` ‖ net ‖ ctr | secp256k1 | Throwaway pairing mailbox; not seed-derived | same | 26.10.20 | live | `pairing/mailbox_keys.json` |
 | HKDF-SHA256, random salt, ikm = key at `m` (`derive_key(0, ROOT)`), info `wfe-history-export-v1/key` and `/check` | 32-byte ChaCha20-Poly1305 key and check | Backup files (`.wfeh`) | `lepic-keychain` | ≤ 26.10.24-r2 | live | `app_data/wfeh_*` |
-| HKDF-SHA256, salt `lepic/addr-proof/1`, ikm = x(ECDH(index 0, contact's mailbox key)), info `mac` ‖ net ‖ role | 32-byte HMAC key | MAC that proves the payments address to one contact (0034); never a signature | `lepic-wallet-contacts` | 26.10.25 | live | TODO(B: `keys/` vector) |
+| HKDF-SHA256, salt `lepic/addr-proof/1`, ikm = x(ECDH(index 0, contact's mailbox key)), info `mac` ‖ net ‖ step (u8: 1 reply, 2 confirm, 3 update) | 32-byte HMAC key | MAC that proves the payments address to one contact (0034); never a signature | `lepic-wallet-contacts` | 26.10.25 | live | `keys/address_proofs` |
 | Random 32 bytes, wrapped by the backup key | AES-256 key | Address-book content key; not derived | app | 26.10.25 | live | none |
 
 #### Tags and domains (signatures, MACs, hashes)
@@ -127,11 +143,11 @@ Shipped:
 
 | Tag | Used with | Covers | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
-| `lepic/address-signature/v1` | ECDSA, index 0; `SHA256(SHA256(tag) ‖ SHA256(tag) ‖ msg)` | Device-link hello | `lepic-epicbox` | ≤ 26.10.24-r2 | retired-reserved (TODO(B): when `sign_with_address_key` leaves the binding) | TODO(vector) |
+| `lepic/address-signature/v1` | ECDSA, index 0; `SHA256(SHA256(tag) ‖ SHA256(tag) ‖ msg)` | Device-link hello | `lepic-epicbox` | ≤ 26.10.24-r2 | retired-reserved | none |
 | `epic-card/1` | Ed25519, contact sig key | A contact card | `lepic-contact` | 26.10.20 | live | `pairing/cards_invites.json` |
 | `epic-seal/1` (HPKE info), `epic-seal/1 sig` (Ed25519 signing input), `epic-seal/1 fixed`, `epic-seal/1 reply` (SHA-256 hint domains) | HPKE, Ed25519, SHA-256 | Sealed envelopes and their hints | `lepic-contact` | 26.10.20 | live | `pairing/envelopes.json` |
 | `epic-pair/1 id`, `commit`, `sas` (SHA-256), `words` (Argon2id salt prefix), `keycheck` (SHA-256 tag, computed in `lepic-contact` and `lepic-wallet-contacts` as one value), `keycheck found`, `keycheck restored` (Ed25519 proof messages) | as listed | Invite id, commitment, short authentication string, pairing words, key check | `lepic-contact`, `lepic-wallet-contacts` | 26.10.20 | live | `pairing/keycheck.json`, `sas.json`, `words.json` |
-| `epic-private/1` (PSK id), `epic-private/1 reply`, `channel`, `sas` (SHA-256) | HPKE PSK, SHA-256 | Private pairing channel | `lepic-contact` | ≤ 26.10.24-r2 | live | TODO(vector) |
+| `epic-private/1` (PSK id), `epic-private/1 reply`, `channel`, `sas` (SHA-256) | HPKE PSK, SHA-256 | Private pairing channel | `lepic-contact` | ≤ 26.10.24-r2 | live | none yet |
 | `lepic-store private context v1`, `pending invoice v1`, `pairing v1`, `peer compat v1`; `lepic-store peer tag v1` (BLAKE2b domain of the peer tag hash) | AEAD associated data, keyed BLAKE2b | Which table a sealed record belongs to; the peer hash | `lepic-store` | ≤ 26.10.24-r2 (`peer ...`: 26.10.25) | live | `store/peer_compat.json` |
 | `wfe-history-export-v1` plus an inner kind header | ChaCha20-Poly1305 | Backup file | `lepic-keychain` | ≤ 26.10.24-r2 | live | `app_data/wfeh_*` |
 
@@ -139,11 +155,19 @@ New in this batch:
 
 | Tag | Used with | Covers | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
-| `epic-device-link/1` | Ed25519, device-link key | The device-link hello transcript. The one `epic-` tag LEPIC itself signs with (it is shared with the app) | TODO(B: owner crate) | 26.10.25 | live | TODO(B) |
-| the listing signer's own tag, TODO(B: name; its hash holds a byte UTF-8 never has) | ECDSA, listing key; digest over `len(domain) ‖ domain ‖ message` | Any app domain below; refuses `lepic` domains | TODO(B: owner crate) | 26.10.25 | live | TODO(B) |
+| `lepic/device-link/v1` | Ed25519, device-link key; signs `tag ‖ transcript` with no hash of the tag | The device-link hello transcript, which the app builds | `lepic-wallet::namespace` | 26.10.25 | live | `keys/device_link_key_seed32`, `keys/device_link_key_seed16` |
+| `lepic/listing-signature/v1` | ECDSA, listing key; digest `SHA256(SHA256(tag) ‖ SHA256(tag) ‖ len(u8) ‖ domain ‖ message)` | Any app domain below. A domain is `[a-z0-9-]+/[0-9]+`, 3 to 64 bytes; any domain starting with `lepic`, in any case, is refused. The tag's SHA-256 holds a byte UTF-8 never uses, so no text signature passes as a listing signature | `lepic-epicbox` | 26.10.25 | live | `keys/listing_signatures` |
+| `lepic-wallet pairing verdict v1` | unkeyed BLAKE2b-256 over tag ‖ the 4-byte short authentication string | The hash a pairing verdict notice carries instead of the string (0034) | `lepic-wallet-contacts` | 26.10.25 | live | none yet |
 | `epic-dir-hello/1` | listing signer | Directory hello, over its fields and the pairing transcript `H(cardA) ‖ H(cardB) ‖ nA ‖ nB` | app | not shipped (app) | live | none (app) |
 | `epic-listing/1`, `epic-listing-moved/1`, `epic-payreq/1`, `epic-unlist/1` | listing signer | A listing; its move to a new address; a payment request; leaving | app | not shipped (app) | live | none (app) |
-| `lepic/addr-proof/1` | HKDF salt (table above); the MAC covers `H(cardProver) ‖ H(cardVerifier) ‖ H(invite)` | Address proof | `lepic-wallet-contacts` | 26.10.25 | live | TODO(B: vector) |
+| `lepic/addr-proof/1` | HKDF salt (table above); the MAC covers `H(cardProver) ‖ H(cardVerifier) ‖ H(invite)`, with a zero slot for a hash the step does not have; in a contact update the verifier slot holds the verifier's card signing key instead of its card hash | Address proof | `lepic-wallet-contacts` | 26.10.25 | live | `keys/address_proofs` |
+
+The info of the proof key carries the step, not the role, and both sides compute the same key. The
+roles stay apart anyway. In a reply and a confirm the message order is fixed (prover card, verifier
+card, invite, a zero slot where a step has none) and the prover card must carry the payments key
+the MAC is checked against. In an update both directions share the step byte and differ only by
+which card is the prover's; the two cards differ, so a proof made one way does not verify the
+other way (a test covers it).
 
 Not listed: relay challenge texts (stock defines them) and the Ed25519 payment-proof signature
 (upstream's message).
@@ -156,7 +180,8 @@ Not listed: relay challenge texts (stock defines them) and the Ed25519 payment-p
   anything of either ships; nothing already installed needs a migration, and linked devices on an
   older release do not verify the new hello.
 - The device-link hello of an older build (index 0, `lepic/address-signature/v1`) is not accepted
-  by the new one. TODO(B: confirm once the old call is removed).
+  by the new one: the call that made it is gone from the binding and the verifier checks only the
+  device-link key under `lepic/device-link/v1`.
 - Shipped keys that break rule 1 or 3 stay as they are: changing the contact root or a tag would
   re-pair every contact.
 - Adding a purpose never needs a new BIP32 branch, and a restore finds every entry by the

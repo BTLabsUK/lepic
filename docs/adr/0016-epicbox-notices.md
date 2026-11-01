@@ -234,7 +234,17 @@ depends on it arriving.
   every peer. The 512-byte limit above is the reader limit of the releases before the buckets.
   Bits never relax a check on a notice: a notice is still accepted only from its recorded
   counterparty. The pair request is gated as a payments-address send (fresh key, bit 1); pairing-outcome
-  notices are mailbox traffic and go only to a pairing whose peer claims bit 3 (0034). TODO(C: confirm the reader limit, bucket lengths and the notice names once C lands).
+  notices are mailbox traffic and go only to a pairing whose peer claims bit 3 (0034). The reader limit is `MAX_NOTICE_LEN`, 8,192 bytes. Writers pad to one of 2,452, 2,551 and
+  2,650 bytes, drawn at random: the JSON length of an S1 with one, two and three plain inputs and one
+  change output, carrying the marker with its feature word. The pair request is
+  `{"lepic":1,"type":"pair","invite":"epiccash://pair/1/..."}`; the outcome notices are
+  `pair-finished`, `pair-match` and `pair-mismatch` (the last two with `sas`, a hash, never the
+  short authentication string) and `unpaired`, all with `"lepic":1` (0034 and RFC 0002 section 7.6
+  have their rules). A host that receives a notice it cannot match to a payment gets
+  `NoticeUnmatched` with the notice and the sender the relay reported, and may pass it to another
+  install of the same wallet, which applies it with `notice_apply_forwarded` under the rules of a
+  notice it received itself: only from the recorded counterparty, `posted` only with the kernel
+  excess the payment implies, and once; one that install does not hold either is dropped.
 
 ## Alternatives considered
 
