@@ -766,8 +766,12 @@ fn check_copy(copy: &Path, store_key: &StoreKey, record: &MigrationRecord) -> Re
     Ok(())
 }
 
+/// Flushes the file at `path` to disk, through a handle that may write: Windows flushes no file
+/// opened read-only.
 fn sync_file(path: &Path) -> Result<(), StoreError> {
-    std::fs::File::open(path)
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
         .and_then(|file| file.sync_all())
         .map_err(io("flush the encrypted copy"))
 }
