@@ -1290,6 +1290,7 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "hkdf",
+ "hmac",
  "jiff",
  "lepic-contact",
  "lepic-crypto",
