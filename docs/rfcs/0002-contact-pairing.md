@@ -348,9 +348,10 @@ at most 96 KiB.
 > mailbox key of this pairing)), info = "mac" || net || step)`, where `net` is `00` mainnet or `01`
 > floonet and `step` is `01` for the invitee's reply, `02` for the inviter's confirm and `03` for a
 > contact update. Where a step has no such hash the slot is 32 zero bytes: the verifier's card in a
-> reply (the invite commits to it), the invite in an update. In an update the verifier slot holds
-> the verifier's card signing key instead of its card hash, so that a card rewritten on either side
-> does not void a proof in flight. The verifier's key is its own mailbox key of this pairing; for
+> reply (the invite commits to it), the invite in an update. A contact update carries a proof only
+> when the sender's payments address changed. A pairing made before address proofs existed gets
+> none and stays unproven until it is paired again. A contact backup carries the proven payments
+> address and key, never the contact's feature word or its heard and verified dates. The verifier's key is its own mailbox key of this pairing; for
 > the inviter it is the key of its card's tag `08`, which the invite repeats. The verifier can
 > compute the same MAC, so the proof convinces nobody else. A reply or confirm for a pairing that
 > expects a payments address fails with `AddressProofMissing` (kind 82) when the proof is absent or
@@ -553,8 +554,8 @@ the way; "Skip" → `paired` (shown as "Paired, not verified", trust on first us
 >
 > An inviter that has not heard the contact ends the pairing as `never-finished` after seven days
 > of collecting and tells the contact `unpaired`. Only time the wallet could collect counts: each
-> gap between two collects that is added to `heard_wait` is capped, so an app that was closed for a
-> week does not end the pairing on its first collect.
+> gap between two collects that is added to `heard_wait` counts for at most one hour, so an app that
+> was closed for a week does not end the pairing on its first collect.
 
 Removing a contact deletes its record and any pending pairing for it. The record's slot stays
 used (2.2). Before the record goes, the wallet tells the contact, best effort and once: a notice

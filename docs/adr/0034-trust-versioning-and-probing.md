@@ -110,9 +110,9 @@ pairing that proved the contact's payments key records the word of its envelopes
 claim and marks the address proof as working; a verdict or `pair-finished` from such a pairing
 marks the outcome notices as working. The host reports its own two bits with
 `peer_feature_result(address, bit, worked)`, which takes exactly one host bit and nothing else,
-sends nothing, and cannot start a bit the key did not claim. This build records no `works` event
-for the pair-request bit: a request is sent when the bit is claimed and the key is fresh, and
-`works` is bookkeeping for later gating, not a check.
+sends nothing, and cannot start a bit the key did not claim. A pair reply that arrives for a request
+sent to the key marks the pair-request bit as working. `works` is bookkeeping for later gating,
+not a check.
 
 ### The address proof
 
@@ -127,12 +127,12 @@ The proof key is `HKDF-SHA256(salt = lepic/addr-proof/1, ikm = x(ECDH), info = "
 step)`, with the step 1 for a reply, 2 for a confirm and 3 for a contact update; the MAC is
 HMAC-SHA256 over `H(prover card) ‖ H(verifier card) ‖ H(invite)` (0033 explains why the info
 carries a step and not a role). A slot for a hash the step does not have is 32 zero bytes: the
-verifier's card in a reply, whose commitment is in the invite, and the invite in an update. In an
-update the verifier slot holds the verifier's card signing key instead of its card hash. That key
-is fixed for the life of a pairing, whereas a card rewrite changes the card hash, and two wallets
-that both rewrote their cards before reading each other's update would otherwise fail every
-proof. A contact that first claims the address-proof bit in an update gets our address card once
-more.
+verifier's card in a reply, whose commitment is in the invite, and the invite in an update. A
+contact update carries a proof only when the wallet's payments address changed (a relay switch).
+
+A pairing made before this release never gets a proof: it stays unproven, reports no payments
+address, and attaching it by address fails with `AddressProofMissing`. Pairing again gives it
+one. Nothing marks such a pairing proven or verified.
 
 Where it travels: envelope extension `0x81`, 32 bytes, in the reply, the confirm and the contact
 update (any other length is skipped like an unknown extension). The inviter's mailbox key, the
@@ -190,8 +190,8 @@ Other wallets' proof requests on normal receives are handled as before.
   contact's mailbox, padded as every notice, and sent only to a pairing whose peer claims bit 3.
 - **Never finished.** An inviter that never hears the contact ends the pairing as
   `never-finished` after seven days of collecting, and tells it `unpaired`. The seven days count
-  only time the wallet could collect: each counted gap between two collects is capped, so a
-  closed app counts for no more than the cap.
+  only time the wallet could collect: each counted gap between two collects counts for at most one hour
+  (`HEARD_WAIT_MAX_GAP`), so a closed app adds at most an hour.
 - **The outbox.** Status notices are kept and retried for 7 days, waiting 30 s, 2 min, 10 min and
   then 30 min between tries, and are dropped without an event. They live in `contact_status_out`
   (kinds `finished`, `match`, `mismatch`, `unpaired`).

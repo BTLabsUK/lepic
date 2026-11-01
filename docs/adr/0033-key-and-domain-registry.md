@@ -160,7 +160,7 @@ New in this batch:
 | `lepic-wallet pairing verdict v1` | unkeyed BLAKE2b-256 over tag ‖ the 4-byte short authentication string | The hash a pairing verdict notice carries instead of the string (0034) | `lepic-wallet-contacts` | 26.10.25 | live | none yet |
 | `epic-dir-hello/1` | listing signer | Directory hello, over its fields and the pairing transcript `H(cardA) ‖ H(cardB) ‖ nA ‖ nB` | app | not shipped (app) | live | none (app) |
 | `epic-listing/1`, `epic-listing-moved/1`, `epic-payreq/1`, `epic-unlist/1` | listing signer | A listing; its move to a new address; a payment request; leaving | app | not shipped (app) | live | none (app) |
-| `lepic/addr-proof/1` | HKDF salt (table above); the MAC covers `H(cardProver) ‖ H(cardVerifier) ‖ H(invite)`, with a zero slot for a hash the step does not have; in a contact update the verifier slot holds the verifier's card signing key instead of its card hash | Address proof | `lepic-wallet-contacts` | 26.10.25 | live | `keys/address_proofs` |
+| `lepic/addr-proof/1` | HKDF salt (table above); the MAC covers `H(cardProver) ‖ H(cardVerifier) ‖ H(invite)`, with a zero slot for a hash the step does not have. A pairing made before this release has no proof and gets none; an address card goes out only when the payments address changes | Address proof | `lepic-wallet-contacts` | 26.10.25 | live | `keys/address_proofs` |
 
 The info of the proof key carries the step, not the role, and both sides compute the same key. The
 roles stay apart anyway. In a reply and a confirm the message order is fixed (prover card, verifier
