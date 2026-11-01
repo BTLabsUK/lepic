@@ -1130,8 +1130,14 @@ where
                     .and_then(notice::pair_request_invite);
                 if let (Some(invite), Some(hook)) = (invite, self.pair_requests()) {
                     // Stored or dropped before the message is acknowledged.
+                    // A store that keeps failing leaves the request on the relay only up to the
+                    // hold bound; then it is acknowledged and the sender may send it again.
                     return match hook.take(self, reply_to.as_str(), invite).await {
                         Ok(()) => Ok(Handled::Notice),
+                        Err(error) if self.hold_exhausted(msg_id, attempt).await? => {
+                            warn!(error = %error, "pairing request not stored, dropped");
+                            Ok(Handled::Dropped)
+                        }
                         Err(error) => {
                             warn!(error = %error, "pairing request kept for later");
                             Err(Hold::PairRequest.into())

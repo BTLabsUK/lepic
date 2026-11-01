@@ -1001,3 +1001,54 @@ mod policy {
         );
     }
 }
+
+/// A pair-request hook whose store always fails, counting its tries.
+struct FailingPairRequests(std::sync::Arc<std::sync::atomic::AtomicU32>);
+
+impl<N, S: lepic_wallet::StoreOpener, V> lepic_wallet::extension::PairRequests<N, S, V>
+    for FailingPairRequests
+{
+    fn take<'a>(
+        &'a self,
+        _wallet: &'a lepic_wallet::Wallet<N, S, V>,
+        _sender: &'a str,
+        _invite_link: String,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+                + Send
+                + 'a,
+        >,
+    > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Err("store unavailable".into()) })
+    }
+}
+
+#[test]
+fn a_pair_request_the_store_keeps_refusing_is_acknowledged_after_three_tries() {
+    let world = World::new();
+    let tries = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    assert!(
+        world
+            .receiver_wallet
+            .set_pair_requests(std::sync::Arc::new(FailingPairRequests(tries.clone())))
+    );
+    let request = lepic_wallet::notice::pair_request_to("epiccash://pair/1/x", 512);
+    world.post_to_receiver(7, 7, &request);
+    let handle = ListenHandle::new();
+
+    world.block_on(async {
+        let listen = world
+            .receiver_wallet
+            .epicbox_listen(&world.receiver_epicbox, &handle);
+        let script = async {
+            world.until_acknowledged(&world.receiver_address).await;
+            handle.stop();
+        };
+        tokio::join!(listen, script).0.unwrap();
+    });
+
+    assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(world.relay.pending(&world.receiver_address), 0);
+}

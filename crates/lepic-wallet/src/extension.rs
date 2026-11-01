@@ -48,7 +48,8 @@ pub trait ContactNotices<N, S: StoreOpener, V>: Send + Sync {
 /// Without a hook installed with [`crate::Wallet::set_pair_requests`] a request is ignored.
 pub trait PairRequests<N, S: StoreOpener, V>: Send + Sync {
     /// Takes the request with `invite_link` from `sender`, the address the relay reported.
-    /// An error keeps the message on the relay for another try.
+    /// An error keeps the message on the relay for another try, up to the inbox's hold bound;
+    /// then the message is acknowledged without the request.
     fn take<'a>(
         &'a self,
         wallet: &'a Wallet<N, S, V>,
