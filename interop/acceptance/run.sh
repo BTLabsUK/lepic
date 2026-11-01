@@ -14,6 +14,7 @@
 #                             keep it, and the stack lock, until stopped; ./chain.sh drives it
 #   ./run.sh --probes         run the relay and epic-wallet probes of probes.sh instead of the
 #                             steps
+#   ./run.sh --trust          run the stock-queue and relay checks of trust.sh instead
 set -euo pipefail
 
 ACCEPTANCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +39,14 @@ while (($# > 0)); do
             source "${ACCEPTANCE_DIR}/probes.sh"
             setup_step=step_probe_setup
             STEPS=("${PROBE_STEPS[@]}")
+            ;;
+        --trust)
+            # shellcheck source=probes.sh
+            source "${ACCEPTANCE_DIR}/probes.sh"
+            # shellcheck source=trust.sh
+            source "${ACCEPTANCE_DIR}/trust.sh"
+            setup_step=step_trust_setup
+            STEPS=("${TRUST_STEPS[@]}")
             ;;
         --stack-only) stack_only=true ;;
         --no-build) build=false ;;

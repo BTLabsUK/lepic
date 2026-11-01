@@ -228,10 +228,10 @@ step_send_over_epicbox() {
     EPICBOX_SEND_TX="${tx_id}"
     summary="$(drain_until finalized 1 120)" || fail "lepic finalized nothing: ${summary}" || return 1
     confirm_both "${tx_id}" "${slate_id}" || return 1
-    # lepic's S1 carried the marker; the stock reply did not, so the stock wallet is not
-    # recorded as running lepic and is sent no notice.
+    # lepic's S1 carried the marker; the stock reply did not, so the stock wallet is recorded
+    # as another wallet and is sent no notice.
     [[ "$(unmade_for "${PEER_KEY}")" == 0 ]] || fail "a message for the stock wallet is unacknowledged" || return 1
-    [[ -z "$(lepic_peer_support "${PEER_KEY}")" ]] || fail "lepic recorded the stock wallet as a peer" || return 1
+    [[ "$(lepic_peer_support "${PEER_KEY}")" == no-invoices ]] || fail "lepic did not record the stock answer" || return 1
     EXPECTED_TOTAL=$((EXPECTED_TOTAL - $(to_units 1.5) - fee))
     check_lepic_total || return 1
     local messages
@@ -538,18 +538,16 @@ payer_drain_shows() {
 # Messages for `key` the relay holds that nobody acknowledged.
 unmade_for() { mongo_eval "print(db.slates.countDocuments({queue: '$1', made: false}))"; }
 
-# What lepic's store recorded about the peer with this Epicbox key, read without lepic, since no
-# command shows it: `no-invoices`, `lepic`, or nothing.
+# What lepic learned about the peer with this Epicbox key from its messages, through
+# `epicbox peer` (the store keeps it sealed): `no-invoices`, `lepic`, or nothing.
 lepic_peer_support() {
-    local database
-    database="$(find "${STATE_DIR}/lepic" -name wallet.sqlite3 -print -quit)"
-    [[ -n "${database}" ]] || return 1
-    python3 - "${database}" "$1" <<'EOF'
-import sqlite3, sys
-connection = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
-row = connection.execute("SELECT support FROM peer_capabilities WHERE key = ?", (sys.argv[2],)).fetchone()
-print(row[0] if row else "")
-EOF
+    local view
+    view="$(lepic epicbox peer "$1@localhost:${RELAY_PORT}")" || return 1
+    case "$(jq -r .capability <<<"${view}")" in
+        lepic) echo lepic ;;
+        no_invoices) echo no-invoices ;;
+        *) echo "" ;;
+    esac
 }
 
 step_fund_payer() {

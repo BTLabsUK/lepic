@@ -12,7 +12,7 @@ payer allows the service, parks the invoice from its invoice address and pays it
 service finalizes, and the payer's drain shows the `posted` receipt. Then lepic sends to that wallet over
 Epicbox while it listens: both slates carry the LEPIC marker, and the listener reports the
 payment as posted by its sender seconds after the sender's push, before it confirms; a stock
-`epic-wallet` receiver is recorded as nothing and sent no notice. A stock `epic-wallet`
+`epic-wallet` receiver's unmarked answer is recorded as another wallet's and is sent no notice. A stock `epic-wallet`
 listener sends lepic's invoice back unpaid; lepic counts it as bounced, records that peer as not
 paying invoices (read from its store, which no command shows), sends it no notice when the
 invoice is cancelled, and pays it over Epicbox afterwards. It then prints a pass or fail table and
@@ -25,6 +25,7 @@ interop/acceptance/run.sh --keep        # leave the stack running afterwards
 interop/acceptance/run.sh --lepic PATH  # test another lepic binary
 interop/acceptance/run.sh --stack-only  # start a clean stack and keep it until Ctrl-C
 interop/acceptance/run.sh --probes      # probe the relay and a stock listener instead
+interop/acceptance/run.sh --trust       # what a stock wallet's queue gets from lepic instead
 ```
 
 `--probes` runs the checks in `probes.sh` instead of the steps. They cover what invoices and
@@ -32,6 +33,18 @@ notices over Epicbox build on: how a stock listener treats a V3 I1, a marker key
 that is not a slate, how the relay serves two addresses, and how LEPIC's Epicbox policy reads a
 marked V3 invoice. The probe client is `../probe`, built into `.work/probe-target`. The results are
 recorded in `docs/compat/epicbox.md`, and the raw output goes to the run's `probes/` directory.
+
+`--trust` runs `trust.sh` instead of the steps, on the stock wallet's relay queue (ADR 0016,
+schema version 12 amendment). A lepic "twin" imported from the stock wallet's `wallet.seed` pays
+lepic with the marker, so lepic sees that key run LEPIC just now. Then lepic pays the stock
+wallet, a probe posts a slate to it while lepic finalizes, and lepic pays it three more times
+while its listener is off, as a phone is. The step passes only when the stock wallet answered
+all four payments and the probe's slate, its log shows no `Unable to parse slate`, nothing for
+it is left unacknowledged on the relay, and `lepic epicbox peer` shows the key as another
+wallet's again. The last step reads the relay's log: every `ClientDetails` names
+`wallet_version` `4.1.0`. Run it with `--lepic` on an older build to see the queue lost: that
+build sends the stock wallet a `posted` notice it never acknowledges, and the relay deletes what
+waits behind it after nine challenge rounds, about ten minutes.
 
 `--stack-only` funds nothing and runs no step: it prints the node URL, the node API secret file,
 the relay and the exchange directory, and holds the stack and its lock until stopped, for a
