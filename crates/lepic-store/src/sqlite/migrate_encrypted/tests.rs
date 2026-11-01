@@ -346,6 +346,36 @@ fn a_plain_database_held_at_the_set_aside_fails_the_open_and_the_next_finishes()
     assert_migrated(dir.path(), &original, &store);
 }
 
+/// The same with a real Windows handle that does not share deletion, as an indexer, antivirus
+/// or backup tool may hold: the rename is refused through every retry.
+#[cfg(windows)]
+#[test]
+fn a_plain_database_another_program_holds_on_windows_is_set_aside_by_the_next_open() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_SHARE_READ: u32 = 1;
+    let dir = tempfile::tempdir().unwrap();
+    plain_database(dir.path(), 0);
+    let original = plain_bytes(dir.path(), DATABASE_FILE);
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(dir.path().join(DATABASE_FILE))
+        .unwrap();
+    let held = open_wallet_dir(dir.path(), keys(), &key(), None);
+    assert!(held.is_err(), "{:?}", held.map(|(_, report)| report));
+    assert!(dir.path().join(ENCRYPTED_DATABASE_FILE).exists());
+    drop(holder);
+    assert_eq!(
+        std::fs::read(dir.path().join(DATABASE_FILE)).unwrap(),
+        original.0
+    );
+
+    let (store, report) = open_wallet_dir(dir.path(), keys(), &key(), None).unwrap();
+    assert_eq!(report.state, AtRestState::Encrypted);
+    assert!(!report.rollback_set_aside);
+    assert_migrated(dir.path(), &original, &store);
+}
+
 #[test]
 fn a_set_aside_stopped_after_the_log_moved_is_finished() {
     let dir = tempfile::tempdir().unwrap();
