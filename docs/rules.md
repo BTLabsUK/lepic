@@ -95,7 +95,8 @@ effects, ordering. The one place a task id belongs in code is `TODO(<task-id>)`.
 - `unsafe` is denied workspace-wide and no LEPIC code writes it. Crypto goes through the safe API of
   the pinned secp256k1-zkp wrapper, and `lepic-crypto` checks every length, count and key before
   the call. `lepic-ffi` alone permits the unsafe code its binding generator emits; hand-written code
-  there follows the same rule.
+  there follows the same rule. The one exception is the store's SQLite3MC key call, a single
+  `#[expect(unsafe_code)]` block in `lepic-store/src/sqlite/cipher.rs` (ADR 0032).
 - The pure crates (`lepic-crypto`, `lepic-primitives`, `lepic-keychain`, `lepic-slate`) do no I/O,
   read no clock and never create their own randomness; callers pass an RNG and the time in. That
   keeps them deterministic and fuzzable.

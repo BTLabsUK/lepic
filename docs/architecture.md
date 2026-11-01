@@ -18,7 +18,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-slate` | Slate domain model, stages and roles, codec trait, legacy V2 and V3 JSON codecs, codec registry, the `ur:epic-slate` QR form of slate text (ADR 0025). | none |
 | `lepic-contact` | Contact pairing formats (RFC 0002): the sealed envelope (HPKE to a contact's X25519 key, signed with its Ed25519 key) and its armor, contact cards, invites, pairing replies and confirms, the SAS. | none |
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
-| `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context. | disk |
+| `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
 | `lepic-transport` | Transport traits, transport registry, format policy, the file transport. | disk |
 | `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, relay client and its transport. | network |
 | `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client and the `http` transport, the listener. | network |
