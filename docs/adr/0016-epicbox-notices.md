@@ -229,6 +229,13 @@ depends on it arriving.
     last 30 days, and sends answered before the update count as unmarked. A build before it
     refuses the upgraded store as too new.
 
+- Amendment, 0033 and 0034: the per-key facts now also hold a feature word and the bits that
+  worked (the schema-12 row), and plain notices pad to the size buckets of 0034, up to 8 KiB, for
+  every peer. The 512-byte limit above is the reader limit of the releases before the buckets.
+  Bits never relax a check on a notice: a notice is still accepted only from its recorded
+  counterparty. The pair request is gated as a payments-address send (fresh key, bit 1); pairing-outcome
+  notices are mailbox traffic and go only to a pairing whose peer claims bit 3 (0034). TODO(C: confirm the reader limit, bucket lengths and the notice names once C lands).
+
 ## Alternatives considered
 
 - Notices as a new slate stage or a field in a slate: a stock listener would act on or reject a

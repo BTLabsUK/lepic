@@ -220,6 +220,11 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 | `80` | sent at | u64 unix seconds | When the sender sealed it, in every signed slate, notice and payload. An extension, so a reader that predates it skips it; a value of another length is skipped too. Recipients refuse one sealed over 30 days ago or over a day ahead of their clock, remember what they took for longer than that, and, once a contact sent it, refuse that contact's slates, notices and payloads without it |
 | `FF` | signature | 64 | Ed25519 by `sig_sk` over the signing input below. Last |
 
+> **Amended by ADR 0034.** Extension `82` is the sender's feature word: a `u32`, big-endian, in a
+> reply, a confirm and a contact update. Bits this reader does not know are kept and never
+> refused (unlike card caps), and a bit never changes what is checked. Extension `81` carries the
+> address proof of 6.1. TODO(B: tag `81` layout, MAC input and error names after B lands).
+
 Signing input: `"epic-seal/1 sig" || header (16 bytes) || recipient X25519 public key || every
 inner field before tag FF, exactly as encoded`. The recipient key binds the signature to this
 recipient, so a contact cannot re-seal our signed message to a third party.
@@ -329,6 +334,12 @@ later version defines them they are rejected as unknown. A card is at most 1,024
 `contact` and `pair` links at most 4,096 characters, the `pair-reply` and `pair-confirm` links
 at most 96 KiB.
 
+> **Amended by ADR 0033 and 0034 (pairing v3).** Tag `09` may hold `key@relay`, the payments
+> address with the relay it is read from. The wallet shows it as the contact's address only when the
+> card carries a proof that verifies (extension `81` of the envelope that delivers the card): a
+> designated-verifier MAC from the owner's index-0 key, not a signature, so the contact cannot show
+> it to anyone else as a statement. A bad proof on an update keeps the stored address. TODO(B: exact encoding, and whether a card with a failed proof is kept for its other fields).
+
 The sig key (tag 06) must not be of small order. Address texts (tags 08, 09, 0A here, and 09, 0A, 0B of the invite) are printable ASCII, `!` to
 `~`, with domains in punycode. Same TLV rules as 3.3. A card from a contact replaces the stored one only when its signature
 verifies with the recorded `sig_pk` and its `seq` is higher. The name is the contact's claim; the
@@ -360,6 +371,13 @@ optional field), a version 11 to 13 QR code at medium error correction. In-perso
 | `09` | home relay | domain[:port] of the relationship's home relay (8.3); the reply and confirm mailboxes live there too |
 | `0A` | service inbox | optional Epicbox address: a service's fixed pairing inbox, used instead of the derived reply mailbox |
 | `0B` | onion | optional onion domain of the home relay, used when Tor is on |
+
+> **Amended by ADR 0034 (pairing v3).** The invite carries one more extension: the inviter's
+> mailbox key (card tag `08`), the key the reply's address proof is computed against.
+> A person's standing invite lasts 7 days, its id is kept in LEPIC settings, and it is replaced
+> when the name the invite shows changes. A pair request sent to a payments address carries its
+> own invite and goes only to a key that is fresh and claims the pair-request bit (0034).
+> TODO(B: extension tag; C: the settings key, the request's notice shape, the failure kinds).
 
 The home relay is the service's own relay for a service, and the relay A's wallet uses at invite
 time for a person. B accepts it as given; B's own relay does not matter.
@@ -485,6 +503,13 @@ the way; "Skip" → `paired` (shown as "Paired, not verified", trust on first us
 | `home relay` | The relationship's relay and onion; both mailboxes live there (8.3) |
 | `app_contact` | The id of the shared address-book contact (one list for every wallet on the device) this pairing is attached to; at most 256 bytes |
 | label | The user's own name for the contact, empty until the user sets one; the app shows the claimed name as "calls itself" meanwhile |
+
+> **Amended by ADR 0034 (pairing v3).** The record gains columns, not states, so older backups
+> import: `peer_heard_at`, `peer_features` (the peer's feature word, 3.3), and `ended_reason`
+> (mismatch, cancelled, unpaired, expired, not heard). An ended pairing is final and never counts
+> as paired. Verdicts (the SAS outcome, carrying the hash of the SAS) count as heard; the outbox
+> keeps pairing notices for 7 days; a pairing ended by mismatch answers nothing. TODO(C: column
+> names, the verdict notice shape, the cancel and expiry rules once C lands).
 
 Removing a contact deletes its record and any pending pairing for it. The record's slot stays
 used (2.2). Before the record goes, the wallet tells the contact, best effort and once: a notice
@@ -811,6 +836,11 @@ pairing in `keys-changed` seals nothing and accepts no invoices until the user k
 record (the new pairing is deleted) or uses the new keys (the old record is deleted, the new one
 goes on as paired or verified). The cases file, C-12, has the details.
 
+> **Amended by ADR 0034 (pairing v3).** Ended is a final state beside `paired`: a cancelled or
+> expired pairing keeps its row until it expires, so drains can answer `CancelledByInviter`, and the
+> `(deleted)` exits above become Ended where this paragraph says so. TODO(C: the exits and their
+> reasons once C lands).
+
 #### 10.3 Limits
 
 At most 64 pending pairings per wallet (services: 3 per account), 10,000 contacts per wallet
@@ -1098,6 +1128,13 @@ new SAS domain string.
 | Compromised phone | Out of scope: it holds the seed | Past sealed messages to it open with the keys from the seed |
 | Forward secrecy | Sender side: each envelope uses a fresh HPKE key | A recipient key leak opens past messages to that key (RFC 9180 section 9.7.4); re-pairing rotates |
 
+> **Amended by ADR 0034.** Added rows. *Address proof shown to others:* the proof is a MAC the
+> verifier could make itself, so it convinces no one else. *Pair request links mailboxes to
+> addresses:* a request from A's address to B's, followed by posts to two new mailboxes, ties them
+> to both people at the relay; accepted, Tor is recommended, and the request is padded like every
+> notice. *Another wallet makes the proof:* the MAC is computed inside the contacts crate only and
+> no listing or address-signature call can produce it.
+
 Secrets never cross the FFI boundary beyond ADR 0014: the app passes invite links, armored text
 and file paths in, and receives cards, SAS emoji, labels and states. The invite code inside a link
 is the one pairing secret the app sees, because the link reaches the app first; it is not stored by
@@ -1111,6 +1148,11 @@ the app.
   `epic-wallet` v4.1.0 over file; Epic Pay is unverified (C-31).
 - An older LEPIC peer: no `reply` → plain answers; it cannot open `epiccash://pair` links, so the
   invite expires; it sees a sealed file as "not a slate", and the sender's fallback applies.
+- Amended by ADR 0034: the relay is told `4.1.0` like stock; writers pad every notice and the pair
+  request to the size buckets of 0034, with no exception for older LEPIC peers; a release with the
+  512-byte reader acknowledges and drops them. The marker may carry the feature word on Epicbox
+  slates only. TODO(B, C: confirm after they land).
+
 - The legacy codecs are not changed. The marked V3 codec writes one more key.
 - Wire, store and API effects are breaking for the binding (allowlist calls removed, new calls),
   not for peers.
