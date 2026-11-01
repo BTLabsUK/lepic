@@ -12,6 +12,7 @@ mod primitives;
 mod slates;
 mod smoke;
 mod store;
+mod store_key;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -57,6 +58,10 @@ const AREAS: &[Area] = &[
     Area {
         name: "store",
         generate: store::generate,
+    },
+    Area {
+        name: "store_key",
+        generate: store_key::generate,
     },
 ];
 

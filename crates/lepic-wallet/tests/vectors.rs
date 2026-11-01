@@ -57,6 +57,24 @@ fn upstream_update_stopped(vector: &Value) -> bool {
 
 #[test]
 fn restore_vectors_find_exactly_the_outputs_upstream_found() {
+    restore_every_vector();
+}
+
+/// The restore of [`restore_vectors_find_exactly_the_outputs_upstream_found`] on the plain
+/// SQLite store; `cargo xtask budget` times it beside the encrypted one.
+#[test]
+fn restore_vectors_on_the_plain_sqlite_store() {
+    support::with_store_kind(support::StoreKind::Sqlite, restore_every_vector);
+}
+
+/// The restore of [`restore_vectors_find_exactly_the_outputs_upstream_found`] on the SQLite
+/// store encrypted at rest.
+#[test]
+fn restore_vectors_on_the_encrypted_sqlite_store() {
+    support::with_store_kind(support::StoreKind::EncryptedSqlite, restore_every_vector);
+}
+
+fn restore_every_vector() {
     for (name, vector) in scan_support::restore_vectors() {
         let harness = scan_support::harness(&vector);
         let wallet = harness.wallet();
@@ -69,7 +87,11 @@ fn restore_vectors_find_exactly_the_outputs_upstream_found() {
         let expected = vector["expected"]["after"]["outputs"].as_array().unwrap();
         assert_eq!(summary.restored, expected.len() as u64, "{name}");
         assert!(!summary.resumed, "{name}");
-        scan_support::assert_matches_upstream(&harness, &wallet, &vector, &name);
+        // The comparison reads the database as another program would, with no seed to derive
+        // the encrypted store's key from; the plain runs cover it.
+        if harness.stores.kind() != support::StoreKind::EncryptedSqlite {
+            scan_support::assert_matches_upstream(&harness, &wallet, &vector, &name);
+        }
     }
 }
 
@@ -170,6 +192,86 @@ fn the_onion_key_is_the_payment_proof_key_of_the_default_account() {
         wallet.onion_key(),
         Err(lepic_wallet::WalletError::Locked)
     ));
+}
+
+/// `testdata/vectors/store_key/*.json`: the store key derived from the vector's phrase is the
+/// key the vector's database key opens with, and its check file is accepted for that key and
+/// refused for another seed's.
+#[test]
+fn store_key_vectors_open_their_database_and_check_file() {
+    use lepic_store::{
+        AtRest, ContextKey, STORE_KEY_LEN, SqliteStore, StoreError, StoreKey, WalletStore,
+    };
+    use lepic_wallet::{ENCRYPTED_DATABASE_FILE, EncryptedSqliteStores, StoreOpener};
+
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/vectors/store_key");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let vector: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let name = vector["name"].as_str().unwrap();
+        let seed =
+            lepic_keychain::Seed::from_mnemonic(vector["inputs"]["mnemonic"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(
+            seed.expose_bytes(),
+            hex_bytes(vector["inputs"]["entropy"].as_str().unwrap()).as_slice(),
+            "{name}"
+        );
+        let expected: [u8; STORE_KEY_LEN] =
+            hex_bytes(vector["expected"]["store_key"].as_str().unwrap())
+                .try_into()
+                .unwrap();
+        let derived = lepic_wallet::store_key(&seed).unwrap();
+        let other =
+            lepic_wallet::store_key(&lepic_keychain::Seed::from_entropy(&[0x77; 32]).unwrap())
+                .unwrap();
+
+        // A database made under the vector's key bytes opens with the derived key.
+        let folder = tempfile::tempdir().unwrap();
+        let database = folder.path().join(ENCRYPTED_DATABASE_FILE);
+        let made = SqliteStore::open(
+            &database,
+            ContextKey::from_bytes([0; 32]),
+            AtRest::Encrypted(&StoreKey::from_bytes(expected)),
+        )
+        .unwrap();
+        made.write(|repos| repos.put_setting("vector", name))
+            .unwrap();
+        drop(made);
+        let mut check = database.as_os_str().to_owned();
+        check.push(".check");
+        std::fs::write(
+            &check,
+            hex_bytes(vector["expected"]["check_file"].as_str().unwrap()),
+        )
+        .unwrap();
+        let opened = EncryptedSqliteStores
+            .open(folder.path(), ContextKey::from_bytes([0; 32]), &derived)
+            .unwrap();
+        assert_eq!(
+            opened
+                .read(|repos| repos.setting("vector"))
+                .unwrap()
+                .as_deref(),
+            Some(name)
+        );
+        drop(opened);
+        assert_eq!(
+            std::fs::read(&check).unwrap(),
+            hex_bytes(vector["expected"]["check_file"].as_str().unwrap()),
+            "{name}: an accepted check is kept"
+        );
+        let refused =
+            EncryptedSqliteStores.open(folder.path(), ContextKey::from_bytes([0; 32]), &other);
+        assert!(matches!(refused, Err(StoreError::WrongKey)), "{name}");
+        seen += 1;
+    }
+    assert_eq!(seen, 3);
 }
 
 fn hex_bytes(text: &str) -> Vec<u8> {

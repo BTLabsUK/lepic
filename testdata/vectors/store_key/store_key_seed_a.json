@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "store_key",
+  "name": "store_key_seed_a",
+  "generator": "conformance/vectors/store_key",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
+  },
+  "inputs": {
+    "mnemonic": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
+    "entropy": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "salt": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+  },
+  "expected": {
+    "store_key": "bf98d971b4510affbfcdca811504b661e5e666009cf86c11ea23e4fe9abd7109",
+    "check_file": "01a0a1a2a3a4a5a6a7a8a9aaabacadaeafeb942be74b8835feddccd3caa6960e89"
+  }
+}

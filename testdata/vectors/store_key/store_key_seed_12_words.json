@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "store_key",
+  "name": "store_key_seed_12_words",
+  "generator": "conformance/vectors/store_key",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
+  },
+  "inputs": {
+    "mnemonic": "pipe stock song coast pair always emotion member joy sting dash theory",
+    "entropy": "a55ac33c9669f00f123456789abcdef0",
+    "salt": "ffffffffffffffffffffffffffffffff"
+  },
+  "expected": {
+    "store_key": "cf6d69bd4107cc4ecb22ce206f63964418e9cfd4a79dc38baf197bd7cd631e18",
+    "check_file": "01ffffffffffffffffffffffffffffffff48055f40c4a1f3374b97de0eb46c2f18"
+  }
+}
