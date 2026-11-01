@@ -488,7 +488,8 @@ CREATE INDEX contact_status_out_contact ON contact_status_out (contact_id);
 ALTER TABLE transactions ADD COLUMN receive_listing_dkey BLOB
     CHECK (receive_listing_dkey IS NULL OR length(receive_listing_dkey) = 33);
 ALTER TABLE transactions ADD COLUMN receive_listing_gen INTEGER
-    CHECK (receive_listing_gen IS NULL OR receive_listing_gen BETWEEN 0 AND 4294967295);
+    CHECK (receive_listing_gen IS NULL OR receive_listing_gen BETWEEN 0 AND 4294967295)
+    CHECK ((receive_listing_gen IS NULL) = (receive_listing_dkey IS NULL));
 ";
 
 pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];

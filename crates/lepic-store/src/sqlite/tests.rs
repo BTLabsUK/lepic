@@ -444,6 +444,28 @@ fn check_v12_seed(store: &SqliteStore) {
         (None, None),
         "an earlier receive came in on the payments address"
     );
+    let set = |dkey: &str, generation: &str| {
+        conn.execute(
+            &format!(
+                "UPDATE transactions SET receive_listing_dkey = {dkey}, \
+                 receive_listing_gen = {generation} WHERE id = 1"
+            ),
+            [],
+        )
+    };
+    for (dkey, generation) in [
+        ("zeroblob(33)", "NULL"),
+        ("NULL", "0"),
+        ("zeroblob(32)", "0"),
+        ("zeroblob(34)", "0"),
+    ] {
+        assert!(
+            set(dkey, generation).is_err(),
+            "a listing of {dkey} and {generation} is refused"
+        );
+    }
+    assert_eq!(set("zeroblob(33)", "7").unwrap(), 1);
+    assert_eq!(set("NULL", "NULL").unwrap(), 1);
 }
 
 fn check_v13_seed(store: &SqliteStore) {
