@@ -433,6 +433,107 @@ step_errors() {
     DETAIL="wrong password 4, bad address 2 and nothing stored, overspend 8, no wallet 5 with hint, no node 9"
 }
 
+# A directory key for the listing step: the generator point, a valid compressed key.
+LISTING_DKEY="0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+# Drains lepic's listing address of LISTING_DKEY until a counter reaches a value, as
+# drain_until does for the wallet's own address.
+listing_drain_until() {
+    local name="$1" want="$2" timeout="$3"
+    local deadline=$((SECONDS + timeout))
+    local total='{"received":0,"finalized":0,"repeated":0,"rejected":0,"held":0,"dropped":0,"notices":0}'
+    while :; do
+        local report
+        report="$(lepic epicbox drain --listing "${LISTING_DKEY}")" || return 1
+        total="$(jq -c -n --argjson a "${total}" --argjson b "${report}" \
+            '$a | with_entries(.value += ($b[.key] // 0))')"
+        if (($(jq -r ".${name}" <<<"${total}") >= want)); then
+            echo "${total}"
+            return 0
+        fi
+        if ((SECONDS >= deadline)); then
+            echo "${total}"
+            return 1
+        fi
+        sleep 2
+    done
+}
+
+# The ed25519 key of an onion v3 address, in hex: the first 32 of its base32 bytes.
+onion_key_hex() {
+    python3 -c 'import base64,sys; a=sys.argv[1].split(".")[0].upper(); print(base64.b32decode(a)[:32].hex())' "$1"
+}
+
+# epic-wallet pays lepic's listing address over Epicbox while lepic's own listener runs: a
+# listing drain on its own connection answers from the listing, the record names the
+# listing, the listener stays connected, and a payment that asks for a proof is refused with
+# nothing signed. The funds count toward the total the later restore must find.
+step_listing_receives_over_epicbox() {
+    peer_listen_start || fail "epic-wallet listener did not start" || return 1
+    local listing
+    listing="$(lepic epicbox status --listing "${LISTING_DKEY}" | jq -r .address)" ||
+        fail "lepic gave no listing address" || return 1
+    [[ "${listing%%@*}" != "${LEPIC_ADDRESS%%@*}" ]] || fail "the listing is the payments address" || return 1
+    local main_before
+    main_before="$(relay_messages_for "${LEPIC_ADDRESS%%@*}")"
+    env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
+        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" "${LEPIC_BIN}" epicbox listen \
+        >"${STATE_DIR}/listing-listen.out" 2>"${STATE_DIR}/listing-listen.err" </dev/null &
+    local listen_pid=$!
+    stop_listen() {
+        kill -INT "${listen_pid}" 2>/dev/null
+        local status=0
+        wait "${listen_pid}" || status=$?
+        cat "${STATE_DIR}/listing-listen.err" >>"${RUN_LOG}"
+        return "${status}"
+    }
+    wait_until "lepic listening" 30 grep -q "connected to the relay" "${STATE_DIR}/listing-listen.err" ||
+        { stop_listen; fail "listen did not report the connection"; } || return 1
+    wait_until "peer spendable" 180 ew_spendable_at_least peer $((3 * UNIT)) ||
+        { stop_listen; fail "epic-wallet has no spendable funds"; } || return 1
+    local last
+    last="$(lepic_last_tx_id)"
+    ew peer send -m epicbox -d "${listing}" -c 1 -s smallest 1.1 >>"${RUN_LOG}" ||
+        { stop_listen; fail "epic-wallet send to the listing failed"; } || return 1
+    local summary
+    summary="$(listing_drain_until received 1 120)" ||
+        { stop_listen; fail "the listing drain received nothing: ${summary}"; } || return 1
+    local tx tx_id slate_id
+    tx="$(lepic_incoming_after "${last}")"
+    [[ -n "${tx}" && "$(wc -l <<<"${tx}")" -eq 1 ]] || { stop_listen; fail "expected one new incoming tx: ${tx}"; } || return 1
+    tx_id="$(jq -r .tx_id <<<"${tx}")"
+    slate_id="$(jq -r .slate_id <<<"${tx}")"
+    lepic tx show "${tx_id}" | jq -e --arg dkey "${LISTING_DKEY}" \
+        '.receive_listing.dkey == $dkey and .receive_listing.generation == 0' >/dev/null ||
+        { stop_listen; fail "tx show does not name the listing: $(lepic tx show "${tx_id}")"; } || return 1
+    confirm_both "${tx_id}" "${slate_id}" || { stop_listen; return 1; }
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 1.1)))
+
+    # A payment proof asked of the listing, for the wallet's own proof key, is refused.
+    local onion proof_key peer_before
+    onion="$(lepic tor address | jq -r .onion)" || { stop_listen; fail "lepic gave no onion address"; } || return 1
+    proof_key="$(onion_key_hex "${onion}")"
+    peer_before="$(relay_messages_for "${PEER_KEY}")"
+    last="$(lepic_last_tx_id)"
+    ew peer send -m epicbox -d "${listing}" -c 1 -s smallest -y -z "${proof_key}" 1.2 >>"${RUN_LOG}" ||
+        { stop_listen; fail "epic-wallet send with a proof request failed"; } || return 1
+    summary="$(listing_drain_until rejected 1 120)" ||
+        { stop_listen; fail "the proof request was not refused: ${summary}"; } || return 1
+    [[ -z "$(lepic_incoming_after "${last}")" ]] || { stop_listen; fail "the proof request was received"; } || return 1
+    [[ "$(relay_messages_for "${PEER_KEY}")" == "${peer_before}" ]] ||
+        { stop_listen; fail "something was answered to the proof request"; } || return 1
+
+    # The listener never saw any of it and is still connected.
+    kill -0 "${listen_pid}" 2>/dev/null || fail "the listener stopped" || return 1
+    stop_listen || fail "listen exited non-zero on Ctrl-C" || return 1
+    grep -q '^Received 0, ' "${STATE_DIR}/listing-listen.out" ||
+        fail "the listener took listing traffic: $(cat "${STATE_DIR}/listing-listen.out")" || return 1
+    [[ "$(relay_messages_for "${LEPIC_ADDRESS%%@*}")" == "${main_before}" ]] ||
+        fail "the payments address queue changed" || return 1
+    check_lepic_total || return 1
+    DETAIL="listing paid by epic-wallet and answered from it, tx ${tx_id} names the listing and confirmed; proof request refused, nothing answered; listener undisturbed"
+}
+
 step_restore() {
     local restored status=0
     restored="$(printf '%s\n' "${RECOVERY_PHRASE}" | lepic_env "${LEPIC_BIN}" \
@@ -739,6 +840,7 @@ STEPS=(
     "tx cancel:step_cancel"
     "tx list, tx show, tx post:step_list_show_post"
     "errors and exit codes:step_errors"
+    "epic-wallet pays a lepic listing by epicbox:step_listing_receives_over_epicbox"
     "wallet restore:step_restore"
     "restore --no-scan, then wallet scan:step_scan_after_restore_without_scan"
     "wallet import-seed:step_import_seed"
