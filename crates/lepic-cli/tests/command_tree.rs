@@ -78,6 +78,7 @@ fn the_tree_has_every_planned_command() {
         "tor listen",
         "node status",
         "contact invite",
+        "contact request",
         "contact open",
         "contact accept",
         "contact enter",

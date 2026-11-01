@@ -618,6 +618,11 @@ pub enum ContactCommand {
     #[command(after_help = "\
 The invite's mailboxes live on this wallet's relay. `lepic contact collect` takes the answer.")]
     Invite(ContactInviteArgs),
+    /// Ask a wallet that paid or was paid lately to pair, at its payments address
+    #[command(after_help = "\
+Sent only to a key that ran LEPIC within 30 days, answered nothing without the marker since and \
+claims pair requests. `lepic contact collect` takes the answer.")]
+    Request(ContactRequestArgs),
     /// Show what an invite link says, before answering it
     Open(ContactLinkArg),
     /// Answer an invite; the reply goes to the inviter's relay unless --by-hand
@@ -741,6 +746,15 @@ pub struct ContactInviteArgs {
     /// Also offer five pairing words that find the invite
     #[arg(long)]
     pub pairing_words: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactRequestArgs {
+    /// The wallet's Epicbox address
+    #[arg(value_name = "ADDRESS")]
+    pub address: String,
+    #[command(flatten)]
+    pub name: ContactNameArg,
 }
 
 #[derive(Debug, Args)]

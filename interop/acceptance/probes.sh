@@ -200,6 +200,26 @@ probe_policy_decode() {
     DETAIL="$(jq -r '"\(.codec) \(.stage) header \(.header)"' <<<"${plain}"), TTL read as $(jq -r .ttl_cutoff_height <<<"${ttl}")"
 }
 
+# Fact 7: no pairing request reaches a key that is not a fresh LEPIC peer claiming them: lepic
+# refuses to send one to the stock listener, whose answers never carried the marker, or to the
+# probe key, which never sent this wallet anything, and posts nothing to either.
+probe_pair_request_needs_proven_key() {
+    local peer_before probe_before status
+    peer_before="$(relay_messages_for "${PEER_KEY}")"
+    probe_before="$(relay_messages_for "${PROBE_ADDRESS%%@*}")"
+    for to in "${PEER_ADDRESS}" "${PROBE_ADDRESS}"; do
+        status="$(lepic_status contact request "${to}" --name Probe)"
+        ((status == 7)) || fail "a pairing request to ${to} exited ${status}, not 7" || return 1
+    done
+    [[ "$(relay_messages_for "${PEER_KEY}")" == "${peer_before}" ]] ||
+        fail "a pairing request reached the stock listener" || return 1
+    [[ "$(relay_messages_for "${PROBE_ADDRESS%%@*}")" == "${probe_before}" ]] ||
+        fail "a pairing request reached the probe key" || return 1
+    [[ "$(lepic contact list | jq '.contacts | length')" == 0 ]] ||
+        fail "a refused request kept a pairing" || return 1
+    DETAIL="refused for the stock listener and an unknown key (7), nothing posted to either"
+}
+
 # Fact 3: a payload that is not a slate is never acknowledged by a stock listener, so the relay
 # hands it out again. Runs last; the stack is torn down afterwards.
 probe_non_slate_unacknowledged() {
@@ -227,5 +247,6 @@ PROBE_STEPS=(
     "fact 1, 2 stock listener bounces a V3 I1:probe_invoice_bounce"
     "fact 2 stock reply drops the marker:probe_reply_drops_marker"
     "fact 5 policy decodes a marked V3 invoice:probe_policy_decode"
+    "fact 7 no pair request to an unproven or stale key:probe_pair_request_needs_proven_key"
     "fact 3 non-slate payload unacknowledged:probe_non_slate_unacknowledged"
 )

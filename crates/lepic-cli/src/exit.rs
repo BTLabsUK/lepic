@@ -319,7 +319,16 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::CannotOpen
         | ContactError::NotASlate
         | ContactError::Stage(_)
-        | ContactError::KeyCheckRefused => ErrorKind::Rejected,
+        | ContactError::KeyCheckRefused
+        | ContactError::PeerNotProven
+        | ContactError::PairingInProgress
+        | ContactError::Crossed
+        | ContactError::InviteDismissed
+        | ContactError::Ended
+        | ContactError::Waiting
+        | ContactError::OtherAddress
+        | ContactError::AddressProofMissing => ErrorKind::Rejected,
+        ContactError::Post(_) => ErrorKind::Transport,
         _ => ErrorKind::Internal,
     }
 }

@@ -22,8 +22,9 @@ use crate::cli::{
     ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
     ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactOpenSealedArgs,
-    ContactPayArgs, ContactPlainArgs, ContactSasArgs, ContactSealArgs, ContactSendSlateArgs,
-    ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
+    ContactPayArgs, ContactPlainArgs, ContactRequestArgs, ContactSasArgs, ContactSealArgs,
+    ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg,
+    PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
@@ -218,6 +219,7 @@ impl<H: Host> Run<'_, H> {
         let relays = relays(&opened, &args, &self.settings.servers.meeting_relays);
         Ok(match args.command {
             ContactCommand::Invite(args) => invite(&opened, &relays, args).await?,
+            ContactCommand::Request(args) => request(&opened, &relays, args).await?,
             ContactCommand::Open(args) => {
                 let preview = wallet.contact_book().pairing_preview(&args.link)?;
                 Report::ContactPreview(ContactPreviewReport {
@@ -317,6 +319,25 @@ async fn invite<N: lepic_node::NodeApi + 'static>(
             .flatten()
             .map(|symbol| format!("{} {}", symbol.emoji, symbol.name))
             .collect(),
+    }))
+}
+
+/// `lepic contact request`: asks a proven wallet to pair, at its payments address.
+async fn request<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactRequestArgs,
+) -> Result<Report, CliError> {
+    let offer = opened
+        .wallet
+        .contact_book()
+        .pairing_request_send(relays, CONTACT_ACCOUNT, &args.address, &args.name.name)
+        .await?;
+    Ok(Report::ContactInvite(ContactInviteReport {
+        contact_id: offer.contact_id.to_string(),
+        link: offer.link,
+        expires_at: offer.expires_at.to_string(),
+        words: Vec::new(),
     }))
 }
 

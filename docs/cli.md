@@ -576,6 +576,10 @@ match` makes the contact verified. `contact open <LINK>` shows what an invite cl
 reply or confirm link sent by hand. In person, each side runs `contact show-card` and then
 `contact scan-card <ID> <LINK>` with the other's card.
 
+`contact request <ADDRESS> --name Anna` asks a wallet this one paid or was paid by lately to
+pair, at its Epicbox address; it is sent only to a key that ran LEPIC within 30 days and claims
+pair requests, and the pairing completes verified when the answer proves that address.
+
 `contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
 `contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`
 or `contact decline <SLATE_ID>`, which tells the contact.
