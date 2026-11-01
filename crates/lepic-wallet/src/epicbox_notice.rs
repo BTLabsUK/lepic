@@ -551,6 +551,7 @@ where
         tx_id: TxId,
         reply_to: &Destination,
         marked: bool,
+        features: Option<u32>,
     ) {
         let network = relay_network(self.config().network);
         let from = key_of(reply_to.as_str(), network);
@@ -561,8 +562,14 @@ where
                 } else {
                     None
                 };
-                for key in [from, invoiced].into_iter().flatten() {
-                    record_slate(repos, &key, now, marked)?;
+                // The claim is the payer's: the key the invoice went to is only shown LEPIC.
+                if let Some(key) = &from {
+                    record_slate(repos, key, now, marked, features)?;
+                }
+                if let Some(key) = &invoiced
+                    && Some(key) != from.as_ref()
+                {
+                    record_slate(repos, key, now, marked, None)?;
                 }
                 Ok(())
             })
@@ -574,13 +581,18 @@ where
 
     /// Records what an S1 showed about its sender: only a LEPIC wallet writes the marker, and
     /// the Epicbox signature binds the S1 to the key it came from.
-    pub(crate) async fn record_sending_peer(&self, reply_to: &Destination, marked: bool) {
+    pub(crate) async fn record_sending_peer(
+        &self,
+        reply_to: &Destination,
+        marked: bool,
+        features: Option<u32>,
+    ) {
         let network = relay_network(self.config().network);
         let Some(from) = key_of(reply_to.as_str(), network) else {
             return;
         };
         let recorded = self
-            .inbox_write(move |repos, now| record_slate(repos, &from, now, marked))
+            .inbox_write(move |repos, now| record_slate(repos, &from, now, marked, features))
             .await;
         if let Err(error) = recorded {
             warn!(error = %ErrorChain(&error), "peer capability not recorded");
@@ -596,6 +608,7 @@ where
         tx_id: TxId,
         reply_to: &Destination,
         marked: bool,
+        features: Option<u32>,
     ) {
         let network = relay_network(self.config().network);
         let Some(from) = key_of(reply_to.as_str(), network) else {
@@ -604,7 +617,7 @@ where
         let recorded = self
             .inbox_write(move |repos, now| {
                 if counterparty_key(repos, tx_id, network)?.as_deref() == Some(from.as_str()) {
-                    record_slate(repos, &from, now, marked)?;
+                    record_slate(repos, &from, now, marked, features)?;
                     let mut marks = repos.tx_marks(tx_id)?;
                     if marks.answer_marked != marked {
                         marks.answer_marked = marked;

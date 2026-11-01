@@ -121,18 +121,59 @@ pub(crate) fn record_unmarked(
     repos.put_peer_compat(key, &compat)
 }
 
-/// Records what the authenticated slate from `key` showed: marked or not.
+/// Records what the authenticated slate from `key` showed: marked, with the `features` its
+/// marker claimed, or not.
 pub(crate) fn record_slate(
     repos: &mut dyn Repositories,
     key: &str,
     now: Timestamp,
     marked: bool,
+    features: Option<u32>,
 ) -> Result<(), StoreError> {
     if marked {
-        record_marked(repos, key, now, None)
+        record_marked(repos, key, now, features)
     } else {
         record_unmarked(repos, key, now)
     }
+}
+
+/// Records the `features` a pairing envelope of `key` claimed, once the pairing proved the
+/// key: they replace the claim of the key's latest marked message, as a newer claim does.
+pub fn record_claim(
+    repos: &mut dyn Repositories,
+    key: &str,
+    now: Timestamp,
+    features: u32,
+) -> Result<(), StoreError> {
+    let mut compat = repos.peer_compat(key)?.unwrap_or_default();
+    compat.claimed = features | MARKER_BIT;
+    compat.features_at = Some(now);
+    compat.works &= compat.claimed;
+    repos.put_peer_compat(key, &compat)
+}
+
+/// Records that the feature `bit` worked with `key`, or failed. Only a claimed bit starts
+/// working; a failure clears it whatever was claimed. Silence is never a failure: callers
+/// report only what a message showed.
+pub fn record_works(
+    repos: &mut dyn Repositories,
+    key: &str,
+    bit: u32,
+    worked: bool,
+) -> Result<(), StoreError> {
+    let Some(mut compat) = repos.peer_compat(key)? else {
+        return Ok(());
+    };
+    let before = compat.works;
+    if worked {
+        compat.works |= bit & compat.claimed;
+    } else {
+        compat.works &= !bit;
+    }
+    if compat.works != before {
+        repos.put_peer_compat(key, &compat)?;
+    }
+    Ok(())
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -157,6 +198,34 @@ where
         Ok(session
             .store
             .read(|repos| Ok::<_, WalletError>(facts(repos, &key, now)?))?)
+    }
+
+    /// Records what the host app learned of one of its own features with the key of `address`:
+    /// that it worked, or that it failed. Only the host bits (device forwarding and the
+    /// directory) are taken; a bit the key never claimed does not start working. Sends nothing.
+    ///
+    /// Fails with [`InboxError::Address`] for an address that does not parse or is on the other
+    /// network, with [`InboxError::NotHostFeature`] for any other bit than one host bit, and with
+    /// [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn peer_feature_result(
+        &self,
+        address: &str,
+        bit: u32,
+        worked: bool,
+    ) -> Result<(), InboxError> {
+        use lepic_epicbox::marker::features::HOST_FEATURES;
+        if !bit.is_power_of_two() || bit & HOST_FEATURES == 0 {
+            return Err(InboxError::NotHostFeature);
+        }
+        let network = relay_network(self.config().network);
+        let key = EpicboxAddress::parse_key(address, network)
+            .map(|key| EpicboxAddress::key_text_of(&key, network))
+            .map_err(InboxError::Address)?;
+        let session = self.session()?;
+        Ok(session
+            .store
+            .write(|repos| Ok::<_, WalletError>(record_works(repos, &key, bit, worked)?))?)
     }
 
     /// Deletes what is known of every key not heard from for `older_than`, and returns how many
@@ -269,13 +338,78 @@ mod tests {
         store
             .write(|repos| {
                 record_marked(repos, "key", at(90).unwrap(), Some(0b10))?;
-                record_slate(repos, "key", now(), false)
+                record_slate(repos, "key", now(), false, None)
             })
             .unwrap();
         let compat = stored(&store);
         assert_eq!((compat.claimed, compat.works), (0b11, MARKER_BIT));
         assert_eq!(compat.last_unmarked_at, Some(now()));
         assert_eq!(PeerFacts::derive(Some(compat), now()).kind, PeerKind::Epic);
+    }
+
+    #[test]
+    fn a_marked_slate_records_the_bits_its_marker_claims() {
+        let store = store();
+        store
+            .write(|repos| record_slate(repos, "key", now(), true, Some(0b1010)))
+            .unwrap();
+        let compat = stored(&store);
+        assert_eq!((compat.claimed, compat.works), (0b1011, MARKER_BIT));
+        assert_eq!(compat.features_at, Some(now()));
+    }
+
+    #[test]
+    fn a_claimed_bit_works_only_once_it_worked_and_stops_on_a_failure() {
+        let store = store();
+        store
+            .write(|repos| {
+                record_marked(repos, "key", now(), Some(0b1000))?;
+                // Not claimed: never starts working.
+                record_works(repos, "key", 0b0100, true)?;
+                record_works(repos, "key", 0b1000, true)
+            })
+            .unwrap();
+        assert_eq!(stored(&store).works, 0b1001);
+        store
+            .write(|repos| record_works(repos, "key", 0b1000, false))
+            .unwrap();
+        assert_eq!(stored(&store).works, MARKER_BIT);
+    }
+
+    #[test]
+    fn silence_changes_nothing() {
+        let store = store();
+        store
+            .write(|repos| {
+                record_marked(repos, "key", at(10).unwrap(), Some(0b1000))?;
+                record_works(repos, "key", 0b1000, true)
+            })
+            .unwrap();
+        let before = stored(&store);
+        // Ninety days later nothing more arrived: what is known stays as it was.
+        assert_eq!(stored(&store), before);
+        assert_eq!(PeerFacts::derive(Some(before), now()).kind, PeerKind::Lepic);
+        assert_eq!(before.works, 0b1001);
+    }
+
+    #[test]
+    fn a_pairing_claim_replaces_the_bits_and_drops_what_no_longer_works() {
+        let store = store();
+        store
+            .write(|repos| {
+                record_marked(repos, "key", at(90).unwrap(), Some(0b1010))?;
+                record_works(repos, "key", 0b1000, true)?;
+                record_claim(repos, "key", now(), 0b0010)
+            })
+            .unwrap();
+        let compat = stored(&store);
+        assert_eq!((compat.claimed, compat.works), (0b0011, MARKER_BIT));
+        assert_eq!(compat.features_at, Some(now()));
+        assert_eq!(
+            compat.last_marked_at,
+            at(90),
+            "a claim is not a marked message"
+        );
     }
 
     #[test]

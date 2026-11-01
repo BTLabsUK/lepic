@@ -33,7 +33,7 @@ use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// The feature bit of a contact that sends and reads the pairing status notices, and makes
 /// its inviter wait until it is heard.
-pub const STATUS_NOTICES: u32 = 1 << 3;
+pub const STATUS_NOTICES: u32 = lepic_epicbox::marker::features::STATUS_NOTICES;
 
 /// How long a status notice is retried before it is dropped.
 pub const STATUS_RETRY_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -202,6 +202,18 @@ impl Tell {
     }
 }
 
+/// The payments key this pairing proved, as compat rows are keyed.
+pub(crate) fn proven_key(
+    record: &ContactRecord,
+    network: lepic_primitives::params::Network,
+) -> Option<String> {
+    let network = lepic_wallet::inbox::relay_network(network);
+    let address = record.facts.payments_address.as_deref()?;
+    lepic_epicbox::EpicboxAddress::parse_key(address, network)
+        .ok()
+        .map(|key| lepic_epicbox::EpicboxAddress::key_text_of(&key, network))
+}
+
 /// Seals `tell` for the contact of `record` and queues it in the store's status outbox, due at
 /// once. Nothing is queued for a pairing with no peer card or mailbox.
 pub(crate) fn queue_status(
@@ -319,6 +331,7 @@ where
         contact_id: ContactId,
         message: StatusMessage,
     ) -> Result<(), ContactError> {
+        let network = self.wallet.config().network;
         let session = self.wallet.session()?;
         let changes = self
             .contact_work(move |ports, _| {
@@ -330,6 +343,10 @@ where
                     };
                     if record.facts.ended_reason.is_some() {
                         return Ok(changes);
+                    }
+                    // The status notices work with the key this pairing proved.
+                    if let Some(key) = proven_key(&record, network) {
+                        lepic_wallet::peer_compat::record_works(repos, &key, STATUS_NOTICES, true)?;
                     }
                     match message {
                         StatusMessage::Finished => {}

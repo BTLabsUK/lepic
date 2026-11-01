@@ -40,7 +40,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use lepic_epicbox::marker::v3::carries_lepic_marker;
+use lepic_epicbox::marker::v3::{carries_lepic_marker, lepic_marker_features};
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
     AddressError, Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
@@ -155,6 +155,9 @@ pub enum InboxError {
     Address(#[source] AddressError),
     #[error("invoice expiry must be positive and at most two days")]
     InvoiceExpiry,
+    /// Only one of the host app's own feature bits can be reported.
+    #[error("not a host feature bit")]
+    NotHostFeature,
 }
 
 impl From<StoreError> for InboxError {
@@ -1170,6 +1173,7 @@ where
         reply_to: &Destination,
     ) -> Result<Handled, Settlement> {
         let marked = carries_lepic_marker(envelope.wire());
+        let features = lepic_marker_features(envelope.wire());
         let session = self.session().map_err(Hold::from)?;
         let slate_id = Uuid::from_bytes(*payment.id().as_bytes());
         let finalized_before = self
@@ -1187,7 +1191,7 @@ where
         {
             Ok(finalized) => {
                 // Recorded before the notice is decided, so an unmarked payment holds it back.
-                self.record_paying_peer(finalized.tx_id, reply_to, marked)
+                self.record_paying_peer(finalized.tx_id, reply_to, marked, features)
                     .await;
                 if let Some(kernel) = finalized.slate.kernel() {
                     self.notify_posted(finalized.tx_id, payment.id(), kernel.excess, marked)
@@ -1197,7 +1201,8 @@ where
             }
             Err(InvoiceError::NotPosted { tx_id, source }) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
-                self.record_paying_peer(tx_id, reply_to, marked).await;
+                self.record_paying_peer(tx_id, reply_to, marked, features)
+                    .await;
                 Ok(self.invoice_finalized(tx_id, payment, finalized_before))
             }
             Err(error @ InvoiceError::Expired { cutoff, .. }) => {
@@ -1243,7 +1248,7 @@ where
                     state: TxState::Cancelled,
                 },
             ) => {
-                self.record_paying_peer(tx_id, reply_to, false).await;
+                self.record_paying_peer(tx_id, reply_to, false, None).await;
                 Err(Refusal::Invoice(error).into())
             }
             Err(error) if invoice_finalize_is_permanent(&error) => {
@@ -1474,6 +1479,7 @@ where
         self.make_room_for(msg_id, attempt, proposal, reply_to)
             .await?;
         let marked = carries_lepic_marker(envelope.wire());
+        let features = lepic_marker_features(envelope.wire());
         match self
             .receive_from(
                 TRANSPORT_ID,
@@ -1485,7 +1491,7 @@ where
             .await
         {
             Ok(received) => {
-                self.record_sending_peer(reply_to, marked).await;
+                self.record_sending_peer(reply_to, marked, features).await;
                 // A payment answers only from the address it came in on: the S1 of a listing
                 // payment that arrives again at the payments address, or the other way round,
                 // gets no answer from there.
@@ -1559,6 +1565,7 @@ where
         reply_to: &Destination,
     ) -> Result<Handled, Settlement> {
         let marked = carries_lepic_marker(envelope.wire());
+        let features = lepic_marker_features(envelope.wire());
         let session = self.session().map_err(Hold::from)?;
         let slate_id = Uuid::from_bytes(*reply.id().as_bytes());
         let finalized_before = self
@@ -1597,7 +1604,8 @@ where
             Err(_) => None,
         };
         if let Some(tx_id) = answered {
-            self.record_receiving_peer(tx_id, reply_to, marked).await;
+            self.record_receiving_peer(tx_id, reply_to, marked, features)
+                .await;
         }
         match finalized {
             Ok(finalized) => {

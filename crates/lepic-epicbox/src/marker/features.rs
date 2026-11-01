@@ -22,7 +22,7 @@ pub const HOST_FEATURES: u32 = DEVICE_FORWARDING | DIRECTORY;
 
 /// The bits this build of LEPIC claims for itself, the same for every wallet it runs, never
 /// derived from a setting.
-pub const LEPIC_FEATURES: u32 = MARKER | ADDRESS_PROOF;
+pub const LEPIC_FEATURES: u32 = MARKER | ADDRESS_PROOF | STATUS_NOTICES;
 
 /// What a wallet whose host claims `host` writes: LEPIC's own bits, and of `host` only the
 /// host bits.
