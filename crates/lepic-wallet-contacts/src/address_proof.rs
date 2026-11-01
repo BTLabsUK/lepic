@@ -695,7 +695,8 @@ mod tests {
         let pairing = pairing();
         let binding = pairing.binding(ProofStep::Confirm);
         let message = binding.message();
-        let der = lepic_epicbox::sign_address_message(&message, &pairing.prover_address)
+        let digest = lepic_crypto::Message::from(<[u8; 32]>::from(Sha256::digest(message)));
+        let der = lepic_crypto::EcdsaSignature::sign(&digest, &pairing.prover_address)
             .unwrap()
             .to_der();
         for window in der.windows(32) {
