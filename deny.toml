@@ -21,12 +21,16 @@ allow = [
   "MPL-2.0",
   "CDLA-Permissive-2.0",
   "BlueOak-1.0.0",
-  # A block of the SQLite3 Multiple Ciphers amalgamation (sqlite3mc-src, ADR 0032).
-  "Unlicense",
 ]
 confidence-threshold = 0.9
 # MPL-2.0 is allowed ahead of need by ADR 0010.
 unused-allowed-license = "allow"
+
+# A block of the SQLite3 Multiple Ciphers amalgamation is under the Unlicense (ADR 0032); no
+# other crate may bring it in.
+[[licenses.exceptions]]
+crate = "sqlite3mc-src"
+allow = ["Unlicense"]
 
 [licenses.private]
 ignore = true

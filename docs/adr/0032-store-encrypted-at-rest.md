@@ -35,7 +35,7 @@ only a C compiler, as LEPIC's other C (secp256k1-zkp) does.
   (`CODEC_TYPE_CHACHA20`, every other scheme off), with `SQLITE_TEMP_STORE=3`. The build refuses
   pkg-config, system SQLite, SQLCipher and bindgen. No OpenSSL, no CMake, no bindgen.
 - **Licences.** SQLite3MC is MIT and public domain; one block is under the Unlicense, which
-  `deny.toml` now allows; the rest (CC0-1.0, Apache-2.0) was allowed already.
+  `deny.toml` allows for `sqlite3mc-src` alone, as a licence exception; the rest (CC0-1.0, Apache-2.0) was allowed already.
 - **Scheme.** Every 4 KiB page of the database and its WAL is encrypted with ChaCha20 and
   authenticated with Poly1305 (sqleet's construction): a 16-byte nonce drawn from SQLite3MC's
   ChaCha20 generator for every page write and a 16-byte tag at the end of the page (32 reserved
