@@ -19,8 +19,8 @@
 use std::ops;
 
 use super::Secp256k1;
+use crate::key::{SecretKey, PublicKey};
 use crate::ffi;
-use crate::key::{PublicKey, SecretKey};
 
 /// A tag used for recovering the public key from a compact signature
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -52,6 +52,7 @@ impl From<ffi::SharedSecret> for SharedSecret {
         SharedSecret(ss)
     }
 }
+
 
 impl ops::Index<usize> for SharedSecret {
     type Output = u8;
@@ -91,9 +92,9 @@ impl ops::Index<ops::RangeFull> for SharedSecret {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Secp256k1;
-    use super::SharedSecret;
     use rand::rng;
+    use super::SharedSecret;
+    use super::super::Secp256k1;
 
     #[test]
     fn ecdh() {
@@ -114,8 +115,8 @@ mod benches {
     use rand::rng;
     use test::{Bencher, black_box};
 
-    use super::super::Secp256k1;
     use super::SharedSecret;
+    use super::super::Secp256k1;
 
     #[bench]
     pub fn bench_ecdh(bh: &mut Bencher) {
@@ -123,9 +124,10 @@ mod benches {
         let (sk, pk) = s.generate_keypair(&mut rng()).unwrap();
 
         let s = Secp256k1::new();
-        bh.iter(|| {
+        bh.iter( || {
             let res = SharedSecret::new(&s, &pk, &sk);
             black_box(res);
         });
     }
 }
+
