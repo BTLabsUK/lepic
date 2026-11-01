@@ -30,8 +30,9 @@ struct Expected {
 
 fn plain_json() -> Result<String, Error> {
     let vector: serde_json::Value = serde_json::from_str(PLAIN_S1)?;
-    vector["expected"]["json"]
-        .as_str()
+    vector
+        .pointer("/expected/json")
+        .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| Error::reference("plain s1")(CheckFailed::Plaintext))
 }

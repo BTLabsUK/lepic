@@ -211,7 +211,7 @@ impl MinedShape {
 
 /// The wallet under test: LEPIC, or in the reference run an upstream wallet in its place.
 enum Subject {
-    Lepic(LepicParty),
+    Lepic(Box<LepicParty>),
     Reference(UpstreamParty),
 }
 
@@ -261,12 +261,12 @@ impl World {
             peer_writes,
         );
         let subject = match kind {
-            SubjectKind::Lepic => Subject::Lepic(LepicParty::restore(
+            SubjectKind::Lepic => Subject::Lepic(Box::new(LepicParty::restore(
                 "subject",
                 &phrase(&SUBJECT_ENTROPY),
                 node.url(),
                 7,
-            )),
+            ))),
             // The reference writes files as LEPIC's file method does, so the runs differ only in
             // the wallet, not in what the peer reads.
             SubjectKind::Reference => Subject::Reference(UpstreamParty::restore(
@@ -326,7 +326,7 @@ impl World {
         match who {
             Who::Peer => &mut self.peer,
             Who::Subject => match &mut self.subject {
-                Subject::Lepic(lepic) => lepic,
+                Subject::Lepic(lepic) => &mut **lepic,
                 Subject::Reference(upstream) => upstream,
             },
         }
@@ -335,7 +335,7 @@ impl World {
     /// The LEPIC subject, in the LEPIC run.
     pub fn lepic(&mut self) -> Option<&mut LepicParty> {
         match &mut self.subject {
-            Subject::Lepic(lepic) => Some(lepic),
+            Subject::Lepic(lepic) => Some(&mut **lepic),
             Subject::Reference(_) => None,
         }
     }

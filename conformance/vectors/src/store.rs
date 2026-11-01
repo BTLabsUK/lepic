@@ -198,10 +198,8 @@ fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) 
 
 fn words<const N: usize>(bytes: &[u8]) -> [u32; N] {
     let mut out = [0; N];
-    for (word, chunk) in out.iter_mut().zip(bytes.chunks_exact(4)) {
-        let mut le = [0; 4];
-        le.copy_from_slice(chunk);
-        *word = u32::from_le_bytes(le);
+    for (word, chunk) in out.iter_mut().zip(bytes.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*chunk);
     }
     out
 }
@@ -231,10 +229,12 @@ fn hchacha20(key: &[u8; 32], nonce: &[u8; 16]) -> [u8; 32] {
     }
     let mut out = [0; 32];
     for (chunk, word) in out
-        .chunks_exact_mut(4)
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
         .zip(state.iter().take(4).chain(state.iter().skip(12)))
     {
-        chunk.copy_from_slice(&word.to_le_bytes());
+        *chunk = word.to_le_bytes();
     }
     out
 }

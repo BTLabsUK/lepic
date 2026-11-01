@@ -10,8 +10,7 @@ use jiff::Timestamp;
 use lepic_keychain::vault::BackendError;
 use lepic_keychain::{KdfParams, Vault, VaultError, VaultStorage};
 use lepic_node::{
-    CallPolicy, HttpSettings, HttpTransport, NodeClient, Propagation, RetryPolicy,
-    webpki_tls_config,
+    CallPolicy, HttpTransport, NodeClient, Propagation, RetryPolicy, webpki_tls_config,
 };
 use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;

@@ -342,7 +342,7 @@ fn shared_x(secp: &Secp256k1, secret: &SecretKey, public: &PublicKey) -> Result<
 pub(super) fn unhex(text: &str) -> Vec<u8> {
     (0..text.len())
         .step_by(2)
-        .filter_map(|at| text.get(at..at + 2))
+        .filter_map(|at| text.get(at..at.checked_add(2)?))
         .filter_map(|pair| u8::from_str_radix(pair, 16).ok())
         .collect()
 }
