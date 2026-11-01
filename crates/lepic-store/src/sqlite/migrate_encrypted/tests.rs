@@ -781,9 +781,48 @@ fn a_connection_given_a_key_wipes_freed_memory() {
 }
 
 #[test]
+fn a_file_uri_names_the_path_whatever_its_form() {
+    assert_eq!(
+        file_uri(Path::new("/home/a b/wallet.enc.sqlite3.tmp")),
+        "file:///home/a%20b/wallet.enc.sqlite3.tmp"
+    );
+    assert_eq!(
+        file_uri(Path::new("data/wallet.enc.sqlite3.tmp")),
+        "file:data/wallet.enc.sqlite3.tmp"
+    );
+    if cfg!(windows) {
+        for (path, uri) in [
+            (r"C:\Users\a b\w", "file:///C:/Users/a%20b/w"),
+            (r"\\?\C:\Users\a b\w", "file:///C:/Users/a%20b/w"),
+            (r"\\server\share\w", "file:////server/share/w"),
+            (r"\\?\UNC\server\share\w", "file:////server/share/w"),
+        ] {
+            assert_eq!(file_uri(Path::new(path)), uri, "{path}");
+        }
+    }
+}
+
+/// A data directory the way the app's binding names it, canonicalised: on Windows that is the
+/// verbatim `\\?\` form.
+#[test]
+fn a_canonical_data_directory_is_copied() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(parent.path()).unwrap();
+    plain_database(&dir, 0);
+    let (_, report) = open_wallet_dir(&dir, keys(), &key(), None).unwrap();
+    assert_eq!(report.state, AtRestState::MigratedNow);
+}
+
+#[test]
 fn a_path_with_uri_characters_is_copied() {
     let parent = tempfile::tempdir().unwrap();
-    let dir = parent.path().join("a dir?#%&=");
+    // Windows allows no `?` in a file name.
+    let name = if cfg!(windows) {
+        "a dir#%&=+;"
+    } else {
+        "a dir?#%&=+;"
+    };
+    let dir = parent.path().join(name);
     std::fs::create_dir(&dir).unwrap();
     plain_database(&dir, 0);
     let (_, report) = open_wallet_dir(&dir, keys(), &key(), None).unwrap();

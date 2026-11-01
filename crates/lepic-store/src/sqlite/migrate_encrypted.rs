@@ -699,13 +699,47 @@ fn copy_into(
     Ok(())
 }
 
-/// A `file:` URI of `path`, with every byte but unreserved ones and separators escaped.
+/// A `file:` URI of `path`, with every byte but unreserved ones and separators escaped. The
+/// path is taken apart, not as text, so a Windows path in its verbatim form (`\\?\C:\...`,
+/// as a canonicalised data directory is) gives `file:///C:/...`, a UNC one
+/// `file:////server/share/...`, and a relative path stays relative.
 fn file_uri(path: &Path) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
-    let mut uri = String::from("file:");
-    if !text.starts_with('/') {
-        uri.push('/');
+    use std::path::{Component, Prefix};
+    let mut text = String::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+                    text.push('/');
+                    text.push(char::from(drive));
+                    text.push(':');
+                }
+                Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+                    text.push_str("//");
+                    text.push_str(&server.to_string_lossy());
+                    text.push('/');
+                    text.push_str(&share.to_string_lossy());
+                }
+                Prefix::Verbatim(_) | Prefix::DeviceNS(_) => {
+                    text.push_str(&prefix.as_os_str().to_string_lossy().replace('\\', "/"));
+                }
+            },
+            Component::RootDir => text.push('/'),
+            Component::CurDir => {}
+            Component::ParentDir | Component::Normal(_) => {
+                if !text.is_empty() && !text.ends_with('/') {
+                    text.push('/');
+                }
+                text.push_str(&component.as_os_str().to_string_lossy());
+            }
+        }
     }
+    // An absolute path gets the empty authority, so its first `/` starts the path.
+    let mut uri = String::from(if text.starts_with('/') {
+        "file://"
+    } else {
+        "file:"
+    });
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~/:".contains(&byte) {
             uri.push(char::from(byte));
