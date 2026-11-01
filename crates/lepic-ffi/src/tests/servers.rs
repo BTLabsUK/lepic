@@ -140,52 +140,49 @@ async fn a_switch_waits_for_a_running_send_and_calls_after_it_wait_for_the_switc
     let mut world = World::new();
     let (wallet, config) = world.funded("").await;
     let wallet = Arc::new(wallet);
+    // The new node holds every request until the end, so a call that reaches it before it
+    // should shows up in its stalled calls instead of racing to finish. Which node a call
+    // reached is decided under the gate; the order in which the spawned tasks see their
+    // calls end is not, so it is not what this test checks.
     let other = MockBackend::new(20).unwrap();
+    other.set_stalled(true);
     world.chain.backend().serve_at(OTHER_NODE, &other);
-    let ended = Arc::new(Mutex::new(Vec::new()));
 
     world.chain.set_node_stalled(true);
     let send = tokio::spawn({
-        let (wallet, ended) = (Arc::clone(&wallet), Arc::clone(&ended));
-        async move {
-            let sent = wallet.create_send_slate(EPIC, 1, None, None).await;
-            ended.lock().unwrap().push("send");
-            sent
-        }
+        let wallet = Arc::clone(&wallet);
+        async move { wallet.create_send_slate(EPIC, 1, None, None).await }
     });
     assert!(eventually(|| world.chain.stalled_node_calls() > 0).await);
     let switched = tokio::spawn({
-        let (wallet, ended) = (Arc::clone(&wallet), Arc::clone(&ended));
+        let wallet = Arc::clone(&wallet);
         let config = WalletConfig {
             node_url: OTHER_NODE.to_owned(),
             ..config
         };
-        async move {
-            let switched = wallet.set_servers(config).await;
-            ended.lock().unwrap().push("switch");
-            switched
-        }
+        async move { wallet.set_servers(config).await }
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
     let later = tokio::spawn({
-        let (wallet, ended) = (Arc::clone(&wallet), Arc::clone(&ended));
-        async move {
-            let summary = wallet.summary(false).await;
-            ended.lock().unwrap().push("later");
-            summary
-        }
+        let wallet = Arc::clone(&wallet);
+        async move { wallet.summary(true).await }
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
-        ended.lock().unwrap().is_empty(),
+        !send.is_finished() && !switched.is_finished() && !later.is_finished(),
         "nothing ends while the send is stalled"
     );
+    assert_eq!(other.stalled_calls(), 0, "nothing reaches the new node yet");
 
+    // The send ends on the old node: had the switch gone first, it would wait on the new one.
     world.chain.set_node_stalled(false);
     send.await.unwrap().unwrap();
     switched.await.unwrap().unwrap();
+    // The call made while the switch waited goes to the new node.
+    assert!(eventually(|| other.stalled_calls() > 0).await);
+    assert!(!later.is_finished());
+    other.set_stalled(false);
     later.await.unwrap().unwrap();
-    assert_eq!(*ended.lock().unwrap(), ["send", "switch", "later"]);
     assert!(wallet.session().ensure_unlocked().is_ok());
 }
 
