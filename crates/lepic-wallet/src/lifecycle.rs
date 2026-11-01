@@ -593,6 +593,34 @@ mod tests {
         assert_eq!(key, expected);
     }
 
+    /// The store vectors record both subkeys of their seeds, as an independent implementation
+    /// derived them.
+    #[test]
+    fn store_keys_match_the_store_vectors() {
+        for name in ["peer_compat", "peer_compat_migrated"] {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/vectors/store")
+                .join(format!("{name}.json"));
+            let vector: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let field = |group: &str, key: &str| vector[group][key].as_str().unwrap().to_owned();
+            let hex = |bytes: &[u8]| -> String {
+                bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+            };
+            let entropy_hex = field("inputs", "entropy");
+            let entropy: Vec<u8> = (0..entropy_hex.len() / 2)
+                .map(|at| u8::from_str_radix(&entropy_hex[2 * at..2 * at + 2], 16).unwrap())
+                .collect();
+            let seed = Seed::from_entropy(&entropy).unwrap();
+            let mut context = [0; CONTEXT_KEY_LEN];
+            fill_context_key(&seed, &mut context).unwrap();
+            let mut tag = [0; PEER_TAG_KEY_LEN];
+            fill_peer_tag_key(&seed, &mut tag).unwrap();
+            assert_eq!(hex(&context), field("expected", "context_key"), "{name}");
+            assert_eq!(hex(&tag), field("expected", "peer_tag_key"), "{name}");
+        }
+    }
+
     #[test]
     fn peer_tag_key_is_its_own_subkey_of_the_seed() {
         let seed = Seed::from_entropy(&[5; 32]).unwrap();

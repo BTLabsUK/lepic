@@ -41,5 +41,9 @@ required-features = ["sqlite"]
 name = "suite"
 required-features = ["sqlite"]
 
+[[test]]
+name = "vectors"
+required-features = ["sqlite"]
+
 [lints]
 workspace = true
