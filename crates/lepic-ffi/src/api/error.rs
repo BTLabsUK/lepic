@@ -238,6 +238,10 @@ pub enum WalletErrorKind {
     /// key than its own, or any proof for a payment to a listing address. Nothing was signed
     /// or stored.
     ForeignProofAddress,
+    /// The wallet's encrypted database does not open with the key its recovery phrase gives:
+    /// its key check refuses it. Nothing was changed or moved. Recover with the phrase only
+    /// if it is this wallet's; the database is kept.
+    WrongKey,
 }
 
 impl WalletErrorKind {
@@ -327,6 +331,7 @@ impl WalletErrorKind {
             Self::PairingWaiting => 88,
             // 83 to 88 belong to the pairing kinds.
             Self::ForeignProofAddress => 89,
+            Self::WrongKey => 90,
         }
     }
 }
@@ -414,6 +419,7 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         E::Store(lepic_store::StoreError::DamagedSetAside | lepic_store::StoreError::Damaged) => {
             WalletErrorKind::DamagedDatabase
         }
+        E::Store(lepic_store::StoreError::WrongKey) => WalletErrorKind::WrongKey,
         E::Store(_) => WalletErrorKind::Io,
         E::SecretVault(_) | E::SecretStore(_) => WalletErrorKind::SecretStore,
         // The node reported a chain position the wallet does not believe.
@@ -797,6 +803,7 @@ mod tests {
             (K::PairingEnded, 87),
             (K::PairingWaiting, 88),
             (K::ForeignProofAddress, 89),
+            (K::WrongKey, 90),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");

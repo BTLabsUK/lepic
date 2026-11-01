@@ -543,7 +543,7 @@ async fn a_reset_without_a_wallet_database_is_refused_and_writes_nothing() {
         !fixture
             .dir
             .path()
-            .join(lepic_wallet::DATABASE_FILE)
+            .join(lepic_wallet::ENCRYPTED_DATABASE_FILE)
             .exists()
     );
 }
@@ -608,27 +608,32 @@ async fn a_stop_at_any_step_of_a_reset_leaves_a_wallet_that_opens() {
     }
 }
 
-/// The wallet database of `fixture`, opened as another program with the data folder would.
-fn database(fixture: &Fixture) -> lepic_store::SqliteStore {
+/// The wallet database of `fixture`, opened as another program with the data folder and the
+/// recovery phrase would.
+fn database(fixture: &Fixture, phrase: &str) -> lepic_store::SqliteStore {
+    let seed = lepic_keychain::Seed::from_mnemonic(phrase).unwrap();
     lepic_store::SqliteStore::open(
-        &fixture.dir.path().join(lepic_wallet::DATABASE_FILE),
-        lepic_store::StoreKeys::from_bytes([0; 32], [0; 32]),
-        lepic_store::AtRest::Plain,
+        &fixture
+            .dir
+            .path()
+            .join(lepic_wallet::ENCRYPTED_DATABASE_FILE),
+        lepic_wallet::lifecycle::store_keys(&seed).unwrap(),
+        lepic_store::AtRest::Encrypted(&lepic_wallet::store_key(&seed).unwrap()),
     )
     .unwrap()
 }
 
 const SEED_CHECK: &str = "wallet.seed_check";
 
-fn seed_check(fixture: &Fixture) -> Option<String> {
-    database(fixture)
+fn seed_check(fixture: &Fixture, phrase: &str) -> Option<String> {
+    database(fixture, phrase)
         .read(|repos| repos.setting(SEED_CHECK))
         .unwrap()
 }
 
 /// The database as a version before the seed check left it.
-fn drop_seed_check(fixture: &Fixture) {
-    database(fixture)
+fn drop_seed_check(fixture: &Fixture, phrase: &str) {
+    database(fixture, phrase)
         .write(|repos| repos.delete_setting(SEED_CHECK))
         .unwrap();
 }
@@ -639,10 +644,12 @@ fn drop_seed_check(fixture: &Fixture) {
 async fn a_reset_with_a_phrase_whose_fingerprint_collides_is_refused() {
     let fixture = Fixture::new();
     let store = FaultyStore::default();
-    drop(create(&fixture, &store.app_store()).await);
+    let wallet = create(&fixture, &store.app_store()).await;
+    let phrase = wallet.mnemonic(OLD.to_owned()).await.unwrap();
+    drop(wallet);
     let vault = store.get(VAULT_KEY);
     let colliding = wallet_fingerprint(OTHER_PHRASE.to_owned(), Chain::Floonet).unwrap();
-    database(&fixture)
+    database(&fixture, &phrase)
         .write(|repos| repos.put_setting("wallet.fingerprint", &colliding))
         .unwrap();
 
@@ -659,8 +666,8 @@ async fn a_reset_of_a_database_without_a_seed_check_is_proven_by_an_output() {
     let fixture = Fixture::new();
     let store = FaultyStore::default();
     let phrase = funded(&fixture, &store).await;
-    let check = seed_check(&fixture).unwrap();
-    drop_seed_check(&fixture);
+    let check = seed_check(&fixture, &phrase).unwrap();
+    drop_seed_check(&fixture, &phrase);
     let mut config = fixture.config();
     config.node_url = "not a node url".to_owned();
 
@@ -668,13 +675,13 @@ async fn a_reset_of_a_database_without_a_seed_check_is_proven_by_an_output() {
         &fixture.runtime,
         config,
         &store.app_store(),
-        phrase,
+        phrase.clone(),
         NEW.to_owned(),
     )
     .await
     .unwrap();
 
-    assert_eq!(seed_check(&fixture), Some(check));
+    assert_eq!(seed_check(&fixture, &phrase), Some(check));
     assert!(opens(&fixture, &store, NEW).await);
 }
 
@@ -685,14 +692,14 @@ async fn a_reset_of_a_database_with_nothing_to_prove_the_phrase_is_refused() {
     let wallet = create(&fixture, &store.app_store()).await;
     let phrase = wallet.mnemonic(OLD.to_owned()).await.unwrap();
     drop(wallet);
-    drop_seed_check(&fixture);
+    drop_seed_check(&fixture, &phrase);
     let vault = store.get(VAULT_KEY);
 
     let refused = reset(&fixture, &store, &phrase).await;
 
     assert_eq!(kind(refused), WalletErrorKind::WalletNotFound);
     assert_eq!(store.get(VAULT_KEY), vault);
-    assert_eq!(seed_check(&fixture), None);
+    assert_eq!(seed_check(&fixture, &phrase), None);
 }
 
 /// Unlike an open, the reset leaves a damaged database where it is, so a retry reports the
@@ -704,7 +711,10 @@ async fn a_reset_of_a_damaged_database_leaves_it_in_place() {
     let wallet = create(&fixture, &store.app_store()).await;
     let phrase = wallet.mnemonic(OLD.to_owned()).await.unwrap();
     drop(wallet);
-    let path = fixture.dir.path().join(lepic_wallet::DATABASE_FILE);
+    let path = fixture
+        .dir
+        .path()
+        .join(lepic_wallet::ENCRYPTED_DATABASE_FILE);
     std::fs::write(&path, [0x5a; 8192]).unwrap();
     let vault = store.get(VAULT_KEY);
 

@@ -2,6 +2,7 @@
 //! Binding behaviour that needs a runtime, a wallet directory and the app's store, driven
 //! through the API the app calls.
 
+use crate::api::at_rest::StoreAtRestState;
 use crate::api::diagnostics::LogLevel;
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::LepicRuntime;
@@ -1188,7 +1189,7 @@ async fn a_new_wallet_refuses_a_password_shorter_than_eight_characters() {
         !fixture
             .dir
             .path()
-            .join(lepic_wallet::DATABASE_FILE)
+            .join(lepic_wallet::ENCRYPTED_DATABASE_FILE)
             .exists()
     );
 }
@@ -1338,7 +1339,7 @@ fn database_files(dir: &std::path::Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with(lepic_wallet::DATABASE_FILE))
+        .filter(|name| name.starts_with("wallet."))
         .collect();
     names.sort();
     names
@@ -1394,7 +1395,7 @@ async fn a_failed_restore_keeps_the_database_that_was_there() {
     .unwrap();
     drop(first);
     let before = database_files(fixture.dir.path());
-    assert!(before.contains(&lepic_wallet::DATABASE_FILE.to_owned()));
+    assert!(before.contains(&lepic_wallet::ENCRYPTED_DATABASE_FILE.to_owned()));
 
     let restored = EpicWallet::create(
         &fixture.runtime,
@@ -1405,7 +1406,10 @@ async fn a_failed_restore_keeps_the_database_that_was_there() {
     )
     .await;
     assert_eq!(kind(restored), WalletErrorKind::SecretStore);
-    assert!(database_files(fixture.dir.path()).contains(&lepic_wallet::DATABASE_FILE.to_owned()));
+    assert!(
+        database_files(fixture.dir.path())
+            .contains(&lepic_wallet::ENCRYPTED_DATABASE_FILE.to_owned())
+    );
 }
 
 /// A damaged database reaches the app as its own kind, once; it is kept beside the wallet and
@@ -1417,7 +1421,10 @@ async fn a_damaged_database_is_reported_once_and_then_rebuilt() {
     let created = fixture.create_with_pin(&store, PIN).await;
     let sealed = created.sealed_password.clone();
     drop(created);
-    let database = fixture.dir.path().join(lepic_wallet::DATABASE_FILE);
+    let database = fixture
+        .dir
+        .path()
+        .join(lepic_wallet::ENCRYPTED_DATABASE_FILE);
     std::fs::write(&database, [0x5a; 8192]).unwrap();
 
     let damaged = fixture.open_with_pin(&store, PIN, &sealed).await;
@@ -1431,4 +1438,144 @@ async fn a_damaged_database_is_reported_once_and_then_rebuilt() {
 
     let wallet = fixture.open_with_pin(&store, PIN, &sealed).await.unwrap();
     assert!(wallet.summary(false).await.is_ok());
+}
+
+/// Removes the wallet's encrypted database and puts an empty plain one of an earlier build in
+/// its place, under `phrase`'s keys.
+fn plain_database_in_place_of_the_encrypted_one(fixture: &Fixture, phrase: &str) {
+    for suffix in ["", "-wal", "-shm", ".check"] {
+        let path = fixture
+            .dir
+            .path()
+            .join(format!("{}{suffix}", lepic_wallet::ENCRYPTED_DATABASE_FILE));
+        drop(std::fs::remove_file(path));
+    }
+    let seed = lepic_keychain::Seed::from_mnemonic(phrase).unwrap();
+    drop(
+        lepic_store::SqliteStore::open(
+            &fixture.dir.path().join(lepic_wallet::DATABASE_FILE),
+            lepic_wallet::lifecycle::store_keys(&seed).unwrap(),
+            lepic_store::AtRest::Plain,
+        )
+        .unwrap(),
+    );
+}
+
+/// An open reports how it found the database: a new wallet's is encrypted, a plain one of an
+/// earlier build is moved into an encrypted one at the first open, which the next open finds.
+#[tokio::test]
+async fn an_open_reports_the_move_of_a_plain_database_to_encryption() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let sealed = created.sealed_password.clone();
+    let at_rest = created.wallet.store_at_rest().await.unwrap();
+    assert_eq!(at_rest.state, StoreAtRestState::Encrypted);
+    assert!(!at_rest.rollback_set_aside);
+    let phrase = created
+        .wallet
+        .mnemonic_with_pin(PIN.to_owned(), sealed.clone())
+        .await
+        .unwrap();
+    drop(created);
+    plain_database_in_place_of_the_encrypted_one(&fixture, &phrase);
+
+    let wallet = fixture.open_with_pin(&store, PIN, &sealed).await.unwrap();
+    let at_rest = wallet.store_at_rest().await.unwrap();
+    assert_eq!(at_rest.state, StoreAtRestState::MigratedNow, "{at_rest:?}");
+    assert!(at_rest.reason.is_empty());
+    let names = database_files(fixture.dir.path());
+    assert!(
+        names.contains(&lepic_wallet::ENCRYPTED_DATABASE_FILE.to_owned()),
+        "{names:?}"
+    );
+    assert!(names.contains(&"wallet.sqlite3.pre-encryption".to_owned()));
+    assert!(!names.contains(&lepic_wallet::DATABASE_FILE.to_owned()));
+    // The plain copy stays until the app retires it.
+    let retired = wallet.retire_plain_store(30).await.unwrap();
+    assert_eq!(
+        retired.deleted,
+        vec!["wallet.sqlite3.pre-encryption".to_owned()]
+    );
+    drop(wallet);
+
+    let wallet = fixture.open_with_pin(&store, PIN, &sealed).await.unwrap();
+    assert_eq!(
+        wallet.store_at_rest().await.unwrap().state,
+        StoreAtRestState::Encrypted
+    );
+}
+
+/// An encrypted database whose key check refuses the vault's seed reaches the app as
+/// `WrongKey`, with nothing moved.
+#[tokio::test]
+async fn a_database_of_another_key_is_wrong_key_and_nothing_moves() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let sealed = created.sealed_password.clone();
+    drop(created);
+    // Another wallet's encrypted database copied over this one's.
+    let other = Fixture::new();
+    drop(
+        other
+            .create_with_pin(&AppSecretStore::in_memory(), PIN)
+            .await,
+    );
+    for suffix in ["", ".check"] {
+        let name = format!("{}{suffix}", lepic_wallet::ENCRYPTED_DATABASE_FILE);
+        std::fs::copy(other.dir.path().join(&name), fixture.dir.path().join(&name)).unwrap();
+    }
+    let before: Vec<(String, Vec<u8>)> = database_files(fixture.dir.path())
+        .into_iter()
+        .filter(|name| !name.ends_with("-shm"))
+        .map(|name| {
+            let bytes = std::fs::read(fixture.dir.path().join(&name)).unwrap();
+            (name, bytes)
+        })
+        .collect();
+
+    let refused = fixture.open_with_pin(&store, PIN, &sealed).await;
+    assert_eq!(kind(refused), WalletErrorKind::WrongKey);
+    assert_eq!(WalletErrorKind::WrongKey.code(), 90);
+    let after: Vec<(String, Vec<u8>)> = database_files(fixture.dir.path())
+        .into_iter()
+        .filter(|name| !name.ends_with("-shm"))
+        .map(|name| {
+            let bytes = std::fs::read(fixture.dir.path().join(&name)).unwrap();
+            (name, bytes)
+        })
+        .collect();
+    assert_eq!(after, before);
+}
+
+/// Deleting a wallet removes its encrypted database, key check and the plain copies set aside.
+#[tokio::test]
+async fn delete_wallet_removes_the_encrypted_database_and_the_plain_copies() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = fixture.create_with_pin(&store, PIN).await;
+    let sealed = created.sealed_password.clone();
+    let phrase = created
+        .wallet
+        .mnemonic_with_pin(PIN.to_owned(), sealed.clone())
+        .await
+        .unwrap();
+    drop(created);
+    plain_database_in_place_of_the_encrypted_one(&fixture, &phrase);
+    drop(fixture.open_with_pin(&store, PIN, &sealed).await.unwrap());
+    std::fs::write(
+        fixture
+            .dir
+            .path()
+            .join("wallet.sqlite3.after-rollback-1700000000"),
+        b"x",
+    )
+    .unwrap();
+    assert!(database_files(fixture.dir.path()).len() > 2);
+
+    crate::api::wallet::delete_wallet(&fixture.runtime, fixture.config(), &store)
+        .await
+        .unwrap();
+    assert_eq!(database_files(fixture.dir.path()), Vec::<String>::new());
 }

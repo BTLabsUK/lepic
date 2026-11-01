@@ -46,8 +46,8 @@ use lepic_wallet::self_send::SelfSent;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::slate::WireSlate;
 use lepic_wallet::{
-    Clock, DATABASE_FILE, Event, NodeEndpoint, Password, Ports, ReceiveRequest, SessionState,
-    SharedRng, Wallet, WalletName, WordCount,
+    Clock, DATABASE_FILE, ENCRYPTED_DATABASE_FILE, Event, NodeEndpoint, Password, Ports,
+    ReceiveRequest, SessionState, SharedRng, Wallet, WalletName, WordCount,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -56,6 +56,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
+use crate::api::at_rest::{RetiredPlainStore, StoreAtRest, StoreAtRestState};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
@@ -516,7 +517,7 @@ fn engine(
     };
     let ports = Ports {
         node,
-        stores: ClaimedStores(Arc::clone(claim)),
+        stores: ClaimedStores::new(Arc::clone(claim), runtime),
         secrets: AppVault::new(vault.clone(), runtime.kdf),
         transports,
         clock: Arc::new(SystemClock),
@@ -700,10 +701,12 @@ impl Session {
         origin: SeedOrigin,
         password: Zeroizing<String>,
     ) -> Result<(), WalletError> {
-        let database = self.data_dir.join(DATABASE_FILE);
-        let made_database = !tokio::fs::try_exists(&database)
-            .await
-            .map_err(|error| io("checking the wallet database", &error))?;
+        let mut made_database = true;
+        for name in [DATABASE_FILE, ENCRYPTED_DATABASE_FILE] {
+            made_database &= !tokio::fs::try_exists(self.data_dir.join(name))
+                .await
+                .map_err(|error| io("checking the wallet database", &error))?;
+        }
         if let Err(error) = self.create_with_vault(origin, password).await {
             if made_database {
                 // Closes the database before its files are removed.
@@ -1187,6 +1190,43 @@ impl Session {
 
     pub(crate) fn fingerprint(&self) -> Result<String, WalletError> {
         Ok(self.engine.fingerprint()?)
+    }
+
+    pub(crate) fn store_at_rest(&self) -> Result<StoreAtRest, WalletError> {
+        let report = self.engine.store_at_rest()?.ok_or_else(|| {
+            WalletError::new(WalletErrorKind::Other, "the store reports nothing at rest")
+        })?;
+        Ok(StoreAtRest::from(&report))
+    }
+
+    /// Under the session's claim, so nothing opens the directory meanwhile.
+    pub(crate) async fn retire_plain_store(
+        &self,
+        older_than_days: u32,
+    ) -> Result<RetiredPlainStore, WalletError> {
+        if self.store_at_rest()?.state == StoreAtRestState::FellBackToPlain {
+            return Ok(RetiredPlainStore {
+                deleted: Vec::new(),
+            });
+        }
+        let dir = self.data_dir.clone();
+        let older_than =
+            std::time::Duration::from_secs(u64::from(older_than_days).saturating_mul(86_400));
+        let summary = tokio::task::spawn_blocking(move || {
+            lepic_store::retire_plain_store(&dir, older_than, std::time::SystemTime::now())
+        })
+        .await
+        .map_err(|_| WalletError::new(WalletErrorKind::Panic, "retirement failed inside lepic"))?
+        .map_err(|error| WalletError::new(WalletErrorKind::Io, error.to_string()))?;
+        if !summary.deleted.is_empty() {
+            info!(
+                files = summary.deleted.len(),
+                "plain database copies deleted"
+            );
+        }
+        Ok(RetiredPlainStore {
+            deleted: summary.deleted,
+        })
     }
 
     pub(crate) fn cancel_scan(&self) {
@@ -2424,16 +2464,44 @@ pub(crate) async fn wallet_exists(store: &AppSecretStore) -> Result<bool, Wallet
     Ok(store.read(VAULT_KEY).await?.is_some() || store.read(VAULT_NEXT_KEY).await?.is_some())
 }
 
-/// Removes the wallet database in `data_dir` with its journal files, if there are any.
+/// Removes the wallet database in `data_dir`, plain or encrypted, with its journal files and
+/// key check, if there are any.
 async fn remove_database(data_dir: &Path) -> Result<(), WalletError> {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let path = data_dir.join(format!("{DATABASE_FILE}{suffix}"));
+    for (name, suffix) in [DATABASE_FILE, ENCRYPTED_DATABASE_FILE]
+        .into_iter()
+        .flat_map(|name| ["", "-wal", "-shm", "-journal", ".check"].map(|suffix| (name, suffix)))
+    {
+        let path = data_dir.join(format!("{name}{suffix}"));
         match tokio::fs::remove_file(&path).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(io("deleting the wallet database", &error)),
         }
     }
+    Ok(())
+}
+
+/// Removes the plain copies of the database set aside by the move to encryption, before the
+/// encrypted database itself goes: [`lepic_store::retire_plain_store`] deletes them only while
+/// that is there. A deleted wallet leaves no readable history behind.
+async fn remove_set_aside_databases(data_dir: &Path) -> Result<(), WalletError> {
+    let dir = data_dir.to_owned();
+    tokio::task::spawn_blocking(move || {
+        // Every after-rollback file is older than a minute from now.
+        let now = std::time::SystemTime::now();
+        let later = now
+            .checked_add(std::time::Duration::from_secs(60))
+            .unwrap_or(now);
+        lepic_store::retire_plain_store(&dir, std::time::Duration::ZERO, later)
+    })
+    .await
+    .map_err(|_| {
+        WalletError::new(
+            WalletErrorKind::Panic,
+            "database removal failed inside lepic",
+        )
+    })?
+    .map_err(|error| WalletError::new(WalletErrorKind::Io, error.to_string()))?;
     Ok(())
 }
 
@@ -2444,6 +2512,7 @@ pub(crate) async fn delete_wallet(
     store: &AppSecretStore,
 ) -> Result<(), WalletError> {
     let claim = runtime.claim(Path::new(&config.data_dir)).await?;
+    remove_set_aside_databases(&claim.dir).await?;
     remove_database(&claim.dir).await?;
     store.delete(VAULT_KEY).await?;
     store.delete(VAULT_NEXT_KEY).await?;
@@ -2469,7 +2538,12 @@ pub(crate) async fn reset_password(
     let dir = claim.dir.clone();
     let phrase = normalize_phrase(&phrase);
     let checked = tokio::task::spawn_blocking(move || {
-        lepic_wallet::lifecycle::check_phrase(&lepic_wallet::SqliteStores, &dir, network, &phrase)
+        lepic_wallet::lifecycle::check_phrase(
+            &lepic_wallet::EncryptingSqliteStores::default(),
+            &dir,
+            network,
+            &phrase,
+        )
     })
     .await
     .map_err(|_| WalletError::new(WalletErrorKind::Panic, "phrase check failed inside lepic"))?;

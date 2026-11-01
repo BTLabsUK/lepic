@@ -28,6 +28,7 @@ mod boundary;
 mod frb_generated;
 mod inspect;
 mod log;
+mod migration;
 #[cfg(feature = "mock")]
 mod mock;
 #[cfg(not(feature = "tor"))]

@@ -2,6 +2,7 @@
 //! where the operation is the same; the binding's README maps old calls to new ones.
 
 pub mod app_data;
+pub mod at_rest;
 pub mod contact;
 pub mod diagnostics;
 pub mod error;

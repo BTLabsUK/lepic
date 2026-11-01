@@ -18,6 +18,7 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::boundary::{Boundary, end_stream, guard, guard_or, install_panic_hook};
 use crate::frb_generated::StreamSink;
 use crate::log::LogForwarder;
+use crate::migration::MigrationForwarder;
 use crate::node::NodeFactory;
 use crate::pin::{PinGuard, PinPolicy};
 
@@ -57,6 +58,8 @@ pub(crate) struct RuntimeInner {
     pub(crate) kdf: KdfParams,
     pub(crate) pin: PinGuard,
     open: Mutex<BTreeSet<PathBuf>>,
+    /// Where the progress of a copy of a plain database goes.
+    pub(crate) migration: Arc<MigrationForwarder>,
     /// Signalled whenever a claim in this runtime is released, so a claim waiting on the
     /// directory tries again at once.
     released: tokio::sync::Notify,
@@ -120,6 +123,7 @@ impl LepicRuntime {
                 kdf,
                 pin: PinGuard::new(pin),
                 open: Mutex::default(),
+                migration: Arc::default(),
                 released: tokio::sync::Notify::new(),
                 #[cfg(feature = "mock")]
                 relay: None,
@@ -238,8 +242,10 @@ impl RuntimeInner {
     /// this runtime or any other, is waited for up to [`CLAIM_WAIT`]: a wallet just locked on
     /// it releases it once the call still running on it has finished its store write. A
     /// release in this runtime wakes the wait at once; one elsewhere is seen at the next try,
-    /// every [`CLAIM_RETRY_WAIT`]. Fails with [`WalletErrorKind::WalletBusy`] when the
-    /// directory is still in use after the wait.
+    /// every [`CLAIM_RETRY_WAIT`]. While the holder copies a plain database into an encrypted
+    /// one, which can take a while on a phone, the wait goes on up to [`MIGRATION_WAIT`], so a
+    /// second opener waits for the copy rather than failing. Fails with
+    /// [`WalletErrorKind::WalletBusy`] when the directory is still in use after the wait.
     pub(crate) async fn claim(self: &Arc<Self>, data_dir: &Path) -> Result<DirClaim, WalletError> {
         let dir = std::fs::canonicalize(data_dir).map_err(|error| {
             WalletError::new(
@@ -247,7 +253,9 @@ impl RuntimeInner {
                 format!("wallet directory is not usable: {error}"),
             )
         })?;
-        let deadline = tokio::time::Instant::now().checked_add(CLAIM_WAIT);
+        let started = tokio::time::Instant::now();
+        let deadline = started.checked_add(CLAIM_WAIT);
+        let migration_deadline = started.checked_add(MIGRATION_WAIT);
         loop {
             // Listening before the try, so a release between the try and the wait is not
             // missed.
@@ -257,6 +265,11 @@ impl RuntimeInner {
             match self.try_claim(&dir) {
                 Err(error) if error.kind == WalletErrorKind::WalletBusy => {
                     let now = tokio::time::Instant::now();
+                    let deadline = if lepic_store::migration_in_progress(&dir) {
+                        migration_deadline
+                    } else {
+                        deadline
+                    };
                     let Some(deadline) = deadline.filter(|deadline| *deadline > now) else {
                         return Err(error);
                     };
@@ -291,6 +304,9 @@ impl RuntimeInner {
 /// runtime or process is looked for meanwhile.
 const CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 const CLAIM_RETRY_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
+/// How long a directory whose holder copies its plain database into an encrypted one is
+/// waited for: far above the copy of a large wallet on a slow phone.
+const MIGRATION_WAIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 fn busy() -> WalletError {
     WalletError::new(
@@ -433,9 +449,25 @@ impl ClaimHolder {
     }
 }
 
-/// The engine's store opener for a session: the SQLite store, which tells the session's
-/// [`ClaimHolder`] when it closes.
-pub(crate) struct ClaimedStores(pub(crate) Arc<ClaimHolder>);
+/// The engine's store opener for a session: the SQLite store encrypted at rest, which moves a
+/// plain database into an encrypted one under the session's claim, reports the progress of
+/// that copy to the runtime's stream, and tells the session's [`ClaimHolder`] when it closes.
+pub(crate) struct ClaimedStores {
+    holder: Arc<ClaimHolder>,
+    stores: lepic_wallet::EncryptingSqliteStores,
+}
+
+impl ClaimedStores {
+    pub(crate) fn new(holder: Arc<ClaimHolder>, runtime: &RuntimeInner) -> Self {
+        let migration = Arc::clone(&runtime.migration);
+        Self {
+            holder,
+            stores: lepic_wallet::EncryptingSqliteStores::with_observer(Arc::new(
+                move |progress| migration.send(progress),
+            )),
+        }
+    }
+}
 
 impl lepic_wallet::StoreOpener for ClaimedStores {
     type Store = ClaimedStore;
@@ -446,10 +478,31 @@ impl lepic_wallet::StoreOpener for ClaimedStores {
         keys: lepic_store::StoreKeys,
         store_key: &lepic_store::StoreKey,
     ) -> Result<ClaimedStore, lepic_store::StoreError> {
-        Ok(ClaimedStore::new(
-            lepic_wallet::SqliteStores.open(data_dir, keys, store_key)?,
-            &self.0,
-        ))
+        self.open_reporting(data_dir, keys, store_key)
+            .map(|(store, _)| store)
+    }
+
+    /// A check of a phrase: creates, moves and migrates nothing.
+    fn open_existing(
+        &self,
+        data_dir: &Path,
+        keys: lepic_store::StoreKeys,
+        store_key: &lepic_store::StoreKey,
+    ) -> Result<Option<ClaimedStore>, lepic_store::StoreError> {
+        Ok(self
+            .stores
+            .open_existing(data_dir, keys, store_key)?
+            .map(|store| ClaimedStore::new(store, &self.holder)))
+    }
+
+    fn open_reporting(
+        &self,
+        data_dir: &Path,
+        keys: lepic_store::StoreKeys,
+        store_key: &lepic_store::StoreKey,
+    ) -> Result<(ClaimedStore, Option<lepic_store::AtRestReport>), lepic_store::StoreError> {
+        let (store, report) = self.stores.open_reporting(data_dir, keys, store_key)?;
+        Ok((ClaimedStore::new(store, &self.holder), report))
     }
 }
 
@@ -588,6 +641,44 @@ mod tests {
 
         assert_eq!(busy.unwrap_err().kind, WalletErrorKind::WalletBusy);
         assert_eq!(started.elapsed(), CLAIM_WAIT);
+    }
+
+    /// A second opener waits for the copy of a plain database into an encrypted one, however
+    /// far past the usual wait it runs, and claims the directory once the copy's holder lets it
+    /// go; a holder that never does is given up on after the copy's own bound.
+    #[tokio::test(start_paused = true)]
+    async fn second_opener_waits_for_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = dir.path().join("wallet.enc.sqlite3.tmp");
+        let runtime = new_runtime();
+        let other = new_runtime();
+        let held = other.inner.claim(dir.path()).await.unwrap();
+        std::fs::write(&copy, b"").unwrap();
+        assert!(lepic_store::migration_in_progress(dir.path()));
+        let release_after = CLAIM_WAIT * 10;
+        let finished = copy.clone();
+        let releasing = tokio::spawn(async move {
+            tokio::time::sleep(release_after).await;
+            std::fs::remove_file(finished).unwrap();
+            drop(held);
+        });
+
+        let started = tokio::time::Instant::now();
+        let claimed = runtime.inner.claim(dir.path()).await;
+
+        releasing.await.unwrap();
+        assert!(claimed.is_ok(), "{:?}", claimed.err());
+        let waited = started.elapsed();
+        assert!(waited >= release_after, "{waited:?}");
+        assert!(waited <= release_after + CLAIM_RETRY_WAIT, "{waited:?}");
+        drop(claimed);
+
+        let _stuck = other.inner.claim(dir.path()).await.unwrap();
+        std::fs::write(&copy, b"").unwrap();
+        let started = tokio::time::Instant::now();
+        let busy = runtime.inner.claim(dir.path()).await.map(drop);
+        assert_eq!(busy.unwrap_err().kind, WalletErrorKind::WalletBusy);
+        assert!(started.elapsed() >= MIGRATION_WAIT);
     }
 
     /// A store that records, as it closes, whether the directory is still claimed.
