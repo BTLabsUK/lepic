@@ -707,6 +707,50 @@ fn remove_set_aside_plain_takes_every_plain_copy() {
     assert_eq!(left, vec!["wallet.enc.sqlite3".to_owned()]);
 }
 
+/// The keyed URI is written into a buffer of its exact size, and an error of the copy that
+/// carries it holds only a result code, never the URI or the key.
+#[test]
+fn the_keyed_uri_never_grows_and_its_errors_never_carry_the_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("missing folder").join(COPY_FILE);
+    let uri = keyed_uri(&copy, &key()).unwrap();
+    let hex = "07".repeat(32);
+    assert!(uri.ends_with(&format!("key=raw:{hex}")), "{}", uri.as_str());
+    assert_eq!(uri.capacity(), uri.len());
+
+    plain_database(dir.path(), 0);
+    let reader = open_reader(&dir.path().join(DATABASE_FILE)).unwrap();
+    let progress = Progress {
+        observer: None,
+        total: 1,
+        page_size: 4096,
+    };
+    let error = copy_into(&reader, &copy, &key(), progress).unwrap_err();
+    for shown in [format!("{error:?}"), format!("{error}"), {
+        let mut chain = String::new();
+        let mut source: Option<&dyn std::error::Error> = Some(&error);
+        while let Some(error) = source {
+            chain.push_str(&error.to_string());
+            source = error.source();
+        }
+        chain
+    }] {
+        assert!(!shown.contains(&hex), "{shown}");
+        assert!(!shown.contains("key="), "{shown}");
+    }
+}
+
+#[test]
+fn a_connection_given_a_key_wipes_freed_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open_wallet_dir(dir.path(), keys(), &key(), None).unwrap();
+    let conn = store.conn.lock().unwrap();
+    let level: String = conn
+        .query_row("PRAGMA memory_security", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(level, "1");
+}
+
 #[test]
 fn a_path_with_uri_characters_is_copied() {
     let parent = tempfile::tempdir().unwrap();

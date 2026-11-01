@@ -90,6 +90,9 @@ mod bundled {
             // Temporary tables, indices and sorts never reach a file: SQLite3MC does not seal
             // the main database's pages there.
             .flag("-DSQLITE_TEMP_STORE=3")
+            // SQLite3MC's secure memory: freed allocations are wiped once a connection sets
+            // `PRAGMA memory_security`, as every keyed one does.
+            .flag("-DSQLITE3MC_SECURE_MEMORY=1")
             .warnings(false);
         // C23 makes the amalgamation call memset_explicit, which C libraries before glibc 2.43
         // lack; C17 takes its explicit_bzero path.

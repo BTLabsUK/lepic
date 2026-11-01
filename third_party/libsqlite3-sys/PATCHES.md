@@ -27,6 +27,9 @@ time that the library is not older than its bindings.
   - `HAVE_CIPHER_CHACHA20=1`, `CODEC_TYPE=CODEC_TYPE_CHACHA20` and every other scheme set to 0
     (AES-128-CBC, AES-256-CBC, SQLCipher, RC4, Ascon-128, AEGIS);
   - `SQLITE_TEMP_STORE=3`: temporary tables, indices and sorts stay in memory on every target.
+  - `SQLITE3MC_SECURE_MEMORY=1`: compiles SQLite3MC's secure memory, which wipes every freed
+    allocation once a connection sets `PRAGMA memory_security = fill` (LEPIC's keyed connections
+    do). Memory locking stays off, as SQLite3MC builds it.
   It refuses the features that would link or build anything else (system SQLite, SQLCipher,
   bindgen, loadable extensions, sessions).
 - `Cargo.toml` is rewritten: the same feature names (rusqlite refers to all of them), build

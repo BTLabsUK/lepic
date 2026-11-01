@@ -32,9 +32,26 @@ const CHECK_LEN: usize = 1 + SALT_LEN + TAG_LEN;
 const RAW_KEY_PREFIX: &[u8; 4] = b"raw:";
 const RAW_KEY_LEN: usize = RAW_KEY_PREFIX.len() + STORE_KEY_LEN;
 
+/// Makes SQLite wipe every allocation it frees, in the whole process, from now on (SQLite3MC's
+/// secure memory, built in with `SQLITE3MC_SECURE_MEMORY`): its copies of a key, and of a URI
+/// that carries one, never stay behind in freed memory. Every connection that is given a key
+/// sets it first.
+pub(super) fn wipe_freed_memory(conn: &Connection) -> Result<(), StoreError> {
+    let level: String = conn.query_row("PRAGMA memory_security = fill", [], |row| row.get(0))?;
+    if level == "1" {
+        Ok(())
+    } else {
+        Err(StoreError::Io {
+            operation: "make the database wipe freed memory",
+            source: std::io::ErrorKind::Unsupported.into(),
+        })
+    }
+}
+
 /// Sets the key of the connection's main database. It must come before anything reads the
 /// file. The key goes in as bytes, so SQLite never holds it in a SQL text.
 pub(super) fn set_key(conn: &Connection, key: &StoreKey) -> Result<(), StoreError> {
+    wipe_freed_memory(conn)?;
     let mut raw = Zeroizing::new([0u8; RAW_KEY_LEN]);
     let (prefix, rest) = raw.split_at_mut(RAW_KEY_PREFIX.len());
     prefix.copy_from_slice(RAW_KEY_PREFIX);

@@ -568,6 +568,8 @@ fn open_reader(plain: &Path) -> Result<Connection, StoreError> {
         true,
     )?;
     reader.busy_timeout(BUSY_TIMEOUT)?;
+    // The copy's URI, with the key, passes through this connection.
+    cipher::wipe_freed_memory(&reader)?;
     reader.pragma_update(None, "temp_store", "MEMORY")?;
     reader.pragma_update(None, "cache_size", -COPY_CACHE_KIB)?;
     Ok(reader)
@@ -612,6 +614,37 @@ struct Progress<'a> {
     page_size: u64,
 }
 
+/// What follows the copy's path in its URI, before the key in hex.
+const KEY_PARAMETERS: &str = "?cipher=chacha20&key=raw:";
+
+/// The URI of `copy` with `store_key`, written into a buffer of exactly its final size, so it
+/// never grows and leaves part of the key in memory it gave back.
+fn keyed_uri(copy: &Path, store_key: &StoreKey) -> Result<Zeroizing<String>, StoreError> {
+    use std::fmt::Write as _;
+    let uri = file_uri(copy);
+    let key = store_key.expose();
+    let mut target = Zeroizing::new(String::with_capacity(
+        uri.len() + KEY_PARAMETERS.len() + 2 * key.len(),
+    ));
+    target.push_str(&uri);
+    target.push_str(KEY_PARAMETERS);
+    for byte in key {
+        write!(&mut *target, "{byte:02x}")
+            .map_err(|_| StoreError::OutOfRange { field: "store key" })?;
+    }
+    Ok(target)
+}
+
+/// An error of the statement that carries the key, with only its result code: SQLite's message
+/// for it can quote the copy's URI, key included, and must never reach a log.
+fn code_only(error: rusqlite::Error) -> StoreError {
+    let code = match error {
+        rusqlite::Error::SqliteFailure(code, _) => code,
+        _ => rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+    };
+    StoreError::from(rusqlite::Error::SqliteFailure(code, None))
+}
+
 /// `VACUUM INTO` the keyed copy (ADR 0032): it reads the plain database and its log through
 /// `reader` and writes only the copy. The key reaches SQLite as a bound parameter in the
 /// copy's URI. While it runs, the size of the copy is reported every [`PROGRESS_INTERVAL`].
@@ -621,14 +654,11 @@ fn copy_into(
     store_key: &StoreKey,
     progress: Progress<'_>,
 ) -> Result<(), StoreError> {
-    let mut target = Zeroizing::new(String::with_capacity(256));
-    target.push_str(&file_uri(copy));
-    target.push_str("?cipher=chacha20&key=raw:");
-    for byte in store_key.expose() {
-        target.push_str(&format!("{byte:02x}"));
-    }
+    let target = keyed_uri(copy, store_key)?;
     let Some(observer) = progress.observer else {
-        reader.execute("VACUUM INTO ?1", [target.as_str()])?;
+        reader
+            .execute("VACUUM INTO ?1", [target.as_str()])
+            .map_err(code_only)?;
         return Ok(());
     };
     let done = std::sync::atomic::AtomicBool::new(false);
@@ -654,7 +684,7 @@ fn copy_into(
         });
         let copied = reader.execute("VACUUM INTO ?1", [target.as_str()]);
         done.store(true, std::sync::atomic::Ordering::Release);
-        copied
+        copied.map_err(code_only)
     })?;
     Ok(())
 }
