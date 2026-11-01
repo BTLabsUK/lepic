@@ -5,7 +5,8 @@
 `run.sh` sends EPIC between `lepic` and `epic-wallet` `v4.0.2` on the public floonet chain, both ways
 over slate files and both ways over a local Epicbox relay, waits for each transaction to confirm and
 prints a table with every kernel excess. No node runs locally: the wallets use the public floonet
-node's foreign API, and the miner funds them by mining floonet blocks through that same API. It runs
+node's foreign API. An outside floonet wallet (`LEPIC_LIVE_FUNDER`, see below) pays the funder, and the
+miner mines floonet blocks through that same API so transactions confirm. It runs
 only with `LEPIC_LIVE_TESTS=1` and never in CI.
 
 ```
@@ -25,7 +26,7 @@ Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`) and HTTP
 | `nodeproxy` | `docker/node-proxy.py` on 127.0.0.1:33413: forwards `/v2/foreign` to the floonet node, answers owner `get_status` from the node's public `/v1/status`, limits and counts the requests |
 | `miner` | `miner/`, a RandomX miner on the node's foreign mining API; started only while blocks are needed |
 | `mongodb`, `epicbox` | The public relay code, run locally with domain `localhost` on 127.0.0.1:33423, plain `ws://` |
-| `funder` | `epic-wallet` serving its foreign API on 127.0.0.1:33415; the miner gets every coinbase from it |
+| `funder` | `epic-wallet` serving its foreign API on 127.0.0.1:33415; `LEPIC_LIVE_FUNDER` pays it there, and the miner gets every coinbase from it |
 | `peer` | `epic-wallet`, the counterparty |
 | `lepic` | `lepic --network floonet` through the proxy, driven with `docker compose exec` |
 
@@ -91,7 +92,7 @@ without `-v`) keeps them.
 
 | Directory | Contents | Unlock |
 |---|---|---|
-| `data/funder` | `epic-wallet` floonet wallet in `.epic/floo`, coinbase recipient | password `live-funder-password` |
+| `data/funder` | `epic-wallet` floonet wallet in `.epic/floo`, paid by `LEPIC_LIVE_FUNDER` or coinbase recipient | password `live-funder-password` |
 | `data/peer` | `epic-wallet` floonet wallet in `.epic/floo`, the counterparty | password `live-peer-password` |
 | `data/lepic` | `lepic` floonet wallet in `lepic/` | password `live-lepic-password` |
 | `data/exchange` | slate files of every file transaction, named by run | |
