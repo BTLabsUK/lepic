@@ -275,7 +275,7 @@ LEPIC-only use of ordinary relay messages; nothing on the wire or the relay chan
 
 ADR 0016 has the reasons; this is the format and who sends what.
 
-- Plaintext: a JSON object of at most 512 bytes whose `lepic` key is the number 1, with `type`
+- Plaintext: a JSON object of at most 8 KiB whose `lepic` key is the number 1, with `type`
   and `slate_id` (hyphenated UUID). `posted` adds `excess`, the kernel excess as 66 hex
   characters. A slate never has a number under `lepic`, which is how a receiver tells the two
   apart.
@@ -295,7 +295,11 @@ ADR 0016 has the reasons; this is the format and who sends what.
 - Accepted only from the recorded counterparty of the slate, and for `posted` only with the
   excess the payment implies: the I2 for an invoice this wallet paid, the stored S2 for a
   payment it received. Every other notice, one of another version or an unknown type, and
-  one over 512 bytes, is acknowledged and dropped.
+  one over 8 KiB, is acknowledged and dropped.
+- Padded: every notice, sealed or plain, and every pairing request is written with a last `pad`
+  key of zeros to one of three lengths drawn at random, those of a marked first slate with one,
+  two and three inputs (2452, 2551 and 2650 bytes), so its size does not tell it from a payment.
+  A LEPIC build that reads at most 512 bytes acknowledges and drops these.
 - Advisory: a notice moves no funds. `withdrawn` deletes an unpaid parked invoice and reports a
   paid one for the host to offer a cancel; `posted` and `declined` are reported only.
 

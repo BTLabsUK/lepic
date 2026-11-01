@@ -946,7 +946,8 @@ where
                 transport: TRANSPORT_ID,
             });
         };
-        match outbound.deliver(to, &notice.encode()).await {
+        let length = crate::notice::notice_length(&mut **self.ports().rng.lock());
+        match outbound.deliver(to, &notice.encode_to(length)).await {
             Ok(()) => {
                 info!(slate_id = %slate_id, "notice sent");
                 Ok(())

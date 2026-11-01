@@ -4,8 +4,9 @@
 //!
 //! A notice is the JSON object `{"lepic":1,"type":<kind>,"slate_id":<uuid>}`, with the kernel
 //! `excess` added for `posted`, at most [`MAX_NOTICE_LEN`] bytes. This wallet pads every notice
-//! it writes to [`PADDED_NOTICE_LEN`] with a `pad` key, which readers ignore as they ignore
-//! every unknown key, so that its size does not tell one kind from another. A stock `epic-wallet` listener
+//! it writes with a `pad` key, which readers ignore as they ignore every unknown key, to one of
+//! the [`NOTICE_LENGTHS`], the lengths of the ordinary first slate of a payment, so that its
+//! size tells neither one kind from another nor a notice from a payment. A stock `epic-wallet` listener
 //! processes only V2 and V3 slates, so a notice goes only to a peer whose own messages proved
 //! it runs LEPIC. A notice never moves funds or unlocks anything, and is taken
 //! only from the recorded counterparty of its slate.
@@ -20,14 +21,62 @@ use serde::{Deserialize, Serialize};
 pub const NOTICE_VERSION: u64 = 1;
 
 /// The longest notice accepted, in bytes.
-pub const MAX_NOTICE_LEN: usize = 512;
+pub const MAX_NOTICE_LEN: usize = 8 * 1024;
 
-/// The length of every notice this wallet writes, in bytes: under [`MAX_NOTICE_LEN`], so that a
-/// later version can add a key and still be read by this one.
-pub const PADDED_NOTICE_LEN: usize = 256;
-const _: () = assert!(PADDED_NOTICE_LEN <= MAX_NOTICE_LEN);
+/// The lengths this wallet pads every notice and pairing request to, one drawn at random for
+/// each: the JSON length of the first slate of a payment it sends over Epicbox, with one, two
+/// and three inputs and one change output, carrying the LEPIC marker with its features.
+pub const NOTICE_LENGTHS: [usize; 3] = [
+    S1_ONE_INPUT,
+    S1_ONE_INPUT + S1_INPUT,
+    S1_ONE_INPUT + 2 * S1_INPUT,
+];
+
+/// A V2 first slate with one plain input and one change output, as `epic-wallet` writes it
+/// (the `send_file_plain_input_s1_v2` vector), plus `,"lepic":{"version":1,"f":15}`.
+const S1_ONE_INPUT: usize = 2423 + 29;
+
+/// What one more plain input adds to it: `,{"features":"Plain","commit":"<66 hex>"}`.
+const S1_INPUT: usize = 99;
+
+const _: () = assert!(NOTICE_LENGTHS[2] <= MAX_NOTICE_LEN);
 
 const PAD: char = '0';
+
+/// One of the [`NOTICE_LENGTHS`], drawn with `rng`.
+pub fn notice_length<R: rand_core::Rng + ?Sized>(rng: &mut R) -> usize {
+    let at = usize::try_from(rng.next_u32())
+        .unwrap_or(0)
+        .checked_rem(NOTICE_LENGTHS.len())
+        .unwrap_or(0);
+    NOTICE_LENGTHS.get(at).copied().unwrap_or(S1_ONE_INPUT)
+}
+
+/// The JSON object `object` with a last `pad` key of zeros that makes it `length` bytes, or the
+/// next of the [`NOTICE_LENGTHS`] it fits; an object longer than all of them is unpadded. The
+/// pad characters need no escaping, so each adds one byte.
+pub fn pad_object(object: &str, length: usize) -> String {
+    const OVERHEAD: usize = r#","pad":"""#.len();
+    let Some(head) = object.strip_suffix('}') else {
+        return object.to_owned();
+    };
+    let empty = head.trim_end().ends_with('{');
+    let overhead = if empty {
+        OVERHEAD.saturating_sub(1)
+    } else {
+        OVERHEAD
+    };
+    let needed = object.len().saturating_add(overhead);
+    let target = std::iter::once(length)
+        .chain(NOTICE_LENGTHS)
+        .find(|target| *target >= needed);
+    let Some(target) = target else {
+        return object.to_owned();
+    };
+    let zeros: String = std::iter::repeat_n(PAD, target.saturating_sub(needed)).collect();
+    let comma = if empty { "" } else { "," };
+    format!(r#"{head}{comma}"pad":"{zeros}"}}"#)
+}
 
 const DECLINED: &str = "declined";
 const WITHDRAWN: &str = "withdrawn";
@@ -96,7 +145,6 @@ struct Written {
     slate_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     excess: Option<String>,
-    pad: String,
 }
 
 /// Classifies a decrypted payload. Bounded: anything over the slate size bound, binary, or not
@@ -149,37 +197,29 @@ pub fn classify_text(text: &str) -> Payload {
 }
 
 impl Notice {
-    /// The notice as it goes over Epicbox.
+    /// The notice as it goes over Epicbox, padded to the first of the [`NOTICE_LENGTHS`].
     pub fn encode(&self) -> WireSlate {
+        self.encode_to(NOTICE_LENGTHS[0])
+    }
+
+    /// The notice as it goes over Epicbox, padded to `length`, which [`notice_length`] draws.
+    pub fn encode_to(&self, length: usize) -> WireSlate {
         let (kind, excess) = match self.kind {
             NoticeKind::Declined => (DECLINED, None),
             NoticeKind::Withdrawn => (WITHDRAWN, None),
             NoticeKind::Posted { excess } => (POSTED, Some(excess.to_hex())),
             NoticeKind::Cancelled => (CANCELLED, None),
         };
-        let mut written = Written {
+        let written = Written {
             lepic: NOTICE_VERSION,
             kind,
             slate_id: self.slate_id.to_string(),
             excess,
-            pad: String::new(),
         };
-        // A struct of strings and a number always serializes, and each pad character adds one
-        // byte, as it needs no escaping.
+        // A struct of strings and a number always serializes.
         let unpadded = serde_json::to_string(&written).unwrap_or_default();
-        written.pad =
-            std::iter::repeat_n(PAD, PADDED_NOTICE_LEN.saturating_sub(unpadded.len())).collect();
-        let text = serde_json::to_string(&written).unwrap_or(unpadded);
-        WireSlate::text(MediaType::JSON, text)
+        WireSlate::text(MediaType::JSON, pad_object(&unpadded, length))
     }
-}
-
-#[derive(Serialize)]
-struct WrittenUnpaired {
-    lepic: u64,
-    #[serde(rename = "type")]
-    kind: &'static str,
-    pad: String,
 }
 
 /// The notice a wallet seals to a paired contact when it removes their pairing (RFC 0002 7.6):
@@ -187,15 +227,12 @@ struct WrittenUnpaired {
 /// slate, so [`classify_text`] reads it as [`Payload::Unknown`], which a wallet that does not
 /// know it ignores; [`is_unpaired`] reads it.
 pub fn unpaired_notice() -> String {
-    let mut written = WrittenUnpaired {
-        lepic: NOTICE_VERSION,
-        kind: UNPAIRED,
-        pad: String::new(),
-    };
-    let unpadded = serde_json::to_string(&written).unwrap_or_default();
-    written.pad =
-        std::iter::repeat_n(PAD, PADDED_NOTICE_LEN.saturating_sub(unpadded.len())).collect();
-    serde_json::to_string(&written).unwrap_or(unpadded)
+    unpaired_notice_to(NOTICE_LENGTHS[0])
+}
+
+/// [`unpaired_notice`] padded to `length`.
+pub fn unpaired_notice_to(length: usize) -> String {
+    pad_object(r#"{"lepic":1,"type":"unpaired"}"#, length)
 }
 
 /// Whether `text` is the notice [`unpaired_notice`] writes, of this notice version and at most
@@ -272,7 +309,7 @@ mod tests {
     #[test]
     fn every_kind_is_written_at_one_length_and_reads_back() {
         for notice in every_kind() {
-            assert_eq!(text(notice).len(), PADDED_NOTICE_LEN, "{notice:?}");
+            assert_eq!(text(notice).len(), NOTICE_LENGTHS[0], "{notice:?}");
             assert_eq!(classify(&notice.encode()), Payload::Notice(notice));
         }
     }
@@ -407,7 +444,7 @@ mod tests {
     #[test]
     fn the_unpaired_notice_is_padded_and_unknown_to_the_invoice_classifier() {
         let text = unpaired_notice();
-        assert_eq!(text.len(), PADDED_NOTICE_LEN);
+        assert_eq!(text.len(), NOTICE_LENGTHS[0]);
         assert!(text.starts_with(r#"{"lepic":1,"type":"unpaired","pad":"0"#));
         assert!(is_unpaired(&text));
         // A wallet that knows only the invoice notices ignores it.
@@ -432,6 +469,55 @@ mod tests {
         for notice in every_kind() {
             assert!(!is_unpaired(&text(notice)));
         }
+    }
+
+    #[test]
+    fn every_notice_length_is_written_exactly_and_none_is_an_old_one() {
+        for length in NOTICE_LENGTHS {
+            assert!(![256, 512].contains(&length));
+            for notice in every_kind() {
+                let wire = notice.encode_to(length);
+                assert_eq!(wire.as_text().unwrap().len(), length, "{notice:?}");
+                assert_eq!(classify(&wire), Payload::Notice(notice));
+            }
+            assert_eq!(unpaired_notice_to(length).len(), length);
+            assert!(is_unpaired(&unpaired_notice_to(length)));
+        }
+    }
+
+    #[test]
+    fn the_lengths_are_those_of_a_first_slate_with_one_to_three_inputs() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/vectors/slates/send_file_plain_input_s1_v2.json");
+        let vector: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let json = vector["expected"]["json"].as_str().unwrap();
+        let marker = r#","lepic":{"version":1,"f":15}"#;
+        assert_eq!(NOTICE_LENGTHS[0], json.len() + marker.len());
+        let slate: serde_json::Value = serde_json::from_str(json).unwrap();
+        let input = &slate["tx"]["body"]["inputs"][0];
+        assert_eq!(input["features"], "Plain");
+        assert_eq!(serde_json::to_string(input).unwrap().len() + 1, S1_INPUT);
+    }
+
+    #[test]
+    fn drawn_lengths_cover_every_bucket() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let drawn: std::collections::BTreeSet<usize> =
+            (0..64).map(|_| notice_length(&mut rng)).collect();
+        assert_eq!(drawn, NOTICE_LENGTHS.into_iter().collect());
+    }
+
+    #[test]
+    fn an_object_too_long_for_its_length_takes_the_next_one() {
+        let long = format!(r#"{{"a":"{}"}}"#, "x".repeat(NOTICE_LENGTHS[0]));
+        assert_eq!(
+            pad_object(&long, NOTICE_LENGTHS[0]).len(),
+            NOTICE_LENGTHS[1]
+        );
+        let longer = format!(r#"{{"a":"{}"}}"#, "x".repeat(NOTICE_LENGTHS[2]));
+        assert_eq!(pad_object(&longer, NOTICE_LENGTHS[0]), longer);
     }
 
     proptest! {

@@ -28,7 +28,9 @@ A notice is a JSON object, not a slate:
 - `lepic` is the format version, a number. A slate written by LEPIC carries an object under
   `lepic` (the marker), and a stock slate carries nothing there, so a number tells a notice from a
   slate before any slate decoding.
-- At most 512 bytes. A longer notice-shaped payload is acknowledged and dropped.
+- At most 8 KiB. A longer notice-shaped payload is acknowledged and dropped. Writers pad every
+  notice to the length of a first slate with one, two or three inputs, drawn at random
+  (amended with schema version 13: before, 256 bytes and a 512-byte bound).
 - A notice of another version or an unknown type is acknowledged and ignored. Unknown keys are
   ignored. A known type with a missing or invalid field is acknowledged and dropped.
 - `declined` goes from the payer to the issuer, from the invoice address the payer holds now, to

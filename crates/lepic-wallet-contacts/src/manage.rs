@@ -389,13 +389,12 @@ where
         let Some((record, mailbox)) = found else {
             return Ok(false);
         };
+        let length = lepic_wallet::notice::notice_length(&mut **self.wallet.ports().rng.lock());
+        let notice = lepic_wallet::notice::unpaired_notice_to(length).into_bytes();
         let envelope = self
             .seal_for_contact(
                 &record,
-                lepic_contact::Content::new(
-                    lepic_contact::MessageType::Notice,
-                    lepic_wallet::notice::unpaired_notice().into_bytes(),
-                ),
+                lepic_contact::Content::new(lepic_contact::MessageType::Notice, notice),
             )
             .await?;
         let session = self.wallet.session()?;

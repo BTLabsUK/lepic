@@ -979,7 +979,8 @@ where
                 })
             })
             .await?;
-        let body = notice.encode().as_bytes().to_vec();
+        let length = lepic_wallet::notice::notice_length(&mut **self.wallet.ports().rng.lock());
+        let body = notice.encode_to(length).as_bytes().to_vec();
         let envelope = self
             .seal_for_contact(&record, Content::new(MessageType::Notice, body))
             .await?;
