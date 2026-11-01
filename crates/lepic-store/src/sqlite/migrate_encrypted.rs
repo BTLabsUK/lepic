@@ -632,7 +632,9 @@ fn keyed_uri(copy: &Path, store_key: &StoreKey) -> Result<Zeroizing<String>, Sto
     let uri = file_uri(copy);
     let key = store_key.expose();
     let mut target = Zeroizing::new(String::with_capacity(
-        uri.len() + KEY_PARAMETERS.len() + 2 * key.len(),
+        uri.len()
+            .saturating_add(KEY_PARAMETERS.len())
+            .saturating_add(key.len().saturating_mul(2)),
     ));
     target.push_str(&uri);
     target.push_str(KEY_PARAMETERS);
@@ -645,9 +647,9 @@ fn keyed_uri(copy: &Path, store_key: &StoreKey) -> Result<Zeroizing<String>, Sto
 
 /// An error of the statement that carries the key, with only its result code: SQLite's message
 /// for it can quote the copy's URI, key included, and must never reach a log.
-fn code_only(error: rusqlite::Error) -> StoreError {
+fn code_only(error: &rusqlite::Error) -> StoreError {
     let code = match error {
-        rusqlite::Error::SqliteFailure(code, _) => code,
+        rusqlite::Error::SqliteFailure(code, _) => *code,
         _ => rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
     };
     StoreError::from(rusqlite::Error::SqliteFailure(code, None))
@@ -666,7 +668,7 @@ fn copy_into(
     let Some(observer) = progress.observer else {
         reader
             .execute("VACUUM INTO ?1", [target.as_str()])
-            .map_err(code_only)?;
+            .map_err(|error| code_only(&error))?;
         return Ok(());
     };
     let done = std::sync::atomic::AtomicBool::new(false);
@@ -692,7 +694,7 @@ fn copy_into(
         });
         let copied = reader.execute("VACUUM INTO ?1", [target.as_str()]);
         done.store(true, std::sync::atomic::Ordering::Release);
-        copied.map_err(code_only)
+        copied.map_err(|error| code_only(&error))
     })?;
     Ok(())
 }
