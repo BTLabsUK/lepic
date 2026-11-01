@@ -17,7 +17,7 @@ epic_util.workspace = true
 epic_wallet_impls.workspace = true
 epic_wallet_libwallet.workspace = true
 jiff.workspace = true
-lepic-keychain.workspace = true
+lepic-keychain = { workspace = true, features = ["test-kdf"] }
 lepic-node = { workspace = true, features = ["mock"] }
 lepic-primitives.workspace = true
 lepic-slate.workspace = true

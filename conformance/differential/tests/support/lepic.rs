@@ -18,8 +18,8 @@ use lepic_primitives::params::Network;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::model::ProofAddress;
 use lepic_store::{
-    AccountIndex, CONTEXT_KEY_LEN, ContextKey, MemoryStore, StoreError, StoredTransaction,
-    TxDirection, TxId, TxState, WalletStore,
+    AccountIndex, CONTEXT_KEY_LEN, MemoryStore, PEER_TAG_KEY_LEN, StoreError, StoreKey, StoreKeys,
+    StoredTransaction, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::file::{FILE, FileTransport};
 use lepic_transport::registry::TransportRegistry;
@@ -102,6 +102,7 @@ impl LepicParty {
         runtime
             .block_on(wallet.scan(ScanOptions::restore(NETWORK), &ScanCancel::new()))
             .unwrap();
+        start_keys_at_zero(&stores, &data_dir);
         LepicParty {
             name,
             runtime,
@@ -331,6 +332,7 @@ fn engine(
         node: NodeEndpoint::parse(node_url).unwrap(),
         transports: vec![FILE],
         offline: false,
+        host_features: 0,
     };
     let ports = Ports {
         node,
@@ -535,20 +537,47 @@ impl MemoryStores {
             .unwrap_or_else(PoisonError::into_inner)
             .get(data_dir)
             .unwrap()
-            .reopen(StoreKeys::from_bytes([0; CONTEXT_KEY_LEN], [0; CONTEXT_KEY_LEN]))
+            .reopen(test_keys())
     }
+}
+
+/// Moves every account's output key counter back to zero, where an upstream wallet's starts.
+/// LEPIC starts each install's counter at a random offset (the `wallet.output_key_start`
+/// setting), so without this the two runs would derive their outputs from different keys and
+/// no commitment would match. The stored start stays, so later opens leave the counters here.
+fn start_keys_at_zero(stores: &MemoryStores, data_dir: &Path) {
+    stores
+        .store(data_dir)
+        .write(|repos| {
+            for mut account in repos.accounts()? {
+                account.next_child = 0;
+                repos.put_account(&account)?;
+            }
+            Ok::<_, StoreError>(())
+        })
+        .unwrap();
+}
+
+/// The keys a new memory store and the test's own handles start with.
+fn test_keys() -> StoreKeys {
+    StoreKeys::from_bytes([0; CONTEXT_KEY_LEN], [0; PEER_TAG_KEY_LEN])
 }
 
 impl StoreOpener for MemoryStores {
     type Store = FaultyStore;
 
-    fn open(&self, data_dir: &Path, key: ContextKey) -> Result<FaultyStore, StoreError> {
+    fn open(
+        &self,
+        data_dir: &Path,
+        keys: StoreKeys,
+        _: &StoreKey,
+    ) -> Result<FaultyStore, StoreError> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         let store = stores
             .entry(data_dir.to_owned())
-            .or_insert_with(|| MemoryStore::new(StoreKeys::from_bytes([0; CONTEXT_KEY_LEN], [0; CONTEXT_KEY_LEN])));
+            .or_insert_with(|| MemoryStore::new(test_keys()));
         Ok(FaultyStore {
-            inner: store.reopen(key),
+            inner: store.reopen(keys),
             faults: self.faults.clone(),
         })
     }
@@ -599,7 +628,7 @@ impl SecretVault for TestVault {
             self.storage.clone(),
             StdRng::seed_from_u64(11),
             password.expose_bytes(),
-            KdfParams::new(8, 1, 1).unwrap(),
+            KdfParams::for_tests(8, 1, 1).unwrap(),
         )
         .map_err(vault_error)
     }
