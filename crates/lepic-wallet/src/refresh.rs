@@ -333,6 +333,32 @@ where
         Ok(RefreshOutcome::Refreshed(summary))
     }
 
+    /// Where the chain holds the kernel with `excess`, or `None` when the node knows none at or
+    /// above `min_height` (any height when `None`), up to its current tip. Reads the node alone
+    /// and changes nothing in the wallet.
+    ///
+    /// Fails with [`WalletError::Node`], which is [`NodeError::Offline`] in an offline session.
+    pub async fn kernel_on_chain(
+        &self,
+        excess: &Commitment,
+        min_height: Option<Height>,
+    ) -> Result<Option<KernelLocation>, WalletError> {
+        if self.config().offline {
+            return Err(WalletError::Node(NodeError::Offline));
+        }
+        debug!(excess = %excess.to_hex(), "kernel lookup");
+        let located = self
+            .ports()
+            .node
+            .get_kernel(excess, min_height, None)
+            .await
+            .map_err(WalletError::Node)?;
+        Ok(located.map(|kernel| KernelLocation {
+            height: kernel.height,
+            mmr_index: kernel.mmr_index,
+        }))
+    }
+
     /// Looks up the kernels of the transactions waiting to confirm and confirms those the
     /// chain holds. Returns the transactions whose kernel the node did not find.
     async fn confirm_kernels(
@@ -1337,6 +1363,13 @@ fn confirm_all(
         changes.extend(confirm(repos, tx_id, height, now)?);
     }
     Ok(changes)
+}
+
+/// Where a kernel sits on chain: the height of its block and its index in the kernel MMR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KernelLocation {
+    pub height: Height,
+    pub mmr_index: u64,
 }
 
 /// The node's answer to a lookup for one transaction, or `None` when the node refused that

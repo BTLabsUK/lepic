@@ -61,7 +61,7 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
+    FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, KernelLocation, LegacyImport,
     LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingRef, NodeTip, OutputCategory,
     OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult,
     SelectionStrategy, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, SlateStage,
@@ -1450,6 +1450,23 @@ impl Session {
     pub(crate) async fn repost(&self, tx_id: u32) -> Result<(), WalletError> {
         self.engine.post(TxId(tx_id), Propagation::Fluff).await?;
         Ok(())
+    }
+
+    pub(crate) async fn kernel_on_chain(
+        &self,
+        excess: &str,
+        min_height: Option<u64>,
+    ) -> Result<Option<KernelLocation>, WalletError> {
+        let excess = Commitment::from_hex(excess)
+            .map_err(|_| invalid("the kernel excess is not a commitment"))?;
+        let located = self
+            .engine
+            .kernel_on_chain(&excess, min_height.map(Height::new))
+            .await?;
+        Ok(located.map(|location| KernelLocation {
+            height: location.height.value(),
+            mmr_index: location.mmr_index,
+        }))
     }
 
     pub(crate) async fn cancel(&self, tx_id: u32) -> Result<(), WalletError> {

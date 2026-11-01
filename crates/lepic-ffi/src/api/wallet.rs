@@ -27,10 +27,10 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    Chain, FeeEstimate, FinalizedTx, InboxReport, LegacyImport, ListenerEvent, ListenerEventKind,
-    NodeTip, PeerCompat, ReceivedSlate, RefreshProgress, ScanProgress, SelfSentTx, SendOptions,
-    SentTx, Slate, SlateInfo, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
-    WalletOutput, WalletSummary,
+    Chain, FeeEstimate, FinalizedTx, InboxReport, KernelLocation, LegacyImport, ListenerEvent,
+    ListenerEventKind, NodeTip, PeerCompat, ReceivedSlate, RefreshProgress, ScanProgress,
+    SelfSentTx, SendOptions, SentTx, Slate, SlateInfo, TransactionDetails, UrSlateProgress,
+    WalletConfig, WalletEvent, WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -1267,6 +1267,24 @@ impl EpicWallet {
     pub async fn repost_transaction(&self, tx_id: u32) -> Result<(), WalletError> {
         self.run("repost_transaction", |session| async move {
             session.repost(tx_id).await
+        })
+        .await
+    }
+
+    /// Where the chain holds the kernel with `excess`, the 33-byte commitment in hex as
+    /// `TransactionDetails::kernel_excess` gives it, or `None` when the node knows none at or
+    /// above `min_height` (any height when `None`). Asks the node and changes nothing in the
+    /// wallet.
+    ///
+    /// Fails with `InvalidArgument` when `excess` is not a commitment, `Offline` in an offline
+    /// session, and `NodeUnreachable` or another node kind when the node cannot be asked.
+    pub async fn kernel_on_chain(
+        &self,
+        excess: String,
+        min_height: Option<u64>,
+    ) -> Result<Option<KernelLocation>, WalletError> {
+        self.run("kernel_on_chain", |session| async move {
+            session.kernel_on_chain(&excess, min_height).await
         })
         .await
     }

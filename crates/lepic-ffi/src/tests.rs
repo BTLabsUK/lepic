@@ -17,6 +17,7 @@ mod address_signature;
 mod contact;
 mod http;
 mod invoice;
+mod kernel_lookup;
 mod listener;
 mod live_restore;
 #[cfg(feature = "tor")]

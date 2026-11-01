@@ -366,6 +366,14 @@ pub struct ListingRef {
     pub generation: u32,
 }
 
+/// Where the chain holds a transaction kernel: the height of the block with it and its index
+/// in the kernel MMR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KernelLocation {
+    pub height: u64,
+    pub mmr_index: u64,
+}
+
 /// One stored transaction of the default account. Times are milliseconds since the Unix epoch,
 /// by the device clock.
 #[derive(Debug, Clone, PartialEq, Eq)]
