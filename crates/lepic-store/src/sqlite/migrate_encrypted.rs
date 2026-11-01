@@ -9,8 +9,10 @@
 //! | `wallet.sqlite3` (`-wal`, `-shm`) | the plain database of builds before encryption |
 //! | `wallet.enc.sqlite3` (`-wal`, `-shm`, `.check`) | the encrypted database and its key check |
 //! | `wallet.enc.sqlite3.tmp` | a copy in progress, removed when a copy starts |
+//! | `wallet.enc.sqlite3.check.tmp` | a key check being written, removed with a copy's files |
 //! | `wallet.sqlite3.pre-encryption` (`-wal`) | the plain database after it was copied |
 //! | `wallet.sqlite3.after-rollback-<unix>` (`-wal`) | a plain database an older build made |
+//! | `wallet.sqlite3.damaged-<unix>` (`-wal`) | a damaged plain database, set aside |
 //!
 //! The copy never writes the plain file, and its schema is never migrated before the switch:
 //! an older build must still read it. Every step can be interrupted and the next open
@@ -52,7 +54,12 @@ pub const ENCRYPTED_DATABASE_FILE: &str = "wallet.enc.sqlite3";
 
 /// The copy in progress, beside the encrypted database's name.
 const COPY_FILE: &str = "wallet.enc.sqlite3.tmp";
+/// The temporary file of a key check being written, before its rename.
+const CHECK_COPY_FILE: &str = "wallet.enc.sqlite3.check.tmp";
 const PRE_ENCRYPTION_SUFFIX: &str = ".pre-encryption";
+/// A damaged database set aside by [`SqliteStore::open`].
+const DAMAGED_SUFFIX: &str = ".damaged-";
+const CHECK_SUFFIX: &str = cipher::CHECK_SUFFIX;
 const AFTER_ROLLBACK_SUFFIX: &str = ".after-rollback-";
 /// The log files that move with a plain database set aside. `-shm` holds nothing durable and
 /// is removed.
@@ -904,6 +911,12 @@ fn held_database_rename(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Every set-aside plain database name in `dir`, with or without its file: the names that
 /// have a database or a log file.
 fn set_aside_bases(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
+    plain_bases(dir, &[PRE_ENCRYPTION_SUFFIX, AFTER_ROLLBACK_SUFFIX])
+}
+
+/// The names in `dir` of plain databases moved to `wallet.sqlite3` and one of `suffixes`, with
+/// or without the file: the names that have a database or a log file.
+fn plain_bases(dir: &Path, suffixes: &[&str]) -> Result<Vec<PathBuf>, StoreError> {
     let mut bases = std::collections::BTreeSet::new();
     let entries = std::fs::read_dir(dir).map_err(io("list the data directory"))?;
     for entry in entries {
@@ -915,10 +928,10 @@ fn set_aside_bases(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
         let Some(rest) = name.strip_prefix(DATABASE_FILE) else {
             continue;
         };
-        if !(rest.starts_with(PRE_ENCRYPTION_SUFFIX) || rest.starts_with(AFTER_ROLLBACK_SUFFIX)) {
+        if !suffixes.iter().any(|suffix| rest.starts_with(suffix)) {
             continue;
         }
-        let base = ["-wal", "-shm", "-journal"]
+        let base = ["-wal", "-shm", "-journal", CHECK_SUFFIX]
             .iter()
             .find_map(|log| name.strip_suffix(log))
             .unwrap_or(name);
@@ -1014,13 +1027,24 @@ pub fn retire_plain_store(
     Ok(summary)
 }
 
-/// Deletes every plain database set aside in `dir`, `.pre-encryption` and `.after-rollback-*`,
-/// with its log files, whatever the encrypted database holds: for the deletion of a wallet,
-/// which leaves no readable history behind. The deleted file names.
-pub fn remove_set_aside_plain(dir: &Path) -> Result<Vec<String>, StoreError> {
+/// Deletes every file but the databases themselves that `dir` keeps of its wallet database,
+/// whatever the encrypted database holds: each plain database set aside, as
+/// `.pre-encryption`, `.after-rollback-*` or `.damaged-*`, with its log files; a copy in
+/// progress or left behind (`wallet.enc.sqlite3.tmp` and its logs); and the key check's
+/// temporary file. For the deletion of a wallet, which leaves no readable history behind,
+/// under the directory's claim. The deleted file names.
+pub fn remove_database_leftovers(dir: &Path) -> Result<Vec<String>, StoreError> {
     let mut deleted = Vec::new();
-    for base in set_aside_bases(dir)? {
+    for base in plain_bases(
+        dir,
+        &[PRE_ENCRYPTION_SUFFIX, AFTER_ROLLBACK_SUFFIX, DAMAGED_SUFFIX],
+    )? {
         deleted.extend(remove_with_logs(&base)?);
+    }
+    for path in copy_files(dir) {
+        if remove_if_present(&path)? {
+            deleted.push(file_name(&path));
+        }
     }
     Ok(deleted)
 }
@@ -1030,7 +1054,7 @@ pub fn remove_set_aside_plain(dir: &Path) -> Result<Vec<String>, StoreError> {
 /// names removed.
 fn remove_with_logs(base: &Path) -> Result<Vec<String>, StoreError> {
     let mut removed = Vec::new();
-    for suffix in ["-wal", "-shm", "-journal", ""] {
+    for suffix in ["-wal", "-shm", "-journal", CHECK_SUFFIX, ""] {
         let path = with_suffix(base, suffix);
         if remove_if_present(&path)? {
             removed.push(file_name(&path));
@@ -1044,10 +1068,12 @@ fn file_name(path: &Path) -> String {
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }
 
+/// The files of a copy in progress, and the temporary file of a key check whose write stopped.
 fn copy_files(dir: &Path) -> Vec<PathBuf> {
     let copy = dir.join(COPY_FILE);
     std::iter::once(copy.clone())
         .chain(COPY_LOGS.iter().map(|log| with_suffix(&copy, log)))
+        .chain([dir.join(CHECK_COPY_FILE)])
         .collect()
 }
 

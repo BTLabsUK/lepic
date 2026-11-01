@@ -2495,11 +2495,12 @@ async fn remove_database(data_dir: &Path) -> Result<(), WalletError> {
     Ok(())
 }
 
-/// Removes every plain copy of the database set aside by the move to encryption, whatever the
-/// encrypted database records. A deleted wallet leaves no readable history behind.
+/// Removes every plain copy of the database set aside, by the move to encryption or as
+/// damaged, whatever the encrypted database records, and what an interrupted copy or key check
+/// left. A deleted wallet leaves no readable history behind.
 async fn remove_set_aside_databases(data_dir: &Path) -> Result<(), WalletError> {
     let dir = data_dir.to_owned();
-    tokio::task::spawn_blocking(move || lepic_store::remove_set_aside_plain(&dir))
+    tokio::task::spawn_blocking(move || lepic_store::remove_database_leftovers(&dir))
         .await
         .map_err(|_| {
             WalletError::new(

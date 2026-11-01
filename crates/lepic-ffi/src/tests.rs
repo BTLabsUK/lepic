@@ -1550,7 +1550,8 @@ async fn a_database_of_another_key_is_wrong_key_and_nothing_moves() {
     assert_eq!(after, before);
 }
 
-/// Deleting a wallet removes its encrypted database, key check and the plain copies set aside.
+/// Deleting a wallet removes its encrypted database, key check, the plain copies set aside,
+/// damaged ones included, and what an interrupted copy or key check left.
 #[tokio::test]
 async fn delete_wallet_removes_the_encrypted_database_and_the_plain_copies() {
     let fixture = Fixture::new();
@@ -1565,14 +1566,16 @@ async fn delete_wallet_removes_the_encrypted_database_and_the_plain_copies() {
     drop(created);
     plain_database_in_place_of_the_encrypted_one(&fixture, &phrase);
     drop(fixture.open_with_pin(&store, PIN, &sealed).await.unwrap());
-    std::fs::write(
-        fixture
-            .dir
-            .path()
-            .join("wallet.sqlite3.after-rollback-1700000000"),
-        b"x",
-    )
-    .unwrap();
+    for leftover in [
+        "wallet.sqlite3.after-rollback-1700000000",
+        "wallet.sqlite3.damaged-1700000000",
+        "wallet.sqlite3.damaged-1700000000-wal",
+        "wallet.enc.sqlite3.tmp",
+        "wallet.enc.sqlite3.tmp-journal",
+        "wallet.enc.sqlite3.check.tmp",
+    ] {
+        std::fs::write(fixture.dir.path().join(leftover), b"x").unwrap();
+    }
     assert!(database_files(fixture.dir.path()).len() > 2);
 
     crate::api::wallet::delete_wallet(&fixture.runtime, fixture.config(), &store)

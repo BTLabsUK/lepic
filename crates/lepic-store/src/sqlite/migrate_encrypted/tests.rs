@@ -687,24 +687,53 @@ fn retire_keeps_a_plain_copy_the_encrypted_database_does_not_record() {
     assert!(!dir.path().join(&aside).exists());
 }
 
-/// The deletion of a wallet takes every set-aside plain database, recorded or not.
+/// The deletion of a wallet takes every set-aside plain database, recorded or not, damaged ones
+/// too, and what an interrupted copy or key check left; never the databases themselves.
 #[test]
-fn remove_set_aside_plain_takes_every_plain_copy() {
+fn remove_database_leftovers_takes_every_plain_copy_and_temporary_file() {
     let dir = tempfile::tempdir().unwrap();
     for name in [
         "wallet.sqlite3.pre-encryption",
         "wallet.sqlite3.pre-encryption-wal",
         "wallet.sqlite3.pre-encryption-1",
         "wallet.sqlite3.after-rollback-5",
+        "wallet.sqlite3.damaged-5",
+        "wallet.sqlite3.damaged-5-wal",
+        "wallet.enc.sqlite3.tmp",
+        "wallet.enc.sqlite3.tmp-wal",
+        "wallet.enc.sqlite3.check.tmp",
         "wallet.enc.sqlite3",
+        "wallet.enc.sqlite3.check",
+        "wallet.sqlite3",
     ] {
         std::fs::write(dir.path().join(name), b"x").unwrap();
     }
-    let mut deleted = remove_set_aside_plain(dir.path()).unwrap();
-    deleted.sort();
-    assert_eq!(deleted.len(), 4, "{deleted:?}");
+    let deleted = remove_database_leftovers(dir.path()).unwrap();
+    assert_eq!(deleted.len(), 9, "{deleted:?}");
     let left: Vec<String> = files(dir.path()).into_keys().collect();
-    assert_eq!(left, vec!["wallet.enc.sqlite3".to_owned()]);
+    assert_eq!(
+        left,
+        vec![
+            "wallet.enc.sqlite3".to_owned(),
+            "wallet.enc.sqlite3.check".to_owned(),
+            "wallet.sqlite3".to_owned(),
+        ]
+    );
+}
+
+/// A key check whose write stopped before its rename leaves its temporary file, which the next
+/// open removes with the copy's files.
+#[test]
+fn a_key_check_left_half_written_is_removed_by_the_next_open() {
+    let dir = tempfile::tempdir().unwrap();
+    plain_database(dir.path(), 0);
+    std::fs::write(dir.path().join(CHECK_COPY_FILE), [1u8; 7]).unwrap();
+    let (store, report) = open_wallet_dir(dir.path(), keys(), &key(), None).unwrap();
+    assert_eq!(report.state, AtRestState::MigratedNow);
+    drop(store);
+    std::fs::write(dir.path().join(CHECK_COPY_FILE), [1u8; 7]).unwrap();
+    drop(open_wallet_dir(dir.path(), keys(), &key(), None).unwrap());
+    assert!(!dir.path().join(CHECK_COPY_FILE).exists());
 }
 
 /// The keyed URI is written into a buffer of its exact size, and an error of the copy that
