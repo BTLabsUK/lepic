@@ -367,6 +367,43 @@ fn a_set_aside_stopped_after_the_log_moved_is_finished() {
     assert_migrated(dir.path(), &original, &store);
 }
 
+/// A log left without its database under the `.pre-encryption` name, as a removal interrupted
+/// by an older build could leave it, does not take in an older build's plain database: that is
+/// set aside after a rollback, with a scan required.
+#[test]
+fn an_orphan_log_does_not_take_an_older_builds_database_for_the_source() {
+    let dir = tempfile::tempdir().unwrap();
+    plain_database(dir.path(), 0);
+    drop(open_wallet_dir(dir.path(), keys(), &key(), None).unwrap());
+    let aside = dir
+        .path()
+        .join(format!("{DATABASE_FILE}{PRE_ENCRYPTION_SUFFIX}"));
+    std::fs::remove_file(&aside).unwrap();
+    assert!(with_suffix(&aside, "-wal").exists());
+    let older = {
+        let path = dir.path().join(DATABASE_FILE);
+        let mut conn = Connection::open(&path).unwrap();
+        migrate_to(&mut conn, PLAIN_SCHEMA, &keys()).unwrap();
+        drop(conn);
+        std::fs::read(&path).unwrap()
+    };
+
+    let (store, report) = open_wallet_dir(dir.path(), keys(), &key(), None).unwrap();
+    assert!(report.rollback_set_aside);
+    assert!(!dir.path().join(DATABASE_FILE).exists());
+    assert!(!aside.exists(), "taken for the source of the copy");
+    let rolled: Vec<String> = files(dir.path())
+        .into_keys()
+        .filter(|name| name.contains(".after-rollback-") && !name.ends_with("-wal"))
+        .collect();
+    assert_eq!(rolled.len(), 1, "{rolled:?}");
+    assert_eq!(std::fs::read(dir.path().join(&rolled[0])).unwrap(), older);
+    let flag = store
+        .read(|repos| repos.setting(ROLLBACK_SCAN_SETTING))
+        .unwrap();
+    assert_eq!(flag.as_deref(), Some("true"));
+}
+
 #[test]
 fn a_full_disk_keeps_the_plain_database_and_the_next_open_migrates() {
     for at in [Step::Cleared, Step::Copying, Step::Copied] {

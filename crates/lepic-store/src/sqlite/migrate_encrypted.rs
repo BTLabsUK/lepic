@@ -345,15 +345,20 @@ struct PlainFiles {
 
 impl PlainFiles {
     fn of(plain: &Path) -> Result<Self, StoreError> {
+        Self::with_wal(plain, &with_suffix(plain, "-wal"))
+    }
+
+    /// [`PlainFiles::of`] the database at `plain` with the log at `wal`, which may have been
+    /// set aside before it.
+    fn with_wal(plain: &Path, wal: &Path) -> Result<Self, StoreError> {
         let (bytes, sha256) = digest(plain)?.ok_or(StoreError::Io {
             operation: "read the plain database",
             source: std::io::ErrorKind::NotFound.into(),
         })?;
-        let wal_sha256 = digest(&with_suffix(plain, "-wal"))?.map(|(_, sha256)| sha256);
         Ok(Self {
             bytes,
             sha256,
-            wal_sha256,
+            wal_sha256: digest(wal)?.map(|(_, sha256)| sha256),
         })
     }
 
@@ -729,33 +734,83 @@ fn sync_file(path: &Path) -> Result<(), StoreError> {
 
 /// Sets aside a plain database beside the open encrypted `store`: the one it was copied from
 /// as `.pre-encryption`, any other as `.after-rollback-<unix>` with a restore scan required.
-/// Also finishes a set-aside an earlier open began. Whether a plain database was set aside
-/// after a rollback.
+/// Also finishes a set-aside an earlier open began, which moved the logs and not the database:
+/// a set-aside log without its database is paired with the plain database only under the name
+/// this open would choose, so the source of the copy, known by the record with that log, goes
+/// to its `.pre-encryption` name and any other plain database to an `.after-rollback-` one.
+/// Whether a plain database was set aside after a rollback.
 fn settle_plain_beside(dir: &Path, store: &SqliteStore) -> Result<bool, StoreError> {
     let plain = dir.join(DATABASE_FILE);
-    if finish_interrupted_set_aside(dir)? || !exists(&plain)? {
+    if !exists(&plain)? {
         return Ok(false);
     }
     let record = store
         .read(|repos| repos.setting(MIGRATED_FROM_SETTING))?
         .and_then(|text| serde_json::from_str::<MigrationRecord>(&text).ok());
-    let files = PlainFiles::of(&plain)?;
-    if record.is_some_and(|record| files.is_recorded(&record)) {
+    let recorded = |wal: &Path| -> Result<bool, StoreError> {
+        Ok(match &record {
+            Some(record) => PlainFiles::with_wal(&plain, wal)?.is_recorded(record),
+            None => false,
+        })
+    };
+    let orphans = orphan_logs(dir)?;
+    for aside in orphans
+        .iter()
+        .filter(|aside| set_aside_suffix(aside).starts_with(PRE_ENCRYPTION_SUFFIX))
+    {
+        if recorded(&with_suffix(aside, "-wal"))? {
+            move_plain(&plain, aside, fs_rename)?;
+            tracing::info!("plain wallet database set aside after the switch");
+            return Ok(false);
+        }
+    }
+    if recorded(&with_suffix(&plain, "-wal"))? {
         set_aside_plain(dir, PRE_ENCRYPTION_SUFFIX, fs_rename)?;
         tracing::info!("plain wallet database set aside after the switch");
         return Ok(false);
     }
     // Before the file moves, so an interrupted open still requires the scan.
     store.write(|repos| repos.put_setting(ROLLBACK_SCAN_SETTING, "true"))?;
-    let suffix = format!("{AFTER_ROLLBACK_SUFFIX}{}", unix_seconds(SystemTime::now()));
-    set_aside_plain(dir, &suffix, fs_rename)?;
+    let interrupted = orphans
+        .iter()
+        .find(|aside| set_aside_suffix(aside).starts_with(AFTER_ROLLBACK_SUFFIX));
+    match interrupted {
+        Some(aside) => move_plain(&plain, aside, fs_rename)?,
+        None => {
+            let suffix = format!("{AFTER_ROLLBACK_SUFFIX}{}", unix_seconds(SystemTime::now()));
+            set_aside_plain(dir, &suffix, fs_rename)?;
+        }
+    }
     tracing::warn!("plain wallet database of an older build set aside; a restore scan is required");
     Ok(true)
 }
 
+/// The set-aside names in `dir` that have a moved log but no database.
+fn orphan_logs(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
+    let mut orphans = Vec::new();
+    for aside in set_aside_bases(dir)? {
+        let has_log = MOVED_LOGS
+            .iter()
+            .any(|log| with_suffix(&aside, log).exists());
+        if has_log && !exists(&aside)? {
+            orphans.push(aside);
+        }
+    }
+    Ok(orphans)
+}
+
+/// What follows `wallet.sqlite3` in a set-aside name.
+fn set_aside_suffix(aside: &Path) -> &str {
+    aside
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(DATABASE_FILE))
+        .unwrap_or("")
+}
+
 /// Moves `wallet.sqlite3` and its logs to a free `wallet.sqlite3<suffix>` name: the logs
 /// first, the database last, and `-shm` removed. An interruption leaves a set-aside log without
-/// its database, which [`finish_interrupted_set_aside`] recognises.
+/// its database, which [`settle_plain_beside`] recognises.
 fn set_aside_plain(dir: &Path, suffix: &str, rename: Rename) -> Result<(), StoreError> {
     let plain = dir.join(DATABASE_FILE);
     let aside = free_name(&with_suffix(&plain, suffix))?;
@@ -813,25 +868,6 @@ fn held_database_rename(from: &Path, to: &Path) -> std::io::Result<()> {
         return Err(std::io::ErrorKind::PermissionDenied.into());
     }
     std::fs::rename(from, to)
-}
-
-/// Completes a set-aside that stopped after moving the logs: a set-aside `-wal` or `-journal`
-/// without its database belongs to the plain database still in place. Whether one was found.
-fn finish_interrupted_set_aside(dir: &Path) -> Result<bool, StoreError> {
-    let plain = dir.join(DATABASE_FILE);
-    if !exists(&plain)? {
-        return Ok(false);
-    }
-    for aside in set_aside_bases(dir)? {
-        let orphan_log = MOVED_LOGS
-            .iter()
-            .any(|log| with_suffix(&aside, log).exists());
-        if orphan_log && !exists(&aside)? {
-            move_plain(&plain, &aside, fs_rename)?;
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 /// Every set-aside plain database name in `dir`, with or without its file: the names that
