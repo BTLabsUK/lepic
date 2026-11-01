@@ -185,21 +185,23 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     }
     let keychain = Keychain::from_seed(seed, target.network)?;
     let ours = SeedIdentity::of(seed, &keychain)?;
+    // The database is proven this seed's before the open below can move it: an open copies a
+    // plain database into one encrypted under this seed's key and sets the plain one aside,
+    // which for another seed's database would lock its own phrase out. The probe moves
+    // nothing. A damaged database is set aside by the open, as before.
+    match stores.open_existing(target.data_dir, store_keys(seed)?, &store_key(seed)?) {
+        Ok(Some(probe)) => {
+            let identity = probe.read(|repos| stored_identity(repos, target.network, &ours))?;
+            admit(&probe, identity, source, &keychain)?;
+        }
+        Ok(None) | Err(StoreError::Damaged) => {}
+        Err(StoreError::WrongKey) => return Err(WalletError::ForeignDatabase),
+        Err(error) => return Err(error.into()),
+    }
     let (store, at_rest) =
         stores.open_reporting(target.data_dir, store_keys(seed)?, &store_key(seed)?)?;
     let identity = store.read(|repos| stored_identity(repos, target.network, &ours))?;
-    match (identity, source) {
-        (StoredIdentity::Empty, _) | (StoredIdentity::Proven, SeedSource::Recovered) => {}
-        (_, SeedSource::Generated) => return Err(WalletError::ForeignDatabase),
-        // The fingerprint alone proves nothing, and the seed check written below would stamp
-        // the database with this seed: an output of another seed refuses it. A database without
-        // outputs holds nothing a seed could be proven by, nor anything to lose.
-        (StoredIdentity::FingerprintOnly, SeedSource::Recovered) => {
-            if store.read(|repos| outputs_prove(repos, &keychain))? == Some(false) {
-                return Err(WalletError::ForeignDatabase);
-            }
-        }
-    }
+    admit(&store, identity, source, &keychain)?;
     let mut vault = secrets.create(password)?;
     put_seed(&mut vault, seed)?;
     debug!("secret storage created");
@@ -220,6 +222,29 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
         slates: SlateCache::default(),
         at_rest,
     })
+}
+
+/// Whether a new wallet of a seed from `source` may take a database whose identity is
+/// `identity`: an unused one, or for a recovered seed one the seed is proven by.
+fn admit(
+    store: &impl WalletStore,
+    identity: StoredIdentity,
+    source: SeedSource,
+    keychain: &Keychain,
+) -> Result<(), WalletError> {
+    match (identity, source) {
+        (StoredIdentity::Empty, _) | (StoredIdentity::Proven, SeedSource::Recovered) => Ok(()),
+        (_, SeedSource::Generated) => Err(WalletError::ForeignDatabase),
+        // The fingerprint alone proves nothing, and the seed check a create writes would stamp
+        // the database with this seed: an output of another seed refuses it. A database without
+        // outputs holds nothing a seed could be proven by, nor anything to lose.
+        (StoredIdentity::FingerprintOnly, SeedSource::Recovered) => {
+            if store.read(|repos| outputs_prove(repos, keychain))? == Some(false) {
+                return Err(WalletError::ForeignDatabase);
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Unlocks the secret storage, reads the seed and opens the database it belongs to.

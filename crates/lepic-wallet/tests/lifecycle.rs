@@ -1119,3 +1119,71 @@ fn check_phrase_reads_an_unmigrated_and_a_migrated_store() {
     );
     assert_eq!(file_names(dir.path()), migrated);
 }
+
+/// A restore, or a create, over a plain database of another seed is refused before anything
+/// moves: the plain database stays, unencrypted and in place, and the wallet's own phrase then
+/// restores it with its accounts.
+#[test]
+fn a_wrong_phrase_over_a_plain_wallet_moves_nothing_and_the_right_one_restores() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let config = plain_wallet(&harness, dir.path());
+    let before = file_names(dir.path());
+    let plain = std::fs::read(dir.path().join(lepic_wallet::DATABASE_FILE)).unwrap();
+    // A new device: no secret storage, so the database is the only thing a phrase meets.
+    let fresh = || {
+        let memory = harness.ports(TestVault::default());
+        lepic_wallet::Ports {
+            node: memory.node,
+            stores: lepic_wallet::EncryptingSqliteStores::default(),
+            secrets: memory.secrets,
+            transports: memory.transports,
+            clock: memory.clock,
+            rng: memory.rng,
+            runtime: memory.runtime,
+        }
+    };
+
+    let other = Seed::from_entropy(&[9; 32]).unwrap().to_mnemonic().unwrap();
+    let wrong = Wallet::new(config.clone(), fresh()).unwrap();
+    let refused = harness.block_on(wrong.restore(password(PASSWORD), &other));
+    assert!(
+        matches!(refused, Err(WalletError::ForeignDatabase)),
+        "{refused:?}"
+    );
+    let generated = Wallet::new(config.clone(), fresh()).unwrap();
+    let refused = harness.block_on(generated.create(password(PASSWORD), WordCount::Twelve));
+    assert!(
+        matches!(refused, Err(WalletError::ForeignDatabase)),
+        "{refused:?}"
+    );
+    assert_eq!(
+        file_names(dir.path()),
+        before,
+        "a refused phrase moved files"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join(lepic_wallet::DATABASE_FILE)).unwrap(),
+        plain
+    );
+
+    let checked = lifecycle::check_phrase(
+        &lepic_wallet::EncryptingSqliteStores::default(),
+        dir.path(),
+        Network::Floonet,
+        &vector_phrase(),
+    );
+    assert!(
+        matches!(checked, Ok(PhraseCheck::Matches(_))),
+        "{checked:?}"
+    );
+    let right = Wallet::new(config, fresh()).unwrap();
+    harness
+        .block_on(right.restore(password(PASSWORD), &vector_phrase()))
+        .unwrap();
+    assert_eq!(
+        right.store_at_rest().unwrap().unwrap().state,
+        lepic_store::AtRestState::MigratedNow
+    );
+    assert_eq!(right.accounts().unwrap().len(), 2);
+}
