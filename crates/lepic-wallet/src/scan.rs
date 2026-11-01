@@ -329,6 +329,7 @@ pub(crate) fn found_output(
 }
 
 /// Records that the entry `tx_id` a scan stored is now dated by its output's block.
+#[cfg(feature = "sqlite")]
 pub(crate) fn record_dated_by_block(
     repos: &mut dyn Repositories,
     tx_id: TxId,
