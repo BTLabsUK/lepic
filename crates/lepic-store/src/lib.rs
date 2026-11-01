@@ -32,7 +32,10 @@ mod transaction;
 mod tx_record;
 
 pub use account::{AccountIndex, AccountRecord, AccountRepository};
-pub use at_rest::{AtRest, STORE_KEY_LEN, StoreKey};
+pub use at_rest::{
+    AtRest, AtRestReport, AtRestState, MIGRATED_FROM_SETTING, MigrationObserver, MigrationProgress,
+    MigrationStage, ROLLBACK_SCAN_SETTING, STORE_KEY_LEN, StoreKey,
+};
 pub use contact::{
     BOX_SALT_LEN, CARD_KEY_LEN, CONTACT_ID_LEN, CONTACT_SLOT_COUNT, ContactCap, ContactId,
     ContactKind, ContactMailbox, ContactOutboxEntry, ContactOutboxId, ContactOutboxState,
@@ -73,7 +76,10 @@ pub use relay::{
 pub use settings::SettingsRepository;
 pub use slate::{SlateRepository, SlateStage, StoredSlate};
 #[cfg(feature = "sqlite")]
-pub use sqlite::{SCHEMA_VERSION, SqliteStore};
+pub use sqlite::{
+    DATABASE_FILE, ENCRYPTED_DATABASE_FILE, RetireSummary, SCHEMA_VERSION, SqliteStore,
+    migration_in_progress, open_existing_wallet_dir, open_wallet_dir, retire_plain_store,
+};
 pub use store::{Repositories, WalletStore};
 pub use transaction::{
     OpenReceipt, ReceiveListing, StoredTransaction, TransactionEntry, TransactionRepository,

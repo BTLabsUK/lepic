@@ -4,6 +4,7 @@
 #[cfg(windows)]
 mod acl;
 mod cipher;
+mod migrate_encrypted;
 mod repos;
 pub(crate) mod schema;
 mod v12;
@@ -22,6 +23,10 @@ use crate::context::StoreKeys;
 use crate::error::StoreError;
 use crate::store::{Repositories, WalletStore};
 
+pub use self::migrate_encrypted::{
+    DATABASE_FILE, ENCRYPTED_DATABASE_FILE, RetireSummary, migration_in_progress,
+    open_existing_wallet_dir, open_wallet_dir, retire_plain_store,
+};
 use self::repos::SqliteRepos;
 pub use self::schema::SCHEMA_VERSION;
 
@@ -37,6 +42,32 @@ const LOG_SUFFIXES: [&str; 3] = ["-wal", "-shm", "-journal"];
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     keys: StoreKeys,
+    /// Files removed once the connection is closed: a throwaway copy's.
+    discard: Vec<PathBuf>,
+}
+
+impl Drop for SqliteStore {
+    fn drop(&mut self) {
+        if self.discard.is_empty() {
+            return;
+        }
+        // The connection closes before its files go, as Windows needs.
+        if let Ok(placeholder) = Connection::open_in_memory() {
+            let conn = self
+                .conn
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            drop(std::mem::replace(conn, placeholder));
+        }
+        for path in &self.discard {
+            match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    tracing::warn!(error = %error, "throwaway database copy not removed");
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl SqliteStore {
@@ -81,6 +112,7 @@ impl SqliteStore {
                 Ok(Self {
                     conn: Mutex::new(conn),
                     keys,
+                    discard: Vec::new(),
                 })
             }
             None => match at_rest {
@@ -121,6 +153,7 @@ impl SqliteStore {
             Some(conn) => Ok(Some(Self {
                 conn: Mutex::new(conn),
                 keys,
+                discard: Vec::new(),
             })),
             None => match at_rest {
                 AtRest::Encrypted(_) if check != cipher::Check::Matches => {

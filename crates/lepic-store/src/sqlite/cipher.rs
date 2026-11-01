@@ -162,7 +162,7 @@ fn owner_only_file(path: &Path) -> std::io::Result<std::fs::File> {
 
 /// Makes a rename inside the database's folder durable.
 #[cfg(unix)]
-fn sync_folder(database: &Path) -> std::io::Result<()> {
+pub(super) fn sync_folder(database: &Path) -> std::io::Result<()> {
     match database.parent() {
         Some(folder) if !folder.as_os_str().is_empty() => std::fs::File::open(folder)?.sync_all(),
         _ => std::fs::File::open(".")?.sync_all(),
@@ -171,7 +171,7 @@ fn sync_folder(database: &Path) -> std::io::Result<()> {
 
 /// Windows has no folder handle to flush; its renames are journalled by NTFS.
 #[cfg(not(unix))]
-fn sync_folder(_: &Path) -> std::io::Result<()> {
+pub(super) fn sync_folder(_: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
