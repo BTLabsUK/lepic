@@ -5,7 +5,7 @@
 use lepic_primitives::params::Network;
 
 use crate::contact_backup::{CardReader, ImportSummary, import_contacts};
-use crate::context::{CONTEXT_KEY_LEN, ContextKey};
+use crate::context::{CONTEXT_KEY_LEN, StoreKeys};
 use crate::error::StoreError;
 use crate::memory::MemoryStore;
 use crate::store::WalletStore;
@@ -24,6 +24,9 @@ pub fn contact_backup_import(
     network: Network,
     read_card: &CardReader<'_>,
 ) -> Result<ImportSummary, StoreError> {
-    let store = MemoryStore::new(ContextKey::from_bytes([0; CONTEXT_KEY_LEN]));
+    let store = MemoryStore::new(StoreKeys::from_bytes(
+        [0; CONTEXT_KEY_LEN],
+        [0; CONTEXT_KEY_LEN],
+    ));
     store.write(|repos| import_contacts(repos, json, network, read_card))
 }

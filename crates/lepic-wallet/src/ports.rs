@@ -10,7 +10,7 @@ use lepic_keychain::SecretStore;
 use lepic_keychain::vault::BackendError;
 #[cfg(feature = "sqlite")]
 use lepic_store::SqliteStore;
-use lepic_store::{ContextKey, StoreError, WalletStore};
+use lepic_store::{StoreError, StoreKeys, WalletStore};
 use lepic_transport::registry::TransportRegistry;
 use rand_core::CryptoRng;
 use thiserror::Error;
@@ -52,7 +52,7 @@ impl std::fmt::Debug for SharedRng {
 pub trait StoreOpener: Send + Sync {
     type Store: WalletStore + 'static;
 
-    fn open(&self, data_dir: &Path, key: ContextKey) -> Result<Self::Store, StoreError>;
+    fn open(&self, data_dir: &Path, keys: StoreKeys) -> Result<Self::Store, StoreError>;
 
     /// Opens the database only when one exists, and changes nothing when it is damaged:
     /// `None` when there is none, [`StoreError::Damaged`] for a damaged one, left where it
@@ -60,9 +60,9 @@ pub trait StoreOpener: Send + Sync {
     fn open_existing(
         &self,
         data_dir: &Path,
-        key: ContextKey,
+        keys: StoreKeys,
     ) -> Result<Option<Self::Store>, StoreError> {
-        self.open(data_dir, key).map(Some)
+        self.open(data_dir, keys).map(Some)
     }
 }
 
@@ -80,16 +80,16 @@ pub struct SqliteStores;
 impl StoreOpener for SqliteStores {
     type Store = SqliteStore;
 
-    fn open(&self, data_dir: &Path, key: ContextKey) -> Result<SqliteStore, StoreError> {
-        SqliteStore::open(&data_dir.join(DATABASE_FILE), key)
+    fn open(&self, data_dir: &Path, keys: StoreKeys) -> Result<SqliteStore, StoreError> {
+        SqliteStore::open(&data_dir.join(DATABASE_FILE), keys)
     }
 
     fn open_existing(
         &self,
         data_dir: &Path,
-        key: ContextKey,
+        keys: StoreKeys,
     ) -> Result<Option<SqliteStore>, StoreError> {
-        SqliteStore::open_existing(&data_dir.join(DATABASE_FILE), key)
+        SqliteStore::open_existing(&data_dir.join(DATABASE_FILE), keys)
     }
 }
 

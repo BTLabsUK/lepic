@@ -612,7 +612,7 @@ async fn a_stop_at_any_step_of_a_reset_leaves_a_wallet_that_opens() {
 fn database(fixture: &Fixture) -> lepic_store::SqliteStore {
     lepic_store::SqliteStore::open(
         &fixture.dir.path().join(lepic_wallet::DATABASE_FILE),
-        lepic_store::ContextKey::from_bytes([0; 32]),
+        lepic_store::StoreKeys::from_bytes([0; 32], [0; 32]),
     )
     .unwrap()
 }

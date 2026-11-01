@@ -42,8 +42,8 @@ use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    AccountIndex, ContextKey, KeyId, MemoryStore, OutputRecord, OutputStatus, PeerCapability,
-    PeerSupport, PendingInvoice, PendingInvoiceStatus, Repositories, StoreError, WalletStore,
+    AccountIndex, KeyId, MemoryStore, OutputRecord, OutputStatus, PeerCompat, PendingInvoice,
+    PendingInvoiceStatus, Repositories, StoreError, StoreKeys, WalletStore,
 };
 use lepic_transport::error::TransportError;
 use lepic_transport::policy::FormatPolicy;
@@ -53,6 +53,7 @@ use lepic_transport::transport::{
 };
 use lepic_wallet::inbox::InboxSummary;
 use lepic_wallet::invoice::{InvoiceRequest, IssuedInvoice, PayRequest};
+use lepic_wallet::peer_compat::{PeerFacts, PeerKind};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::Delivery;
 use lepic_wallet::{
@@ -157,11 +158,11 @@ pub struct CountingStores {
 impl StoreOpener for CountingStores {
     type Store = CountingStore;
 
-    fn open(&self, data_dir: &Path, key: ContextKey) -> Result<CountingStore, StoreError> {
+    fn open(&self, data_dir: &Path, key: StoreKeys) -> Result<CountingStore, StoreError> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         let store = stores
             .entry(data_dir.to_owned())
-            .or_insert_with(|| MemoryStore::new(ContextKey::from_bytes([0; 32])));
+            .or_insert_with(|| MemoryStore::new(StoreKeys::from_bytes([0; 32], [0; 32])));
         Ok(CountingStore {
             inner: store.reopen(key),
             writes: Arc::clone(&self.writes),
@@ -238,10 +239,18 @@ pub fn pay_request() -> PayRequest {
     }
 }
 
-fn context_key(seed: &Seed) -> ContextKey {
-    let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).unwrap();
-    mac.update(b"lepic-wallet private context key v1");
-    ContextKey::from_bytes(mac.finalize_fixed().into())
+/// The keys `lifecycle::store_keys` derives from the seed: the context key, which
+/// `tests/lifecycle_logs.rs` also recomputes, and the peer tag key.
+fn context_key(seed: &Seed) -> StoreKeys {
+    let subkey = |domain: &[u8]| -> [u8; 32] {
+        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).unwrap();
+        mac.update(domain);
+        mac.finalize_fixed().into()
+    };
+    StoreKeys::from_bytes(
+        subkey(b"lepic-wallet private context key v1"),
+        subkey(b"lepic-wallet peer tag v1"),
+    )
 }
 
 pub struct Party {
@@ -334,6 +343,17 @@ impl Party {
         self.store().read(read).unwrap()
     }
 
+    /// What the wallet keeps about the peer key `key`, if anything.
+    pub fn peer_compat(&self, key: &str) -> Option<PeerCompat> {
+        self.read(|repos| repos.peer_compat(key))
+    }
+
+    /// What the wallet derives about the peer key `key` now, when it keeps anything about it.
+    pub fn peer_kind(&self, key: &str) -> Option<PeerKind> {
+        self.peer_compat(key)
+            .map(|compat| PeerFacts::derive(Some(compat), self.clock.now()).kind)
+    }
+
     /// Write transactions run so far through the wallet's store opener.
     pub fn writes(&self) -> usize {
         self.stores.writes.load(Ordering::SeqCst)
@@ -399,11 +419,15 @@ impl Party {
         self.store()
             .write(|repos| {
                 if marked {
-                    repos.put_peer_capability(&PeerCapability {
-                        key: sender.key_text(),
-                        support: PeerSupport::Lepic,
-                        learned_at: now,
-                    })?;
+                    repos.put_peer_compat(
+                        &sender.key_text(),
+                        &PeerCompat {
+                            last_marked_at: Some(now),
+                            claimed: 1,
+                            works: 1,
+                            ..PeerCompat::default()
+                        },
+                    )?;
                 }
                 repos.park_invoice(&invoice)
             })

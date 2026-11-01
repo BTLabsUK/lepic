@@ -11,7 +11,7 @@ use lepic_keychain::{Identifier, Keychain, SecretName, SecretStore, Seed, Switch
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
-use lepic_store::{AccountIndex, ContextKey, KeyId, OutputRecord, OutputStatus, WalletStore};
+use lepic_store::{AccountIndex, KeyId, OutputRecord, OutputStatus, StoreKeys, WalletStore};
 use lepic_transport::transport::TransportId;
 use lepic_wallet::lifecycle::PhraseCheck;
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
@@ -390,7 +390,7 @@ const FINGERPRINT: &str = "wallet.fingerprint";
 fn database(harness: &Harness) -> TestStore {
     harness
         .stores
-        .open(&harness.data_dir, ContextKey::from_bytes([0; 32]))
+        .open(&harness.data_dir, StoreKeys::from_bytes([0; 32], [0; 32]))
         .unwrap()
 }
 

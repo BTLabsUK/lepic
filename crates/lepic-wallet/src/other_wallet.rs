@@ -320,14 +320,17 @@ mod tests {
     use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
     use lepic_primitives::output::OutputIdentifier;
     use lepic_primitives::params::Network;
-    use lepic_store::{CONTEXT_KEY_LEN, ContextKey, KeyId, MemoryStore, WalletStore};
+    use lepic_store::{CONTEXT_KEY_LEN, KeyId, MemoryStore, StoreKeys, WalletStore};
 
     use super::*;
 
     const ACCOUNT: AccountIndex = AccountIndex(0);
 
     fn store() -> MemoryStore {
-        let store = MemoryStore::new(ContextKey::from_bytes([1; CONTEXT_KEY_LEN]));
+        let store = MemoryStore::new(StoreKeys::from_bytes(
+            [1; CONTEXT_KEY_LEN],
+            [1; CONTEXT_KEY_LEN],
+        ));
         store
             .write(|repos| crate::account::ensure_default_account(repos))
             .unwrap();

@@ -555,7 +555,7 @@ fn inputs_are_locked_and_the_s1_stored_before_the_transport_is_called() {
         lepic_wallet::StoreOpener::open(
             &sender.harness.stores,
             &sender.harness.data_dir,
-            lepic_store::ContextKey::from_bytes([0; 32]),
+            lepic_store::StoreKeys::from_bytes([0; 32], [0; 32]),
         )
         .unwrap(),
     );

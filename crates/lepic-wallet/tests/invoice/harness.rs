@@ -21,8 +21,8 @@ use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_slate::codec::WireSlate;
 use lepic_store::{
-    AccountIndex, ContextKey, KeyId, MemoryStore, OutputRecord, OutputStatus, Repositories,
-    StoreError, WalletStore,
+    AccountIndex, KeyId, MemoryStore, OutputRecord, OutputStatus, Repositories, StoreError,
+    StoreKeys, WalletStore,
 };
 use lepic_transport::file::{FILE, FilePolicy};
 use lepic_transport::loopback::LoopbackTransport;
@@ -149,10 +149,16 @@ impl Party {
 
     /// The wallet's database, opened with the key the engine seals contexts under.
     pub fn store(&self) -> MemoryStore {
-        let mut mac =
-            <Blake2bMac<U32> as KeyInit>::new_from_slice(self.seed.expose_bytes()).unwrap();
-        mac.update(b"lepic-wallet private context key v1");
-        let key = ContextKey::from_bytes(mac.finalize_fixed().into());
+        let subkey = |domain: &[u8]| -> [u8; 32] {
+            let mut mac =
+                <Blake2bMac<U32> as KeyInit>::new_from_slice(self.seed.expose_bytes()).unwrap();
+            mac.update(domain);
+            mac.finalize_fixed().into()
+        };
+        let key = StoreKeys::from_bytes(
+            subkey(b"lepic-wallet private context key v1"),
+            subkey(b"lepic-wallet peer tag v1"),
+        );
         lepic_wallet::StoreOpener::open(&self.stores, Path::new(DATA_DIR), key).unwrap()
     }
 

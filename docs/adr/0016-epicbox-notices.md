@@ -184,6 +184,48 @@ depends on it arriving.
     (schema version 11), a migration that only adds columns; a build before it refuses the
     upgraded store as too new.
 
+- Amendment, schema version 12: proof expires, falls back, and is checked per exchange. A peer
+  "proven" once stayed proven for good, and `posted` went out after any finalized answer from
+  it, marked or not. So the statement above that a stock receiver is never sent a notice was
+  false for a key that ran LEPIC once and answers from another wallet now, for example Stack
+  Wallet on the same recovery phrase. That wallet never acknowledges a notice, and the relay
+  drops the address's whole queue after three unacknowledged rounds (`docs/compat/epicbox.md`,
+  "Relay retention"). It is true again under these rules:
+  - Facts, not a verdict. The store keeps, per Epicbox key, only: the last marked message
+    (a marked S1, S2 from the send's target, I1 parked, I2, or an accepted notice), the last
+    unmarked slate over Epicbox (S1, S2, I2, or an I1 sent back unchanged), the feature bits
+    the latest marked message claimed, the bits that worked, and when bits were last claimed.
+    File, paste, QR and HTTP slates are tied to no key and recorded for none. Every unmarked
+    slate is recorded before any notice for its exchange is decided.
+  - Derived, never stored. A key is LEPIC while its last marked message is newer than its last
+    unmarked one, and Epic otherwise, as one group: no other wallet is told apart.
+    `PeerInvoiceSupport` is that: no row Unknown, LEPIC Lepic, Epic NoInvoices.
+  - Sending. Every plain notice to a payments address (`posted`, `cancelled`, `withdrawn`,
+    `declined`) needs the key LEPIC with a marked message in the last 30 days, and the
+    exchange's own incoming slate marked: the S2 or I2 just finalized for `posted`, the send's
+    latest S2 for `cancelled` (the new column `tx_marks.answer_marked`), the I2 being answered
+    for `withdrawn`. A `withdrawn` at the cancel, before any payment came, and a `declined` go
+    only to a paired contact's mailbox, which only LEPIC reads. Sealed notices to mailboxes are
+    unchanged.
+  - Twins. Two installs on one phrase, one LEPIC and one not, flip the key as either answers;
+    each flip is right for the moment it describes. A notice the LEPIC twin acknowledges was
+    still handed to the other socket first and counts toward its rounds; the per-exchange rule
+    keeps that to one notice per marked exchange, the residue this design accepts.
+  - Storage. The facts are sealed per row (XChaCha20-Poly1305 under the private context key)
+    and found by a keyed BLAKE2b hash of the key under its own seed subkey
+    `lepic-wallet peer tag v1`; the hash is in the row's associated data, so a row moved under
+    another hash does not open. The table `peer_compat (key_tag, sealed)` names no peer. The
+    sealed record is versioned, so later fields need no migration (vector
+    `testdata/vectors/store/peer_compat.json`). Rows whose newest date is older than the
+    host's limit are deleted by `forget_peers`; the app passes 180 days. A forgotten key is
+    unknown and gets no notice. The rows are in no backup or export and are relearned.
+  - Migration 11 to 12, in one transaction with the rest of the schema change: a `lepic` row
+    becomes its date as the last marked message with bit 0 claimed and working; `no-invoices`
+    its date as the last unmarked one; an undecodable row is dropped. The old table goes. So a
+    key proven months ago is LEPIC by dates but gets no notice until a marked exchange in the
+    last 30 days, and sends answered before the update count as unmarked. A build before it
+    refuses the upgraded store as too new.
+
 ## Alternatives considered
 
 - Notices as a new slate stage or a field in a slate: a stock listener would act on or reject a

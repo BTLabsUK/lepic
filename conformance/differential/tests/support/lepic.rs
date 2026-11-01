@@ -535,7 +535,7 @@ impl MemoryStores {
             .unwrap_or_else(PoisonError::into_inner)
             .get(data_dir)
             .unwrap()
-            .reopen(ContextKey::from_bytes([0; CONTEXT_KEY_LEN]))
+            .reopen(StoreKeys::from_bytes([0; CONTEXT_KEY_LEN], [0; CONTEXT_KEY_LEN]))
     }
 }
 
@@ -546,7 +546,7 @@ impl StoreOpener for MemoryStores {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         let store = stores
             .entry(data_dir.to_owned())
-            .or_insert_with(|| MemoryStore::new(ContextKey::from_bytes([0; CONTEXT_KEY_LEN])));
+            .or_insert_with(|| MemoryStore::new(StoreKeys::from_bytes([0; CONTEXT_KEY_LEN], [0; CONTEXT_KEY_LEN])));
         Ok(FaultyStore {
             inner: store.reopen(key),
             faults: self.faults.clone(),

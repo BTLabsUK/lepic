@@ -1338,7 +1338,8 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap();
-        let store = lepic_store::MemoryStore::new(lepic_store::ContextKey::from_bytes(
+        let store = lepic_store::MemoryStore::new(lepic_store::StoreKeys::from_bytes(
+            [1; lepic_store::CONTEXT_KEY_LEN],
             [1; lepic_store::CONTEXT_KEY_LEN],
         ));
         let now = Timestamp::UNIX_EPOCH;
@@ -1395,7 +1396,8 @@ mod tests {
 
     #[test]
     fn found_keys_move_the_counter_only_within_this_installs_window() {
-        let store = lepic_store::MemoryStore::new(lepic_store::ContextKey::from_bytes(
+        let store = lepic_store::MemoryStore::new(lepic_store::StoreKeys::from_bytes(
+            [1; lepic_store::CONTEXT_KEY_LEN],
             [1; lepic_store::CONTEXT_KEY_LEN],
         ));
         let counter = |store: &lepic_store::MemoryStore| {

@@ -13,7 +13,9 @@ use crate::contact::{
     INVITE_ID_LEN, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PairingId, PairingRole, PairingState,
     PeerCard, PendingPairing, PreviousHome, RelayBackoff, SealMode, StoredContactOutbox,
 };
-use crate::context::{self, ContextKey, ContextRepository, ParticipantId, PrivateContext};
+use crate::context::{
+    self, ContextKey, ContextRepository, ParticipantId, PrivateContext, StoreKeys,
+};
 use crate::encoding::{timestamp_from_column, timestamp_to_column, u64_from_column, u64_to_column};
 use crate::error::{Record, StoreError};
 use crate::imported::{
@@ -24,7 +26,7 @@ use crate::invoice::{
     self, InvoiceAddressIndex, InvoiceRepository, PendingInvoice, PendingInvoiceStatus,
 };
 use crate::output::{CommitmentBytes, KeyId, OutputRecord, OutputRepository, OutputStatus};
-use crate::peer::{PeerCapability, PeerRepository, PeerSupport};
+use crate::peer::{self, PeerCompat, PeerRepository, PeerTag, PeerTagKey};
 use crate::relay::{
     InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };
@@ -43,11 +45,16 @@ use crate::tx_record::{
 pub(super) struct SqliteRepos<'a> {
     conn: &'a Connection,
     key: &'a ContextKey,
+    peer_tag: &'a PeerTagKey,
 }
 
 impl<'a> SqliteRepos<'a> {
-    pub(super) fn new(conn: &'a Connection, key: &'a ContextKey) -> Self {
-        Self { conn, key }
+    pub(super) fn new(conn: &'a Connection, keys: &'a StoreKeys) -> Self {
+        Self {
+            conn,
+            key: &keys.context,
+            peer_tag: &keys.peer_tag,
+        }
     }
 
     fn exists(&self, sql: &str, params: impl rusqlite::Params) -> Result<bool, StoreError> {
@@ -625,6 +632,7 @@ fn decode_marks(row: &Row<'_>) -> Result<TxMarks, StoreError> {
             })
             .transpose()?,
         cancelled_answered: decode_flag(row.get(9)?, "cancelled answered")?,
+        answer_marked: decode_flag(row.get(10)?, "answer marked")?,
     })
 }
 
@@ -693,7 +701,7 @@ impl TxRecordRepository for SqliteRepos<'_> {
             .first(
                 "SELECT local_cutoff, finalized_at, kernel_absent_at, receive_seen_at,
                      receive_inputs_unspent, inputs_spent_elsewhere, sender_posted_at,
-                     withdrawn_answered, sender_cancelled_at, cancelled_answered
+                     withdrawn_answered, sender_cancelled_at, cancelled_answered, answer_marked
                  FROM tx_marks WHERE tx_id = ?1",
                 [i64::from(id.0)],
                 decode_marks,
@@ -712,8 +720,8 @@ impl TxRecordRepository for SqliteRepos<'_> {
             "INSERT OR REPLACE INTO tx_marks (tx_id, local_cutoff, finalized_at,
                  kernel_absent_at, receive_seen_at, receive_inputs_unspent,
                  inputs_spent_elsewhere, sender_posted_at, withdrawn_answered,
-                 sender_cancelled_at, cancelled_answered)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 sender_cancelled_at, cancelled_answered, answer_marked)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 i64::from(id.0),
                 encode_height(marks.local_cutoff),
@@ -732,6 +740,7 @@ impl TxRecordRepository for SqliteRepos<'_> {
                     .map(timestamp_to_column)
                     .transpose()?,
                 marks.cancelled_answered,
+                marks.answer_marked,
             ],
         )?;
         Ok(())
@@ -1303,37 +1312,46 @@ impl InvoiceRepository for SqliteRepos<'_> {
     }
 }
 
-fn decode_peer_capability(row: &Row<'_>) -> Result<PeerCapability, StoreError> {
-    let record = Record::PeerCapability;
-    let support: String = row.get(1)?;
-    Ok(PeerCapability {
-        key: row.get(0)?,
-        support: decode_code(&support, PeerSupport::from_code, record, "support")?,
-        learned_at: timestamp_from_column(row.get(2)?, record, "learned at")?,
-    })
-}
-
 impl PeerRepository for SqliteRepos<'_> {
-    fn put_peer_capability(&mut self, capability: &PeerCapability) -> Result<(), StoreError> {
+    fn put_peer_compat(&mut self, key: &str, compat: &PeerCompat) -> Result<(), StoreError> {
+        let tag = self.peer_tag.tag(key)?;
+        let sealed = peer::seal(self.key, &tag, compat)?;
         self.conn.execute(
-            "INSERT INTO peer_capabilities (key, support, learned_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT (key) DO UPDATE SET support = excluded.support,
-                 learned_at = excluded.learned_at",
-            params![
-                capability.key,
-                capability.support.code(),
-                timestamp_to_column(capability.learned_at)?,
-            ],
+            "INSERT INTO peer_compat (key_tag, sealed) VALUES (?1, ?2)
+             ON CONFLICT (key_tag) DO UPDATE SET sealed = excluded.sealed",
+            params![tag.0.as_slice(), sealed],
         )?;
         Ok(())
     }
 
-    fn peer_capability(&self, key: &str) -> Result<Option<PeerCapability>, StoreError> {
+    fn peer_compat(&self, key: &str) -> Result<Option<PeerCompat>, StoreError> {
+        let tag = self.peer_tag.tag(key)?;
         self.first(
-            "SELECT key, support, learned_at FROM peer_capabilities WHERE key = ?1",
-            [key],
-            decode_peer_capability,
+            "SELECT sealed FROM peer_compat WHERE key_tag = ?1",
+            [tag.0.as_slice()],
+            |row| peer::open(self.key, &tag, &row.get::<_, Vec<u8>>(0)?),
         )
+    }
+
+    fn forget_peers(&mut self, before: Timestamp) -> Result<usize, StoreError> {
+        let rows = self.collect("SELECT key_tag, sealed FROM peer_compat", [], |row| {
+            let tag: [u8; 32] = row
+                .get::<_, Vec<u8>>(0)?
+                .try_into()
+                .map_err(|_| corrupt(Record::PeerCompat, "key tag"))?;
+            let compat = peer::open(self.key, &PeerTag(tag), &row.get::<_, Vec<u8>>(1)?)?;
+            Ok((tag, compat))
+        })?;
+        let mut forgotten = 0_usize;
+        for (tag, compat) in rows {
+            if compat.last_seen().is_none_or(|seen| seen < before) {
+                forgotten = forgotten.saturating_add(self.conn.execute(
+                    "DELETE FROM peer_compat WHERE key_tag = ?1",
+                    [tag.as_slice()],
+                )?);
+            }
+        }
+        Ok(forgotten)
     }
 }
 

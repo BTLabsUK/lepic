@@ -284,10 +284,13 @@ ADR 0016 has the reasons; this is the format and who sends what.
   paid invoice was pushed. Both go to the address the invoice was issued to. `posted` also goes
   from the sender of an ordinary payment to its receiver, from the payments address, after the
   sender pushed it.
-- Sent only to a key proven to run LEPIC: one whose marked I1 was parked, whose marked I2 for an
-  issued invoice was finalized (which also proves the key the invoice went to), whose marked S1
-  was answered, whose marked S2 came from the key its send went to, or whose notice was
-  accepted. A key that sent an issued I1 back unchanged never gets one.
+- Sent to a payments address only when the exchange's own incoming slate came marked (the S2 or
+  I2 just finalized, the send's latest S2 for `cancelled`, the parked I1 for `declined`) and the
+  key is LEPIC lately: its last marked message (a marked I1 parked, I2 finalized, which also
+  counts for the key the invoice went to, S1 answered, S2 from the key its send went to, or an
+  accepted notice) is newer than its last unmarked slate or bounced I1, and at most 30 days
+  old (ADR 0016, schema version 12 amendment). A stock listener never acknowledges a notice and
+  loses its queue to one (relay retention below), so every other case sends nothing.
 - Accepted only from the recorded counterparty of the slate, and for `posted` only with the
   excess the payment implies: the I2 for an invoice this wallet paid, the stored S2 for a
   payment it received. Every other notice, one of another version or an unknown type, and
@@ -309,7 +312,8 @@ LEPIC's behaviour for sends; the slate is the one `epic-wallet` sends, plus one 
   same for V3).
 - The key proves, under the Epicbox signature, that the key it came from runs LEPIC: the S1's
   sender, and the S2's sender when that is the key the send went to.
-- After the push that completes a send to a proven receiver, the sender posts `posted` with the
+- After the push that completes a send whose S2 came marked from a receiver that is LEPIC
+  lately, the sender posts `posted` with the
   kernel excess to the address the send went to. The receiver takes it as the notices section
   above says, and shows it as the sender's report while the payment waits; only the chain
   confirms the payment.

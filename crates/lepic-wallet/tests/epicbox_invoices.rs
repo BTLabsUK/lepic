@@ -25,9 +25,7 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::stage::Stage;
-use lepic_store::{
-    OutputStatus, PeerSupport, PendingInvoiceStatus, SlateStage, TxDirection, TxState,
-};
+use lepic_store::{OutputStatus, PendingInvoiceStatus, SlateStage, TxDirection, TxState};
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::Event;
 use lepic_wallet::details::TxFlow;
@@ -35,6 +33,7 @@ use lepic_wallet::epicbox_invoice::{InvoiceExpiry, PeerInvoiceSupport};
 use lepic_wallet::event::BouncedInvoice;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, PayRequest};
+use lepic_wallet::peer_compat::PeerKind;
 use lepic_wallet::selection::{SelectionOptions, SelfSendShape};
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
@@ -325,11 +324,8 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
     );
     assert_eq!(world.relay.pending(&world.issuer.address), 0);
     let key = stock.address().key_text();
-    let capability = world
-        .issuer
-        .read(|repos| repos.peer_capability(&key))
-        .unwrap();
-    assert_eq!(capability.support, PeerSupport::NoInvoices);
+    let capability = world.issuer.peer_kind(&key).unwrap();
+    assert_eq!(capability, PeerKind::Epic);
     assert_eq!(
         world
             .issuer
@@ -417,12 +413,7 @@ fn an_i1_from_another_key_is_not_taken_for_a_bounce() {
         }
     );
     let key = World::address_of(8).key_text();
-    assert!(
-        world
-            .issuer
-            .read(|repos| repos.peer_capability(&key))
-            .is_none()
-    );
+    assert!(world.issuer.peer_kind(&key).is_none());
 }
 
 #[test]

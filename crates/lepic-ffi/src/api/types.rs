@@ -885,6 +885,32 @@ pub struct SasEntry {
     pub name: String,
 }
 
+/// What this wallet learned about the software behind an Epicbox key from that key's own
+/// messages, from `EpicWallet::peer_compat`, with what follows from it now. Times are
+/// milliseconds since the Unix epoch. Everything is `None`, 0 or false for a key nothing is
+/// known about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerCompat {
+    /// The last message from the key that carried the LEPIC marker, or the last notice from it
+    /// this wallet accepted.
+    pub last_marked_at_ms: Option<i64>,
+    /// The last slate from the key without the marker, or an invoice it sent back.
+    pub last_unmarked_at_ms: Option<i64>,
+    /// The feature bits its latest marked message claimed.
+    pub claimed: u32,
+    /// The feature bits that worked with it.
+    pub works: u32,
+    /// When `claimed` was last written from a message that carried feature bits.
+    pub features_at_ms: Option<i64>,
+    /// Derived: its last marked message is newer than its last unmarked one.
+    pub lepic: bool,
+    /// Derived: `lepic`, with a marked message in the last 30 days, so this wallet tells it of
+    /// the end of an exchange that came marked.
+    pub notices: bool,
+    /// Derived: `notices`, and no unmarked slate in the last 30 days.
+    pub fresh: bool,
+}
+
 /// A paired contact, from `EpicWallet::contacts` and `EpicWallet::contact`. Holds no key.
 /// Times are milliseconds since the Unix epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]

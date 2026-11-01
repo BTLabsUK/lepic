@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use lepic_store::{ContextKey, Repositories, SqliteStore, StoreError, WalletStore};
+use lepic_store::{Repositories, SqliteStore, StoreError, StoreKeys, WalletStore};
 use lepic_wallet::{SqliteStores, StoreOpener};
 
 /// A [`SqliteStore`] shared between the engine and the CLI.
@@ -50,7 +50,7 @@ impl CliStores {
 impl StoreOpener for CliStores {
     type Store = SharedStore;
 
-    fn open(&self, data_dir: &Path, key: ContextKey) -> Result<SharedStore, StoreError> {
+    fn open(&self, data_dir: &Path, key: StoreKeys) -> Result<SharedStore, StoreError> {
         let store = SharedStore(Arc::new(SqliteStores.open(data_dir, key)?));
         *self.opened.lock().unwrap_or_else(PoisonError::into_inner) = Some(store.clone());
         Ok(store)
@@ -59,7 +59,7 @@ impl StoreOpener for CliStores {
     fn open_existing(
         &self,
         data_dir: &Path,
-        key: ContextKey,
+        key: StoreKeys,
     ) -> Result<Option<SharedStore>, StoreError> {
         // A check of a phrase, not an unlock: not recorded as the opened store.
         Ok(SqliteStores

@@ -5,6 +5,7 @@
 mod acl;
 mod repos;
 pub(crate) mod schema;
+mod v12;
 mod v8;
 
 use std::ffi::OsString;
@@ -15,7 +16,7 @@ use std::time::{Duration, SystemTime};
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
 
-use crate::context::ContextKey;
+use crate::context::StoreKeys;
 use crate::error::StoreError;
 use crate::store::{Repositories, WalletStore};
 
@@ -33,7 +34,7 @@ const LOG_SUFFIXES: [&str; 3] = ["-wal", "-shm", "-journal"];
 #[derive(Debug)]
 pub struct SqliteStore {
     conn: Mutex<Connection>,
-    key: ContextKey,
+    keys: StoreKeys,
 }
 
 impl SqliteStore {
@@ -45,12 +46,12 @@ impl SqliteStore {
     /// files to `<name>.damaged-<unix seconds>` and kept, and the open fails with
     /// [`StoreError::DamagedSetAside`]; opening again creates a new, empty database. Log files
     /// found without their database are set aside the same way before a new one is made.
-    pub fn open(path: &Path, key: ContextKey) -> Result<Self, StoreError> {
+    pub fn open(path: &Path, keys: StoreKeys) -> Result<Self, StoreError> {
         if !path.try_exists().map_err(io("look for the database"))? {
             set_aside_logs_without_database(path)?;
         }
         restrict_to_owner(path)?;
-        match open_checked(path, OpenFlags::SQLITE_OPEN_CREATE)? {
+        match open_checked(path, OpenFlags::SQLITE_OPEN_CREATE, &keys)? {
             Some(conn) => {
                 // SQLite has just made the `-wal` and `-shm` files; on Windows they took the
                 // folder's access list, not the database's.
@@ -58,7 +59,7 @@ impl SqliteStore {
                 restrict_to_owner(path)?;
                 Ok(Self {
                     conn: Mutex::new(conn),
-                    key,
+                    keys,
                 })
             }
             None => {
@@ -74,14 +75,14 @@ impl SqliteStore {
     /// log files left where they are. For a caller that must leave a damaged wallet as it
     /// found it. It opens read-write, as recovery needs: a hot `-journal` may be rolled back
     /// and a `-shm` file created, but no file is moved.
-    pub fn open_existing(path: &Path, key: ContextKey) -> Result<Option<Self>, StoreError> {
+    pub fn open_existing(path: &Path, keys: StoreKeys) -> Result<Option<Self>, StoreError> {
         if !path.try_exists().map_err(io("look for the database"))? {
             return Ok(None);
         }
-        match open_checked(path, OpenFlags::empty())? {
+        match open_checked(path, OpenFlags::empty(), &keys)? {
             Some(conn) => Ok(Some(Self {
                 conn: Mutex::new(conn),
-                key,
+                keys,
             })),
             None => Err(StoreError::Damaged),
         }
@@ -91,7 +92,11 @@ impl SqliteStore {
 /// The open, migrated connection, or `None` when the file is damaged. The damaged file is
 /// closed without a checkpoint, so its write-ahead log stays as it was. `create` is
 /// `SQLITE_OPEN_CREATE` to make a missing file, or empty.
-fn open_checked(path: &Path, create: OpenFlags) -> Result<Option<Connection>, StoreError> {
+fn open_checked(
+    path: &Path,
+    create: OpenFlags,
+    keys: &StoreKeys,
+) -> Result<Option<Connection>, StoreError> {
     let mut conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | create | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -99,7 +104,7 @@ fn open_checked(path: &Path, create: OpenFlags) -> Result<Option<Connection>, St
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
     let checked = configure(&conn).and_then(|()| {
         if passes_quick_check(&conn)? {
-            schema::migrate_to(&mut conn, SCHEMA_VERSION).map(|()| true)
+            schema::migrate_to(&mut conn, SCHEMA_VERSION, keys).map(|()| true)
         } else {
             Ok(false)
         }
@@ -309,7 +314,7 @@ impl WalletStore for SqliteStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(StoreError::from)?;
-        operation(&SqliteRepos::new(&tx, &self.key))
+        operation(&SqliteRepos::new(&tx, &self.keys))
     }
 
     fn write<R, E>(
@@ -323,7 +328,7 @@ impl WalletStore for SqliteStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StoreError::from)?;
-        let result = operation(&mut SqliteRepos::new(&tx, &self.key))?;
+        let result = operation(&mut SqliteRepos::new(&tx, &self.keys))?;
         tx.commit().map_err(StoreError::from)?;
         Ok(result)
     }

@@ -452,7 +452,7 @@ where
 // Tests may use plain arithmetic (docs/rules.md).
 #[allow(clippy::arithmetic_side_effects)]
 mod tests {
-    use lepic_store::{CONTEXT_KEY_LEN, ContextKey, MemoryStore, WalletStore};
+    use lepic_store::{CONTEXT_KEY_LEN, MemoryStore, StoreKeys, WalletStore};
 
     use super::*;
 
@@ -471,7 +471,10 @@ mod tests {
     }
 
     fn store() -> MemoryStore {
-        MemoryStore::new(ContextKey::from_bytes([1; CONTEXT_KEY_LEN]))
+        MemoryStore::new(StoreKeys::from_bytes(
+            [1; CONTEXT_KEY_LEN],
+            [1; CONTEXT_KEY_LEN],
+        ))
     }
 
     fn observe(store: &MemoryStore, last: Option<u64>, tip: u64, now: i64) -> Option<Height> {

@@ -23,8 +23,8 @@ use lepic_slate::model::{MAX_MESSAGE_LEN, Slate, SlateId};
 use lepic_slate::registry::CodecRegistry;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    PeerCapability, PeerSupport, PendingInvoiceStatus, Repositories, SlateStage, StoreError,
-    TxDirection, TxId, TxState, WalletStore,
+    PendingInvoiceStatus, Repositories, SlateStage, StoreError, TxDirection, TxId, TxState,
+    WalletStore,
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::{Destination, Transport};
@@ -36,20 +36,23 @@ use crate::error::WalletError;
 use crate::event::{BouncedInvoice, Event, ExpiredInvoice};
 use crate::inbox::{Hold, InboxError, relay_network};
 use crate::invoice::{InvoiceError, PaidInvoice, PayRequest, payer_release_height};
+use crate::peer_compat::PeerKind;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
 use crate::refresh::{final_kernel, last_confirmed, legacy_codecs, ttl_cutoff};
 use crate::wallet::Wallet;
 
-/// What a peer's own messages showed about invoices, from [`Wallet::peer_capability`].
+/// What a peer's own messages showed about invoices, from [`Wallet::peer_capability`]: the
+/// [`PeerKind`] of [`Wallet::peer_compat`] under the names hosts already use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerInvoiceSupport {
-    /// Nothing yet: no marked slate or notice from it, and no invoice sent back.
+    /// Nothing yet, or forgotten: no slate, notice or returned invoice from it is on record.
     Unknown,
-    /// A slate or notice from it carried the LEPIC marker, so it pays invoices and reads
-    /// notices.
+    /// Its last marked slate or accepted notice is newer than its last unmarked slate, so it
+    /// pays invoices.
     Lepic,
-    /// It sent an invoice back unpaid, so it neither pays invoices nor reads notices.
+    /// Its last slate came without the marker, or it sent an invoice back unpaid, so it pays
+    /// no invoices and reads no notices.
     NoInvoices,
 }
 
@@ -199,8 +202,8 @@ where
     V: SecretVault + 'static,
 {
     /// What this wallet learned about the peer at `address` from its own messages: whether it
-    /// proved it runs LEPIC, or sent an invoice back unpaid. Matched on the key only. Reads only
-    /// the store.
+    /// runs LEPIC or another wallet, as [`Wallet::peer_compat`] derives it. Matched on the key
+    /// only. Reads only the store.
     ///
     /// Fails with [`InboxError::Address`] for an address that does not parse or is on the other
     /// network, and with [`WalletError::Locked`].
@@ -210,14 +213,15 @@ where
         let key = EpicboxAddress::parse_key(address, network)
             .map(|key| EpicboxAddress::key_text_of(&key, network))
             .map_err(InboxError::Address)?;
+        let now = self.ports().clock.now();
         let session = self.session()?;
-        let learned = session
+        let facts = session
             .store
-            .read(|repos| Ok::<_, WalletError>(repos.peer_capability(&key)?))?;
-        Ok(match learned.map(|capability| capability.support) {
-            None => PeerInvoiceSupport::Unknown,
-            Some(PeerSupport::Lepic) => PeerInvoiceSupport::Lepic,
-            Some(PeerSupport::NoInvoices) => PeerInvoiceSupport::NoInvoices,
+            .read(|repos| Ok::<_, WalletError>(crate::peer_compat::facts(repos, &key, now)?))?;
+        Ok(match facts.kind {
+            PeerKind::Unknown => PeerInvoiceSupport::Unknown,
+            PeerKind::Lepic => PeerInvoiceSupport::Lepic,
+            PeerKind::Epic => PeerInvoiceSupport::NoInvoices,
         })
     }
 
@@ -467,18 +471,12 @@ where
             .await?)
     }
 
-    /// Records that the peer of a bounced invoice does not pay invoices, so nothing but slates
-    /// is ever sent to it, and tells the host which invoice came back.
+    /// Records the bounced invoice as an unmarked answer from its peer, so nothing but slates
+    /// goes to it until a marked message comes, and tells the host which invoice came back.
     pub(crate) async fn record_bounce(&self, bounced: BouncedInvoice) -> Result<(), Hold> {
         let key = peer_key(&bounced.peer);
-        self.inbox_write(move |repos, now| {
-            repos.put_peer_capability(&PeerCapability {
-                key,
-                support: PeerSupport::NoInvoices,
-                learned_at: now,
-            })
-        })
-        .await?;
+        self.inbox_write(move |repos, now| crate::peer_compat::record_unmarked(repos, &key, now))
+            .await?;
         info!(tx_id = %bounced.tx_id, slate_id = %bounced.slate_id, "invoice returned unpaid");
         self.emit(Event::InvoiceBounced(bounced));
         Ok(())

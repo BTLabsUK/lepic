@@ -27,8 +27,8 @@ use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::Transaction;
 use lepic_store::{
-    AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, OutputRecord, OutputStatus,
-    Repositories, StoreError, StoredTransaction, TxDirection, TxState, WalletStore,
+    AccountIndex, AccountRecord, CONTEXT_KEY_LEN, OutputRecord, OutputStatus, Repositories,
+    StoreError, StoreKeys, StoredTransaction, TxDirection, TxState, WalletStore,
 };
 use lepic_wallet::scan::{ScanOptions, ScannedBlock};
 use lepic_wallet::{Ports, StoreOpener, Wallet};
@@ -258,7 +258,7 @@ pub fn store(harness: &Harness) -> TestStore {
         .stores
         .open(
             &harness.data_dir,
-            ContextKey::from_bytes([0; CONTEXT_KEY_LEN]),
+            StoreKeys::from_bytes([0; CONTEXT_KEY_LEN], [0; CONTEXT_KEY_LEN]),
         )
         .unwrap()
 }

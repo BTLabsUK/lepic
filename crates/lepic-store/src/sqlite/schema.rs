@@ -6,6 +6,7 @@
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
+use crate::context::StoreKeys;
 use crate::error::{Record, StoreError};
 
 const V1: &str = "
@@ -402,10 +403,24 @@ ALTER TABLE tx_marks ADD COLUMN cancelled_answered INTEGER NOT NULL DEFAULT 0
     CHECK (cancelled_answered IN (0, 1));
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
+/// What each peer key showed, sealed and found by a keyed hash of the key, replacing the clear
+/// `peer_capabilities` rows, which [`super::v12::move_peer_capabilities`] moves and drops after
+/// this runs; and whether the latest answer to a send carried the LEPIC marker, unknown and so
+/// unset for the sends before.
+const V12: &str = "
+CREATE TABLE peer_compat (
+    key_tag BLOB PRIMARY KEY CHECK (length(key_tag) = 32),
+    sealed BLOB NOT NULL
+);
+
+ALTER TABLE tx_marks ADD COLUMN answer_marked INTEGER NOT NULL DEFAULT 0
+    CHECK (answer_marked IN (0, 1));
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {
@@ -432,9 +447,14 @@ pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {
         })
 }
 
-/// Brings the database to `target` in one transaction. Fails with
-/// [`StoreError::SchemaTooNew`], changing nothing, when the database is already past `target`.
-pub(crate) fn migrate_to(conn: &mut Connection, target: u32) -> Result<(), StoreError> {
+/// Brings the database to `target` in one transaction, sealing what a migration moves under
+/// `keys`. Fails with [`StoreError::SchemaTooNew`], changing nothing, when the database is
+/// already past `target`.
+pub(crate) fn migrate_to(
+    conn: &mut Connection,
+    target: u32,
+    keys: &StoreKeys,
+) -> Result<(), StoreError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let current = stored_version(&tx)?;
     if current > target {
@@ -458,6 +478,9 @@ pub(crate) fn migrate_to(conn: &mut Connection, target: u32) -> Result<(), Store
         if reached == 8 {
             super::v8::move_settings(&tx)?;
         }
+        if reached == 12 {
+            super::v12::move_peer_capabilities(&tx, keys)?;
+        }
         tx.execute(
             "UPDATE schema_version SET version = ?1 WHERE id = 1",
             [reached],
@@ -470,6 +493,15 @@ pub(crate) fn migrate_to(conn: &mut Connection, target: u32) -> Result<(), Store
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::ContextKey;
+    use crate::peer::PeerTagKey;
+
+    fn keys() -> StoreKeys {
+        StoreKeys::new(
+            ContextKey::from_bytes([1; 32]),
+            PeerTagKey::from_bytes([2; 32]),
+        )
+    }
 
     #[test]
     fn schema_version_counts_the_migrations() {
@@ -486,7 +518,7 @@ mod tests {
     fn each_migration_advances_the_version_by_one() {
         let mut conn = Connection::open_in_memory().unwrap();
         for target in 1..=SCHEMA_VERSION {
-            migrate_to(&mut conn, target).unwrap();
+            migrate_to(&mut conn, target, &keys()).unwrap();
             assert_eq!(stored_version(&conn).unwrap(), target);
         }
     }
@@ -494,9 +526,9 @@ mod tests {
     #[test]
     fn rejects_downgrade() {
         let mut conn = Connection::open_in_memory().unwrap();
-        migrate_to(&mut conn, SCHEMA_VERSION).unwrap();
+        migrate_to(&mut conn, SCHEMA_VERSION, &keys()).unwrap();
         assert!(matches!(
-            migrate_to(&mut conn, SCHEMA_VERSION - 1),
+            migrate_to(&mut conn, SCHEMA_VERSION - 1, &keys()),
             Err(StoreError::SchemaTooNew { .. })
         ));
     }

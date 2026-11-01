@@ -225,7 +225,7 @@ mod tests {
     // Tests may unwrap and use plain arithmetic (docs/rules.md).
     #![allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 
-    use lepic_store::{ContextKey, MemoryStore, WalletStore};
+    use lepic_store::{MemoryStore, StoreKeys, WalletStore};
 
     use super::*;
 
@@ -244,7 +244,7 @@ mod tests {
     }
 
     fn store() -> MemoryStore {
-        MemoryStore::new(ContextKey::from_bytes([0; 32]))
+        MemoryStore::new(StoreKeys::from_bytes([0; 32], [0; 32]))
     }
 
     #[test]

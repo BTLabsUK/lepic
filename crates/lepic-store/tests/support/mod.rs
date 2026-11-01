@@ -14,9 +14,9 @@ use lepic_store::{
     AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContactId, ContactKind, ContactMailbox,
     ContactOutboxEntry, ContactOutboxState, ContactRecord, ContactState, ContextKey, KEY_ID_LEN,
     KeyId, MemoryStore, OutputRecord, OutputStatus, PairingId, PairingRole, PairingSecrets,
-    PairingState, PeerCard, PendingInvoice, PendingInvoiceStatus, PendingPairing, PreviousHome,
-    RelayBackoff, SealMode, SlateStage, SqliteStore, StoredSlate, TransactionEntry, TxDirection,
-    TxState, WalletStore,
+    PairingState, PeerCard, PeerTagKey, PendingInvoice, PendingInvoiceStatus, PendingPairing,
+    PreviousHome, RelayBackoff, SealMode, SlateStage, SqliteStore, StoreKeys, StoredSlate,
+    TransactionEntry, TxDirection, TxState, WalletStore,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -32,9 +32,9 @@ const COMMITMENTS: [&str; 3] = [
 pub trait Backend {
     type Store: WalletStore;
 
-    fn create(key: ContextKey) -> Self;
+    fn create(key: StoreKeys) -> Self;
     fn store(&self) -> &Self::Store;
-    fn reopen(&self, key: ContextKey) -> Self::Store;
+    fn reopen(&self, key: StoreKeys) -> Self::Store;
 }
 
 pub struct SqliteBackend {
@@ -59,7 +59,7 @@ pub fn database_path(dir: &Path) -> PathBuf {
 impl Backend for SqliteBackend {
     type Store = SqliteStore;
 
-    fn create(key: ContextKey) -> Self {
+    fn create(key: StoreKeys) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = SqliteStore::open(&database_path(dir.path()), key).unwrap();
         Self { dir, store }
@@ -69,7 +69,7 @@ impl Backend for SqliteBackend {
         &self.store
     }
 
-    fn reopen(&self, key: ContextKey) -> SqliteStore {
+    fn reopen(&self, key: StoreKeys) -> SqliteStore {
         SqliteStore::open(&self.path(), key).unwrap()
     }
 }
@@ -81,7 +81,7 @@ pub struct MemoryBackend {
 impl Backend for MemoryBackend {
     type Store = MemoryStore;
 
-    fn create(key: ContextKey) -> Self {
+    fn create(key: StoreKeys) -> Self {
         Self {
             store: MemoryStore::new(key),
         }
@@ -91,13 +91,17 @@ impl Backend for MemoryBackend {
         &self.store
     }
 
-    fn reopen(&self, key: ContextKey) -> MemoryStore {
+    fn reopen(&self, key: StoreKeys) -> MemoryStore {
         self.store.reopen(key)
     }
 }
 
-pub fn context_key(byte: u8) -> ContextKey {
-    ContextKey::from_bytes([byte; CONTEXT_KEY_LEN])
+/// The keys a store is opened with, both made of `byte`.
+pub fn context_key(byte: u8) -> StoreKeys {
+    StoreKeys::new(
+        ContextKey::from_bytes([byte; CONTEXT_KEY_LEN]),
+        PeerTagKey::from_bytes([byte; 32]),
+    )
 }
 
 pub fn time(seconds: i64) -> Timestamp {

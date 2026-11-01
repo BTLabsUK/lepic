@@ -43,7 +43,9 @@ pub use contact_backup::{
     CONTACT_BACKUP_VERSION, CardReader, ImportSummary, export_contacts, export_contacts_where,
     import_contacts,
 };
-pub use context::{CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext};
+pub use context::{
+    CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext, StoreKeys,
+};
 pub use error::{DatabaseError, Record, StoreError};
 pub use imported::{
     ChainCheck, ImportedKind, ImportedMessage, ImportedOutput, ImportedOutputStatus,
@@ -58,7 +60,9 @@ pub use output::{
     COMMITMENT_LEN, CommitmentBytes, KEY_ID_LEN, KeyId, OutputRecord, OutputRepository,
     OutputStatus,
 };
-pub use peer::{PeerCapability, PeerRepository, PeerSupport};
+#[doc(hidden)]
+pub use peer::vectors as peer_vectors;
+pub use peer::{PEER_TAG_KEY_LEN, PEER_TAG_LEN, PeerCompat, PeerRepository, PeerTag, PeerTagKey};
 pub use relay::{
     InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };

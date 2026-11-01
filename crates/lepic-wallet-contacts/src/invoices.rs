@@ -714,7 +714,14 @@ where
                 ));
                 if let Some(kernel) = finalized.transaction.kernels().first() {
                     self.wallet
-                        .notify_posted(finalized.tx_id, finalized.slate.id(), kernel.excess)
+                        .notify_posted(
+                            finalized.tx_id,
+                            finalized.slate.id(),
+                            kernel.excess,
+                            // Sealed from the contact: only its mailbox is told, never a
+                            // payments address.
+                            false,
+                        )
                         .await;
                 }
                 Ok(Handled::Stored)

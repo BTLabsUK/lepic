@@ -443,7 +443,7 @@ impl lepic_wallet::StoreOpener for ClaimedStores {
     fn open(
         &self,
         data_dir: &Path,
-        key: lepic_store::ContextKey,
+        key: lepic_store::StoreKeys,
     ) -> Result<ClaimedStore, lepic_store::StoreError> {
         Ok(ClaimedStore::new(
             lepic_wallet::SqliteStores.open(data_dir, key)?,
@@ -634,7 +634,8 @@ mod tests {
         let held_while_closing = Arc::new(Mutex::new(None));
         let store = ClaimedStore::new(
             ClosingStore {
-                inner: lepic_store::MemoryStore::new(lepic_store::ContextKey::from_bytes(
+                inner: lepic_store::MemoryStore::new(lepic_store::StoreKeys::from_bytes(
+                    [2; lepic_store::CONTEXT_KEY_LEN],
                     [2; lepic_store::CONTEXT_KEY_LEN],
                 )),
                 holder: Arc::clone(&holder),

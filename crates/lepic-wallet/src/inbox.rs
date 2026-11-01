@@ -1176,20 +1176,18 @@ where
             .await
         {
             Ok(finalized) => {
-                if marked {
-                    self.record_paying_peer(finalized.tx_id, reply_to).await;
-                }
+                // Recorded before the notice is decided, so an unmarked payment holds it back.
+                self.record_paying_peer(finalized.tx_id, reply_to, marked)
+                    .await;
                 if let Some(kernel) = finalized.slate.kernel() {
-                    self.notify_posted(finalized.tx_id, payment.id(), kernel.excess)
+                    self.notify_posted(finalized.tx_id, payment.id(), kernel.excess, marked)
                         .await;
                 }
                 Ok(self.invoice_finalized(finalized.tx_id, payment, finalized_before))
             }
             Err(InvoiceError::NotPosted { tx_id, source }) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
-                if marked {
-                    self.record_paying_peer(tx_id, reply_to).await;
-                }
+                self.record_paying_peer(tx_id, reply_to, marked).await;
                 Ok(self.invoice_finalized(tx_id, payment, finalized_before))
             }
             Err(error @ InvoiceError::Expired { cutoff, .. }) => {
@@ -1229,6 +1227,15 @@ where
                 }
                 Err(_) => Err(Hold::Invoice(error).into()),
             },
+            Err(
+                error @ InvoiceError::NotFinalizable {
+                    tx_id,
+                    state: TxState::Cancelled,
+                },
+            ) => {
+                self.record_paying_peer(tx_id, reply_to, false).await;
+                Err(Refusal::Invoice(error).into())
+            }
             Err(error) if invoice_finalize_is_permanent(&error) => {
                 Err(Refusal::Invoice(error).into())
             }
@@ -1466,9 +1473,7 @@ where
             .await
         {
             Ok(received) => {
-                if marked {
-                    self.record_sending_peer(reply_to).await;
-                }
+                self.record_sending_peer(reply_to, marked).await;
                 match self.reply(reply_to, &received.reply).await {
                     Ok(()) => {}
                     Err(hold)
@@ -1546,31 +1551,42 @@ where
         } else {
             Handled::Finalized
         };
-        match self
+        let finalized = self
             .finalize_from(
                 TRANSPORT_ID,
                 envelope.wire(),
                 POST_PROPAGATION,
                 Answerer::Epicbox(reply_to.clone()),
             )
-            .await
-        {
+            .await;
+        // What the answer showed is recorded before any notice about the send is decided, so
+        // an unmarked answer holds every notice back.
+        let answered = match &finalized {
+            Ok(finalized) => Some(finalized.tx_id),
+            Err(
+                FinalizeError::NotPosted { tx_id, .. }
+                | FinalizeError::NotFinalizable {
+                    tx_id,
+                    state: TxState::Cancelled,
+                },
+            ) => Some(*tx_id),
+            Err(_) => None,
+        };
+        if let Some(tx_id) = answered {
+            self.record_receiving_peer(tx_id, reply_to, marked).await;
+        }
+        match finalized {
             Ok(finalized) => {
-                if marked {
-                    self.record_receiving_peer(finalized.tx_id, reply_to).await;
-                }
                 // Only the call that pushed the transaction tells the receiver; an S2 that
                 // arrives again for a posted transaction pushes nothing.
                 if finalized.pushed {
-                    self.notify_pushed(finalized.tx_id, &finalized.slate).await;
+                    self.notify_pushed(finalized.tx_id, &finalized.slate, marked)
+                        .await;
                 }
                 Ok(handled)
             }
             Err(FinalizeError::NotPosted { tx_id, source }) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
-                if marked {
-                    self.record_receiving_peer(tx_id, reply_to).await;
-                }
                 Ok(handled)
             }
             // Not reachable over Epicbox today: new Epicbox slates go out in the V2 shape,
@@ -1597,7 +1613,7 @@ where
                     tx_id,
                     state: TxState::Cancelled,
                 },
-            ) if marked => match self.answer_cancelled_send(tx_id, reply_to).await {
+            ) if marked => match self.answer_cancelled_send(tx_id).await {
                 Ok(()) => Err(Refusal::Finalize(error).into()),
                 Err(hold)
                     if matches!(hold, Hold::Withheld)

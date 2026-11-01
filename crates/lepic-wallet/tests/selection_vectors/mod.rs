@@ -10,8 +10,8 @@ use lepic_crypto::Commitment;
 use lepic_primitives::amount::{Amount, Fee, Height, MILLI_EPIC};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_store::{
-    AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, KEY_ID_LEN, KeyId, MemoryStore,
-    OutputRecord, OutputStatus, WalletStore,
+    AccountIndex, AccountRecord, CONTEXT_KEY_LEN, KEY_ID_LEN, KeyId, MemoryStore, OutputRecord,
+    OutputStatus, StoreKeys, WalletStore,
 };
 use lepic_wallet::WalletError;
 use lepic_wallet::account::next_output_key;
@@ -128,7 +128,10 @@ fn not_enough_funds(expected: &Value) -> SelectionError {
 /// The keys the account hands out next, when its counter follows the stored outputs as it does
 /// in the upstream wallet the vector was recorded from.
 fn next_change_keys(utxos: &[OutputRecord], count: usize) -> Vec<KeyId> {
-    let store = MemoryStore::new(ContextKey::from_bytes([7; CONTEXT_KEY_LEN]));
+    let store = MemoryStore::new(StoreKeys::from_bytes(
+        [7; CONTEXT_KEY_LEN],
+        [7; CONTEXT_KEY_LEN],
+    ));
     store
         .write(|repos| {
             repos.put_account(&AccountRecord {

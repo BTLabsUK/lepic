@@ -94,7 +94,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::context::ContextKey;
+    use crate::context::StoreKeys;
     use crate::memory::MemoryStore;
     use crate::store::WalletStore;
 
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn memory_store_prunes_inbox_entries_received_before_the_cutoff() {
-        let store = MemoryStore::new(ContextKey::from_bytes([1; 32]));
+        let store = MemoryStore::new(StoreKeys::from_bytes([1; 32], [1; 32]));
         prunes_inbox_entries_received_before_the_cutoff(&store);
     }
 
@@ -145,7 +145,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = crate::SqliteStore::open(
             &dir.path().join("wallet.sqlite"),
-            ContextKey::from_bytes([1; 32]),
+            StoreKeys::from_bytes([1; 32], [1; 32]),
         )
         .unwrap();
         prunes_inbox_entries_received_before_the_cutoff(&store);

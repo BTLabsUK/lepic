@@ -145,7 +145,7 @@ mod tests {
     use lepic_slate::codec::Codec;
     use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
     use lepic_store::{
-        AccountIndex, CONTEXT_KEY_LEN, ContextKey, MemoryStore, StoredSlate, TransactionEntry,
+        AccountIndex, CONTEXT_KEY_LEN, MemoryStore, StoreKeys, StoredSlate, TransactionEntry,
         TxState, WalletStore,
     };
     use serde_json::Value;
@@ -207,7 +207,10 @@ mod tests {
 
     #[test]
     fn stored_reply_is_found_by_slate_id_and_decodes() {
-        let store = MemoryStore::new(ContextKey::from_bytes([3; CONTEXT_KEY_LEN]));
+        let store = MemoryStore::new(StoreKeys::from_bytes(
+            [3; CONTEXT_KEY_LEN],
+            [3; CONTEXT_KEY_LEN],
+        ));
         let reply_json = vector_json(S2);
         let slate = decode(&reply_json);
         let uuid = Uuid::from_bytes(*slate.id().as_bytes());

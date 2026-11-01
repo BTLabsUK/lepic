@@ -33,6 +33,7 @@ use lepic_wallet::legacy_history::{
     TxOrigin as EngineTxOrigin,
 };
 use lepic_wallet::lifecycle::PhraseCheck;
+use lepic_wallet::peer_compat::PeerKind;
 use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshOutcome};
 use lepic_wallet::scan::{
     FoundDuring as EngineFoundDuring, ScanCancel, ScanOptions, ScanStart, ScanSummary,
@@ -61,8 +62,8 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, LegacyImport,
     LegacyImportStatus, ListenerEvent, ListenerEventKind, NodeTip, OutputCategory, OutputStatus,
-    ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy, SelfSentTx, SendOptions,
-    SentTx, Slate, SlateMessage, SlateStage, TransactionDetails, TransportConnection,
+    PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult, SelectionStrategy, SelfSentTx,
+    SendOptions, SentTx, Slate, SlateMessage, SlateStage, TransactionDetails, TransportConnection,
     TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput,
     WalletSummary,
 };
@@ -1392,6 +1393,28 @@ impl Session {
                     "epicbox is not configured for this wallet",
                 )
             })
+    }
+
+    pub(crate) fn peer_compat(&self, address: &str) -> Result<PeerCompat, WalletError> {
+        let facts = self.engine.peer_compat(address)?;
+        let stored = facts.stored.unwrap_or_default();
+        Ok(PeerCompat {
+            last_marked_at_ms: stored.last_marked_at.map(Timestamp::as_millisecond),
+            last_unmarked_at_ms: stored.last_unmarked_at.map(Timestamp::as_millisecond),
+            claimed: stored.claimed,
+            works: stored.works,
+            features_at_ms: stored.features_at.map(Timestamp::as_millisecond),
+            lepic: facts.kind == PeerKind::Lepic,
+            notices: facts.notices,
+            fresh: facts.fresh,
+        })
+    }
+
+    pub(crate) fn forget_peers(&self, older_than_days: u32) -> Result<u32, WalletError> {
+        let days = u64::from(older_than_days);
+        let older_than = std::time::Duration::from_secs(days.saturating_mul(24 * 60 * 60));
+        let forgotten = self.engine.forget_peers(older_than)?;
+        Ok(u32::try_from(forgotten).unwrap_or(u32::MAX))
     }
 
     pub(crate) fn epicbox_address(&self) -> Result<String, WalletError> {

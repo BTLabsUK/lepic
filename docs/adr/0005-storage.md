@@ -29,9 +29,10 @@ and possibly a `wallet.seed` file.
   sender key (`MAX_PARKED_INVOICES`, `MAX_PARKED_INVOICES_PER_SENDER`), so an allowlisted sender
   cannot grow the database without bound. Only parked invoices count; a parked invoice moves
   only to paid or declined and never back, and the store parks nothing in another status.
-- The invoice allowlist and what each peer is proven to support (LEPIC notices, or no invoices)
-  are keyed by the Epicbox public key alone, since the relay authenticates the key and never the
-  domain. An allowlist entry keeps the full address replies go to. The current invoice address
+- The invoice allowlist and what each peer's messages showed (ADR 0016, schema version 12) are
+  keyed by the Epicbox public key alone, since the relay authenticates the key and never the
+  domain. The peer rows hold only dates and feature bits, sealed under the private context key
+  with a keyed hash of the key as row id and associated data, so the table names no peer. An allowlist entry keeps the full address replies go to. The current invoice address
   index is a single row that is never 0, because index 0 is the payments address.
 - Seeds go through a `SecretStore` port. On mobile the host app implements it with Android Keystore or
   the iOS Keychain. On desktop, `lepic-keychain` provides a vault file: XChaCha20-Poly1305 under an

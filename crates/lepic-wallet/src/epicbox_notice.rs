@@ -2,11 +2,11 @@
 //! Notices over Epicbox in the engine (ADR 0016): which peers may be sent one, what a received
 //! one does, and who sends which.
 //!
-//! A peer is proven to run LEPIC once a slate from it carried the LEPIC marker, or it sent a
-//! notice this wallet accepted; only then does it get a notice, because a stock listener processes
-//! only V2 and V3 slates. A notice is accepted only from the recorded
-//! counterparty of its slate, and it never moves funds or unlocks anything: it deletes a parked
-//! invoice at most, and otherwise only tells the host.
+//! A plain notice goes to a payments address only when the exchange it is about came marked
+//! from that key and the key is LEPIC lately ([`crate::peer_compat`]), because any other
+//! listener processes only V2 and V3 slates and never acknowledges a notice. A notice is
+//! accepted only from the recorded counterparty of its slate, and it never moves funds or
+//! unlocks anything: it deletes a parked invoice at most, and otherwise only tells the host.
 //!
 //! `posted` goes from the issuer of a paid invoice to its payer, and from the sender of an
 //! ordinary payment to its receiver. The receiver keeps the time of the first report it
@@ -17,13 +17,14 @@
 //! late S2 of a send already cancelled. The receiver keeps the time of the first report it
 //! accepted while the payment waited, and leaves the payment as it is.
 
+use lepic_epicbox::marker::v3::carries_lepic_marker;
 use lepic_epicbox::{EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::NodeApi;
 use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    ContactId, PeerCapability, PeerSupport, PendingInvoiceStatus, Repositories, SlateStage,
-    StoreError, TxDirection, TxId, TxState, WalletStore,
+    ContactId, PendingInvoiceStatus, Repositories, SlateStage, StoreError, TxDirection, TxId,
+    TxState, WalletStore,
 };
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{Destination, Outbound, Transport};
@@ -39,6 +40,7 @@ use crate::finalize::kernel_excess;
 use crate::inbox::{ErrorChain, Handled, Hold, relay_network};
 use crate::invoice::check_signed_payment;
 use crate::notice::{Notice, NoticeKind};
+use crate::peer_compat::{facts, record_marked, record_slate};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{final_kernel, stored_slate};
 use crate::wallet::Wallet;
@@ -87,26 +89,6 @@ fn counterparty_key(
     Ok(repos
         .counterparty(tx_id)?
         .and_then(|address| key_of(&address, network)))
-}
-
-/// Whether the peer with `key` proved that it runs LEPIC.
-fn proven(repos: &dyn Repositories, key: &str) -> Result<bool, StoreError> {
-    Ok(repos
-        .peer_capability(key)?
-        .is_some_and(|capability| capability.support == PeerSupport::Lepic))
-}
-
-/// Records that the peer with `key` runs LEPIC.
-pub(crate) fn record_lepic(
-    repos: &mut dyn Repositories,
-    key: String,
-    now: jiff::Timestamp,
-) -> Result<(), StoreError> {
-    repos.put_peer_capability(&PeerCapability {
-        key,
-        support: PeerSupport::Lepic,
-        learned_at: now,
-    })
 }
 
 /// Who a notice is from.
@@ -200,7 +182,7 @@ fn apply_notice(
     if let NoticeFrom::Epicbox(key) = from
         && !matches!(effect, Effect::Dropped)
     {
-        record_lepic(repos, key, now)?;
+        record_marked(repos, &key, now, None)?;
     }
     Ok(effect)
 }
@@ -378,7 +360,7 @@ fn cancellation_target(
     repos: &dyn Repositories,
     tx_id: TxId,
     answered: bool,
-) -> Result<Option<(SlateId, Destination)>, StoreError> {
+) -> Result<Option<(SlateId, Destination, bool)>, StoreError> {
     let Some(entry) = repos.transaction(tx_id)? else {
         return Ok(None);
     };
@@ -388,12 +370,13 @@ fn cancellation_target(
     let contact = crate::contact_link::slate_contact(repos, slate_id)?;
     let over_epicbox =
         entry.transport.as_deref() == Some(TRANSPORT_ID.as_str()) || contact.is_some();
+    let marks = repos.tx_marks(tx_id)?;
     if entry.direction != TxDirection::Outgoing
         || entry.state != TxState::Cancelled
         || !over_epicbox
         || repos.slate(slate_id, SlateStage::Standard1)?.is_none()
         || (answered && repos.slate(slate_id, SlateStage::Standard3)?.is_none())
-        || repos.tx_marks(tx_id)?.cancelled_answered
+        || marks.cancelled_answered
     {
         return Ok(None);
     }
@@ -405,6 +388,7 @@ fn cancellation_target(
     Ok(Some((
         SlateId::from_bytes(slate_id.into_bytes()),
         Destination::new(to),
+        marks.answer_marked,
     )))
 }
 
@@ -492,17 +476,27 @@ where
         Ok(Handled::Notice)
     }
 
-    /// Records that the senders of a marked payment of an invoice this wallet issued run
-    /// LEPIC: the key the payment came from, and the key the invoice went to, whose holder
-    /// is the only one that could answer it.
-    pub(crate) async fn record_paying_peer(&self, tx_id: TxId, reply_to: &Destination) {
+    /// Records what a payment of an invoice this wallet issued showed about its senders. A
+    /// marked one shows that the key it came from runs LEPIC, and so does the key the invoice
+    /// went to, whose holder is the only one that could answer it; an unmarked one shows only
+    /// that the key it came from does not, for now.
+    pub(crate) async fn record_paying_peer(
+        &self,
+        tx_id: TxId,
+        reply_to: &Destination,
+        marked: bool,
+    ) {
         let network = relay_network(self.config().network);
         let from = key_of(reply_to.as_str(), network);
         let recorded = self
             .inbox_write(move |repos, now| {
-                let invoiced = counterparty_key(repos, tx_id, network)?;
+                let invoiced = if marked {
+                    counterparty_key(repos, tx_id, network)?
+                } else {
+                    None
+                };
                 for key in [from, invoiced].into_iter().flatten() {
-                    record_lepic(repos, key, now)?;
+                    record_slate(repos, &key, now, marked)?;
                 }
                 Ok(())
             })
@@ -512,24 +506,31 @@ where
         }
     }
 
-    /// Records that the sender of a marked S1 runs LEPIC: only a LEPIC wallet writes the
-    /// marker, and the Epicbox signature binds it to the key the S1 came from.
-    pub(crate) async fn record_sending_peer(&self, reply_to: &Destination) {
+    /// Records what an S1 showed about its sender: only a LEPIC wallet writes the marker, and
+    /// the Epicbox signature binds the S1 to the key it came from.
+    pub(crate) async fn record_sending_peer(&self, reply_to: &Destination, marked: bool) {
         let network = relay_network(self.config().network);
         let Some(from) = key_of(reply_to.as_str(), network) else {
             return;
         };
         let recorded = self
-            .inbox_write(move |repos, now| record_lepic(repos, from, now))
+            .inbox_write(move |repos, now| record_slate(repos, &from, now, marked))
             .await;
         if let Err(error) = recorded {
             warn!(error = %ErrorChain(&error), "peer capability not recorded");
         }
     }
 
-    /// Records that the receiver of the send `tx_id` runs LEPIC, when its marked S2 came from
-    /// the key the send went to. An S2 from any other key proves nothing about that receiver.
-    pub(crate) async fn record_receiving_peer(&self, tx_id: TxId, reply_to: &Destination) {
+    /// Records what an S2 for the send `tx_id` showed about its receiver, when it came from the
+    /// key the send went to, and whether this answer was marked, which a later `cancelled`
+    /// needs. An S2 from any other key shows nothing about that receiver. Runs before any notice
+    /// about the send is decided.
+    pub(crate) async fn record_receiving_peer(
+        &self,
+        tx_id: TxId,
+        reply_to: &Destination,
+        marked: bool,
+    ) {
         let network = relay_network(self.config().network);
         let Some(from) = key_of(reply_to.as_str(), network) else {
             return;
@@ -537,7 +538,12 @@ where
         let recorded = self
             .inbox_write(move |repos, now| {
                 if counterparty_key(repos, tx_id, network)?.as_deref() == Some(from.as_str()) {
-                    record_lepic(repos, from, now)?;
+                    record_slate(repos, &from, now, marked)?;
+                    let mut marks = repos.tx_marks(tx_id)?;
+                    if marks.answer_marked != marked {
+                        marks.answer_marked = marked;
+                        repos.put_tx_marks(tx_id, &marks)?;
+                    }
                 }
                 Ok(())
             })
@@ -548,10 +554,11 @@ where
     }
 
     /// Tells the receiver of `tx_id`, a send over Epicbox whose S2 this wallet just finalized
-    /// and pushed in a listen or drain, that it was posted with the kernel of `finalized`.
-    /// Nothing for another transport or a slate without a kernel. Only the inbox calls it, so
-    /// nothing goes to the relay outside a listen or drain the host started.
-    pub(crate) async fn notify_pushed(&self, tx_id: TxId, finalized: &Slate) {
+    /// and pushed in a listen or drain, that it was posted with the kernel of `finalized`, when
+    /// that S2 came `marked`. Nothing for another transport or a slate without a kernel. Only
+    /// the inbox calls it, so nothing goes to the relay outside a listen or drain the host
+    /// started.
+    pub(crate) async fn notify_pushed(&self, tx_id: TxId, finalized: &Slate, marked: bool) {
         let Some(kernel) = finalized.kernel() else {
             return;
         };
@@ -567,7 +574,7 @@ where
         };
         match over_epicbox.await {
             Ok(true) => {
-                self.notify_posted(tx_id, finalized.id(), kernel.excess)
+                self.notify_posted(tx_id, finalized.id(), kernel.excess, marked)
                     .await;
             }
             Ok(false) => {}
@@ -649,12 +656,15 @@ where
         Ok(cancel)
     }
 
-    /// Tells the payer that the paid invoice `tx_id` was pushed with `excess`.
+    /// Tells the payer that the paid invoice `tx_id` was pushed with `excess`. Over Epicbox
+    /// only when the payment came `answer_marked`; a paired contact is told in its mailbox
+    /// either way.
     pub async fn notify_posted(
         &self,
         tx_id: TxId,
         slate_id: SlateId,
         excess: lepic_crypto::Commitment,
+        answer_marked: bool,
     ) {
         let to = match self.counterparty_of(tx_id).await {
             Ok(Some(to)) => to,
@@ -668,13 +678,17 @@ where
             slate_id,
             kind: NoticeKind::Posted { excess },
         };
-        let _ = self.send_notice(None, &to, notice).await;
+        let _ = self.send_notice(None, &to, notice, answer_marked).await;
     }
 
     /// Tells the payer that the cancelled invoice `tx_id` is withdrawn, when it was one issued
-    /// over Epicbox, and records that it was told. Fails with why such a notice was not
-    /// delivered.
-    pub(crate) async fn notify_withdrawn(&self, tx_id: TxId) -> Result<(), Hold> {
+    /// over Epicbox, and records that it was told. Over Epicbox only in answer to a payment
+    /// that came `answer_marked`. Fails with why such a notice was not delivered.
+    pub(crate) async fn notify_withdrawn(
+        &self,
+        tx_id: TxId,
+        answer_marked: bool,
+    ) -> Result<(), Hold> {
         let target = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
@@ -696,7 +710,7 @@ where
             slate_id,
             kind: NoticeKind::Withdrawn,
         };
-        self.send_notice(None, &to, notice).await?;
+        self.send_notice(None, &to, notice, answer_marked).await?;
         let recorded = self
             .inbox_write(move |repos, _| {
                 let mut marks = repos.tx_marks(tx_id)?;
@@ -726,7 +740,7 @@ where
         let due = self.inbox_write(move |repos, now| {
             let due = withdrawn_answer_due(repos, &codecs, tx_id, &payment)?;
             if due && let Some(invoiced) = counterparty_key(repos, tx_id, network)? {
-                record_lepic(repos, invoiced, now)?;
+                record_marked(repos, &invoiced, now, None)?;
             }
             Ok(due)
         });
@@ -738,15 +752,16 @@ where
                 return Err(error.into());
             }
         }
-        self.notify_withdrawn(tx_id).await
+        self.notify_withdrawn(tx_id, true).await
     }
 
     /// Tells the receiver of the cancelled send `tx_id` that it is cancelled, when it is an
     /// ordinary payment sent over Epicbox or through a paired contact whose receiver was not
     /// told before, and records that it was told. With `answered`, only when this wallet
     /// finalized the receiver's answer: the cancel and release of a send call it so, and a late
-    /// answer to a cancelled send without. Over Epicbox only a receiver proven to run LEPIC is
-    /// told. Fails with why such a notice was not delivered; a cancel never fails on it.
+    /// answer to a cancelled send without. Over Epicbox only a receiver whose latest answer came
+    /// marked, and that is LEPIC lately, is told. Fails with why such a notice was not
+    /// delivered; a cancel never fails on it.
     pub async fn notify_cancelled(&self, tx_id: TxId, answered: bool) -> Result<(), Hold> {
         let target = async {
             let session = self.session()?;
@@ -757,7 +772,7 @@ where
             })
             .await
         };
-        let (slate_id, to) = match target.await {
+        let (slate_id, to, answer_marked) = match target.await {
             Ok(Some(target)) => target,
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -769,7 +784,7 @@ where
             slate_id,
             kind: NoticeKind::Cancelled,
         };
-        self.send_notice(None, &to, notice).await?;
+        self.send_notice(None, &to, notice, answer_marked).await?;
         let recorded = self
             .inbox_write(move |repos, _| {
                 let mut marks = repos.tx_marks(tx_id)?;
@@ -785,19 +800,14 @@ where
 
     /// Answers a marked late S2 of the cancelled send `tx_id`, from the key the send went to,
     /// with a `cancelled`: the receiver answered after the cancel, or its answer reached this
-    /// wallet only after it. The marked S2 proves the receiver runs LEPIC. Once per send. Fails
-    /// with why that answer was due and not delivered.
-    pub(crate) async fn answer_cancelled_send(
-        &self,
-        tx_id: TxId,
-        reply_to: &Destination,
-    ) -> Result<(), Hold> {
-        self.record_receiving_peer(tx_id, reply_to).await;
+    /// wallet only after it. The caller recorded the answer first. Once per send. Fails with
+    /// why that answer was due and not delivered.
+    pub(crate) async fn answer_cancelled_send(&self, tx_id: TxId) -> Result<(), Hold> {
         self.notify_cancelled(tx_id, false).await
     }
 
     /// Tells the issuer of the parked invoice `slate_id` that it was declined, from the payments
-    /// address.
+    /// address. Over Epicbox only when the parked I1, kept as it arrived, carried the marker.
     pub(crate) async fn notify_declined(&self, slate_id: SlateId) {
         let to = async {
             let session = self.session()?;
@@ -808,8 +818,14 @@ where
             })
             .await
         };
-        let to = match to.await {
-            Ok(Some(parked)) => Destination::new(parked.sender_address),
+        let (to, marked) = match to.await {
+            Ok(Some(parked)) => {
+                let marked = carries_lepic_marker(&lepic_slate::codec::WireSlate::binary(
+                    lepic_slate::codec::MediaType::JSON,
+                    parked.bytes,
+                ));
+                (Destination::new(parked.sender_address), marked)
+            }
             Ok(None) => return,
             Err(error) => {
                 warn!(slate_id = %slate_id, error = %ErrorChain(&error), "notice not sent");
@@ -820,7 +836,7 @@ where
             slate_id,
             kind: NoticeKind::Declined,
         };
-        let _ = self.send_notice(None, &to, notice).await;
+        let _ = self.send_notice(None, &to, notice, marked).await;
     }
 
     async fn counterparty_of(
@@ -838,13 +854,16 @@ where
     }
 
     /// Sends `notice` to `to`, through `sender` or else the registered Epicbox transport, when
-    /// the peer proved it runs LEPIC. A notice that was not sent is logged here, and the
-    /// reason is returned for the one caller that holds a message on it.
+    /// the exchange's own incoming slate came `exchange_marked` and the key is LEPIC lately. A
+    /// paired contact's notice goes to its mailbox instead, which only LEPIC reads. A notice
+    /// that was not sent is logged here, and the reason is returned for the one caller that
+    /// holds a message on it.
     async fn send_notice(
         &self,
         sender: Option<&dyn Outbound>,
         to: &Destination,
         notice: Notice,
+        exchange_marked: bool,
     ) -> Result<(), Hold> {
         let slate_id = notice.slate_id;
         if let Some(contact_id) = self.contact_of_slate(slate_id).await {
@@ -868,15 +887,22 @@ where
                 transport: TRANSPORT_ID,
             }));
         };
-        let proof = async {
+        if !exchange_marked {
+            debug!(slate_id = %slate_id, "notice withheld, the exchange came unmarked");
+            return Err(Hold::Withheld);
+        }
+        let allowed = async {
             let session = self.session()?;
-            self.blocking(move |_, _| Ok(session.store.read(|repos| proven(repos, &key))?))
-                .await
+            self.blocking(move |ports, _| {
+                let now = ports.clock.now();
+                Ok(session.store.read(|repos| facts(repos, &key, now))?.notices)
+            })
+            .await
         };
-        match proof.await {
+        match allowed.await {
             Ok(true) => {}
             Ok(false) => {
-                debug!(slate_id = %slate_id, "notice withheld from a peer not proven to run lepic");
+                debug!(slate_id = %slate_id, "notice withheld from a peer not lately shown to run lepic");
                 return Err(Hold::Withheld);
             }
             Err(error) => {

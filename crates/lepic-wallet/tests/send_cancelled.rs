@@ -29,13 +29,12 @@ use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::SlateId;
-use lepic_store::{
-    PeerCapability, PeerSupport, SlateStage, TxDirection, TxId, TxState, WalletStore,
-};
+use lepic_store::{PeerCompat, SlateStage, TxDirection, TxId, TxState, WalletStore};
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::event::CancelledPayment;
 use lepic_wallet::inbox::InboxSummary;
 use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
+use lepic_wallet::peer_compat::PeerKind;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{Clock, Event};
@@ -333,13 +332,50 @@ fn a_repeated_late_answer_sends_nothing_more() {
     assert_eq!(told.len(), 1, "{told:?}");
     assert!(is_cancelled_notice(&told[0], sent.slate_id));
     let key = World::address_of(PEER).key_text();
-    assert_eq!(
-        world
+    assert_eq!(world.sender().peer_kind(&key), Some(PeerKind::Lepic));
+}
+
+/// The receiver's key ran LEPIC lately, but the answer to this send came unmarked: another
+/// wallet on that key may be the one waiting, so the cancel tells nobody.
+#[test]
+fn a_cancel_after_an_unmarked_answer_sends_no_cancelled() {
+    let world = World::new();
+    let peer = world.peer_client(PEER);
+    let key = World::address_of(PEER).key_text();
+    world
+        .sender()
+        .store()
+        .write(|repos| {
+            repos.put_peer_compat(
+                &key,
+                &PeerCompat {
+                    last_marked_at: Some(world.sender().clock.now()),
+                    ..PeerCompat::default()
+                },
+            )
+        })
+        .unwrap();
+    let (receipt, s2) = world.receipt_through_peer(|s1| s1);
+    world
+        .node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    world.post(PEER, &world.sender().address, &unmarked(&s2), 1);
+    assert_eq!(world.drain(world.sender()).finalized, 1);
+    let sent = world
+        .sender()
+        .read(|repos| repos.transaction_by_slate(uuid(receipt.slate_id), TxDirection::Outgoing))
+        .unwrap();
+    assert!(
+        !world
             .sender()
-            .read(|repos| repos.peer_capability(&key))
-            .map(|capability| capability.support),
-        Some(PeerSupport::Lepic)
+            .read(|repos| repos.tx_marks(sent.id))
+            .answer_marked
     );
+
+    world.cancel(world.sender(), sent.id);
+
+    assert!(world.drain_peer(&peer).is_empty());
+    assert!(!world.cancel_answered(sent.id));
 }
 
 #[test]
@@ -352,11 +388,13 @@ fn a_send_cancelled_before_any_answer_sends_nothing() {
         .sender()
         .store()
         .write(|repos| {
-            repos.put_peer_capability(&PeerCapability {
-                key,
-                support: PeerSupport::Lepic,
-                learned_at: world.sender().clock.now(),
-            })
+            repos.put_peer_compat(
+                &key,
+                &PeerCompat {
+                    last_marked_at: Some(world.sender().clock.now()),
+                    ..PeerCompat::default()
+                },
+            )
         })
         .unwrap();
     let sent = world.send_to(&World::address_of(PEER));
@@ -431,12 +469,7 @@ fn a_cancelled_notice_from_another_key_is_dropped() {
     assert!(cancelled_events(&mut receiver_events).is_empty());
     assert_eq!(world.report_shown(receipt.tx_id), None);
     let stranger = World::address_of(STRANGER).key_text();
-    assert!(
-        world
-            .receiver()
-            .read(|repos| repos.peer_capability(&stranger))
-            .is_none()
-    );
+    assert!(world.receiver().peer_kind(&stranger).is_none());
 
     // The same notice from the payment's sender is taken.
     world.post(

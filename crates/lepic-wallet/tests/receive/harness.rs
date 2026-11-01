@@ -30,7 +30,7 @@ use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::EncodeError;
 use lepic_slate::model::Slate;
 use lepic_slate::origin::WireOrigin;
-use lepic_store::{AccountIndex, ContextKey, StoreError, WalletStore};
+use lepic_store::{AccountIndex, StoreError, StoreKeys, WalletStore};
 use lepic_transport::file::{FILE, FilePolicy};
 use lepic_transport::loopback::LoopbackTransport;
 use lepic_transport::policy::{Encoding, FormatPolicy};
@@ -278,12 +278,17 @@ impl Receiver {
 
     /// The wallet's database, opened with the key the engine seals contexts under.
     pub fn store(&self) -> TestStore {
-        let mut mac =
-            <Blake2bMac<U32> as KeyInit>::new_from_slice(self.seed.expose_bytes()).unwrap();
-        mac.update(b"lepic-wallet private context key v1");
-        let key: [u8; 32] = mac.finalize_fixed().into();
-        self.stores
-            .open_for_test(Path::new(DATA_DIR), ContextKey::from_bytes(key))
+        let subkey = |domain: &[u8]| -> [u8; 32] {
+            let mut mac =
+                <Blake2bMac<U32> as KeyInit>::new_from_slice(self.seed.expose_bytes()).unwrap();
+            mac.update(domain);
+            mac.finalize_fixed().into()
+        };
+        let keys = StoreKeys::from_bytes(
+            subkey(b"lepic-wallet private context key v1"),
+            subkey(b"lepic-wallet peer tag v1"),
+        );
+        self.stores.open_for_test(Path::new(DATA_DIR), keys)
     }
 
     /// Moves the default account's key counter to `key_id`, the key the next output takes.
@@ -347,11 +352,11 @@ impl Receiver {
 }
 
 pub trait OpenForTest {
-    fn open_for_test(&self, data_dir: &Path, key: ContextKey) -> TestStore;
+    fn open_for_test(&self, data_dir: &Path, key: StoreKeys) -> TestStore;
 }
 
 impl OpenForTest for TestStores {
-    fn open_for_test(&self, data_dir: &Path, key: ContextKey) -> TestStore {
+    fn open_for_test(&self, data_dir: &Path, key: StoreKeys) -> TestStore {
         assert!(!self.is_empty(data_dir));
         lepic_wallet::StoreOpener::open(self, data_dir, key).unwrap()
     }

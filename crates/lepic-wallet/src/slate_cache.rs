@@ -153,7 +153,7 @@ impl Decoded {
 #[cfg(test)]
 mod tests {
     use lepic_primitives::amount::Fee;
-    use lepic_store::{CONTEXT_KEY_LEN, ContextKey, MemoryStore, WalletStore};
+    use lepic_store::{CONTEXT_KEY_LEN, MemoryStore, StoreKeys, WalletStore};
 
     use super::*;
 
@@ -168,7 +168,10 @@ mod tests {
 
     #[test]
     fn unchanged_stages_are_decoded_once_and_an_added_one_is_seen() {
-        let store = MemoryStore::new(ContextKey::from_bytes([2; CONTEXT_KEY_LEN]));
+        let store = MemoryStore::new(StoreKeys::from_bytes(
+            [2; CONTEXT_KEY_LEN],
+            [2; CONTEXT_KEY_LEN],
+        ));
         let codecs = crate::codecs::legacy(Fee::new(1_000_000));
         let cache = SlateCache::default();
         let slate_id = Uuid::from_bytes([7; 16]);

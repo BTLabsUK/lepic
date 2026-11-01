@@ -255,12 +255,15 @@ pub fn next_output_key(
 
 #[cfg(test)]
 mod tests {
-    use lepic_store::{CONTEXT_KEY_LEN, ContextKey, MemoryStore, WalletStore};
+    use lepic_store::{CONTEXT_KEY_LEN, MemoryStore, StoreKeys, WalletStore};
 
     use super::*;
 
     fn store_with_default_account() -> MemoryStore {
-        let store = MemoryStore::new(ContextKey::from_bytes([1; CONTEXT_KEY_LEN]));
+        let store = MemoryStore::new(StoreKeys::from_bytes(
+            [1; CONTEXT_KEY_LEN],
+            [1; CONTEXT_KEY_LEN],
+        ));
         store.write(|repos| ensure_default_account(repos)).unwrap();
         store
     }

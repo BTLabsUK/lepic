@@ -157,7 +157,7 @@ pub(crate) fn confirm_released(
 mod tests {
     use lepic_primitives::amount::Amount;
     use lepic_store::{
-        AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContextKey, MemoryStore, TransactionEntry,
+        AccountIndex, AccountRecord, CONTEXT_KEY_LEN, MemoryStore, StoreKeys, TransactionEntry,
         TxDirection, WalletStore,
     };
 
@@ -168,7 +168,10 @@ mod tests {
     }
 
     fn store_with(state: TxState) -> (MemoryStore, TxId) {
-        let store = MemoryStore::new(ContextKey::from_bytes([2; CONTEXT_KEY_LEN]));
+        let store = MemoryStore::new(StoreKeys::from_bytes(
+            [2; CONTEXT_KEY_LEN],
+            [2; CONTEXT_KEY_LEN],
+        ));
         let tx_id = store
             .write(|repos| {
                 repos.put_account(&AccountRecord {

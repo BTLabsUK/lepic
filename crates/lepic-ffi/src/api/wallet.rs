@@ -28,9 +28,9 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, LegacyImport, ListenerEvent, ListenerEventKind,
-    NodeTip, ReceivedSlate, RefreshProgress, ScanProgress, SelfSentTx, SendOptions, SentTx, Slate,
-    SlateInfo, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent, WalletOutput,
-    WalletSummary,
+    NodeTip, PeerCompat, ReceivedSlate, RefreshProgress, ScanProgress, SelfSentTx, SendOptions,
+    SentTx, Slate, SlateInfo, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
+    WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -1300,6 +1300,27 @@ impl EpicWallet {
     pub async fn epicbox_address(&self) -> Result<String, WalletError> {
         self.run("epicbox_address", |session| async move {
             session.epicbox_address()
+        })
+        .await
+    }
+
+    /// What this wallet learned about the software at the Epicbox address `address` (its key
+    /// alone counts) from that key's own messages, and what follows from it now. Reads only the
+    /// store. Fails with `InvalidArgument` for an address that does not parse or is on the other
+    /// network.
+    pub async fn peer_compat(&self, address: String) -> Result<PeerCompat, WalletError> {
+        self.run("peer_compat", |session| async move {
+            session.peer_compat(&address)
+        })
+        .await
+    }
+
+    /// Deletes what this wallet learned about every Epicbox key it has not heard from for
+    /// `older_than_days` days, and returns how many keys it forgot. A forgotten key gets no
+    /// notices until it is heard from again. Hosts call it on open with 180.
+    pub async fn forget_peers(&self, older_than_days: u32) -> Result<u32, WalletError> {
+        self.run("forget_peers", |session| async move {
+            session.forget_peers(older_than_days)
         })
         .await
     }

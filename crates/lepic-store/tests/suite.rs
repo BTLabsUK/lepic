@@ -17,15 +17,15 @@ use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
 use lepic_store::{
     AccountIndex, AccountRecord, CONTACT_SLOT_COUNT, ChainCheck, ContactCap, ContactOutboxState,
-    ContactState, ContextKey, FoundDuring, ImportSummary, ImportedKind, ImportedMessage,
-    ImportedOutput, ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus,
-    InvoiceAddressIndex, InvoiceCap, KeyId, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES,
-    MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt,
-    OtherWalletSpend, OutboxEntry, OutboxId, OutboxStatus, OutputStatus, PRIVATE_SLOT_END,
-    PairingId, PairingState, ParticipantId, PeerCapability, PeerCard, PeerSupport,
-    PendingInvoiceStatus, PrivateContext, Record, Repositories, ScanFoundRecord, SealMode,
-    SlateStage, StoreError, TransactionEntry, TxDirection, TxId, TxMarks, TxState, TxWatch,
-    WalletStore, WatchPhase, WatchedOutput, export_contacts, import_contacts,
+    ContactState, FoundDuring, ImportSummary, ImportedKind, ImportedMessage, ImportedOutput,
+    ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex,
+    InvoiceCap, KeyId, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES,
+    MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt, OtherWalletSpend,
+    OutboxEntry, OutboxId, OutboxStatus, OutputStatus, PRIVATE_SLOT_END, PairingId, PairingState,
+    ParticipantId, PeerCard, PeerCompat, PendingInvoiceStatus, PrivateContext, Record,
+    Repositories, ScanFoundRecord, SealMode, SlateStage, StoreError, TransactionEntry, TxDirection,
+    TxId, TxMarks, TxState, TxWatch, WalletStore, WatchPhase, WatchedOutput, export_contacts,
+    import_contacts,
 };
 use uuid::Uuid;
 
@@ -592,11 +592,13 @@ fn failed_write_leaves_every_repository_unchanged<B: Backend>() {
         })?;
         repos.park_invoice(&invoice(SLATE_B, 1, 1))?;
         repos.put_contact(&contact(1, 1))?;
-        repos.put_peer_capability(&PeerCapability {
-            key: peer_key(1),
-            support: PeerSupport::Lepic,
-            learned_at: support::time(1),
-        })?;
+        repos.put_peer_compat(
+            &peer_key(1),
+            &PeerCompat {
+                last_marked_at: Some(support::time(1)),
+                ..PeerCompat::default()
+            },
+        )?;
         repos.set_invoice_address_index(InvoiceAddressIndex::FIRST)?;
         Err(EngineError::Rejected)
     });
@@ -612,7 +614,7 @@ fn failed_write_leaves_every_repository_unchanged<B: Backend>() {
             && repos.inbox("m")?.is_none()
             && repos.pending_invoices()?.is_empty()
             && repos.contacts()?.is_empty()
-            && repos.peer_capability(&peer_key(1))?.is_none()
+            && repos.peer_compat(&peer_key(1))?.is_none()
             && repos.invoice_address_index()?.is_none())
     })
     .unwrap();
@@ -1858,34 +1860,116 @@ fn contact_backup_takes_card_fields_from_the_card_bytes<B: Backend>() {
     }
 }
 
-fn peer_capability_is_replaced_by_later_evidence<B: Backend>() {
+fn peer_compat_is_replaced_by_later_evidence<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
-    let stock = PeerCapability {
-        key: peer_key(1),
-        support: PeerSupport::NoInvoices,
-        learned_at: support::time(1),
+    let stock = PeerCompat {
+        last_unmarked_at: Some(support::time(1)),
+        ..PeerCompat::default()
     };
-    let lepic = PeerCapability {
-        support: PeerSupport::Lepic,
-        learned_at: support::time(2),
-        ..stock.clone()
+    let lepic = PeerCompat {
+        last_marked_at: Some(support::time(2)),
+        claimed: 0b11,
+        works: 0b1,
+        features_at: Some(support::time(2)),
+        ..stock
     };
-    write(store, |repos| repos.put_peer_capability(&stock)).unwrap();
+    write(store, |repos| repos.put_peer_compat(&peer_key(1), &stock)).unwrap();
     assert_eq!(
-        read(store, |repos| repos.peer_capability(&peer_key(1))).unwrap(),
+        read(store, |repos| repos.peer_compat(&peer_key(1))).unwrap(),
         Some(stock)
     );
-    write(store, |repos| repos.put_peer_capability(&lepic)).unwrap();
+    write(store, |repos| repos.put_peer_compat(&peer_key(1), &lepic)).unwrap();
     let (found, unknown) = read(store, |repos| {
         Ok((
-            repos.peer_capability(&peer_key(1))?,
-            repos.peer_capability(&peer_key(2))?,
+            repos.peer_compat(&peer_key(1))?,
+            repos.peer_compat(&peer_key(2))?,
         ))
     })
     .unwrap();
     assert_eq!(found, Some(lepic));
     assert_eq!(unknown, None);
+}
+
+/// Rows are found by a keyed hash of the peer key: under another peer tag key, no row is found.
+fn peer_compat_is_found_only_under_its_tag_key<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let compat = PeerCompat {
+        last_marked_at: Some(support::time(1)),
+        ..PeerCompat::default()
+    };
+    write(backend.store(), |repos| {
+        repos.put_peer_compat(&peer_key(1), &compat)
+    })
+    .unwrap();
+    let other = backend.reopen(context_key(2));
+    assert_eq!(
+        read(&other, |repos| repos.peer_compat(&peer_key(1))).unwrap(),
+        None
+    );
+    let same = backend.reopen(context_key(1));
+    assert_eq!(
+        read(&same, |repos| repos.peer_compat(&peer_key(1))).unwrap(),
+        Some(compat)
+    );
+}
+
+fn forget_peers_deletes_rows_whose_newest_date_is_older<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let day = 24 * 60 * 60;
+    let now = support::time(400 * day);
+    let days_ago = |days: i64| Some(support::time((400 - days) * day));
+    let rows = [
+        (
+            1,
+            PeerCompat {
+                last_marked_at: days_ago(181),
+                ..PeerCompat::default()
+            },
+        ),
+        (
+            2,
+            PeerCompat {
+                last_marked_at: days_ago(179),
+                ..PeerCompat::default()
+            },
+        ),
+        (
+            3,
+            PeerCompat {
+                last_marked_at: days_ago(300),
+                last_unmarked_at: days_ago(10),
+                ..PeerCompat::default()
+            },
+        ),
+        (4, PeerCompat::default()),
+    ];
+    write(store, |repos| {
+        for (n, compat) in &rows {
+            repos.put_peer_compat(&peer_key(*n), compat)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let cutoff = support::time(220 * day);
+    assert_eq!(now.duration_since(cutoff).as_secs(), 180 * day);
+
+    let forgotten = write(store, |repos| repos.forget_peers(cutoff)).unwrap();
+
+    assert_eq!(forgotten, 2);
+    let left = read(store, |repos| {
+        (1..=4)
+            .map(|n| repos.peer_compat(&peer_key(n)).map(|row| row.is_some()))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .unwrap();
+    assert_eq!(left, [false, true, true, false]);
+    assert_eq!(
+        write(store, |repos| repos.forget_peers(cutoff)).unwrap(),
+        0,
+        "forgetting again deletes nothing"
+    );
 }
 
 fn imported(source_id: u32) -> ImportedTransaction {
@@ -2103,6 +2187,7 @@ fn tx_record_fixture() -> (TxMarks, TxWatch, OtherWalletSpend, ScanFoundRecord) 
         withdrawn_answered: true,
         sender_cancelled_at: Some(Timestamp::from_nanosecond(1_727_000_100_987_654_321).unwrap()),
         cancelled_answered: true,
+        answer_marked: true,
     };
     let watch = TxWatch {
         phase: WatchPhase::Kernel,
@@ -2371,7 +2456,9 @@ for_each_backend!(
     contact_backup_rejects_unknown_versions_and_malformed_records,
     contact_backup_refuses_the_other_network,
     contact_backup_takes_card_fields_from_the_card_bytes,
-    peer_capability_is_replaced_by_later_evidence,
+    peer_compat_is_replaced_by_later_evidence,
+    peer_compat_is_found_only_under_its_tag_key,
+    forget_peers_deletes_rows_whose_newest_date_is_older,
     imported_transactions_round_trip_and_are_replaced,
     imported_records_need_their_transaction_and_bounded_messages,
     imported_outputs_are_found_by_commitment_and_status,
@@ -2385,7 +2472,7 @@ for_each_backend!(
 fn context_key_is_not_needed_to_read_other_records() {
     let backend = <support::SqliteBackend as Backend>::create(context_key(1));
     write(backend.store(), |repos| repos.put_setting("k", "v")).unwrap();
-    let other: ContextKey = context_key(2);
+    let other = context_key(2);
     let reopened = backend.reopen(other);
     assert_eq!(
         read(&reopened, |repos| repos.setting("k"))

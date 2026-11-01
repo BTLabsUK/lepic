@@ -12,11 +12,11 @@ use rusqlite::Connection;
 use super::SqliteStore;
 use super::schema::{SCHEMA_VERSION, migrate_to, stored_version};
 use crate::account::{AccountIndex, AccountRecord};
-use crate::context::ContextKey;
+use crate::context::{ContextKey, StoreKeys};
 use crate::error::StoreError;
 use crate::invoice::{InvoiceAddressIndex, PendingInvoice, PendingInvoiceStatus};
 use crate::output::KeyId;
-use crate::peer::PeerSupport;
+use crate::peer::{PeerCompat, PeerTagKey};
 use crate::store::WalletStore;
 use crate::transaction::{TxId, TxState};
 use crate::tx_record::{
@@ -100,12 +100,9 @@ fn check_v3_seed(store: &SqliteStore) {
 }
 
 fn check_v4_seed(store: &SqliteStore) {
-    let (capability, index) = store
+    let (compat, index) = store
         .read(|repos| {
-            Ok::<_, StoreError>((
-                repos.peer_capability("key")?,
-                repos.invoice_address_index()?,
-            ))
+            Ok::<_, StoreError>((repos.peer_compat("key")?, repos.invoice_address_index()?))
         })
         .unwrap();
     // The invoice allowlist is gone; the contact tables take its place.
@@ -121,8 +118,12 @@ fn check_v4_seed(store: &SqliteStore) {
     assert_eq!(tables.len(), 5);
     drop(conn);
     assert_eq!(
-        capability.map(|capability| capability.support),
-        Some(PeerSupport::NoInvoices)
+        compat,
+        Some(PeerCompat {
+            last_unmarked_at: Some(Timestamp::from_nanosecond(8).unwrap()),
+            ..PeerCompat::default()
+        }),
+        "a returned invoice is an unmarked answer"
     );
     assert_eq!(index, InvoiceAddressIndex::new(3));
 }
@@ -318,6 +319,57 @@ fn check_v10_seed(store: &SqliteStore) {
 }
 
 fn check_v11_seed(store: &SqliteStore) {
+    let at = |second| Some(Timestamp::from_second(second).unwrap());
+    let (peers, marks) = store
+        .read(|repos| {
+            Ok::<_, StoreError>((
+                [
+                    repos.peer_compat("lepic-key")?,
+                    repos.peer_compat("stock-key")?,
+                    repos.peer_compat("odd-key")?,
+                ],
+                repos.tx_marks(TxId(1))?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        peers,
+        [
+            Some(PeerCompat {
+                last_marked_at: at(1_790_000_000),
+                claimed: 1,
+                works: 1,
+                ..PeerCompat::default()
+            }),
+            Some(PeerCompat {
+                last_unmarked_at: at(1_790_000_100),
+                ..PeerCompat::default()
+            }),
+            None,
+        ],
+        "a proven key keeps its date as the last marked message; an unknown value is dropped"
+    );
+    assert_eq!(
+        marks,
+        TxMarks {
+            cancelled_answered: true,
+            ..TxMarks::default()
+        },
+        "an earlier send's answer counts as unmarked"
+    );
+    let conn = store.conn.lock().unwrap();
+    let (old_tables, rows): (i64, i64) = conn
+        .query_row(
+            "SELECT (SELECT count(*) FROM sqlite_schema WHERE name = 'peer_capabilities'),
+                    (SELECT count(*) FROM peer_compat)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((old_tables, rows), (0, 2));
+}
+
+fn check_v12_seed(store: &SqliteStore) {
     check_empty(store);
     assert!(store.read(|repos| repos.tx_watches()).unwrap().is_empty());
 }
@@ -463,13 +515,32 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 11,
-        seed: "",
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, slate_id,
+                   amount_credited, amount_debited, created_at, updated_at)
+               VALUES (1, 0, 'outgoing', 'cancelled', X'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a',
+                   0, 5, 1, 1);
+               INSERT INTO tx_marks (tx_id, receive_inputs_unspent, inputs_spent_elsewhere,
+                   cancelled_answered)
+               VALUES (1, 0, 0, 1);
+               INSERT INTO peer_capabilities (key, support, learned_at) VALUES
+                   ('lepic-key', 'lepic', 1790000000000000000),
+                   ('stock-key', 'no-invoices', 1790000100000000000),
+                   ('odd-key', 'maybe', 1);",
         check: check_v11_seed,
+    },
+    UpgradeCase {
+        from: 12,
+        seed: "",
+        check: check_v12_seed,
     },
 ];
 
-fn key() -> ContextKey {
-    ContextKey::from_bytes([3; 32])
+fn key() -> StoreKeys {
+    StoreKeys::new(
+        ContextKey::from_bytes([3; 32]),
+        PeerTagKey::from_bytes([4; 32]),
+    )
 }
 
 #[test]
@@ -486,7 +557,7 @@ fn every_older_schema_version_migrates_to_the_current_one() {
         let path = dir.path().join("wallet.sqlite");
         {
             let mut conn = Connection::open(&path).unwrap();
-            migrate_to(&mut conn, case.from).unwrap();
+            migrate_to(&mut conn, case.from, &key()).unwrap();
             conn.execute_batch(case.seed).unwrap();
             assert_eq!(stored_version(&conn).unwrap(), case.from);
         }

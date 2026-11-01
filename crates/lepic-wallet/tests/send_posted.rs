@@ -31,11 +31,12 @@ use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::SlateId;
-use lepic_store::{PeerSupport, SlateStage, TxDirection, TxId, TxState, WalletStore};
+use lepic_store::{PeerCompat, SlateStage, TxDirection, TxId, TxState, WalletStore};
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::event::PostedPayment;
 use lepic_wallet::inbox::InboxSummary;
 use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
+use lepic_wallet::peer_compat::PeerKind;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{Clock, Event};
@@ -231,20 +232,14 @@ fn a_send_between_lepic_wallets_tells_the_receiver_it_was_posted() {
     )));
     let sender_key = world.sender().address.key_text();
     assert_eq!(
-        world
-            .receiver()
-            .read(|repos| repos.peer_capability(&sender_key))
-            .map(|capability| capability.support),
-        Some(PeerSupport::Lepic)
+        world.receiver().peer_kind(&sender_key),
+        Some(PeerKind::Lepic)
     );
     assert_eq!(world.drain(world.sender()).finalized, 1);
     let receiver_key = world.receiver().address.key_text();
     assert_eq!(
-        world
-            .sender()
-            .read(|repos| repos.peer_capability(&receiver_key))
-            .map(|capability| capability.support),
-        Some(PeerSupport::Lepic)
+        world.sender().peer_kind(&receiver_key),
+        Some(PeerKind::Lepic)
     );
     let excess = world.kernel_excess();
     let tx_id = world
@@ -320,12 +315,7 @@ fn a_posted_notice_from_another_key_is_dropped() {
     assert!(!world.reported(receipt.sent.slate_id));
     assert_eq!(world.report_shown(receipt.tx_id), None);
     let stranger = World::address_of(STRANGER).key_text();
-    assert!(
-        world
-            .receiver()
-            .read(|repos| repos.peer_capability(&stranger))
-            .is_none()
-    );
+    assert!(world.receiver().peer_kind(&stranger).is_none());
 }
 
 #[test]
@@ -466,7 +456,7 @@ fn a_posted_notice_for_a_payment_over_another_transport_is_dropped() {
 }
 
 #[test]
-fn an_unmarked_s1_is_answered_without_the_marker_and_proves_nothing() {
+fn an_unmarked_s1_is_answered_without_the_marker_and_counts_as_another_wallet() {
     let world = World::new();
 
     let receipt = world.receipt_through_sender(|s1| unmarked(&s1));
@@ -474,12 +464,7 @@ fn an_unmarked_s1_is_answered_without_the_marker_and_proves_nothing() {
     assert!(!carries_lepic_marker(&wire(&receipt.s2)));
     assert!(!receipt.s2.contains("lepic"));
     let sender = World::address_of(SENDER).key_text();
-    assert!(
-        world
-            .receiver()
-            .read(|repos| repos.peer_capability(&sender))
-            .is_none()
-    );
+    assert_eq!(world.receiver().peer_kind(&sender), Some(PeerKind::Epic));
 }
 
 #[test]
@@ -493,12 +478,112 @@ fn an_unmarked_reply_gets_no_notice() {
     assert_eq!(world.node.pushed_transactions().len(), 1);
     assert!(world.drain_peer(&world.peer_client(SENDER)).is_empty());
     let sender = World::address_of(SENDER).key_text();
-    assert!(
-        world
-            .sender()
-            .read(|repos| repos.peer_capability(&sender))
-            .is_none()
+    assert_eq!(world.sender().peer_kind(&sender), Some(PeerKind::Epic));
+}
+
+/// Marks `key` as heard from with the marker at `at`, as an earlier exchange or a migrated
+/// record leaves it.
+fn proven_at(party: &Party, key: &str, at: jiff::Timestamp) {
+    party
+        .store()
+        .write(|repos| {
+            repos.put_peer_compat(
+                key,
+                &PeerCompat {
+                    last_marked_at: Some(at),
+                    claimed: 1,
+                    works: 1,
+                    ..PeerCompat::default()
+                },
+            )
+        })
+        .unwrap();
+}
+
+/// The shipping bug: a key that ran LEPIC once answers from another wallet now. Its unmarked
+/// answer is recorded before the notice is decided, and no `posted` goes to its queue.
+#[test]
+fn a_key_proven_before_that_answers_unmarked_gets_no_posted() {
+    let world = World::new();
+    let (_, notice) = world.posted_through_sender();
+    assert!(matches!(classify_text(&notice), Payload::Notice(_)));
+    let sender = World::address_of(SENDER).key_text();
+    assert_eq!(world.sender().peer_kind(&sender), Some(PeerKind::Lepic));
+    world.sender().fund(20, world::FUNDING);
+
+    let receipt = world.receipt_through_sender(|s1| s1);
+    world.post(SENDER, &world.sender().address, &unmarked(&receipt.s2), 1);
+    assert_eq!(world.drain(world.sender()).finalized, 1);
+
+    assert_eq!(world.node.pushed_transactions().len(), 2);
+    assert!(world.drain_peer(&world.peer_client(SENDER)).is_empty());
+    let compat = world.sender().peer_compat(&sender).unwrap();
+    assert_eq!(compat.last_unmarked_at, Some(world.sender().clock.now()));
+    assert_eq!(world.sender().peer_kind(&sender), Some(PeerKind::Epic));
+}
+
+/// Two wallets on one recovery phrase: a LEPIC one made the key look LEPIC just now, and the
+/// other answers this send. The exchange itself came unmarked, so nothing goes.
+#[test]
+fn a_twin_answering_unmarked_gets_no_posted() {
+    let world = World::new();
+    let sender = World::address_of(SENDER).key_text();
+    proven_at(world.sender(), &sender, world.sender().clock.now());
+
+    let receipt = world.receipt_through_sender(|s1| s1);
+    world.post(SENDER, &world.sender().address, &unmarked(&receipt.s2), 1);
+    assert_eq!(world.drain(world.sender()).finalized, 1);
+
+    assert!(world.drain_peer(&world.peer_client(SENDER)).is_empty());
+    let compat = world.sender().peer_compat(&sender).unwrap();
+    assert!(compat.last_marked_at.is_some() && compat.last_unmarked_at.is_some());
+}
+
+/// A key last heard from with the marker 60 days ago, as a record migrated from an older store
+/// can be, is LEPIC by its dates but gets no notice for a new unmarked exchange.
+#[test]
+fn a_key_proven_sixty_days_ago_gets_no_notice_for_an_unmarked_exchange() {
+    let world = World::new();
+    let sender = World::address_of(SENDER).key_text();
+    let sixty_days = Duration::from_secs(60 * 24 * 60 * 60);
+    let long_ago = world.sender().clock.now() - jiff::SignedDuration::try_from(sixty_days).unwrap();
+    proven_at(world.sender(), &sender, long_ago);
+    let facts = world
+        .sender()
+        .wallet
+        .peer_compat(&World::address_of(SENDER).to_string())
+        .unwrap();
+    assert_eq!(facts.kind, PeerKind::Lepic);
+    assert!(!facts.notices);
+
+    let receipt = world.receipt_through_sender(|s1| s1);
+    world.post(SENDER, &world.sender().address, &unmarked(&receipt.s2), 1);
+    assert_eq!(world.drain(world.sender()).finalized, 1);
+
+    assert!(world.drain_peer(&world.peer_client(SENDER)).is_empty());
+}
+
+/// The same old key that answers marked is LEPIC again at once, and is told.
+#[test]
+fn a_key_proven_sixty_days_ago_that_answers_marked_is_told_again() {
+    let world = World::new();
+    let sender = World::address_of(SENDER).key_text();
+    let sixty_days = jiff::SignedDuration::from_hours(60 * 24);
+    proven_at(
+        world.sender(),
+        &sender,
+        world.sender().clock.now() - sixty_days,
     );
+
+    let (_, notice) = world.posted_through_sender();
+
+    assert!(matches!(
+        classify_text(&notice),
+        Payload::Notice(Notice {
+            kind: NoticeKind::Posted { .. },
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -512,13 +597,7 @@ fn a_marked_reply_from_another_key_proves_nothing() {
 
     for byte in [SENDER, STRANGER] {
         let key = World::address_of(byte).key_text();
-        assert!(
-            world
-                .sender()
-                .read(|repos| repos.peer_capability(&key))
-                .is_none(),
-            "{byte}"
-        );
+        assert!(world.sender().peer_kind(&key).is_none(), "{byte}");
         assert!(
             world.drain_peer(&world.peer_client(byte)).is_empty(),
             "{byte}"

@@ -372,3 +372,53 @@ fn pairing_secrets_are_not_in_the_database_file() {
         );
     }
 }
+
+/// What is kept per peer names no peer: the table has a keyed hash and sealed bytes only, and
+/// neither the key's text nor its hex appears anywhere in the file or its log.
+#[test]
+fn peer_rows_hold_no_peer_key_in_the_database_file() {
+    use lepic_store::PeerCompat;
+    let backend = SqliteBackend::create(context_key(1));
+    // An Epicbox key as the engine stores it, base58 text of a compressed point.
+    let key = "esWjXDfZ3w1Rv8FA9rB2U5A8NFmDCXiWkzhVZZP3zXpH5NL8bQq9";
+    let compat = PeerCompat {
+        last_marked_at: Some(support::time(1)),
+        last_unmarked_at: Some(support::time(2)),
+        claimed: 1,
+        works: 1,
+        features_at: None,
+    };
+    backend
+        .store()
+        .write(|repos| repos.put_peer_compat(key, &compat))
+        .unwrap();
+    assert_eq!(
+        backend
+            .store()
+            .read(|repos| repos.peer_compat(key))
+            .unwrap(),
+        Some(compat)
+    );
+    let conn = Connection::open(backend.path()).unwrap();
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('peer_compat') ORDER BY cid")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(columns, ["key_tag", "sealed"]);
+    drop(conn);
+    let mut raw = fs::read(backend.path()).unwrap();
+    let mut wal = backend.path().into_os_string();
+    wal.push("-wal");
+    raw.extend(fs::read(wal).unwrap_or_default());
+    let hex: String = key.bytes().map(|byte| format!("{byte:02x}")).collect();
+    for needle in [key.as_bytes(), &key.as_bytes()[2..18], hex.as_bytes()] {
+        assert!(
+            !raw.windows(needle.len()).any(|window| window == needle),
+            "{}",
+            String::from_utf8_lossy(needle)
+        );
+    }
+}

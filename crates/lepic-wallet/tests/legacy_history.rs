@@ -122,7 +122,10 @@ impl World {
             .stores
             .open(
                 &self.harness.data_dir,
-                lepic_store::ContextKey::from_bytes([0; lepic_store::CONTEXT_KEY_LEN]),
+                lepic_store::StoreKeys::from_bytes(
+                    [0; lepic_store::CONTEXT_KEY_LEN],
+                    [0; lepic_store::CONTEXT_KEY_LEN],
+                ),
             )
             .unwrap()
     }

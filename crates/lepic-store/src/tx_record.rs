@@ -36,6 +36,9 @@ pub struct TxMarks {
     pub sender_cancelled_at: Option<Timestamp>,
     /// The receiver of a cancelled send was told it is cancelled.
     pub cancelled_answered: bool,
+    /// The latest answer to a send over Epicbox carried the LEPIC marker, so its receiver may
+    /// be told of the send's end.
+    pub answer_marked: bool,
 }
 
 stored_enum! {

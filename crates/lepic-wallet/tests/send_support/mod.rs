@@ -21,8 +21,8 @@ use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
-    AccountIndex, AccountRecord, ContextKey, KeyId, OutboxStatus, OutputRecord, OutputStatus,
-    ParticipantId, Repositories, StoreError, StoredOutbox, StoredTransaction, WalletStore,
+    AccountIndex, AccountRecord, KeyId, OutboxStatus, OutputRecord, OutputStatus, ParticipantId,
+    Repositories, StoreError, StoreKeys, StoredOutbox, StoredTransaction, WalletStore,
 };
 use lepic_transport::file::FilePolicy;
 use lepic_transport::loopback::LoopbackTransport;
@@ -237,11 +237,18 @@ pub fn output(
     }
 }
 
-/// The key `lifecycle::context_key` derives, which `tests/lifecycle_logs.rs` also recomputes.
-pub fn context_key(seed: &Seed) -> ContextKey {
-    let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).unwrap();
-    mac.update(b"lepic-wallet private context key v1");
-    ContextKey::from_bytes(mac.finalize_fixed().into())
+/// The keys `lifecycle::store_keys` derives from the seed: the context key, which
+/// `tests/lifecycle_logs.rs` also recomputes, and the peer tag key.
+pub fn context_key(seed: &Seed) -> StoreKeys {
+    let subkey = |domain: &[u8]| -> [u8; 32] {
+        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(seed.expose_bytes()).unwrap();
+        mac.update(domain);
+        mac.finalize_fixed().into()
+    };
+    StoreKeys::from_bytes(
+        subkey(b"lepic-wallet private context key v1"),
+        subkey(b"lepic-wallet peer tag v1"),
+    )
 }
 
 pub fn legacy_codecs() -> CodecRegistry {

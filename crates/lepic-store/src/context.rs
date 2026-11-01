@@ -13,6 +13,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::error::{Record, StoreError};
+use crate::peer::{PEER_TAG_KEY_LEN, PeerTagKey};
 
 pub const CONTEXT_KEY_LEN: usize = 32;
 
@@ -45,6 +46,27 @@ impl ContextKey {
 impl fmt::Debug for ContextKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("ContextKey([redacted])")
+    }
+}
+
+/// The keys a store is opened with: the one its sealed records are sealed under, and the one
+/// peer rows are found by.
+#[derive(Debug)]
+pub struct StoreKeys {
+    pub context: ContextKey,
+    pub peer_tag: PeerTagKey,
+}
+
+impl StoreKeys {
+    pub fn new(context: ContextKey, peer_tag: PeerTagKey) -> Self {
+        Self { context, peer_tag }
+    }
+
+    pub fn from_bytes(context: [u8; CONTEXT_KEY_LEN], peer_tag: [u8; PEER_TAG_KEY_LEN]) -> Self {
+        Self::new(
+            ContextKey::from_bytes(context),
+            PeerTagKey::from_bytes(peer_tag),
+        )
     }
 }
 
@@ -125,6 +147,16 @@ pub(crate) fn seal_bytes(
 ) -> Result<Vec<u8>, SealFailure> {
     let mut nonce = [0_u8; NONCE_LEN];
     getrandom::fill(&mut nonce).map_err(SealFailure::Randomness)?;
+    seal_bytes_with_nonce(key, aad, plaintext, nonce)
+}
+
+/// [`seal_bytes`] with the nonce given, for golden vectors; everything else draws it.
+pub(crate) fn seal_bytes_with_nonce(
+    key: &ContextKey,
+    aad: &[u8],
+    plaintext: &[u8],
+    nonce: [u8; NONCE_LEN],
+) -> Result<Vec<u8>, SealFailure> {
     let ciphertext = cipher(key)?
         .encrypt(
             &XNonce::from(nonce),

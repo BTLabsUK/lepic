@@ -22,13 +22,14 @@ use lepic_epicbox::EpicboxClient;
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::model::SlateId;
-use lepic_store::{PeerSupport, PendingInvoiceStatus, TxDirection, TxState};
+use lepic_store::{PendingInvoiceStatus, TxDirection, TxState};
 use lepic_transport::transport::Inbound;
 use lepic_wallet::Event;
 use lepic_wallet::event::{DeclinedInvoice, PostedInvoice, WithdrawnInvoice};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{IssuedInvoice, PaidInvoice};
 use lepic_wallet::notice::{MAX_NOTICE_LEN, Notice, NoticeKind, Payload, classify_text};
+use lepic_wallet::peer_compat::PeerKind;
 use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 
@@ -131,10 +132,8 @@ impl World {
         })
     }
 
-    fn issuer_capability(&self, key: &str) -> Option<PeerSupport> {
-        self.issuer
-            .read(|repos| repos.peer_capability(key))
-            .map(|capability| capability.support)
+    fn issuer_capability(&self, key: &str) -> Option<PeerKind> {
+        self.issuer.peer_kind(key)
     }
 
     /// Takes every message waiting for `peer`, acknowledges it and returns its plaintext.
@@ -210,7 +209,7 @@ fn the_payer_receives_posted_with_the_kernel_excess() {
     let excess = pushed[0].kernels()[0].excess;
     // The marked payment proved the payer's key.
     let payments = world.payer.address.key_text();
-    assert_eq!(world.issuer_capability(&payments), Some(PeerSupport::Lepic));
+    assert_eq!(world.issuer_capability(&payments), Some(PeerKind::Lepic));
     let _ = events(&mut payer_events);
 
     let summary = world.drain_payer_invoices();
@@ -240,8 +239,10 @@ fn the_payer_receives_posted_with_the_kernel_excess() {
     assert_eq!(state, TxState::Sent);
 }
 
+/// No slate of this invoice came back from the payer, so nothing shows that a LEPIC wallet
+/// reads that address now: the withdrawal goes nowhere, and the parked invoice expires.
 #[test]
-fn an_unpaid_payer_receives_withdrawn_for_a_cancelled_invoice() {
+fn an_unpaid_payer_is_not_sent_withdrawn_for_a_cancelled_invoice() {
     let world = World::new();
     world.settle_one_invoice();
     let issued = world.issue(None);
@@ -254,25 +255,13 @@ fn an_unpaid_payer_receives_withdrawn_for_a_cancelled_invoice() {
         .unwrap();
     let summary = world.drain_payer_invoices();
 
-    assert_eq!(
-        summary,
-        InboxSummary {
-            notices: 1,
-            ..InboxSummary::default()
-        }
-    );
-    assert_eq!(
-        notice_events(&mut payer_events),
-        vec![Event::InvoiceWithdrawn(WithdrawnInvoice {
-            slate_id: issued.slate_id,
-            tx_id: None,
-        })]
-    );
+    assert_eq!(summary, InboxSummary::default());
+    assert!(notice_events(&mut payer_events).is_empty());
     assert!(
         world
             .payer
             .read(|repos| repos.pending_invoice(uuid(issued.slate_id)))
-            .is_none()
+            .is_some()
     );
 }
 
@@ -293,6 +282,10 @@ fn a_withdrawn_paid_invoice_raises_an_event_and_moves_nothing() {
     world
         .block_on(world.issuer.wallet.cancel(issued.tx_id))
         .unwrap();
+    // Nothing goes at the cancel: the payment has not reached the issuer yet. Its marked
+    // payment, once taken, is answered with the withdrawal.
+    assert_eq!(world.drain_payer_invoices().notices, 0);
+    assert_eq!(world.drain_issuer().rejected, 1);
     let summary = world.drain_payer_invoices();
 
     assert_eq!(summary.notices, 1);
@@ -571,7 +564,7 @@ fn a_payment_of_a_withdrawn_invoice_proves_only_the_invoiced_key() {
     let sender = World::address_of(8).key_text();
     assert_eq!(world.issuer_capability(&sender), None);
     let invoiced = World::address_of(9).key_text();
-    assert_eq!(world.issuer_capability(&invoiced), Some(PeerSupport::Lepic));
+    assert_eq!(world.issuer_capability(&invoiced), Some(PeerKind::Lepic));
     assert!(world.withdrawn_answered(issued.slate_id));
 }
 
@@ -648,7 +641,7 @@ fn the_issuer_hears_a_decline_from_the_invoiced_address() {
         .state;
     assert_eq!(state, TxState::Received);
     let invoiced = world.payer.address.clone().key_text();
-    assert_eq!(world.issuer_capability(&invoiced), Some(PeerSupport::Lepic));
+    assert_eq!(world.issuer_capability(&invoiced), Some(PeerKind::Lepic));
 }
 
 #[test]
@@ -678,8 +671,10 @@ fn a_decline_after_the_invoice_was_finalized_raises_no_event() {
     assert_eq!(state, TxState::Posted);
 }
 
+/// A notice is no slate of the exchange: a peer whose only message in it was a notice is not
+/// sent `withdrawn` at the cancel.
 #[test]
-fn a_peer_proven_by_its_notice_is_sent_withdrawn() {
+fn a_peer_proven_only_by_its_notice_is_not_sent_withdrawn() {
     let world = World::new();
     let peer = world.peer_client(9);
     let issued = world.issue_to(peer.address(), None);
@@ -696,15 +691,7 @@ fn a_peer_proven_by_its_notice_is_sent_withdrawn() {
         .block_on(world.issuer.wallet.cancel(issued.tx_id))
         .unwrap();
 
-    let received = world.drain_peer(&peer);
-    assert_eq!(received.len(), 1);
-    assert_eq!(
-        classify_text(&received[0]),
-        Payload::Notice(Notice {
-            slate_id: issued.slate_id,
-            kind: NoticeKind::Withdrawn,
-        })
-    );
+    assert!(world.drain_peer(&peer).is_empty());
 }
 
 #[test]
@@ -865,7 +852,7 @@ fn no_notice_is_posted_to_a_peer_without_proof() {
     assert_eq!(posts(), before);
     assert!(world.drain_peer(&silent).is_empty());
     let key = World::address_of(7).key_text();
-    assert_eq!(world.payer.read(|repos| repos.peer_capability(&key)), None);
+    assert_eq!(world.payer.peer_kind(&key), None);
     assert!(
         world
             .issuer
@@ -943,9 +930,9 @@ fn an_unmarked_payment_proves_nothing_and_gets_no_notice() {
         .unwrap()
         .state;
     assert_eq!(state, TxState::Posted);
-    // The key it came from is also the key the invoice went to.
+    // The key it came from is also the key the invoice went to; it answered unmarked.
     let key = World::address_of(9).key_text();
-    assert_eq!(world.issuer_capability(&key), None);
+    assert_eq!(world.issuer_capability(&key), Some(PeerKind::Epic));
     assert_eq!(world.relay.received("PostSlate"), before);
     assert!(world.drain_peer(&peer).is_empty());
 }

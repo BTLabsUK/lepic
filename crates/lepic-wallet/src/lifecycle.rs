@@ -11,7 +11,10 @@ use blake2::digest::{FixedOutput, KeyInit, Update};
 use lepic_keychain::vault::SecretName;
 use lepic_keychain::{Identifier, Keychain, SecretBytes, SecretStore, Seed, SwitchCommitment};
 use lepic_primitives::params::Network;
-use lepic_store::{CONTEXT_KEY_LEN, ContextKey, Repositories, StoreError, WalletStore};
+use lepic_store::{
+    CONTEXT_KEY_LEN, ContextKey, PEER_TAG_KEY_LEN, PeerTagKey, Repositories, StoreError, StoreKeys,
+    WalletStore,
+};
 use rand_core::CryptoRng;
 use tracing::debug;
 use zeroize::Zeroizing;
@@ -36,6 +39,10 @@ const SEED_CHECK_SETTING: &str = "wallet.seed_check";
 
 /// Domain separator of the key private transaction contexts are sealed under.
 const CONTEXT_KEY_DOMAIN: &[u8] = b"lepic-wallet private context key v1";
+
+/// Domain separator of the key the store finds what it knows of each peer by: a keyed hash under
+/// it, so the store names no peer.
+const PEER_TAG_KEY_DOMAIN: &[u8] = b"lepic-wallet peer tag v1";
 
 /// Domain separator of the seed check: keyed BLAKE2b of it under the seed, which proves a seed
 /// with 256 bits where the fingerprint has 32, and reveals nothing that derives keys.
@@ -171,7 +178,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     }
     let keychain = Keychain::from_seed(seed, target.network)?;
     let ours = SeedIdentity::of(seed, &keychain)?;
-    let store = stores.open(target.data_dir, context_key(seed)?)?;
+    let store = stores.open(target.data_dir, store_keys(seed)?)?;
     let identity = store.read(|repos| stored_identity(repos, target.network, &ours))?;
     match (identity, source) {
         (StoredIdentity::Empty, _) | (StoredIdentity::Proven, SeedSource::Recovered) => {}
@@ -218,7 +225,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
     let seed = Seed::from_entropy(stored.expose_bytes()).map_err(WalletError::StoredSeed)?;
     let keychain = Keychain::from_seed(&seed, target.network)?;
     let ours = SeedIdentity::of(&seed, &keychain)?;
-    let store = stores.open(target.data_dir, context_key(&seed)?)?;
+    let store = stores.open(target.data_dir, store_keys(&seed)?)?;
     // A missing database is rebuilt empty: everything in it but history is recovered by a scan,
     // which must run before new outputs are created.
     store.write(|repos| {
@@ -281,7 +288,7 @@ pub(crate) fn check_seed<S: StoreOpener>(
 ) -> Result<PhraseCheck, WalletError> {
     let keychain = Keychain::from_seed(&seed, target.network)?;
     let ours = SeedIdentity::of(&seed, &keychain)?;
-    let Some(store) = stores.open_existing(target.data_dir, context_key(&seed)?)? else {
+    let Some(store) = stores.open_existing(target.data_dir, store_keys(&seed)?)? else {
         return Ok(PhraseCheck::Unused);
     };
     match store.read(|repos| stored_identity(repos, target.network, &ours))? {
@@ -489,13 +496,23 @@ pub(crate) fn fingerprint(keychain: &Keychain) -> Result<String, WalletError> {
 
 /// Keyed BLAKE2b of a domain string under the seed: the same seed always opens its database,
 /// and the key reveals nothing about the seed.
-fn context_key(seed: &Seed) -> Result<ContextKey, WalletError> {
-    ContextKey::filled_by(|key| fill_context_key(seed, key))
+fn store_keys(seed: &Seed) -> Result<StoreKeys, WalletError> {
+    Ok(StoreKeys::new(
+        ContextKey::filled_by(|key| fill_context_key(seed, key))?,
+        PeerTagKey::filled_by(|key| fill_peer_tag_key(seed, key))?,
+    ))
 }
 
 fn fill_context_key(seed: &Seed, key: &mut [u8; CONTEXT_KEY_LEN]) -> Result<(), WalletError> {
     let mut mac = seed_mac(seed)?;
     mac.update(CONTEXT_KEY_DOMAIN);
+    mac.finalize_into(key.into());
+    Ok(())
+}
+
+fn fill_peer_tag_key(seed: &Seed, key: &mut [u8; PEER_TAG_KEY_LEN]) -> Result<(), WalletError> {
+    let mut mac = seed_mac(seed)?;
+    mac.update(PEER_TAG_KEY_DOMAIN);
     mac.finalize_into(key.into());
     Ok(())
 }
@@ -574,5 +591,19 @@ mod tests {
         let mut key = [0; CONTEXT_KEY_LEN];
         fill_context_key(&seed, &mut key).unwrap();
         assert_eq!(key, expected);
+    }
+
+    #[test]
+    fn peer_tag_key_is_its_own_subkey_of_the_seed() {
+        let seed = Seed::from_entropy(&[5; 32]).unwrap();
+        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(&[5; 32]).unwrap();
+        mac.update(b"lepic-wallet peer tag v1");
+        let expected: [u8; 32] = mac.finalize_fixed().into();
+        let mut key = [0; PEER_TAG_KEY_LEN];
+        fill_peer_tag_key(&seed, &mut key).unwrap();
+        assert_eq!(key, expected);
+        let mut context = [0; CONTEXT_KEY_LEN];
+        fill_context_key(&seed, &mut context).unwrap();
+        assert_ne!(key, context);
     }
 }

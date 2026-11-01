@@ -27,7 +27,7 @@ use lepic_node::{NodeClient, NodeVersion, Tip};
 use lepic_primitives::amount::Height;
 use lepic_primitives::hash::Hash;
 use lepic_primitives::params::Network;
-use lepic_store::{ContextKey, MemoryStore, Repositories, SqliteStore, StoreError, WalletStore};
+use lepic_store::{MemoryStore, Repositories, SqliteStore, StoreError, StoreKeys, WalletStore};
 use lepic_transport::file::FilePolicy;
 use lepic_transport::loopback::LoopbackTransport;
 use lepic_transport::registry::TransportRegistry;
@@ -122,11 +122,11 @@ impl MemoryStores {
 impl StoreOpener for MemoryStores {
     type Store = MemoryStore;
 
-    fn open(&self, data_dir: &Path, key: ContextKey) -> Result<MemoryStore, StoreError> {
+    fn open(&self, data_dir: &Path, key: StoreKeys) -> Result<MemoryStore, StoreError> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         let store = stores
             .entry(data_dir.to_owned())
-            .or_insert_with(|| MemoryStore::new(ContextKey::from_bytes([0; 32])));
+            .or_insert_with(|| MemoryStore::new(StoreKeys::from_bytes([0; 32], [0; 32])));
         Ok(store.reopen(key))
     }
 }
@@ -242,7 +242,7 @@ impl TestStores {
 impl StoreOpener for TestStores {
     type Store = TestStore;
 
-    fn open(&self, data_dir: &Path, key: ContextKey) -> Result<TestStore, StoreError> {
+    fn open(&self, data_dir: &Path, key: StoreKeys) -> Result<TestStore, StoreError> {
         match self {
             Self::Memory(stores) => stores.open(data_dir, key).map(TestStore::Memory),
             Self::Sqlite(dirs) => SqliteStores
@@ -254,7 +254,7 @@ impl StoreOpener for TestStores {
     fn open_existing(
         &self,
         data_dir: &Path,
-        key: ContextKey,
+        key: StoreKeys,
     ) -> Result<Option<TestStore>, StoreError> {
         match self {
             Self::Memory(stores) => Ok(stores.open_existing(data_dir, key)?.map(TestStore::Memory)),

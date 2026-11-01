@@ -14,7 +14,9 @@ use crate::contact::{
     ContactOutboxState, ContactRecord, ContactRepository, INVITE_ID_LEN, MAX_CONTACTS,
     MAX_PENDING_PAIRINGS, PairingId, PairingSecrets, PendingPairing, StoredContactOutbox,
 };
-use crate::context::{self, ContextKey, ContextRepository, ParticipantId, PrivateContext};
+use crate::context::{
+    self, ContextKey, ContextRepository, ParticipantId, PrivateContext, StoreKeys,
+};
 use crate::encoding::timestamp_to_column;
 use crate::error::{Record, StoreError};
 use crate::imported::{
@@ -24,7 +26,7 @@ use crate::invoice::{
     self, InvoiceAddressIndex, InvoiceRepository, PendingInvoice, PendingInvoiceStatus,
 };
 use crate::output::{CommitmentBytes, OutputRecord, OutputRepository, OutputStatus};
-use crate::peer::{PeerCapability, PeerRepository};
+use crate::peer::{self, PeerCompat, PeerRepository, PeerTagKey};
 use crate::relay::{
     InboxEntry, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };
@@ -52,7 +54,8 @@ struct State {
     outbox: BTreeMap<OutboxId, OutboxEntry>,
     settings: BTreeMap<String, String>,
     pending_invoices: BTreeMap<[u8; 16], SealedInvoice>,
-    peer_capabilities: BTreeMap<String, PeerCapability>,
+    /// Sealed rows by tag, as the SQLite table holds them.
+    peer_compat: BTreeMap<[u8; 32], Vec<u8>>,
     contacts: BTreeMap<ContactId, ContactRecord>,
     contact_slot_counters: BTreeMap<AccountIndex, u32>,
     contact_mailboxes: BTreeMap<ContactId, ContactMailbox>,
@@ -90,21 +93,24 @@ struct SealedPairing {
 pub struct MemoryStore {
     state: Arc<Mutex<State>>,
     key: ContextKey,
+    peer_tag: PeerTagKey,
 }
 
 impl MemoryStore {
-    pub fn new(key: ContextKey) -> Self {
+    pub fn new(keys: StoreKeys) -> Self {
         Self {
             state: Arc::default(),
-            key,
+            key: keys.context,
+            peer_tag: keys.peer_tag,
         }
     }
 
-    /// A second handle on the same data, sealing and opening contexts under `key`.
-    pub fn reopen(&self, key: ContextKey) -> Self {
+    /// A second handle on the same data, sealing and opening records under `keys`.
+    pub fn reopen(&self, keys: StoreKeys) -> Self {
         Self {
             state: Arc::clone(&self.state),
-            key,
+            key: keys.context,
+            peer_tag: keys.peer_tag,
         }
     }
 }
@@ -118,6 +124,7 @@ impl WalletStore for MemoryStore {
         let repos = MemoryRepos {
             state: &mut state,
             key: &self.key,
+            peer_tag: &self.peer_tag,
         };
         operation(&repos)
     }
@@ -134,6 +141,7 @@ impl WalletStore for MemoryStore {
         let result = operation(&mut MemoryRepos {
             state: &mut draft,
             key: &self.key,
+            peer_tag: &self.peer_tag,
         })?;
         *state = draft;
         Ok(result)
@@ -143,6 +151,7 @@ impl WalletStore for MemoryStore {
 struct MemoryRepos<'a> {
     state: &'a mut State,
     key: &'a ContextKey,
+    peer_tag: &'a PeerTagKey,
 }
 
 impl MemoryRepos<'_> {
@@ -773,16 +782,34 @@ impl InvoiceRepository for MemoryRepos<'_> {
 }
 
 impl PeerRepository for MemoryRepos<'_> {
-    fn put_peer_capability(&mut self, capability: &PeerCapability) -> Result<(), StoreError> {
-        timestamp_to_column(capability.learned_at)?;
-        self.state
-            .peer_capabilities
-            .insert(capability.key.clone(), capability.clone());
+    fn put_peer_compat(&mut self, key: &str, compat: &PeerCompat) -> Result<(), StoreError> {
+        let tag = self.peer_tag.tag(key)?;
+        let sealed = peer::seal(self.key, &tag, compat)?;
+        self.state.peer_compat.insert(tag.0, sealed);
         Ok(())
     }
 
-    fn peer_capability(&self, key: &str) -> Result<Option<PeerCapability>, StoreError> {
-        Ok(self.state.peer_capabilities.get(key).cloned())
+    fn peer_compat(&self, key: &str) -> Result<Option<PeerCompat>, StoreError> {
+        let tag = self.peer_tag.tag(key)?;
+        self.state
+            .peer_compat
+            .get(&tag.0)
+            .map(|sealed| peer::open(self.key, &tag, sealed))
+            .transpose()
+    }
+
+    fn forget_peers(&mut self, before: Timestamp) -> Result<usize, StoreError> {
+        let mut stale = Vec::new();
+        for (tag, sealed) in &self.state.peer_compat {
+            let compat = peer::open(self.key, &peer::PeerTag(*tag), sealed)?;
+            if compat.last_seen().is_none_or(|seen| seen < before) {
+                stale.push(*tag);
+            }
+        }
+        for tag in &stale {
+            self.state.peer_compat.remove(tag);
+        }
+        Ok(stale.len())
     }
 }
 
