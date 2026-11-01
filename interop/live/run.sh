@@ -6,12 +6,16 @@
 #   LEPIC_LIVE_TESTS=1 ./run.sh             build what changed, start the stack, fund, test
 #   LEPIC_LIVE_TESTS=1 ./run.sh --no-build  reuse the images and binaries already built
 #   LEPIC_LIVE_TESTS=1 ./run.sh --down      stop the stack afterwards
+#   LEPIC_LIVE_TESTS=1 ./run.sh --mine-funds  fund the funder by mining coinbase, not from
+#                                             LEPIC_LIVE_FUNDER
 #
 # No node runs locally: both wallets and the miner use the public floonet node's foreign API
 # (LIVE_NODE_URL), and the stack stays up by default so the wallets stay usable by hand.
 #
-# Mining happens only while the funder lacks mature coinbase, while funding transactions confirm,
-# and while each test transaction waits for its block. Prints a table with every kernel excess
+# The funder wallet is topped up from an outside floonet wallet, LEPIC_LIVE_FUNDER (see the
+# README). It mines its own coinbase only with --mine-funds, without that command, or when that
+# wallet holds too little. Mining otherwise happens only while funding transactions confirm and
+# while each test transaction waits for its block. Prints a table with every kernel excess
 # and the height the public floonet node reports for it. Exits 0 only when every step passed.
 set -euo pipefail
 
@@ -24,10 +28,12 @@ fi
 
 down=false
 build=true
+mine_funds=false
 for arg in "$@"; do
     case "${arg}" in
         --down) down=true ;;
         --no-build) build=false ;;
+        --mine-funds) mine_funds=true ;;
         *) echo "unknown option ${arg}" >&2; exit 2 ;;
     esac
 done
@@ -57,6 +63,15 @@ FUND_AMOUNT="${LIVE_FUND_AMOUNT:-5}"
 FUND_MINIMUM=$((${LIVE_FUND_MINIMUM:-8} * UNIT))
 # A confirmation wait covers many blocks of slack.
 CONFIRM_TIMEOUT="${LIVE_CONFIRM_TIMEOUT:-1800}"
+# A command that pays floonet EPIC: `<command> <http-url> <amount>` sends, `<command> info` prints
+# an epic-wallet info table. The QA funder's fund.sh by default, when it is there; set it empty
+# to mine instead.
+if [[ -z "${LEPIC_LIVE_FUNDER+set}" && -x "${HOME}/epic/qa-funder/fund.sh" ]]; then
+    LEPIC_LIVE_FUNDER="${HOME}/epic/qa-funder/fund.sh"
+fi
+LEPIC_LIVE_FUNDER="${LEPIC_LIVE_FUNDER:-}"
+# The funder's foreign listener, which the outside wallet pays over HTTP.
+FUNDER_URL="http://127.0.0.1:33415"
 
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 log_dir="${LIVE_INTEROP_DIR}/.work/live/logs/${run_id}"
@@ -176,6 +191,39 @@ fund_one() {
 
 lepic_spendable() { lepic_balance spendable; }
 
+# Spendable units of the outside funding wallet, from its info table; 0 when it does not answer.
+outside_spendable() {
+    local value
+    value="$("${LEPIC_LIVE_FUNDER}" info 2>>"${RUN_LOG}" |
+        awk -F'|' '/Currently Spendable/ {gsub(/ /, "", $2); print $2}')" || true
+    to_units "${value:-0}"
+}
+
+# Gets the funder `units` spendable at one confirmation: paid by LEPIC_LIVE_FUNDER over HTTP when
+# that wallet holds enough, or mined as coinbase (30 blocks to mature) otherwise.
+top_up_funder() {
+    local units="$1" has amount
+    if [[ "${mine_funds}" == false && -n "${LEPIC_LIVE_FUNDER}" ]]; then
+        has="$(outside_spendable)"
+        # A margin of one EPIC for the payment's own fee.
+        if ((has >= units + UNIT)); then
+            amount="$(jq -n "${units} / ${UNIT}")"
+            log "paying the funder ${amount} EPIC from ${LEPIC_LIVE_FUNDER}"
+            "${LEPIC_LIVE_FUNDER}" "${FUNDER_URL}" "${amount}" >>"${RUN_LOG}" 2>&1 ||
+                fail "${LEPIC_LIVE_FUNDER} did not pay the funder" || return 1
+            mine_until "the funder's payment confirmed" "${CONFIRM_TIMEOUT}" \
+                ew_spendable_at_least funder "${units}" 1 ||
+                fail "the payment to the funder did not confirm" || return 1
+            return 0
+        fi
+        log "${LEPIC_LIVE_FUNDER} holds $(jq -n "${has} / ${UNIT}") EPIC, too little; mining instead"
+    fi
+    miner_start || fail "the miner did not start" || return 1
+    log "waiting for ${units} units of mature coinbase in the funder"
+    poll_until "funder funds" 7200 ew_spendable_at_least funder "${units}" 1 ||
+        fail "the funder did not get mature coinbase" || return 1
+}
+
 lepic_spendable_now() { (($(lepic_spendable) >= $1)); }
 
 step_funding() {
@@ -189,10 +237,10 @@ step_funding() {
         return 0
     fi
     local funder_need=$(((need * FUND_AMOUNT + 1) * UNIT))
+    if ! ew_spendable_at_least funder "${funder_need}" 1; then
+        top_up_funder "${funder_need}" || return 1
+    fi
     miner_start || fail "the miner did not start" || return 1
-    log "waiting for ${funder_need} units of mature coinbase in the funder"
-    poll_until "funder funds" 7200 ew_spendable_at_least funder "${funder_need}" ||
-        fail "the funder did not get mature coinbase" || return 1
     if ((lepic_has < FUND_MINIMUM)); then
         for ((n = 1; n <= FUND_OUTPUTS; n++)); do
             fund_one lepic "${run_id}-lepic-${n}" || fail "funding lepic failed" || return 1

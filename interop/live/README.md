@@ -12,6 +12,7 @@ only with `LEPIC_LIVE_TESTS=1` and never in CI.
 LEPIC_LIVE_TESTS=1 interop/live/run.sh            # build, start or reuse the stack, fund, test
 LEPIC_LIVE_TESTS=1 interop/live/run.sh --no-build # reuse the images and binaries already built
 LEPIC_LIVE_TESTS=1 interop/live/run.sh --down     # stop the stack afterwards
+LEPIC_LIVE_TESTS=1 interop/live/run.sh --mine-funds  # fund by mining coinbase, not LEPIC_LIVE_FUNDER
 ```
 
 Needs what `../run.sh` needs (Docker with Compose, `git`, `jq`, `bash`) and HTTPS to the floonet node,
@@ -51,6 +52,14 @@ after a pause that doubles from 10 seconds.
 
 ## Funds and mining
 
+The funder gets its coins from an outside floonet wallet, `LEPIC_LIVE_FUNDER`: a command that sends
+with `<command> <http-url> <amount>` and prints an `epic-wallet info` table with `<command> info`.
+When the variable is unset and `$HOME/epic/qa-funder/fund.sh` exists, that QA funder is used; set
+it empty to mine instead. `run.sh` checks the wallet's spendable balance, pays the funder's foreign
+listener (`http://127.0.0.1:33415`) what the top-ups need plus one EPIC, and mines only until that
+payment has one confirmation. With `--mine-funds`, with no command, or when the wallet holds too
+little, the funder mines its own coinbase instead, which takes 30 blocks to mature.
+
 Floonet blocks are RandomX only, the reward is 16 EPIC and coinbase matures after 30 blocks. The miner
 follows the reference node's own stratum flow, through the foreign API:
 
@@ -68,8 +77,9 @@ The miner refuses foundation heights (every 1,440 blocks on floonet), whose bloc
 a node can add, and pauses 10 seconds after each block. `LIVE_MINER_THREADS` (4) sets the thread
 count; each thread needs about 256 MB. It runs only while it is needed:
 
-1. Funding, when `lepic` or the peer holds less than `LIVE_FUND_MINIMUM` (8) spendable EPIC: mine
-   until the funder has enough mature coinbase, send `LIVE_FUND_OUTPUTS` (3) slate files of
+1. Funding, when `lepic` or the peer holds less than `LIVE_FUND_MINIMUM` (8) spendable EPIC: when the
+   funder holds too little, get it paid by `LEPIC_LIVE_FUNDER` and mine until that confirms (or mine
+   until it has enough mature coinbase), then send `LIVE_FUND_OUTPUTS` (3) slate files of
    `LIVE_FUND_AMOUNT` (5) EPIC to each wallet that is short, one at a time, until each is confirmed.
 2. Each test transaction: mine until both wallets show it confirmed.
 

@@ -108,13 +108,14 @@ lepic_tx_confirmed() {
 
 lepic_spendable_at_least() { (($(lepic_balance spendable) >= $1)); }
 
+# Spendable units of an epic-wallet wallet, at $2 confirmations (epic-wallet's default when unset).
 ew_spendable() {
     local value
-    value="$(ew "$1" info | awk -F'|' '/Currently Spendable/ {gsub(/ /, "", $2); print $2}')"
+    value="$(ew "$1" info ${2:+-c "$2"} | awk -F'|' '/Currently Spendable/ {gsub(/ /, "", $2); print $2}')"
     to_units "${value:-0}"
 }
 
-ew_spendable_at_least() { (($(ew_spendable "$1") >= $2)); }
+ew_spendable_at_least() { (($(ew_spendable "$1" "${3:-}") >= $2)); }
 
 # Prints the `txs` row of the transaction with this slate id.
 ew_tx_row() { ew "$1" txs | grep -F -- "$2" | head -n 1; }
