@@ -1093,8 +1093,13 @@ where
         let (envelope, first) = match decision {
             Decision::Drop => return Ok(Taken::Ignored),
             Decision::Unexpected(reason) => {
-                warn!("pairing reply from another wallet than expected dropped");
-                return Ok(self.pairing_failed(contact_id, reason));
+                warn!("pairing reply from another wallet than expected refused");
+                // The pairing goes on; a reply taken by hand says why it was refused.
+                return Ok(if by_hand {
+                    Taken::Failed(Some(FailedPairing { contact_id, reason }))
+                } else {
+                    Taken::Ignored
+                });
             }
             Decision::Known(tell) => {
                 warn!("pairing reply from a contact already paired refused");
@@ -1844,10 +1849,9 @@ fn decide_reply(
     }
     let expected = match unexpected(pending.expect_key.as_ref(), proven.as_ref()) {
         Ok(expected) => expected,
-        Err(reason) => {
-            drop_pairing(repos, pairing_id, contact_id)?;
-            return Ok(Decision::Unexpected(reason));
-        }
+        // Anyone holding the invite may answer first: the pairing keeps waiting for the
+        // wallet it expects.
+        Err(reason) => return Ok(Decision::Unexpected(reason)),
     };
     let n_a = Nonce::from_bytes(n_a);
     let body = ConfirmBody {
@@ -2144,7 +2148,7 @@ enum Decision {
     Again(Vec<u8>),
     /// Paired now; the confirm to send.
     Confirm(Vec<u8>),
-    /// The reply did not prove the address the invite expected; the pairing is gone.
+    /// The reply did not prove the address the invite expected; the pairing keeps waiting.
     Unexpected(PairingFailure),
 }
 

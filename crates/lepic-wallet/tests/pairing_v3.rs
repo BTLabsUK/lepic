@@ -23,7 +23,7 @@ use std::time::Duration;
 use helpers::{accept, events, invite_request, relays};
 use lepic_epicbox::marker::features::LEPIC_FEATURES;
 use lepic_store::{AccountIndex, ContactState, PeerCompat, WalletStore};
-use lepic_wallet::event::{ContactChange, ContactUpdate, PairingFailure};
+use lepic_wallet::event::{ContactChange, ContactUpdate};
 use lepic_wallet::{Clock, Event};
 use lepic_wallet_contacts::{
     AcceptRequest, ContactError, ContactRelays, PairingEndReason, PairingStatus, RelayMode,
@@ -168,7 +168,7 @@ fn no_request_reaches_an_unproven_or_stale_key() {
 }
 
 #[test]
-fn an_answer_from_another_wallet_than_expected_stores_nothing() {
+fn an_answer_from_another_wallet_than_expected_stores_nothing_and_the_invite_waits() {
     let world = World::new();
     let (anna, ben) = (&world.issuer, &world.payer);
     let stranger = world.stranger();
@@ -192,22 +192,41 @@ fn an_answer_from_another_wallet_than_expected_stores_nothing() {
         .unwrap();
     world.collect(anna);
 
-    assert!(events(&mut anna_events).iter().any(|event| matches!(
-        event,
-        Event::PairingFailed(failed)
-            if failed.contact_id == offer.contact_id && failed.reason == PairingFailure::OtherAddress
-    )));
+    // The answer is refused, and the pairing keeps waiting for the wallet it expects.
+    assert!(
+        !events(&mut anna_events)
+            .iter()
+            .any(|event| matches!(event, Event::PairingFailed(_)))
+    );
     assert!(
         world
             .block_on(anna.wallet.contact_book().contacts())
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|contact| contact.claimed_name.is_none())
     );
-    assert!(
-        world
-            .block_on(anna.wallet.contact_book().pairings_pending())
-            .unwrap()
-            .is_empty()
+    let pending = world
+        .block_on(anna.wallet.contact_book().pairings_pending())
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].contact_id, offer.contact_id);
+
+    // The expected wallet's answer still pairs.
+    world
+        .block_on(
+            stranger
+                .wallet
+                .contact_book()
+                .pairing_accept(&relays(&stranger), accept(&offer.link, "Sam", false)),
+        )
+        .unwrap();
+    world.collect(anna);
+    let contact = world
+        .block_on(anna.wallet.contact_book().contact(offer.contact_id))
+        .unwrap();
+    assert_eq!(
+        contact.payments_address.as_deref(),
+        Some(stranger.address.to_string().as_str())
     );
 }
 
