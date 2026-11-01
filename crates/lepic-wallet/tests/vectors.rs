@@ -200,7 +200,7 @@ fn the_onion_key_is_the_payment_proof_key_of_the_default_account() {
 #[test]
 fn store_key_vectors_open_their_database_and_check_file() {
     use lepic_store::{
-        AtRest, ContextKey, STORE_KEY_LEN, SqliteStore, StoreError, StoreKey, WalletStore,
+        AtRest, STORE_KEY_LEN, SqliteStore, StoreError, StoreKey, StoreKeys, WalletStore,
     };
     use lepic_wallet::{ENCRYPTED_DATABASE_FILE, EncryptedSqliteStores, StoreOpener};
 
@@ -236,7 +236,7 @@ fn store_key_vectors_open_their_database_and_check_file() {
         let database = folder.path().join(ENCRYPTED_DATABASE_FILE);
         let made = SqliteStore::open(
             &database,
-            ContextKey::from_bytes([0; 32]),
+            StoreKeys::from_bytes([0; 32], [0; 32]),
             AtRest::Encrypted(&StoreKey::from_bytes(expected)),
         )
         .unwrap();
@@ -251,7 +251,7 @@ fn store_key_vectors_open_their_database_and_check_file() {
         )
         .unwrap();
         let opened = EncryptedSqliteStores
-            .open(folder.path(), ContextKey::from_bytes([0; 32]), &derived)
+            .open(folder.path(), StoreKeys::from_bytes([0; 32], [0; 32]), &derived)
             .unwrap();
         assert_eq!(
             opened
@@ -267,7 +267,7 @@ fn store_key_vectors_open_their_database_and_check_file() {
             "{name}: an accepted check is kept"
         );
         let refused =
-            EncryptedSqliteStores.open(folder.path(), ContextKey::from_bytes([0; 32]), &other);
+            EncryptedSqliteStores.open(folder.path(), StoreKeys::from_bytes([0; 32], [0; 32]), &other);
         assert!(matches!(refused, Err(StoreError::WrongKey)), "{name}");
         seen += 1;
     }
