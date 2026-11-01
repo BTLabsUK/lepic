@@ -1112,9 +1112,9 @@ where
         Ok(())
     }
 
-    /// Gives every contact pairing our card with the payments address (tag 09) and its proof,
-    /// once for each payments address: after an upgrade from a build whose cards named none,
-    /// and after the wallet's relay changed. Queued in one write per contact.
+    /// Gives every contact pairing our card with the new payments address (tag 09) and its
+    /// proof after the wallet's relay changed, once for each payments address. Queued in one
+    /// write per contact.
     async fn send_address_cards(&self, relays: &ContactRelays) -> Result<(), ContactError> {
         let network = self.wallet.config().network;
         let features = self.wallet.config().claimed_features();

@@ -361,9 +361,11 @@ pub(crate) fn queue_card_update(
 /// The settings key holding the payments address our contact cards were last given.
 const ADDRESS_CARDS_KEY: &str = "contact.address-cards";
 
-/// Queues one contact update to every paired contact whose card from us does not name
-/// `payments`' address yet, with the card naming it and its proof, and returns how many. Done
-/// once per payments address: nothing is queued while the stored address is the same.
+/// Queues one contact update to every paired contact whose card from us names another payments
+/// address than `payments`' (the wallet's relay changed), with the card naming the new one and
+/// its proof, and returns how many. A card that names no payments address is left as it is: such
+/// a pairing was made before address proofs and stays unproven. Done once per payments address:
+/// nothing is queued while the stored address is the same.
 pub(crate) fn queue_address_cards(
     repos: &mut dyn Repositories,
     rng: &lepic_wallet::SharedRng,
@@ -384,8 +386,9 @@ pub(crate) fn queue_address_cards(
         let Ok(own) = ContactCard::decode(&record.own_card, net) else {
             continue;
         };
-        if own.fields().payments_address.as_ref() == Some(&card_address) {
-            continue;
+        match own.fields().payments_address.as_ref() {
+            Some(named) if *named != card_address => {}
+            _ => continue,
         }
         let at = CardUpdate {
             keychain,

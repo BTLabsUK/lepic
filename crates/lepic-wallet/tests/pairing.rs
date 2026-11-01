@@ -3226,14 +3226,12 @@ fn an_update_whose_proof_fails_keeps_the_proven_address() {
     assert_eq!(record.facts.peer_features, 5);
 }
 
-#[test]
-fn contacts_paired_before_addresses_get_one_card_update_with_the_proof() {
-    let world = World::new();
-    let (anna_side, ben_side) = world.pair_by_link();
-    // As a build before address proofs left them: no address in our card, none proven.
-    let keys = contact_keys(&world.issuer, anna_side);
-    world.issuer.write(|repos| {
-        let mut record = repos.contact(anna_side)?.unwrap();
+/// Leaves `party`'s pairing `contact` as a build before address proofs left it: no payments
+/// address in either card, none proven, no features heard.
+fn as_paired_before_address_proofs(party: &Party, contact: ContactId) {
+    let keys = contact_keys(party, contact);
+    party.write(|repos| {
+        let mut record = repos.contact(contact)?.unwrap();
         let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
         let mut fields = own.fields().clone();
         fields.payments_address = None;
@@ -3242,36 +3240,67 @@ fn contacts_paired_before_addresses_get_one_card_update_with_the_proof() {
             .unwrap()
             .as_bytes()
             .to_vec();
+        record.facts.payments_address = None;
+        record.facts.payments_key = None;
+        record.facts.peer_features = 0;
         repos.put_contact(&record)?;
         repos.delete_setting("contact.address-cards")
     });
-    world.payer.write(|repos| {
-        let mut record = repos.contact(ben_side)?.unwrap();
-        record.facts.payments_address = None;
-        record.facts.payments_key = None;
-        repos.put_contact(&record)
-    });
+}
 
-    world.collect(&world.issuer);
-    world.collect(&world.payer);
-    let proven = payments_address(&world, &world.payer, ben_side).unwrap();
-    assert_eq!(
-        key_of(&proven),
-        world.issuer.address.public_key().to_bytes()
-    );
-
-    // Once per address: the next collect sends nothing more.
-    let seq = || {
-        world
-            .payer
-            .read(|repos| repos.contact(ben_side))
+#[test]
+fn a_pairing_from_before_address_proofs_stays_unproven_and_cannot_be_attached_by_address() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    as_paired_before_address_proofs(&world.issuer, anna_side);
+    as_paired_before_address_proofs(&world.payer, ben_side);
+    let peer_seq = |party: &Party, contact| {
+        party
+            .read(|repos| repos.contact(contact))
             .unwrap()
             .peer
             .unwrap()
             .seq
     };
-    let after = seq();
+    let seqs = (
+        peer_seq(&world.issuer, anna_side),
+        peer_seq(&world.payer, ben_side),
+    );
+    let states = (
+        world_view(&world, &world.issuer, anna_side).state,
+        world_view(&world, &world.payer, ben_side).state,
+    );
+
     world.collect(&world.issuer);
     world.collect(&world.payer);
-    assert_eq!(seq(), after);
+    world.collect(&world.issuer);
+
+    // No card goes to such a pairing, and nothing claims an address for it.
+    assert_eq!(
+        (
+            peer_seq(&world.issuer, anna_side),
+            peer_seq(&world.payer, ben_side)
+        ),
+        seqs
+    );
+    for (party, contact) in [(&world.issuer, anna_side), (&world.payer, ben_side)] {
+        assert_eq!(payments_address(&world, party, contact), None);
+    }
+    assert_eq!(
+        (
+            world_view(&world, &world.issuer, anna_side).state,
+            world_view(&world, &world.payer, ben_side).state,
+        ),
+        states
+    );
+    let attach = world.block_on(world.issuer.wallet.contact_book().contact_attach(
+        anna_side,
+        Some("book-1".to_owned()),
+        Some(world.payer.address.to_string()),
+    ));
+    assert!(matches!(attach, Err(ContactError::AddressProofMissing)));
+    assert_eq!(
+        world_view(&world, &world.issuer, anna_side).app_contact,
+        None
+    );
 }
