@@ -370,8 +370,84 @@ fn check_v11_seed(store: &SqliteStore) {
 }
 
 fn check_v12_seed(store: &SqliteStore) {
+    use crate::contact::{ContactId, PairingEndReason};
+    let records = store.read(|repos| repos.contacts()).unwrap();
+    let facts: Vec<_> = records
+        .iter()
+        .map(|record| (record.contact_id, record.facts.clone()))
+        .collect();
+    let at = |nanos: i128| Some(Timestamp::from_nanosecond(nanos).unwrap());
+    assert_eq!(facts.len(), 3);
+    assert_eq!(facts[0].0, ContactId([1; 16]));
+    assert_eq!(
+        facts[0].1.peer_heard_at,
+        at(5),
+        "a paired record counts as heard"
+    );
+    assert_eq!(facts[0].1.ended_reason, Some(PairingEndReason::Unpaired));
+    assert_eq!(facts[0].1.ended_at, at(1_790_000_000_000_000_000));
+    assert_eq!(
+        facts[1].1.peer_heard_at, None,
+        "an invite waiting is not heard"
+    );
+    assert_eq!(facts[1].1.ended_reason, None);
+    assert_eq!(facts[2].1.peer_heard_at, at(7));
+    assert_eq!(
+        (facts[2].1.ended_reason, facts[2].1.ended_at),
+        (Some(PairingEndReason::Unpaired), None),
+        "a marker whose time does not read still ends the pairing"
+    );
+    for (_, fact) in &facts {
+        assert_eq!(fact.peer_features, 0);
+        assert_eq!(fact.payments_address, None);
+    }
+    let left = store
+        .read(|repos| {
+            Ok::<_, StoreError>([
+                repos.setting("contact.unpaired.01010101010101010101010101010101")?,
+                repos.setting("contact.unpaired.03030303030303030303030303030303")?,
+                repos.setting("network")?,
+            ])
+        })
+        .unwrap();
+    assert_eq!(left, [None, None, Some("floonet".to_owned())]);
+    let conn = store.conn.lock().unwrap();
+    let pairing: (i64, Option<String>, Option<Vec<u8>>, Option<i64>) = conn
+        .query_row(
+            "SELECT count(*), max(expect_address), max(reply), max(cancelled_at) FROM pairings",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        pairing,
+        (1, None, None, None),
+        "a pairing in progress is kept"
+    );
+    let new_tables: i64 = conn
+        .query_row(
+            "SELECT (SELECT count(*) FROM pair_requests) + (SELECT count(*) FROM contact_status_out)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(new_tables, 0);
+    let listing: (Option<Vec<u8>>, Option<i64>) = conn
+        .query_row(
+            "SELECT receive_listing_dkey, receive_listing_gen FROM transactions WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        listing,
+        (None, None),
+        "an earlier receive came in on the payments address"
+    );
+}
+
+fn check_v13_seed(store: &SqliteStore) {
     check_empty(store);
-    assert!(store.read(|repos| repos.tx_watches()).unwrap().is_empty());
 }
 
 fn check_v5_seed(store: &SqliteStore) {
@@ -531,8 +607,34 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 12,
-        seed: "",
+        seed: "INSERT INTO accounts (idx, label, next_child) VALUES (0, 'default', 0);
+               INSERT INTO transactions (id, account, direction, state, amount_credited,
+                   amount_debited, created_at, updated_at)
+               VALUES (1, 0, 'incoming', 'received', 5, 0, 1, 1);
+               INSERT INTO contacts (contact_id, label, state, allow_invoices, seal,
+                   imported_from_backup, created_at, updated_at, account, slot, box_salt,
+                   own_card)
+               VALUES (X'01010101010101010101010101010101', 'a', 'paired', 0, 'on', 0, 5, 5, 0,
+                   1, X'11111111111111111111111111111111', X'aa'),
+                      (X'02020202020202020202020202020202', '', 'pending-invite', 0, 'on', 0, 6,
+                   6, 0, 2, X'22222222222222222222222222222222', X'bb'),
+                      (X'03030303030303030303030303030303', 'c', 'verified', 0, 'on', 0, 7, 7, 0,
+                   3, X'33333333333333333333333333333333', X'cc');
+               INSERT INTO pairings (pairing_id, role, contact_id, sealed, invite_id, expires_at,
+                   our_mailbox, state, created_at, invite)
+               VALUES (X'02020202020202020202020202020202', 'inviter',
+                   X'02020202020202020202020202020202', X'00', X'0202020202020202', 100,
+                   'box@relay', 'pending-invite', 6, X'dd');
+               INSERT INTO settings (key, value) VALUES
+                   ('network', 'floonet'),
+                   ('contact.unpaired.01010101010101010101010101010101', '1790000000'),
+                   ('contact.unpaired.03030303030303030303030303030303', 'x1');",
         check: check_v12_seed,
+    },
+    UpgradeCase {
+        from: 13,
+        seed: "",
+        check: check_v13_seed,
     },
 ];
 

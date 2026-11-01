@@ -30,6 +30,8 @@ pub enum Record {
     ImportedTransaction,
     ImportedOutput,
     TransactionRecord,
+    PairRequest,
+    StatusNotice,
 }
 
 impl fmt::Display for Record {
@@ -54,6 +56,8 @@ impl fmt::Display for Record {
             Self::ImportedTransaction => "imported transaction",
             Self::ImportedOutput => "imported output",
             Self::TransactionRecord => "transaction record",
+            Self::PairRequest => "pair request",
+            Self::StatusNotice => "status notice",
         })
     }
 }

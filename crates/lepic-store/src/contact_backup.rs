@@ -9,7 +9,8 @@
 //! that decoding, never from the document. The `.wfeh` key is the same on both networks, so the
 //! document names its network and an import refuses the other one. It holds no secret: pairings in progress, outbox entries and relay
 //! backoff are not exported, and a contact still waiting for its reply is left out because
-//! nothing could finish it. A record restored from it is flagged [`ContactRecord::imported_from_backup`], because the
+//! nothing could finish it. Neither is a pairing that ended, or one whose contact was never
+//! heard from, so no build restores either as paired. A record restored from it is flagged [`ContactRecord::imported_from_backup`], because the
 //! pairing may also live on the device the backup came from (cases C-11).
 
 use jiff::Timestamp;
@@ -18,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::AccountIndex;
 use crate::contact::{
-    ContactId, ContactMailbox, ContactRecord, ContactRepository, ContactState, PeerCard,
-    PreviousHome, SealMode,
+    ContactId, ContactMailbox, ContactRecord, ContactRepository, ContactState, PairingFacts,
+    PeerCard, PreviousHome, SealMode,
 };
 use crate::error::{Record, StoreError};
 
@@ -74,6 +75,19 @@ struct Entry {
     peer: CardEntry,
     alternate: Option<CardEntry>,
     mailbox: Option<MailboxEntry>,
+    // Added later: absent in older documents, ignored by older readers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payments_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payments_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_features: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_heard_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_verified_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_verdict: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -211,6 +225,13 @@ pub fn export_contacts_where<R: ContactRepository + ?Sized>(
         let Some(peer) = &contact.peer else {
             continue;
         };
+        let facts = &contact.facts;
+        if facts.ended_reason.is_some() {
+            continue;
+        }
+        let Some(heard) = facts.peer_heard_at else {
+            continue;
+        };
         let mailbox = repos.contact_mailbox(contact.contact_id)?;
         contacts.push(Entry {
             contact_id: to_hex(&contact.contact_id.0),
@@ -231,6 +252,12 @@ pub fn export_contacts_where<R: ContactRepository + ?Sized>(
             peer: card_entry(peer),
             alternate: contact.alternate.as_ref().map(card_entry),
             mailbox: mailbox.as_ref().map(mailbox_entry),
+            payments_address: facts.payments_address.clone(),
+            payments_key: facts.payments_key.as_ref().map(|key| to_hex(key)),
+            peer_features: Some(facts.peer_features),
+            peer_heard_at: Some(heard.to_string()),
+            peer_verified_at: facts.peer_verified_at.map(|time| time.to_string()),
+            peer_verdict: facts.peer_verdict.as_ref().map(|verdict| to_hex(verdict)),
         });
     }
     let slot_counters = repos
@@ -266,6 +293,32 @@ fn record_from(
     if read_card(&own_card).is_none() {
         return Err(corrupt("own card"));
     }
+    let created_at = time(&entry.created_at, "created at")?;
+    let payments_key = entry
+        .payments_key
+        .as_deref()
+        .map(|key| from_hex_fixed(key, "payments key"))
+        .transpose()?;
+    // An address comes back only with its key.
+    let payments_address = entry
+        .payments_address
+        .clone()
+        .filter(|_| payments_key.is_some());
+    let facts = PairingFacts {
+        payments_key: payments_key.filter(|_| payments_address.is_some()),
+        payments_address,
+        peer_features: entry.peer_features.unwrap_or(0),
+        peer_heard_at: Some(
+            optional_time(entry.peer_heard_at.as_deref(), "peer heard at")?.unwrap_or(created_at),
+        ),
+        peer_verified_at: optional_time(entry.peer_verified_at.as_deref(), "peer verified at")?,
+        peer_verdict: entry
+            .peer_verdict
+            .as_deref()
+            .map(|verdict| from_hex_fixed(verdict, "peer verdict"))
+            .transpose()?,
+        ..PairingFacts::default()
+    };
     let record = ContactRecord {
         contact_id,
         account: AccountIndex(entry.account),
@@ -291,8 +344,9 @@ fn record_from(
         last_sealed_in: optional_time(entry.last_sealed_in.as_deref(), "last sealed in")?,
         app_contact: entry.app_contact.clone(),
         imported_from_backup: true,
-        created_at: time(&entry.created_at, "created at")?,
+        created_at,
         updated_at: time(&entry.updated_at, "updated at")?,
+        facts,
     };
     let mailbox = entry
         .mailbox

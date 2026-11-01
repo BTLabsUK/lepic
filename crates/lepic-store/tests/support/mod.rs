@@ -13,10 +13,10 @@ use lepic_primitives::ser::{ProtocolVersion, deserialize};
 use lepic_store::{
     AccountIndex, AccountRecord, CONTEXT_KEY_LEN, ContactId, ContactKind, ContactMailbox,
     ContactOutboxEntry, ContactOutboxState, ContactRecord, ContactState, ContextKey, KEY_ID_LEN,
-    KeyId, MemoryStore, OutputRecord, OutputStatus, PairingId, PairingRole, PairingSecrets,
-    PairingState, PeerCard, PeerTagKey, PendingInvoice, PendingInvoiceStatus, PendingPairing,
-    PreviousHome, RelayBackoff, SealMode, SlateStage, SqliteStore, StoreKeys, StoredSlate,
-    TransactionEntry, TxDirection, TxState, WalletStore,
+    KeyId, MemoryStore, OutputRecord, OutputStatus, PairingFacts, PairingId, PairingRole,
+    PairingSecrets, PairingState, PeerCard, PeerTagKey, PendingInvoice, PendingInvoiceStatus,
+    PendingPairing, PreviousHome, RelayBackoff, SealMode, SlateStage, SqliteStore, StoreKeys,
+    StoredSlate, TransactionEntry, TxDirection, TxState, WalletStore,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -227,6 +227,10 @@ pub fn contact(n: u8, second: i64) -> ContactRecord {
         imported_from_backup: false,
         created_at: time(second),
         updated_at: time(second),
+        facts: PairingFacts {
+            peer_heard_at: Some(time(second)),
+            ..PairingFacts::default()
+        },
     }
 }
 
@@ -270,6 +274,10 @@ pub fn pairing(n: u8, second: i64) -> PendingPairing {
         state: PairingState::PendingInvite,
         created_at: time(second),
         invite: vec![n; 40],
+        expect_address: None,
+        expect_key: None,
+        reply: None,
+        cancelled_at: None,
     }
 }
 

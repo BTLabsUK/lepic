@@ -19,11 +19,12 @@ use lepic_store::{
     AccountIndex, AccountRecord, CONTACT_SLOT_COUNT, ChainCheck, ContactCap, ContactOutboxState,
     ContactState, FoundDuring, ImportSummary, ImportedKind, ImportedMessage, ImportedOutput,
     ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex,
-    InvoiceCap, KeyId, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES,
-    MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt, OtherWalletSpend,
-    OutboxEntry, OutboxId, OutboxStatus, OutputStatus, PRIVATE_SLOT_END, PairingId, PairingState,
-    ParticipantId, PeerCard, PeerCompat, PendingInvoiceStatus, PrivateContext, Record,
-    Repositories, ScanFoundRecord, SealMode, SlateStage, StoreError, TransactionEntry, TxDirection,
+    InvoiceCap, KeyId, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES,
+    MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt,
+    OtherWalletSpend, OutboxEntry, OutboxId, OutboxStatus, OutputStatus, PRIVATE_SLOT_END,
+    PairRequest, PairingEndReason, PairingFacts, PairingId, PairingState, ParticipantId, PeerCard,
+    PeerCompat, PendingInvoiceStatus, PrivateContext, Record, Repositories, ScanFoundRecord,
+    SealMode, SlateStage, StatusKind, StatusNotice, StoreError, TransactionEntry, TxDirection,
     TxId, TxMarks, TxState, TxWatch, WalletStore, WatchPhase, WatchedOutput, export_contacts,
     import_contacts,
 };
@@ -1562,6 +1563,266 @@ fn pending_pairings_stop_at_the_cap<B: Backend>() {
     .unwrap();
 }
 
+fn pairing_facts_round_trip_and_are_found_by_payments_key<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let mut proven = contact(1, 1);
+    proven.facts = PairingFacts {
+        payments_address: Some("key@relay.example".to_owned()),
+        payments_key: Some([2; 33]),
+        peer_features: 0x8000_000a,
+        peer_heard_at: Some(support::time(3)),
+        peer_verified_at: Some(support::time(4)),
+        peer_verdict: Some([5; 32]),
+        ended_reason: Some(PairingEndReason::PeerMismatch),
+        ended_at: Some(support::time(6)),
+        heard_wait: std::time::Duration::from_secs(7),
+        heard_wait_mark: Some(support::time(8)),
+    };
+    write(store, |repos| {
+        repos.put_contact(&proven)?;
+        repos.put_contact(&contact(2, 2))
+    })
+    .unwrap();
+    read(store, |repos| {
+        assert_eq!(repos.contact(contact_id(1))?, Some(proven.clone()));
+        assert_eq!(
+            repos.contacts_by_payments_key(&[2; 33])?,
+            vec![proven.clone()]
+        );
+        assert!(repos.contacts_by_payments_key(&[3; 33])?.is_empty());
+        Ok(())
+    })
+    .unwrap();
+    // An address is never stored without its key.
+    let mut half = contact(3, 3);
+    half.facts.payments_address = Some("key@relay.example".to_owned());
+    assert!(matches!(
+        write(store, |repos| repos.put_contact(&half)),
+        Err(StoreError::OutOfRange { .. })
+    ));
+}
+
+fn cancelled_pairings_have_a_cap_of_their_own<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let numbered = |n: usize, cancelled: bool| {
+        let id = u8::try_from(n).unwrap();
+        let mut next = pairing(0, 10);
+        next.pairing_id = PairingId([id; 16]);
+        next.invite_id = [id; 8];
+        next.cancelled_at = cancelled.then(|| support::time(11));
+        next.expect_address = Some("key@relay.example".to_owned());
+        next.expect_key = Some([id; 33]);
+        next.reply = Some(vec![id; 3]);
+        next
+    };
+    write(store, |repos| {
+        for n in 0..MAX_PENDING_PAIRINGS {
+            repos.put_pending_pairing(&numbered(n, false))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    // A full set of pairings in progress leaves room for cancelled ones, and cancelling one
+    // makes room for a new one in progress.
+    write(store, |repos| {
+        repos.put_pending_pairing(&numbered(0, true))?;
+        repos.put_pending_pairing(&numbered(100, false))
+    })
+    .unwrap();
+    write(store, |repos| {
+        for n in 101..(100 + MAX_CANCELLED_PAIRINGS) {
+            repos.put_pending_pairing(&numbered(n, true))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        write(store, |repos| repos
+            .put_pending_pairing(&numbered(250, true))),
+        Err(StoreError::ContactCapReached {
+            cap: ContactCap::PendingPairings
+        })
+    ));
+    let stored = read(store, |repos| repos.pending_pairing(PairingId([0; 16])))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, numbered(0, true));
+}
+
+fn pair_request(n: u8, received: i64) -> PairRequest {
+    PairRequest {
+        sender_key: [n; 33],
+        sender_address: format!("sender{n}@relay.example"),
+        invite_id: [n; 8],
+        invite: vec![n; 30],
+        expires_at: support::time(received + 600),
+        received_at: support::time(received),
+        dismissed_at: None,
+        answered_at: None,
+    }
+}
+
+fn pair_requests_are_kept_one_per_sender_key<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let mut newer = pair_request(1, 30);
+    newer.invite_id = [9; 8];
+    write(store, |repos| {
+        repos.put_pair_request(&pair_request(1, 20))?;
+        repos.put_pair_request(&pair_request(2, 10))?;
+        repos.put_pair_request(&newer)
+    })
+    .unwrap();
+    read(store, |repos| {
+        assert_eq!(
+            repos.pair_requests()?,
+            vec![pair_request(2, 10), newer.clone()]
+        );
+        assert_eq!(repos.pair_request(&[1; 33])?, Some(newer.clone()));
+        assert_eq!(repos.pair_request_by_invite(&[9; 8])?, Some(newer.clone()));
+        assert_eq!(repos.pair_request_by_invite(&[1; 8])?, None);
+        Ok(())
+    })
+    .unwrap();
+    let mut dismissed = newer.clone();
+    dismissed.dismissed_at = Some(support::time(40));
+    write(store, |repos| repos.put_pair_request(&dismissed)).unwrap();
+    assert!(
+        !read(store, |repos| repos.pair_request(&[1; 33]))
+            .unwrap()
+            .unwrap()
+            .live()
+    );
+    assert!(write(store, |repos| repos.delete_pair_request(&[2; 33])).unwrap());
+    assert!(!write(store, |repos| repos.delete_pair_request(&[2; 33])).unwrap());
+    assert_eq!(
+        read(store, |repos| repos.pair_requests()).unwrap(),
+        vec![dismissed]
+    );
+}
+
+fn status_notice(n: u8, next_try: i64) -> StatusNotice {
+    StatusNotice {
+        contact_id: contact_id(n),
+        kind: StatusKind::Mismatch,
+        payload: format!("payload {n}"),
+        destination: format!("peer{n}@relay.example:443"),
+        attempts: 0,
+        next_try_at: support::time(next_try),
+        created_at: support::time(1),
+        expires_at: support::time(7 * 86_400),
+        delivered_at: None,
+    }
+}
+
+fn status_notices_list_due_ones_and_outlive_their_contact<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let (late, soon, later) = write(store, |repos| {
+        repos.put_contact(&contact(1, 1))?;
+        Ok((
+            repos.enqueue_status_notice(&status_notice(1, 90))?,
+            repos.enqueue_status_notice(&status_notice(1, 50))?,
+            repos.enqueue_status_notice(&status_notice(2, 500))?,
+        ))
+    })
+    .unwrap();
+    let due = |at| {
+        read(store, |repos| repos.due_status_notices(support::time(at)))
+            .unwrap()
+            .iter()
+            .map(|stored| stored.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(due(100), vec![soon, late]);
+    let mut delivered = status_notice(1, 50);
+    delivered.delivered_at = Some(support::time(60));
+    delivered.attempts = 1;
+    write(store, |repos| {
+        repos.update_status_notice(soon, &delivered)?;
+        repos.delete_contact(contact_id(1))
+    })
+    .unwrap();
+    assert_eq!(due(1000), vec![late, later]);
+    let kept = read(store, |repos| repos.status_notices(contact_id(1))).unwrap();
+    assert_eq!(
+        kept.len(),
+        2,
+        "a verdict goes out after the contact was removed"
+    );
+    assert_eq!(kept[1].notice, delivered);
+    write(store, |repos| repos.delete_status_notice(late)).unwrap();
+    assert_eq!(due(1000), vec![later]);
+    assert!(matches!(
+        write(store, |repos| repos
+            .update_status_notice(late, &status_notice(1, 1))),
+        Err(StoreError::NotFound {
+            record: Record::StatusNotice
+        })
+    ));
+}
+
+fn contact_backup_leaves_out_ended_and_unheard_records<B: Backend>() {
+    let source = B::create(context_key(1));
+    let mut proven = contact(1, 1);
+    proven.facts.payments_address = Some("key@relay.example".to_owned());
+    proven.facts.payments_key = Some([7; 33]);
+    proven.facts.peer_features = 8;
+    proven.facts.peer_verified_at = Some(support::time(5));
+    proven.facts.peer_verdict = Some([6; 32]);
+    let mut ended = contact(2, 2);
+    ended.facts.ended_reason = Some(PairingEndReason::Mismatch);
+    ended.facts.ended_at = Some(support::time(3));
+    let mut unheard = contact(3, 3);
+    unheard.facts.peer_heard_at = None;
+    write(source.store(), |repos| {
+        repos.put_contact(&proven)?;
+        repos.put_contact(&ended)?;
+        repos.put_contact(&unheard)
+    })
+    .unwrap();
+    let json = read(source.store(), |repos| {
+        export_contacts(repos, Network::Floonet)
+    })
+    .unwrap();
+    let clean = B::create(context_key(2));
+    let summary = write(clean.store(), |repos| import(repos, &json)).unwrap();
+    assert_eq!(summary.imported, 1);
+    let mut expected = proven.clone();
+    expected.imported_from_backup = true;
+    assert_eq!(
+        read(clean.store(), |repos| repos.contacts()).unwrap(),
+        vec![expected]
+    );
+    // A document of an earlier build carries none of the new fields: its records count as
+    // heard since they were made, claim no features and have no proven address.
+    let older = json
+        .replace(r#","payments_address":"key@relay.example""#, "")
+        .replace(&format!(r#","payments_key":"{}""#, "07".repeat(33)), "")
+        .replace(r#","peer_features":8"#, "")
+        .replace(&format!(r#","peer_heard_at":"{}""#, support::time(1)), "")
+        .replace(
+            &format!(r#","peer_verified_at":"{}""#, support::time(5)),
+            "",
+        )
+        .replace(&format!(r#","peer_verdict":"{}""#, "06".repeat(32)), "");
+    assert!(!older.contains("peer_"), "{older}");
+    let restored = B::create(context_key(3));
+    write(restored.store(), |repos| import(repos, &older)).unwrap();
+    let facts = read(restored.store(), |repos| repos.contacts()).unwrap()[0]
+        .facts
+        .clone();
+    assert_eq!(
+        facts,
+        PairingFacts {
+            peer_heard_at: Some(support::time(1)),
+            ..PairingFacts::default()
+        }
+    );
+}
+
 fn contact_outbox_lists_due_entries_and_follows_a_home_relay_move<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
@@ -2500,6 +2761,11 @@ for_each_backend!(
     transaction_records_round_trip_and_are_replaced,
     transaction_records_need_their_transaction_and_go_with_it,
     contact_links_are_replaced_and_a_transactions_goes_with_it,
+    pairing_facts_round_trip_and_are_found_by_payments_key,
+    cancelled_pairings_have_a_cap_of_their_own,
+    pair_requests_are_kept_one_per_sender_key,
+    status_notices_list_due_ones_and_outlive_their_contact,
+    contact_backup_leaves_out_ended_and_unheard_records,
 );
 
 #[test]

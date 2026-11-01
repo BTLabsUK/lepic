@@ -11,8 +11,9 @@ use uuid::Uuid;
 use crate::account::{AccountIndex, AccountRecord, AccountRepository};
 use crate::contact::{
     self, CARD_KEY_LEN, ContactCap, ContactId, ContactMailbox, ContactOutboxEntry, ContactOutboxId,
-    ContactOutboxState, ContactRecord, ContactRepository, INVITE_ID_LEN, MAX_CONTACTS,
-    MAX_PENDING_PAIRINGS, PairingId, PairingSecrets, PendingPairing, StoredContactOutbox,
+    ContactOutboxState, ContactRecord, ContactRepository, INVITE_ID_LEN, MAX_CANCELLED_PAIRINGS,
+    MAX_CONTACTS, MAX_PENDING_PAIRINGS, PAYMENTS_KEY_LEN, PairRequest, PairingId, PairingSecrets,
+    PendingPairing, StatusNotice, StatusNoticeId, StoredContactOutbox, StoredStatusNotice,
 };
 use crate::context::{
     self, ContextKey, ContextRepository, ParticipantId, PrivateContext, StoreKeys,
@@ -71,6 +72,8 @@ struct State {
     scan_found: BTreeMap<TxId, ScanFoundRecord>,
     slate_contacts: BTreeMap<[u8; 16], ContactId>,
     tx_contacts: BTreeMap<TxId, ContactId>,
+    pair_requests: BTreeMap<[u8; PAYMENTS_KEY_LEN], PairRequest>,
+    status_notices: BTreeMap<StatusNoticeId, StatusNotice>,
 }
 
 /// A pending invoice as the SQLite row holds it: its bytes sealed, the other fields in clear.
@@ -1063,12 +1066,29 @@ impl ContactRepository for MemoryRepos<'_> {
                 record: Record::PendingPairing,
             });
         }
-        if !self.state.pairings.contains_key(&pairing.pairing_id)
-            && self.state.pairings.len() >= MAX_PENDING_PAIRINGS
-        {
-            return Err(StoreError::ContactCapReached {
-                cap: ContactCap::PendingPairings,
-            });
+        let cancelled = pairing.cancelled_at.is_some();
+        let was_cancelled = self
+            .state
+            .pairings
+            .get(&pairing.pairing_id)
+            .map(|stored| stored.fields.cancelled_at.is_some());
+        if was_cancelled != Some(cancelled) {
+            let cap = if cancelled {
+                MAX_CANCELLED_PAIRINGS
+            } else {
+                MAX_PENDING_PAIRINGS
+            };
+            let held = self
+                .state
+                .pairings
+                .values()
+                .filter(|stored| stored.fields.cancelled_at.is_some() == cancelled)
+                .count();
+            if held >= cap {
+                return Err(StoreError::ContactCapReached {
+                    cap: ContactCap::PendingPairings,
+                });
+            }
         }
         let sealed = contact::seal_secrets(self.key, pairing)?;
         let mut fields = pairing.clone();
@@ -1242,6 +1262,118 @@ impl ContactRepository for MemoryRepos<'_> {
     fn set_tx_contact(&mut self, tx_id: TxId, contact: ContactId) -> Result<(), StoreError> {
         self.require_transaction(tx_id)?;
         self.state.tx_contacts.insert(tx_id, contact);
+        Ok(())
+    }
+
+    fn contacts_by_payments_key(
+        &self,
+        key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<Vec<ContactRecord>, StoreError> {
+        Ok(self.contacts_where(|contact| contact.facts.payments_key.as_ref() == Some(key)))
+    }
+
+    fn put_pair_request(&mut self, request: &PairRequest) -> Result<(), StoreError> {
+        contact::check_pair_request(request)?;
+        self.state
+            .pair_requests
+            .insert(request.sender_key, request.clone());
+        Ok(())
+    }
+
+    fn pair_request(
+        &self,
+        sender_key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<Option<PairRequest>, StoreError> {
+        Ok(self.state.pair_requests.get(sender_key).cloned())
+    }
+
+    fn pair_request_by_invite(
+        &self,
+        invite_id: &[u8; INVITE_ID_LEN],
+    ) -> Result<Option<PairRequest>, StoreError> {
+        Ok(self
+            .pair_requests()?
+            .into_iter()
+            .find(|request| &request.invite_id == invite_id))
+    }
+
+    fn pair_requests(&self) -> Result<Vec<PairRequest>, StoreError> {
+        let mut requests: Vec<PairRequest> = self.state.pair_requests.values().cloned().collect();
+        requests.sort_by_key(|request| (request.received_at, request.sender_key));
+        Ok(requests)
+    }
+
+    fn delete_pair_request(
+        &mut self,
+        sender_key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<bool, StoreError> {
+        Ok(self.state.pair_requests.remove(sender_key).is_some())
+    }
+
+    fn enqueue_status_notice(
+        &mut self,
+        notice: &StatusNotice,
+    ) -> Result<StatusNoticeId, StoreError> {
+        contact::check_status_notice(notice)?;
+        let id = next_key(
+            &self.state.status_notices,
+            StatusNoticeId(1),
+            |StatusNoticeId(last)| last.checked_add(1).map(StatusNoticeId),
+        )
+        .ok_or(StoreError::OutOfRange {
+            field: "status notice id",
+        })?;
+        self.state.status_notices.insert(id, notice.clone());
+        Ok(id)
+    }
+
+    fn update_status_notice(
+        &mut self,
+        id: StatusNoticeId,
+        notice: &StatusNotice,
+    ) -> Result<(), StoreError> {
+        contact::check_status_notice(notice)?;
+        match self.state.status_notices.get_mut(&id) {
+            Some(stored) => {
+                *stored = notice.clone();
+                Ok(())
+            }
+            None => Err(StoreError::NotFound {
+                record: Record::StatusNotice,
+            }),
+        }
+    }
+
+    fn due_status_notices(&self, now: Timestamp) -> Result<Vec<StoredStatusNotice>, StoreError> {
+        let mut due: Vec<StoredStatusNotice> = self
+            .state
+            .status_notices
+            .iter()
+            .filter(|(_, notice)| notice.delivered_at.is_none() && notice.next_try_at <= now)
+            .map(|(id, notice)| StoredStatusNotice {
+                id: *id,
+                notice: notice.clone(),
+            })
+            .collect();
+        due.sort_by_key(|stored| (stored.notice.next_try_at, stored.id));
+        Ok(due)
+    }
+
+    fn status_notices(&self, contact: ContactId) -> Result<Vec<StoredStatusNotice>, StoreError> {
+        Ok(self
+            .state
+            .status_notices
+            .iter()
+            .filter(|(_, notice)| notice.contact_id == contact)
+            .map(|(id, notice)| StoredStatusNotice {
+                id: *id,
+                notice: notice.clone(),
+            })
+            .collect())
+    }
+
+    fn delete_status_notice(&mut self, id: StatusNoticeId) -> Result<(), StoreError> {
+        self.state.status_notices.remove(&id);
         Ok(())
     }
 }

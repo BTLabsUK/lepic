@@ -274,6 +274,7 @@ fn pending_record(
         imported_from_backup: false,
         created_at: now,
         updated_at: now,
+        facts: lepic_store::PairingFacts::default(),
     }
 }
 
@@ -1360,6 +1361,10 @@ fn store_invite(
         state: PairingState::PendingInvite,
         created_at: at.now,
         invite: invite.as_bytes().to_vec(),
+        expect_address: None,
+        expect_key: None,
+        reply: None,
+        cancelled_at: None,
     })?;
     Ok(InviteOffer {
         contact_id: new.contact_id,
@@ -1446,6 +1451,10 @@ fn store_answer(
         state: PairingState::PendingReply,
         created_at: at.now,
         invite: invite.as_bytes().to_vec(),
+        expect_address: None,
+        expect_key: None,
+        reply: None,
+        cancelled_at: None,
     })?;
     Ok((new.contact_id, envelope, reply_from, to))
 }

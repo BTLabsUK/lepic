@@ -417,10 +417,84 @@ ALTER TABLE tx_marks ADD COLUMN answer_marked INTEGER NOT NULL DEFAULT 0
     CHECK (answer_marked IN (0, 1));
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
+/// What a pairing learns after it is stored, as facts beside its state: the proven payments
+/// address, the claimed features, when the contact was heard and confirmed the check, and how the
+/// pairing ended, which moves here from the settings rows that marked a contact's own removal.
+/// Pairings in progress keep the address they must prove, the invitee's reply to post again,
+/// and a cancel. Pairing requests from other wallets and the pairing status notices get tables
+/// of their own; and a received transaction names the listing it came in on.
+const V13: &str = "
+ALTER TABLE contacts ADD COLUMN payments_address TEXT;
+ALTER TABLE contacts ADD COLUMN payments_key BLOB
+    CHECK (payments_key IS NULL OR length(payments_key) = 33);
+ALTER TABLE contacts ADD COLUMN peer_features INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE contacts ADD COLUMN peer_heard_at INTEGER;
+ALTER TABLE contacts ADD COLUMN peer_verified_at INTEGER;
+ALTER TABLE contacts ADD COLUMN peer_verdict BLOB;
+ALTER TABLE contacts ADD COLUMN ended_reason TEXT
+    CHECK (ended_reason IN ('mismatch', 'peer-mismatch', 'unpaired', 'never-finished'));
+ALTER TABLE contacts ADD COLUMN ended_at INTEGER;
+ALTER TABLE contacts ADD COLUMN heard_wait INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE contacts ADD COLUMN heard_wait_mark INTEGER;
+CREATE INDEX contacts_payments_key ON contacts (payments_key);
+
+UPDATE contacts SET peer_heard_at = created_at
+    WHERE state IN ('paired', 'verified', 'keys-changed');
+
+UPDATE contacts SET ended_reason = 'unpaired',
+    ended_at = (SELECT CAST(value AS INTEGER) * 1000000000 FROM settings
+                WHERE key = 'contact.unpaired.' || lower(hex(contacts.contact_id))
+                    AND value <> '' AND value NOT GLOB '*[^0-9]*' AND length(value) <= 10)
+    WHERE EXISTS (SELECT 1 FROM settings
+                  WHERE key = 'contact.unpaired.' || lower(hex(contacts.contact_id)));
+DELETE FROM settings WHERE substr(key, 1, 17) = 'contact.unpaired.';
+
+ALTER TABLE pairings ADD COLUMN expect_address TEXT;
+ALTER TABLE pairings ADD COLUMN expect_key BLOB
+    CHECK (expect_key IS NULL OR length(expect_key) = 33);
+ALTER TABLE pairings ADD COLUMN reply BLOB;
+ALTER TABLE pairings ADD COLUMN cancelled_at INTEGER;
+CREATE INDEX pairings_expect_key ON pairings (expect_key);
+
+CREATE TABLE pair_requests (
+    sender_key BLOB PRIMARY KEY CHECK (length(sender_key) = 33),
+    sender_address TEXT NOT NULL,
+    invite_id BLOB NOT NULL,
+    invite BLOB NOT NULL,
+    expires_at INTEGER NOT NULL,
+    received_at INTEGER NOT NULL,
+    dismissed_at INTEGER,
+    answered_at INTEGER
+);
+CREATE INDEX pair_requests_received ON pair_requests (received_at);
+CREATE INDEX pair_requests_invite ON pair_requests (invite_id);
+
+CREATE TABLE contact_status_out (
+    id INTEGER PRIMARY KEY,
+    contact_id BLOB NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('finished', 'match', 'mismatch', 'unpaired')),
+    payload TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    next_try_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    delivered_at INTEGER
+);
+CREATE INDEX contact_status_out_due ON contact_status_out (next_try_at)
+    WHERE delivered_at IS NULL;
+CREATE INDEX contact_status_out_contact ON contact_status_out (contact_id);
+
+ALTER TABLE transactions ADD COLUMN receive_listing_dkey BLOB
+    CHECK (receive_listing_dkey IS NULL OR length(receive_listing_dkey) = 33);
+ALTER TABLE transactions ADD COLUMN receive_listing_gen INTEGER
+    CHECK (receive_listing_gen IS NULL OR receive_listing_gen BETWEEN 0 AND 4294967295);
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

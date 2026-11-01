@@ -10,8 +10,10 @@ use crate::account::{AccountIndex, AccountRecord, AccountRepository};
 use crate::contact::{
     self, CARD_KEY_LEN, ContactCap, ContactId, ContactKind, ContactMailbox, ContactOutboxEntry,
     ContactOutboxId, ContactOutboxState, ContactRecord, ContactRepository, ContactState,
-    INVITE_ID_LEN, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PairingId, PairingRole, PairingState,
-    PeerCard, PendingPairing, PreviousHome, RelayBackoff, SealMode, StoredContactOutbox,
+    INVITE_ID_LEN, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PAYMENTS_KEY_LEN,
+    PairRequest, PairingEndReason, PairingFacts, PairingId, PairingRole, PairingState, PeerCard,
+    PendingPairing, PreviousHome, RelayBackoff, SealMode, StatusKind, StatusNotice, StatusNoticeId,
+    StoredContactOutbox, StoredStatusNotice,
 };
 use crate::context::{
     self, ContextKey, ContextRepository, ParticipantId, PrivateContext, StoreKeys,
@@ -1621,7 +1623,9 @@ fn decode_card(
 const CONTACT_COLUMNS: &str = "contact_id, card, peer_sig_key, peer_enc_key, peer_hint_key, \
     card_seq, kind, claimed_name, alt_card, alt_sig_key, alt_enc_key, alt_hint_key, alt_seq, \
     alt_kind, alt_name, label, state, verified_at, allow_invoices, seal, last_sealed_in, \
-    app_contact, imported_from_backup, created_at, updated_at, account, slot, box_salt, sas, own_card";
+    app_contact, imported_from_backup, created_at, updated_at, account, slot, box_salt, sas, own_card, \
+    payments_address, payments_key, peer_features, peer_heard_at, peer_verified_at, peer_verdict, \
+    ended_reason, ended_at, heard_wait, heard_wait_mark";
 
 fn decode_contact(row: &Row<'_>) -> Result<ContactRecord, StoreError> {
     let record = Record::Contact;
@@ -1650,11 +1654,67 @@ fn decode_contact(row: &Row<'_>) -> Result<ContactRecord, StoreError> {
             .map(|sas| fixed(&sas, record, "sas"))
             .transpose()?,
         own_card: row.get(29)?,
+        facts: decode_facts(row, 30)?,
     })
 }
 
+/// The pairing facts of a contact row, starting at column `first`.
+fn decode_facts(row: &Row<'_>, first: usize) -> Result<PairingFacts, StoreError> {
+    let record = Record::Contact;
+    let at = |offset: usize| first.saturating_add(offset);
+    let payments_address: Option<String> = row.get(first)?;
+    let payments_key: Option<Vec<u8>> = row.get(at(1))?;
+    let payments_key = payments_key
+        .map(|key| fixed::<PAYMENTS_KEY_LEN>(&key, record, "payments key"))
+        .transpose()?;
+    if payments_address.is_some() != payments_key.is_some() {
+        return Err(corrupt(record, "payments address"));
+    }
+    let features: i64 = row.get(at(2))?;
+    let verdict: Option<Vec<u8>> = row.get(at(5))?;
+    let ended: Option<String> = row.get(at(6))?;
+    let wait: i64 = row.get(at(8))?;
+    Ok(PairingFacts {
+        payments_address,
+        payments_key,
+        peer_features: decode_u32(features, record, "peer features")?,
+        peer_heard_at: optional_time(row.get(at(3))?, record, "peer heard at")?,
+        peer_verified_at: optional_time(row.get(at(4))?, record, "peer verified at")?,
+        peer_verdict: verdict
+            .map(|verdict| fixed(&verdict, record, "peer verdict"))
+            .transpose()?,
+        ended_reason: ended
+            .map(|code| decode_code(&code, PairingEndReason::from_code, record, "ended reason"))
+            .transpose()?,
+        ended_at: optional_time(row.get(at(7))?, record, "ended at")?,
+        heard_wait: std::time::Duration::from_nanos(
+            u64::try_from(wait).map_err(|_| corrupt(record, "heard wait"))?,
+        ),
+        heard_wait_mark: optional_time(row.get(at(9))?, record, "heard wait mark")?,
+    })
+}
+
+fn facts_params(facts: &PairingFacts) -> Result<Vec<rusqlite::types::Value>, StoreError> {
+    Ok(vec![
+        facts.payments_address.clone().into(),
+        facts.payments_key.map(|key| key.to_vec()).into(),
+        i64::from(facts.peer_features).into(),
+        optional_column(facts.peer_heard_at)?.into(),
+        optional_column(facts.peer_verified_at)?.into(),
+        facts.peer_verdict.map(|verdict| verdict.to_vec()).into(),
+        facts
+            .ended_reason
+            .map(|reason| reason.code().to_owned())
+            .into(),
+        optional_column(facts.ended_at)?.into(),
+        contact::duration_to_column(facts.heard_wait)?.into(),
+        optional_column(facts.heard_wait_mark)?.into(),
+    ])
+}
+
 const PAIRING_COLUMNS: &str = "pairing_id, role, contact_id, sealed, invite_id, expires_at, \
-    our_mailbox, peer_mailbox, state, created_at, invite";
+    our_mailbox, peer_mailbox, state, created_at, invite, expect_address, expect_key, reply, \
+    cancelled_at";
 
 impl SqliteRepos<'_> {
     fn contact_where(
@@ -1694,6 +1754,13 @@ impl SqliteRepos<'_> {
             state: decode_code(&state, PairingState::from_code, record, "state")?,
             created_at: timestamp_from_column(row.get(9)?, record, "created at")?,
             invite: row.get(10)?,
+            expect_address: row.get(11)?,
+            expect_key: row
+                .get::<_, Option<Vec<u8>>>(12)?
+                .map(|key| fixed(&key, record, "expected key"))
+                .transpose()?,
+            reply: row.get(13)?,
+            cancelled_at: optional_time(row.get(14)?, record, "cancelled at")?,
         })
     }
 
@@ -1837,6 +1904,7 @@ impl ContactRepository for SqliteRepos<'_> {
             contact.sas.map(|sas| sas.to_vec()).into(),
             contact.own_card.clone().into(),
         ]);
+        values.extend(facts_params(&contact.facts)?);
         self.conn.execute(
             &upsert("contacts", CONTACT_COLUMNS, "contact_id"),
             rusqlite::params_from_iter(values),
@@ -2047,14 +2115,29 @@ impl ContactRepository for SqliteRepos<'_> {
                 record: Record::PendingPairing,
             });
         }
-        let stored = self.exists(
-            "SELECT EXISTS (SELECT 1 FROM pairings WHERE pairing_id = ?1)",
+        let was_cancelled: Option<bool> = self.first(
+            "SELECT cancelled_at IS NOT NULL FROM pairings WHERE pairing_id = ?1",
             [id],
+            |row| Ok(row.get::<_, bool>(0)?),
         )?;
-        if !stored && self.count("SELECT COUNT(*) FROM pairings", [])? >= MAX_PENDING_PAIRINGS {
-            return Err(StoreError::ContactCapReached {
-                cap: ContactCap::PendingPairings,
-            });
+        let cancelled = pairing.cancelled_at.is_some();
+        if was_cancelled != Some(cancelled) {
+            let (sql, cap) = if cancelled {
+                (
+                    "SELECT COUNT(*) FROM pairings WHERE cancelled_at IS NOT NULL",
+                    MAX_CANCELLED_PAIRINGS,
+                )
+            } else {
+                (
+                    "SELECT COUNT(*) FROM pairings WHERE cancelled_at IS NULL",
+                    MAX_PENDING_PAIRINGS,
+                )
+            };
+            if self.count(sql, [])? >= cap {
+                return Err(StoreError::ContactCapReached {
+                    cap: ContactCap::PendingPairings,
+                });
+            }
         }
         let sealed = contact::seal_secrets(self.key, pairing)?;
         self.conn.execute(
@@ -2071,6 +2154,10 @@ impl ContactRepository for SqliteRepos<'_> {
                 pairing.state.code(),
                 timestamp_to_column(pairing.created_at)?,
                 pairing.invite,
+                pairing.expect_address,
+                pairing.expect_key.map(|key| key.to_vec()),
+                pairing.reply,
+                optional_column(pairing.cancelled_at)?,
             ],
         )?;
         Ok(())
@@ -2287,4 +2374,224 @@ impl ContactRepository for SqliteRepos<'_> {
             [timestamp_to_column(cutoff)?],
         )?)
     }
+
+    fn contacts_by_payments_key(
+        &self,
+        key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<Vec<ContactRecord>, StoreError> {
+        self.contact_where("payments_key = ?1", [&key[..]])
+    }
+
+    fn put_pair_request(&mut self, request: &PairRequest) -> Result<(), StoreError> {
+        contact::check_pair_request(request)?;
+        self.conn.execute(
+            &upsert("pair_requests", PAIR_REQUEST_COLUMNS, "sender_key"),
+            params![
+                &request.sender_key[..],
+                request.sender_address,
+                &request.invite_id[..],
+                request.invite,
+                timestamp_to_column(request.expires_at)?,
+                timestamp_to_column(request.received_at)?,
+                optional_column(request.dismissed_at)?,
+                optional_column(request.answered_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn pair_request(
+        &self,
+        sender_key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<Option<PairRequest>, StoreError> {
+        self.first(
+            &format!("SELECT {PAIR_REQUEST_COLUMNS} FROM pair_requests WHERE sender_key = ?1"),
+            [&sender_key[..]],
+            decode_pair_request,
+        )
+    }
+
+    fn pair_request_by_invite(
+        &self,
+        invite_id: &[u8; INVITE_ID_LEN],
+    ) -> Result<Option<PairRequest>, StoreError> {
+        self.first(
+            &format!(
+                "SELECT {PAIR_REQUEST_COLUMNS} FROM pair_requests WHERE invite_id = ?1 \
+                 ORDER BY received_at"
+            ),
+            [&invite_id[..]],
+            decode_pair_request,
+        )
+    }
+
+    fn pair_requests(&self) -> Result<Vec<PairRequest>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {PAIR_REQUEST_COLUMNS} FROM pair_requests ORDER BY received_at, sender_key"
+            ),
+            [],
+            decode_pair_request,
+        )
+    }
+
+    fn delete_pair_request(
+        &mut self,
+        sender_key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<bool, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM pair_requests WHERE sender_key = ?1",
+            [&sender_key[..]],
+        )? > 0)
+    }
+
+    fn enqueue_status_notice(
+        &mut self,
+        notice: &StatusNotice,
+    ) -> Result<StatusNoticeId, StoreError> {
+        contact::check_status_notice(notice)?;
+        self.conn.execute(
+            "INSERT INTO contact_status_out (contact_id, kind, payload, destination, attempts, \
+                 next_try_at, created_at, expires_at, delivered_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            status_params(notice)?,
+        )?;
+        let id = self.conn.last_insert_rowid();
+        Ok(StatusNoticeId(u64::try_from(id).map_err(|_| {
+            StoreError::OutOfRange {
+                field: "status notice id",
+            }
+        })?))
+    }
+
+    fn update_status_notice(
+        &mut self,
+        id: StatusNoticeId,
+        notice: &StatusNotice,
+    ) -> Result<(), StoreError> {
+        contact::check_status_notice(notice)?;
+        let [
+            contact_id,
+            kind,
+            payload,
+            destination,
+            attempts,
+            next,
+            created,
+            expires,
+            delivered,
+        ] = status_params(notice)?;
+        let changed = self.conn.execute(
+            "UPDATE contact_status_out SET contact_id = ?1, kind = ?2, payload = ?3, \
+                 destination = ?4, attempts = ?5, next_try_at = ?6, created_at = ?7, \
+                 expires_at = ?8, delivered_at = ?9 WHERE id = ?10",
+            params![
+                contact_id,
+                kind,
+                payload,
+                destination,
+                attempts,
+                next,
+                created,
+                expires,
+                delivered,
+                status_id_column(id)?
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound {
+                record: Record::StatusNotice,
+            });
+        }
+        Ok(())
+    }
+
+    fn due_status_notices(&self, now: Timestamp) -> Result<Vec<StoredStatusNotice>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {STATUS_COLUMNS} FROM contact_status_out \
+                 WHERE delivered_at IS NULL AND next_try_at <= ?1 ORDER BY next_try_at, id"
+            ),
+            [timestamp_to_column(now)?],
+            decode_status_notice,
+        )
+    }
+
+    fn status_notices(&self, contact: ContactId) -> Result<Vec<StoredStatusNotice>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {STATUS_COLUMNS} FROM contact_status_out WHERE contact_id = ?1 ORDER BY id"
+            ),
+            [&contact.0[..]],
+            decode_status_notice,
+        )
+    }
+
+    fn delete_status_notice(&mut self, id: StatusNoticeId) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM contact_status_out WHERE id = ?1",
+            [status_id_column(id)?],
+        )?;
+        Ok(())
+    }
+}
+
+const PAIR_REQUEST_COLUMNS: &str = "sender_key, sender_address, invite_id, invite, expires_at, \
+    received_at, dismissed_at, answered_at";
+
+fn decode_pair_request(row: &Row<'_>) -> Result<PairRequest, StoreError> {
+    let record = Record::PairRequest;
+    Ok(PairRequest {
+        sender_key: fixed(&row.get::<_, Vec<u8>>(0)?, record, "sender key")?,
+        sender_address: row.get(1)?,
+        invite_id: fixed(&row.get::<_, Vec<u8>>(2)?, record, "invite id")?,
+        invite: row.get(3)?,
+        expires_at: timestamp_from_column(row.get(4)?, record, "expires at")?,
+        received_at: timestamp_from_column(row.get(5)?, record, "received at")?,
+        dismissed_at: optional_time(row.get(6)?, record, "dismissed at")?,
+        answered_at: optional_time(row.get(7)?, record, "answered at")?,
+    })
+}
+
+const STATUS_COLUMNS: &str = "id, contact_id, kind, payload, destination, attempts, next_try_at, \
+    created_at, expires_at, delivered_at";
+
+fn status_id_column(id: StatusNoticeId) -> Result<i64, StoreError> {
+    i64::try_from(id.0).map_err(|_| StoreError::OutOfRange {
+        field: "status notice id",
+    })
+}
+
+fn status_params(notice: &StatusNotice) -> Result<[rusqlite::types::Value; 9], StoreError> {
+    Ok([
+        notice.contact_id.0.to_vec().into(),
+        notice.kind.code().to_owned().into(),
+        notice.payload.clone().into(),
+        notice.destination.clone().into(),
+        i64::from(notice.attempts).into(),
+        timestamp_to_column(notice.next_try_at)?.into(),
+        timestamp_to_column(notice.created_at)?.into(),
+        timestamp_to_column(notice.expires_at)?.into(),
+        optional_column(notice.delivered_at)?.into(),
+    ])
+}
+
+fn decode_status_notice(row: &Row<'_>) -> Result<StoredStatusNotice, StoreError> {
+    let record = Record::StatusNotice;
+    let id: i64 = row.get(0)?;
+    let kind: String = row.get(2)?;
+    Ok(StoredStatusNotice {
+        id: StatusNoticeId(u64::try_from(id).map_err(|_| corrupt(record, "id"))?),
+        notice: StatusNotice {
+            contact_id: ContactId(fixed(&row.get::<_, Vec<u8>>(1)?, record, "contact id")?),
+            kind: decode_code(&kind, StatusKind::from_code, record, "kind")?,
+            payload: row.get(3)?,
+            destination: row.get(4)?,
+            attempts: decode_u32(row.get(5)?, record, "attempts")?,
+            next_try_at: timestamp_from_column(row.get(6)?, record, "next try at")?,
+            created_at: timestamp_from_column(row.get(7)?, record, "created at")?,
+            expires_at: timestamp_from_column(row.get(8)?, record, "expires at")?,
+            delivered_at: optional_time(row.get(9)?, record, "delivered at")?,
+        },
+    })
 }

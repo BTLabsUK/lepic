@@ -926,6 +926,7 @@ fn remade_record(
         imported_from_backup: false,
         created_at: now,
         updated_at: now,
+        facts: new_record.facts.clone(),
     }
 }
 

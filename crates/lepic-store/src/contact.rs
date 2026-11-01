@@ -8,6 +8,7 @@
 //! associated data, so a row copied to another pairing does not open.
 
 use std::fmt;
+use std::time::Duration;
 
 use jiff::Timestamp;
 use uuid::Uuid;
@@ -48,6 +49,16 @@ pub const SAS_LEN: usize = 4;
 
 /// Length of a key in a peer card.
 pub const CARD_KEY_LEN: usize = 32;
+
+/// Length of an Epicbox public key, compressed.
+pub const PAYMENTS_KEY_LEN: usize = 33;
+
+/// Length of the hash of a SAS a verdict carries.
+pub const VERDICT_LEN: usize = 32;
+
+/// Cancelled pairings kept at once to answer late replies; storing one more fails with
+/// [`StoreError::ContactCapReached`]. They do not count toward [`MAX_PENDING_PAIRINGS`].
+pub const MAX_CANCELLED_PAIRINGS: usize = 64;
 
 /// Which cap refused a contact or a pairing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +131,20 @@ stored_enum! {
 }
 
 stored_enum! {
+    /// Why a pairing ended. An ended record is kept, and never counts as paired.
+    pub enum PairingEndReason {
+        /// This side found the SAS check did not match.
+        Mismatch => "mismatch",
+        /// The contact reported that the SAS check did not match.
+        PeerMismatch => "peer-mismatch",
+        /// The contact removed the pairing.
+        Unpaired => "unpaired",
+        /// The contact's wallet was never heard from.
+        NeverFinished => "never-finished",
+    }
+}
+
+stored_enum! {
     /// Whether messages to the contact are sealed.
     pub enum SealMode {
         On => "on",
@@ -151,6 +176,30 @@ impl fmt::Debug for PeerCard {
             .field("claimed_name", &self.claimed_name)
             .finish_non_exhaustive()
     }
+}
+
+/// What a pairing learned about the contact after it was stored. The record's state never
+/// says Waiting or Ended: those are derived from these facts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PairingFacts {
+    /// The contact's payments address, `key@relay`, only from a verified address proof.
+    pub payments_address: Option<String>,
+    /// The key of `payments_address`, for lookups.
+    pub payments_key: Option<[u8; PAYMENTS_KEY_LEN]>,
+    /// The features the contact claimed in this pairing; 0 when none were received.
+    pub peer_features: u32,
+    /// When an authenticated message of the contact in this pairing first arrived.
+    pub peer_heard_at: Option<Timestamp>,
+    /// When the contact's match verdict was accepted.
+    pub peer_verified_at: Option<Timestamp>,
+    /// The SAS hash the accepted match verdict carried.
+    pub peer_verdict: Option<[u8; VERDICT_LEN]>,
+    pub ended_reason: Option<PairingEndReason>,
+    pub ended_at: Option<Timestamp>,
+    /// Collecting time counted while the contact is unheard.
+    pub heard_wait: Duration,
+    /// The last collect that reached the pairing's home relay while it is unheard.
+    pub heard_wait_mark: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +234,7 @@ pub struct ContactRecord {
     pub imported_from_backup: bool,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    pub facts: PairingFacts,
 }
 
 /// The home relay a contact's mailboxes lived on before it moved, kept until `until`.
@@ -286,6 +336,86 @@ pub struct PendingPairing {
     pub created_at: Timestamp,
     /// The invite in its exact bytes: the inviter's own, or the one the invitee answered.
     pub invite: Vec<u8>,
+    /// The payments address the other side must prove, `key@relay`.
+    pub expect_address: Option<String>,
+    /// The key of `expect_address`.
+    pub expect_key: Option<[u8; PAYMENTS_KEY_LEN]>,
+    /// The invitee's reply envelope, posted again on each collect until it is answered.
+    pub reply: Option<Vec<u8>>,
+    /// Set when the inviter cancelled: the row is kept until the invite expires, to refuse late
+    /// replies.
+    pub cancelled_at: Option<Timestamp>,
+}
+
+/// A pairing request another wallet sent to this wallet's payments address, kept one per
+/// sender key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PairRequest {
+    pub sender_key: [u8; PAYMENTS_KEY_LEN],
+    /// `key@relay` as the relay authenticated the sender.
+    pub sender_address: String,
+    pub invite_id: [u8; INVITE_ID_LEN],
+    /// The invite in its exact bytes.
+    pub invite: Vec<u8>,
+    pub expires_at: Timestamp,
+    pub received_at: Timestamp,
+    pub dismissed_at: Option<Timestamp>,
+    pub answered_at: Option<Timestamp>,
+}
+
+impl fmt::Debug for PairRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PairRequest")
+            .field("expires_at", &self.expires_at)
+            .field("received_at", &self.received_at)
+            .field("dismissed_at", &self.dismissed_at)
+            .field("answered_at", &self.answered_at)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PairRequest {
+    /// Neither dismissed nor answered.
+    pub fn live(&self) -> bool {
+        self.dismissed_at.is_none() && self.answered_at.is_none()
+    }
+}
+
+stored_enum! {
+    /// What a status notice tells a contact about its pairing.
+    pub enum StatusKind {
+        Finished => "finished",
+        Match => "match",
+        Mismatch => "mismatch",
+        Unpaired => "unpaired",
+    }
+}
+
+/// Local id of a stored status notice, assigned by the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StatusNoticeId(pub u64);
+
+/// A pairing status notice that must reach a contact's mailbox. It outlives the contact
+/// record, so a verdict still goes out after the record was removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusNotice {
+    pub contact_id: ContactId,
+    pub kind: StatusKind,
+    /// The armored envelope.
+    pub payload: String,
+    pub destination: String,
+    pub attempts: u32,
+    pub next_try_at: Timestamp,
+    pub created_at: Timestamp,
+    /// Dropped without delivery from then on.
+    pub expires_at: Timestamp,
+    pub delivered_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredStatusNotice {
+    pub id: StatusNoticeId,
+    pub notice: StatusNotice,
 }
 
 /// Local id of a stored outbox entry, assigned by the store.
@@ -390,7 +520,7 @@ pub trait ContactRepository {
     /// Inserts the pairing, or replaces the one with the same id. Fails with
     /// [`StoreError::Duplicate`] when another pairing has the same invite id, and with
     /// [`StoreError::ContactCapReached`] when a new pairing would pass
-    /// [`MAX_PENDING_PAIRINGS`].
+    /// [`MAX_PENDING_PAIRINGS`], or a newly cancelled one [`MAX_CANCELLED_PAIRINGS`].
     fn put_pending_pairing(&mut self, pairing: &PendingPairing) -> Result<(), StoreError>;
 
     fn pending_pairing(&self, id: PairingId) -> Result<Option<PendingPairing>, StoreError>;
@@ -468,6 +598,56 @@ pub trait ContactRepository {
     /// recorded before. Deleting the transaction deletes the link. Fails with
     /// [`StoreError::UnknownTransaction`] when no entry has the id.
     fn set_tx_contact(&mut self, tx_id: TxId, contact: ContactId) -> Result<(), StoreError>;
+
+    /// The contacts whose proven payments key is `key`, oldest first.
+    fn contacts_by_payments_key(
+        &self,
+        key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<Vec<ContactRecord>, StoreError>;
+
+    /// Inserts the request, or replaces the one from the same sender key.
+    fn put_pair_request(&mut self, request: &PairRequest) -> Result<(), StoreError>;
+
+    fn pair_request(
+        &self,
+        sender_key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<Option<PairRequest>, StoreError>;
+
+    fn pair_request_by_invite(
+        &self,
+        invite_id: &[u8; INVITE_ID_LEN],
+    ) -> Result<Option<PairRequest>, StoreError>;
+
+    /// Every stored request, oldest received first.
+    fn pair_requests(&self) -> Result<Vec<PairRequest>, StoreError>;
+
+    /// Removes the request of the sender key, and returns whether it was stored.
+    fn delete_pair_request(
+        &mut self,
+        sender_key: &[u8; PAYMENTS_KEY_LEN],
+    ) -> Result<bool, StoreError>;
+
+    /// Stores a new status notice under the next free id.
+    fn enqueue_status_notice(
+        &mut self,
+        notice: &StatusNotice,
+    ) -> Result<StatusNoticeId, StoreError>;
+
+    /// Fails with [`StoreError::NotFound`] when no notice has the id.
+    fn update_status_notice(
+        &mut self,
+        id: StatusNoticeId,
+        notice: &StatusNotice,
+    ) -> Result<(), StoreError>;
+
+    /// Undelivered notices whose next try is at or before `now`, most overdue first.
+    fn due_status_notices(&self, now: Timestamp) -> Result<Vec<StoredStatusNotice>, StoreError>;
+
+    /// The contact's notices, by id.
+    fn status_notices(&self, contact: ContactId) -> Result<Vec<StoredStatusNotice>, StoreError>;
+
+    /// Removes the notice if it is stored.
+    fn delete_status_notice(&mut self, id: StatusNoticeId) -> Result<(), StoreError>;
 }
 
 /// Rejects timestamps the SQLite backend could not hold, so both backends accept the same data.
@@ -477,9 +657,49 @@ pub(crate) fn check_contact(contact: &ContactRecord) -> Result<(), StoreError> {
     }
     timestamp_to_column(contact.created_at)?;
     timestamp_to_column(contact.updated_at)?;
-    for time in [contact.verified_at, contact.last_sealed_in]
+    let facts = &contact.facts;
+    for time in [
+        contact.verified_at,
+        contact.last_sealed_in,
+        facts.peer_heard_at,
+        facts.peer_verified_at,
+        facts.ended_at,
+        facts.heard_wait_mark,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        timestamp_to_column(time)?;
+    }
+    duration_to_column(facts.heard_wait)?;
+    if facts.payments_address.is_some() != facts.payments_key.is_some() {
+        return Err(StoreError::OutOfRange {
+            field: "payments address",
+        });
+    }
+    Ok(())
+}
+
+/// A duration as the nanoseconds a column holds.
+pub(crate) fn duration_to_column(duration: Duration) -> Result<i64, StoreError> {
+    i64::try_from(duration.as_nanos()).map_err(|_| StoreError::OutOfRange { field: "duration" })
+}
+
+pub(crate) fn check_pair_request(request: &PairRequest) -> Result<(), StoreError> {
+    for time in [request.expires_at, request.received_at]
         .into_iter()
-        .flatten()
+        .chain(request.dismissed_at)
+        .chain(request.answered_at)
+    {
+        timestamp_to_column(time)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn check_status_notice(notice: &StatusNotice) -> Result<(), StoreError> {
+    for time in [notice.next_try_at, notice.created_at, notice.expires_at]
+        .into_iter()
+        .chain(notice.delivered_at)
     {
         timestamp_to_column(time)?;
     }
@@ -528,6 +748,14 @@ pub(crate) fn check_mailbox(mailbox: &ContactMailbox) -> Result<(), StoreError> 
 pub(crate) fn check_pairing(pairing: &PendingPairing) -> Result<(), StoreError> {
     timestamp_to_column(pairing.expires_at)?;
     timestamp_to_column(pairing.created_at)?;
+    if let Some(time) = pairing.cancelled_at {
+        timestamp_to_column(time)?;
+    }
+    if pairing.expect_address.is_some() != pairing.expect_key.is_some() {
+        return Err(StoreError::OutOfRange {
+            field: "expected address",
+        });
+    }
     Ok(())
 }
 
@@ -666,6 +894,10 @@ mod tests {
             state: PairingState::PendingInvite,
             created_at: Timestamp::from_second(1).unwrap(),
             invite: vec![8; 40],
+            expect_address: None,
+            expect_key: None,
+            reply: None,
+            cancelled_at: None,
         };
         let sealed = seal_secrets(&key, &pairing).unwrap();
         let opened = open_secrets(&key, pairing.pairing_id, &pairing.invite_id, &sealed).unwrap();
