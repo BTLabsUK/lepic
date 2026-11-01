@@ -261,7 +261,7 @@ fn confirm_mined_release(
     tx_id: TxId,
     account: AccountIndex,
     released: &ReleasedSend,
-    phase: WatchPhase,
+    phase: StoredPhase,
     height: Height,
     now: Timestamp,
 ) -> Result<Option<StateChange>, WalletError> {
@@ -270,10 +270,13 @@ fn confirm_mined_release(
         .is_some_and(|entry| matches!(entry.state, TxState::Cancelled | TxState::Expired));
     let still_watched = repos
         .tx_watch(tx_id)?
-        .is_some_and(|watch| watch.phase == phase.stored());
+        .is_some_and(|watch| watch.phase == phase);
     if !still_ended || !still_watched {
         return Ok(None);
     }
+    // The inputs first: an entry of another wallet's spend they leave may hold the change a
+    // scan credited to it, and becomes the entry the change is then taken from.
+    claim_inputs(repos, codecs, tx_id)?;
     for change in &released.change {
         match repos.output(change.commitment.as_bytes())? {
             None => repos.put_output(&released.change_record(change, account, tx_id, height))?,
@@ -283,21 +286,62 @@ fn confirm_mined_release(
     let change = confirm_released(repos, tx_id, now)?;
     repos.set_confirmed_height(tx_id, height)?;
     repos.delete_tx_watch(tx_id)?;
-    undo_spends_by_another_wallet(repos, codecs, tx_id)?;
     Ok(change)
 }
 
-/// Takes the inputs of `tx_id`, a send the chain mined after it ended here, out of any entry of
-/// another wallet's spend: a refresh that found them gone before it saw the send mined took
-/// them for one, and the send itself debits them.
-fn undo_spends_by_another_wallet(
+/// Confirms the cancelled or expired transaction whose watched output `commitment` a scan
+/// found on chain at `height`, before the scan stores it, so the output is stored as that
+/// transaction's and not as a receive of its own: only that transaction creates it. Run it
+/// for an output the store does not hold; afterwards the store holds it when it was watched.
+pub(crate) fn confirm_found_output(
+    repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
+    commitment: &Commitment,
+    height: Height,
+    now: Timestamp,
+) -> Result<Option<StateChange>, WalletError> {
+    for watched in released_sends(repos)? {
+        let watches_it = watched
+            .send
+            .change
+            .iter()
+            .any(|change| change.commitment == *commitment);
+        if !watches_it {
+            continue;
+        }
+        debug!(tx_id = %watched.tx_id, height = %height, "ended transaction found by a scan");
+        return confirm_mined_release(
+            repos,
+            codecs,
+            watched.tx_id,
+            watched.account,
+            &watched.send,
+            watched.phase.stored(),
+            height,
+            now,
+        );
+    }
+    Ok(None)
+}
+
+/// Records the inputs of `tx_id`, a send the chain mined after it ended here, as spent by it:
+/// out of any entry of another wallet's spend, which a refresh that found them gone before it
+/// saw the send mined took them for, and away from a later send of this wallet that locked
+/// them again and can now never be mined.
+fn claim_inputs(
     repos: &mut dyn Repositories,
     codecs: &CodecRegistry,
     tx_id: TxId,
 ) -> Result<(), StoreError> {
-    let Some(slate_id) = repos.transaction(tx_id)?.and_then(|entry| entry.slate_id) else {
+    let Some(entry) = repos.transaction(tx_id)? else {
         return Ok(());
     };
+    let Some(slate_id) = entry.slate_id else {
+        return Ok(());
+    };
+    // The incoming entry of a send to the wallet itself shares the slate; the outgoing one
+    // spent the inputs.
+    let spender = entry.direction == TxDirection::Outgoing;
     let stages = [
         SlateStage::Standard3,
         SlateStage::Standard1,
@@ -316,6 +360,13 @@ fn undo_spends_by_another_wallet(
     for input in slate.inputs() {
         if let Some(output) = repos.output(input.commitment.as_bytes())? {
             other_wallet::revived(repos, &output)?;
+            if spender {
+                repos.put_output(&OutputRecord {
+                    status: OutputStatus::Spent,
+                    tx: Some(tx_id),
+                    ..output
+                })?;
+            }
         }
     }
     Ok(())
@@ -641,7 +692,7 @@ where
                             watched.tx_id,
                             watched.account,
                             &watched.send,
-                            watched.phase,
+                            watched.phase.stored(),
                             *at,
                             now,
                         )?);

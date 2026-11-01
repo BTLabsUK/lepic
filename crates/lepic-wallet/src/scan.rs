@@ -405,8 +405,11 @@ where
     /// Scans the chain from `options.start` to the node's tip for this wallet's outputs and
     /// reconciles the store with what it finds: missing outputs are restored with a confirmed
     /// incoming transaction each, outputs stored as spent but still unspent are revived and their
-    /// transactions cancelled. Emits [`Event::Sync`] after each page and
-    /// [`Event::Transaction`] for every cancelled transaction.
+    /// transactions cancelled. A missing output that a cancelled or expired transaction dropped
+    /// and a refresh still watches for confirms that transaction instead, as
+    /// [`Wallet::refresh`] does when it finds it, and is stored as its own. Emits
+    /// [`Event::Sync`] after each page and [`Event::Transaction`] for every cancelled or
+    /// confirmed transaction.
     ///
     /// An output stored as spent is revived only when the node, asked for it again, still holds
     /// it. The tip must be plausible as [`Wallet::refresh`] checks it, no output may be above
@@ -983,7 +986,20 @@ fn store_found(
     };
     for output in found {
         outcome.found = outcome.found.saturating_add(1);
-        match repos.output(output.id.commitment.as_bytes())? {
+        let mut stored = repos.output(output.id.commitment.as_bytes())?;
+        if stored.is_none() {
+            // An output a cancelled or expired transaction dropped and still watches for is
+            // that transaction's, mined after all, never a receive of its own.
+            outcome.changes.extend(crate::release::confirm_found_output(
+                repos,
+                ending.codecs,
+                &output.id.commitment,
+                output.height,
+                now,
+            )?);
+            stored = repos.output(output.id.commitment.as_bytes())?;
+        }
+        match stored {
             Some(stored) => {
                 let revivable = revivable.contains(&output.id.commitment);
                 reconcile(

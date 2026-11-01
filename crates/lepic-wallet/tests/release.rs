@@ -97,6 +97,7 @@ fn some_proof() -> lepic_crypto::RangeProof {
 /// the peer answered.
 struct Releasing {
     harness: Harness,
+    peer: lepic_transport::loopback::LoopbackTransport,
     clock: MovableClock,
     wallet: TestWallet,
     store: TestStore,
@@ -202,6 +203,7 @@ impl Releasing {
             .unwrap()
             .reply;
         Self {
+            peer,
             harness,
             clock,
             wallet,
@@ -801,13 +803,47 @@ fn refuses_a_cancel_when_the_node_pool_cannot_be_asked() {
 }
 
 both_stores!(a_late_confirmation_takes_over_the_change_a_scan_restored_first);
+/// A scan of an earlier version stored the change of the released send under an entry of its
+/// own, as a scan does for an output no record explains; a scan now confirms the send instead.
 fn a_late_confirmation_takes_over_the_change_a_scan_restored_first() {
     let releasing = Releasing::posted().made_releasable();
     let change_before = releasing.change();
     releasing.release().unwrap();
     releasing.mined_elsewhere_at(RELEASABLE_FROM);
     let sends = releasing.history().len();
-    support::complete_restore_scan(&releasing.harness.runtime, &releasing.wallet);
+    releasing
+        .store
+        .write(|repos| {
+            let change = &change_before[0];
+            let found = repos.insert_transaction(&lepic_store::TransactionEntry {
+                account: ACCOUNT,
+                direction: lepic_store::TxDirection::Incoming,
+                state: TxState::Confirmed,
+                slate_id: None,
+                transport: None,
+                amount_credited: change.amount,
+                amount_debited: Amount::ZERO,
+                fee: None,
+                created_at: fixed_time(),
+                updated_at: fixed_time(),
+            })?;
+            repos.set_confirmed_height(found, Height::new(RELEASABLE_FROM))?;
+            repos.put_scan_found(
+                found,
+                &lepic_store::ScanFoundRecord {
+                    output: Some(*change.commitment()),
+                    during: Some(lepic_store::FoundDuring::Rescan),
+                    dated_by_block: false,
+                },
+            )?;
+            repos.put_output(&OutputRecord {
+                status: OutputStatus::Unspent,
+                height: Height::new(RELEASABLE_FROM),
+                tx: Some(found),
+                ..change.clone()
+            })
+        })
+        .unwrap();
     let restored = releasing.change();
     assert_eq!(restored.len(), 1, "the scan restores the change");
     assert_ne!(restored[0].tx, Some(releasing.tx_id));
@@ -904,4 +940,304 @@ fn a_tip_held_as_pending_does_not_end_the_watch() {
     releasing.refresh();
 
     assert_eq!(releasing.state(), TxState::Confirmed);
+}
+
+impl Releasing {
+    /// The final transaction reached a miner although the node here refused it: it is mined
+    /// at `height` from the final slate, its inputs spent, its outputs and kernel on chain, and
+    /// the node's tip is there.
+    fn final_slate_mined_at(&self, height: u64) {
+        let slate = self.final_slate();
+        let mined = self.kernel_at(height);
+        self.chain_reaches(height);
+        self.harness.node.update_chain(|chain| {
+            for output in &mut chain.outputs {
+                if slate
+                    .inputs()
+                    .iter()
+                    .any(|input| input.commitment == output.commitment)
+                {
+                    output.spent = true;
+                }
+            }
+            for (position, output) in slate.outputs().iter().enumerate() {
+                chain.outputs.push(ChainOutput {
+                    commitment: output.commitment,
+                    features: output.features,
+                    proof: output.proof.clone(),
+                    height: Height::new(height),
+                    mmr_index: 2 + position as u64,
+                    spent: false,
+                });
+            }
+            chain.kernels.push(mined);
+        });
+    }
+
+    /// A refresh and the update scan that follows it on the app's refresh path.
+    fn refresh_and_scan(&self) {
+        self.refresh();
+        self.harness.block_on(self.wallet.refresh_scan()).unwrap();
+    }
+
+    /// The send confirmed at `height`, alone in the history with what it spent and kept:
+    /// its input spent by it, its change its own, no entry found by a scan or of another
+    /// wallet.
+    fn assert_confirmed_once(&self, height: u64, change_before: &[OutputRecord]) {
+        assert_eq!(self.state(), TxState::Confirmed);
+        let history = self.history();
+        assert_eq!(
+            history
+                .iter()
+                .map(|details| (details.transaction.id, details.origin))
+                .collect::<Vec<_>>(),
+            vec![(self.tx_id, lepic_wallet::legacy_history::TxOrigin::Wallet)],
+            "one row for the payment"
+        );
+        let details = &history[0];
+        assert_eq!(details.confirmed_height, Some(Height::new(height)));
+        let change = self.change();
+        assert_eq!(change.len(), 1, "{change:?}");
+        assert_eq!(change[0].id, change_before[0].id);
+        assert_eq!(change[0].amount, change_before[0].amount);
+        assert_eq!(change[0].tx, Some(self.tx_id), "the change is the send's");
+        assert_eq!(change[0].status, OutputStatus::Unspent);
+        let funding = self
+            .outputs()
+            .into_iter()
+            .find(|output| output.id == self.funding.id)
+            .unwrap();
+        assert_eq!(funding.status, OutputStatus::Spent);
+        assert_eq!(
+            funding.tx,
+            Some(self.tx_id),
+            "the input is spent by the send"
+        );
+    }
+}
+
+both_stores!(a_send_cancelled_too_late_comes_back_confirmed_with_its_change);
+/// The node here refused the post, the send was cancelled, and another node had relayed it to
+/// a miner after all.
+fn a_send_cancelled_too_late_comes_back_confirmed_with_its_change() {
+    let releasing = Releasing::refused();
+    let change_before = releasing.change();
+    assert_eq!(change_before.len(), 1);
+    releasing.cancel().unwrap();
+    assert_eq!(releasing.state(), TxState::Cancelled);
+    assert!(releasing.change().is_empty(), "the cancel drops the change");
+    let mined_at = TIP + 2;
+    releasing.final_slate_mined_at(mined_at);
+
+    releasing.refresh_and_scan();
+    releasing.refresh_and_scan();
+
+    releasing.assert_confirmed_once(mined_at, &change_before);
+
+    support::complete_restore_scan(&releasing.harness.runtime, &releasing.wallet);
+    releasing.refresh_and_scan();
+
+    releasing.assert_confirmed_once(mined_at, &change_before);
+}
+
+both_stores!(a_scan_that_finds_the_change_of_a_send_cancelled_too_late_confirms_the_send);
+/// The update scan after a refresh sees the block first: the change it finds is the cancelled
+/// send's, not a receive by another wallet.
+fn a_scan_that_finds_the_change_of_a_send_cancelled_too_late_confirms_the_send() {
+    let releasing = Releasing::refused();
+    let change_before = releasing.change();
+    releasing.cancel().unwrap();
+    releasing.refresh_and_scan();
+    let mined_at = TIP + 2;
+    releasing.final_slate_mined_at(mined_at);
+    let mut events = releasing.wallet.subscribe();
+
+    releasing
+        .harness
+        .block_on(releasing.wallet.refresh_scan())
+        .unwrap();
+
+    releasing.assert_confirmed_once(mined_at, &change_before);
+    assert_eq!(
+        transaction_events(&mut events),
+        vec![(TxState::Cancelled, TxState::Confirmed)]
+    );
+    releasing.refresh_and_scan();
+    releasing.assert_confirmed_once(mined_at, &change_before);
+}
+
+both_stores!(a_restore_scan_that_finds_the_change_of_a_send_cancelled_too_late_confirms_the_send);
+fn a_restore_scan_that_finds_the_change_of_a_send_cancelled_too_late_confirms_the_send() {
+    let releasing = Releasing::refused();
+    let change_before = releasing.change();
+    releasing.cancel().unwrap();
+    let mined_at = TIP + 2;
+    releasing.final_slate_mined_at(mined_at);
+
+    support::complete_restore_scan(&releasing.harness.runtime, &releasing.wallet);
+
+    releasing.assert_confirmed_once(mined_at, &change_before);
+    releasing.refresh_and_scan();
+    releasing.assert_confirmed_once(mined_at, &change_before);
+}
+
+impl Releasing {
+    /// Sends again to the peer, answered, finalized and posted, returning the new send.
+    fn send_again(&self) -> TxId {
+        let sent = self
+            .harness
+            .block_on(self.wallet.send(
+                SendRequest {
+                    minimum_confirmations: 1,
+                    strategy: SelectionStrategy::Smallest,
+                    ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+                },
+                Delivery::Deliver {
+                    transport: LOOPBACK,
+                    to: Destination::new(PEER.to_owned()),
+                },
+            ))
+            .unwrap();
+        let s1 = self
+            .harness
+            .block_on(self.peer.next_envelope())
+            .unwrap()
+            .unwrap()
+            .wire()
+            .clone();
+        let s2 = Receiver::new(RECEIVER_MNEMONIC, TIP)
+            .receive(FILE, s1.as_text().unwrap(), None)
+            .unwrap()
+            .reply;
+        self.harness
+            .block_on(self.wallet.finalize(LOOPBACK, &s2, Propagation::Stem))
+            .unwrap();
+        sent.tx_id
+    }
+
+    fn state_of(&self, tx_id: TxId) -> TxState {
+        self.store
+            .read(|repos| Ok::<_, StoreError>(repos.transaction(tx_id)?.unwrap().state))
+            .unwrap()
+    }
+}
+
+both_stores!(a_send_cancelled_too_late_takes_its_input_back_from_the_send_that_reused_it);
+/// The send was cancelled, its coin went into a second send, and the first is mined: the coin
+/// is spent by the first, and the second, which can never be mined, ends.
+fn a_send_cancelled_too_late_takes_its_input_back_from_the_send_that_reused_it() {
+    let releasing = Releasing::refused();
+    let change_before = releasing.change();
+    releasing.cancel().unwrap();
+    let resend = releasing.send_again();
+    assert_eq!(releasing.state_of(resend), TxState::Posted);
+    let mined_at = TIP + 2;
+    releasing.final_slate_mined_at(mined_at);
+
+    releasing.refresh_and_scan();
+
+    assert_eq!(releasing.state(), TxState::Confirmed);
+    assert_eq!(releasing.state_of(resend), TxState::Cancelled);
+    let funding = releasing
+        .outputs()
+        .into_iter()
+        .find(|output| output.id == releasing.funding.id)
+        .unwrap();
+    assert_eq!(funding.status, OutputStatus::Spent);
+    assert_eq!(funding.tx, Some(releasing.tx_id), "spent by the mined send");
+    let unspent: Vec<OutputRecord> = releasing
+        .outputs()
+        .into_iter()
+        .filter(|output| output.status != OutputStatus::Spent)
+        .collect();
+    assert_eq!(unspent.len(), 1, "{unspent:?}");
+    assert_eq!(unspent[0].id, change_before[0].id);
+    assert_eq!(unspent[0].tx, Some(releasing.tx_id));
+    assert!(
+        releasing
+            .history()
+            .iter()
+            .all(|details| details.origin == lepic_wallet::legacy_history::TxOrigin::Wallet),
+        "no entry of another wallet"
+    );
+}
+
+both_stores!(the_other_install_shows_a_send_cancelled_too_late_as_one_spend_with_its_change);
+/// Another install of the phrase, which never saw the send, shows it as the one spend by
+/// another wallet the chain shows, its change folded in, as the sending install shows it as
+/// its own send.
+fn the_other_install_shows_a_send_cancelled_too_late_as_one_spend_with_its_change() {
+    let releasing = Releasing::refused();
+    let change_before = releasing.change();
+    let twin_side = Harness::new();
+    let twin = Wallet::new(
+        lepic_wallet::WalletConfig {
+            data_dir: PathBuf::from("/twin-data"),
+            ..twin_side.config(Network::Floonet)
+        },
+        Ports {
+            node: releasing.harness.node.client(),
+            clock: Arc::new(releasing.clock.clone()),
+            ..twin_side.ports(TestVault::default())
+        },
+    )
+    .unwrap();
+    twin_side
+        .block_on(twin.restore(password("twin"), SENDER_MNEMONIC))
+        .unwrap();
+    support::complete_restore_scan(&twin_side.runtime, &twin);
+    let seed = lepic_keychain::Seed::from_mnemonic(SENDER_MNEMONIC).unwrap();
+    let twin_store = twin_side
+        .stores
+        .open(
+            &PathBuf::from("/twin-data"),
+            context_key(&seed),
+            &lepic_wallet::store_key(&seed).unwrap(),
+        )
+        .unwrap();
+    // The twin holds the funding output too, as a plain one: a coinbase output this young is
+    // spent by nobody, so the chain check would never take it for a spend elsewhere.
+    twin_store
+        .write(|repos| {
+            repos.put_account(&AccountRecord {
+                index: ACCOUNT,
+                label: "default".to_owned(),
+                next_child: NEXT_CHILD,
+            })?;
+            repos.put_output(&OutputRecord {
+                id: lepic_primitives::output::OutputIdentifier::new(
+                    OutputFeatures::Plain,
+                    releasing.funding.id.commitment,
+                ),
+                tx: None,
+                ..releasing.funding.clone()
+            })
+        })
+        .unwrap();
+    let twin_refresh_and_scan = || {
+        twin_side.block_on(twin.refresh()).unwrap();
+        twin_side.block_on(twin.refresh_scan()).unwrap();
+    };
+    twin_refresh_and_scan();
+    releasing.cancel().unwrap();
+    let mined_at = TIP + 2;
+    releasing.final_slate_mined_at(mined_at);
+
+    releasing.refresh_and_scan();
+    twin_refresh_and_scan();
+
+    releasing.assert_confirmed_once(mined_at, &change_before);
+    let history = twin_side.block_on(twin.transactions(ACCOUNT)).unwrap();
+    let spends: Vec<_> = history
+        .iter()
+        .filter(|details| details.origin == lepic_wallet::legacy_history::TxOrigin::OtherWallet)
+        .collect();
+    assert_eq!(spends.len(), 1, "{history:#?}");
+    let entry = &spends[0].transaction.entry;
+    assert_eq!(entry.direction, lepic_store::TxDirection::Outgoing);
+    assert_eq!(entry.amount_debited, releasing.funding.amount);
+    assert_eq!(
+        entry.amount_credited, change_before[0].amount,
+        "the change is the spend's"
+    );
 }

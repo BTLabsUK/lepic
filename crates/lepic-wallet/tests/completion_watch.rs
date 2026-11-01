@@ -543,7 +543,7 @@ fn a_sender_cancel_of_a_finalized_send_keeps_a_watch_that_restores_its_change() 
 }
 
 #[test]
-fn a_late_payment_found_after_the_kernel_watch_takes_over_the_output_a_scan_restored() {
+fn a_scan_that_finds_a_late_payment_after_the_kernel_watch_restores_it() {
     let payment = Payment::answered(None);
     payment.receiver.cancel(payment.receive_tx).unwrap();
     let payment = payment.finalized();
@@ -559,14 +559,8 @@ fn a_late_payment_found_after_the_kernel_watch_takes_over_the_output_a_scan_rest
             .len()
     };
     let before = entries(&payment.receiver);
-    support::complete_restore_scan(&payment.receiver.harness.runtime, &payment.receiver.wallet);
-    assert_eq!(
-        entries(&payment.receiver),
-        before + 1,
-        "the scan adds an entry"
-    );
 
-    payment.receiver.refresh();
+    support::complete_restore_scan(&payment.receiver.harness.runtime, &payment.receiver.wallet);
 
     payment.assert_receive_restored(mined);
     assert_eq!(
@@ -574,6 +568,9 @@ fn a_late_payment_found_after_the_kernel_watch_takes_over_the_output_a_scan_rest
         before,
         "counted once, in the payment"
     );
+    payment.receiver.refresh();
+    payment.assert_receive_restored(mined);
+    assert_eq!(entries(&payment.receiver), before);
 }
 
 #[test]
@@ -994,7 +991,7 @@ fn a_receiver_cancel_after_answering_is_refused_while_the_node_tip_is_implausibl
 }
 
 #[test]
-fn a_late_payment_takes_over_the_output_a_scan_restored_first() {
+fn a_scan_that_finds_a_late_payment_first_restores_it() {
     let payment = Payment::answered(None);
     payment.receiver.cancel(payment.receive_tx).unwrap();
     let payment = payment.finalized();
@@ -1007,22 +1004,16 @@ fn a_late_payment_takes_over_the_output_a_scan_restored_first() {
             .len()
     };
     let before = entries(&payment.receiver);
-    support::complete_restore_scan(&payment.receiver.harness.runtime, &payment.receiver.wallet);
-    let restored = payment.receiver.outputs();
-    assert_eq!(restored.len(), 1, "the scan restores the output");
-    assert_ne!(restored[0].tx, Some(payment.receive_tx));
-    assert_eq!(
-        entries(&payment.receiver),
-        before + 1,
-        "under an entry of its own"
-    );
 
-    payment.receiver.refresh();
+    support::complete_restore_scan(&payment.receiver.harness.runtime, &payment.receiver.wallet);
 
     payment.assert_receive_restored(TIP + 1);
     assert_eq!(
         entries(&payment.receiver),
         before,
-        "the restored entry is dropped"
+        "under the payment, not an entry of its own"
     );
+    payment.receiver.refresh();
+    payment.assert_receive_restored(TIP + 1);
+    assert_eq!(entries(&payment.receiver), before);
 }
