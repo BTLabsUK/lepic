@@ -1894,6 +1894,7 @@ fn decide_reply(
     if expected {
         record.state = ContactState::Verified;
         record.verified_at = Some(now);
+        learn_requests_work(repos, &record, network)?;
     }
     repos.put_contact(&record)?;
     repos.put_contact_mailbox(&paired_mailbox(contact_id, &peer, &own, home_text, onion))?;
@@ -1905,6 +1906,30 @@ fn decide_reply(
     repos.put_pending_pairing(&pending)?;
     repos.put_setting(&confirm_key(pairing_id), &hex(&envelope))?;
     Ok(Decision::Confirm(envelope))
+}
+
+/// Records that pair requests work with the key `record` proved when its invite went out as a
+/// pairing request this wallet sent.
+fn learn_requests_work(
+    repos: &mut dyn Repositories,
+    record: &ContactRecord,
+    network: lepic_primitives::params::Network,
+) -> Result<(), StoreError> {
+    if repos
+        .setting(&request_out_key(record.contact_id))?
+        .is_none()
+    {
+        return Ok(());
+    }
+    let Some(key) = super::status::proven_key(record, network) else {
+        return Ok(());
+    };
+    lepic_wallet::peer_compat::record_works(
+        repos,
+        &key,
+        lepic_epicbox::marker::features::PAIR_REQUESTS,
+        true,
+    )
 }
 
 /// Decides on a reply that came after nA was consumed: the reply that paired, taken again, gets
@@ -2155,6 +2180,13 @@ enum Decision {
 const CONFIRM_PREFIX: &str = "contact.confirm.";
 const CONFIRM_OUT_PREFIX: &str = "contact.confirmout.";
 const REFUSALS_PREFIX: &str = "contact.refusals.";
+const REQUEST_OUT_PREFIX: &str = "contact.requestout.";
+
+/// The setting that marks the invite of the pairing record `contact_id` as one this wallet sent
+/// as a pairing request, until its pairing ends.
+pub(crate) fn request_out_key(contact_id: ContactId) -> String {
+    format!("{REQUEST_OUT_PREFIX}{}", hex(&contact_id.0))
+}
 
 /// Refusals one invite sends at most, so a leaked invite cannot make the inviter post to
 /// mailboxes of the repliers' choosing without end (RFC 0002 C-15).
@@ -2174,6 +2206,9 @@ pub(crate) fn end_pending(
     repos.delete_setting(&confirm_key(pairing_id))?;
     repos.delete_setting(&confirm_out_key(pairing_id))?;
     repos.delete_setting(&refusals_key(pairing_id))?;
+    if let Some(pending) = repos.pending_pairing(pairing_id)? {
+        repos.delete_setting(&request_out_key(pending.contact_id))?;
+    }
     repos.delete_pending_pairing(pairing_id)
 }
 

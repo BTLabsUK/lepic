@@ -21,7 +21,7 @@ mod world;
 use std::time::Duration;
 
 use helpers::{accept, events, invite_request, relays};
-use lepic_epicbox::marker::features::LEPIC_FEATURES;
+use lepic_epicbox::marker::features::{LEPIC_FEATURES, PAIR_REQUESTS};
 use lepic_store::{AccountIndex, ContactState, PeerCompat, WalletStore};
 use lepic_wallet::event::{ContactChange, ContactUpdate};
 use lepic_wallet::{Clock, Event};
@@ -139,6 +139,49 @@ fn a_request_to_a_proven_contact_pairs_both_sides_verified() {
             .is_empty(),
         "an answered request is no longer listed"
     );
+    // The answer shows that pair requests work with Ben's key.
+    assert_ne!(works(anna, ben) & PAIR_REQUESTS, 0);
+}
+
+fn works(party: &Party, peer: &Party) -> u32 {
+    party
+        .store()
+        .read(|repos| repos.peer_compat(&peer.address.key_text()))
+        .unwrap()
+        .unwrap()
+        .works
+}
+
+#[test]
+fn an_invite_expecting_an_address_but_not_sent_as_a_request_proves_no_pair_requests() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    let offer = world
+        .block_on(anna.wallet.contact_book().pairing_invite(
+            &relays(anna),
+            lepic_wallet_contacts::InviteRequest {
+                expect_address: Some(ben.address.to_string()),
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap();
+    world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_accept(&relays(ben), accept(&offer.link, "Ben", false)),
+        )
+        .unwrap();
+    world.collect(anna);
+    world.collect(ben);
+    world.collect(anna);
+
+    assert_eq!(
+        status(&world, anna, offer.contact_id),
+        PairingStatus::Verified
+    );
+    assert_eq!(works(anna, ben) & PAIR_REQUESTS, 0);
 }
 
 #[test]

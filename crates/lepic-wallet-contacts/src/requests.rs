@@ -357,8 +357,13 @@ where
             return Err(ContactError::PeerNotProven);
         }
         let session = self.wallet.session()?;
-        self.contact_work(move |_, _| session.store.read(|repos| check_free(repos, &key, true)))
+        {
+            let session = Arc::clone(&session);
+            self.contact_work(move |_, _| {
+                session.store.read(|repos| check_free(repos, &key, true))
+            })
             .await?;
+        }
         let offer = self
             .pairing_invite(
                 relays,
@@ -391,6 +396,14 @@ where
             self.contact_remove(offer.contact_id).await?;
             return Err(error);
         }
+        // An answer to it shows that pair requests work with the key.
+        let contact_id = offer.contact_id;
+        self.contact_work(move |_, _| {
+            Ok(session.store.write(|repos| {
+                repos.put_setting(&super::pairing::request_out_key(contact_id), "1")
+            })?)
+        })
+        .await?;
         info!("pairing request sent");
         Ok(offer)
     }
