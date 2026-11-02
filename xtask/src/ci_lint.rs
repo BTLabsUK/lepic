@@ -80,7 +80,7 @@ impl fmt::Display for Finding {
 }
 
 pub(crate) fn run(root: &Path) -> Result<()> {
-    // The GitLab copy of the repository carries no hosted workflows at all.
+    // A copy of the repository without hosted workflows has nothing to lint.
     if !root.join(GITHUB_DIR).is_dir() {
         eprintln!("ci-lint: no {GITHUB_DIR} directory, nothing to lint");
         return Ok(());
@@ -797,7 +797,7 @@ mod tests {
     #[test]
     fn repository_workflows_pass_every_rule() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        // A copy without hosted workflows (the GitLab one) has nothing to check.
+        // A copy without hosted workflows has nothing to check.
         if !root.join(GITHUB_DIR).is_dir() {
             return;
         }

@@ -2,10 +2,8 @@
 
 ## Reporting a vulnerability
 
-Do not open a public issue. Email **support@btlabs.uk**, or open a *confidential* issue on GitLab
-(New issue, then tick "Turn on confidentiality"); only the maintainers can see it. The GitHub
-repository, [BTLabsUK/lepic](https://github.com/BTLabsUK/lepic), is a read-only mirror: do not
-report vulnerabilities there.
+Do not open a public issue, and do not report a vulnerability in the public repository,
+[BTLabsUK/lepic](https://github.com/BTLabsUK/lepic). Email **support@btlabs.uk**.
 
 Include the affected version or commit, what an attacker controls, what happens, and the smallest
 reproduction you have.

@@ -2,16 +2,15 @@
 
 LEPIC takes contributions under the rules set out on this page.
 
-The source lives on [GitLab](https://gitlab.com/epic-cash-bt/lepic): open issues and merge
-requests there. [github.com/BTLabsUK/lepic](https://github.com/BTLabsUK/lepic) is a read-only
-mirror.
+The source lives at [github.com/BTLabsUK/lepic](https://github.com/BTLabsUK/lepic): open
+issues and pull requests there.
 
 ## Before you start
 
 1. Read `README.md` and `docs/architecture.md` for goals, non-goals and the crate layout, and
    `docs/rules.md` for the hard rules and the rules for Rust code, compatibility, testing and
    security that every change follows.
-2. Find or open the issue for the change on GitLab.
+2. Find or open the issue for the change on GitHub.
 3. Read the ADRs and `docs/compat/` pages that bear on it.
 
 ## Making a change

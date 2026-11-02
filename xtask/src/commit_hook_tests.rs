@@ -49,7 +49,7 @@ fn hook_refuses_autosquash_subjects_with_no_autosquash() {
 
 #[test]
 fn commit_lint_relints_edited_titles_with_the_base_branch_hook() {
-    // A copy without hosted workflows (the GitLab one) has no commit-lint job to check.
+    // A copy without hosted workflows has no commit-lint job to check.
     let path = repository().join(".github/workflows/commit-lint.yml");
     if !path.is_file() {
         return;
