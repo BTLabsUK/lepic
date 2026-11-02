@@ -749,6 +749,16 @@ impl Session {
         self.node_tor.enabled()
     }
 
+    /// Whether HTTP sends go through the wallet's tor while it runs. Sends to onions always
+    /// do: they have no other way.
+    pub(crate) fn set_http_over_tor(&self, enabled: bool) {
+        self.send_tor.set_enabled(enabled);
+    }
+
+    pub(crate) fn http_over_tor(&self) -> bool {
+        self.send_tor.enabled()
+    }
+
     /// The relay connection, node requests and HTTP sends wait for a tor that is being
     /// started.
     fn expect_routes(&self) {

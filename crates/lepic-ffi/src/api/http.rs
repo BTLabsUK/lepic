@@ -125,7 +125,8 @@ impl EpicWallet {
     /// user agreed that the slate travels unencrypted.
     ///
     /// While the wallet's tor runs or is expected (`WalletConfig::tor_wanted`,
-    /// [`EpicWallet::expect_tor`]), the connection goes through tor, which resolves the host,
+    /// [`EpicWallet::expect_tor`]) and HTTP sends over Tor are on
+    /// ([`EpicWallet::set_http_over_tor`]), the connection goes through tor, which resolves the host,
     /// and waits for a tor that is still starting within the request timeout; a host on this
     /// device stays direct. A tor that fails fails the send: it never goes directly instead.
     /// Otherwise the wallet is reached directly.

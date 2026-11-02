@@ -9,6 +9,11 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- `lepic-ffi` gains `EpicWallet::set_http_over_tor` and `EpicWallet::http_over_tor`: HTTP
+  sends can reach the other wallet directly while the wallet's tor runs, as the node and the
+  relay already can (`set_node_over_tor`, `set_epicbox_over_tor`), for an app that runs tor
+  only to be paid at its onion and to send to onions. On by default: nothing changes until
+  the app turns it off.
 - The wallet database moves to encryption at rest at its first open (ADR 0032): a plain
   `wallet.sqlite3` is copied into `wallet.enc.sqlite3`, checked, switched to and kept aside as
   `wallet.sqlite3.pre-encryption`; a failed copy runs the session on the plain file and is tried

@@ -101,6 +101,12 @@ impl Session {
         false
     }
 
+    pub(crate) fn set_http_over_tor(&self, _enabled: bool) {}
+
+    pub(crate) fn http_over_tor(&self) -> bool {
+        false
+    }
+
     /// Nothing to wait for, as on iOS. Fails with `Locked` while the wallet is locked.
     pub(crate) fn expect_tor(&self) -> Result<(), WalletError> {
         self.ensure_unlocked()

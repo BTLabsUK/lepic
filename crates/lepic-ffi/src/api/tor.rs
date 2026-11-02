@@ -312,6 +312,26 @@ impl EpicWallet {
             .guard_or("node_over_tor", true, || self.session.node_over_tor())
     }
 
+    /// Turns HTTP sends over Tor on or off; it is on when the wallet opens. While it is on and
+    /// the wallet's tor runs or is expected, [`EpicWallet::send_http`] and
+    /// [`EpicWallet::resend_http`] go through tor, as they describe. Off, they reach the other
+    /// wallet directly even while tor runs, for an app that runs tor only to be paid at its
+    /// onion and to send to onions. Sends to onions ([`EpicWallet::send_tor`]) always go
+    /// through tor. A send in progress finishes on its own connection.
+    #[frb(sync)]
+    pub fn set_http_over_tor(&self, enabled: bool) {
+        self.boundary().guard_or("set_http_over_tor", (), || {
+            self.session.set_http_over_tor(enabled);
+        });
+    }
+
+    /// Whether HTTP sends over Tor are on, as [`EpicWallet::set_http_over_tor`] set it.
+    #[frb(sync)]
+    pub fn http_over_tor(&self) -> bool {
+        self.boundary()
+            .guard_or("http_over_tor", true, || self.session.http_over_tor())
+    }
+
     #[frb(sync)]
     pub fn expect_tor(&self) -> Result<(), WalletError> {
         self.boundary()

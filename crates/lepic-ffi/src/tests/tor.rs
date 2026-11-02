@@ -1128,6 +1128,45 @@ async fn the_node_goes_through_tor_while_it_runs_and_the_setting_is_on() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_sends_go_through_tor_while_it_runs_and_their_setting_is_on() {
+    let (pair, network) = tor_pair().await;
+    let bob = &pair.bob;
+    assert!(bob.http_over_tor(), "on by default");
+    assert!(!bob.send_through_tor(), "tor is off");
+
+    bob.expect_tor().unwrap();
+    assert!(bob.send_through_tor(), "never direct while tor is awaited");
+    bob.set_http_over_tor(false);
+    assert!(!bob.http_over_tor() && !bob.send_through_tor());
+    bob.set_http_over_tor(true);
+    assert!(bob.send_through_tor());
+    bob.stop_tor();
+    bob.stop_tor();
+    assert!(!bob.send_through_tor(), "a stop leads back to direct");
+
+    // Tor for payments only: the node, the relay and HTTP sends go directly while tor runs.
+    bob.set_node_over_tor(false);
+    bob.set_epicbox_over_tor(false);
+    bob.set_http_over_tor(false);
+    let (events, _) = start_tor(&network, bob, pair.dirs[1].path()).await;
+    assert!(!bob.send_through_tor() && !bob.node_through_tor() && !bob.relay_through_tor());
+    assert_eq!(
+        bob.tor_status().kind,
+        TorStatusKind::Ready,
+        "the onion is published"
+    );
+    bob.set_http_over_tor(true);
+    assert!(
+        bob.send_through_tor() && !bob.node_through_tor(),
+        "the settings of HTTP sends and the node are separate"
+    );
+
+    bob.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
+    assert!(bob.http_over_tor() && !bob.send_through_tor());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_status_and_the_events_carry_the_socks_port_once_tor_has_bootstrapped() {
     let (pair, network) = tor_pair().await;
     let bob = &pair.bob;
